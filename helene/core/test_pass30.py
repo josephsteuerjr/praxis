@@ -510,11 +510,11 @@ class PromiseWakeTests(unittest.TestCase):
 
     def test_her_own_remind_self_silences_the_net(self):
         """Анти-костыль «не двойной драйвер»: её УСПЕШНЫЙ remind_self в том же ходе —
-        сеть молчит. Но только по факту успеха (маркер «→ Наметила #»), не по вызову."""
+        сеть молчит. Но только по факту успеха (маркер «→ Намечено #»), не по вызову."""
         import promises
         import tasks
 
-        took_her_own_hand = ["remind_self(kind=window, goal=добить пакет) → Наметила #7 [window]: …"]
+        took_her_own_hand = ["remind_self(kind=window, goal=добить пакет) → Намечено #7 [window]: …"]
         self.assertIsNone(promises.note_outbound(
             "777", "Сейчас добью пакет и пришлю.", tools=took_her_own_hand))
         self.assertEqual(tasks.list_open(), [])
@@ -579,7 +579,7 @@ class PromiseWakeTests(unittest.TestCase):
         tasks.cancel(first["id"])
         self.assertIsNone(promises.note_self_intent(
             "task_window", "Теперь допилю рельсы.",
-            tools=["remind_self(kind=window, goal=рельсы) → Наметила #9"]))
+            tools=["remind_self(kind=window, goal=рельсы) → Намечено #9"]))
         self.assertEqual([t for t in tasks.list_open()
                           if t.get("target") == "promise:self"], [])
 

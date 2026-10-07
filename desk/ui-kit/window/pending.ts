@@ -10,16 +10,22 @@
  * уже отвеченными репликами до перезапуска окна. Заглушку сверяем по началу и по
  * времени: своя реплика лентой не старше пузыря — подтверждение.
  */
-export interface FeedRow { text?: string; timestamp?: string }
-export interface SentBubble { text: string; at: string }
+export interface FeedRow { text?: string; timestamp?: string; source_id?: string }
+export interface SentBubble { text: string; at: string; source_id?: string }
 
 /** Считать ли пузырь подтверждённым лентой своих реплик. */
 export function confirmedByFeed(bubble: SentBubble, own: FeedRow[]): boolean {
+  // Modern receipts are authoritative even if STT changes text or clocks differ.
+  // Never fall back to text when this message has an identity.
+  if (bubble.source_id) return own.some((m) => m.source_id === bubble.source_id);
   const text = bubble.text.trim();
-  if (own.some((m) => (m.text || "").trim() === text)) return true;
+  const since = Date.parse(bubble.at) - 5000;
+  const fresh = (m: FeedRow) => !!m.timestamp && Number.isFinite(Date.parse(m.timestamp))
+    && Number.isFinite(since) && Date.parse(m.timestamp) >= since;
+  if (own.some((m) => fresh(m) && ((m.text || "").trim() === text
+      || (m.text || "").trim().startsWith(text + "\n[")))) return true;
   if (!text.startsWith("[")) return false;
   const head = text.replace(/\]$/, "");
-  const since = Date.parse(bubble.at) - 5000;
   return own.some((m) => {
     const row = (m.text || "").trim();
     if (!row.startsWith(head)) return false;

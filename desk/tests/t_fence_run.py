@@ -30,6 +30,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "localharness"))
 
+# process_scope живёт в дереве агента (слой): стенд видит ровно то, что едет в
+# поставку — HELENE_TREE_SRC сборки или слой репозитория (паттерн
+# t_owner_words._tree_agent). До 06.10 файл был только в legacy live-дереве,
+# и `_plain` падал на ModuleNotFoundError.
+_TREE = Path(os.environ.get("HELENE_TREE_SRC") or HERE.parents[1] / "helene" / "core")
+if (_TREE / "process_scope.py").is_file():
+    sys.path.insert(0, str(_TREE))
+
 import fence  # noqa: E402
 
 

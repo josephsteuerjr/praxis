@@ -18,7 +18,7 @@
    длины отличаются. Факт возможного расхождения назван полем `receipt.scrubbed_possible`;
    пере-якорить смещения на подчищенный текст запрещено.
 3. Бюджет PRAXIS_CONTEXT_BUDGET считает СИМВОЛЫ и НЕ считает: шапку evidence,
-   extra_system, extra_evidence, обёртку <praxis_context_evidence>, схемы рук, сообщения
+   extra_system, extra_evidence, обёртку <context_evidence>, схемы рук, сообщения
    (см. BUDGET_EXCLUDES). «Кадр не влез» = «не влезли тиры», и только они.
 4. Один кадр = один полный след + N тонких ссылок ({frame_id, emit, reused}). Число
    расписок НЕ равно числу кадров: вторая и далее итерация тул-цикла шлёт тот же кадр.
@@ -552,7 +552,7 @@ def _containers(system, evidence: str, epoch: str = "") -> dict:
         "epoch": "messages[0]" if str(epoch or "") else "(absent)",
         # Зона «сейчас» живёт в том же последнем сообщении, между закрытым конвертом и
         # открытой репликой. Пустая зона — «(absent)», а не ноль без имени.
-        "situation": "messages[-1] · после </praxis_context_evidence>",
+        "situation": "messages[-1] · после </context_evidence>",
     }
 
 

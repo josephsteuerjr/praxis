@@ -35,6 +35,7 @@ import secrets
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
@@ -43,6 +44,7 @@ from aiohttp.abc import AbstractAccessLogger
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deskd import agentcfg
+from deskd import artifacts
 from deskd import control
 from deskd import readers
 from deskd import rooms
@@ -172,10 +174,10 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 # «перезапустить» в том, чтобы она была под рукой, когда до компьютера не
 # дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
-_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media",
+_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt"}
+                 "/api/interrupt", "/api/interrupt-step"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/")
 
@@ -187,6 +189,44 @@ def _hostname(raw: str) -> str:
     return raw.rsplit(":", 1)[0] if ":" in raw else raw
 
 
+# Хост из `phone.external` (внешний адрес канала, 06.10). Кэш по отпечатку
+# файла — ПАРЕ (mtime_ns, size), как у соседнего кэша устройств: на файловых
+# системах с грубым mtime (сетевые диски) одна только метка времени могла не
+# заметить подмену адреса. Host-гейт спрашивается на КАЖДОМ запросе, и читать
+# helene.json с диска ради него было бы лишним. Пусто — адреса нет.
+_EXTERNAL_HOST_CACHE: dict = {"stamp": None, "host": ""}
+
+
+def _phone_external_host() -> str:
+    cfg_path = readers.config_path()
+    if cfg_path is None:
+        return ""
+    try:
+        st = cfg_path.stat()
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return ""
+    if _EXTERNAL_HOST_CACHE["stamp"] == stamp:
+        return str(_EXTERNAL_HOST_CACHE["host"] or "")
+    raw = readers._load_json(cfg_path)
+    url = str(((raw.get("phone") or {}) if isinstance(raw, dict) else {}).get("external") or "").strip()
+    host = ""
+    if url:
+        # Схема — только http/https: фронт строит QR по тем же правилам, и
+        # ftp://host в гейте открыл бы имя, на котором QR-ссылка битая.
+        m = re.match(r"^https?://([^/:?#]+)", url, re.I)
+        candidate = (m.group(1) if m else ("" if "://" in url else url.split("/")[0])).split(":")[0]
+        candidate = _hostname(candidate).strip().lower()
+        # Внешний адрес — имя с точкой (FQDN). IP пускается гейтом и без этой
+        # ручки, однобуквенные огрызки схемы («http://» без хоста) и wildcard
+        # в разрешённые не тащим — только точное имя.
+        if candidate and "*" not in candidate and "." in candidate:
+            host = candidate
+    _EXTERNAL_HOST_CACHE["stamp"] = stamp
+    _EXTERNAL_HOST_CACHE["host"] = host
+    return host
+
+
 def _host_ok(request: web.Request) -> bool:
     raw = request.headers.get("Host") or ""
     if not raw:
@@ -195,6 +235,10 @@ def _host_ok(request: web.Request) -> bool:
     if name in ("localhost", "") or name in _ALLOWED_HOSTS:
         return True
     if name.endswith(_ALLOWED_HOST_SUFFIXES):
+        return True
+    # Внешний адрес канала (`phone.external`, 06.10): телефон приходит по нему
+    # через сервер с белым IP ровно за тем ключом, которого у него ещё нет.
+    if name and name == _phone_external_host():
         return True
     try:
         import ipaddress
@@ -242,13 +286,14 @@ def _cors(origin: str) -> dict:
 # ------------------------------------------------------------- телефон
 # Спаривание по QR: окно просит одноразовую пару (с петли), телефон открывает
 # ссылку /m/?pair=<токен> и меняет токен на свой ключ устройства. Токен живёт
-# десять минут и годится ДВАЖДЫ: на iPhone страница в Safari и установленное
-# на экран «Домой» приложение — разные хранилища, и второй обмен нужен ровно
-# для него. Ключи устройств лежат хэшами в memory/.state/devices.json.
+# десять минут и годится ТРИЖДЫ (06.10, слово владельца: двух не хватало,
+# когда телефон по умолчанию открывает Firefox — браузер и «Установить
+# приложение» успевают съесть оба захода ещё до значка на «Домой»). Ключи
+# устройств лежат хэшами в memory/.state/devices.json.
 
 _PAIRS: dict[str, dict] = {}
 _PAIR_TTL = 600
-_PAIR_USES = 2
+_PAIR_USES = 3
 
 
 def _devices_path() -> Path:
@@ -357,7 +402,8 @@ def _is_loopback(request: web.Request) -> bool:
 
 def _role(request: web.Request) -> str:
     """"owner" — окно/эта машина, "device" — спаренный телефон, "" — никто."""
-    supplied = request.query.get("key") or request.cookies.get(COOKIE) or ""
+    bearer = request.headers.get("Authorization", "")
+    supplied = (bearer[7:] if bearer.startswith("Bearer ") else "") or request.query.get("key") or request.cookies.get(COOKIE) or ""
     if TOKEN and supplied:
         try:
             if secrets.compare_digest(supplied, TOKEN):
@@ -531,7 +577,8 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
 
 
 async def api_pair_redeem(request):
-    """Телефон меняет токен на ключ устройства. Токен годится дважды (iPhone)."""
+    """Телефон меняет токен на ключ устройства. Токен годится трижды (iPhone
+    и браузер по умолчанию; 06.10 — слово владельца про Firefox)."""
     token = str(request.query.get("token") or "")
     peer = request.transport.get_extra_info("peername") if request.transport else None
     got = await asyncio.to_thread(
@@ -859,6 +906,49 @@ async def _r_md(c: Call):
     return await asyncio.to_thread(readers.safe_read_md, c.query.get("path") or "")
 
 
+_RETENTION_CACHE: dict = {}
+
+
+def _retention_module():
+    """localharness/retention.py по пути файла: имя слишком общее для sys.path."""
+    if "mod" not in _RETENTION_CACHE:
+        import importlib.util
+        path = Path(__file__).resolve().parent / "localharness" / "retention.py"
+        spec = importlib.util.spec_from_file_location("desk_retention", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _RETENTION_CACHE["mod"] = mod
+    return _RETENTION_CACHE["mod"]
+
+
+async def _r_retention(c: Call):
+    """Леджер ретенции рабочих материалов (слово владельца 01.10).
+
+    GET — отчёт без изменений на диске; POST {action:"sweep"} — уборка
+    однозначного мусора (staging старых обновлений) с записью леджера;
+    POST {action:"delete", path} — удалить ОДНУ папку свежего снимка (05.10,
+    «никак не чистится»): слово владельца кнопкой. Путь сверяется со свежей
+    классификацией на месте — произвольного удаления по пути нет; модели и
+    снимки кнопка не трогает. Телефону ручка не открыта: до этих путей
+    устройство не пускает scope-гейт middleware.
+    """
+    action = str((c.body or {}).get("action") or "report")
+
+    def run():
+        mod = _retention_module()
+        root = readers.tree()
+        if action == "sweep":
+            return mod.sweep(root)
+        if action == "delete":
+            return mod.delete_entry(root, None, str((c.body or {}).get("path") or ""))
+        return {"schema": mod.SCHEMA, "entries": mod.classify(root), "removed": []}
+
+    try:
+        return await asyncio.to_thread(run)
+    except Exception as exc:
+        return Fail(500, f"леджер не собрался: {exc}", "retention")
+
+
 async def _r_md_write(c: Call):
     """Правка маркдауна агента из окна: конституция, навыки, заметки.
 
@@ -920,6 +1010,68 @@ async def _r_media(c: Call):
         return Fail(404, why or "нет такого вложения", "no_media")
     return web.FileResponse(path, headers={"Content-Type": ctype,
                                            "Cache-Control": "private, max-age=3600"})
+
+
+async def _r_artifact(c: Call):
+    path, why = artifacts.resolve(readers.tree(), c.query.get("path") or "")
+    if path is None:
+        return Fail(404, why, "no_artifact")
+    details = artifacts.metadata(readers.tree(), c.query.get("path") or "")
+    mime = details.get("media_mime") or "application/octet-stream"
+    preview = c.query.get("preview") == "1"
+    safe_inline = mime in {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp"} or mime.startswith("text/")
+    if preview and mime.startswith("text/"):
+        mime = "text/plain; charset=utf-8"
+    disposition = "inline" if preview and safe_inline else "attachment"
+    filename = quote(details.get("media_name") or path.name, safe="")
+    return web.FileResponse(path, headers={"Content-Type": mime,
+        "Content-Disposition": disposition + "; filename*=UTF-8''" + filename,
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=3600",
+        "Content-Security-Policy": "sandbox; default-src 'none'"})
+
+
+async def _r_relay_auth_import(c: Call):
+    if c.role != "owner" or os.environ.get("HELENE_SERVER_AUTH_IMPORT") != "1":
+        raise web.HTTPForbidden(text="Приём входа доступен владельцу на сервере")
+    from deskd import relay_auth
+    try:
+        return relay_auth.enqueue(readers.tree(), (c.body or {}).get("auth"),
+                                  (c.body or {}).get("replace") is True)
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+
+async def _r_relay_auth_status(c: Call):
+    if c.role != "owner" or os.environ.get("HELENE_SERVER_AUTH_IMPORT") != "1":
+        raise web.HTTPForbidden(text="Статус входа доступен владельцу на сервере")
+    from deskd import relay_auth
+    try:
+        return relay_auth.receipt(readers.tree(), c.query.get("id"))
+    except ValueError as exc:
+        raise web.HTTPBadRequest(text=str(exc))
+
+
+async def _r_local_files(c: Call):
+    if c.role != "owner" or not c.local or os.environ.get("HELENE_SERVER_AUTH_IMPORT") == "1":
+        raise web.HTTPForbidden(text="Файлы компьютера выбирают из локального окна владельца")
+    from deskd import local_files
+    try:
+        if c.body is None:
+            return await asyncio.to_thread(local_files.listing, c.query.get("path") or "")
+        body = c.body
+        if not isinstance(body, dict):
+            raise ValueError("Файловый диалог не получил действие")
+        if body.get("action") == "read":
+            return await asyncio.to_thread(local_files.read_file, str(body.get("path") or ""))
+        if body.get("action") == "save":
+            return await asyncio.to_thread(local_files.save_file, readers.tree(),
+                                          str(body.get("rel") or ""), str(body.get("folder") or ""),
+                                          str(body.get("name") or ""), body.get("overwrite") is True, body.get("data"))
+        raise ValueError("Неизвестное действие файлового диалога")
+    except FileExistsError:
+        raise web.HTTPConflict(text="Файл с этим именем уже существует")
+    except (OSError, ValueError) as exc:
+        raise web.HTTPBadRequest(text=str(exc))
 
 
 async def _r_home(c: Call):
@@ -1136,6 +1288,11 @@ async def _r_brain_set(c: Call):
                                    fields if isinstance(fields, dict) else {})
 
 
+async def _r_interrupt_step(c: Call):
+    return await asyncio.to_thread(control.interrupt_step, readers.tree(),
+                                   str((c.body or {}).get("run_id") or ""))
+
+
 async def _r_interrupt(c: Call):
     """Прервать живой ход агента (12.09): просьба в memory/.control, раннер читает на тике.
     Телефону открыто наравне с перезапуском — это окно владельца."""
@@ -1181,7 +1338,14 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/chat-turns/{peer}", _r_chat_turns),
     Route("GET", "/api/md", _r_md),
     Route("POST", "/api/md", _r_md_write),
+    Route("GET", "/api/retention", _r_retention),
+    Route("POST", "/api/retention", _r_retention),
     Route("GET", "/api/media", _r_media),
+    Route("GET", "/api/artifact", _r_artifact),
+    Route("POST", "/api/relay/auth/import", _r_relay_auth_import),
+    Route("GET", "/api/relay/auth/status", _r_relay_auth_status),
+    Route("GET", "/api/local-files", _r_local_files, local_only=True),
+    Route("POST", "/api/local-files", _r_local_files, local_only=True),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
@@ -1209,6 +1373,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
     Route("POST", "/api/interrupt", _r_interrupt),
+    Route("POST", "/api/interrupt-step", _r_interrupt_step),
     Route("GET", "/api/memory-fold/{room}", _r_fold_state),
     Route("POST", "/api/memory-fold", _r_fold),
     Route("GET", "/api/voice", _r_voice),
@@ -1273,6 +1438,8 @@ def _http_handler(route: Route):
                     query={k: request.query.get(k) for k in request.query},
                     body=body, local=_is_loopback(request), role=_role(request))
         result = await route.handler(call)
+        if isinstance(result, web.StreamResponse):
+            return result
         if isinstance(result, Fail):
             # Текстом, как прежние HTTPConflict/HTTPBadRequest: клиенты читают
             # причину из тела ответа словами.
@@ -1287,8 +1454,9 @@ _SAY_RE = re.compile(r"[^\w\-]+")
 _CHAT_KEY_RE = re.compile(r"^-?\d+(?:__topic__\d+)?$")
 
 
-_ATTACH_MAX_FILES = 4
-_ATTACH_MAX_BYTES = 8 * 1024 * 1024
+_ATTACH_MAX_FILES = 16
+_ATTACH_MAX_BYTES = 64 * 1024 * 1024
+_ATTACH_MAX_TOTAL = 128 * 1024 * 1024
 _ATTACH_MIME = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
                 "image/gif": ".gif",
                 # Голосовое из окна (0.6.0): запись микрофона едет тем же подвалом
@@ -1304,9 +1472,10 @@ def _attachments_in(raw) -> list[dict]:
     """Вложения из тела запроса: `[{name, mime, data(base64)}]` -> проверенные байты.
 
     Картинки (те, что читает модель — см. `_MODEL_IMAGE_MIME` в дереве) и
-    голосовые (расшифровывает руннер), до четырёх, до 8 МБ каждое. Всё остальное —
-    отказ словами: окно показало бы «отправлено», а руннер молча выбросил бы файл,
-    который модель не прочтёт.
+    голосовые (расшифровывает руннер) — как раньше. Любой ДРУГОЙ файл тоже
+    принимается (01.10, слово владельца: вложения — просто папка хода):
+    руннер копирует его в runs/<id>/files, агент работает им руками; расширение
+    неизвестных типов берём из имени, без расширения — честное `.bin`.
     """
     if raw in (None, "", []):
         return []
@@ -1315,16 +1484,13 @@ def _attachments_in(raw) -> list[dict]:
     if len(raw) > _ATTACH_MAX_FILES:
         raise web.HTTPBadRequest(text=f"не больше {_ATTACH_MAX_FILES} вложений за раз")
     out: list[dict] = []
+    total_bytes = 0
     for i, item in enumerate(raw, 1):
         if not isinstance(item, dict):
             raise web.HTTPBadRequest(text=f"вложение #{i}: не объект")
         # `audio/webm;codecs=opus` — так называет запись MediaRecorder; параметры
         # после «;» типу не принадлежат.
         mime = str(item.get("mime") or "").strip().lower().split(";", 1)[0].strip()
-        if mime not in _ATTACH_MIME:
-            raise web.HTTPBadRequest(
-                text=f"вложение #{i}: тип {mime or '?'} не читается моделью — "
-                     "можно PNG, JPEG, WebP, GIF или голосовое (webm/ogg/m4a/mp3/wav)")
         try:
             data = base64.b64decode(str(item.get("data") or ""), validate=True)
         except (ValueError, TypeError):
@@ -1332,12 +1498,21 @@ def _attachments_in(raw) -> list[dict]:
         if not data:
             raise web.HTTPBadRequest(text=f"вложение #{i}: пустой файл")
         if len(data) > _ATTACH_MAX_BYTES:
-            raise web.HTTPBadRequest(text=f"вложение #{i}: больше 8 МБ")
+            raise web.HTTPBadRequest(text=f"вложение #{i}: больше 64 МБ")
+        total_bytes += len(data)
+        if total_bytes > _ATTACH_MAX_TOTAL:
+            raise web.HTTPBadRequest(text="вложения вместе больше 128 МБ")
         name = re.sub(r"[^\w.\-]+", "_", str(item.get("name") or "").strip(), flags=re.UNICODE)
-        name = name.strip("._") or (f"voice{i}" if mime in _ATTACH_AUDIO else f"image{i}")
-        if not name.lower().endswith(_ATTACH_MIME[mime]) and not (
-                mime == "image/jpeg" and name.lower().endswith(".jpeg")):
-            name += _ATTACH_MIME[mime]
+        if mime in _ATTACH_MIME:
+            name = name.strip("._") or (f"voice{i}" if mime in _ATTACH_AUDIO else f"image{i}")
+            if not name.lower().endswith(_ATTACH_MIME[mime]) and not (
+                    mime == "image/jpeg" and name.lower().endswith(".jpeg")):
+                name += _ATTACH_MIME[mime]
+        else:
+            # Материал хода: руннер положит файл в папку прогона по имени.
+            name = name.strip("._") or f"file{i}"
+            if not Path(name).suffix:
+                name += ".bin"
         out.append({"name": name[:120], "mime": mime, "data": data})
     return out
 
@@ -1466,7 +1641,9 @@ async def _say(text: str, chat: str = "", attachments=None, via: str = "owner") 
             written.append("control")
         except OSError:
             log.warning("mid-turn канал недоступен", exc_info=True)
-        return {"written": written, "stamp": stamp, "midturn": reader_alive and not sleeping,
+        return {"written": written, "stamp": stamp,
+                "source_id": "note:" + (f"{stamp}__to__{chat}" if targeted else stamp),
+                "midturn": reader_alive and not sleeping,
                 "sleeping": sleeping,
                 "chat": chat or "window", "attachments": rel_paths}
 
@@ -1832,7 +2009,8 @@ def _mobile_file(name: str):
 
 
 def build_app() -> web.Application:
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application(middlewares=[auth_middleware],
+                          client_max_size=_ATTACH_MAX_TOTAL * 4 // 3 + 1024 * 1024)
     app.router.add_get("/", index)
     # Все ручки API — из одной таблицы (та же, что у канала).
     for route in ROUTES:

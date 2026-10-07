@@ -24,6 +24,7 @@ import { modeCard } from "./modecard";
 import { mountsCard, type LiveSandbox } from "./mounts";
 import { voiceCard } from "./voicecard";
 import { agentsCard } from "./agentscard";
+import { imagesCard } from "./imagescard";
 import { extensionsCard } from "./extensionscard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
@@ -58,7 +59,7 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
 }
 
 /** Карточки местного агента и его часть записи в конфиг. */
-export async function agentEdition({ draft, loaded, platform }: EditionContext): Promise<Edition> {
+export async function agentEdition({ draft, loaded, platform, freshness }: EditionContext): Promise<Edition> {
   // Агент живёт на macOS: службы Windows и тела тула `computer` там нет по
   // построению. Карточки про них не рисуются — не «недоступно», а нет
   // (решение владельца). Двойная страховка: движок на не-Windows и сам не
@@ -671,7 +672,7 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
     // всё, что доступно учётке (слово владельца 06.09), и карточке здесь нечего
     // показывать; список в конфиге живёт и оживает вместе с песочницей.
     mounts.el.hidden = !sandbox;
-  }, mac);
+  }, mac || platform === "linux", platform === "linux", (base, fresh) => freshness.accept?.(base, fresh));
   cards.push(inGroup(mode.el, GROUP.rights));
 
   // --- песочница: сеть контейнера остаётся выбором владельца, ограду ставит режим
@@ -743,17 +744,34 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
   //
   // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
+  const images = imagesCard(draft, () => loginBtn.click());
+  cards.push(inGroup(images.el, GROUP.brain));
   cards.push(inGroup(agentsCard(mac).el, GROUP.agent));
 
   // --- расширения владельца (25.09, K): модули с манифестом, не патчи дерева
   cards.push(inGroup(extensionsCard(modeLive, loaded.tree).el, GROUP.agent));
 
   // --- данные
-  const data = el("div", "actions");
-  data.append(
+  //
+  // Две строки, а не одна: рядом с домом агента — путь к его конституции
+  // (soul/SOUL.md живёт в дереве всегда, но целого пути к ней не знал ни один
+  // экран). Хвостовые разделители срезаем, чтобы строка не читалась
+  // «C:\…\data\/soul/SOUL.md».
+  const soulPath = String(loaded.tree || "").replace(/[\\/]+$/, "") + "/soul/SOUL.md";
+  const data = el("div");
+  const homeRow = el("div", "actions");
+  homeRow.append(
     el("span", "mono", loaded.tree),
     button("Открыть папку", "quiet", () => void shell("open_path", { path: loaded.tree }).catch((e) => toast(humanError(e).text))),
   );
+  const soulRow = el("div", "actions");
+  soulRow.style.marginTop = "8px";
+  soulRow.append(
+    el("span", "field-hint", "Конституция:"),
+    el("span", "mono", soulPath),
+    button("Показать файл", "quiet", () => void shell("open_path", { path: soulPath }).catch((e) => toast(humanError(e).text))),
+  );
+  data.append(homeRow, soulRow);
   cards.push(inGroup(card("Данные агента", data, "Память, дневник, конституция и настройки лежат здесь. Перенос агента на другую машину — перенос этой папки вместе с программой."), GROUP.agent));
 
   return {
@@ -842,6 +860,12 @@ export async function agentEdition({ draft, loaded, platform }: EditionContext):
         if (provider !== "chatgpt") {
           if (Object.keys(relayBlock).length) out.relay = { ...relayBlock, enabled: false };
           else delete out.relay;
+        }
+        const imageError = images.collect(out);
+        if (imageError) return imageError;
+        if (provider === "chatgpt") out.relay = keepBlock(out.relay, { key: out.model.key });
+        if (images.enabled() && !String(out.relay?.key || "").trim()) {
+          out.relay = keepBlock(out.relay, { key: keys.chatgpt || newRelayKey(), port: Number(relayBlock.port) || RELAY_PORT });
         }
         // Ключи неактивных провайдеров переживают смену вкладки.
         out.model.keys = keys;

@@ -57,7 +57,9 @@ class SeedGit(unittest.TestCase):
         self.assertEqual(author, "Проба", "автор снимка — сам агент")
         self.assertEqual(email, "proba@helene.local".replace("proba", "agent"),
                          "нелатинское имя даёт адрес agent@helene.local")
-        self.assertEqual(git(self.tmp, "branch", "--show-current").strip(), "main")
+        # `branch --show-current` есть только с git 2.22, а Debian 10 (порог
+        # поставки) держит 2.20; symbolic-ref отвечает тем же и везде.
+        self.assertEqual(git(self.tmp, "symbolic-ref", "--short", "HEAD").strip(), "main")
 
     def test_snapshot_holds_the_home_and_not_the_keys(self) -> None:
         files = set(git(self.tmp, "ls-files").split())

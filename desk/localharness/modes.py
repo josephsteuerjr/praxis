@@ -113,15 +113,17 @@ KEY = "agent_mode"
 #: не рисует (прячет по `app_info.platform`), а журнал говорит одной строкой.
 #: Две константы, а не одна: механизмы разные и платформы у них разные. Стенды
 #: подменяют их, чтобы разобрать обе картины на любой машине.
-HAS_SERVICE = os.name == "nt" or sys.platform == "darwin"
-HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin"
+#: Linux (порт 28.09): служба — шаблон systemd `helene@<владелец>.service`
+#: (`common/linux_service.rs`), тело — X11 и AT-SPI.
+HAS_SERVICE = os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux")
+HAS_COMPUTER = os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux")
 
 #: Есть ли у службы галочки. Обе — механизмы Windows: нулевая сессия (служба под
 #: LocalSystem) и правило брандмауэра (netsh). На macOS демон launchd и так идёт
 #: от имени владельца, а брандмауэр система спрашивает сама — там галочек нет ни
 #: в каком положении. Отдельная константа, а не `os.name` по месту: стенды
 #: подменяют её, чтобы разобрать обе картины на любой машине.
-HAS_SERVICE_TOGGLES = os.name == "nt"
+HAS_SERVICE_TOGGLES = os.name == "nt" or sys.platform.startswith("linux")
 #: Тексты по платформе (`texts()`, `service_texts()`, `computer_texts()`):
 #: `None` — по `sys.platform` (как и было), `True`/`False` — подмена стендом, чтобы
 #: разобрать картину Windows на раннере macOS и наоборот (как HAS_SERVICE/HAS_COMPUTER).
@@ -131,6 +133,18 @@ MACOS_TEXTS: bool | None = None
 
 def _mac_texts() -> bool:
     return MACOS_TEXTS if MACOS_TEXTS is not None else sys.platform == "darwin"
+
+
+#: То же для Linux. Стенд, подменивший `MACOS_TEXTS` (картина Windows или Mac на
+#: чужой машине), Linux-текстов не получает: подмена одного флага — это выбор
+#: платформы целиком, а не «Mac нет — значит Linux».
+LINUX_TEXTS: bool | None = None
+
+
+def _linux_texts() -> bool:
+    if LINUX_TEXTS is not None:
+        return LINUX_TEXTS
+    return MACOS_TEXTS is None and sys.platform.startswith("linux")
 
 #: Имя службы в SCM (svc/src/main.rs::SERVICE_NAME). Латиницей.
 SERVICE_NAME = "Helene"
@@ -162,18 +176,12 @@ TITLES = {
 #: список — `fence.hands_report`, экран «Система»; здесь только та часть, ради
 #: которой владелец не пойдёт никуда смотреть.
 TEXTS = {
-    "sandbox": ("Агент заперт в своей папке: файлы и команды дальше дома не "
-                "идут, наружу — только те папки, что ты смонтировал. Окна и "
-                "рабочий стол — отдельная опция «Управление компьютером»: "
-                "тело для них живёт снаружи ограды. Снаружи и Forge: он "
-                "работает в worktree задачи, а тот лежит там, куда ты его "
-                "завёл. Поимённо, какая рука накрыта, а какая нет, — на экране "
-                "«Система»."),
-    "interactive": ("Агент работает с твоими правами: файлы и процессы — те же, "
-                    "что доступны тебе самому, не больше. Файловые руки видят "
-                    "то же, что и shell, монтировать ничего не нужно. Если "
-                    "учётка ограничена, агент ограничен так же. Права "
-                    "администратора он просит отдельно, окном Windows."),
+    # 04.10, слова владельца: коротко и по делу, без простыней.
+    "sandbox": ("Tools — в контейнере, доступ к папкам за пределами песочницы — "
+                "по одобрению. Смонтировать папки самостоятельно можно в "
+                "настройках."),
+    "interactive": ("Агент с правами пользователя, права администратора "
+                    "выдаются согласно UAC."),
 }
 
 #: Те же две ограды словами для macOS. Общие тексты обещают то, чего в порте
@@ -198,13 +206,28 @@ TEXTS_MACOS: dict[str, str] = {
 }
 
 
+#: Те же две ограды словами Linux: ограда — bubblewrap (`fence_posix`), права
+#: администратора — окном пароля системы (polkit), а не окном Windows.
+TEXTS_LINUX: dict[str, str] = {
+    # 04.10, слова владельца; на Linux администратора спрашивает polkit.
+    "sandbox": ("Tools — в контейнере, доступ к папкам за пределами песочницы — "
+                "по одобрению. Смонтировать папки самостоятельно можно в "
+                "настройках."),
+    "interactive": ("Агент с правами пользователя, права администратора "
+                    "выдаются через polkit."),
+}
+
+
 def texts() -> dict[str, str]:
-    """Тексты оград для ЭТОЙ платформы: macOS — TEXTS_MACOS, иначе TEXTS.
+    """Тексты оград для ЭТОЙ платформы: macOS — TEXTS_MACOS, Linux — TEXTS_LINUX,
+    иначе TEXTS.
 
     Одна точка выбора на `resolve`, `describe` и `catalogue`: то, что уезжает в
     `/api/mode`, в анатомию и в карточки, обязано быть одним и тем же текстом.
     """
-    return TEXTS_MACOS if _mac_texts() else TEXTS
+    if _mac_texts():
+        return TEXTS_MACOS
+    return TEXTS_LINUX if _linux_texts() else TEXTS
 
 # --------------------------------------------------------------------------- #
 #  Служба: тексты опции, а не режима
@@ -252,6 +275,21 @@ SERVICE_WARNING_MACOS = ("Окон и экрана у такого агента 
                          "когда ты откроешь окно Helene — тело поднимает оно.")
 
 
+#: Та же опция словами Linux: служба systemd от имени владельца (шаблон
+#: `helene@.service` из пакета). ⚠ Форма — та же, что у `*_MACOS`.
+SERVICE_TITLE_LINUX = "Работать без входа в систему"
+
+SERVICE_TEXT_LINUX = ("Ставится один раз, система спросит пароль администратора. "
+                      "Код агента поднимает systemd от твоего имени: Telegram и "
+                      "телефон отвечают, когда окно не открыто и даже когда ты не "
+                      "вошёл в систему. Упавшее — поднимается само. Ограду это не "
+                      "меняет: режим ты выбираешь отдельно, и он работает так же.")
+
+SERVICE_WARNING_LINUX = ("После выхода из графического сеанса управление рабочим "
+                         "столом недоступно. Пока окно Hélène открыто, оно поднимает "
+                         "тело тула `computer` для движка службы.")
+
+
 def service_texts() -> tuple[str, str, str]:
     """Заголовок, описание и оговорка опции службы для ЭТОЙ платформы.
 
@@ -261,8 +299,29 @@ def service_texts() -> tuple[str, str, str]:
     """
     if _mac_texts():
         return SERVICE_TITLE_MACOS, SERVICE_TEXT_MACOS, SERVICE_WARNING_MACOS
+    if _linux_texts():
+        return SERVICE_TITLE_LINUX, SERVICE_TEXT_LINUX, SERVICE_WARNING_LINUX
     return SERVICE_TITLE, SERVICE_TEXT, ""
 
+
+#: Третья ступень лестницы прав (04.10, слово Егора: «если уж разрешил нулевую
+#: сессию — это уже не UAC и не интерактивчик»). Это НЕ ограда и не отдельная
+#: галочка службы: это верхняя ступень выбора «кем агент работает». Подпись
+#: обязана говорить вслух, что ограда при этом перестаёт быть границей, —
+#: иначе карточка врала бы ровно там, где владелец принимает самое доверительное
+#: решение. Слова согласованы с владельцем в ASCII-макете 04.10.
+LADDER_SESSION0_TITLE = "Нулевая сессия"
+
+LADDER_SESSION0_TEXT = ("Ставит системную службу helene-svc, помогающую "
+                        "поднимать харнесс в случае падения и выдающую права "
+                        "СИСТЕМЫ при выборе опции.")
+
+#: Оговорка ступени — её показывает подтверждение в МИГ выбора, как раньше
+#: показывала галочка (слово Егора 28.09: согласие одно, без диалога на каждый шаг).
+LADDER_SESSION0_WARNING = ("Осторожно: права выше ваших собственных. "
+                           "Подтверждение администратора нужно только один раз "
+                           "при установке службы. Без выбранной опции права "
+                           "системы выдаваться не будут.")
 
 SESSION0_TITLE = "Разрешить агенту нулевую сессию"
 
@@ -372,12 +431,38 @@ COMPUTER_SCOPE_TEXTS_MACOS = {
 }
 
 
+#: Та же опция словами Linux: тело водит окнами через X-сервер (XTest, EWMH), дерево
+#: окна читает через AT-SPI. Разрешений, как на Mac, система не спрашивает; под
+#: Wayland тело видит только X-программы — это сказано прямо.
+COMPUTER_TEXT_LINUX = ("Тул `computer`: окна, экран, клавиатура и мышь, файлы и "
+                       "процессы на этой машине. Работает через отдельное тело "
+                       "(helene-body), которое код агента поднимает рядом с собой в "
+                       "твоей сессии — снаружи ограды, поэтому в песочнице оно тоже "
+                       "работает. Окна, ввод и снимки идут через X-сервер, дерево "
+                       "окна — через доступность (AT-SPI). В сеансе Wayland тело "
+                       "видит и водит только X-программы; полное управление — в "
+                       "сеансе X11 («на Xorg» при входе). Что именно разрешено, "
+                       "решают четыре права ниже; от режима опция не зависит.")
+
+COMPUTER_SCOPE_TEXTS_LINUX = {
+    "computer.read": COMPUTER_SCOPE_TEXTS["computer.read"],
+    "computer.files": COMPUTER_SCOPE_TEXTS["computer.files"],
+    "computer.process": ("Запускать команды bash в твоей сессии и следить за ними. "
+                         "Тоже мимо ограды."),
+    "computer.apps": ("Список окон, активация, клавиатура и мышь, снимки экрана, "
+                      "чтение окна как текста, буфер обмена. Через X-сервер; под "
+                      "Wayland — только X-программы."),
+}
+
+
 def computer_texts() -> tuple[str, dict[str, str]]:
     """Текст опции и тексты прав для ЭТОЙ платформы: macOS — `*_MACOS`, иначе
     общие. Одна точка выбора на `computer_option()`: то, что уезжает в
     `/api/mode` и в карточку, обязано быть одним и тем же текстом."""
     if _mac_texts():
         return COMPUTER_TEXT_MACOS, COMPUTER_SCOPE_TEXTS_MACOS
+    if _linux_texts():
+        return COMPUTER_TEXT_LINUX, COMPUTER_SCOPE_TEXTS_LINUX
     return COMPUTER_TEXT, COMPUTER_SCOPE_TEXTS
 
 
@@ -544,6 +629,9 @@ def service_installed(cfg: dict | None = None, *, probe: bool = True) -> bool | 
     if probe and sys.platform == "darwin":
         found = _launchd_has_daemon()
         return hint if found is None else found
+    if probe and sys.platform.startswith("linux"):
+        found = _systemd_has_service()
+        return hint if found is None else found
     if not probe or os.name != "nt":
         return hint
     now = time.time()
@@ -570,6 +658,29 @@ def _launchd_has_daemon() -> bool | None:
     except OSError:
         log.debug("launchd не опросился", exc_info=True)
         return None
+
+
+def _systemd_has_service() -> bool | None:
+    """Включена ли служба владельца `helene@<имя>.service`. None — «спросить не у кого».
+
+    Ответ systemd, а не след установщика: `systemctl is-enabled` печатает `enabled`,
+    `disabled`, `not-found`… и кодом говорит «да/нет». Прав не нужно — это чтение.
+    """
+    try:
+        import pwd
+        import subprocess
+        owner = pwd.getpwuid(os.geteuid()).pw_name
+        done = subprocess.run(["systemctl", "is-enabled", f"helene@{owner}.service"],
+                              capture_output=True, text=True, timeout=5)
+    except Exception:
+        log.debug("systemd не опросился", exc_info=True)
+        return None
+    word = (done.stdout or "").strip().splitlines()[-1:] or [""]
+    if word[0] in ("enabled", "enabled-runtime", "linked", "linked-runtime"):
+        return True
+    if word[0] in ("disabled", "not-found", "masked", "static", "indirect", "generated"):
+        return False
+    return None
 
 
 def _scm_has_service(name: str) -> bool | None:
@@ -730,8 +841,13 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
         notes.append("service.firewall = false — правило брандмауэра служба не "
                      "ставит: кнопка «Телефон» спросит права окном Windows")
 
+    # Лестница: верхняя ступень побеждает в названии — если агенту открыта
+    # нулевая сессия, говорить «сейчас: песочница» значило бы умолчать о главном.
+    ladder_name = "session0" if effective_session0 else name
     return {
         "name": name,
+        "ladder_name": ladder_name,
+        "ladder_title": LADDER_SESSION0_TITLE if effective_session0 else TITLES[name],
         "title": TITLES[name],
         "text": texts()[name],
         "sandbox": want_sandbox,
@@ -745,7 +861,7 @@ def resolve(cfg: dict, *, installed: bool | None = None) -> dict:
         "service_warning": service_texts()[2] if service_here else "",
         "session0": effective_session0,
         "session0_set": stored_session0,
-        "session0_warning": SESSION0_WARNING if effective_session0 else "",
+        "session0_warning": LADDER_SESSION0_WARNING if effective_session0 else "",
         "firewall": effective_firewall,
         "firewall_set": stored_firewall,
         "legacy_service": legacy,
@@ -896,6 +1012,8 @@ def describe(picture: dict) -> dict:
     return {
         "name": picture.get("name") or DEFAULT_MODE,
         "title": picture.get("title") or TITLES[DEFAULT_MODE],
+        "ladder_name": picture.get("ladder_name") or picture.get("name") or DEFAULT_MODE,
+        "ladder_title": picture.get("ladder_title") or picture.get("title") or TITLES[DEFAULT_MODE],
         "text": picture.get("text") or texts()[DEFAULT_MODE],
         "sandbox": bool(picture.get("sandbox")),
         "explicit": bool(picture.get("explicit")),
@@ -934,6 +1052,35 @@ def catalogue() -> list[dict]:
     } for name in MODES]
 
 
+def ladder() -> list[dict]:
+    """Ступени «кем агент работает» — одна лестница вместо оград + галочки.
+
+    Слово Егора 04.10: режим — ЛЕСТНИЦА. «Песочница» и «Интерактивный» — выбор
+    ограды; «Нулевая сессия» — верхняя ступень поверх любой из них (галочка
+    `service.session0`, растворённая в лестницу). Выбор верхней ступени НЕ
+    меняет ограду в файле: песочница остаётся страховкой от случайностей, а
+    подпись ступени честно говорит, что границей она больше не является.
+
+    Третья ступень существует только там, где её кому исполнить
+    (`HAS_SERVICE_TOGGLES`): на macOS демоны идут от имени владельца, на Linux
+    есть корневой брокер systemd. Состав решает харнесс, а не окно.
+    """
+    rungs = catalogue()
+    if not HAS_SERVICE_TOGGLES:
+        return rungs
+    return rungs + [{
+        "name": "session0",
+        "title": LADDER_SESSION0_TITLE,
+        "text": ("Служба helene-svc поднимает движок после падения, а отдельный брокер "
+                 "выполняет поручения агента от root без polkit и пароля.") if _linux_texts() else LADDER_SESSION0_TEXT,
+        "warning": LADDER_SESSION0_WARNING,
+        "needs_admin": False,
+        # ограду НЕ меняем: у ступени нет своего sandbox
+        "sandbox": None,
+        "requires_service": True,
+    }]
+
+
 def service_option() -> dict:
     """Опция службы с двумя её галочками — для тех же экранов.
 
@@ -944,14 +1091,11 @@ def service_option() -> dict:
     # Галочки — механизмы Windows: нулевая сессия (служба под LocalSystem) и
     # правило брандмауэра (netsh). На macOS их нет, и пустой список честнее
     # серых переключателей, которые ничего не меняют.
-    toggles = [] if not HAS_SERVICE_TOGGLES else [
-        {
-            "key": "service.session0",
-            "title": SESSION0_TITLE,
-            "text": SESSION0_TEXT,
-            "warning": SESSION0_WARNING,
-            "default": False,
-        },
+    # 04.10: галочка «нулевая сессия» ушла из этой секции — она стала третьей
+    # ступенью лестницы прав (см. `ladder()`), отдельный тумблер поверх ограды
+    # врал устройством: лестница — один выбор, а не два независимых. Ключ в
+    # файле прежний (`service.session0`), его продолжает читать служба.
+    toggles = [] if not HAS_SERVICE_TOGGLES or _linux_texts() else [
         {
             "key": "service.firewall",
             "title": FIREWALL_TITLE,

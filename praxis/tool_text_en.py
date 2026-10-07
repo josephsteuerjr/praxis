@@ -659,12 +659,13 @@ EN: dict[str, dict] = {
               "paths": "space-separated paths; empty means everything"},
     },
     "coding_session": {
-        "p": {"priority": "urgent wakes you when a worker finishes; normal waits for the "
-                          "next hourly window",
+        "p": {"priority": "urgent: wake when a worker finishes; normal: next hourly window",
               "action": "start | status | list | finish | abandon",
               "task_id": "the task to act on",
               "goal": "what the task is for",
               "isolation": "auto | worktree | direct",
+              "success_criteria": "start: readiness criteria (advisory)",
+              "verify_commands": "start: check commands, not auto-run",
               "title": "finish: what the change does",
               "review": "finish: your verdict on your diff",
               "checked": "finish: how you verified it",

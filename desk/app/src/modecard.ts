@@ -8,6 +8,7 @@
 import { el, humanError, toast } from "../../ui-kit/window/lib";
 import { button as btn, toggle as switchRow } from "../../ui-kit/dom";
 import { shell } from "../../ui-kit/window/api";
+import { persistSession0 } from "./session0-persist";
 import { LEGACY_SERVICE, SESSION0_WARNING_FALLBACK,
          type ModeChoice, type ModeState, type StoredService } from "../../ui-kit/window/mode";
 
@@ -41,6 +42,18 @@ async function adminProbe(): Promise<{ known: boolean; canElevate: boolean }> {
   }
 }
 
+/**
+ * Записать ключ верхней ступени немедленно, мимо черновика экрана настроек.
+ *
+ * Отпечаток записи сообщается экрану ПАРОЙ base/fresh (ревью 06.10): base —
+ * отпечаток, по которому запись читала файл. Экран принимает fresh как свой
+ * только при совпадении base со своим отпечатком открытия — черновик от этого
+ * не «подтверждается» чужим состоянием, а правки, сделанные в файле между
+ * загрузкой экрана и согласием (Блокнот), НЕ легализуются: их всё равно
+ * честно спросит «Сохранить». Это уточнение ревью 05.10, не его отмена:
+ * подтверждать черновик чужим отпечатком по-прежнему нельзя.
+ */
+
 export interface ModeCard {
   /** Готовая карточка для экрана Настроек. */
   el: HTMLElement;
@@ -68,7 +81,7 @@ export interface ModeCard {
  *        значило бы молча стирать выбор владельца
  * @param onPick  зовётся при смене ограды: соседним карточкам (песочница,
  *        монтирование) надо обновить свои строки состояния
- * @param mac     агент живёт на macOS: служба там есть с 0.8.0, но это демон
+ * @param posix     агент живёт на macOS: служба там есть с 0.8.0, но это демон
  *        launchd, а не служба Windows — секция рисуется словами харнесса, без
  *        UAC и брандмауэра, а галочек у неё нет вовсе (`service.toggles` пуст:
  *        нулевая сессия и правило брандмауэра — механизмы Windows). Галочки
@@ -80,7 +93,9 @@ export function modeCard(
   failure: unknown,
   stored: StoredService,
   onPick: (name: string, sandbox: boolean, title: string) => void,
-  mac = false,
+  posix = false,
+  linux = false,
+  onConfigWrite: (base: string | null, fresh: string | null) => void = () => {},
 ): ModeCard {
   const box = el("section", "card");
   box.append(el("h3", "", "Режим"));
@@ -91,6 +106,11 @@ export function modeCard(
   // всё ещё присылает её третьим пунктом, не должен уводить окно в запись
   // "service" в `agent_mode`. Ровно эта запись и снимала песочницу молча.
   const fences = (live?.choices || []).filter((c) => c && c.name && c.name !== LEGACY_SERVICE);
+  // 04.10: третья ступень лестницы — «Нулевая сессия» (name="session0",
+  // sandbox отсутствует). Присылает её только харнесс, у которого ступень
+  // существует (Windows); старый харнесс её не пришлёт — и лестница честно
+  // остаётся из двух ступеней, как раньше.
+  const session0Rung = fences.find((c) => c.name === "session0");
 
   // --- труба не ответила, режим не прочитался или выбирать не из чего
   //
@@ -136,12 +156,56 @@ export function modeCard(
   // в две стороны, и они не равны: лишняя ограда чинится одним щелчком, а
   // молча снятая — это и есть та беда, ради которой всё переписано. То же
   // правило и у харнесса: без следов ограды `modes.infer` выбирает песочницу.
-  let picked = choiceOf(live.name)?.name
+  let picked = stored.session0 && session0Rung ? "session0" : (live as ModeState & { ladder_name?: string }).ladder_name
+    && choiceOf((live as ModeState & { ladder_name?: string }).ladder_name as string)?.name
+    || choiceOf(live.name)?.name
     || (legacyPipe
       ? choiceOf("sandbox")?.name || fences[0].name
       : fences.find((c) => c.sandbox === !!live.sandbox)?.name || fences[0].name);
+  // Ограда под верхней ступенью: «Нулевая сессия» ограду не меняет, и для
+  // песочницы/записи в файл нужен тот забор, что стоял до неё.
+  let fencePicked = picked === "session0"
+    ? (choiceOf(live.name)?.name || choiceOf("sandbox")?.name || fences[0].name)
+    : picked;
   let session0 = stored.session0;
   let firewall = stored.firewall;
+  // Что СЕЙЧАС лежит в файле по ключу верхней ступени, и что владелец хочет
+  // видеть там. Записи идут СТРОГО ПО ОДНОЙ (очередь): два быстрых щелчка
+  // вкл-выкл больше не гонятся за одним файлом — вторая запись читает файл уже
+  // после первой и не падает в конфликт свежести с собственной карточкой
+  // (ревью 05.10). Меняется session0InFile только по факту записи.
+  // Успешная запись отдаёт рамке экрана ПАРУ отпечатков (base/fresh, ревью
+  // 06.10): base — по чему читали, fresh — что стало. Рамка принимает fresh
+  // как свой ТОЛЬКО при совпадении base со своим отпечатком — иначе «Сохранить»
+  // честно спросит про конфликт, а не молча легализует затирание чужой правки.
+  let session0InFile = stored.session0;
+  let session0Want: boolean | null = null;
+  let session0Busy = false;
+  const putSession0 = (v: boolean) => {
+    session0Want = v;
+    if (session0Busy) return;   // запись в полёте — досмотрит свежее желание, выйдя из неё
+    session0Busy = true;
+    const drain = async (): Promise<void> => {
+      while (session0Want !== null && session0Want !== session0InFile) {
+        const want = session0Want;
+        session0Want = null;
+        try {
+          const stamp = await persistSession0(shell, want);
+          session0InFile = want;
+          onConfigWrite(stamp.base, stamp.fresh);
+        } catch (e) {
+          // Фикс-волна 06.10 (P3-1): здесь НЕ гасим желание. Второй быстрый
+          // щелчок ставит его ВО ВРЕМЯ await выше — прежний catch затирал и
+          // его вместе с отказом первого, и файл не узнавал о втором решении.
+          // Теперь отказ первого не мешает: цикл увидит живое желание и
+          // запишет его; без желаний — выйдет. Повтор только по щелчку.
+          toast(`Выбор в файл не записался (${humanError(e).text}) — нажми «Сохранить», иначе ступень слетит при перезапуске.`);
+        }
+      }
+      session0Busy = false;
+    };
+    void drain();
+  };
   // Стоит ли служба. Пришло от трубы (SCM на Windows, файл демона на macOS),
   // но живой ответ оболочки свежее: после «Поставить»/«Снять» он меняется, а
   // ответ трубы остаётся с загрузки.
@@ -167,7 +231,7 @@ export function modeCard(
     const svc = installed === null ? "спросить не удалось" : installed ? "установлена" : "не установлена";
     // Хвост про службу — только там, где служба бывает, и её собственным
     // именем: «Служба Windows» на Mac было бы словом не про эту машину.
-    const svcTail = ` ${mac ? "Служба" : "Служба Windows"}: ${svc}.`;
+    const svcTail = ` ${posix ? "Служба" : "Служба Windows"}: ${svc}.`;
     if (legacyPipe) {
       // Врать «Сейчас: Служба» нельзя: службы-режима не существует, а какая
       // ограда стоит на самом деле, этот харнесс не сказал.
@@ -175,21 +239,34 @@ export function modeCard(
       return;
     }
     const src = live.explicit ? live.source : `записи в файле ещё нет, ограда выведена — ${live.source}`;
-    now.textContent = `Сейчас: ${live.title}.${svcTail} Источник: ${src}.`;
+    // Верхняя ступень побеждает в словах: включённая нулевая сессия — главное
+    // в «сейчас», называть вместо неё ограду значило бы умолчать о доверии.
+    const ladder = live as ModeState & { ladder_title?: string };
+    const nowTitle = ladder.ladder_title || live.title;
+    const root = nowTitle !== live.title ? ` (ограда — ${live.title})` : "";
+    now.textContent = `Сейчас: ${nowTitle}${root}.${svcTail} Источник: ${src}.`;
   };
 
   const syncPick = () => {
     for (const b of pickRow.querySelectorAll<HTMLButtonElement>(".choice-item")) {
       b.setAttribute("aria-checked", String(b.dataset.value === picked));
     }
+    // Выбор ограды = сход с верхней ступени: session0 выключается сам,
+    // молча оставить её включённой под «Песочницей» значило бы вернуть
+    // вторую правду, из-за которой галочку и растворили в лестницу.
+    if (picked !== "session0") session0 = false;
     syncPlan();
+    // P2-1: сюда приходят radio-cancel, щелчок по ограде и выключение ступени
+    // — все программные смены session0. Тумблер службы обязан показать их.
+    syncToggles();
   };
 
   // --- две ограды: названия и описания ЦЕЛИКОМ из `modes.catalogue()`.
   // Запирать здесь нечего: ни песочница, ни интерактивный прав администратора
   // не требуют (`needs_admin: false` у обеих) — админ нужен только службе, и
   // спрашивают его там, в её секции.
-  for (const c of fences) {
+  const fenceRun = fences.filter((c) => c.name !== "session0");
+  for (const c of fenceRun) {
     const b = el("button", "choice-item");
     b.type = "button";
     b.setAttribute("role", "radio");
@@ -197,10 +274,89 @@ export function modeCard(
     b.append(el("span", "choice-title", c.title), el("span", "choice-text", c.text));
     b.addEventListener("click", () => {
       picked = c.name;
+      fencePicked = c.name;
+      askBox.hidden = true;
       syncPick();
-      onPick(picked, c.sandbox, c.title);
+      // Сход с верхней ступени оградой — тоже согласие наоборот: ключ прав
+      // системы в файле пережить не должен (ревью 05.10: до сих пор файл
+      // молча держал session0=true при выбранной «Песочнице» на экране).
+      putSession0(false);
+      onPick(picked, !!c.sandbox, c.title);
     });
     pickRow.append(b);
+  }
+  // --- третья ступень: доверие с журналом. Выбор просит подтверждения один
+  // раз (слово Егора 28.09 о согласии), выключение — сразу. Без службы
+  // ступень заперта и говорит, где службу поставить.
+  const askBox = el("div", "mode-block session0-ask");
+  askBox.hidden = true;
+  if (session0Rung) {
+    const warning = (session0Rung as ModeChoice & { warning?: string }).warning
+      || live.session0_warning || SESSION0_WARNING_FALLBACK;
+    const b = el("button", "choice-item");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.dataset.value = "session0";
+    b.append(
+      el("span", "choice-title", session0Rung.title),
+      el("span", "choice-text", session0Rung.text),
+    );
+    // Ступень НЕ заперта и без службы (05.10, слово владельца «так и не
+    // ставится»): подтверждение «Разрешить права СИСТЕМЫ» само ставит службу —
+    // один пароль администратора, ровно как договорились 04.10. Запирая
+    // ступень, мы запирали единственную кнопку, которая службу ставит.
+    if (installed === false) {
+      b.append(el("span", "choice-text", "Службы ещё нет — подтверждение ниже поставит её само."));
+    }
+    b.addEventListener("click", () => {
+      if (picked !== "session0") {
+        picked = "session0";
+        syncPick();
+        askBox.hidden = false;
+        // Ограду НЕ меняем: верхняя ступень её сохраняет как страховку.
+        onPick(picked, !!choiceOf(fencePicked)?.sandbox, session0Rung.title);
+        return;
+      }
+      // Повторный щелчок по уже выбранной ступени — выключить её,
+      // вернувшись к ограде (как выключение прежней галочки — сразу).
+      picked = fencePicked;
+      askBox.hidden = true;
+      syncPick();
+      putSession0(false);
+      const fence = choiceOf(fencePicked);
+      if (fence) onPick(fence.name, !!fence.sandbox, fence.title);
+    });
+    pickRow.append(b);
+    askBox.append(
+      el("p", "receipt err", warning),
+      // 04.10, слово владельца: подтверждение называется тем, что разрешает,
+      // и ставит службу само, если её ещё нет (администратора спросят ОДИН
+      // раз — при установке службы, словами оговорки).
+      btn(linux ? "Разрешить права root" : "Разрешить права СИСТЕМЫ", "danger", async () => {
+        askBox.hidden = true;
+        session0 = true;
+        syncToggles();
+        // Согласие — не черновик: ключ уезжает в файл сейчас, а не кнопкой
+        // «Сохранить», которую после явного «разрешаю» никто не ищет (05.10).
+        putSession0(true);
+        if (linux || installed === false) {
+          try {
+            toast(await shell<string>("install_service"));
+            afterService();
+          } catch (e) {
+            toast(`Служба не поставилась: ${humanError(e).text} — ступень останется словами в файле до следующей попытки.`);
+          }
+        }
+      }),
+      btn("Не разрешать", "quiet", () => {
+        askBox.hidden = true;
+        picked = fencePicked;
+        syncPick();
+        const fence = choiceOf(fencePicked);
+        if (fence) onPick(fence.name, !!fence.sandbox, fence.title);
+      }),
+    );
+    pickRow.append(askBox);
   }
 
   // --- что ещё надо сделать, чтобы выбор не остался на бумаге
@@ -218,20 +374,25 @@ export function modeCard(
       );
       return;
     }
-    if (picked === live.name) {
+    // Ограда с оградой, а не ступень с оградой (аудит 06.10): picked бывает
+    // "session0" (верхняя ступень лестницы), а live.name — всегда забор.
+    // Прямое сравнение обещало «ограда сменится после сохранения» всякий раз,
+    // когда ступень и забор согласованы, — и с ним вечная кнопка перезапуска.
+    const pickedFence = picked === "session0" ? fencePicked : picked;
+    if (pickedFence === live.name) {
       // Предупреждения о текущем состоянии берём готовыми у харнесса: там уже
       // написано человеческими словами и «sandbox.enabled разошлась с режимом»,
       // и «session0 включена, а службы нет».
       for (const n of live.notes) planBox.append(el("p", "receipt err", n));
       return;
     }
-    planBox.append(el("p", "receipt", "Ограда сменится после сохранения и перезапуска программы."));
+    planBox.append(el("p", "receipt", "Ограда сменится после сохранения и перезапуска движка — окна это не трогает."));
     if (installed) {
       planBox.append(
         el(
           "p",
           "field-hint",
-          `${mac ? "Служба" : "Служба Windows"} останется на месте: она не режим, ограду не снимает и не включает. ` +
+          `${posix ? "Служба" : "Служба Windows"} останется на месте: она не режим, ограду не снимает и не включает. ` +
             "Снимать её ради смены ограды не нужно — но настройки она читает при своём старте, " +
             "поэтому после сохранения перезапусти её (кнопки ниже).",
         ),
@@ -245,7 +406,7 @@ export function modeCard(
   // старее окна: своих не пишем, говорим об этом прямо и галочки не трогаем —
   // они уедут в файл ровно такими, какими лежали.
   const option = live.service;
-  svcBox.append(el("h4", "", option?.title || live.service_title || (mac ? "Служба" : "Служба Windows")));
+  svcBox.append(el("h4", "", option?.title || live.service_title || (posix ? "Служба" : "Служба Windows")));
   const svcText = option?.text || live.service_text || "";
   if (svcText) svcBox.append(el("p", "choice-text", svcText));
   else {
@@ -266,7 +427,7 @@ export function modeCard(
   // Чего служба НЕ даёт — рядом с тем, что даёт, и ДО кнопки. На macOS это
   // окна и экран: их у процесса вне сеанса нет.
   const svcWarn = option?.warning || live.service_warning || "";
-  if (svcWarn) svcBox.append(el("p", "receipt err", svcWarn));
+  if (svcWarn) svcBox.append(el("p", "field-hint", svcWarn));
 
   /** Заперта ли установка службы и почему. Пустая строка — можно ставить. */
   const lockedWhy = (): string => {
@@ -274,7 +435,7 @@ export function modeCard(
     // На macOS пробы прав нет и быть не может: администратором здесь становятся
     // вводом пароля в системном диалоге, а не членством в группе, проверенным
     // заранее. Запирать кнопку по нашей слепоте — отнимать выбор.
-    if (mac) return "";
+    if (posix) return "";
     if (admin.known && !admin.canElevate) {
       return "Служба недоступна: у этой учётной записи нет прав администратора. Служба ставится один раз — " +
         "попроси того, кто хозяин компьютера, или войди под его учётной записью. " +
@@ -301,11 +462,11 @@ export function modeCard(
       svcClient.textContent =
         st === "running"
           ? "Движок и канал держит служба — это окно работает клиентом: своих процессов оно не " +
-            "поднимает, и «Перезапустить» их не тронет." +
+            "поднимает. Кнопки движка передают команды её надзору." +
             // Кто поднимает тело под службой — разное на разных системах:
             // на macOS это окно (TCC живёт у Helene.app), на Windows тело
             // поднимает сам движок в интерактивной половине (`session-host`).
-            (mac ? " Тело тула `computer` поднимает окно, пока оно открыто." : "")
+            (posix ? " Тело тула `computer` поднимает окно, пока оно открыто." : "")
           : "";
       // Ответ оболочки свежее ответа трубы: пересобираем всё, что от него зависит.
       installed = st !== "absent";
@@ -355,16 +516,18 @@ export function modeCard(
     installBtn.setAttribute("aria-disabled", String(!!why));
     if (installed === true) {
       svcAdmin.className = "field-hint";
-      svcAdmin.textContent = mac
+      svcAdmin.textContent = posix
         ? "Служба уже стоит. Снять её можно кнопкой выше — система спросит пароль администратора."
         : "Служба уже стоит. Снять её можно кнопкой выше — Windows спросит права администратора.";
       return;
     }
-    if (mac) {
+    if (posix) {
       svcAdmin.className = "field-hint";
       svcAdmin.textContent =
-        "Система спросит пароль администратора: положить описание службы в /Library/LaunchDaemons " +
-        "может только он. Больше ничего под этими правами не делается.";
+        (linux
+          ? "Система спросит пароль администратора для установки службы systemd."
+          : "Система спросит пароль администратора: положить описание службы в /Library/LaunchDaemons может только он.") +
+        " Больше ничего под этими правами не делается.";
       return;
     }
     if (why) {
@@ -383,7 +546,12 @@ export function modeCard(
   // Рисуем по списку из трубы (`service.toggles`), а не своим перечнем: харнесс
   // знает и умолчания, и оговорки. Ключи, которых окно писать не умеет, честно
   // называем — молча съесть галочку хуже, чем сказать «правь руками».
-  const toggleView = new Map<string, { row: HTMLElement; note: HTMLElement }>();
+  // ⚠ В карте — сам переключатель, а не только подписи (фикс-волна 06.10,
+  // P2-1): тумблер «Нулевая сессия» обязан следовать за ФАКТОМ в файле —
+  // ступень лестницы меняет его программно (radio-confirm/radio-cancel/
+  // fence-click → putSession0), и несинхронный aria-checked показывал выкл
+  // при включённой ступени и наоборот.
+  const toggleView = new Map<string, { row: HTMLElement; note: HTMLElement; sw?: HTMLButtonElement }>();
   const known: Record<string, { get(): boolean; set(v: boolean): void }> = {
     "service.session0": { get: () => session0, set: (v) => (session0 = v) },
     "service.firewall": { get: () => firewall, set: (v) => (firewall = v) },
@@ -434,13 +602,17 @@ export function modeCard(
     row.append(ask);
     const note = el("p", "field-hint");
     row.append(note);
-    toggleView.set(t.key, { row, note });
+    toggleView.set(t.key, { row, note, sw });
     togglesBox.append(row);
   }
 
   const syncToggles = () => {
     const s0 = toggleView.get("service.session0");
     if (s0) {
+      // Тумблер следует за ФАКТОМ (P2-1): его перевели программно — ступень
+      // лестницы (radio-confirm → session0=true, fence-click/radio-cancel →
+      // putSession0(false)) — и aria-checked обязан показать то же, что файл.
+      if (s0.sw) s0.sw.setAttribute("aria-checked", String(!!session0));
       s0.note.className = session0 && installed === false ? "receipt err" : "field-hint";
       s0.note.textContent = !session0
         ? `Выключено. Ключ service.session0 — его читает сама служба; на ограду «${choiceOf(picked)?.title || live.title}» не влияет.`
@@ -450,6 +622,9 @@ export function modeCard(
     }
     const fw = toggleView.get("service.firewall");
     if (fw) {
+      // Тот же гребень, что у нулевой сессии: программных смен у firewall нет,
+      // но синхронизация по факту стоит копейки и страхует будущие.
+      if (fw.sw) fw.sw.setAttribute("aria-checked", String(!!firewall));
       fw.note.className = "field-hint";
       fw.note.textContent = firewall
         ? "Включено (умолчание). Кнопка «Телефон» откроет порт через службу; прав системы агенту это не даёт и с нулевой сессией не связано."
@@ -457,6 +632,19 @@ export function modeCard(
     }
   };
 
+  // Журнал брокера — свидетель верхней ступени. Кнопка показывает файл
+  // broker.log в папке данных: он появляется с первым поручением.
+  if (session0Rung) {
+    const jRow = el("div", "actions");
+    jRow.append(
+      btn("Журнал поручений", "quiet", () => {
+        void shell("reveal_path", { path: "data/broker.log" }).catch((e) =>
+          toast(`Журнал не открылся: ${humanError(e).text}`));
+      }),
+      el("span", "field-hint", "Каждая просьба агента к службе — с исходом."),
+    );
+    svcBox.append(jRow);
+  }
   svcBox.append(svcRow, svcClient, svcAdmin, togglesBox);
 
   box.append(now, pickRow, planBox);
@@ -470,7 +658,7 @@ export function modeCard(
       "field-hint",
       "Ограда и служба — два разных вопроса. Ограду выбираешь здесь, и она раскладывается в ручки сама " +
         "(отдельного тумблера песочницы больше нет). Служба ставится поверх любой ограды и ни одну из них не снимает. " +
-        "Применяется перезапуском программы.",
+        "Применяется перезапуском движка.",
     ),
   );
   syncNow();
@@ -478,7 +666,7 @@ export function modeCard(
   syncAdmin();
   syncToggles();
   void svcRefresh();
-  if (!mac) {
+  if (!posix) {
     // Права спрашиваем после отрисовки: ответа может не быть вовсе, и ждать его
     // экрану незачем — как придёт, секция службы перерисуется сама. На macOS
     // спрашивать нечего: администратором там становятся вводом пароля.
@@ -490,9 +678,12 @@ export function modeCard(
 
   return {
     el: box,
-    name: () => choiceOf(picked)?.name || "",
-    title: () => choiceOf(picked)?.title || "",
-    sandbox: () => !!choiceOf(picked)?.sandbox,
+    // В `agent_mode` пишется ОГРАДА; верхняя ступень живёт отдельным ключом
+    // service.session0 (его служба читает сама). Карточка возвращает ограду
+    // под текущей ступеней, а название — той ступени, что выбрана.
+    name: () => (picked === "session0" ? (choiceOf(fencePicked)?.name || "") : (choiceOf(picked)?.name || "")),
+    title: () => (picked === "session0" ? (session0Rung?.title || "") : (choiceOf(picked)?.title || "")),
+    sandbox: () => (picked === "session0" ? !!choiceOf(fencePicked)?.sandbox : !!choiceOf(picked)?.sandbox),
     session0: () => session0,
     firewall: () => firewall,
     note: () => {
@@ -504,7 +695,7 @@ export function modeCard(
         );
       }
       // На macOS нулевой сессии нет — как и службы, которой её давать.
-      if (!mac && session0 && installed === false) {
+      if (!posix && session0 && installed === false) {
         bits.push("Нулевая сессия включена, но служба не установлена — дать её некому.");
       }
       if (legacyPipe) {
@@ -512,7 +703,7 @@ export function modeCard(
           `Харнесс называл режимом службу — записал ограду «${choiceOf(picked)?.title || ""}». Проверь, та ли она.`,
         );
       }
-      if (picked !== live.name && installed) {
+      if ((picked === "session0" ? fencePicked : picked) !== live.name && installed) {
         bits.push("Служба читает настройки при своём старте — перезапусти её, иначе ограда сменится только в окне.");
       }
       return bits.length ? " " + bits.join(" ") : "";

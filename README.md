@@ -1,287 +1,157 @@
-# Praxis
+# Praxis & Hélène
 
-An agent that lives in Telegram, on a desktop, and in files — and the runtime you build
-your own with.
+**A persistent AI agent, and a desktop home for agents you make your own.**
 
-Most of what follows is the part people re-implement badly and abandon: a real Telegram
-presence, a computer that can actually be driven, isolation that is honest about what it
-covers, and a byte-exact record of every call to the model. It is written, it runs in
-production, and the paths below say where each piece lives.
+Praxis is the agent runtime: memory, tools, Telegram, durable work and self-authorship.
+Hélène brings it to a desktop with a calm, paper-like interface, independent agents,
+voice, files and a dedicated Doctor. An agent can run locally or on your server.
 
----
+[Download Hélène](https://github.com/josephsteuerjr/praxis/releases/latest) ·
+[Release history](https://github.com/josephsteuerjr/praxis/releases) ·
+[Relay](https://github.com/josephsteuerjr/praxis-relay) ·
+[Build and release guide](desk/installer/RELEASE.md)
 
-## Telegram, in full — both transports, one accounting
+## A home for several agents
 
-An agent in Telegram is usually a toy bot: no history, no rooms, no idea who is speaking,
-one thread of text. This is not that. **Two transports** feed one set of rooms, contacts
-and archives, and the agent does not know which one carried a message.
+- **Independent agents.** Each agent has its own constitution, memory, settings, files
+  and runtime. Switch agents in the window, choose the default, or open a specific one.
+- **A deliberate beginning.** Create an agent from the default constitution, inherit and
+  edit an existing constitution, or write your own. Inspect the actual constitution file.
+- **Individual controls.** Start and stop one agent. Keep another running. Changes to the
+  agent list appear immediately, and files open from the selected agent's own tree.
+- **Recoverable removal.** Removal requires the agent ID and moves its files into an
+  archive instead of silently erasing its memory.
+- **A Doctor.** Create a dedicated diagnostic agent from the Agents card. It measures
+  the installation, distinguishes observations from diagnoses, proposes treatment,
+  verifies the result and reports it. Its constitution keeps it separate from patients'
+  conversations and requires owner approval for treatment beyond quiet reversible checks.
 
-- **Bot API** — one token from BotFather and the agent lives in Telegram without a human
-  account: long-poll `getUpdates` on its own thread, text and files out, reactions, bot
-  name and description, its own rooms read from its own archives.
-  → `desk/localharness/botapi.py`
-- **Your own account (MTProto, Telethon)** — a separate number for the agent, the same
-  interface behind an adapter: dialogs, history, joining, contacts, everything a person
-  has. On the author's server this is the main lane.
-  → `desk/localharness/mtproto.py`, `desk/localharness/mtproto_login.py`,
-  `praxis/mtproto_runner.py`
+The Doctor is a product feature, not an invisible repair service. Its knowledge and
+character can develop through the same authored mechanisms as other agents.
 
-What a bot **cannot** do — read a stranger's history, list dialogs, write first to someone
-who never wrote, join by invite link — comes back as a refusal in words. The agent is never
-handed an imitation of a capability it does not have.
+## Conversations, images, files and voice
 
-What the core adds on top of either transport:
+- **Paper-like chat.** Readable typography, resizable panels, remembered drafts and reading
+  positions, visible activity, and controls that reflect the actual engine state.
+- **Images.** Generate and edit images through the ChatGPT subscription relay from a
+  Codex or GLM conversation. Images have independent settings and reference-image support.
+  View the whole image inline, open the internal viewer, fit or zoom, then return to chat.
+- **File handling.** Attach ordinary documents as well as pictures. Choose folders,
+  search and select several files, or use paste and drag-and-drop. Save with an explicit
+  name and destination, a replacement decision and a completion receipt. Remote-agent
+  attachments are saved to the person's computer.
+- **Voice.** Record in chat, including the Alt+Enter shortcut. Local speech engines use
+  Whisper for recognition and Piper for synthesis; the server supports its STT/TTS lane.
+  Engine updates preserve downloaded models where compatible.
+- **Phone and web.** Use the paired mobile interface or Telegram Mini App with the same
+  conversation and settings. Configure an external HTTPS address for access away from home.
 
-| what | where |
+An image relay can remain available while a different provider supplies the main voice.
+Hélène 1.4.1 fixes empty image credentials and preserves the auxiliary relay on update.
+
+## Telegram as a real place
+
+Use a Bot API token or a separate Telegram account through MTProto/Telethon. The transports
+have different capabilities; unsupported operations return an explicit explanation.
+
+The runtime includes:
+
+- Private and group conversations, exact forum-topic routing, reply targets and room modes.
+- Topic-aware archives, history retrieval, conversation search and participant orientation.
+- Contacts, membership, profile and moderation tools within the account's actual rights.
+- Durable outgoing messages and staged files, idempotency keys and delivery receipts.
+- Reactions, media, follow-ups and owner-controlled admission.
+- Reusable Telegram skills for raw account operations, search, history archaeology,
+  reconnect delivery, thread hygiene and moderation.
+
+Under the explicit reply-hand contract, an agent speaks by calling `reply`. Ordinary
+model text is its private note, and a completed empty delivery plan does not prove that
+a message was sent.
+
+## Memory, continuity and self-authorship
+
+Markdown and JSONL are the inspectable canon. SQLite/FTS accelerates lookup rather than
+becoming the source of the agent's behaviour.
+
+- Recall, facts, room memory, journals, personal notes, projects and ongoing intentions.
+- Compaction and retained history with provenance, refresh and recovery mechanisms.
+- Authored skills and identity revisions rather than installation-time overwrites of a
+  living agent's constitution.
+- Independent model/provider settings and recorded context about the current runtime.
+- Durable runs with model calls, tool results, checkpoints, artifacts and resume state.
+- Recorded frames and integrity-checked result references for diagnosing what a run saw.
+
+The current Praxis mirror also includes confidence-aware memory hooks, open questions,
+Forge task contracts and the literal durable-frame reader. Frame records may be scrubbed
+for secrets: they certify the retained representation, not byte identity with provider traffic.
+
+## Engineering work that survives a chat turn
+
+Forge gives work an explicit goal, source directory and durable record. It supports
+isolated worktrees, supervised processes, independent coding workers, dependency-aware
+swarms, checkpoints, verification and lessons. The current Praxis task contract can record
+success criteria and verification commands and reuse matching verification evidence.
+
+The ordinary tool set includes file search, exact edits, patches, code outlines, shell
+commands, tests, web access and computer tools. Tool descriptions and compact pointers
+are generated for the current channel and authority; an agent can inspect the full schema.
+
+Self-development uses proposals and reviewable changes with checks and rollback records.
+The owner controls whether proposals can merge automatically.
+
+## Local, remote and computer access
+
+Hélène can host an agent locally or connect to a server. Transfer tools carry memory,
+skills, authored code changes and continuity between installations. Owner-authorized
+relay-login transfer supports a connected server without putting credentials in chat.
+
+Computer access uses native bodies and explicit scopes for reading, files, processes and
+applications. Windows provides UI Automation, screen capture, input, a service and a
+Session 0 broker. Linux and macOS have their own desktop integrations and platform permissions.
+
+Execution mode and service mode are separate choices. Interactive execution uses the
+owner's rights; sandbox and broker support depend on the platform. The installation
+shows the capabilities and limits of the selected mode rather than promising a universal fence.
+
+## Updates that preserve a living installation
+
+- A separate update path with preparation, progress, cancellation and a clear result.
+- Existing data/code paths and constitutions are retained.
+- Agent-authored code changes are carried by three-way reconciliation; unresolved
+  changes remain available for inspection.
+- Installed-code receipts are captured after reconciliation, so a legitimate carried
+  change does not trigger an automatic rollback by itself.
+- An open acceptance trial is reported explicitly before another update can begin.
+- Windows has trial/rollback controls. Backup and agent-transfer paths preserve the
+  relevant authored data and avoid duplicating downloaded dependency caches.
+
+## Platforms and downloads
+
+| Platform | Delivery |
 |---|---|
-| Forum routing done right: exact root/topic dispatch and a stable conversation id per topic — a **place** is a room, a reply is an address, and the two are never confused | `praxis/telegram_topics.py`, `praxis/rooms.py` |
-| Append-only group archive with topic and participant projections, search and orientation — the agent walks into a 10 000-message chat and knows where it is | `praxis/group_context.py` |
-| Address book that never stores access hashes | `praxis/telegram_contacts.py` |
-| Membership state machine for owner and agent, fsync-JSONL, survives a crash mid-join | `praxis/telegram_membership.py` |
-| Durable outbox: stable MTProto `random_id`, immutable staged files — a restart in the middle of a send does not duplicate and does not lose | `praxis/telegram_outbox.py` |
-| Ledger of "write to someone" requests and their answers | `praxis/telegram_followups.py` |
-| Challenge confirmation for account-critical operations | `praxis/telegram_confirmation.py` |
-| Owner inbox with typed outcome and dedupe | `praxis/owner_delivery.py` |
-| Moderation hands, duplicate audit, room registry, route table | `praxis/telegram_moderation.py`, `telegram_duplicate_audit.py`, `telegram_registry.py`, `telegram_routes.py` |
-| Voice in and out: STT (faster-whisper) and TTS (Silero, Piper) on the server | `praxis/stt_rpc.py`, `praxis/silero_tts_*.py` |
-| A Telegram Mini App — the same interface as the phone, entered by `initData` signature | `desk/miniapp/`, `POST /pair/telegram` |
+| Windows | Installer, portable ZIP, optional voice-engine archive, native desktop and service |
+| Linux | DEB and RPM packages, Electron desktop, service and rights-broker integration |
+| macOS, Apple Silicon | Native archive and installer script built by GitHub CI from the matching Windows release |
+| Server / phone | Server channel, paired mobile interface and Telegram Mini App |
 
-Who may start a turn is the owner's decision (`telegram.allow_from`: owner / listed / any).
-Everyone else's messages still land in memory — they simply do not wake the agent.
+Linux Electron cannot infer a stationary touchpad contact from wheel events; its scrolling
+settings expose that limitation. macOS screen and accessibility operations depend on TCC
+permissions. Package/build checks and real-machine interaction are separate evidence.
 
-Twenty tools, so the model can act rather than ask: `send_message`, `send_file`,
-`send_media`, `react`, `read_chat`, `read_context`, `search_chats`,
-`search_private_messages`, `group_context`, `inbox_list`, `inbox_read`, `admit`, `get_id`,
-`manage_room`, `freeze_chat`, `freeze_contact`, `telegram_account` (join / leave / raw
-dispatch behind a confirmation), `set_avatar`, `update_profile`, `restart_mailbot`.
+## Source and release provenance
 
----
-
-## Files, code, projects
-
-`fs_read`, `fs_write` (refuses to clobber or truncate), `fs_edit` (exactly one occurrence
-or nothing), `fs_search`, `fs_ls`, `code_outline`, `code_map`, `run`, `run_tests`,
-`pip_install` into a project venv, `shell`. Projects are real: `project_create` gives one
-its own git and quota (`praxis/selfgit.py`, `praxis/workshop.py`).
-
-**Durable coding** is a separate lane for work that outlives one turn: `coding_session`
-binds a goal to a directory in an isolated worktree, `coding_process` supervises long
-processes, `coding_agent` spawns independent subagents with fresh context, `coding_swarm`
-coordinates them over a dependency graph, `coding_checkpoint` / `coding_verify` /
-`coding_learn` close the loop. → `praxis/work_engine.py`, `praxis/forge_worker.py`,
-`praxis/forge_swarm.py`
-
-The agent also writes its own code: `start_proposal` / `submit_proposal` opens a branch and
-a separate checkout, runs the full test suite in a sandbox and records the verdict; the
-owner merges — or the agent does, if the owner allowed it. → `praxis/selfdev.py`
-
----
-
-## Remote: the same window onto a core that lives elsewhere
-
-The agent can live on this machine or on a server, and the window does not change. `remote`
-mode points it at a channel over HTTPS (`desk/server/`, Docker, with the STT box);
-`carry.py` exports the whole agent — memory, constitution, skills, its personal git, logins
-— as one archive and imports it on the other side. The Praxis application is the same
-window onto a core running under a harness of its own. → `desk/localharness/carry.py`,
-`desk/server/README-СЕРВЕР.md`, `remote/`
-
----
-
-## Computer use: UIA, screen, input, processes
-
-A native driver, not a screenshot loop. `praxis-body` speaks UI Automation through COM,
-takes the screen, sends input, walks files and runs processes inside Job Objects, and
-journals what it did; `praxis-bridge` is a WSS relay with a durable frame spool and
-content-addressed artifacts. Protocol `praxis.body.v1`. → `praxis/body/crates/`
-
-Three ways to run it, and the difference is who owns the desktop:
-
-- **delegated from the sandbox** — the agent sits in an AppContainer while the driver lives
-  outside it, so windows are reachable even under isolation;
-- **interactive** — the owner's own rights, nothing more and nothing less;
-- **Session 0** — a LocalSystem service (`desk/svc/`) with a rights broker: one named pipe,
-  one token, a journal with before/after. For people who know what that sentence means.
-
-Rights are four scopes (`computer.read`, `computer.files`, `computer.process`,
-`computer.apps`), granted by the owner as checkboxes and re-read on every call. Typing goes
-one `SendInput` at a time with a pause — recipients with asynchronous input (WinUI, TSF)
-read `VK_PACKET` when they drain the queue, and a burst arrives as one last character.
-
----
-
-## Isolation that is honest about its edges
-
-**The mode is the fence around the tools**, and there are two of them
-(`desk/localharness/modes.py`):
-
-- **`sandbox`** — the agent's `shell` runs in a Windows container and file tools cannot
-  leave the product folder; the owner's secrets are closed to it. No administrator rights
-  needed. The fence covers `shell` and the file tools — and the documentation says so
-  instead of implying more.
-- **`interactive`** — no fence: everything runs with the owner's rights. Elevation is asked
-  for one action at a time, through a UAC prompt.
-
-The one door out of the sandbox is a folder: what the owner lists in `sandbox.mounts`
-appears to the agent as `data/workspace/mnt/<name>`; the agent may **ask** with
-`mount_request`, only a human opens it. Same shape for privileges: `broker_request` asks
-for one command, the window shows it, the broker runs it only after a "yes".
-
-The Windows service is an option **on top of** either mode, never a third mode: it starts
-the harness in the owner's session, keeps the broker, and does not touch isolation either
-way.
-
----
-
-## About a hundred tools — and the agent sees all of them, every turn
-
-The tool set is code-generated per channel (owner, the agent itself, trusted people with a
-scope) — 99 on the author's install — and the window shows the same descriptions the model
-reads. Speech and turn (`reply`, `say`, `stay_silent`, `narrate`, `end_turn`, `speak`),
-memory and self-authorship (`recall`, `remember`, `journal`, `update_self`,
-`manage_identity` — versioned revisions of SOUL / VOICE / CURRENT — `write_skill`,
-`manage_desire`), self-tuning (`switch_brain`, `manage_perception`, `manage_appetite`,
-`manage_autonomy`, `focus`, `rest`, `my_capabilities`), its own code, Telegram, files,
-durable coding, runs, intentions and time, web, computer, host control.
-→ `praxis/tool_offerings.py`
-
----
-
-## The whole outgoing frame, captured
-
-Every call to the model is recorded in full — not a summary, the frame itself.
-`praxis/frame_trace.py` marks the zones — `persona`, `dynamic`, `evidence`, `situation`,
-`messages`, `tools` — and attaches the metadata to an idempotent `model-input` receipt;
-`mark()` returns the same object, so the frame is byte-for-byte identical with the
-instrument and without it, and three different zeros stay distinguishable ("did not fit the
-budget" ≠ "branch not taken" ≠ "empty"). `praxis/frame_layout.py` holds the shape: foreign
-text enters the document only through a gutter (`> `, `>CR> `) and never stands in column
-zero; the end of a section is counted by a meter, not guessed by a regexp.
-
-Calls land in `memory/.state/llm_calls.jsonl` with role, model, tokens and cache; the
-window shows what exactly went out and what came back from cache; shadow snapshots of the
-frame are compared against each other. Every substantial turn is a durable run —
-`praxis/run_manager.py`: manifest, append-only WAL, `ResultRef`, recovery, resume on a
-strict plan with budgets.
-
----
-
-## And the rest, briefly
-
-- **Memory is files.** `soul/SOUL.md`, `VOICE.md`, `self/CURRENT.md` with versioned
-  self-authorship and provenance; skills as markdown; a journal, dossiers of people,
-  desires, notes. Append-only life memory with a hot layer and compaction
-  (`praxis/memory_life.py`), trust classes for sources (`praxis/memory_provenance.py`), a
-  rebuildable SQLite FTS (`praxis/memory_fts.py`). A portable git ships with the product,
-  so every edit to the soul is committed and any of it can be rolled back.
-- **A subscription for a brain.** [Praxis Relay](https://github.com/josephsteuerjr/praxis-relay)
-  turns a ChatGPT Plus/Pro subscription into a local OpenAI-compatible API and ships inside
-  Hélène as `helene-relay.exe`. No Codex system prompt on top of the agent's constitution;
-  the model catalog comes from the backend; tool schemas are rewritten for the strict
-  validator on the fly — proven on a turn carrying 98 tools.
-- **Window, phone, mini-app.** A Tauri 2 window whose static files are read from disk (edit
-  the interface without rebuilding the exe): chat with rooms, the turn panel with steps and
-  tool receipts, context, the agent's files with editing, journal, system, settings. The
-  phone is a PWA behind a QR code; the mini-app is the same application inside Telegram.
-- **One archive to install.** Embedded Python with every dependency, portable git, the
-  window, the service, the core, the computer driver and the relay. Updating in place
-  merges settings, never touches `data/`, and replaces the interface only if the release
-  changed it.
-
----
-
-## macOS (Apple Silicon)
-
-Since 0.7.1 Hélène also ships for macOS on Apple Silicon (M1 and later, macOS 14 or newer).
-One line installs it. The archive is fetched with `curl`, so Gatekeeper never sees a browser
-download — the build is not signed with a Developer ID:
-
-```sh
-curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
-```
-
-Run it as the user who is logged in at the Mac's screen, in that user's own Terminal — no
-`sudo`, no `su`. The wizard is a window: `open` starts it in the session the Terminal lives
-in, as that session's owner, so under `sudo` it would not run as root, and after `su` into
-another account it starts as the first user and cannot read the second one's home. The
-script refuses in words in all three cases (`sudo`, `su`, no GUI session over ssh) before
-downloading anything. Administrator rights are not needed; the app asks for the
-administrator password itself when it needs one (the service, privileged actions).
-
-The script checks the machine and the OS, downloads `Helene-<version>-macos-arm64.zip` and
-its `.sha256` (the release tag is stamped into the script by the build), verifies the sum,
-unpacks into `~/Library/Caches/app.helene.install/staging` and opens the setup wizard
-(`Helene Setup.app`), which installs into `~/Applications/Helene`:
-
-- `Helene.app` — the window and the menu-bar icon (`app.helene.desk`); `Helene Setup.app` —
-  the wizard; `helene-relay` — the ChatGPT subscription relay.
-- `runtime/` — its own CPython 3.14 with every package, voice included (`faster-whisper`,
-  `piper-tts`), and `runtime/git/` — git built from source, so the agent's own repository
-  works out of the box. Nothing is installed into the system.
-- `tree/` — the agent code, byte for byte the same as in the Windows archive of the same
-  release; `data/` — the agent's memory, born on first launch.
-- The `shell` tool runs under a seatbelt (`sandbox-exec`) profile: the agent's commands see
-  the runtime and the code and write only into its own home. No administrator rights.
-- Since 0.8.0: `helene-body` and `helene-bridge` — the computer driver (the `computer`
-  tool: screen, windows, keyboard and mouse through CoreGraphics, the window tree through
-  Accessibility, files and processes), started by the engine next to itself, outside the
-  seatbelt, when "Computer control" is on. Two system permissions are needed — "Screen &
-  System Audio Recording" and "Accessibility" — and without them the body refuses in words
-  (a capture without Screen Recording is a refusal with a hint, not the wallpaper).
-  Because the build is signed ad hoc, both permissions drop after every update: remove
-  Helene from both lists and add it again. The privilege broker is the app itself: the agent
-  asks, the owner sees the command and the reason, macOS asks for the password in its own
-  dialog.
-- Since 0.8.0: the service without a login session — a launchd daemon `app.helene.svc`
-  running as the owner, installed and removed from the "Service" card (macOS asks for the
-  administrator password). Telegram and the phone keep answering when no window is open and
-  after you log out. It has no windows and no screen: a process outside your session sees no
-  desktop, so under the service the `computer` body is started by the window while the
-  window is open. With FileVault on, nothing runs after a reboot until the first login —
-  the disk is locked until then.
-
-Run the same line again to update: the script sees the installed copy, stops it and installs
-over it without touching `data/` or `helene.json` — the window's "Check for updates" does the
-same through the same script. `sh install.sh --uninstall` removes the program and keeps the
-data; `--uninstall --purge` removes both.
-
-What the macOS build does **not** have, on purpose — and the documents inside say so: Intel
-Macs, a Developer ID signature, notarization or a dmg (hence `install.sh` and the dropping
-permissions), and firewall rules (macOS asks by itself). The archive is built on GitHub
-Actions (`.github/workflows/macos.yml` → `desk/installer/build_mac.py`) and carries a
-passport with every source and checksum; the body, the broker and the service are built and
-exercised there on a real Mac, but nobody has yet clicked through the permission dialogs or
-the password prompts by hand — on the runner `sudo` needs no password, which is not what a
-person's machine does. The checklist is in `ПЕРВЫЙ-ЗАПУСК.md` inside the archive.
-
----
-
-## Praxis, Hélène, and who to talk to
-
-**Praxis** is the agent this runtime was written for and against: she lives on a server,
-moderates a chat, writes her own code, keeps her own memory — and she is on Telegram as
-[@praxis_intelligence](https://t.me/praxis_intelligence).
-
-**Hélène** is the desktop edition — Windows, and since 0.7.1 macOS on Apple Silicon: a
-runtime for building **your own** agent, not a finished personality. It ships with a template constitution and twenty skills, and what the
-agent becomes from there is between you and it.
-
-Author: Yegor Kosyrev — Telegram [@tatarskiy_e4pochmak](https://t.me/tatarskiy_e4pochmak).
-
----
-
-## The repository
-
-| folder | what it is |
+| Path | Purpose |
 |---|---|
-| [`praxis/`](praxis) | the core: durable runs, files-as-canon memory, Telegram, self-authorship |
-| [`helene/`](helene) | the Windows edition of that core, declared as a layer — only the files that differ, with a table saying how far each one is and why |
-| [`desk/`](desk) | the Hélène application: window, channel, local runner, shell, service, installer, the macOS build (`installer/build_mac.py`, `installer/install.sh`) |
-| [`remote/`](remote) | the Praxis application: the same window onto a core that lives on a server |
+| [`praxis/`](praxis) | Sanitized current production runtime; no private identity or live memory |
+| [`helene/`](helene) | Declared edition layer for Hélène's frozen package core |
+| [`desk/`](desk) | Desktop, harness, Doctor, installers, mobile interfaces and platform builds |
+| [`remote/`](remote) | Remote-hosting components |
+| [`CORE-SOURCE.json`](CORE-SOURCE.json) | Production Praxis source provenance |
+| [`HELENE-SOURCE.json`](HELENE-SOURCE.json) | Frozen Hélène core, layer and package/CI source provenance |
 
-Releases of Hélène are published here — one archive that unpacks into a folder on Windows,
-and for macOS a zip with `install.sh` next to it. The relay is a product of its own:
-[praxis-relay](https://github.com/josephsteuerjr/praxis-relay).
+The production mirror and the packaged edition have separate revision records. Published
+assets include SHA-256 checksums. The macOS workflow checks that its source Windows archive
+exists under the same version before compiling, then validates its contents and passport.
 
 ## Licence
 

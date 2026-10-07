@@ -39,7 +39,8 @@ import body_client
 import computer_memory
 import serverd_client
 import selfdev
-from process_liveness import is_process_alive
+import process_scope
+from process_liveness import is_process_alive, process_started_at
 
 
 log = logging.getLogger("praxis-forge")
@@ -96,17 +97,8 @@ def _atomic_text(path: Path, text: str) -> None:
 
 
 def _proc_started_at(pid: int) -> str:
-    """Метка рождения процесса — то, чего НЕ переживает перезапуск. '' — не прочитал.
-
-    Берём 22-е поле /proc/<pid>/stat (starttime в тиках с загрузки). Два разных процесса
-    с одним номером почти наверняка родились в разные тики, а после рестарта контейнера —
-    гарантированно."""
-    try:
-        with open(f"/proc/{int(pid)}/stat", encoding="utf-8", errors="replace") as fh:
-            raw = fh.read()
-        return raw.rsplit(")", 1)[1].split()[19]
-    except Exception:
-        return ""
+    """Shared kernel birth identity; absence is explicitly unknown."""
+    return process_started_at(pid)
 
 
 def _owner_alive(pid: int, started_at: str = "") -> bool:
@@ -601,6 +593,27 @@ def _cap(text: str, limit: int = 16000) -> str:
     return text[:head] + f"\n… вырезано {len(text)-head-tail} символов …\n" + text[-tail:]
 
 
+def _ownership_error(path: Path) -> str:
+    """Both worktree and shared Git metadata must belong to this agent.
+
+    The installed code root remains eligible for selfdev; a linked checkout into
+    an owner's common-dir is not made ours by its location under BASE.
+    """
+    path = path.resolve()
+    roots = (BASE.resolve(), REPO.resolve())
+    if not any(path == r or r in path.parents for r in roots):
+        return "Forge не пишет в чужой каталог: создай независимый clone в своём workspace (без --shared)."
+    git = _git_root(path)
+    if git is not None:
+        probe = _run(["git", "-C", str(git), "rev-parse", "--path-format=absolute", "--git-common-dir"])
+        if probe.returncode or not probe.stdout.strip():
+            return "Forge: принадлежность Git metadata не установлена; запись не начата."
+        common = Path(probe.stdout.strip()).resolve()
+        if not any((git == r or r in git.parents) and (common == r or r in common.parents) for r in roots):
+            return "Forge: общий .git находится вне собственного дома/кода; чужие refs/index не изменены. Создай независимый clone."
+    return ""
+
+
 def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
     task = get(task_id)
     if not task:
@@ -614,6 +627,10 @@ def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
         return task, root, ""
     if not root.is_dir():
         return task, None, _missing_root_reason(task, root)
+    for candidate in (root, Path(task.get("source_root") or root), Path(task.get("source_git") or root)):
+        error = _ownership_error(candidate)
+        if error:
+            return task, None, error + " Сохранённая задача и её файлы оставлены на месте."
     return task, root, ""
 
 
@@ -2000,6 +2017,9 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
     source, label = _resolve_target(target)
     if source is None:
         return f"Coding-задача не открыта: {label}"
+    denied = _ownership_error(source)
+    if denied:
+        return denied
     isolation = str(isolation or "auto").strip().lower()
     if isolation not in {"auto", "worktree", "direct"}:
         return "isolation: auto | worktree | direct"
@@ -2015,6 +2035,8 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
     worktree_root = ""
     isolation_note = ""      # почему изоляция вышла не такой, как просили — её право знать
     is_self = source == REPO.resolve() and label == "self"
+    if is_self and isolation == "direct":
+        return "Собственный код меняется через selfdev proposal, не через direct. Выбери isolation=auto."
     if is_self and isolation != "direct":
         proposal = selfdev.begin(goal)
         if not proposal.get("ok"):
@@ -2526,7 +2548,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600) -> str:
     seconds = max(0, int(timeout or 0))
     t0 = time.monotonic()
     try:
-        proc = subprocess.run(command, shell=True, cwd=str(place), capture_output=True, text=True, encoding="utf-8",
+        proc = process_scope.run(command, shell=True, cwd=str(place), capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=(seconds or None))
         out = (proc.stdout or "") + (proc.stderr or "")
         code, status = proc.returncode, "ok" if proc.returncode == 0 else "failed"
@@ -2600,7 +2622,7 @@ def _pid_alive(pid: int, started_at: str = "") -> bool:
         return False
     local = _RUNNERS.get(int(pid))
     if local is not None:
-        if local.poll() is None:
+        if not process_scope.reap_if_done(local):
             return True
         _RUNNERS.pop(int(pid), None)
         return False
@@ -2615,13 +2637,8 @@ def _unit_state(path: Path) -> dict:
     if isinstance(result, dict):
         pid = int(request.get("supervisor_pid") or 0)
         local = _RUNNERS.get(pid)
-        if local is not None:
-            try:
-                local.wait(timeout=.2)
-            except subprocess.TimeoutExpired:
-                pass
-            if local.poll() is not None:
-                _RUNNERS.pop(pid, None)
+        if local is not None and process_scope.reap_if_done(local):
+            _RUNNERS.pop(pid, None)
         return {**request, **result, "id": request.get("id") or path.name}
     pid = int(request.get("supervisor_pid") or 0)
     born = str(request.get("supervisor_started_at") or "")
@@ -2681,7 +2698,10 @@ def _spawn_runner(script: Path, request: Path, supervisor_log: Path) -> int:
     else:
         kwargs["start_new_session"] = True
     try:
-        proc = subprocess.Popen([sys.executable, str(script), "--request", str(request)], **kwargs)
+        # Durable Forge children outlive an interrupted foreground step.
+        owner = process_scope.current_scope().split('/step/')[0]
+        with process_scope.bind(owner + '/forge'):
+            proc = process_scope.spawn([sys.executable, str(script), "--request", str(request)], **kwargs)
         _RUNNERS[int(proc.pid)] = proc
     finally:
         fh.close()
@@ -2722,15 +2742,14 @@ def _kill_identity(pid: int, started_at: str = "", expect: str = "") -> str:
       3. метки нет, но командная строка содержит наш уникальный путь запроса.
     Ни одно не сработало — не убиваем вслепую и говорим, что доказать нечем (это не
     запрет: в отказе сказано, чем посмотреть и как остановить руками).
-    На Windows /proc нет, метка пустая — поведение остаётся прежним."""
+    На Windows метка — FILETIME. Отсутствие метки никогда не разрешает сигнал."""
     local = _RUNNERS.get(int(pid))
     if local is not None and local.poll() is None:
         return ""
     born = _proc_started_at(pid)
     if not born:
-        # Номера уже нет (killpg сам скажет «уже завершён») либо ядро метки не даёт —
-        # доказывать нечего и незачем.
-        return ""
+        return (f"не трогаю: тождество процесса {pid} не доказано — метка рождения "
+                "недоступна; отсутствие метки не означает, что PID принадлежит Forge")
     if started_at:
         if born == started_at:
             return ""
@@ -2747,40 +2766,11 @@ def _kill_identity(pid: int, started_at: str = "", expect: str = "") -> str:
 def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
     if not pid:
         return "pid отсутствует"
-    doubt = _kill_identity(pid, started_at, expect)
-    if doubt:
-        return doubt
-    # Окно между TERM и KILL — то же место, где номер может уйти другому: наш умер от
-    # TERM, ядро отдало номер, и голое «жив?» отправило бы SIGKILL уже постороннему.
-    born = started_at or _proc_started_at(pid)
-    try:
-        if os.name == "nt":
-            # 20.09: returncode обязателен. taskkill молчит успехом и в случае отказа:
-            # rc=1 (доступ запрещён) или rc=128 (не найден) прежде выглядели как «остановлен».
-            # Издание: вывод taskkill читаем как UTF-8 с заменой — на русской консоли
-            # (cp866) он иначе падал UnicodeDecodeError.
-            proc = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                                  capture_output=True, text=True, encoding="utf-8",
-                                  errors="replace", timeout=15)
-            rc = int(proc.returncode)
-            if rc == 0:
-                return "остановлен"
-            if rc == 128:
-                return "уже завершён"
-            detail = (proc.stderr or proc.stdout or "").strip()[:120]
-            return f"не остановлен: taskkill rc={rc}: {detail}".rstrip(": ")
-        else:
-            os.killpg(pid, signal.SIGTERM)
-            deadline = time.monotonic() + 1.0
-            while time.monotonic() < deadline and _pid_alive(pid, born):
-                time.sleep(.05)
-            if _pid_alive(pid, born):
-                os.killpg(pid, signal.SIGKILL)
-        return "остановлен"
-    except ProcessLookupError:
-        return "уже завершён"
-    except Exception as exc:
-        return f"не остановлен: {type(exc).__name__}: {exc}"
+    if process_scope.stop_owned(pid):
+        return "остановка своего process scope запрошена"
+    return ("не трогаю дерево по сохранённому PID: живого job/group handle нет. "
+            "Метка рождения и командная строка не дают атомарного владения потомками; "
+            "результаты сохранены, используй общий стоп владельца.")
 
 
 def process(task_id: str, action: str, process_id: str = "", command: str = "",

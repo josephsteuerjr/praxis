@@ -59,7 +59,12 @@ class GlmEffortWireTests(unittest.TestCase):
                 import json
                 from types import SimpleNamespace
                 import anthropic
-                import httpx
+                # SDK на httpx2 отвергает объекты старого httpx («Invalid http_client
+                # argument»); мокаем тем пакетом, что использует сам SDK.
+                try:
+                    import httpx2 as httpx
+                except ImportError:
+                    import httpx
                 import llm
 
                 self = TestCase()

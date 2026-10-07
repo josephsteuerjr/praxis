@@ -467,6 +467,13 @@ def _normalize(cfg: dict) -> dict:
     # PASS 9.2: блок иммунитета (second_opinion — задел, дефолт false) — тоже пропускаем
     if isinstance(cfg.get("immune"), dict):
         out["immune"] = cfg["immune"]
+    # Images are an independent resource, never a text/evaluator role.
+    # Absent config stays disabled; deployment installs explicit values and receipt.
+    if isinstance(cfg.get("image_channel"), dict):
+        out["image_channel"] = {key: str(cfg["image_channel"].get(key) or "") for key in ("base_url", "api_key")}
+    if isinstance(cfg.get("images"), dict):
+        import imagegen
+        out["images"] = imagegen.normalize(cfg["images"])
     return out
 
 
@@ -503,6 +510,10 @@ def _journal(msg: str) -> None:
 
 def _diff_roles(old: dict, new: dict) -> list[str]:
     out = []
+    if old.get("images") != new.get("images"):
+        image = new.get("images") or {}
+        out.append(f"изображения: {'включены' if image.get('enabled') else 'выключены'}, "
+                   f"{image.get('model') or 'не настроены'}, качество {image.get('quality') or 'auto'}")
     for role in ROLES:
         o, n = (old.get("roles") or {}).get(role) or {}, (new.get("roles") or {}).get(role) or {}
         if (o.get("model"), o.get("framework")) != (n.get("model"), n.get("framework")):
@@ -639,6 +650,9 @@ def update_config(changes: dict) -> dict:
                 cfg.setdefault(sect, {}).setdefault(k, {}).update(v)
     if isinstance(changes.get("limits"), dict):
         cfg.setdefault("limits", {}).update(changes["limits"])
+    if isinstance(changes.get("images"), dict):
+        import imagegen
+        cfg.setdefault("images", {}).update(imagegen.validate(changes["images"]))
     save_config(cfg)
     fresh = _normalize(cfg)
     try:
@@ -1334,6 +1348,16 @@ _SIGHTED_GLM_V_RE = re.compile(r"(?i)^glm-\d+(?:\.\d+)?v(?:$|-flashx?$)")
 # hallucinate. flashx is NOT covered (1311, outside subscription).
 _SIGHTED_GLM_FLASH_RE = re.compile(r"(?i)^glm-(?:4\.6|5(?:\.\d)?)-flash$")
 
+# Бюджет изображений на ОДИН запрос по ногам (01.10). Числа из фактов, не из док:
+# живые пробы glm-5.3-flash (рецепты desk-notes/evidence/UI-01.10/vision-canary-glm-*)
+# — транспорт принимает и 10 картинок, но совместная точность падает с числом:
+# 3 — стабильно, 4–5 — по одной ошибке, 10 — развал ответа. Кодекс-подписка
+# закончилась, живой проверки openai-ноги больше нет: владельцем назначены
+# статические 10 (спул и так даёт 10 на ход). ~5 МБ на картинку — общая прикидка
+# обеих ног; крупнее — честным маркером, а не молчаливым отрезанием.
+IMAGE_REQUEST_BUDGET: dict[str, int] = {"anthropic": 3, "openai": 10}
+IMAGE_REQUEST_MAX_BYTES = 5 * 1024 * 1024
+
 
 def role_model(role: str = "voice") -> str:
     """Имя модели роли по конфигу (без ротации каталога): для честных сообщений в кадре."""
@@ -1624,7 +1648,7 @@ def _route_image_leg(role: str, framework: str, model: str, messages):
     if not _has_image_blocks(messages):
         return model, messages, False, False
     if accepts_images(model=model):
-        return model, _canonicalize_image_blocks(messages), False, False
+        return model, _sighted_messages(framework, messages), False, False
     replacement = vision_model(role, model, framework)
     # ⚠ 20.09.2026. Замена должна принадлежать ЭТОЙ ноге. `vision_model` умеет отдать
     # зрячую модель СОСЕДНЕГО фреймворка — это её контракт, им пользуется кросс-нога
@@ -1638,8 +1662,73 @@ def _route_image_leg(role: str, framework: str, model: str, messages):
                     _ROLE_RU[role], replacement, framework)
         replacement = ""
     if replacement:
-        return replacement, _canonicalize_image_blocks(messages), True, False
+        return replacement, _sighted_messages(framework, messages), True, False
     return model, _omit_image_blocks(messages, model), False, True
+
+
+_IMAGE_BUDGET_MARKER = (
+    "[image omitted before model call: the {framework} leg request budget keeps the "
+    "last {kept} images (live-verified joint-vision accuracy); this one was not shown "
+    "and must not be described]")
+
+
+def _image_block_bytes(block) -> int:
+    """Размер пикселей блока: base64-источник или файл по пути; нечитаемое — сверх лимита."""
+    source = block.get("source") if isinstance(block, dict) else None
+    if isinstance(source, dict) and source.get("type") == "base64":
+        return int(len(str(source.get("data") or "")) * 3 / 4)
+    try:
+        return os.path.getsize(str(block.get("path") or ""))
+    except OSError:
+        return IMAGE_REQUEST_MAX_BYTES + 1
+
+
+def _sighted_messages(framework: str, messages):
+    """Зрячая лента: канонические блоки + бюджет ноги, отрезанное — честным маркером.
+
+    Бюджет — «последние N», как в `agent._media_prompt` и спуле: свежий контекст
+    важнее старого. Сверхлимитный по размеру файл не везем молча — тем же маркером.
+    Маркер стоит в самой ленте: его видит модель и не выдумывает содержимое, а
+    владелец видит его в ответе — этот же приём использует `_omit_image_blocks`."""
+    msgs = _canonicalize_image_blocks(messages)
+    budget = int(IMAGE_REQUEST_BUDGET.get(framework) or 0)
+    if budget <= 0:
+        return msgs
+    seats: list[tuple[int, int]] = []
+    oversize: set[tuple[int, int]] = set()
+    for i, message in enumerate(msgs):
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for j, block in enumerate(content):
+            if not _is_image_block(block):
+                continue
+            if _image_block_bytes(block) > IMAGE_REQUEST_MAX_BYTES:
+                oversize.add((i, j))
+            else:
+                seats.append((i, j))
+    dropped = set(seats[:-budget]) if len(seats) > budget else set()
+    if not dropped and not oversize:
+        return msgs
+    if dropped or oversize:
+        log.warning("llm: %s — бюджет изображений: показаны последние %d из %d, "
+                    "сверхлимитных по размеру %d", framework, budget,
+                    len(seats) - len(dropped), len(oversize))
+    out = []
+    for i, message in enumerate(msgs):
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            out.append(message)
+            continue
+        blocks = []
+        for j, block in enumerate(content):
+            if _is_image_block(block) and ((i, j) in dropped or (i, j) in oversize):
+                blocks.append({"type": "text", "text": _IMAGE_BUDGET_MARKER.format(
+                    framework=framework, kept=budget)})
+            else:
+                blocks.append(block)
+        out.append(dict(message, content=blocks))
+    return out
 
 
 _NO_PIXELS_RESPONSE = (
@@ -1791,16 +1880,182 @@ def _max_tokens_field(cli) -> str:
     «профиля провайдера», где адресат объявляет свои поля сам; но и профиль должен
     исходить из того же: спрашивать адресата, а не угадывать по имени модели.
     """
+    return "max_completion_tokens" if _direct_openai(cli) else "max_tokens"
+
+
+def _direct_openai(cli) -> bool:
+    """Клиент смотрит прямо в настоящий OpenAI (`openai.com` и поддомены), мимо реле."""
     try:
         host = (urlparse(str(getattr(cli, "base_url", "") or "")).hostname or "").lower()
     except (ValueError, TypeError, AttributeError):
         host = ""
-    direct_openai = host == "openai.com" or host.endswith(".openai.com")
-    return "max_completion_tokens" if direct_openai else "max_tokens"
+    return host == "openai.com" or host.endswith(".openai.com")
+
+
+# ─────────────────── настоящий OpenAI — через Responses API ───────────────────
+# ⚠ 28.09.2026, баг-репорт Йоно (агент Дмитрия К) через Arête. Издание 1.2.3, мозг по
+# ключу OpenAI на gpt-5.6-terra: первый же ход с инструментами — 400 «Function tools with
+# reasoning_effort are not supported for gpt-5.6-terra in /v1/chat/completions. To use
+# function tools, use /v1/responses or set reasoning_effort to 'none'». То же у gpt-6-sol;
+# gpt-5 проходит. Убрать ступень у роли не помогло: `_effective_effort` берёт её и из
+# thinking основного цикла. Резать рассуждение до none — значит отнять у новых моделей то,
+# ради чего их выбирают. Поэтому к настоящему OpenAI этот путь ходит в /v1/responses, где
+# инструменты и глубина живут вместе. Реле и прочие openai-совместимые серверы остаются на
+# chat/completions: реле само говорит с Codex на Responses, а чужой сервер Responses может
+# и не знать.
+def tools_to_responses(tools: list | None) -> list | None:
+    """Наши схемы -> инструменты Responses API (плоская форма, strict выключен явно:
+    в Responses он по умолчанию включён, а на chat/completions был выключен)."""
+    out = []
+    for t in tools_to_openai(tools) or []:
+        if t.get("type") == "function":
+            fn = t.get("function") or {}
+            out.append({"type": "function", "name": fn.get("name", ""),
+                        "description": fn.get("description", ""),
+                        "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
+                        "strict": False})
+        elif t.get("type") == "web_search":
+            item = {"type": "web_search"}
+            if t.get("search_context_size"):
+                item["search_context_size"] = t["search_context_size"]
+            out.append(item)
+    return out or None
+
+
+def messages_to_responses(messages: list) -> list:
+    """Наша история (anthropic-форма) -> входные элементы Responses API.
+
+    Текст — простыми сообщениями `{role, content: str}`; вызовы рук — `function_call`
+    (без `id`: он принадлежал бы ответу, сохранённому у OpenAI, а мы шлём `store=False`),
+    ответы рук — `function_call_output`; картинки — `input_image` с data URL.
+    """
+    items: list[dict] = []
+    for m in messages or []:
+        role, content = m.get("role", "user"), m.get("content", "")
+        if isinstance(content, str):
+            if content:
+                items.append({"role": role, "content": content})
+            continue
+        if role == "assistant":
+            texts, calls = [], []
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text" and str(b.get("text", "")):
+                    texts.append(str(b.get("text", "")))
+                elif b.get("type") == "tool_use":
+                    calls.append({"type": "function_call", "call_id": str(b.get("id", "")),
+                                  "name": str(b.get("name", "")),
+                                  "arguments": json.dumps(b.get("input") or {}, ensure_ascii=False)})
+            if texts:
+                items.append({"role": "assistant", "content": "\n".join(texts)})
+            items.extend(calls)
+            continue
+        parts: list[dict] = []
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_result":
+                items.append({"type": "function_call_output", "call_id": str(b.get("tool_use_id", "")),
+                              "output": str(b.get("content", ""))})
+            elif b.get("type") == "text":
+                parts.append({"type": "input_text", "text": str(b.get("text", ""))})
+            elif b.get("type") == "image":
+                mime, data = _image_payload(b)
+                detail = str(b.get("detail") or "").lower()
+                parts.append({"type": "input_image", "image_url": f"data:{mime};base64,{data}",
+                              "detail": detail if detail in ("low", "high", "auto") else "auto"})
+            elif _is_image_block(b):
+                raise ValueError("non-canonical image block reached responses adapter")
+        if parts:
+            if all(p["type"] == "input_text" for p in parts):
+                items.append({"role": role, "content": "\n".join(p["text"] for p in parts)})
+            else:
+                items.append({"role": role, "content": parts})
+    return items
+
+
+def _field(obj, name: str, default=None):
+    """Поле ответа SDK: объект или словарь (фейки стендов отдают словари)."""
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _openai_from_response(resp, model: str) -> LLMResponse:
+    """Ответ Responses API -> блоки anthropic-формы, как у chat/completions-пути."""
+    if str(_field(resp, "status", "") or "") == "failed":
+        err = _field(resp, "error") or {}
+        raise RuntimeError(f"openai responses: {_field(err, 'code', '') or 'failed'}: "
+                           f"{str(_field(err, 'message', '') or '')[:300]}")
+    texts: list[str] = []
+    calls: list[dict] = []
+    for item in _field(resp, "output") or []:
+        kind = _field(item, "type")
+        if kind == "message":
+            for part in _field(item, "content") or []:
+                if _field(part, "type") == "output_text" and _field(part, "text"):
+                    texts.append(str(_field(part, "text")))
+        elif kind == "function_call":
+            raw = _field(item, "arguments") or ""
+            malformed = {MALFORMED_JSON_KEY: str(raw)[:MALFORMED_JSON_KEEP]}
+            try:
+                args = json.loads(raw) if str(raw).strip() else {}
+            except Exception:
+                args = malformed
+            if not isinstance(args, dict):
+                args = malformed
+            calls.append({"type": "tool_use", "id": str(_field(item, "call_id", "") or ""),
+                          "name": str(_field(item, "name", "") or ""), "input": args})
+    text = "\n".join(texts).strip()
+    blocks = ([{"type": "text", "text": text}] if text else []) + calls
+    reason = str(_field(_field(resp, "incomplete_details") or {}, "reason", "") or "")
+    if calls:
+        stop = "tool_use"
+    elif str(_field(resp, "status", "") or "") == "incomplete" and reason == "max_output_tokens":
+        stop = "max_tokens"
+    else:
+        stop = "end_turn"
+    usage = _field(resp, "usage") or {}
+    total_in = int(_field(usage, "input_tokens", 0) or 0)
+    cached = int(_field(_field(usage, "input_tokens_details") or {}, "cached_tokens", 0) or 0)
+    return LLMResponse(
+        text=text, blocks=blocks, stop_reason=stop,
+        usage={"schema": USAGE_SCHEMA, "in": max(0, total_in - max(0, cached)),
+               "out": int(_field(usage, "output_tokens", 0) or 0),
+               **({"cache_read": cached} if cached else {})},
+        framework="openai", model=model)
+
+
+def _openai_responses_answer(cli, model: str, *, system, messages, tools, max_tokens, thinking,
+                             reasoning_effort: str | None = None) -> LLMResponse:
+    """Вызов Responses API и разбор ответа — БЕЗ сторожа: его ставит `_call_openai`,
+    один на все пути (стенд `test_empty_response` сверяет каждый возврат)."""
+    # Потолок Responses — не меньше 16 (меньшее API отвергает); рукопожатие просит мало.
+    kw: dict = {"model": model, "input": messages_to_responses(messages), "store": False,
+                "max_output_tokens": max(16, int(max_tokens or 16))}
+    sys_text = system_text(system)
+    if sys_text:
+        kw["instructions"] = sys_text
+    address = cache_address(model, sys_text)
+    if address:
+        kw["extra_body"] = {"prompt_cache_key": address}
+    effort = _effective_effort(thinking, reasoning_effort)
+    if effort:
+        kw["reasoning"] = {"effort": effort}
+    rt = tools_to_responses(tools)
+    if rt:
+        kw["tools"] = rt
+    resp = cli.responses.create(**kw)
+    return _openai_from_response(resp, model)
 
 
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                  reasoning_effort: str | None = None) -> LLMResponse:
+    if _direct_openai(cli) and hasattr(cli, "responses"):
+        return _guard_answer(_openai_responses_answer(
+            cli, model, system=system, messages=messages, tools=tools, max_tokens=max_tokens,
+            thinking=thinking, reasoning_effort=reasoning_effort))
     msgs = messages_to_openai(messages)
     sys_text = system_text(system)
     if sys_text:
@@ -2246,7 +2501,28 @@ def _fallbackable(e: Exception) -> bool:
             return True
     except (TypeError, ValueError):
         pass
+    if _incompatible_model(e):
+        return True
     return isinstance(e, TimeoutError)
+
+
+def _incompatible_model(e: Exception) -> bool:
+    """400/404 «эта модель так не умеет / такой модели нет» — повод уйти на запасную.
+
+    28.09: агент сам переключил мозг на модель, которой не подходил запрос, и каждый его
+    ход падал 400 — а 400 фолбэком не считался, и выйти он не мог. После `switch_brain`
+    запасная — это прежняя основная, значит ход уйдёт туда, где он двигался. Узко: только
+    несовместимость модели, а не любая ошибка запроса.
+    """
+    try:
+        status = int(getattr(e, "status_code", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    if status not in (400, 404):
+        return False
+    text = str(e).lower()
+    return any(mark in text for mark in ("not supported", "unsupported", "does not support",
+                                         "model_not_found", "does not exist"))
 
 
 # ─────────────────── транспортный повтор на пустом ответе ───────────────────
@@ -2752,6 +3028,11 @@ def _brain_note(role: str, framework: str, model: str, **kw) -> None:
         log.debug("brain note не записался", exc_info=True)
 
 
+#: Рука рукопожатия: вызывать её незачем, она нужна, чтобы запрос был «с инструментами».
+_PING_TOOL = {"name": "handshake_probe", "description": "Handshake probe. Do not call it.",
+              "input_schema": {"type": "object", "properties": {}}}
+
+
 def ping(role: str) -> tuple[bool, str]:
     """Проверка ОСНОВНОГО канала роли (без фолбэка): минимальный вызов. -> (ok, err).
 
@@ -2767,8 +3048,13 @@ def ping(role: str) -> tuple[bool, str]:
         framework = str(rc["framework"])
         model = str(rc["model"])
         thinking = 1024 if framework == "anthropic" and model.strip().lower() == "glm-5.3" else None
+        # 28.09: рукопожатие — тем же вызовом, что настоящий ход: с рукой и со ступенью роли.
+        # Голый ping без инструментов проходил на gpt-6-sol по ключу OpenAI, а первый же ход
+        # с руками падал 400 — агент Дмитрия сам поставил себе мозг, на котором не мог
+        # двигаться, и вернуть прежний мог только человек правкой llm.json.
         resp = _call(framework, model, system="", messages=[{"role": "user", "content": "ping"}],
-                     tools=None, max_tokens=1, thinking=thinking)
+                     tools=[_PING_TOOL], max_tokens=1, thinking=thinking,
+                     reasoning_effort=rc.get("reasoning_effort"))
         _usage_add(role, resp.usage, model=model)  # 18.5: пинг — тоже расход, не мимо счётчика
         return (True, "")
     except Exception as e:

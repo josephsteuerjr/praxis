@@ -53,14 +53,29 @@ def _one_line(value: object, limit: int = 140) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+# 06.10: маркер факта несёт confidence суффиксом `[source:clm-…|observed]`.
+# Старые маркеры без суффикса валидны — до 06.10 formation писал голый clm-id.
+_FACT_SOURCE_RE = re.compile(r"\[source:(clm-[0-9a-f]{16})(?:\|[a-z]+)?\]\s*$", re.I)
+# Приоритет строки для hook: наблюдение сильнее вывода. uncertain в hook не
+# попадает вовсе — claim_source уже отдаёт для него не-automatic kind.
+_HOOK_CONFIDENCE_RANK = {"observed": 0, "inferred": 1}
+
+
 def _derive_person_hook(path: Path) -> str:
-    """Build a grep hook while keeping a dossier projection tied to its claim receipt."""
+    """Build a grep hook while keeping a dossier projection tied to its claim receipt.
+
+    06.10: выбор строки — не «первая подходящая», а лучшая по confidence: observed
+    прежде inferred (факт сильнее вывода в одной строке-указателе), из равных —
+    первая по порядку файла (стабильность пересборок). Прежде hook мог показать
+    inferred-строку, когда выше стояло наблюдение по тому же человеку.
+    """
     title = _one_line(_title(path), 120)
     saw_noncurrent_claim = False
+    best: tuple[int, str] | None = None  # (rank, hook-строка без заголовка)
     for raw in _read(path).splitlines():
         line = raw.strip()
         if re.match(r"^[-*]\s+", line) and "~~устарело~~" not in line.casefold():
-            source = re.search(r"\[source:(clm-[0-9a-f]{16})\]\s*$", line, re.I)
+            source = _FACT_SOURCE_RE.search(line)
             if not source:
                 continue
             claim_path = path.parent.parent / "life" / "claims" / f"{source.group(1)}.md"
@@ -76,7 +91,16 @@ def _derive_person_hook(path: Path) -> str:
             value = re.sub(r"^\(s[123]\)\s*", "", value, flags=re.I)
             value = re.sub(r"\s*_\(.*?\)_\s*", " ", value).strip()
             if value and not value.startswith("_("):
-                return _one_line(f"{title} — {value}")
+                # confidence — из САМОГО claim (source_kind), не из текста маркера:
+                # маркер пишет formation, а истина о claim живёт в его файле.
+                confidence = "observed" if source_kind == memory_provenance.CLAIM_SUPPORTED_OBSERVED_KIND else "inferred"
+                rank = _HOOK_CONFIDENCE_RANK[confidence]
+                if best is None or rank < best[0]:
+                    best = (rank, value)
+                    if rank == 0:
+                        break  # observed непобиваем: из равных первый уже зафиксирован
+    if best is not None:
+        return _one_line(f"{title} — {best[1]}")
     if saw_noncurrent_claim:
         return _one_line(f"{title} — claim not current; verify")
     return _one_line(f"{title} — legacy dossier; verify")
@@ -280,6 +304,29 @@ def _render_projects(memory: Path, base: Path) -> Path:
     return path
 
 
+def _open_note_questions(base: Path) -> tuple[list[tuple[str, str, str]], bool]:
+    """Открытые note-вопросы из authored_notes: [(дата, текст, note_id)], читалось ли.
+
+    06.10: вопросы — тоже открытые нити, но жили только в events.jsonl и на карте
+    THREADS не показывались вовсе. Читаем через API модуля (структура события —
+    его собственность), до 10 строк.
+    """
+    try:
+        import authored_notes
+        notes = authored_notes.AuthoredNoteLedger(base).list(
+            status="open", kind="question", limit=10)
+    except Exception:
+        return [], False
+    rows: list[tuple[str, str, str]] = []
+    for note in notes:
+        date = str(note.get("created_at") or "")[:10] or "без даты"
+        text = _one_line(note.get("text"), 90)
+        note_id = str(note.get("id") or "")
+        if text and note_id:
+            rows.append((date, text, note_id))
+    return rows, True
+
+
 def _render_threads(memory: Path) -> Path:
     rows: list[tuple[str, str, str]] = []
     people_root = memory / "people"
@@ -312,6 +359,16 @@ def _render_threads(memory: Path) -> Path:
     lines += [f"- **{owner}** — {text} ([source]({link}))" for owner, text, link in selected]
     if not selected:
         lines.append("- Открытых нитей в канонических карточках не найдено.")
+    # 06.10: открытые note-вопросы — отдельной секцией: у них другой владелец
+    # (authored_notes), и смешивать их с нитями людей значило бы присвоить чужую
+    # строку ближайшему слагу. Формат — grep-hook: дата, ~90 знаков, адрес note_id.
+    questions, questions_read = _open_note_questions(memory.parent)
+    if questions:
+        lines += ["", "## Открытые вопросы (notes)"]
+        lines += [f"- вопрос ({date}): {text} — memory/notes/events.jsonl {note_id}"
+                  for date, text, note_id in questions]
+    elif questions_read:
+        lines += ["", "## Открытые вопросы (notes)", "- Открытых note-вопросов нет."]
     _omitted(lines, omitted)
     path = memory / "maps" / "THREADS.md"
     _atomic(path, "\n".join(lines))

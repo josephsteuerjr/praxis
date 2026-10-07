@@ -186,7 +186,7 @@ class Desk:
     # ------------------------------------------------------------- запись
     def archive(self, text: str, *, outgoing: bool, now: dt.datetime | None = None,
                 sender: str = "", system: bool = False, kind: str = "",
-                media_path: str = "", media_kind: str = "") -> None:
+                media_path: str = "", media_kind: str = "", source_id: str = "") -> None:
         """Лента комнаты в её формате: memory/groups/<поток>.jsonl + реестр состояния.
 
         Окно читает комнаты именно отсюда (deskd.readers.chats/chat_tail).
@@ -204,12 +204,16 @@ class Desk:
         stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
         row = {"timestamp": stamp, "outgoing": bool(outgoing), "text": str(text),
                "sender_name": (self.agent_name if outgoing else (sender or self.speaker))}
+        if source_id:
+            row["source_id"] = str(source_id)
         # Вложение — ПУТЁМ ОТ ДЕРЕВА и видом, а не строкой в тексте. Окно по этим
         # двум полям рисует проигрыватель, канал по первому отдаёт байты, и ни
         # одно из двух не разбирает человеческую фразу «[файл] имя — путь».
         if media_path:
             row["media_path"] = str(media_path)
             row["media_kind"] = str(media_kind or "file")
+            from deskd import artifacts
+            row.update(artifacts.metadata(self.tree, str(media_path)))
         if system:
             # Служебная плашка продукта, а не слово агента: окно её показывает,
             # память жизни (и значит кадр модели) её не получает. `kind` — вид
@@ -382,7 +386,7 @@ class Desk:
         return str(message_id)
 
     def deliver(self, text: str, *, source_id: str = "", label: str = "",
-                system: bool = False, kind: str = "") -> str:
+                system: bool = False, kind: str = "", media_path: str = "", media_kind: str = "") -> str:
         """Её слово доехало до окна. Возвращаем расписку в том же виде, что транспорт.
 
         Расписка — не косметика: рука `reply` дописывает к ней подсказку про `end_turn`,
@@ -397,7 +401,8 @@ class Desk:
         """
         now = dt.datetime.now(dt.timezone.utc)
         body = str(text or "")
-        self.archive(body, outgoing=True, now=now, system=system, kind=kind)
+        self.archive(body, outgoing=True, now=now, system=system, kind=kind,
+                     media_path=media_path, media_kind=media_kind)
         if system:
             return f"Показано в окне → {label or self.title} (плашка продукта)"
         self.life(body, direction="out", actor=self.agent_name,
@@ -576,29 +581,19 @@ def install(agent_mod, desks: Desks) -> None:
         desk = desks.current(agent_mod) if target in ("", desks.speaker) else desks.find(target)
         if desk is None:
             return _refusal(target)
-        # Файл ВНУТРИ дерева окно умеет показать само: канал отдаёт байты по пути
-        # от дерева (`/api/media`), окно рисует проигрыватель. Так приезжает голос
-        # агента: `media_audio` кладёт WAV в `<дерево>/media/tts`.
-        #
-        # ⚠ Файл СНАРУЖИ дерева остаётся строкой с путём, и это не лень: канал,
-        # отдающий любой путь с диска, — файловый сервер на весь компьютер, а не
-        # окно агента. Владелец откроет такой файл сам.
-        rel = ""
-        try:
-            rel = src.resolve().relative_to(Path(desks.tree).resolve()).as_posix()
-        except (ValueError, OSError):
-            rel = ""
+        # Снимок выбранного рукой файла: в URL попадает только путь внутри
+        # зарегистрированной папки артефактов, включая внешние исходники.
+        from deskd import artifacts
+        rel = artifacts.stage(desks.tree, src)
         kind = str(media_kind or "document")
         if voice_note or kind in ("audio", "voice"):
             kind = "audio"
-        note = f"[{'голос' if kind == 'audio' else 'файл'}] {src.name}"
-        if not rel:
-            note += f" — {src}"
-        if str(caption or "").strip():
-            note += "\n" + str(caption).strip()
+        elif kind == "photo":
+            kind = "image"
+        note = str(caption or "").strip()
         if rel:
             desk.archive(note, outgoing=True, media_path=rel, media_kind=kind)
-            desk.life(note, direction="out", actor=desk.agent_name,
+            desk.life(note or f"[вложение: {src.name}]", direction="out", actor=desk.agent_name,
                       source_id=f"file-{int(time.time() * 1000)}")
             desk.sent.append(note)
             return f"Отправлено → {desks.speaker} (окно Hélène, вложение {src.name})"

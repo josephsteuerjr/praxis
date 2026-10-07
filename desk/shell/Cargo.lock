@@ -1486,10 +1486,17 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "helene"
-version = "1.2.6"
+version = "1.4.1"
 dependencies = [
+ "base64 0.22.1",
+ "block2",
+ "gtk",
  "libc",
  "notify-rust",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-graphics",
+ "serde",
  "serde_json",
  "sha2",
  "tauri",
@@ -1497,7 +1504,10 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-window-state",
  "tauri-winrt-notification",
+ "tokio",
  "ureq",
+ "url",
+ "webkit2gtk",
  "windows",
  "windows-sys 0.59.0",
  "winreg",
@@ -2267,6 +2277,7 @@ dependencies = [
  "block2",
  "objc2",
  "objc2-core-foundation",
+ "objc2-core-graphics",
  "objc2-foundation",
 ]
 

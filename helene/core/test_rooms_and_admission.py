@@ -275,7 +275,7 @@ class TestSocial(Base):
     def test_admit_refuses_owner(self):
         with self.owner_turn():
             out = agent.tool_admit("Я сам", "123456789")
-            self.assertIn("ты сам", out.lower())
+            self.assertIn("самого владельца", out.lower())
             self.assertEqual(social.category("123456789"), "owner")
 
     def test_owner_id_read_lazily(self):

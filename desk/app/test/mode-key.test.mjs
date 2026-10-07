@@ -110,9 +110,12 @@ assert.ok(
 );
 
 // --- 4. единственная разрешённая копия текста сверяется с оригиналом
+// 04.10: оговорка живёт у СТУПЕНИ лестницы (LADDER_SESSION0_WARNING) — галочка
+// службы растворена в лестницу. Якорь ^ нужен, чтобы не поймать константу
+// ступени подстрокой у старого имени.
 const modesPy = readFileSync(join(desk, "localharness", "modes.py"), "utf8");
-const pyLiteral = /SESSION0_WARNING = \(([\s\S]*?)\)\n/.exec(modesPy);
-assert.ok(pyLiteral, "в modes.py не нашлась SESSION0_WARNING — тест устарел, а не код");
+const pyLiteral = /^LADDER_SESSION0_WARNING = \(([\s\S]*?)\)\n/m.exec(modesPy);
+assert.ok(pyLiteral, "в modes.py не нашлась LADDER_SESSION0_WARNING — тест устарел, а не код");
 const joinLiterals = (chunk) => (chunk.match(/"([^"]*)"/g) || []).map((s) => s.slice(1, -1)).join("");
 const fromPy = joinLiterals(pyLiteral[1]);
 

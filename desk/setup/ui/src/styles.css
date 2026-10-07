@@ -103,6 +103,10 @@ button:focus-visible {
 .scene[hidden] {
   display: none;
 }
+.stepbar[hidden] { display: none; }
+.scene-update:not([hidden]) { animation: update-arrive var(--dur-3) var(--ease-out); }
+@keyframes update-arrive { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .scene-update:not([hidden]) { animation: none; } }
 
 /* ---------- сцена 1: надпись ---------- */
 

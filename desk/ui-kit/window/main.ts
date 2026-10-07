@@ -13,10 +13,12 @@ import "./styles/app.css";
 import "./styles/paper.css";
 // Колонка ходов справа (28.09, переделана целиком).
 import "./styles/turns.css";
-import { api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
+import { ApiError, api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
 import * as look from "./look";
+import { mountPanelWidths } from "./panel-widths";
+import { activityWords, engineOperationObserved, engineWords, type EngineOperation, type OwnerState } from "./session";
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
@@ -25,6 +27,7 @@ import { hostInfo } from "../../ui-kit/window/host";
 import { clientIsMac, isMacPlatform, kbdLabel, platformOf } from "../../ui-kit/platform";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
 import { mountSwitch } from "../../ui-kit/window/agents";
+import { mountWindowMedia, pickPaperFiles } from "./paper-files";
 import * as panel from "../../ui-kit/window/panel";
 import * as now from "../../ui-kit/window/views/now";
 import * as talk from "../../ui-kit/window/views/talk";
@@ -86,6 +89,7 @@ export function start(opts: WindowOptions): void {
   view.replaceChildren(viewInner);
   scroll.mountView(view, viewInner);
   const app = q<HTMLElement>("#app");
+  mountWindowMedia(app, opts.localAgent !== false);
   const railNav = q<HTMLElement>("#rail-nav");
   const railBottom = q<HTMLElement>("#rail-bottom");
   const railSign = q<HTMLElement>("#rail-sign");
@@ -108,6 +112,156 @@ export function start(opts: WindowOptions): void {
   const composerFiles = q<HTMLElement>("#composer-files");
   const composerBox = q<HTMLElement>(".composer-box");
 
+  const activityRow = document.createElement("div");
+  activityRow.className = "composer-status";
+  const activityLabel = document.createElement("span");
+  activityLabel.className = "composer-activity";
+  activityLabel.setAttribute("aria-live", "polite");
+  const turnControls = document.createElement("div");
+  turnControls.className = "composer-turn-controls";
+  activityRow.append(activityLabel, turnControls);
+  composer.prepend(activityRow);
+  talk.mountTurnControls(turnControls);
+  // Status floats above the input, without turning the whole area above it into
+  // an invisible clipping shelf. Reserve room only at the end of the transcript.
+  const statusSize = new ResizeObserver(() => {
+    composer.parentElement!.style.setProperty("--composer-status-h", `${activityRow.getBoundingClientRect().height}px`);
+  });
+  statusSize.observe(activityRow);
+  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+    if (!event.persisted) statusSize.disconnect();
+  });
+
+  const engineControls = document.createElement("div");
+  engineControls.className = "engine-controls";
+  engineControls.innerHTML = '<button type="button" data-engine-power hidden></button><button type="button" data-engine-restart>Перезапустить</button>';
+  document.querySelector(".head-side")?.append(engineControls);
+  const powerButton = engineControls.querySelector<HTMLButtonElement>("[data-engine-power]")!;
+  const restartButton = engineControls.querySelector<HTMLButtonElement>("[data-engine-restart]")!;
+  let ownerState: OwnerState | null = null;
+  let engineOperation: EngineOperation | null = null;
+  let engineFailure = "";
+  let unconfirmedOperation: EngineOperation | null = null;
+  let channelAvailable = false;
+  let stateReadStarted = 0;
+  let ownerReading = false;
+  powerButton.addEventListener("click", () => void controlEngine(ownerState?.stopped ? "resume" : "stop"));
+  restartButton.addEventListener("click", () => void restartHarness());
+
+  function paintEngineControls() {
+    powerButton.hidden = !ownerState?.supported;
+    // Снятый агент (1.4.1): «остановить движок» здесь гасил бы ВСЮ установку —
+    // чужое действие в окне погашенного. Кнопка честно выключена и объясняет,
+    // что произошло и кто исполнит подъём. Старая оболочка (нет enabled) — как было.
+    const disarmed = ownerState?.enabled === false && !ownerState?.stopped;
+    if (disarmed) {
+      powerButton.textContent = ownerState?.service ? "Агент снят · служба держит" : "Агент снят в настройках";
+      powerButton.title = ownerState?.service
+        ? "Агент снят; его процессы отпустит перезапуск службы («Система» → «Перезапустить»)"
+        : "Верни галочку в настройках агента — движок поднимется сам";
+    } else {
+      powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Остановить движок";
+      powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить движок и его работу";
+    }
+    powerButton.disabled = !!engineOperation || disarmed;
+    restartButton.hidden = foreignHarness();
+    restartButton.disabled = !!engineOperation || !!ownerState?.stopped;
+    restartButton.title = ownerState?.stopped ? "Сначала возобнови движок" : "Перезапустить движок, сохранив окно";
+    syncComposer();
+  }
+
+  async function refreshOwner() {
+    if (!inTauri || opts.localAgent === false || ownerReading) return;
+    ownerReading = true;
+    const base = cfg.base, key = cfg.key;
+    try {
+      const state = await shell<OwnerState>("owner_state");
+      if (cfg.base === base && cfg.key === key) ownerState = state;
+    }
+    catch { if (cfg.base === base && cfg.key === key) ownerState = null; } // Older/remote shells do not expose a seed stop.
+    finally { ownerReading = false; }
+    reconcileEngine();
+    renderState(S.agentState, channelAvailable);
+    paintActivity();
+  }
+
+  function reconcileEngine() {
+    const op = engineOperation || unconfirmedOperation;
+    if (op && engineOperationObserved(op, ownerState, channelAvailable,
+        !!S.agentState?.runner?.alive, S.agentState?.runner?.pid || ownerState?.pid || 0, stateReadStarted)) {
+      engineOperation = null;
+      unconfirmedOperation = null;
+      engineFailure = "";
+      toast(op.action === "stop" ? "Движок остановлен" : op.action === "resume" ? "Движок на связи" : "Движок перезапущен");
+    } else if (engineOperation && op?.accepted && Date.now() - op.started > 60_000) {
+      unconfirmedOperation = op;
+      engineOperation = null;
+      // Слово обязано объяснить, ЧТО именно тянется (06.10): движок выходит на
+      // границе хода, и «ещё не подтверждён» без причины читался как зависание.
+      engineFailure = op.action === "stop" ? "Остановка ещё не подтверждена" : op.action === "resume"
+        ? "Запуск ещё не подтверждён" : "Перезапуск ждёт: движение ещё не вышло на границу хода";
+      toast(engineFailure);
+    }
+    paintEngineControls();
+  }
+
+  async function controlEngine(action: EngineOperation["action"]) {
+    if (engineOperation) return;
+    if (ownerState?.stopped && action === "restart") { toast("Сначала возобнови движок"); return; }
+    const op: EngineOperation = { action, agent_id: ownerState?.agent_id, started: Date.now(),
+      previousPid: S.agentState?.runner?.pid || ownerState?.pid || 0, accepted: false };
+    engineOperation = op;
+    unconfirmedOperation = null;
+    engineFailure = "";
+    paintEngineControls();
+    renderState(S.agentState, channelAvailable);
+    paintActivity();
+    try {
+      if (action === "restart") {
+        let accepted = false;
+        try {
+          const answer = await post<{ ok?: boolean; note?: string }>("/api/supervisor/restart", { target: "all" });
+          accepted = answer?.ok === true;
+          if (!accepted) throw new ApiError(answer?.note || "Движок не принял просьбу о перезапуске", 409);
+        } catch (error) {
+          if (!inTauri || opts.localAgent === false) throw error;
+          if (error instanceof ApiError && error.status && error.status < 500
+              && error.status !== 404 && error.status !== 405) throw error;
+          await shell("engine_restart");
+          accepted = true;
+        }
+        if (!accepted) throw new Error("Движок не принял просьбу о перезапуске");
+      } else {
+        await shell("owner_control", { action: action === "stop" ? "panic" : "resume" });
+      }
+      if (engineOperation !== op) return;
+      op.accepted = true;
+      op.acceptedAt = Date.now();
+      void refreshOwner();
+      void refreshState();
+    } catch (error) {
+      if (engineOperation !== op) return;
+      engineOperation = null;
+      engineFailure = humanError(error).text;
+      toast(engineFailure);
+      paintEngineControls();
+      paintActivity();
+      void refreshOwner();
+      renderState(S.agentState, channelAvailable);
+    }
+  }
+
+  function paintActivity() {
+    const blocked = !!ownerState?.stopped || !!engineOperation || !channelAvailable;
+    activityLabel.textContent = blocked ? "" : activityWords(S.agentState?.activity);
+    activityLabel.title = !blocked && S.agentState?.activity?.tool ? S.agentState.activity.tool : "";
+    talk.onStateChange(blocked);
+    readQueued.hidden = blocked || !talk.currentTurn() || !(say.value.trim() || attachments.length
+      || S.pending.some(p => p.room === S.room && p.state === "queued"));
+    syncComposerNote();
+  }
+
+
   // ---------------------------------------------------------------- вложения (0.5.0)
   // Картинка к реплике: скрепка, вставка из буфера, перетаскивание. Файл уезжает в
   // /api/say как base64 рядом с текстом; канал кладёт его в desk_inbox, руннер — в
@@ -115,11 +269,12 @@ export function start(opts: WindowOptions): void {
   // Только то, что модель читает (PNG/JPEG/WebP/GIF), до четырёх и до 8 МБ.
   // Голосовое (0.6.0) — запись микрофона тем же путём: руннер расшифровывает её
   // whisper-ом, как голосовые из Telegram, и кладёт текст в реплику.
-  interface Attachment { name: string; mime: string; data: string; url: string; size: number; kind: "image" | "audio"; seconds?: number }
+  interface Attachment { name: string; mime: string; data: string; url: string; size: number; kind: "image" | "audio" | "file"; seconds?: number }
   const ATTACH_MIME = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
   const AUDIO_MIME = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/x-wav"]);
-  const ATTACH_MAX = 4;
-  const ATTACH_BYTES = 8 * 1024 * 1024;
+  const ATTACH_MAX = 16;
+  const ATTACH_BYTES = 64 * 1024 * 1024;
+  const ATTACH_TOTAL = 128 * 1024 * 1024;
   let attachments: Attachment[] = [];
   const baseMime = (t: string) => String(t || "").split(";", 1)[0].trim().toLowerCase();
 
@@ -135,30 +290,33 @@ export function start(opts: WindowOptions): void {
   async function addFiles(files: Iterable<File>, seconds?: number) {
     for (const f of files) {
       const mime = baseMime(f.type);
-      const kind: Attachment["kind"] = AUDIO_MIME.has(mime) ? "audio" : "image";
-      if (kind === "image" && !ATTACH_MIME.has(mime)) { toast(`${f.name || "файл"}: модель читает только PNG, JPEG, WebP и GIF; голосовое — кнопкой микрофона`); continue; }
-      if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 8 МБ`); continue; }
+      const kind: Attachment["kind"] = AUDIO_MIME.has(mime) ? "audio" : ATTACH_MIME.has(mime) ? "image" : "file";
+      if (f.size > ATTACH_BYTES) { toast(`${f.name || "файл"}: больше 64 МБ`); continue; }
+      if (attachments.reduce((sum, item) => sum + item.size, 0) + f.size > ATTACH_TOTAL) { toast("Вложения вместе больше 128 МБ"); continue; }
       if (attachments.length >= ATTACH_MAX) { toast(`Не больше ${ATTACH_MAX} вложений за раз`); break; }
       try {
         const data = await fileToBase64(f);
-        attachments.push({ name: f.name || (kind === "audio" ? "voice" : "image"), mime, data, url: URL.createObjectURL(f), size: f.size, kind, seconds });
+        attachments.push({ name: f.name || (kind === "audio" ? "voice" : "file"), mime, data, url: URL.createObjectURL(f), size: f.size, kind, seconds });
       } catch (e) {
         toast("Не прочиталось: " + humanError(e).text);
       }
     }
     paintFiles();
+    paintActivity();
   }
 
   function dropFile(i: number) {
     const [gone] = attachments.splice(i, 1);
     if (gone) URL.revokeObjectURL(gone.url);
     paintFiles();
+    paintActivity();
   }
 
   function clearFiles() {
     for (const a of attachments) URL.revokeObjectURL(a.url);
     attachments = [];
     paintFiles();
+    paintActivity();
   }
 
   function paintFiles() {
@@ -166,14 +324,26 @@ export function start(opts: WindowOptions): void {
     composerFiles.innerHTML = attachments
       .map((a, i) => a.kind === "audio"
         ? `<span class="chip chip-voice"><span class="chip-ico" aria-hidden="true">🎤</span><span>голосовое${a.seconds ? " · " + fmtDur(a.seconds) : ""}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`
-        : `<span class="chip"><img src="${a.url}" alt=""><span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
+        : `<span class="chip">${a.kind === "image" ? `<img src="${a.url}" alt="">` : `<span class="chip-ico" aria-hidden="true">📄</span>`}<span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
       .join("");
     composerFiles.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
       b.addEventListener("click", () => dropFile(Number(b.dataset.i)));
     });
   }
 
-  attachBtn.addEventListener("click", () => attachInput.click());
+  attachBtn.setAttribute("aria-label", "Приложить файлы");
+  attachBtn.title = "Приложить файлы · можно вставить из буфера или перетащить";
+  let pickingFiles = false;
+  attachBtn.addEventListener("click", async () => {
+    if (pickingFiles) return;
+    pickingFiles = true;
+    try {
+      const selected = await pickPaperFiles(opts.localAgent !== false, ATTACH_MAX - attachments.length,
+        ATTACH_TOTAL - attachments.reduce((s,a) => s + a.size, 0));
+      await addFiles(selected);
+    } catch (e) { toast("Не удалось приложить файлы: " + humanError(e).text); }
+    finally { pickingFiles = false; }
+  });
   attachInput.addEventListener("change", () => {
     void addFiles(attachInput.files ? Array.from(attachInput.files) : []);
     attachInput.value = "";
@@ -190,17 +360,27 @@ export function start(opts: WindowOptions): void {
   const MIC_MAX_SEC = 300;
   let rec: MediaRecorder | null = null;
   let recStream: MediaStream | null = null;
-  let recChunks: Blob[] = [];
-  let recStart = 0;
   let recTick = 0;
+  let micStarting = false;
+  function micCanStart() {
+    return S.view === "talk" && !S.rooms.find(r => r.key === S.room)?.stub
+      && !ownerState?.stopped && !engineOperation;
+  }
+  function syncMicButton() {
+    // Остановить уже начатую запись можно и после остановки движка.
+    // У серверного издания этой кнопки вообще нет.
+    if (micBtn) micBtn.disabled = micStarting || (!rec && !micCanStart());
+  }
   const micIdle = () => {
-    if (!micBtn) return;
-    micBtn.classList.remove("recording");
-    micBtn.title = "Записать голосовое";
-    micBtn.setAttribute("aria-label", "Записать голосовое");
+    micBtn?.classList.remove("recording");
+    if (micBtn) {
+      micBtn.title = "Записать голосовое · Alt+Enter";
+      micBtn.setAttribute("aria-label", "Записать голосовое");
+    }
     if (recTick) { clearInterval(recTick); recTick = 0; }
-    if (recStream) { for (const t of recStream.getTracks()) t.stop(); recStream = null; }
     rec = null;
+    if (recStream) { for (const t of recStream.getTracks()) t.stop(); recStream = null; }
+    syncMicButton();
   };
   async function micToggle() {
     if (!micBtn) return;
@@ -208,54 +388,79 @@ export function start(opts: WindowOptions): void {
       if (rec.state !== "inactive") rec.stop();
       return;
     }
+    if (micStarting || !micCanStart()) return;
+    const room = S.room;
+    micStarting = true;
+    micBtn.title = "Подготовка записи…";
+    micBtn.setAttribute("aria-label", "Подготовка записи");
+    syncMicButton();
     try {
-      const v = await api<{ ready?: boolean; why?: string }>("/api/voice");
-      if (!v.ready) { toast(`Голосовое некому расшифровать: ${v.why || "слух не поднят"}. Настройки → Голос.`); return; }
-    } catch {
-      // Канал не ответил — не запрещаем: причину, если что, назовёт руннер в реплике.
-    }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      toast("В этом окне нет доступа к микрофону");
-      return;
-    }
-    try {
-      recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (e) {
-      toast("Микрофон не дали: " + humanError(e).text);
-      return;
-    }
-    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
-    try {
-      rec = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+      try {
+        const v = await api<{ ready?: boolean; why?: string }>("/api/voice");
+        if (!v.ready) { toast(`Голосовое некому расшифровать: ${v.why || "слух не поднят"}. Настройки → Голос.`); return; }
+      } catch {
+        // Канал не ответил — причину, если что, назовёт раннер в реплике.
+      }
+      if (!micCanStart() || S.room !== room) return;
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+        toast("В этом окне нет доступа к микрофону");
+        return;
+      }
+      try { recStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch (e) { toast("Микрофон не дали: " + humanError(e).text); return; }
+      // Пока открыто системное разрешение, можно уйти в другой чат/раздел.
+      if (!micCanStart() || S.room !== room) return;
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
+      const recorder = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+      const chunks: Blob[] = [];
+      const started = Date.now();
+      rec = recorder;
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      recorder.onerror = () => {
+        if (rec !== recorder) return;
+        toast("Запись оборвалась");
+        micIdle();
+      };
+      recorder.onstop = () => {
+        // Позднее завершение сломанного рекордера не трогает новую запись.
+        if (rec !== recorder) return;
+        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
+        const type = baseMime(recorder.mimeType || mime || "audio/webm") || "audio/webm";
+        const blob = new Blob(chunks, { type });
+        micIdle();
+        if (blob.size < 1024) { toast("Запись слишком короткая"); return; }
+        const ext = type === "audio/ogg" ? "ogg" : type === "audio/mp4" ? "m4a" : "webm";
+        const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
+        void addFiles([new File([blob], `voice-${stamp}.${ext}`, { type })], seconds);
+      };
+      recorder.start(250);
+      micBtn.classList.add("recording");
+      const paintRecording = () => {
+        const s = Math.round((Date.now() - started) / 1000);
+        micBtn.title = `Идёт запись · ${fmtDur(s)} · Alt+Enter или нажми, чтобы закончить`;
+        micBtn.setAttribute("aria-label", micBtn.title);
+        if (s >= MIC_MAX_SEC && recorder.state !== "inactive") { toast("Пять минут — предел одного голосового"); recorder.stop(); }
+      };
+      paintRecording();
+      recTick = window.setInterval(paintRecording, 500);
     } catch (e) {
       toast("Запись не началась: " + humanError(e).text);
       micIdle();
-      return;
+    } finally {
+      micStarting = false;
+      if (!rec) micIdle();
+      else syncMicButton();
     }
-    recChunks = [];
-    recStart = Date.now();
-    rec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
-    rec.onerror = () => { toast("Запись оборвалась"); micIdle(); };
-    rec.onstop = () => {
-      const seconds = Math.max(1, Math.round((Date.now() - recStart) / 1000));
-      const type = baseMime(rec?.mimeType || mime || "audio/webm") || "audio/webm";
-      const blob = new Blob(recChunks, { type });
-      micIdle();
-      if (blob.size < 1024 || seconds < 1) { toast("Запись слишком короткая"); return; }
-      const ext = type === "audio/ogg" ? "ogg" : type === "audio/mp4" ? "m4a" : "webm";
-      const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
-      void addFiles([new File([blob], `voice-${stamp}.${ext}`, { type })], seconds);
-    };
-    rec.start(250);
-    micBtn.classList.add("recording");
-    recTick = window.setInterval(() => {
-      const s = Math.round((Date.now() - recStart) / 1000);
-      micBtn.title = `Идёт запись · ${fmtDur(s)} · нажми, чтобы закончить`;
-      micBtn.setAttribute("aria-label", micBtn.title);
-      if (s >= MIC_MAX_SEC && rec && rec.state !== "inactive") { toast("Пять минут — предел одного голосового"); rec.stop(); }
-    }, 500);
+  }
+  function micShortcut(e: KeyboardEvent) {
+    if (e.key !== "Enter" || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey
+      || e.isComposing || e.defaultPrevented || S.view !== "talk" || !micBtn) return;
+    e.preventDefault();
+    // Удержание клавиш не переключает запись туда-обратно.
+    if (!e.repeat && !micBtn.disabled) void micToggle();
   }
   micBtn?.addEventListener("click", () => void micToggle());
+  document.addEventListener("keydown", micShortcut);
   say.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -420,8 +625,25 @@ export function start(opts: WindowOptions): void {
   }
   setCollapsed("rail", readFlag("frame.rail"));
   setCollapsed("panel", readFlag("frame.panel"));
-  railBtn.addEventListener("click", () => setCollapsed("rail", !app.classList.contains("rail-collapsed"), true));
-  panelBtn.addEventListener("click", () => setCollapsed("panel", !app.classList.contains("panel-collapsed"), true));
+  const disposeWidths = mountPanelWidths(app);
+  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
+    if (!event.persisted) disposeWidths();
+  });
+  function togglePanel(which: "rail" | "panel") {
+    setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
+    // Focus without scrolling the history or changing the draft/selection.
+    if (S.view === "talk") say.focus({ preventScroll: true });
+  }
+  railBtn.addEventListener("click", () => togglePanel("rail"));
+  panelBtn.addEventListener("click", () => togglePanel("panel"));
+  addEventListener("frame-live-action", (event) => {
+    const button = document.querySelector("[data-live-runs]");
+    if (button) button.textContent = `Агент: ${(event as CustomEvent<string>).detail} — раскрыть действия`;
+  });
+  addEventListener("frame-live-runs", () => {
+    setCollapsed("panel", false, true);
+    void panel.revealLiveRun();
+  });
 
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
@@ -504,7 +726,7 @@ export function start(opts: WindowOptions): void {
   // своей прокруткой. Картинка встаёт в том же кадре, что и щелчок; перечитывание идёт
   // фоном и подменяет содержимое молча.
   const pages = new Map<View, HTMLElement>();
-  const scrolls = new Map<View, number>();
+  const scrolls = new Map<View, { top: number; pinned: boolean }>();
 
   function pageFor(id: View): HTMLElement {
     let page = pages.get(id);
@@ -512,6 +734,17 @@ export function start(opts: WindowOptions): void {
       page = document.createElement("div");
       page.className = "page";
       page.dataset.page = id;
+      if (id === "settings") {
+        const changed = () => {
+          page!.dataset.settingsDirty = "1";
+          page!.dataset.settingsRevision = String(Number(page!.dataset.settingsRevision || 0) + 1);
+        };
+        page.addEventListener("input", changed);
+        page.addEventListener("change", changed);
+        page.addEventListener("click", (event) => {
+          if ((event.target as HTMLElement).closest('[role="radio"], [role="switch"]')) changed();
+        });
+      }
       pages.set(id, page);
     }
     return page;
@@ -519,6 +752,7 @@ export function start(opts: WindowOptions): void {
 
   /** Держит ли страница несохранённый ввод владельца. */
   function isDirty(page: HTMLElement): boolean {
+    if (page.dataset.settingsDirty === "1") return true;
     const active = document.activeElement;
     if (active instanceof HTMLElement && page.contains(active)
         && (active.isContentEditable || active.matches("input, textarea, select"))) {
@@ -544,7 +778,7 @@ export function start(opts: WindowOptions): void {
    */
   function homeScroll(id: View): number {
     const saved = scrolls.get(id);
-    if (saved !== undefined) return saved;
+    if (saved !== undefined) return id === "talk" && saved.pinned ? view.scrollHeight : saved.top;
     return id === "talk" ? view.scrollHeight : 0;
   }
 
@@ -561,7 +795,9 @@ export function start(opts: WindowOptions): void {
     const from = S.view;
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
     // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
-    if (from !== id && pages.get(from)?.parentNode === viewInner) scrolls.set(from, view.scrollTop);
+    if (from !== id && pages.get(from)?.parentNode === viewInner) {
+      scrolls.set(from, { top: view.scrollTop, pinned: scroll.view()?.pinned ?? false });
+    }
     S.view = id;
     syncRail();
     const section = SECTIONS.find((s) => s.id === id) ?? FOOT.find((s) => s.id === id);
@@ -582,15 +818,24 @@ export function start(opts: WindowOptions): void {
     const wasAtEnd = view.scrollHeight - view.scrollTop - view.clientHeight < 80;
     // Смена вкладки — мгновенная: движение владелец просил у панелей, а не здесь.
     app.classList.add("no-anim");
-    if (viewInner.firstChild !== page) viewInner.replaceChildren(page);
+    const mounting = viewInner.firstChild !== page;
+    if (mounting) viewInner.replaceChildren(page);
     // Лента чата липнет к низу и масштабируется; её узел масштаба ставит сама talk.render.
     if (!talking) scroll.sectionShown(false, null);
     else scroll.sectionShown(true, page.querySelector<HTMLElement>(".talk-zoom"));
     if (blank) page.classList.add("page-in");
-    view.scrollTop = opts.quiet ? view.scrollTop : homeScroll(id);
+    // Re-selecting a section (including reconnect) is a refresh, not navigation.
+    // Restore through the physics owner: DOM scroll events arrive too late to
+    // prevent an old follow/animation target from overwriting the saved position.
+    if (mounting) {
+      const scroller = scroll.view();
+      if (scroller) scroller.scrollTo(homeScroll(id), false);
+      else view.scrollTop = homeScroll(id);
+    }
     // Начатую правку фоновое перечитывание не сносит: у «Файлов» это открытый редактор,
     // у «Настроек» — заполненная форма. Раньше их стирало молча, через полсекунды после
     // того, как владелец увидел свой текст на месте.
+    dispatchEvent(new CustomEvent("frame-section", { detail: id }));
     if (!blank && isDirty(page)) {
       announce(section?.label ?? "");
       return;
@@ -598,8 +843,11 @@ export function start(opts: WindowOptions): void {
     try {
       await views[id].render(page);
       if (gen !== showSeq) return;
-      if (!opts.quiet) view.scrollTop = homeScroll(id);
-      else if (wasAtEnd) view.scrollTop = view.scrollHeight;
+      if (id === "settings") dispatchEvent(new CustomEvent("frame-section", { detail: id }));
+      if (!talking && mounting && !opts.quiet) scroll.view()?.scrollTo(homeScroll(id), false);
+      // Chat physics owns the bottom/anchor while rendering. The owner may also
+      // have scrolled during await: a measurement from before it is obsolete.
+      else if (!talking && opts.quiet && wasAtEnd) scroll.view()?.scrollTo(view.scrollHeight, false);
       announce(section?.label ?? "");
     } catch (e) {
       if (gen !== showSeq) return;
@@ -622,6 +870,10 @@ export function start(opts: WindowOptions): void {
   let renaming = "";
   function selectRoom(room: Room) {
     roomPicked = true;
+    if (room.key === S.room) {
+      void show("talk", { quiet: true });
+      return;
+    }
     S.room = room.key;
     S.roomName = room.name;
     renderRooms();
@@ -844,38 +1096,11 @@ export function start(opts: WindowOptions): void {
    * поднимала, и перезапуск окна — нулевое действие.
    */
   async function restartHarness() {
-    // 26.09: сначала — просьба движку через канал. Движок сам выходит между ходами
-    // кодом «перезапусти меня», а поднимает его тот, кто держит, — окно или служба, —
-    // с перечитанными настройками. Окно при этом остаётся: перезапуск окна под службой
-    // был нулевым действием («какого чёрта он не перезапускается с ней»).
-    try {
-      const answer = await post<{ ok?: boolean; note?: string }>("/api/supervisor/restart", { target: "all" });
-      if (answer?.ok) {
-        toast("Движок перезапускается — окно остаётся. Секунд через десять агент снова на связи.");
-        return;
-      }
-    } catch {
-      // канал не ответил — движка нет или он не поднялся; ниже — как раньше
-    }
-    let svc = "";
-    // Служба есть на обеих системах (SCM и демон launchd) — спрашиваем всегда.
-    // Вне приложения (Пульт в браузере) ручки нет, и это не служба «не стоит»,
-    // а «спросить не у кого»: пустая строка, и перезапуск идёт как обычно.
-    try {
-      svc = await shell<string>("service_state");
-    } catch {
-      // вне приложения (веб) — служба не при делах
-    }
-    if (svc === "running") {
-      toast(`Агента держит ${isMacPlatform(S.platform) ? "служба" : "служба Windows"}, а движок на просьбу не ответил — служба поднимет его сама. Не поднялся за минуту: Настройки → Режим, сними и поставь службу заново.`);
-      void show("settings");
+    if (cfg.needs_local_setup) {
+      await shell("restart_self").catch((e) => toast(humanError(e).text));
       return;
     }
-    try {
-      await shell("restart_self");
-    } catch (e) {
-      toast("Не перезапустилось: " + humanError(e).text);
-    }
+    await controlEngine("restart");
   }
 
   /**
@@ -897,6 +1122,22 @@ export function start(opts: WindowOptions): void {
 
   function renderState(s: AgentState | null, connected: boolean) {
     paintPulse(connected);
+    const words = engineWords(ownerState, engineOperation);
+    if (words) {
+      statePill.dataset.level = engineOperation || ownerState?.runner_alive ? "live" : "off";
+      stateText.textContent = words;
+      statePill.title = ownerState?.note || words;
+      stateAction.hidden = true;
+      alarmBox.hidden = true;
+      return;
+    }
+    if (engineFailure) {
+      statePill.dataset.level = "warn";
+      stateText.textContent = engineFailure;
+      statePill.title = engineFailure;
+      stateAction.hidden = true;
+      return;
+    }
     if (!connected) {
       statePill.dataset.level = "off";
       stateText.textContent = "Нет связи с кодом агента";
@@ -914,7 +1155,7 @@ export function start(opts: WindowOptions): void {
       return;
     }
     statePill.dataset.level = s.level;
-    stateText.textContent = s.phrase;
+    stateText.textContent = s.level === "live" && s.activity ? "На связи" : s.phrase;
     statePill.title = s.phrase;
     if (s.action) {
       stateAction.hidden = false;
@@ -932,11 +1173,21 @@ export function start(opts: WindowOptions): void {
     alarmBox.innerHTML = alarms.map((a) => `<span>⚠ ${esc(a.text)}</span>`).join(" · ");
   }
 
+  let stateReading = false;
+  let lastStateAttempt = 0;
   async function refreshState() {
+    if (stateReading) return;
+    stateReading = true;
+    lastStateAttempt = Date.now();
+    const started = lastStateAttempt;
+    const identity = cfg.base + "\n" + cfg.key;
     try {
       const s = await api<AgentState>("/api/state");
+      if (identity !== cfg.base + "\n" + cfg.key) return;
       const wasBusy = !!S.agentState?.runner?.busy;
       S.agentState = s;
+      stateReadStarted = started;
+      channelAvailable = true;
       // Имя: снимок харнесса знает его лучше всех; без снимка (чужой харнесс)
       // имя даёт config.js страницы — иначе Праксис звалась бы «Агент».
       const named = s.anatomy === false && (cfg.agent || "").trim() ? (cfg.agent || "").trim() : s.agent;
@@ -956,7 +1207,9 @@ export function start(opts: WindowOptions): void {
         }
       }
       // Связь берём настоящую: api() умеет уйти на HTTP-фолбэк при мёртвом сокете.
-      renderState(s, S.connected);
+      reconcileEngine();
+      renderState(s, channelAvailable);
+      paintActivity();
       paintRailSign();
       const busy = foreignHarness()
         ? S.runs.some((r) => r.status === "running" && runIsRecent(r))
@@ -966,7 +1219,12 @@ export function start(opts: WindowOptions): void {
       }
       now.tick();
     } catch {
-      // связь решает пилюля через onConnection
+      if (identity !== cfg.base + "\n" + cfg.key) return;
+      channelAvailable = false;
+      renderState(S.agentState, false);
+      paintActivity();
+    } finally {
+      stateReading = false;
     }
   }
 
@@ -995,11 +1253,10 @@ export function start(opts: WindowOptions): void {
       }
       const total = (l.in || 0) + (l.cached || 0);
       const share = total ? Math.round((100 * (l.cached || 0)) / total) : 0;
-      // Дизайнер 29.09: строка перегружена. Время и слово «кэш» — в подсказку; видно
-      // модель, полоску доли кэша, вход → ответ.
+      // The header identifies the model; detailed usage remains in the tooltip,
+      // context disclosure and System. Keep the conversation visually primary.
       pulseHTML =
-        `<b>${esc(l.model || "")}</b> · <span class="cachebar"><i style="width:${share}%"></i></span>${share}% · ` +
-        `${fmtK(total)} → ${fmtK(l.out || 0)}${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+        `<b>${esc(l.model || "")}</b>${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
       pulseLast = `Последний вызов модели — ${fmtTs(l.ts)}: из кэша провайдера ${share}% входа, ` +
         `вход ${fmtK(total)} → ответ ${fmtK(l.out || 0)}.`;
       pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -1036,23 +1293,35 @@ export function start(opts: WindowOptions): void {
   }
   function autoGrow() {
     say.style.height = "auto";
-    say.style.height = Math.min(say.scrollHeight, 180) + "px";
+    say.style.overflowY = "hidden";
+    const height = say.scrollHeight;
+    composerBox.classList.toggle("multiline", height > 34);
+    // Fractional line boxes at Windows scaling must not create an empty scrollbar.
+    say.style.height = Math.min(height + 1, 180) + "px";
+    say.style.overflowY = height > 180 ? "auto" : "hidden";
   }
 
+  function syncComposerNote() {
+    composerNote.textContent = [...S.pending].reverse().find(p => p.room === S.room)?.note || "";
+  }
+  addEventListener("frame-pending", () => { syncComposerNote(); paintActivity(); });
   let composerRoom = "";
   function syncComposer() {
     const room = S.rooms.find((r) => r.key === S.room);
     composerTarget.textContent = isWindowRoom(S.room) ? "" : `в «${S.roomName}»`;
     say.placeholder = room?.stub ? "Чат-заглушка: писать сюда пока нельзя" : isWindowRoom(S.room) ? "Написать агенту…" : `Написать в «${S.roomName}»…`;
     say.disabled = !!room?.stub;
-    send.disabled = !!room?.stub || sending;
+    const blocked = !!ownerState?.stopped || !!engineOperation;
+    send.disabled = !!room?.stub || sending || blocked;
+    attachBtn.disabled = !!room?.stub || blocked;
+    syncMicButton();
     // Черновик подставляем только при настоящей смене комнаты: событие
     // frame-room летит на каждой перерисовке чата.
     if (composerRoom !== S.room) {
       saveDraft(composerRoom, composerRoom ? say.value : "");
       composerRoom = S.room;
       say.value = readDraft(S.room);
-      composerNote.textContent = "";
+      syncComposerNote();
       autoGrow();
     }
   }
@@ -1060,19 +1329,39 @@ export function start(opts: WindowOptions): void {
   say.addEventListener("input", () => {
     autoGrow();
     saveDraft(S.room, say.value);
+    paintActivity();
   });
   // Первый замер мог пройти до стилей (dev-сервер подключает CSS асинхронно) —
   // поле раздувалось до потолка. Перемеряем, когда страница собралась.
   addEventListener("load", autoGrow);
-  say.addEventListener("keydown", (e) => {
+  function onComposerKeydown(e: KeyboardEvent) {
     // sending и isComposing: без них два быстрых Enter давали два хода агента по
     // одному тексту, а Enter подтверждения IME при кириллице отправлял недописанное.
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && !sending) {
+    if (e.key === "Enter" && !e.altKey && !e.shiftKey && !e.isComposing && !sending) {
       e.preventDefault();
       void doSend();
     }
-  });
+  }
+  say.addEventListener("keydown", onComposerKeydown);
   send.addEventListener("click", () => void doSend());
+  const readQueued = document.createElement("button");
+  readQueued.type = "button"; readQueued.className = "notice-action"; readQueued.textContent = "Прочитать сейчас";
+  readQueued.hidden = true;
+  readQueued.title = "Отправляет черновик, прерывает текущие процессы шага и читает очередь вместе. Субагенты не останавливаются; вызов модели дочитывается до границы.";
+  activityRow.append(readQueued);
+  readQueued.addEventListener("click", async () => {
+    if (sending) return;
+    const target = talk.currentTurn();
+    if (!target) return;
+    readQueued.disabled = true;
+    try {
+      if ((say.value.trim() || attachments.length) && !(await doSend())) return;
+      if (talk.currentTurn()?.key !== target.key) { toast("Ход уже сменился — сообщение осталось в очереди"); return; }
+      const receipt = await post("/api/interrupt-step", { run_id: target.run_id });
+      toast(String(receipt?.note || "Просьба записана"));
+    } catch (e) { toast(humanError(e).text); }
+    finally { readQueued.disabled = false; }
+  });
 
   let sending = false;
   let pendSeq = 0;
@@ -1082,7 +1371,7 @@ export function start(opts: WindowOptions): void {
     // Ревью 26.09 (W3 S1): сон — не ход; записка ждёт его конца, а не «читается сейчас».
     if (sleeping) return "агент спит — прочтёт, когда проснётся";
     if (chat && !isWindowRoom(chat)) return midturn ? `ушло в «${S.roomName}»` : `ждёт хода в «${S.roomName}»`;
-    if (midturn) return "агент читает сейчас";
+    if (midturn) return "принято — ждёт чтения в текущем ходе";
     const st = S.agentState;
     // «Квитанции не было ни разу» — это не «агент выключен», а «этот агент окно не
     // читает»: так выглядит окно к серверу, где записка ложится в дерево и ждёт
@@ -1093,7 +1382,7 @@ export function start(opts: WindowOptions): void {
   }
 
   async function doSend() {
-    if (sending) return;
+    if (sending || ownerState?.stopped || engineOperation) return;
     const typedText = say.value.trim();
     const files = attachments.slice();
     if (!typedText && !files.length) return;
@@ -1143,10 +1432,11 @@ export function start(opts: WindowOptions): void {
       if (chat) payload.chat = chat;
       if (files.length) payload.attachments = files.map((a) => ({ name: a.name, mime: a.mime, data: a.data }));
       const data = await post("/api/say", payload);
+      pending.source_id = typeof data?.source_id === "string" ? data.source_id : undefined;
       if (files.length) clearFiles();
       pending.state = "queued";
       pending.note = sendNote(chat, !!data?.midturn, !!data?.sleeping);
-      composerNote.textContent = pending.note;
+      syncComposerNote();
       talk.paintPending();
       talk.afterSend();
     } catch (e) {
@@ -1165,7 +1455,9 @@ export function start(opts: WindowOptions): void {
     }
     clearTimeout(slow);
     sending = false;
-    send.disabled = false;
+    syncComposer();
+    paintActivity();
+    return pending.state === "queued";
   }
 
   // ---------------------------------------------------------------- события
@@ -1179,7 +1471,9 @@ export function start(opts: WindowOptions): void {
       });
       void refreshPulse();
     } else {
+      channelAvailable = false;
       renderState(S.agentState, false);
+      paintActivity();
     }
   });
 
@@ -1245,7 +1539,7 @@ export function start(opts: WindowOptions): void {
     if (isMacPlatform(was) !== isMacPlatform(S.platform)) void show(S.view, { quiet: true });
   });
   syncComposer();
-  addEventListener("frame-room", syncComposer);
+  addEventListener("frame-room", () => { syncComposer(); paintActivity(); });
   addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));
   addEventListener("frame-restart", () => void restartHarness());
   // Пока адрес сервера не вписан, связываться не с кем: канал не открываем и
@@ -1311,6 +1605,12 @@ export function start(opts: WindowOptions): void {
   // Первый запуск издания: занял экран — окно не подключается и комнат не
   // грузит, потому что подключаться пока не к чему.
   if (opts.firstRun?.(view)) return;
+  if (cfg.needs_local_setup) {
+    // The local engine intentionally waits for a configured provider/model.
+    // Native settings remain available without a running agent or API channel.
+    void show("settings");
+    return;
+  }
   connect();
   void refreshState();
   // 26.09: окно, открытое мастером сразу после установки, заставало канал ещё не
@@ -1329,7 +1629,12 @@ export function start(opts: WindowOptions): void {
   };
   openFirst();
   void refreshPulse();
-  setInterval(() => void refreshState(), 8000);
+  void refreshOwner();
+  setInterval(() => void refreshOwner(), 2000);
+  setInterval(() => {
+    const active = !!engineOperation || (channelAvailable && !!S.agentState?.runner?.busy);
+    if (Date.now() - lastStateAttempt >= (active ? 1500 : 8000)) void refreshState();
+  }, 1500);
   setInterval(() => void refreshPulse(), 20000);
 }
 

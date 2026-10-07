@@ -279,6 +279,9 @@ pub fn is_elevated() -> bool {
 /// мастера и — если мастер поднят — не с правами администратора. Поднятый процесс
 /// отдаёт запуск Проводнику: тот запускает от имени владельца сеанса, без прав.
 pub fn launch_app(exe: &Path) -> std::io::Result<()> {
+    if crate::install::owner_stopped_pub() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "Остановлен владельцем; обновление не возобновляет агента"));
+    }
     let cwd = exe.parent().map(Path::to_path_buf).unwrap_or_else(std::env::temp_dir);
     if is_elevated() {
         let explorer = std::env::var_os("SystemRoot")

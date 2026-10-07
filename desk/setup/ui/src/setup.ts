@@ -254,7 +254,12 @@ export async function uninstallLaunch(): Promise<void> {
 /** Решения уже стоящей установки — для «Обновить» поверх (те же, что у `--update`).
  *  null — решений нет (имена, конституция): мастер идёт обычным маршрутом. */
 export async function installedSetup(dir: string): Promise<Setup | null> {
-  if (!inTauri) return null;
+  if (!inTauri) {
+    const params = new URLSearchParams(location.search);
+    if (params.has("readFail")) throw new Error("Превью: файл настроек недоступен");
+    if (params.has("installed")) return { ...setup, dir, agent: "Агент", owner: "Владелец", constitution: "Текущая конституция", accepted: true };
+    return null;
+  }
   return (await invoke<Setup | null>("installed_setup", { dir })) ?? null;
 }
 

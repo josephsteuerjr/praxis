@@ -1,12 +1,86 @@
 // Устройство: как этот агент работает, простыми словами, с разбором живого
 // хода и живым списком рук — снимок кода, не пересказ.
-import { api } from "../api";
-import { esc, fmtK, fmtN, fmtTime, md, plural, q, safeRender } from "../lib";
+import { api, post } from "../api";
+import { esc, fmtK, fmtN, fmtTime, humanError, md, plural, q, safeRender, toast } from "../lib";
 import { stepsHTML, type RunDetail } from "../panel";
 import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
 import { isMacPlatform } from "../../platform";
 import { mountSupervisor } from "./supervisor";
+
+/** Запись леджера ретенции (GET /api/retention). */
+interface RetentionEntry {
+  class: string;
+  path: string;
+  bytes: number;
+  files: number;
+  age_days: number;
+  sweepable?: boolean;
+}
+
+interface RetentionReport {
+  entries?: RetentionEntry[];
+  removed?: Array<{ path: string; bytes: number }>;
+}
+
+const RETENTION_CLASS_RU: Record<string, string> = {
+  project: "проект",
+  update_staging: "staging обновления",
+  spool_cache: "кэш спула",
+  models: "модели",
+  run_artifacts: "артефакты ходов",
+  backups: "снимки-бэкапы",
+};
+
+function fmtMB(bytes: number): string {
+  return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} МБ` : `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+}
+
+/**
+ * Материалы — диаграммой на полосках в бумажном стиле (слово владельца 05.10:
+ * «не выглядит диаграммой — можно было бы красивые полоски в общем бумажном
+ * стиле»). Длина полоски — доля веса среди материалов, тон — чернильная
+ * заливка поверх бумаги. Щелчок разворачивает подробности и действия: у
+ * удаляемых классов — «Удалить папку» с подтверждением вторым щелчком (слово
+ * владельца 01.10 и есть политика удаления, 05.10 — «никак не чистится»);
+ * staging убирает общая кнопка по возрасту.
+ */
+const DELETABLE_CLASSES = new Set(["project", "spool_cache", "run_artifacts"]);
+
+function materialsHTML(r: RetentionReport | null): string {
+  if (!r || !r.entries?.length) {
+    return `<h3 class="section-title">Материалы</h3><p class="muted">Леджер ретенции пуст: вторичных материалов не нашлось.</p>`;
+  }
+  const total = r.entries.reduce((s, e) => s + (e.bytes || 0), 0);
+  const heaviest = Math.max(...r.entries.map((e) => e.bytes || 0), 1);
+  const strips = r.entries
+    .slice()
+    .sort((a, b) => (b.bytes || 0) - (a.bytes || 0))
+    .map((e) => {
+      const name = e.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || e.path;
+      const cls = RETENTION_CLASS_RU[e.class] || e.class;
+      const fill = Math.max(2, Math.round(((e.bytes || 0) / heaviest) * 100));
+      const deletable = DELETABLE_CLASSES.has(e.class);
+      const policy =
+        deletable ? "удаляется здесь, твоим словом"
+        : e.class === "models" ? "перекачиваемые, в копии не ездят"
+        : e.class === "backups" ? "снимки перед обновлениями; чистит владелец руками"
+        : e.sweepable ? "мусор — уберётся кнопкой ниже" : "уберётся сама по возрасту";
+      return `<details class="material-strip${e.sweepable ? " sweep" : ""}" data-path="${esc(e.path)}">
+        <summary><span class="strip-fill" style="--fill:${fill}%"></span>
+          <span class="strip-name">${esc(name)}</span><span class="muted">${esc(cls)}</span>
+          <span class="strip-size">${fmtMB(e.bytes || 0)}</span><span class="muted">${fmtN(e.files || 0)} ф.</span><span class="muted">${fmtN(Math.round(e.age_days || 0))} дн.</span></summary>
+        <div class="fold-body"><p class="mono field-hint">${esc(e.path)}</p><p class="field-hint">${esc(policy)}</p>
+          ${deletable ? `<div class="actions"><button class="btn btn-danger" data-retention-delete="${esc(e.path)}" type="button">Удалить папку</button><span class="receipt"></span></div>` : ""}
+        </div>
+      </details>`;
+    })
+    .join("");
+  const sweepable = r.entries.filter((e) => e.sweepable).length;
+  return `<h3 class="section-title">Материалы <span class="muted">${fmtMB(total)} · ${fmtN(r.entries.length)}</span></h3>
+    <div class="material-strips">${strips}</div>
+    ${sweepable ? `<div class="actions" style="margin:8px 0 4px"><button class="btn btn-quiet" id="retention-sweep" type="button">Убрать мусор обновлений (${fmtN(sweepable)})</button><span class="receipt" id="retention-receipt"></span></div>` : ""}`;
+}
 
 const INTRO: Array<[string, string]> = [
   [
@@ -284,10 +358,11 @@ function spendCutsHTML(s: Spend | null): string {
 }
 
 export async function render(container: HTMLElement): Promise<void> {
-  const [aR, pR, mR, cR, sR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7")]);
+  const [aR, pR, mR, cR, sR, retR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7"), api<RetentionReport>("/api/retention")]);
   if (aR.status === "rejected") throw aR.reason;
   const a = aR.value;
   const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
+  const materials = materialsHTML(retR.status === "fulfilled" ? retR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
   const cutsBox = cutsHTML(cR.status === "fulfilled" ? cR.value : null) + spendCutsHTML(sR.status === "fulfilled" ? sR.value : null);
   const modeName = mR.status === "fulfilled" && mR.value.name ? `режим: <b>${esc(mR.value.title)}</b> · ` : "";
@@ -313,9 +388,10 @@ export async function render(container: HTMLElement): Promise<void> {
        · тулов предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
     : '<p class="muted">Снимка ещё нет: движок пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
-    ${meta}${modeBox}${fenceBox}
+    ${meta}${materials}${modeBox}${fenceBox}
     <div id="supervisor-box"></div>
-    ${spend}${intro}
+    ${spend}
+    ${intro}
     ${cutsBox}
     <h3 class="section-title">Разбор живого хода</h3>
     <p class="muted">Не пример из документации, а последний настоящий ход этого агента, шаг за шагом, с пояснением каждого шага.</p>
@@ -331,6 +407,67 @@ export async function render(container: HTMLElement): Promise<void> {
   // на своих обработчиках, а этот экран без него рисуется как рисовался.
   const supervisorBox = q<HTMLElement>("#supervisor-box", container);
   safeRender(supervisorBox, () => mountSupervisor(supervisorBox));
+  const sweepBtn = container.querySelector<HTMLButtonElement>("#retention-sweep");
+  // Полоски разворачиваются ЯВНЫМ обработчиком (05.10, «не разворачивается»):
+  // нативный toggle details у владельца не срабатывал — теперь открытие и
+  // закрытие держим сами, и никакой проглоченный клик их не снимет.
+  for (const strip of container.querySelectorAll<HTMLDetailsElement>(".material-strip")) {
+    strip.querySelector("summary")?.addEventListener("click", (e) => {
+      e.preventDefault();
+      strip.open = !strip.open;
+    });
+  }
+  // Удаление папки — слово владельца двумя щелчками: первый взводит и честно
+  // переспрашивает, второй исполняет. Отказ канала показывается на месте.
+  for (const btn of container.querySelectorAll<HTMLButtonElement>("[data-retention-delete]")) {
+    btn.addEventListener("click", () => {
+      if (btn.dataset.armed === "1") {
+        const receipt = btn.parentElement?.querySelector<HTMLElement>(".receipt");
+        if (receipt) receipt.textContent = "удаляю…";
+        btn.disabled = true;
+        void post<{ ok?: boolean; note?: string }>("/api/retention",
+            { action: "delete", path: btn.dataset.retentionDelete || "" })
+          .then((r) => {
+            if (!r?.ok) throw new Error(r?.note || "не вышло");
+            toast("Папка удалена");
+            void render(container);
+          })
+          .catch((e) => {
+            btn.disabled = false;
+            btn.dataset.armed = "";
+            btn.textContent = "Удалить папку";
+            if (receipt) receipt.textContent = humanError(e).text;
+          });
+        return;
+      }
+      btn.dataset.armed = "1";
+      btn.textContent = "Точно удалить? Нажми ещё раз";
+      window.setTimeout(() => {
+        if (btn.dataset.armed === "1") {
+          btn.dataset.armed = "";
+          btn.textContent = "Удалить папку";
+        }
+      }, 4000);
+    });
+  }
+  if (sweepBtn) {
+    const receipt = container.querySelector<HTMLElement>("#retention-receipt");
+    sweepBtn.addEventListener("click", () => {
+      sweepBtn.disabled = true;
+      if (receipt) receipt.textContent = "убираю…";
+      post("/api/retention", { action: "sweep" })
+        .then((r) => {
+          const removed = ((r as RetentionReport).removed) || [];
+          const freed = removed.reduce((s, x) => s + (x.bytes || 0), 0);
+          toast(`Убрано staging: ${fmtN(removed.length)} · ${fmtMB(freed)}`);
+          void render(container);
+        })
+        .catch((e) => {
+          if (receipt) receipt.textContent = "не вышло: " + humanError(e).text;
+          sweepBtn.disabled = false;
+        });
+    });
+  }
   const lessonBox = q<HTMLDetailsElement>("#lesson-box", container);
   lessonBox.addEventListener("toggle", () => {
     // Голый `void` оставлял складку в «ищу последний завершённый ход…» навсегда.

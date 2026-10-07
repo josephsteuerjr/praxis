@@ -21,6 +21,7 @@ import { ModeScene } from "./scenes/mode";
 import { WhereScene } from "./scenes/where";
 import { installedSetup, isMac, loadDefaults, machine, setup, uninstallLaunch, type Found, type Setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
+import { paperButton, paperDialog } from "../../../ui-kit/paper-dialog";
 
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
 // показывается отсюда, поэтому исключение до show() давало живой процесс вообще
@@ -118,7 +119,7 @@ for (const btn of document.querySelectorAll<HTMLButtonElement>(".win")) {
   btn.addEventListener("click", () => {
     if (action === "minimize") void win.minimize();
     else if (action === "maximize") void win.toggleMaximize();
-    else void win.close();
+    else void requestClose();
   });
 }
 
@@ -130,6 +131,7 @@ const keys = new KeysScene(q<HTMLElement>(".scene-keys"));
 const mode_ = new ModeScene(q<HTMLElement>(".scene-mode"));
 const legacy = new LegacyScene(q<HTMLElement>(".scene-legacy"));
 const install = new InstallScene(q<HTMLElement>(".scene-install"));
+const update = new InstallScene(q<HTMLElement>(".scene-update"), true);
 const uninstall = new UninstallScene(q<HTMLElement>(".scene-uninstall"));
 const installed = new InstalledScene(q<HTMLElement>(".scene-installed"));
 const found = new FoundScene(q<HTMLElement>(".scene-found"));
@@ -171,7 +173,7 @@ function insertScene(scene: Scene, before: Scene, key: string) {
 
 function byNameScene(key: string): Scene {
   const table: Record<string, Scene> = {
-    name, constitution, keys, where, mode: mode_, install, uninstall, legacy, installed, found,
+    name, constitution, keys, where, mode: mode_, install, update, uninstall, legacy, installed, found,
   };
   return table[key];
 }
@@ -184,6 +186,21 @@ nextBtn.addEventListener("click", () => void go(1));
 let index = 0;
 let busy = false;
 let hintTimer = 0;
+let closeDialog: HTMLDialogElement | null = null;
+function closingDuringInstall(): boolean {
+  const current = scenes[index];
+  if (current !== install && current !== update || !current.isRunning) return false;
+  if (closeDialog?.open) { closeDialog.focus(); return true; }
+  const ui = paperDialog(current === update ? "Обновление ещё идёт" : "Установка ещё идёт"); closeDialog = ui.dialog;
+  const words = document.createElement("p"); words.className = "paper-lead";
+  words.textContent = current.canCancel ? "Чтобы закончить сейчас, отмени операцию. Установщик дождётся отката и покажет результат."
+    : "Сейчас версии меняются местами. Дождись результата — окно снова можно будет закрыть.";
+  ui.body.append(words); ui.footer.append(paperButton("Вернуться", () => ui.dialog.close(), true));
+  if (current.canCancel) ui.footer.append(paperButton(current === update ? "Отменить обновление" : "Отменить установку", () => { ui.dialog.close(); current.requestCancel(); }));
+  ui.dialog.addEventListener("close", () => { closeDialog = null; }, { once: true }); return true;
+}
+async function requestClose() { if (!closingDuringInstall()) await win?.close(); }
+if (win) void win.onCloseRequested(e => { if (closingDuringInstall()) e.preventDefault(); });
 
 function showHint(text: string, delayMs: number) {
   clearTimeout(hintTimer);
@@ -242,6 +259,14 @@ async function jumpTo(to: Scene): Promise<void> {
   const from = scenes[index];
   index = at;
   refreshEdge();
+  if (to === update || from === update) {
+    // An update is one continuous sheet, with no overlapping wizard headings.
+    from.root.hidden = true;
+    to.setStatic();
+    const heading = to.root.querySelector<HTMLElement>("h2");
+    if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+    busy = false; refreshEdge(); return;
+  }
   const leaving = from.leave(1);
   await sleep(0.12 * T * 1000);
   await Promise.all([leaving, to.enter(1)]);
@@ -252,29 +277,34 @@ async function jumpTo(to: Scene): Promise<void> {
 /** «Обновить» поверх стоящей установки: решения — из неё самой, как у `--update`. */
 async function updateInstalled(): Promise<void> {
   const inst = machine.installed;
-  if (!inst) return;
+  if (!inst || busy || update.locked) return;
+  if (!scenes.includes(update)) { scenes.push(update); byName.update = scenes.length - 1; }
+  update.prepare(shippedVersion);
+  await jumpTo(update);
+  busy = true;
   let decided: Setup | null = null;
   try {
     decided = await installedSetup(inst.dir);
-  } catch {
-    decided = null;
+  } catch (error) {
+    busy = false;
+    update.preparationFailed("Не удалось прочитать текущие настройки: " + String(error), () => void updateInstalled(), () => void jumpTo(installed));
+    refreshEdge(); return;
   }
   if (!decided && isPraxis()) {
     // Praxis: решать нечего — только папка и режим стоящего.
     Object.assign(setup, { dir: inst.dir, scope: machine.installedFound?.scope || "" });
-    await jumpTo(install);
-    install.start();
+    busy = false; update.start(); refreshEdge();
     return;
   }
   if (!decided) {
     // Решений в установке нет (имя, конституция) — обычный мастер, как у `--update`.
-    showHint("В установке не хватает решений — пройдём мастер, это тоже установка поверх.", 0);
-    void go(1);
+    busy = false;
+    update.preparationFailed("Не удалось прочитать настройки установленной Hélène. Обновление не началось; текущая версия и её данные на месте.", () => void updateInstalled(), () => void jumpTo(installed));
+    refreshEdge();
     return;
   }
   Object.assign(setup, decided, { dir: inst.dir, scope: machine.installedFound?.scope || "" });
-  await jumpTo(install);
-  install.start();
+  busy = false; update.start(); refreshEdge();
 }
 
 /** «Продолжить с <имя>» (1.2): решения — из найденной памяти, сама память уходит в
@@ -327,13 +357,13 @@ function isControl(target: EventTarget | null): boolean {
  */
 function refreshEdge() {
   const current = scenes[index];
-  const own = current === installed || current === found || current === install || current === uninstall;
-  const locked = (current === install && install.locked) || (current === uninstall && uninstall.locked);
-  backBtn.hidden = !canGo(-1) || locked;
+  const own = current === installed || current === found || current === install || current === update || current === uninstall;
+  const locked = (current === install && install.locked) || (current === update && update.locked) || (current === uninstall && uninstall.locked);
+  backBtn.hidden = !canGo(-1) || locked || current === update;
   nextBtn.hidden = own || !canGo(1);
   backBtn.disabled = busy;
   nextBtn.disabled = busy;
-  const steps = scenes.filter((s) => s !== installed && s !== found && s !== legacy);
+  const steps = scenes.filter((s) => s !== installed && s !== found && s !== legacy && s !== update);
   const at = steps.indexOf(current);
   stepCount.textContent = at >= 0 && steps.length > 1 ? `Шаг ${at + 1} из ${steps.length}` : "";
   nextLabel.textContent = scenes[index + 1] === install ? "К установке" : "Далее";
@@ -342,6 +372,7 @@ function refreshEdge() {
 // Заполнил поле — причина, по которой не пускало, снимается сама.
 document.addEventListener("input", hideHint);
 addEventListener("keydown", (e) => {
+  if (scenes[index] === update || q<HTMLElement>("#setup-boot").hidden === false) return;
   const button = e.target instanceof HTMLButtonElement;
   if (isControl(e.target) && !button) return;
   // Enter и Space на кнопке — это её собственное нажатие (click от Enter/Space
@@ -360,6 +391,7 @@ addEventListener("keydown", (e) => {
 
 // ---------------------------------------------------------------- старт
 
+let shippedVersion = "";
 async function start() {
   try {
     await Promise.all([
@@ -402,9 +434,15 @@ async function start() {
     if (d.installed?.dir) setup.dir = d.installed.dir;
     // Система — по слову оболочки: по нему сцены прячут службу, тело и брандмауэр.
     machine.platform = String(d.platform || "").trim().toLowerCase();
-  } catch {
-    // без оболочки папка останется примером
+  } catch (error) {
+    if (inTauri) {
+      const boot = q<HTMLElement>("#setup-boot"); boot.replaceChildren();
+      const title = document.createElement("h2"); title.className = "form-head"; title.textContent = "Не удалось проверить установку";
+      const reason = document.createElement("p"); reason.className = "form-lead"; reason.textContent = String(error);
+      const retry = document.createElement("button"); retry.className = "form-button primary"; retry.textContent = "Повторить"; retry.addEventListener("click", () => void start()); boot.append(title,reason,retry); return;
+    }
   }
+  shippedVersion = shipped;
   // 26.09: Hélène уже стоит — первой сценой «уже установлена» (обновить / удалить /
   // настроить заново), а не мастер с именем и конституцией, как при первой установке.
   if (!uninstallMode && machine.installed) {
@@ -444,8 +482,11 @@ async function start() {
   if (jump && jump in byName) index = byName[jump];
   const first = scenes[index];
   refreshEdge();
-  if (params.has("static")) first.setStatic();
-  else await first.enter(1);
+  // The first visible route is already laid out. Boot has its own honest frame,
+  // so no wizard controls flash while defaults/installed detection are pending.
+  first.setStatic();
+  q<HTMLElement>("#setup-boot").hidden = true;
+  q<HTMLElement>(".stepbar").hidden = false;
   refreshEdge();
 }
 

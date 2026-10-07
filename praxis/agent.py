@@ -4448,7 +4448,9 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         target: str = "self", isolation: str = "auto", scope: str = "self",
                         priority: str = "normal",
                         title: str = "", review: str = "", checked: str = "",
-                        submit: bool = True, reviewer: str = "") -> str:
+                        submit: bool = True, reviewer: str = "",
+                        success_criteria: list[str] | None = None,
+                        verify_commands: list[str] | None = None) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4479,7 +4481,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                 )
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
-                          origin_chat=origin)
+                          origin_chat=origin,
+                          success_criteria=success_criteria, verify_commands=verify_commands)
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыла coding-задачу: {goal[:180]}", salience=2)
         return out
@@ -7657,15 +7660,17 @@ FORGE_TOOLS = [
      "input_schema": _obj({
          "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon"]},
          "task_id": {"type": "string"}, "goal": {"type": "string"},
-         "target": {"type": "string", "description": "self or a directory path; scope=host an absolute Linux host path, scope=windows an absolute Windows path"},
+         "target": {"type": "string", "description": "self or a directory path; host = absolute Linux path, windows = absolute Windows path"},
          "isolation": {"type": "string", "enum": ["auto", "worktree", "direct"]},
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
+         "success_criteria": {"type": "array", "items": {"type": "string"}},
+         "verify_commands": {"type": "array", "items": {"type": "string"}},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
-                   "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED proxy to the local PC (direct computer.* verbs are the primary path). All scopes stay in the same canonical Forge."},
+                   "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED (use computer.* directly); all in the same Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
          "checked": {"type": "string"}, "submit": {"type": "boolean"},
          "reviewer": {"type": "string",
-                      "description": "finish: reviewer verdict or 'skip: <reason>' (gate; empty = fetch fresh from the task ledger)"},
+                      "description": "finish: reviewer verdict or 'skip: <reason>'; empty = fetch fresh"},
      }, ["action"])} ,
     {"name": "coding_inspect",
      "description": (
@@ -11348,7 +11353,7 @@ def _inlay_spans(text: str) -> list[tuple[int, int]]:
     CJK-семейства, не Lm и не приклеена к разрешённой букве (второе ревью
     01.10, СРЕДНЕЕ-3): скан 4109 живых контекстов 09–10 показал, что класс
     одиночных «малых» письменностей — это ники комнаты (Ᏸ ×311, 𓆏 ×170,
-    ᅠ ×133, ᐟ ×106, ник с Ᏸ → «⟨вклейка: Ᏸ⟩»), а не глитчи
+    ᅠ ×133, ᐟ ×106, Ᏸiƀoba/participant → «⟨вклейка: Ᏸ⟩iƀoba»), а не глитчи
     генерации. Исключения держат экспонатный класс:
     CJK (одиночные 我/半/明 — исходный дефект 27.09, полная запись в TABLE),
     Lm (одиночная ー — репро №1 первого ревью), приклейка к разрешённой
@@ -11397,7 +11402,7 @@ def _is_nick_like(text: str, s0: int, s1: int) -> bool:
       все CJK, все её собственные дефекты 27.09 («по半 часа», «за语气»,
       «Многие Մм», «у Хоуп Մмые») — иероглиф вклеен в русское слово;
     * одиночная чужая буква ИЗОЛИРОВАННАЯ или при латинице — ники и handles
-      комнаты: Ᏸ ×311 (ник с латиницей), 𓆏 ×170 (ник участника),
+      комнаты: Ᏸ ×311 («Ᏸiƀoba (participant)»), 𓆏 ×170 (another participant),
       ᅠ ×133 («ᅠD & W»), ᐟ ×106 («τ¹ᐟ²» — её же математика), ツ ×68
       (каомодзи), 𓋹/𖤛/𐕣 — декор; глитчей среди них ноль.
 
@@ -11445,7 +11450,7 @@ def _cjk_ratio(text: str) -> float:
 
 def _sanitize_cjk_substitutions(reply: str, convo_text: str = "") -> tuple[str, str]:
     """Санитайзер вклеек CJK в не-CJK речи (дефект glm-5.3, 23–26.09; апгрейд
-    27.09 по договору с участником комнаты): кластеры не вырезаются, а заменяются
+    27.09 по договору с torvn77): кластеры не вырезаются, а заменяются
     переводной вклейкой «⟨вклейка: перевод⟩» через cjk_vkladki
     (словарь → дешёвый LLM-перевод → кэш на диск → fallback на кластер).
     01.10: с CJK-диапазонов — на любую письменность кроме латиницы и
@@ -12805,13 +12810,20 @@ def _run_recap_markdown(run_id: str, *, outcome: str, final_text: str = "",
     if delivery_rows:
         try:
             evidence = _delivery_evidence(run_id)
+            # A completed empty plan is not an accepted message. Reply-hand
+            # receipts are separate from the (silent) turn-boundary receipt.
+            hand_ids = reply_hand_message_ids(run_id) if evidence.get("silent") else []
+            state = ("incomplete" if not evidence.get("ready") else
+                     "skipped" if evidence.get("silent") and not hand_ids else "sent")
             delivery_lines.extend([
-                f"- State: `{'sent' if evidence.get('ready') else 'incomplete'}`",
+                f"- State: `{state}`",
                 f"- Expected text/media: {evidence.get('expected_text_chars') or 0} chars / "
                 f"{evidence.get('expected_media_count') or 0} item(s)",
                 f"- Observed text/media: {evidence.get('observed_text_chars') or 0} chars / "
                 f"{evidence.get('observed_media_count') or 0} item(s)",
             ])
+            if hand_ids:
+                delivery_lines.append(f"- Messages accepted through the reply hand: {len(hand_ids)}")
         except Exception as exc:
             delivery_lines.append(f"- Delivery receipts exist but reduction failed: `{type(exc).__name__}`.")
         delivery_lines.append("- Receipt metadata is available in the full run timeline; payload locators stay out of the recap.")
@@ -13608,7 +13620,10 @@ def run_delivery_finalize_recovered(run_id: str, *, media_count: int = 0) -> boo
         # чанка, до текстовой расписки дело не доходит, и без этой ветки ход навсегда
         # оставался бы «написала». При пустом тексте проектор обновит исход и не станет
         # писать заметку о речи — речи и не было.
-        if evidence.get("ready"):
+        if evidence.get("ready") and (
+                not evidence.get("silent") or reply_hand_message_ids(run_id)):
+            # ``ready`` also covers a skipped zero-message plan. Preserve the
+            # unspoken authored note instead of marking it as delivered speech.
             project_delivery_outcome(run_id, _DELIVERY_SPOKEN,
                                      text=str(evidence.get("final_text") or ""))
         elif evidence.get("delivery_message_ids"):

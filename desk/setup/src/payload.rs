@@ -101,6 +101,8 @@ pub struct Manifest {
     /// поставки от того, что владелец положил в папку сам.
     #[serde(default)]
     pub top: Vec<String>,
+    #[serde(default)]
+    pub code_sha256: std::collections::BTreeMap<String, String>,
     /// 1.2.1: голос вынесен из рантайма в отдельный набор (`voice/site-packages`). По
     /// этой записи обновление с поставки, где движок жил в рантайме (≤ 1.2.0), переносит
     /// его пакеты в `voice/`, а не выбрасывает вместе с прежним рантаймом.

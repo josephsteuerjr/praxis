@@ -7,11 +7,12 @@
 //
 // Страница окна приходит своим протоколом helene://localhost — этот origin канал агента
 // уже пускает (deskapp.py: _SHELL_SCHEMES), правки в харнессе не нужны.
-import { BrowserWindow, Menu, Tray, app, ipcMain, nativeImage, nativeTheme, net, protocol, screen } from "electron";
+import { BrowserWindow, Menu, Tray, Notification, app, dialog, ipcMain, nativeImage, nativeTheme, net, protocol, screen } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { channelFor } from "./channel";
+import { HostClient } from "./host";
+import { bootstrapChannel, initOwner, ownerRoot, programRoot } from "./layout";
 import { runCommand, type Ctx } from "./commands";
 
 const PRODUCT_UI = "Hélène";
@@ -32,11 +33,12 @@ protocol.registerSchemesAsPrivileged([
 
 /** Папка установки (helene.json, app/static, helene.log). В разработке — рядом стоящая Hélène. */
 function installRoot(): string {
+  if (process.platform === "linux") return ownerRoot(app.getPath("home"), process.env.HELENE_ROOT);
   if (process.env.HELENE_ROOT) return process.env.HELENE_ROOT;
   if (app.isPackaged) return dirname(process.execPath);
   if (process.platform === "win32") return "C:\\Program Files\\Helene";
   if (process.platform === "darwin") return "/Applications/Helene.app/Contents/Resources";
-  return "/opt/helene";
+  return ownerRoot(app.getPath("home"), process.env.HELENE_ROOT);
 }
 
 /** Статика окна: HELENE_UI, в разработке — сборка app/ этого дерева, в поставке — app/static. */
@@ -47,7 +49,17 @@ function uiRoot(root: string): string {
 }
 
 const ROOT = installRoot();
-const UI = uiRoot(ROOT);
+const PROGRAM = process.platform === "linux" ? programRoot(process.execPath, process.env.HELENE_PROGRAM_ROOT) : ROOT;
+if (process.platform === "linux") {
+  mkdirSync(join(ROOT, "window"), { recursive: true });
+  app.setPath("userData", join(ROOT, "window"));
+}
+const UI = process.env.HELENE_UI || (app.isPackaged ? join(PROGRAM, "app", "static") : uiRoot(ROOT));
+let host: HostClient;
+let channel: Record<string, unknown>;
+let initScript = "";
+let stopped = false;
+let closing = false;
 
 function log(line: string) {
   const stamp = new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -74,22 +86,50 @@ const ctx: Ctx = {
   root: ROOT,
   version: app.getVersion(),
   product: PRODUCT_UI,
-  relaunch: () => { quitting = true; app.relaunch(); app.exit(0); },
+  relaunch: () => { app.relaunch(); app.quit(); },
+  host: { invoke: (cmd, args) => host.invoke(cmd, args) },
 };
 
-function start() {
+async function start() {
+  try {
+    if (process.platform === "linux") initOwner(PROGRAM, ROOT, !!process.env.HELENE_ROOT);
+    host = new HostClient(process.env.HELENE_HOST || join(PROGRAM, process.platform === "win32" ? "helene-host.exe" : "helene-host"), ROOT, log);
+    host.on("event", (name, data) => {
+      if (name === "show-window") show();
+      if (name === "replace-window") {
+        initScript = data.script; channel = bootstrapChannel(initScript);
+        win?.destroy(); win = null; show();
+      }
+      if (name === "notify" && Notification.isSupported()) new Notification(data).show();
+      if (name === "message") void dialog.showMessageBox({ type: data.type, title: data.title, message: data.message }).catch((e) => log(String(e)));
+      if (name === "relaunch") { app.relaunch(); app.quit(); }
+      if (name === "exit") app.quit();
+    });
+    const ready = await host.ready;
+    initScript = ready.script;
+    channel = bootstrapChannel(initScript);
+    host.on("closed", (error) => {
+      if (!quitting) { dialog.showErrorBox("Движок оболочки остановился", String(error)); app.quit(); }
+    });
+  } catch (error) {
+    dialog.showErrorBox("Hélène не открылась", error instanceof Error ? error.message : String(error));
+    app.quit(); return;
+  }
   // Проверка темы глазами: HELENE_THEME=dark|light (в поставке — как в системе).
   const theme = process.env.HELENE_THEME;
   if (theme === "dark" || theme === "light") nativeTheme.themeSource = theme;
   log(`старт ${PRODUCT_UI} ${app.getVersion()} · Electron ${process.versions.electron} · установка ${ROOT} · статика ${UI}`);
   protocol.handle("helene", (req) => serveStatic(req.url));
   ipcMain.on("helene:config", (e) => {
-    const { channel, note } = channelFor(ROOT, PRODUCT_UI);
-    log(note);
+    if (!trustedSender(e)) { e.returnValue = null; return; }
     e.returnValue = channel;
   });
-  ipcMain.handle("helene:invoke", (_e, cmd: string, args: Record<string, unknown>) => runCommand(String(cmd), args ?? {}, ctx));
+  ipcMain.handle("helene:invoke", (e, cmd: string, args: Record<string, unknown>) => {
+    if (!trustedSender(e) || String(cmd).startsWith("host_")) throw new Error("Недоступный вызов оболочки");
+    return runCommand(String(cmd), args ?? {}, ctx);
+  });
   ipcMain.on("helene:look", (e, paper: { day?: string; night?: string }) => {
+    if (!trustedSender(e)) return;
     try {
       mkdirSync(app.getPath("userData"), { recursive: true });
       writeFileSync(lookFile(), JSON.stringify({ day: paper?.day, night: paper?.night }));
@@ -98,6 +138,7 @@ function start() {
     w?.setBackgroundColor(paperColor());
   });
   ipcMain.on("helene:win", (e, action: string) => {
+    if (!trustedSender(e)) return;
     const w = BrowserWindow.fromWebContents(e.sender);
     if (!w) return;
     if (action === "minimize") w.minimize();
@@ -179,7 +220,7 @@ function paperColor(): string {
 
 function icon(name: string): Electron.NativeImage | undefined {
   const dev = join(__dirname, "..", "..", "shell", "icons", name);
-  const packed = join(process.resourcesPath || "", "icons", name);
+  const packed = join(PROGRAM, "electron", "resources", "icons", name);
   const p = app.isPackaged ? packed : dev;
   return existsSync(p) ? nativeImage.createFromPath(p) : undefined;
 }
@@ -198,11 +239,22 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       sandbox: true,
+      additionalArguments: ["--helene-session=" + (process.env.XDG_SESSION_TYPE === "wayland" ? "wayland" : "x11")],
       spellcheck: false,
     },
   });
   if (b.maximized) w.maximize();
   w.once("ready-to-show", () => w.show());
+  const visibility = () => void host.invoke("host_visibility", { visible: w.isVisible(), focused: w.isFocused() }).catch((e) => log(String(e)));
+  // Четыре отдельных вызова: общий union имён не выбирает одну перегрузку BrowserWindow.on.
+  w.on("show", visibility);
+  w.on("hide", visibility);
+  w.on("focus", visibility);
+  w.on("blur", visibility);
+  w.webContents.on("did-finish-load", () => {
+    // Bootstrap owns this code. It may render the explicit foreign-port refusal.
+    void w.webContents.executeJavaScript(initScript).catch((e) => log(String(e)));
+  });
   // Закрыть окно ≠ выйти: окно прячется к часам, агент живёт; выход — из меню значка.
   w.on("close", (e) => {
     saveBounds(w);
@@ -237,6 +289,7 @@ function armFree() {
 }
 
 function show() {
+  if (!channel || quitting) return;
   if (!win || win.isDestroyed()) win = createWindow();
   else {
     if (win.isMinimized()) win.restore();
@@ -256,11 +309,25 @@ function makeTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Открыть ${PRODUCT_UI}`, click: () => show() },
     { type: "separator" },
-    { label: "Выход (агент остаётся под службой)", click: () => { quitting = true; app.quit(); } },
+    { label: "Выйти", click: () => { quitting = true; app.quit(); } },
   ]));
   tray.on("click", () => show());
 }
 
-app.on("before-quit", () => { quitting = true; });
+app.on("before-quit", (event) => {
+  quitting = true;
+  if (stopped || !host) return;
+  event.preventDefault();
+  if (closing) return;
+  closing = true;
+  void host.close().finally(() => { stopped = true; app.quit(); });
+});
 app.on("window-all-closed", () => { /* живём у часов */ });
 app.on("activate", () => show()); // macOS: клик по значку в Dock
+
+function trustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
+  const frame = event.senderFrame;
+  if (!frame || frame !== event.sender.mainFrame) return false;
+  try { const url = new URL(frame.url); return url.protocol === "helene:" && url.hostname === "localhost"; }
+  catch { return false; }
+}

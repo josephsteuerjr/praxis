@@ -467,8 +467,13 @@ def _apply_supported(candidate: dict, claim_id: str) -> list[str]:
     ops = []
     if candidate["kind"] == "person":
         slug = graph.resolve(candidate["subject"])
+        # 06.10: confidence едет в маркер факта (clm-…|observed) — прежде она
+        # терялась на пути claim → досье, и hook не мог предпочесть наблюдение
+        # выводу (memory_catalog._derive_person_hook читает обе формы маркера).
+        confidence = str(candidate.get("confidence") or "uncertain").lower()
         people.append_fact(slug, candidate["subject"], candidate["text"],
-                           candidate["visibility"], candidate["salience"], source_ref=claim_id)
+                           candidate["visibility"], candidate["salience"],
+                           source_ref=f"{claim_id}|{confidence}")
         ops.append(f"people/{slug}.md ← {claim_id}")
     if candidate["kind"] == "relation" and candidate.get("other"):
         if candidate.get("visibility") == "private":

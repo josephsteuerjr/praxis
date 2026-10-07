@@ -816,13 +816,22 @@ def desk_main(argv: list[str]) -> int:
             return 0
         new, old = Path(args.new), Path(args.old)
         GIT[0] = _bundled_git(new)
-        files = write_pristine(new, args.to_version, pristine_path(new, args.to_version))
+        # Чистую копию новой версии снимаем ДО переноса (потом в `new` лягут правки агента), но
+        # на место кладём ПОСЛЕ: при переустановке той же версии другой сборкой её имя совпадает
+        # с базой сверки. ⚠ 29.09, ПК Егора: 1.2.5 поверх 1.2.5 — копию перезаписали раньше
+        # сверки, база совпала с новой сборкой, и разница сборок стала «правками агента»:
+        # 13 файлов старой сборки легли поверх новой и уехали дальше в 1.2.6.
+        dest = pristine_path(new, args.to_version)
+        fresh = dest.with_name(f".fresh-{secrets.token_hex(4)}-{dest.name}")
+        files = write_pristine(new, args.to_version, fresh)
         work = new / PRISTINE_DIR / f".work-{secrets.token_hex(4)}"
         try:
             report = carry_install(old, new, data=data_of(new), from_version=args.from_version,
                                    to_version=args.to_version, work=work)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+            if fresh.exists():
+                os.replace(fresh, dest)
         remember_after_carry(new, args.to_version)
         # Старые чистые копии — прочь: нужны нынешняя (база следующего обновления) и прежняя
         # (база, если откатят); остальное — вес без смысла.

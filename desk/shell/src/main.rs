@@ -37,7 +37,7 @@
 // уезжает домашний путь владельца, а бинарь молча получает статус dev-сборки.
 // Отличить его грепом нельзя, build_dist.py копирует exe вслепую, CI нет.
 // Пусть такая сборка просто не соберётся.
-#[cfg(all(not(debug_assertions), not(feature = "custom-protocol")))]
+#[cfg(all(feature = "desktop", not(debug_assertions), not(feature = "custom-protocol")))]
 compile_error!(
     "релизная сборка оболочки без --features custom-protocol вшивает в exe путь папки сборки \
      и метит бинарь как dev; собирай `cargo build --release --features custom-protocol` или `tauri build`"
@@ -45,11 +45,36 @@ compile_error!(
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+#[path = "../../common/relay_policy.rs"]
+mod relay_policy;
+mod relay_transfer;
+mod local_files;
+#[cfg(feature = "desktop")]
+use tauri::async_runtime as file_runtime;
+#[cfg(feature = "host")]
+use tokio::task as file_runtime;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "desktop")]
 use tauri::Manager;
+#[cfg(feature = "desktop")]
+use tauri::{AppHandle as ShellHandle, State as ShellState};
+#[cfg(feature = "desktop")]
+use tauri as shell_adapter;
+#[cfg(feature = "host")]
+#[path = "host_adapter.rs"]
+mod shell_adapter;
+#[cfg(feature = "host")]
+use shell_adapter::{ShellHandle, ShellState};
+
+#[cfg(all(windows, feature = "desktop"))]
+mod touchpad;
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+mod scroll_session;
+#[cfg(all(feature = "desktop", any(target_os = "macos", target_os = "linux")))]
+mod scroll_port;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -100,6 +125,7 @@ struct ProductIdentity {
 
 static PRODUCT_RT: std::sync::OnceLock<ProductIdentity> = std::sync::OnceLock::new();
 
+#[cfg(feature = "desktop")]
 fn init_product(config: &tauri::Config) {
     let name = config
         .product_name
@@ -198,7 +224,12 @@ fn toast(title: &str, body: &str) {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(all(target_os = "linux", feature = "host"))]
+fn toast(title: &str, body: &str) {
+    shell_adapter::event("notify", serde_json::json!({"title": title, "body": body}));
+}
+
+#[cfg(not(any(windows, target_os = "macos", all(target_os = "linux", feature = "host"))))]
 fn toast(_title: &str, _body: &str) {}
 
 /// Строковый литерал AppleScript: обратный слэш и кавычка экранируются,
@@ -309,11 +340,15 @@ fn message_box_info(title: &str, text: &str) {
 /// Прочие POSIX: окна нет, но текст не пропадает — он в журнале.
 #[cfg(not(any(windows, target_os = "macos")))]
 fn message_box(title: &str, text: &str) {
+    #[cfg(feature = "host")]
+    shell_adapter::event("message", serde_json::json!({"title": title, "message": text, "type": "error"}));
     log_line(&format!("окно с сообщением показать нечем; текст был: {title} — {text}"));
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
 fn message_box_info(title: &str, text: &str) {
+    #[cfg(feature = "host")]
+    shell_adapter::event("message", serde_json::json!({"title": title, "message": text, "type": "info"}));
     log_line(&format!("окно с сообщением показать нечем; текст был: {title} — {text}"));
 }
 
@@ -477,6 +512,9 @@ impl ChildSpec {
     }
 
     fn spawn(&self) -> SpawnOutcome {
+        if owner_stopped() {
+            return SpawnOutcome::Waiting("Агент остановлен владельцем; нужен явный запуск".into());
+        }
         match self {
             ChildSpec::Script { python, script, args, tree, host, token, config } => {
                 match spawn_child(python, script, args, tree, host, token, config) {
@@ -592,7 +630,11 @@ fn exe_dir() -> PathBuf {
 /// Правило одно на оболочку и мастер установки (`setup/`).
 fn install_root() -> PathBuf {
     static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    ROOT.get_or_init(|| install_root_from(&exe_dir())).clone()
+    ROOT.get_or_init(|| {
+        #[cfg(feature = "host")]
+        if let Some(raw) = arg_after("--root") { return PathBuf::from(raw); }
+        install_root_from(&exe_dir())
+    }).clone()
 }
 
 /// Чистая половина `install_root`: правило подъёма отдельно, чтобы его можно
@@ -745,6 +787,7 @@ fn cache_rule(mime: &str) -> &'static str {
     if mime.starts_with("text/html") { "no-store" } else { "no-cache" }
 }
 
+#[cfg(feature = "desktop")]
 fn serve_static<R: tauri::Runtime>(
     ctx: tauri::UriSchemeContext<'_, R>,
     request: tauri::http::Request<Vec<u8>>,
@@ -1007,12 +1050,16 @@ mod job {
             }
         }
 
-        pub fn adopt(&self, child: &std::process::Child) {
+        pub fn adopt(&self, child: &std::process::Child) -> Result<(), String> {
             use std::os::windows::io::AsRawHandle;
-            unsafe {
-                if AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) == 0 {
-                    super::log_line("ребёнок не приписан к job-объекту — может остаться сиротой");
-                }
+            if unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle() as HANDLE) } == 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            Ok(())
+        }
+        pub fn terminate(&self) {
+            if unsafe { windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1) } == 0 {
+                super::log_line("owner stop: Job termination unconfirmed");
             }
         }
     }
@@ -1025,10 +1072,30 @@ static JOB: std::sync::OnceLock<Option<job::Job>> = std::sync::OnceLock::new();
 fn adopt(child: &Child) {
     #[cfg(windows)]
     if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() {
-        job.adopt(child);
+        if let Err(e) = job.adopt(child) { log_line(&format!("Job adoption failed: {e}")); }
     }
     #[cfg(not(windows))]
     let _ = child;
+}
+
+fn adopt_suspended(child: &mut Child) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        #[link(name="ntdll")]
+        extern "system" { fn NtResumeProcess(handle: *mut std::ffi::c_void) -> i32; }
+        let result = (|| {
+            let job = JOB.get_or_init(job::Job::new).as_ref().ok_or("Job unavailable")?;
+            job.adopt(child)?;
+            if owner_stopped() { return Err("owner stop before resume".into()); }
+            if unsafe { NtResumeProcess(child.as_raw_handle()) } < 0 { return Err("resume failed".into()); }
+            Ok(())
+        })();
+        if result.is_err() { let _ = child.kill(); let _ = child.wait(); }
+        result
+    }
+    #[cfg(not(windows))]
+    { adopt(child); Ok(()) }
 }
 
 /// Секрет трубы. Без него труба (deskapp.py) отдаёт роль ВЛАДЕЛЬЦА каждому
@@ -1122,6 +1189,74 @@ fn current_id() -> String {
     with_current(BASE_AGENT_ID.to_string(), |c| c.id.clone())
 }
 
+/// Кого открывать при старте, когда ярлык молчит: файл установки
+/// `agent-default.json` вида {"id": "..."}. Пишет его ТОЛЬКО команда
+/// `agent_default_set` — переключатель окна (`switch_agent`) его не трогает:
+/// «открыл руками» и «открывать всегда» — два разных выбора владельца.
+fn agent_default_path() -> PathBuf {
+    install_root().join("agent-default.json")
+}
+
+/// Чистая половина чтения: любой брак (нет файла, не JSON, нет id) — None,
+/// а не отказ: поломанный файл выбора не имеет права прятать корневого.
+fn agent_default_id_from(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let id = value.get("id")?.as_str()?.trim().to_lowercase();
+    (!id.is_empty()).then_some(id)
+}
+
+fn agent_default_id() -> Option<String> {
+    agent_default_id_from(&agent_default_path())
+}
+
+/// Чистая половина записи: атомарно (tmp + rename), как config_save_at.
+fn agent_default_write_at(path: &Path, id: &str) -> Result<(), String> {
+    let pretty = serde_json::to_string_pretty(&serde_json::json!({ "id": id }))
+        .map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, pretty).map_err(|e| format!("не записалось: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| format!("не подменилось: {e}"))?;
+    Ok(())
+}
+
+fn agent_default_write(id: &str) -> Result<(), String> {
+    agent_default_write_at(&agent_default_path(), id)
+}
+
+/// Чистая половина выбора при старте: ярлык сильнее сохранённого выбора, а
+/// сохранённый годится только если агент в ростере и включён. Снятое или
+/// пропавшее — откат к корневому со словом (второй элемент), а не молча.
+/// Возвращает id, которым окно и займется (None = корневой).
+fn startup_pick(
+    flag: Option<String>,
+    saved: Option<String>,
+    roster: &[(String, String, bool)],
+) -> (Option<String>, Option<String>) {
+    // 06.10 (F10, судейский фикс): ярлык сильнее сохранённого выбора, но снятый агент
+    // не открывает мёртвое окно ни от ярлыка, ни от сохранённого — отказ словами из
+    // одной точки решения. Неизвестный ярлык проходит нарочно: «нет такого агента»
+    // скажет проверка ниже по коду, у неё своё слово и откат к корневому.
+    let Some(said) = flag.clone().or(saved) else { return (None, None) };
+    match roster.iter().find(|(id, _, _)| *id == said) {
+        Some((_, _, true)) => (Some(said), None),
+        Some((_, name, false)) => (
+            None,
+            Some(format!(
+                "{} «{name}», но сейчас он снят в его настройках и подниматься не может.",
+                if flag.is_some() { "Ярлык просит агента" } else { "Ты просил открывать" }
+            )),
+        ),
+        None if flag.is_some() => (Some(said), None),
+        None => (
+            None,
+            Some(format!(
+                "Сохранённый выбор «открывать всегда» зовёт агента «{said}», но в этой установке его больше нет."
+            )),
+        ),
+    }
+}
+
 /// Файл настроек текущего агента. У корневого это `helene.json` рядом с
 /// программой — то же место, что и до 11.09.
 fn current_config_path() -> PathBuf {
@@ -1204,12 +1339,12 @@ fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host:
         }
     }
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     #[cfg(unix)]
     cmd.process_group(0);
     match cmd.spawn() {
-        Ok(child) => {
-            adopt(&child);
+        Ok(mut child) => {
+            if let Err(e) = adopt_suspended(&mut child) { log_line(&e); return None; }
             Some(child)
         }
         Err(err) => {
@@ -1262,7 +1397,7 @@ fn rotate_child_log(path: &Path) -> bool {
 /// она запущена. Тогда окно — только смотрит: своих детей не поднимает ни при старте, ни
 /// надзором, а просьбы о перезапуске кладёт движку. Ответ живёт 10 с — надзор спрашивает
 /// каждые 5 с, и sc.exe на каждый его тик был бы лишним процессом.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn service_owns_harness() -> bool {
     static SEEN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
     if let Ok(seen) = SEEN.lock() {
@@ -1280,7 +1415,15 @@ fn service_owns_harness() -> bool {
             .unwrap_or(false),
         _ => false,
     };
-    let owns = installed && service_state_blocking() == "running";
+    // Installation owns the lifecycle even while SCM is stopped; no shadow engine.
+    #[cfg(windows)]
+    let owns = installed;
+    #[cfg(target_os = "linux")]
+    let owns = match linux_svc_state(&linux_owner_name()).as_str() {
+        "running" | "stopped" => true,
+        "absent" => false,
+        _ => installed,
+    };
     if let Ok(mut seen) = SEEN.lock() {
         *seen = Some((Instant::now(), owns));
     }
@@ -1288,7 +1431,7 @@ fn service_owns_harness() -> bool {
 }
 
 /// Вне Windows служба устроена иначе (launchd поднимает движок сам) — правило не нужно.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn service_owns_harness() -> bool {
     false
 }
@@ -1308,8 +1451,38 @@ fn ask_engine_restart(tree: &Path, by: &str) -> bool {
         "by": by,
     });
     let path = tree.join("memory").join(".state").join("supervisor-request.json");
-    let _ = std::fs::create_dir_all(path.parent().unwrap_or(tree));
-    std::fs::write(&path, serde_json::to_string_pretty(&request).unwrap_or_default()).is_ok()
+    publish_supervisor_request(&path, &request).is_ok()
+}
+
+/// The watcher must never claim a partially written request. Publish in the same
+/// directory, replacing the previous request atomically on both Windows and POSIX.
+fn publish_supervisor_request(path: &Path, request: &serde_json::Value) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or_else(|| std::io::Error::other("no request directory"))?;
+    std::fs::create_dir_all(parent)?;
+    let tmp = parent.join(format!(".supervisor-{}-{}.tmp", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let result = (|| {
+        file.write_all(&serde_json::to_vec_pretty(request).map_err(std::io::Error::other)?)?;
+        file.sync_all()?;
+        drop(file);
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+            let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+            let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) } == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        #[cfg(not(windows))]
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&tmp); }
+    result
 }
 
 /// Секунды эпохи → `ГГГГ-ММ-ДДTчч:мм:ссZ` (гражданский календарь, Хиннант).
@@ -1509,10 +1682,7 @@ fn harness_verdict(port: u16, tree: &Path, key: &str) -> Verdict {
 /// ребёнком, когда helene.json просит: relay.enabled. Дом реле — data/relay:
 /// учётные данные живут в папке продукта и переезжают вместе с ней.
 fn relay_enabled(cfg: &serde_json::Value) -> bool {
-    cfg.get("relay")
-        .and_then(|r| r.get("enabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    relay_policy::needed(cfg)
 }
 
 fn relay_port(cfg: &serde_json::Value) -> u16 {
@@ -1535,11 +1705,7 @@ enum RelaySpawn {
 /// Отпечаток настроек реле: по нему окно после «Сохранить» решает, поднимать ли своё
 /// реле заново (25.09, C.1 — смена мозга и реле без перезапуска окна и службы).
 fn relay_fingerprint(cfg: &serde_json::Value) -> String {
-    let key = cfg
-        .get("model")
-        .and_then(|m| m.get("key"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let key = relay_policy::key(cfg);
     let instructions = cfg
         .get("relay")
         .and_then(|r| r.get("instructions"))
@@ -1611,7 +1777,7 @@ fn note_relay_login() {
 /// и поднимается заново по свежему конфигу (или не поднимается, если relay.enabled
 /// снят). Чужое реле (порт держит служба или прежняя копия) не трогаем — им занимается
 /// его хозяин: служба перечитывает helene.json и auth.json сама.
-fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, why: &str) -> String {
+fn reconcile_relay(state: &ShellState<LocalHarness>, cfg: &serde_json::Value, why: &str) -> String {
     let base_config = install_root().join(CONFIG_NAME);
     // Ревью 25.09 (A4 F3/F4). Записи детей НЕ удаляются и не переставляются: надзор
     // (`watch_children`) держит индексы записей между двумя захватами замка, и `remove`
@@ -1709,9 +1875,9 @@ fn reconcile_relay(state: &tauri::State<LocalHarness>, cfg: &serde_json::Value, 
 /// Живое реле о себе: применённый вход (какой слот активен, сколько настроено). Это
 /// ответ на «применится перезапуском», которое висело вечно: файл auth.json — не факт
 /// применения, факт — слово самого реле (25.09, C.3).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn relay_account() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(relay_account_blocking)
+    shell_adapter::async_runtime::spawn_blocking(relay_account_blocking)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -1841,24 +2007,20 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn 
     // Ключ мозга = ключ реле: сгенерированный при установке ключ обязателен
     // Bearer-ом на /chat/completions — открытый локальный порт позволял бы
     // любому процессу на машине жечь подписку владельца.
-    if let Some(key) = cfg
-        .get("model")
-        .and_then(|m| m.get("key"))
-        .and_then(|v| v.as_str())
-        .filter(|k| !k.trim().is_empty())
-    {
+    let key = relay_policy::key(cfg);
+    if !key.trim().is_empty() {
         cmd.env("RELAY_API_KEY", key);
     }
     if python.exists() {
         cmd.env("RELAY_PYTHON", &python);
     }
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.creation_flags(CREATE_NO_WINDOW | 0x4);
     #[cfg(unix)]
     cmd.process_group(0);
     match cmd.spawn() {
-        Ok(child) => {
-            adopt(&child);
+        Ok(mut child) => {
+            if let Err(e) = adopt_suspended(&mut child) { return RelaySpawn::Unavailable(e); }
             if let Ok(mut seen) = RELAY_LOGIN_SEEN.lock() {
                 *seen = relay_login_generation();
             }
@@ -1972,6 +2134,9 @@ fn build_plans(base: &Path) -> Vec<SpawnPlan> {
 /// НАВЕРХУ: пока его знала только эта функция, окно всё равно строило адрес
 /// вебвью тем же портом и становилось клиентом чужой установки.
 fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Verdict>) {
+    if owner_stopped() || service_owns_harness() {
+        return (Vec::new(), None);
+    }
     // Дерево создаём ДО проверки: иначе canonicalize своего пути падает и
     // сравнение с чужим давало ложное «чужая установка».
     let _ = std::fs::create_dir_all(&plan.tree);
@@ -2094,8 +2259,8 @@ fn file_mtime_ns(path: &Path) -> Option<String> {
 /// устарел: отвечаем `{ok:false, code:"stale"}` с текущим отпечатком и не
 /// пишем, как `safe_write_md` у маркдаунов (ревью 06.09, §3, решение 3).
 /// Старое окно без отпечатка пишет как раньше.
-#[tauri::command]
-fn config_save(app: tauri::AppHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn config_save(app: ShellHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
     // Файл ТОГО агента, которого показывает окно: у корневого — рядом с
     // программой, у соседа — его собственный. Иначе настройки второго агента
     // молча уезжали бы в конфиг первого.
@@ -2160,8 +2325,9 @@ fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result
 /// заставал живого (single-instance) и выходил сам, либо успевал увидеть ещё
 /// не убитых детей старого и оставался окном без харнесса. Теперь: гасим
 /// детей, отдаём запуск отложенному хвосту cmd и только потом выходим.
-#[tauri::command]
-fn restart_self(app: tauri::AppHandle) {
+#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+fn restart_self(app: ShellHandle) {
     let Ok(exe) = std::env::current_exe() else {
         log_line("перезапуск: не узнал собственный путь");
         return;
@@ -2230,6 +2396,15 @@ fn restart_self(app: tauri::AppHandle) {
     }
     app.exit(0);
 }
+#[cfg(feature = "host")]
+fn restart_self(app: ShellHandle) {
+    let state = app.state::<LocalHarness>();
+    if service_owns_harness() { let _ = ask_engine_restart(&current_tree(), "window"); }
+    kill_children(&state);
+    relay_abort();
+    shell_adapter::event("relaunch", serde_json::Value::Null);
+}
+
 
 /// Бандл `.app`, внутри которого лежит этот бинарь: `X.app/Contents/MacOS/x`
 /// → `X.app`. Не в бандле (сборка из cargo) — None.
@@ -2359,14 +2534,14 @@ fn may_signal_group(reaped: bool, alive_leader: bool) -> bool {
 /// Тело, поднятое окном под службой. Отдельно от `LocalHarness.children`: у
 /// этого ребёнка другое условие жизни (он появляется, когда движок уже жив у
 /// службы) и другой владелец решения — опция «Управление компьютером».
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 static SERVICE_BODY: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Погасить тело, поднятое окном. Зовётся из `kill_children`: выход из строки
 /// меню и ⌘Q обязаны уносить его с собой, иначе оно осталось бы висеть на
 /// мосту службы после закрытия окна — то есть агент «видел бы экран», когда
 /// владелец его закрыл.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn stop_service_body() {
     if let Ok(mut guard) = SERVICE_BODY.lock() {
         if let Some(child) = guard.as_mut() {
@@ -2380,7 +2555,7 @@ fn stop_service_body() {
 /// перезаписывается движком на каждом старте и лежит правами 0600 — читает его
 /// только владелец. Пустой или обрезанный файл — это НЕ токен: пустая строка в
 /// `PRAXIS_BODY_TOKEN` означала бы тело, которое мост пускает без ключа.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_body_token(tree: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(tree.join("memory").join(".state").join("body-token")).ok()?;
     let token = raw.trim().to_string();
@@ -2395,7 +2570,7 @@ fn service_body_token(tree: &Path) -> Option<String> {
 /// мосту, которого уже нет, а окно поднимало бы тело раз за разом в пустоту —
 /// с растущей паузой и строкой в журнал на каждый круг. Адрес моста берём
 /// оттуда же, откуда его возьмёт тело, — из его конфига.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn service_bridge_alive(body_json: &Path) -> bool {
     let Ok(raw) = std::fs::read_to_string(body_json) else { return false };
     let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&raw) else { return false };
@@ -2418,8 +2593,8 @@ fn service_bridge_alive(body_json: &Path) -> bool {
 ///   * `helene-body` в поставке есть.
 /// Не сложилось — ждём молча (одна строка в журнал на смену состояния): это
 /// обычная жизнь, а не сбой.
-#[cfg(target_os = "macos")]
-fn watch_service_body(app: tauri::AppHandle, tree: PathBuf, config: PathBuf) {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn watch_service_body(app: ShellHandle, tree: PathBuf, config: PathBuf) {
     use std::sync::atomic::Ordering;
     let exe = install_root().join("helene-body");
     let body_json = tree.join("body").join("body.json");
@@ -2549,9 +2724,35 @@ fn relay_home() -> PathBuf {
     base_tree().join("relay")
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn relay_auth_transfer(replace: bool) -> Result<serde_json::Value, String> {
+    // Destination comes from the saved native configuration, not renderer input.
+    let cfg = config_value().ok_or("Нет настроек подключения")?;
+    if cfg.get("mode").and_then(|v| v.as_str()) != Some("remote") {
+        return Err("Сначала сохрани подключение приложения к серверу в карточке «Перенос»".into());
+    }
+    let base = cfg.get("base").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    shell_adapter::async_runtime::spawn_blocking(move || relay_transfer::transfer(&relay_home(), &base, &key, replace))
+        .await.map_err(|_| "Передача входа не завершилась".to_string())?
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn local_files_list(path: String) -> Result<serde_json::Value, String> {
+    file_runtime::spawn_blocking(move || local_files::list(&path)).await.map_err(|e| e.to_string())?
+}
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn local_files_read(path: String) -> Result<serde_json::Value, String> {
+    file_runtime::spawn_blocking(move || local_files::read(&path)).await.map_err(|e| e.to_string())?
+}
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn local_files_save(folder: String, name: String, data: String, overwrite: bool) -> Result<serde_json::Value, String> {
+    file_runtime::spawn_blocking(move || local_files::save(&folder, &name, &data, overwrite)).await.map_err(|e| e.to_string())?
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn relay_login() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(relay_login_blocking)
+    shell_adapter::async_runtime::spawn_blocking(relay_login_blocking)
         .await
         .map_err(|e| e.to_string())?
 }
@@ -2609,7 +2810,7 @@ fn relay_login_blocking() -> Result<String, String> {
 /// «Ждём вход в браузере» — открыть своей рукой или скопировать. Пока помощник жив.
 static LOGIN_URL: Mutex<Option<String>> = Mutex::new(None);
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn relay_login_url() -> Option<String> {
     let pending = login_lock().as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
     if !pending {
@@ -2619,14 +2820,14 @@ fn relay_login_url() -> Option<String> {
 }
 
 /// Открыть страницу входа рукой самого окна — только ту ссылку, что напечатал помощник.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_login_page() -> Result<(), String> {
     let url = relay_login_url().ok_or("вход не идёт или ссылки ещё нет — нажми «Войти в ChatGPT» ещё раз")?;
     open_path(url)
 }
 
-#[tauri::command]
-fn relay_status(app: tauri::AppHandle) -> String {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn relay_status(app: ShellHandle) -> String {
     let auth = relay_home().join("local_auth").join("auth.json");
     // (жив ли помощник, вышел ли успехом)
     let (pending, helper_ok) = {
@@ -2685,13 +2886,13 @@ fn relay_status(app: tauri::AppHandle) -> String {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn install_service() -> Result<String, String> {
     // Опциональная служба: один UAC. Само окно прав не требует и не получает;
     // рецепт — установщика (`common/service_op.rs`): ждём поднятый процесс,
     // читаем его код и спрашиваем SCM. Раньше результат не читался, и
     // «запрошено» значило «сделано» — отказ в UAC выглядел успехом.
-    tauri::async_runtime::spawn_blocking(|| service_op_from_window("install"))
+    shell_adapter::async_runtime::spawn_blocking(|| service_op_from_window("install"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
@@ -2700,19 +2901,19 @@ async fn install_service() -> Result<String, String> {
 /// системным диалогом пароля (`osascript … with administrator privileges`),
 /// а на машине с беспарольным sudo (раннер CI) через `sudo -n`.
 #[cfg(target_os = "macos")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn install_service() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| mac_service_op("install"))
+    shell_adapter::async_runtime::spawn_blocking(|| mac_service_op("install"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
 /// Службы на этой платформе нет; окно её карточку прячет (`app_info.platform`),
 /// а до этих ручек из интерфейса не дойти — ответ словами на всякий случай.
-#[cfg(not(any(windows, target_os = "macos")))]
-#[tauri::command]
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn install_service() -> Result<String, String> {
-    Err("службы на этой платформе нет".into())
+    shell_adapter::async_runtime::spawn_blocking(|| linux_service_op("install")).await.unwrap_or_else(|_| Err("service operation interrupted".into()))
 }
 
 /// Поставить или снять демон launchd. Одна функция на обе кнопки: описание
@@ -2846,14 +3047,155 @@ fn service_op_from_window(op: &str) -> Result<String, String> {
     }
 }
 
+/// One explicit owner door; never route resume to the install/uninstall wrapper.
+/// Observe the owner marker independently of the API it has stopped.
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn owner_state() -> serde_json::Value {
+    let (agent_id, tree) = with_current((BASE_AGENT_ID.to_string(), base_tree()),
+        |c| (c.id.clone(), c.tree.clone().unwrap_or_else(base_tree)));
+    let receipt = std::fs::read(tree.join("memory/.control/desk_inbox/.reader.json"))
+        .ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+    let pid = receipt.as_ref().and_then(|v| v.get("pid")).and_then(|v| v.as_u64())
+        .and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0).unwrap_or(0);
+    let note = owner_stop_note();
+    #[cfg(windows)]
+    let alive = if pid == 0 { None } else { owner_pid_alive(pid,
+        receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
+    #[cfg(target_os = "linux")]
+    let alive = if pid == 0 { Some(false) } else { linux_owner_pid_alive(pid,
+        receipt.as_ref().and_then(|v| v.get("at")).and_then(|v| v.as_f64())) };
+    #[cfg(not(any(windows, target_os = "linux")))]
+    let alive: Option<bool> = None;
+    // ⚠ Живой случай 06.10: окно СНЯТОГО агента при служебной установке. «Погасить»
+    // в настройках пишет только флаг enabled=false — процессы держит служба и
+    // отпускает их своим перезапуском. Кнопка движка не знала ни того, ни
+    // другого и выглядела сломанной: движок честно жив, а окно молчит. Отдаём
+    // оба факта: `enabled` — флаг из конфига агента, `service` — служебная ли
+    // это установка (тогда гашение/подъём исполняет служба, не окно).
+    let enabled = with_current(true, |c| {
+        c.tree.as_ref().map(|t| agent_enabled_flag(&c.config, t)).unwrap_or(true)
+    });
+    serde_json::json!({"agent_id": agent_id, "supported": cfg!(any(windows, target_os = "linux")), "stopped": note.is_some(),
+        "runner_alive": alive, "pid": pid,
+        "enabled": enabled, "service": service_owns_harness(),
+        "note": note.as_ref().map(owner_stop_said).unwrap_or_default()})
+}
+
+/// Флаг enabled агента по ЕГО конфигу. Корневой всегда включён; недочитаемый
+/// конфиг — «включён»: кнопке движка лучше честное «работает», чем ложное
+/// «снят» из-за битого файла настроек.
+fn agent_enabled_flag(config: &Path, tree: &Path) -> bool {
+    if tree == base_tree() {
+        return true;
+    }
+    match read_config(config) {
+        ConfigRead::Ok(v) => v.get("enabled").and_then(|e| e.as_bool()).unwrap_or(true),
+        _ => true,
+    }
+}
+
+/// Read-only Windows process probe. Never use os.kill/TerminateProcess for liveness.
+#[cfg(windows)]
+fn owner_pid_alive(pid: u32, observed_at: Option<f64>) -> Option<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, FILETIME};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, OpenProcess, WaitForSingleObject};
+    unsafe {
+        let handle = OpenProcess(0x00100000 | 0x1000, 0, pid); // SYNCHRONIZE + query only
+        if handle.is_null() {
+            return if GetLastError() == 87 { Some(false) } else { None };
+        }
+        let wait = WaitForSingleObject(handle, 0);
+        let mut born: FILETIME = std::mem::zeroed();
+        let mut exited: FILETIME = std::mem::zeroed();
+        let mut kernel: FILETIME = std::mem::zeroed();
+        let mut user: FILETIME = std::mem::zeroed();
+        let times = GetProcessTimes(handle, &mut born, &mut exited, &mut kernel, &mut user);
+        CloseHandle(handle);
+        if wait == 0 { return Some(false); }
+        if wait != 0x102 || times == 0 { return None; }
+        let stamp = observed_at.filter(|n| n.is_finite() && *n > 0.)?;
+        let born_epoch = (((born.dwHighDateTime as u64) << 32) | born.dwLowDateTime as u64) as f64
+            / 10_000_000. - 11_644_473_600.;
+        // A reused PID is not the reader that issued this receipt.
+        Some(born_epoch <= stamp)
+    }
+}
+
+/// Same supervisor request as the API, usable while the channel is reconnecting.
+#[cfg(target_os = "linux")]
+static OWNER_RESUME_LIFT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn engine_restart() -> Result<String, String> {
+    if owner_stopped() { return Err("Движок остановлен владельцем — сначала возобнови его".into()); }
+    #[cfg(target_os = "linux")]
+    if service_owns_harness() && linux_svc_state(&linux_owner_name()) == "stopped" {
+        return linux_service_op("start");
+    }
+    if !ask_engine_restart(&current_tree(), "window") {
+        return Err("Не удалось записать просьбу о перезапуске".into());
+    }
+    Ok("Перезапуск запрошен; жду готовности движка".into())
+}
+
+/// Стоп-кран владельца. Windows просит согласие UAC и кладёт флаг службой; Linux
+/// пишет флаг сам (движок там всегда от имени владельца — прав не нужно), а детей
+/// гасит и поднимает надзор `watch_children` своими полусекундными тиками.
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn owner_control(action: String) -> Result<String, String> {
+    if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
+    #[cfg(target_os = "linux")]
+    {
+        return match action.as_str() {
+            "panic" => {
+                request_owner_stop("window")?;
+                Ok("Остановка записана. Движок и канал погаснут в ближайшую секунду; надзор не поднимет их, пока не нажмёшь «Возобновить».".into())
+            }
+            _ => {
+                if service_owns_harness() && linux_svc_state(&linux_owner_name()) == "stopped" {
+                    // Keep the stop marker if systemd could not be started.
+                    linux_service_op("start")?;
+                }
+                resume_owner_stop()?;
+                OWNER_RESUME_LIFT.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok("Стоп снят. Надзор поднимет агента в ближайшие секунды.".into())
+            }
+        };
+    }
+    #[cfg(windows)]
+    {
+        let exe = install_root().join("helene-svc.exe");
+        let file = exe.to_string_lossy().replace('\'', "''");
+        let script = format!("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath '{file}' -ArgumentList '{action}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode");
+        let mut cmd = Command::new(powershell_exe());
+        cmd.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+        let out = run_hidden_for(&mut cmd, Duration::from_secs(120))?;
+        if !out.status.success() {
+            return Err(if action == "resume" {
+                if owner_stopped() {
+                    "Возобновление не выполнено; стоп сохранён. Проверь права, конфиг и регистрацию службы и задачи Helene\\session-host."
+                } else {
+                    "Запрет работы снят, но запуск не подтверждён. Проверь службу и задачу Helene\\session-host; если службы нет в настройках, запуском управляет окно."
+                }
+            } else {
+                "Команда владельца не выполнена (права/процесс); состояние не подтверждено"
+            }.into());
+        }
+        if owner_stopped() != (action == "panic") { return Err("Флаг не подтвердил команду".into()); }
+        Ok(if action == "panic" { "Остановка записана; надзор завершает своё дерево" } else { "Остановка снята явным действием; надзор может запустить агента" }.into())
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    { Err("Нативный стоп-кран этого выпуска реализован на Windows и Linux".into()) }
+}
+
 /// Уведомление Windows из веб-части (заголовок, текст).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn notify(title: String, body: String) {
     toast(&title, &body);
 }
 
 /// Конфиг целиком для экрана настроек плюс где он лежит и где данные.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn config_load() -> Result<serde_json::Value, String> {
     let base = install_root();
     let path = current_config_path();
@@ -2882,9 +3224,9 @@ fn config_load() -> Result<serde_json::Value, String> {
 /// async: синхронная команда Tauri исполняется на главном потоке, и висящий
 /// sc.exe вешал бы окно целиком (а опрашивают его каждые 2,5 с).
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn service_state() -> String {
-    tauri::async_runtime::spawn_blocking(service_state_blocking)
+    shell_adapter::async_runtime::spawn_blocking(service_state_blocking)
         .await
         .unwrap_or_else(|_| "absent".to_string())
 }
@@ -2893,9 +3235,9 @@ async fn service_state() -> String {
 /// `unknown`. Прав не требует (`launchctl print` — чтение), но может и не
 /// ответить, и тогда ответ честный «не знаю», а не выдуманное «нет».
 #[cfg(target_os = "macos")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn service_state() -> String {
-    tauri::async_runtime::spawn_blocking(mac_svc_state_said)
+    shell_adapter::async_runtime::spawn_blocking(mac_svc_state_said)
         .await
         .unwrap_or_else(|_| "unknown".to_string())
 }
@@ -2925,10 +3267,10 @@ fn mac_svc_state_said() -> String {
 
 /// Вне Windows и macOS службы нет как механизма — `missing`, а не `absent`:
 /// второе значит «можно поставить», и окно рисовало бы под него кнопку.
-#[cfg(not(any(windows, target_os = "macos")))]
-#[tauri::command]
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn service_state() -> String {
-    "missing".to_string()
+    linux_svc_state(&linux_owner_name())
 }
 
 /// Ответ SCM о службе продукта: running | stopped | absent. С дедлайном —
@@ -2969,25 +3311,25 @@ fn service_state_blocking() -> String {
 }
 
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_service() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| service_op_from_window("uninstall"))
+    shell_adapter::async_runtime::spawn_blocking(|| service_op_from_window("uninstall"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
 #[cfg(target_os = "macos")]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_service() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| mac_service_op("remove"))
+    shell_adapter::async_runtime::spawn_blocking(|| mac_service_op("remove"))
         .await
         .unwrap_or_else(|_| Err("вызов службы прерван".into()))
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-#[tauri::command]
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn remove_service() -> Result<String, String> {
-    Err("службы на этой платформе нет".into())
+    shell_adapter::async_runtime::spawn_blocking(|| linux_service_op("remove")).await.unwrap_or_else(|_| Err("service operation interrupted".into()))
 }
 
 /// Что вообще можно отдать Проводнику. Проводник не «показывает», а ЗАПУСКАЕТ
@@ -2995,6 +3337,14 @@ async fn remove_service() -> Result<String, String> {
 /// из ответа сервера обновлений (кнопка «Скачать» подставляет его url).
 /// Поэтому — белый список: http(s)-ссылка либо путь внутри папки программы,
 /// дерева данных или %TEMP%.
+///
+/// Относительный путь — от дерева ТЕКУЩЕГО агента, а не от папки процесса:
+/// окно второго агента просит показать «свой» broker.log, и «свой» решает
+/// текущий, а не то, из какой папки запустили exe. Окно раньше (до мультиагентов)
+/// слало пути от корня установки — они остались в старых сборках веб-части и в
+/// строках, где имя дерева вшито в путь («data/broker.log» у корневого, чьё
+/// дерево и есть `data`), поэтому кандидат с уже существующим файлом в корне
+/// установки выигрывает у дерева, а не наоборот: живой файл лучше угаданного.
 fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
     let raw = path.trim();
     if raw.is_empty() {
@@ -3007,9 +3357,7 @@ fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
         }
         return Ok(raw.into());
     }
-    let target = PathBuf::from(raw)
-        .canonicalize()
-        .map_err(|_| format!("нет такого пути: {raw}"))?;
+    let target = resolve_target(raw, current_tree())?;
     for root in [install_root(), tree_dir(), std::env::temp_dir()] {
         if let Ok(root) = root.canonicalize() {
             if target.starts_with(&root) {
@@ -3018,6 +3366,38 @@ fn open_target(path: &str) -> Result<std::ffi::OsString, String> {
         }
     }
     Err("этот путь вне папок программы — не открываю".into())
+}
+
+/// Куда физически смотрит строка из окна: абсолютный путь — сам по себе;
+/// относительный — от дерева текущего агента, а если такого файла нет — от
+/// корня установки (старая семантика, живая в прежних сборках веб-части).
+/// Разрешён только существующий файл: canonicalize и не может иначе, а значит
+/// «угадывания» в отличие от старого поведения нет — есть два честных места.
+fn resolve_target(raw: &str, tree: PathBuf) -> Result<PathBuf, String> {
+    let direct = PathBuf::from(raw);
+    if direct.is_absolute() {
+        return direct
+            .canonicalize()
+            .map_err(|_| format!("нет такого пути: {raw}"));
+    }
+    let from_tree = tree.join(&direct);
+    if let Ok(got) = from_tree.canonicalize() {
+        return Ok(got);
+    }
+    // Строка «data/broker.log» — это путь от КОРНЯ установки времён одного
+    // агента (дерево корневого тогда и называлось «data»). У соседей дерево
+    // другое, и тот же журнал лежит в нём без префикса: пробуем и так.
+    // strip_prefix сравнивает по ЦЕЛЫМ компонентам — «database.log» не тронет.
+    if let Ok(stripped) = Path::new(raw).strip_prefix("data") {
+        let no_prefix = tree.join(stripped);
+        if let Ok(got) = no_prefix.canonicalize() {
+            return Ok(got);
+        }
+    }
+    install_root()
+        .join(&direct)
+        .canonicalize()
+        .map_err(|_| format!("нет такого пути: {raw}"))
 }
 
 /// Убрать префикс `\\?\`, который добавляет canonicalize: Проводник такой
@@ -3035,7 +3415,7 @@ fn plain_path(path: &Path) -> PathBuf {
 
 /// Открыть папку в Проводнике (или ссылку в браузере).
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     Command::new(explorer_exe())
@@ -3047,7 +3427,7 @@ fn open_path(path: String) -> Result<(), String> {
 
 /// macOS: `open` — папку в Finder, ссылку в браузере. Прочие POSIX: `xdg-open`.
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     let tool = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
@@ -3063,7 +3443,7 @@ fn open_path(path: String) -> Result<(), String> {
 
 /// Показать файл в Проводнике с выделением — для собранных логов.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn reveal_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     let mut cmd = Command::new(explorer_exe());
@@ -3076,7 +3456,7 @@ fn reveal_path(path: String) -> Result<(), String> {
 
 /// macOS: `open -R` — Finder с выделенным файлом. Прочие POSIX: открыть папку.
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn reveal_path(path: String) -> Result<(), String> {
     let target = open_target(&path)?;
     let mut cmd = if cfg!(target_os = "macos") {
@@ -3102,7 +3482,7 @@ fn reveal_path(path: String) -> Result<(), String> {
 /// системное окно, галочку ставит владелец сам: выдать разрешение TCC
 /// программно нельзя, и это правильно. Окно зовёт команду только на macOS
 /// (карточка рисует кнопки по `tcc` в снимке тела).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn open_privacy_pane(kind: String) -> Result<(), String> {
     let Some(url) = privacy_pane_url(&kind) else {
         return Err(format!("не знаю такого раздела разрешений: «{kind}»"));
@@ -3207,7 +3587,7 @@ fn startup_lnk() -> Option<PathBuf> {
 
 /// Автозапуск — ярлык в папке автозагрузки пользователя, без реестра и прав.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn autostart_get() -> bool {
     startup_lnk().map(|p| p.exists()).unwrap_or(false)
 }
@@ -3216,15 +3596,15 @@ fn autostart_get() -> bool {
 /// <идентификатор>.plist`; есть файл — есть автозапуск, ровно как ярлык
 /// в автозагрузке Windows. Идентификатор — сборки (`app.helene.desk`), а не
 /// продукт латиницей: у варианта Праксис свой, и агенты не спорят за имя.
-#[cfg(not(windows))]
-#[tauri::command]
+#[cfg(target_os = "macos")]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn autostart_get() -> bool {
     launch_agent_plist().map(|p| p.is_file()).unwrap_or(false)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn autostart_set(on: bool) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || autostart_set_blocking(on))
+    shell_adapter::async_runtime::spawn_blocking(move || autostart_set_blocking(on))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -3279,7 +3659,7 @@ fn launch_agent_text(label: &str, program: &str) -> String {
 /// автозапуск → тумблер в любую сторону → Hélène исчезает с экрана. Поймано
 /// адверсаркой до живой пробы. Старый путь бинаря в уже загруженном задании
 /// доживает до выхода из системы — при следующем входе launchd прочитает файл.
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
 fn autostart_set_blocking(on: bool) -> Result<(), String> {
     let plist = launch_agent_plist().ok_or("не нашёл домашнюю папку (HOME)")?;
     if !on {
@@ -3334,7 +3714,7 @@ fn autostart_set_blocking(on: bool) -> Result<(), String> {
 
 /// Адрес этой машины в локальной сети — для QR телефону. Сокет не отправляет
 /// ничего: connect на внешний адрес лишь выбирает интерфейс.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn lan_ip() -> Option<String> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     sock.connect("8.8.8.8:80").ok()?;
@@ -3344,9 +3724,9 @@ fn lan_ip() -> Option<String> {
 /// Адрес этой машины в сети Tailscale (100.64.0.0/10), если он установлен и
 /// включён: телефон с Tailscale в том же аккаунте достучится из любой сети,
 /// не только из этой Wi-Fi. Спрашиваем у их же CLI, ничего не угадываем.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn tailscale_ip() -> Option<String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    shell_adapter::async_runtime::spawn_blocking(|| {
         // Голого "tailscale.exe" в списке больше нет: по голому имени Windows
         // взяла бы файл из папки программы, а туда пишет и сам агент.
         let mut candidates: Vec<PathBuf> = Vec::new();
@@ -3413,7 +3793,14 @@ include!("../../common/service_op.rs");
 // model_probe: стенды сборки plist и экранирования идут и на Windows, а живые
 // части (`mac_svc_state`, `mac_svc_run_admin`) гейтятся внутри файла.
 include!("../../common/mac_service.rs");
+#[cfg(target_os = "linux")]
+include!("../../common/linux_service.rs");
+#[cfg(target_os = "linux")]
+include!("../../common/linux_broker.rs");
+#[cfg(target_os = "linux")]
+include!("linux_window.rs");
 include!("../../common/stamp.rs");
+include!("../../common/owner_stop.rs");
 include!("../../common/random_hex.rs");
 include!("../../common/run_hidden.rs");
 // Ярлык «Пуска» с AUMID — через COM, без PowerShell (1.2.3).
@@ -3477,9 +3864,9 @@ fn backup_ticker() {
 }
 
 /// «Сделать копию сейчас» в настройках. -> путь к снимку.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn backup_now() -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+    shell_adapter::async_runtime::spawn_blocking(|| {
         let root = install_root();
         let cfg = match read_config(&root.join(CONFIG_NAME)) {
             ConfigRead::Ok(v) => Some(v),
@@ -3496,7 +3883,7 @@ async fn backup_now() -> Result<serde_json::Value, String> {
 }
 
 /// Снимки в папке копий — для карточки «Копии памяти».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn backup_list() -> serde_json::Value {
     let root = install_root();
     let cfg = match read_config(&root.join(CONFIG_NAME)) {
@@ -3760,7 +4147,7 @@ fn token_elevation_type() -> i32 {
 ///
 /// Ручку просит app/src/mode.ts::adminProbe: без неё экран режимов отвечает
 /// честным «не знаю».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn admin_state() -> serde_json::Value {
     admin_verdict(process_is_elevated(), token_elevation_type())
 }
@@ -4197,9 +4584,9 @@ fn netsh_batch(
 /// Разрешить входящие к трубе в брандмауэре Windows. Нужны права
 /// администратора; без них — честная ошибка, а не тишина.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_allow(port: u16) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || firewall_allow_blocking(port))
+    shell_adapter::async_runtime::spawn_blocking(move || firewall_allow_blocking(port))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -4208,7 +4595,7 @@ async fn firewall_allow(port: u16) -> Result<String, String> {
 /// спрашивает владельца про входящие к питону при первом подключении. Не
 /// ошибка — телефон от этого не ломается, — но строка в журнале остаётся.
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_allow(port: u16) -> Result<String, String> {
     log_line(&format!(
         "брандмауэр: правило для порта {port} на этой платформе не ставится — система спросит сама"
@@ -4262,15 +4649,15 @@ fn firewall_allow_blocking(port: u16) -> Result<String, String> {
 /// Во всём продукте до этого был только `add rule` и ни одного `delete`:
 /// дыра переживала и выключение телефона, и удаление программы.
 #[cfg(windows)]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_clear(port: u16) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || firewall_clear_blocking(port))
+    shell_adapter::async_runtime::spawn_blocking(move || firewall_clear_blocking(port))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[cfg(not(windows))]
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn firewall_clear(port: u16) -> Result<String, String> {
     log_line(&format!("брандмауэр: правила для порта {port} на этой платформе нет — снимать нечего"));
     Ok(format!("порт {port}: правила брандмауэра здесь нет — снимать нечего"))
@@ -4352,6 +4739,41 @@ const BROKER_SHOWN_MAX: usize = 1200;
 /// Когда оболочка начала слушать просьбы. Уезжает в файл ответов, чтобы
 /// харнесс отличал «владелец ещё не ответил» от «слушать некому — окна нет».
 static BROKER_WATCH_SINCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Судейский фикс P1 (06.10): наблюдатели ставятся на ДЕРЕВО, а не на подъём.
+/// Реестр живых деревьев под мьютексом: старт и `lift_agent` ставят пару
+/// `watch_outbound` + `watch_broker_wishes` только когда дерево новое. Раньше
+/// цикл «погасить → поднять» плодил сторожей просьб: у дерева два потока,
+/// каждый со своим стоп-кадром, и одна просьба брокера рождала ДВА одинаковых
+/// окна подтверждения — двойное «да» исполняло подписанную команду дважды.
+static WATCHED_TREES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+
+/// Один проход сторожа просьб на всё дерево одновременно. Даже если пара
+/// наблюдателей когда-нибудь задублируется (например, старым процессом), второй
+/// вход в `broker_pass` подождёт здесь, перечитает ответы и увидит уже
+/// записанное решение — диалог не повторится.
+static BROKER_PASS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Поставить пару наблюдателей, если дерево ещё не смотрится. `true` — пара
+/// только что создана. Одна точка входа для старта и для подъёма.
+fn watch_agent_tree(app: &ShellHandle, tree: PathBuf, name: String, notify_text: bool) -> bool {
+    let fresh = WATCHED_TREES
+        .lock()
+        .map(|mut g| claim_watch(&mut g, &tree))
+        .unwrap_or(true);
+    if fresh {
+        watch_outbound(app.clone(), tree.clone(), name, notify_text);
+        watch_broker_wishes(tree);
+    }
+    fresh
+}
+
+/// Чистая половина реестра: дерево заявлено первым проходом — `true`,
+/// повторно (старт уже смотрел, подъём повторяет) — `false`.
+fn claim_watch(guard: &mut std::collections::HashSet<PathBuf>, tree: &Path) -> bool {
+    guard.insert(tree.to_path_buf())
+}
 
 /// Местное время в том же виде, что в `service.log` и `broker.log`: журнал у
 /// владельца один, и две половины одной строки не должны быть в разных
@@ -4795,6 +5217,10 @@ fn broker_answer_row(
 /// команду между вопросом и выполнением — классический TOCTOU, и подпись
 /// владельца стояла бы под чужим текстом.
 fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
+    // Судейский фикс P1 (06.10): проход один на дерево за раз. Стоп-кадр у
+    // каждого потока свой, поэтому без замка два сторожа одного дерева могли
+    // прочитать одну просьбу до записи ответа и показать два одинаковых окна.
+    let _pass = BROKER_PASS_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let wishes = broker_wishes(raw);
     if wishes.is_empty() {
         return true;
@@ -4850,7 +5276,7 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
         }
         // `ping` ничего не выполняет — спрашивать владельца не о чем. Это
         // единственное исключение, и оно ровно такое же, как у службы.
-        if refusal.is_none() && wish.op != BrokerOp::Ping {
+        if refusal.is_none() && wish.op != BrokerOp::Ping && !cfg!(target_os = "linux") {
             if shown >= BROKER_WISH_PER_PASS {
                 all = false;
                 known.remove(&wish.id);
@@ -4953,9 +5379,9 @@ fn broker_pass(tree: &Path, raw: &str, file_at: u64) -> bool {
 /// Что нужно, чтобы исполнить подписанную просьбу.
 #[cfg(windows)]
 type BrokerPrepared = BrokerAsk;
-#[cfg(all(not(windows), not(target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 type BrokerPrepared = BrokerWish;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 type BrokerPrepared = MacPrepared;
 
 /// macOS: подписанная просьба И ОТПЕЧАТОК ФАЙЛА, который она зовёт.
@@ -4971,7 +5397,7 @@ type BrokerPrepared = MacPrepared;
 /// и сверяется перед исполнением. Для системных путей (`/usr`, `/bin`, `/sbin`,
 /// `/System`, `/opt/homebrew`) отпечатка нет: туда без root не пишут, а лишняя
 /// строка в окне подтверждения — это шум, за которым перестают читать нужное.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[derive(Clone)]
 struct MacPrepared {
     wish: BrokerWish,
@@ -5002,7 +5428,7 @@ fn broker_prepare(tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Stri
 
 /// macOS: та же граница, что у службы, только путь — POSIX; программа обязана
 /// быть на месте — просьбу о несуществующей команде владельцу показывать незачем.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, String> {
     // Выключатель владельца — ПЕРВЫМ и на каждой просьбе: конфиг читается
     // заново, значит «выключил» действует немедленно, а не «после перезапуска
@@ -5012,6 +5438,10 @@ fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Str
         return Err(BROKER_OFF_SAID.to_string());
     }
     mac_wish_check(wish)?;
+    #[cfg(target_os = "linux")]
+    if wish.op == BrokerOp::SpawnInteractive {
+        return Err("брокер Linux: exec | ping; обычные процессы запускай тулом shell".into());
+    }
     if !wish.op.runs() {
         return Ok(MacPrepared { wish: wish.clone(), digest: None });
     }
@@ -5042,7 +5472,7 @@ fn broker_prepare(_tree: &Path, wish: &BrokerWish) -> Result<BrokerPrepared, Str
 /// причине — выключенный по умолчанию брокер был бы мёртвым кодом.
 ///
 /// Читается ЗАНОВО на каждой просьбе: «действует немедленно» значит именно это.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn mac_broker_enabled() -> bool {
     match read_config(&install_root().join(CONFIG_NAME)) {
         ConfigRead::Ok(v) => v
@@ -5078,7 +5508,7 @@ fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
     String::new()
 }
 
-#[cfg(all(not(windows), not(target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
     String::new()
 }
@@ -5087,7 +5517,7 @@ fn broker_prepared_note(_prepared: &BrokerPrepared) -> String {
 /// даётся отпечаток — по нему он может сверить файл сам. Восемь знаков, а не
 /// шестьдесят четыре: длинную строку не читают вовсе, а восьми хватает, чтобы
 /// заметить подмену, и они же стоят в журнале.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn broker_prepared_note(prepared: &BrokerPrepared) -> String {
     match &prepared.digest {
         Some(hex) => format!(
@@ -5099,7 +5529,7 @@ fn broker_prepared_note(prepared: &BrokerPrepared) -> String {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn broker_prepare(_tree: &Path, _wish: &BrokerWish) -> Result<BrokerPrepared, String> {
     Err("брокера на этой платформе нет: повышать права некому".to_string())
 }
@@ -5118,7 +5548,12 @@ fn broker_execute(prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
     mac_broker_run(prepared)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+fn broker_execute(prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
+    linux_broker_run(prepared)
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 fn broker_execute(_prepared: &BrokerPrepared, _wish: &BrokerWish) -> BrokerRun {
     BrokerRun::Failed("брокера на этой платформе нет".to_string())
 }
@@ -5543,9 +5978,9 @@ fn watch_broker_wishes(tree: PathBuf) {
 /// Живая проверка адреса и ключа — тем же кодом, что установщик
 /// (`common/model_probe.rs`): 200 без списка моделей — не «ok», как отвечал
 /// прежний вариант окна на неверный ключ z.ai.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn probe_model(base_url: String, key: String, framework: Option<String>) -> serde_json::Value {
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let result = shell_adapter::async_runtime::spawn_blocking(move || {
         probe_model_blocking(&base_url, &key, framework.as_deref().unwrap_or(""))
     })
     .await
@@ -5625,7 +6060,7 @@ fn ensure_start_menu_shortcut(_identifier: &str, _name: &str, _icon: Option<&Pat
 /// Windows держит уведомления в Центре уведомлений и по умолчанию показывает
 /// их на экране блокировки: с выключенным тумблером приходит только «новое
 /// сообщение», без текста разговора.
-fn watch_outbound(app: tauri::AppHandle, tree: PathBuf, agent: String, show_text: bool) {
+fn watch_outbound(app: ShellHandle, tree: PathBuf, agent: String, show_text: bool) {
     std::thread::spawn(move || {
         let archive = tree
             .join("memory")
@@ -5825,7 +6260,7 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     p.setAttribute("style", "white-space:pre-wrap;opacity:.85;margin:0 0 22px");
     box.appendChild(h);
     box.appendChild(p);
-    var api = window.__TAURI_INTERNALS__;
+    var api = window.__TAURI_INTERNALS__ || window.__HELENE__;
     if (api && typeof api.invoke === "function") {{
       var btn = document.createElement("button");
       btn.textContent = "Перезапустить Hélène";
@@ -5846,12 +6281,15 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     )
 }
 
-fn main() {
+fn bootstrap() -> Option<Boot> {
+    if std::env::args().any(|a| a == "--panic") {
+        if let Err(e) = owner_control("panic".into()) { eprintln!("{e}"); std::process::exit(1); }
+        return None;
+    }
     let base = install_root();
     install_panic_hook();
     // Контекст сборки — один раз и до первого слова в журнале: из него имя продукта.
-    let context = tauri::generate_context!();
-    init_product(context.config());
+
     log_line(&format!("старт {} {} ({})", product_fs(), env!("CARGO_PKG_VERSION"), toast_id()));
     let read = read_config(&base.join(CONFIG_NAME));
     let broken = matches!(read, ConfigRead::Broken(_));
@@ -5877,7 +6315,7 @@ fn main() {
     // (его нет вовсе или он читается): поставка приезжает с шаблоном
     // helene.json, и первый запуск обязан открывать визард.
     if !broken && unconfigured(&cfg) && hand_over_to_setup(&base) {
-        return;
+        return None;
     }
     let configured = !unconfigured(&cfg);
 
@@ -5891,11 +6329,21 @@ fn main() {
         .and_then(|n| n.get("text"))
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
-    // Кого показывать: `--agent <id>` из ярлыка, иначе корневой. Неизвестный id
-    // не подменяется корневым молча — ярлык на удалённого агента обязан сказать
-    // об этом, иначе владелец пишет не тому.
-    let wanted = arg_after("--agent");
-    let mut current = find_agent(&base, wanted.as_deref().unwrap_or(BASE_AGENT_ID))
+    // Кого показывать: `--agent <id>` из ярлыка, иначе сохранённый выбор
+    // «открывать всегда» (agent-default.json), иначе корневой. Само решение —
+    // в чистой `startup_pick` (её проверяет стенд), здесь только слова к окну.
+    let entries: Vec<(String, String, bool)> = roster(&base)
+        .into_iter()
+        .map(|a| (a.id, a.name, a.enabled))
+        .collect();
+    let (wanted, saved_refused) = startup_pick(arg_after("--agent"), agent_default_id(), &entries);
+    // Фикс-волна 06.10 (F10): ярлык на СНЯТОГО агента раньше открывал мёртвое
+    // окно без единого слова. Решение о снятом — одна точка: startup_pick
+    // проверяет и ярлык, и сохранённый выбор одним гвардом ростера, отказ
+    // словами приходит вторым элементом пары и звучит здесь одинаково.
+    let mut current = wanted
+        .as_deref()
+        .and_then(|id| find_agent(&base, id))
         .or_else(|| find_agent(&base, BASE_AGENT_ID));
     if let Some(said) = wanted.as_deref() {
         if find_agent(&base, said).is_none() {
@@ -5905,6 +6353,13 @@ fn main() {
                 format!("Ярлык просит агента «{said}», но в этой установке его нет. Открываю того, кто здесь первый."),
             );
         }
+    }
+    if let Some(why) = saved_refused {
+        log_line("выбор агента не вышел — открываю корневого");
+        message_box_async(
+            format!("{}: агент не открылся", product_ui()),
+            format!("{why} Открываю корневого; выбор можно перевести на него в карточке «Агенты»."),
+        );
     }
     let agent = current.as_ref().map(|a| a.name.clone()).unwrap_or(agent);
     // Без настройки харнесс не поднимаем: без ключа модели дети бесполезны.
@@ -5948,13 +6403,13 @@ fn main() {
                 // живёт (служба или другое окно) либо порт занят; надзор
                 // попробует снова, когда порт освободится.
                 let mut verdict = None;
-                // 27.09 (слово Егора): при запущенной службе у агента ОДИН хозяин —
+                // При выбранной в конфиге службе у агента ОДИН хозяин —
                 // служба. Окно своих детей не поднимает: иначе кто стартовал первым,
                 // тот и держал порт (реле 5011 спорило со службой), а закрытое окно
-                // уносило реле с собой. Не поднимет служба за минуту — надзор окна
-                // поднимет сам (watch_children, запасной ход).
+                // уносило реле с собой. Отсутствующая регистрация требует ремонта,
+                // а не запасного движка окна; watch_children соблюдает тот же контракт.
                 if service_owns_harness() {
-                    log_line("служба запущена — агента держит она; окно своих детей не поднимает, только смотрит в канал");
+                    log_line("запуск агента закреплён за службой в настройках; окно своих детей не поднимает, доступность движка проверяется по каналу");
                 } else {
                     for plan in &plans {
                         let (kids, said) = start_children(plan, true);
@@ -6020,10 +6475,32 @@ fn main() {
             .unwrap_or_else(|| install_root().join(CONFIG_NAME)),
     });
 
+    #[cfg(feature = "host")]
+    if init_script.is_empty() {
+        init_script = format!("window.DESK_CONFIG_OVERRIDE = {};", serde_json::json!({
+            "base": "", "key": "", "agent": agent, "product": product_ui(), "needs_local_setup": !configured,
+        }));
+    }
+    Some(Boot { base, children, plans, init_script, tree, notify_text })
+}
+
+struct Boot {
+    base: PathBuf, children: Vec<Managed>, plans: Vec<SpawnPlan>,
+    init_script: String, tree: Option<PathBuf>, notify_text: bool,
+}
+
+#[cfg(feature = "desktop")]
+fn main() {
+    let context = tauri::generate_context!();
+    init_product(context.config());
+    let Some(Boot { base, children, plans, init_script, tree, notify_text }) = bootstrap() else { return };
     let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|a| a == "--panic") {
+                let _ = owner_control("panic".into());
+            }
             show_main(app);
         }));
     let built = builder
@@ -6037,6 +6514,9 @@ fn main() {
         // Статика окна — с диска (app/static), см. serve_static.
         .register_uri_scheme_protocol("helene", |ctx, request| serve_static(ctx, request))
         .invoke_handler(tauri::generate_handler![
+            owner_control,
+            owner_state,
+            engine_restart,
             config_save,
             restart_self,
             install_service,
@@ -6055,6 +6535,10 @@ fn main() {
             relay_login, relay_login_url, open_login_page,
             relay_status,
             relay_account,
+            relay_auth_transfer,
+            local_files_list,
+            local_files_read,
+            local_files_save,
             notify,
             app_info,
             update_check,
@@ -6070,7 +6554,10 @@ fn main() {
             carry_export,
             agents_list,
             switch_agent,
-            agent_add
+            agent_add,
+            agent_default_set,
+            agent_enabled_set,
+            agent_remove
         ])
         .setup(move |app| {
             // Продукт зовётся своим именем: заголовок, ярлык, значок, уведомления —
@@ -6096,6 +6583,10 @@ fn main() {
             )))?;
             debug_assert_eq!(app.config().identifier, toast_id());
             open_window(app, &init_script, Some(window_icon))?;
+            #[cfg(windows)]
+            touchpad::start(app.handle().clone());
+            #[cfg(target_os = "macos")]
+            scroll_port::start(app.handle().clone());
             // Передний план: Windows отдаёт его неохотно, когда запустивший нас
             // процесс (установщик) уже вышел, — окно появлялось позади других,
             // и казалось, что не открылось. Короткий «поверх всех» лечит.
@@ -6131,6 +6622,8 @@ fn main() {
             use tauri::menu::{Menu, MenuItem, Submenu};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             let open = MenuItem::with_id(app, "open", format!("Открыть {}", product_ui()), true, None::<&str>)?;
+            let panic_item = MenuItem::with_id(app, "owner-panic", "Остановить агента совсем", cfg!(windows), None::<&str>)?;
+            let resume_item = MenuItem::with_id(app, "owner-resume", "Запустить после остановки", cfg!(windows), None::<&str>)?;
             let quit = MenuItem::with_id(
                 app,
                 "quit",
@@ -6163,9 +6656,9 @@ fn main() {
                 let refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> =
                     rows.iter().map(|r| r as &dyn tauri::menu::IsMenuItem<tauri::Wry>).collect();
                 let agents_menu = Submenu::with_items(app, "Агенты", true, &refs)?;
-                Menu::with_items(app, &[&open, &agents_menu, &quit])?
+                Menu::with_items(app, &[&open, &agents_menu, &panic_item, &resume_item, &quit])?
             } else {
-                Menu::with_items(app, &[&open, &quit])?
+                Menu::with_items(app, &[&open, &panic_item, &resume_item, &quit])?
             };
             let tray = TrayIconBuilder::with_id("frame")
                 .icon(tray_icon)
@@ -6176,6 +6669,13 @@ fn main() {
             let tray = tray.icon_as_template(true);
             tray.on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => show_main(app),
+                    "owner-panic" | "owner-resume" => {
+                        let action = if event.id.as_ref() == "owner-panic" { "panic" } else { "resume" };
+                        std::thread::spawn(move || match owner_control(action.into()) {
+                            Ok(note) => toast("Hélène", &note),
+                            Err(note) => toast("Hélène", &note),
+                        });
+                    }
                     "quit" => {
                         let state = app.state::<LocalHarness>();
                         kill_children(&state);
@@ -6211,11 +6711,7 @@ fn main() {
             // Уведомление подписано его именем — оно же стоит в заголовке.
             if tree.is_some() {
                 for a in raisable(&base) {
-                    watch_outbound(app.handle().clone(), a.tree.clone(), a.name.clone(), notify_text);
-                    // …и его просьба к брокеру — окном подтверждения. Тоже не через
-                    // вебвью: просьба приходит, когда владелец занят другим, а окно
-                    // продукта в этот момент чаще всего в трее.
-                    watch_broker_wishes(a.tree.clone());
+                    watch_agent_tree(app.handle(), a.tree.clone(), a.name.clone(), notify_text);
                 }
             }
             Ok(())
@@ -6350,6 +6846,7 @@ fn webview2_present() -> bool {
 /// спрашиваем то же самое. Прочитать не удалось — считаем, что памяти нет:
 /// «не знаю» тут безопаснее трактовать как первый запуск, иначе окно откроется
 /// крошечным посреди экрана.
+#[cfg(feature = "desktop")]
 fn window_state_remembered<M: tauri::Manager<tauri::Wry>>(manager: &M) -> bool {
     manager
         .path()
@@ -6369,6 +6866,7 @@ fn window_state_remembered<M: tauri::Manager<tauri::Wry>>(manager: &M) -> bool {
 /// появляется НИКОГДА — процесс жив, дети подняты, журнал чист, окна нет.
 /// Поймано живой пробой 11.09; из `switch_agent` (цикл уже крутится) годится
 /// и `AppHandle`.
+#[cfg(feature = "desktop")]
 fn open_window<M: tauri::Manager<tauri::Wry>>(
     manager: &M,
     init_script: &str,
@@ -6429,11 +6927,22 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
     if !init_script.is_empty() {
         builder = builder.initialization_script(init_script);
     }
-    builder.build()?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    { builder = builder.initialization_script(&scroll_port::initial_support()); }
+    let _window = builder.build()?;
+    #[cfg(target_os = "linux")]
+    scroll_port::attach(&_window);
     Ok(())
 }
 
-fn show_main(app: &tauri::AppHandle) {
+#[cfg(feature = "desktop")]
+fn replace_main(app: &ShellHandle, script: &str) -> Result<(), String> {
+    open_window(app, script, None).map_err(|e| e.to_string())
+}
+#[cfg(feature = "host")]
+fn replace_main(app: &ShellHandle, script: &str) -> Result<(), String> { app.replace(script) }
+
+fn show_main(app: &ShellHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();
@@ -6443,7 +6952,7 @@ fn show_main(app: &tauri::AppHandle) {
     }
 }
 
-fn kill_children(state: &tauri::State<LocalHarness>) {
+fn kill_children(state: &ShellState<LocalHarness>) {
     state.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Ok(mut guard) = state.children.lock() {
         for m in guard.iter_mut() {
@@ -6458,7 +6967,7 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
     relay_abort();
     // И тело, поднятое окном под службой: движок службы переживёт выход из
     // окна, а тело обязано уйти вместе с окном — владелец закрыл программу.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     stop_service_body();
 }
 
@@ -6473,7 +6982,7 @@ fn kill_children(state: &tauri::State<LocalHarness>) {
 /// Здесь же — вторая попытка поднять СВОЙ харнесс, когда своих детей нет
 /// вовсе: порт был занят (служба, чужая программа, зомби прежней установки).
 /// Раньше это состояние было необратимым до перезапуска exe.
-fn watch_children(app: tauri::AppHandle) {
+fn watch_children(app: ShellHandle) {
     use std::sync::atomic::Ordering;
     /// Что делать с ребёнком после осмотра — решение принимается под замком,
     /// а исполняется без него.
@@ -6485,14 +6994,28 @@ fn watch_children(app: tauri::AppHandle) {
         Halt(String, String),
     }
     let mut last_lift = Instant::now();
-    // С какого момента агента нет на порту при запущенной службе (по агенту): служба
-    // поднимает его сама, окно ждёт минуту и только потом берёт на себя (27.09).
-    let mut svc_gap: std::collections::HashMap<String, Instant> = std::collections::HashMap::new();
     loop {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(500));
         let state = app.state::<LocalHarness>();
         if state.stopping.load(Ordering::Relaxed) {
             return;
+        }
+        if owner_stopped() {
+            #[cfg(windows)]
+            if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() { job.terminate(); }
+            if let Ok(mut children) = state.children.lock() {
+                for child in children.iter_mut().filter_map(|m| m.child.as_mut()) {
+                    stop_child(child);
+                }
+                children.clear();
+            }
+            relay_abort();
+            continue;
+        }
+        #[cfg(target_os = "linux")]
+        if OWNER_RESUME_LIFT.swap(false, Ordering::Relaxed) {
+            last_lift = Instant::now() - Duration::from_secs(30);
+            if let Ok(mut plans) = state.plans.lock() { *plans = build_plans(&install_root()); }
         }
         // 1) Осмотр под замком: только try_wait и учёт падений.
         let mut acts: Vec<(usize, Act)> = Vec::new();
@@ -6720,23 +7243,7 @@ fn watch_children(app: tauri::AppHandle) {
                 .unwrap_or_default();
             let owned = service_owns_harness();
             for plan in plans {
-                if owned {
-                    // Служба держит агента: окно не поднимает. Не отвечает он на порту уже
-                    // минуту (задача сессии сломана, служба зависла) — берёт на себя.
-                    if harness_alive(plan.port) {
-                        svc_gap.remove(&plan.agent);
-                        continue;
-                    }
-                    let since = *svc_gap.entry(plan.agent.clone()).or_insert_with(Instant::now);
-                    if since.elapsed() < Duration::from_secs(60) {
-                        continue;
-                    }
-                    log_line(&format!(
-                        "служба запущена, но код агента{} не отвечает уже минуту — поднимаю окном (запасной ход)",
-                        plan.whose()
-                    ));
-                    svc_gap.remove(&plan.agent);
-                }
+                if owned { continue; }
                 let (mut lifted, _) = start_children(&plan, false);
                 if !lifted.is_empty() {
                     let mut installed = false;
@@ -6781,7 +7288,7 @@ fn watch_children(app: tauri::AppHandle) {
 /// применяет на лету, а его перезапуск ронял бы вход в подписку посреди хода.
 /// Старые дети гасятся, порт ждём до трёх секунд, потом `start_children`, как при
 /// старте окна.
-fn restart_agent_children(state: &tauri::State<LocalHarness>, agent: &str) {
+fn restart_agent_children(state: &ShellState<LocalHarness>, agent: &str) {
     use std::sync::atomic::Ordering;
     let base = install_root();
     let Some(full) = build_plans(&base).into_iter().find(|p| p.agent == agent) else {
@@ -6844,20 +7351,24 @@ fn restart_agent_children(state: &tauri::State<LocalHarness>, agent: &str) {
 /// «Поднят» считается по ЖИВЫМ детям этого процесса, а не по конфигу: агент,
 /// чей порт занят чужой программой, в конфиге включён — и молчаливая галочка
 /// «работает» была бы враньём.
-#[tauri::command]
-fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn agents_list(state: ShellState<LocalHarness>) -> serde_json::Value {
     let base = install_root();
     let raised: Vec<String> = state
         .children
         .lock()
         .map(|g| g.iter().filter(|m| m.child.is_some()).map(|m| m.agent.clone()).collect())
         .unwrap_or_default();
+    let default_id = agent_default_id();
     let list: Vec<serde_json::Value> = roster(&base)
         .iter()
         .map(|a| {
             let mut got = a.as_json();
             got["raised"] = serde_json::Value::Bool(raised.contains(&a.id));
             got["current"] = serde_json::Value::Bool(a.id == current_id());
+            // Кого открывать при старте (radio в карточке): отсутствие поля или
+            // false у всех = выбор не задан (файла нет или сломан).
+            got["default"] = serde_json::Value::Bool(default_id.as_deref() == Some(a.id.as_str()));
             got
         })
         .collect();
@@ -6870,8 +7381,8 @@ fn agents_list(state: tauri::State<LocalHarness>) -> serde_json::Value {
 /// заново с init-скриптом того агента (адрес канала + его ключ). Детей при
 /// этом никто не гасит: остальные агенты продолжают жить, и переписка в них
 /// идёт своим чередом — окно просто смотрит в другую сторону.
-#[tauri::command]
-fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn switch_agent(app: ShellHandle, id: String) -> Result<serde_json::Value, String> {
     let base = install_root();
     let Some(agent) = find_agent(&base, &id) else {
         return Err(format!("агента «{id}» в этой установке нет"));
@@ -6879,6 +7390,15 @@ fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, 
     if agent.id == current_id() {
         show_main(&app);
         return Ok(serde_json::json!({ "ok": true, "same": true }));
+    }
+    if !agent.enabled {
+        // Окно к снятому агенту — пустое: его харнесс не поднялся и не поднимется,
+        // каждый запрос окна получит отказ. Отказ словами до пересборки окна,
+        // а не мёртвое окно после него.
+        return Err(format!(
+            "агент «{}» снят в настройках — вернуть его можно галочкой в его настройках",
+            agent.name
+        ));
     }
     if !agent.conflict.is_empty() {
         return Err(format!(
@@ -6911,7 +7431,7 @@ fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, 
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        let made = open_window(&handle, &script, None);
+        let made = replace_main(&handle, &script);
         // Флаг снимаем ПОСЛЕ постройки: пока он поднят, смерть окна не гасит
         // детей — а до этой строки как раз и умирает старое.
         SWITCHING.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -6925,36 +7445,149 @@ fn switch_agent(app: tauri::AppHandle, id: String) -> Result<serde_json::Value, 
     Ok(serde_json::json!({ "ok": true, "id": agent.id, "name": agent.name }))
 }
 
-/// Завести ещё одного агента в этой же установке.
+/// Чистая половина отказа agent_enabled_set: корневой не гасится. None — можно.
+fn agent_enabled_refusal(base: bool, enabled_is_new: bool) -> Option<String> {
+    if !base {
+        return None;
+    }
+    let what = if enabled_is_new {
+        "поднять корневой принудительно"
+    } else {
+        "снять корневого"
+    };
+    Some(format!(
+        "корневой агент живёт всегда — {what} нельзя, а «Hélène без агента» не бывает"
+    ))
+}
+
+/// Чистая половина отказа agent_remove: корневой, текущий в окне, поднятый —
+/// нельзя. None — можно.
+fn agent_remove_refusal(base: bool, raised: bool, current: bool) -> Option<String> {
+    if base {
+        return Some("корневой агент — это сама установка; удалить нельзя".into());
+    }
+    if current {
+        return Some("этот агент сейчас в окне — переключись на другого, потом удаляй".into());
+    }
+    if raised {
+        return Some("этот агент сейчас работает — погаси его (сними галочку в настройках), потом удаляй".into());
+    }
+    None
+}
+
+/// Погасить агента: остановить ЕГО детей и вычеркнуть его план.
 ///
-/// Делает ровно две вещи: папку с конфигом (`agents/<id>/helene.json`) и запись
-/// в списке. Дом агента засевает раннер при первом старте — второй реализации
-/// засева здесь нет и не будет. Мозг и ограда наследуются от корневого (владелец
-/// настроил их один раз), бот и тело — нет: они у каждого свои.
-#[tauri::command]
-async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Value, String> {
+/// Это НЕ owner_control: стоп владельца гасит всю установку и живёт в своём
+/// файле у семени; здесь владелец снял одного. План — то, по чему надзор
+/// считает «чьих детей нет» и поднимает снова: убрав план, мы убираем и
+/// пересчёт (помеченных halted надзор не трогает, но и план им больше не
+/// выдаст — объекта нет), и это работает на всех платформах, а не только
+/// там, где планы можно перестроить по-живому.
+fn stop_agent_children(state: &ShellState<LocalHarness>, agent: &str) -> usize {
+    let mut stopped = 0;
+    if let Ok(mut guard) = state.children.lock() {
+        let mut keep = Vec::new();
+        for mut m in guard.drain(..) {
+            if m.agent == agent {
+                if let Some(child) = m.child.as_mut() {
+                    stop_child(child);
+                    stopped += 1;
+                }
+                // halted и без child: надзор такой спеку не поднимет, но пусть
+                // её и не будет в списке — агент снят, его строка в журнале
+                // падений больше никому не принадлежит.
+            } else {
+                keep.push(m);
+            }
+        }
+        *guard = keep;
+    }
+    if let Ok(mut plans) = state.plans.lock() {
+        plans.retain(|p| p.agent != agent);
+    }
+    stopped
+}
+
+/// Разрешено ли агенту показывать текст уведомлений (notifications.text).
+/// Настраивается в ЕГО конфиге: у второго агента свои люди и свой Telegram,
+/// и его слово в трее живёт по его же настройке, а не по чужой.
+fn agent_notify_text(config: &Path) -> bool {
+    agent_config(config)
+        .get("notifications")
+        .and_then(|n| n.get("text"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// Поднять одного агента по свежему плану с диска (конфиг уже включён).
+/// Возвращает слово для журнала. Реле трогаем только если оно не живо:
+/// реле одно на установку, и его перезапуск ронял бы вход в подписку.
+fn lift_agent(app: &ShellHandle, agent: &str) -> Result<Option<String>, String> {
+    let state = app.state::<LocalHarness>();
     let base = install_root();
-    let named = name.trim().to_string();
-    if named.is_empty() {
-        return Err("у агента должно быть имя — им он подписывает свои слова".into());
+    let Some(mut full) = build_plans(&base).into_iter().find(|p| p.agent == agent) else {
+        return Ok(None); // не настроен или не local — поднимать нечего, это не ошибка
+    };
+    // Фикс-волна 06.10 (F3): наблюдатели ставились ТОЛЬКО на старте (setup) —
+    // погашенный и поднятый агент оставался без уведомлений и окон брокера
+    // до перезапуска всей программы. Ставим здесь — через общий реестр
+    // `watch_agent_tree`: дерево уже смотрится (старт) — пара не плодится,
+    // дерево новое — пара ставится. Один сторож просьб на дерево, всегда.
+    watch_agent_tree(app, full.tree.clone(), full.name.clone(), agent_notify_text(&full.config));
+    let relay_alive = state
+        .children
+        .lock()
+        .map(|g| {
+            g.iter()
+                .any(|m| matches!(m.spec, ChildSpec::Relay { .. }) && m.child.is_some())
+        })
+        .unwrap_or(false);
+    if relay_alive {
+        full.specs.retain(|s| !matches!(s, ChildSpec::Relay { .. }));
     }
-    if roster(&base).len() >= 16 {
-        return Err("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол".into());
+    let (mut lifted, _) = start_children(&full, true);
+    let mut installed = false;
+    if let Ok(mut guard) = state.children.lock() {
+        if !state.stopping.load(std::sync::atomic::Ordering::Relaxed) {
+            guard.append(&mut lifted);
+            installed = true;
+        }
     }
+    if let Ok(mut plans) = state.plans.lock() {
+        match plans.iter_mut().find(|p| p.agent == agent) {
+            Some(slot) => *slot = full.clone(),
+            None => plans.push(full.clone()),
+        }
+    }
+    if installed {
+        Ok(Some(full.whose()))
+    } else {
+        for m in lifted.iter_mut() {
+            if let Some(child) = m.child.as_mut() {
+                stop_child(child);
+            }
+        }
+        Err("окно уже закрывается — агент не поднят".into())
+    }
+}
+
+/// Запустить питон-CLI агентов (agents_cli.py) и разобрать его ответ.
+/// Одна строка JSON в stdout; жалобы — stderr и ненулевой код. Образец —
+/// `agent_add`: тот же питон, те же ключи окружения, то же отсутствие окна.
+async fn run_agents_cli(args: &[String]) -> Result<serde_json::Value, String> {
+    let base = install_root();
     let python = python_path(&base, &config_value().unwrap_or(serde_json::json!({})));
     let script = base.join("app").join("localharness").join("agents_cli.py");
     if !script.exists() {
         return Err(format!("в этой сборке нет {}", script.display()));
     }
-    let named_for_cmd = named.clone();
-    let made: serde_json::Value = tauri::async_runtime::spawn_blocking(move || {
-        // Заводит агента ПИТОН — тот самый модуль, которым список читают раннер
-        // и канал. Второй реализации правил (slug, свободный порт, что
-        // наследуется) в Rust нет: разъезд двух «завести агента» стоил бы
-        // владельцу папки с чужим именем и порта, занятого дважды.
+    let mut argv: Vec<String> = vec!["-u".into(), script.to_string_lossy().into_owned()];
+    argv.extend_from_slice(args);
+    argv.push("--base".into());
+    argv.push(base.to_string_lossy().into_owned());
+    shell_adapter::async_runtime::spawn_blocking(move || {
         let mut cmd = Command::new(&python);
-        cmd.arg("-u").arg(&script).arg("add").arg("--name").arg(&named_for_cmd)
-            .arg("--base").arg(&base)
+        cmd.args(&argv)
             .env("PYTHONUTF8", "1")
             .env("HELENE_PARENT_PID", std::process::id().to_string())
             .stdout(Stdio::piped())
@@ -6971,7 +7604,320 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
             .map_err(|e| format!("ответ не разобрался ({e}): {text}"))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?
+}
+
+/// Сохранённый выбор «открывать всегда»: agent-default.json у установки.
+/// Пишется ТОЛЬКО здесь — переключатель окна его не трогает, поэтому файл и
+/// есть воля владельца, а не след последнего просмотра.
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn agent_default_set(id: String) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let wanted = id.trim().to_lowercase();
+    let Some(agent) = find_agent(&base, &wanted) else {
+        return Err(format!("агента «{wanted}» в этой установке нет"));
+    };
+    if !agent.enabled {
+        return Err(format!(
+            "агент «{}» снят в настройках — его нельзя назначать тем, кто откроется при старте",
+            agent.name
+        ));
+    }
+    agent_default_write(&agent.id)?;
+    log_line(&format!(
+        "при старте теперь открывается «{}» ({})",
+        agent.name, agent.id
+    ));
+    Ok(serde_json::json!({ "ok": true, "id": agent.id, "name": agent.name }))
+}
+
+/// Погасить или поднять ОДНОГО агента. Флаг в его конфиге пишет питон
+/// (agents_cli set-enabled — правила одни на всех читателей), оркестрация —
+/// здесь: погасить значит остановить его детей и убрать его из планов;
+/// поднять — собрать план заново с только что включённым конфигом.
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_enabled_set(
+    app: ShellHandle,
+    id: String,
+    enabled: bool,
+) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let wanted = id.trim().to_lowercase();
+    let Some(agent) = find_agent(&base, &wanted) else {
+        return Err(format!("агента «{wanted}» в этой установке нет"));
+    };
+    if let Some(why) = agent_enabled_refusal(agent.base, enabled) {
+        return Err(why);
+    }
+    let name = agent.name.clone();
+    if agent.enabled == enabled {
+        // Фикс-волна 06.10 (F7): «уже включён» раньше отвечал молчаливым
+        // no-op — но конфиг мог подправить руками Блокнот, а сами дети при
+        // этом давно умерли или никогда не поднимались. Слово владельца
+        // «Поднять» обязано значить «чтобы работал»: проверяем план/детей
+        // и поднимаем, кого недосчитались.
+        if enabled {
+            let missing = app
+                .state::<LocalHarness>()
+                .children
+                .lock()
+                .map(|g| !g.iter().any(|m| m.agent == agent.id && m.child.is_some()))
+                .unwrap_or(true);
+            if missing {
+                match lift_agent(&app, &agent.id) {
+                    Ok(Some(whose)) => {
+                        log_line(&format!("агент «{}»{} был включён в конфиге, но не работал — поднят по слову владельца", name, whose));
+                        toast(product_ui(), &format!("«{name}» был включён в настройках, но не работал — теперь работает."));
+                    }
+                    Ok(None) => {
+                        log_line(&format!(
+                            "агент «{name}» включён, но его не поднять: не настроен или живёт не здесь"
+                        ));
+                    }
+                    Err(why) => return Err(why),
+                }
+            }
+        }
+        return Ok(serde_json::json!({ "ok": true, "same": true, "id": agent.id }));
+    }
+    run_agents_cli(&[
+        "set-enabled".into(),
+        "--id".into(),
+        agent.id.clone(),
+        "--enabled".into(),
+        if enabled { "true".into() } else { "false".into() },
+    ])
+    .await?;
+    // Служба держит детей своими планами и читает их при СВОЁМ старте: слово
+    // владельца записано в конфиг, но исполняет его служба после перезапуска.
+    // Молчать об этом нельзя — иначе «погасил», а агент жив.
+    if service_owns_harness() {
+        let said = if enabled {
+            format!("«{name}» включён в настройках. Его держит служба — поднимет его перезапуск службы («Система» → «Перезапустить»).")
+        } else {
+            format!("«{name}» снят в настройках. Его держит служба — отпустит его перезапуск службы («Система» → «Перезапустить»).")
+        };
+        log_line(&said);
+        toast(product_ui(), &said);
+        return Ok(serde_json::json!({ "ok": true, "id": agent.id, "enabled": enabled, "service": true }));
+    }
+    let state = app.state::<LocalHarness>();
+    if enabled {
+        match lift_agent(&app, &agent.id) {
+            Ok(Some(whose)) => {
+                log_line(&format!("агент «{name}»{} поднят по слову владельца", whose));
+                toast(product_ui(), &format!("«{name}» снова работает."));
+            }
+            Ok(None) => {
+                log_line(&format!(
+                    "агент «{name}» включён, но его не поднять: не настроен или живёт не здесь"
+                ));
+            }
+            Err(why) => return Err(why),
+        }
+    } else {
+        let stopped = stop_agent_children(&state, &agent.id);
+        log_line(&format!(
+            "агент «{name}» снят в настройках — детей остановлено {stopped}, из планов вычеркнут"
+        ));
+        // Фикс-волна 06.10 (F6): гашение агента, чьё окно сейчас открыто,
+        // убивает связь ЭТОГО окна. Молчание здесь выглядело как «пропало
+        // соединение» без причины. Говорим тем же тостом — действие не
+        // блокируем: владелец уже принял решение, предупреждение — про
+        // последствия, а не ещё один вопрос.
+        if agent.id == current_id() {
+            toast(
+                product_ui(),
+                &format!("«{name}» погашен — окно этого агента потеряет связь; переключись на другого или продолжи."),
+            );
+        } else {
+            toast(product_ui(), &format!("«{name}» погашен и больше не поднимется, пока не вернёшь галочку."));
+        }
+    }
+    Ok(serde_json::json!({ "ok": true, "id": agent.id, "enabled": enabled }))
+}
+
+/// Удалить агента установки: папка agents/<id> с домом уезжает на чердак
+/// (решение питона), окно получает свежий список. Отказ — корневой, текущий
+/// в окне, поднятый: удалять то, что исполняется, Windows не даст, а
+/// полудобавленный чердак хуже честного «сначала погаси».
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_remove(app: ShellHandle, id: String) -> Result<serde_json::Value, String> {
+    let base = install_root();
+    let wanted = id.trim().to_lowercase();
+    let Some(agent) = find_agent(&base, &wanted) else {
+        return Err(format!("агента «{wanted}» в этой установке нет"));
+    };
+    let state = app.state::<LocalHarness>();
+    let raised_here = state
+        .children
+        .lock()
+        .map(|g| g.iter().any(|m| m.agent == agent.id && m.child.is_some()))
+        .unwrap_or(false);
+    if let Some(why) = agent_remove_refusal(agent.base, raised_here, agent.id == current_id()) {
+        return Err(format!("«{}»: {why}", agent.name));
+    }
+    if agent.enabled && service_owns_harness() {
+        return Err(format!(
+            "«{}» поднимает служба — сними галочку в настройках агента и дай службе его отпустить, потом удаляй",
+            agent.name
+        ));
+    }
+    // План мог остаться от прошлой сессии надзора — вычеркиваем и его.
+    stop_agent_children(&state, &agent.id);
+    let attic = base.join("agents-attic");
+    let name = agent.name.clone();
+    let made = run_agents_cli(&[
+        "remove".into(),
+        "--id".into(),
+        agent.id.clone(),
+        "--attic".into(),
+        attic.to_string_lossy().into_owned(),
+    ])
+    .await?;
+    log_line(&format!(
+        "агент «{name}» удалён: папка увезена на чердак {}",
+        attic.display()
+    ));
+    toast(product_ui(), &format!("«{name}» удалён; его папка — на чердаке agents-attic, если что-то забыто."));
+    // Сохранённый «открывать всегда» не может звать удалённого: откат к корневому,
+    // молча — потому что окно уже сказало своё слово удалением.
+    if agent_default_id().as_deref() == Some(agent.id.as_str()) {
+        let _ = std::fs::remove_file(agent_default_path());
+    }
+    Ok(made)
+}
+
+/// Завести ещё одного агента в этой же установке.
+///
+/// Делает ровно две вещи: папку с конфигом (`agents/<id>/helene.json`) и запись
+/// в списке. Дом агента засевает раннер при первом старте — второй реализации
+/// засева здесь нет и не будет. Мозг и ограда наследуются от корневого (владелец
+/// настроил их один раз), бот и тело — нет: они у каждого свои.
+///
+/// Конституция (договор с волной A и B1): `soul_kind` — "canonical" | "inherit"
+/// | "text". Текст конституции НЕ едет через argv (32 КБ — предел командной
+/// строки Windows): он пишется во временный файл и передаётся как --soul-file,
+/// файл стирается после ответа питона. "inherit" без текста — питон сам берёт
+/// soul/SOUL.md донора (--soul-from); "inherit" С текстом — это "text".
+///
+/// Вложенная форма `soul:{kind,text,from}` (карточка «Агенты») сильнее плоских
+/// `soul_kind/soul_text/soul_from`: смешение двух форм не должно тихо
+/// предпочесть не ту. Канон — ни той, ни другой: все трое None, питон получит
+/// «как раньше». Пустая строка в любой форме — как отсутствие (не сказано).
+/// Разворот общий для обеих труб (Tauri/Electron) и живёт здесь.
+fn merge_soul_forms(
+    soul: Option<&serde_json::Value>,
+    flat_kind: Option<String>,
+    flat_text: Option<String>,
+    flat_from: Option<String>,
+) -> (Option<String>, Option<String>, Option<String>) {
+    let field = |key: &str| -> Option<String> {
+        soul.filter(|v| v.is_object())
+            .and_then(|n| n.get(key))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .filter(|v| !v.trim().is_empty())
+    };
+    let nonempty = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+    (
+        nonempty(field("kind").or(flat_kind)),
+        nonempty(field("text").or(flat_text)),
+        nonempty(field("from").or(flat_from)),
+    )
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn agent_add(
+    app: ShellHandle,
+    name: String,
+    soul: Option<serde_json::Value>,
+    soul_kind: Option<String>,
+    soul_text: Option<String>,
+    soul_from: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let (soul_kind, soul_text, soul_from) =
+        merge_soul_forms(soul.as_ref(), soul_kind, soul_text, soul_from);
+    let base = install_root();
+    let named = name.trim().to_string();
+    if named.is_empty() {
+        return Err("у агента должно быть имя — им он подписывает свои слова".into());
+    }
+    if roster(&base).len() >= 16 {
+        return Err("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол".into());
+    }
+    // Конституция (договор с волной A и B1): один проход — (флаги питона,
+    // временный файл). «inherit» С текстом — это «text»: владелец уже прошёл
+    // редактор наследования и прислал то, что хочет видеть. Текст НЕ едет
+    // через argv (32 КБ — предел командной строки Windows): только через файл.
+    let text_supplied = soul_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let kind = soul_kind
+        .map(|k| k.trim().to_lowercase())
+        .filter(|k| !k.is_empty());
+    let mut argv: Vec<String> = vec!["add".into(), "--name".into(), named.clone()];
+    let soul_tmp: Option<PathBuf> = match kind.as_deref() {
+        None => None,
+        // Доктор (1.4.1): канон и знания читает питон из поставки — ни текста,
+        // ни донора через argv не едет.
+        Some("doctor") => {
+            argv.extend(["--soul-kind".into(), "doctor".into()]);
+            None
+        }
+        Some("canonical") => {
+            argv.extend(["--soul-kind".into(), "canonical".into()]);
+            None
+        }
+        Some("text" | "inherit") if text_supplied.is_some() => {
+            let path = std::env::temp_dir().join(format!(
+                "helene-soul-{}-{}.md",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::write(&path, text_supplied.unwrap_or(""))
+                .map_err(|e| format!("текст конституции не записался: {e}"))?;
+            argv.extend([
+                "--soul-kind".into(),
+                "text".into(),
+                "--soul-file".into(),
+                path.to_string_lossy().into_owned(),
+            ]);
+            Some(path)
+        }
+        Some("inherit") => {
+            let donor = soul_from
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(BASE_AGENT_ID)
+                .to_string();
+            if find_agent(&base, &donor).is_none() {
+                return Err(format!("агента-донора «{donor}» в этой установке нет"));
+            }
+            argv.extend([
+                "--soul-kind".into(),
+                "inherit".into(),
+                "--soul-from".into(),
+                donor,
+            ]);
+            None
+        }
+        Some(other) => {
+            return Err(format!("такого вида конституции нет: «{other}»"));
+        }
+    };
+    let made: serde_json::Value = {
+        let result = run_agents_cli(&argv).await;
+        if let Some(path) = &soul_tmp {
+            let _ = std::fs::remove_file(path);
+        }
+        result?
+    };
     let id = made.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     log_line(&format!("заведён агент «{named}» ({id}) — поднимется после перезапуска"));
     // Поднимать его прямо сейчас нечем: детей заводит план, а план строится на
@@ -6985,7 +7931,7 @@ async fn agent_add(app: tauri::AppHandle, name: String) -> Result<serde_json::Va
 /// ним окно прячет карточки того, чего на этой системе нет (служба, тело,
 /// брандмауэр); `root` — корень установки, `exe_dir` оставлен под старым
 /// именем с тем же значением: окно показывает его как «папку программы».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn app_info() -> serde_json::Value {
     let base = install_root();
     serde_json::json!({
@@ -7094,9 +8040,9 @@ fn pick_update_zip(
 /// Рядом лежит `.sha256`; внутри архива в корне — `install.sh`.
 const UPDATE_MAC_SUFFIX: &str = "-macos-arm64.zip";
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn update_check(url: String) -> Result<serde_json::Value, String> {
-    tauri::async_runtime::spawn_blocking(move || update_check_blocking(&url))
+    shell_adapter::async_runtime::spawn_blocking(move || update_check_blocking(&url))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -7138,7 +8084,7 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
         let asset = v
             .get("assets")
             .and_then(|a| a.as_array())
-            .and_then(|a| pick_update_zip(a, product_fs(), product_fs() == PRODUCT, macos));
+            .and_then(|a| if cfg!(target_os = "linux") { None } else { pick_update_zip(a, product_fs(), product_fs() == PRODUCT, macos) });
         let current = env!("CARGO_PKG_VERSION");
         // macOS: версия новее есть, а сборки для Mac в ней нет — сказать это
         // словами, а не подсовывать страницу релиза с Windows-архивом. Когда
@@ -7284,7 +8230,7 @@ fn update_autocheck() {
     if notify {
         toast(
             product_ui(),
-            &format!("Есть версия {latest}. Настройки → О программе → «Скачать и установить»."),
+            &format!("Есть версия {latest}. Настройки → О программе → «{}».", if cfg!(target_os = "linux") { "Открыть выпуск Linux" } else { "Скачать и установить" }),
         );
         log_line(&format!("проверка обновлений при старте: есть версия {latest}"));
     }
@@ -7347,7 +8293,7 @@ fn update_file_name(url: &str) -> Result<String, String> {
 /// релиза). Не совпала — файл удаляется, ответ отказ: подписи кода у поставки
 /// нет, и сумма — единственная проверка, что скачано то, что выложено.
 /// `sha_ok`: true — совпала; null — сверять было не с чем (сумма не пришла).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn update_download(url: String, sha256: Option<String>) -> Result<serde_json::Value, String> {
     // Отказ обязан оставить след. 20.09.2026: у владельца кнопка отвечала
     // «Не получилось.», а в helene.log не было НИ ОДНОЙ строки об этом — успех
@@ -7371,7 +8317,7 @@ async fn update_download_inner(url: String, sha256: Option<String>) -> Result<se
     if !expected.is_empty() && (expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit())) {
         return Err("контрольная сумма релиза не похожа на sha256".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         use sha2::{Digest, Sha256};
         use std::io::{Read, Write};
         let dir = downloads_dir();
@@ -7441,8 +8387,9 @@ async fn update_download_inner(url: String, sha256: Option<String>) -> Result<se
 /// полторы секунды (ответ окну успевает дойти). Скрипту передаётся
 /// `HELENE_OLD_PID`, чтобы он мог дождаться нашей смерти, прежде чем менять
 /// файлы под ногами.
-#[tauri::command]
-async fn update_install(app: tauri::AppHandle, path: String, force_extensions: Option<bool>) -> Result<serde_json::Value, String> {
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn update_install(app: ShellHandle, path: String, force_extensions: Option<bool>) -> Result<serde_json::Value, String> {
+    if cfg!(target_os = "linux") { return Err("На Linux установи новый .deb/.rpm через пакетный менеджер.".into()); }
     let force_extensions = force_extensions.unwrap_or(false);
     let archive = PathBuf::from(path.trim())
         .canonicalize()
@@ -7461,7 +8408,7 @@ async fn update_install(app: tauri::AppHandle, path: String, force_extensions: O
     // Windows программу гасит сам установщик.
     #[cfg(windows)]
     let _ = app;
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
         {
             let stem = archive.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Helene".into());
@@ -7565,7 +8512,7 @@ fn install_script_entry(listing: &str) -> Option<String> {
 /// потом install.sh распаковывал zip второй раз. Смысл Windows-ветки тот же:
 /// архив рядом с собой → установщик из него → оболочка отдаёт дело и выходит.
 #[cfg(not(windows))]
-fn update_install_posix(app: tauri::AppHandle, archive: &Path, force_extensions: bool) -> Result<serde_json::Value, String> {
+fn update_install_posix(app: ShellHandle, archive: &Path, force_extensions: bool) -> Result<serde_json::Value, String> {
     let unzip = posix_tool("unzip");
     let mut list = Command::new(&unzip);
     list.arg("-Z1").arg(archive);
@@ -7651,7 +8598,7 @@ fn update_install_posix(app: tauri::AppHandle, archive: &Path, force_extensions:
 
 /// Вход агента в Telegram своим аккаунтом: шаги status / send / code / logout
 /// выполняет помощник на встроенном Python; ответ — его JSON как есть.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn telegram_account(
     step: String,
     api_id: String,
@@ -7665,7 +8612,7 @@ async fn telegram_account(
     // процесса: запущенный не ярлыком helene.exe клал сессию Telethon в чужое
     // место, и руннер не находил её никогда.
     let tree = current_tree();
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("mtproto_login.py");
         if !python.exists() || !script.exists() {
@@ -7711,7 +8658,7 @@ async fn telegram_account(
 /// его читает канал и показывает окно. Ребёнок усыновляется job-объектом, как
 /// остальные: закрыл окно — качать некому, и окно об этом скажет, увидев
 /// протухшую запись, вместо вечного «качаю…».
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
     let base = install_root();
     let python = bundled_python(&base);
@@ -7758,10 +8705,10 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
 /// путь к архиву; окно показывает его в Проводнике. Импорт на ПК — только из
 /// консоли при закрытой программе: подменять data/ под живым харнессом нельзя,
 /// и команды на это у окна намеренно нет.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn carry_export() -> Result<String, String> {
     let base = install_root();
-    tauri::async_runtime::spawn_blocking(move || {
+    shell_adapter::async_runtime::spawn_blocking(move || {
         let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("carry.py");
         if !python.exists() || !script.exists() {
@@ -7812,12 +8759,12 @@ async fn carry_export() -> Result<String, String> {
 /// Собрать логи для поддержки в один zip во временной папке: helene.log,
 /// вывод харнесса, службы и реле. Файлы сперва копируются: дети держат свои
 /// логи открытыми, и архиватор напрямую их не читает.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn logs_bundle() -> Result<String, String> {
     // Дерево берём то, с которым это окно живёт (Identity), а не считаем
     // заново от текущей папки процесса.
     let tree = current_tree();
-    tauri::async_runtime::spawn_blocking(move || logs_bundle_blocking(tree))
+    shell_adapter::async_runtime::spawn_blocking(move || logs_bundle_blocking(tree))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -8100,10 +9047,197 @@ mod tests {
         }
     }
 
+    /// 06.10 (волна C): сохранённый «открывать всегда» — приоритет ниже ярлыка,
+    /// и годится только для живого включённого агента. Снятое и пропавшее —
+    /// откат к корневому СО СЛОВОМ (второй элемент пары), а не молча.
+    #[test]
+    fn startup_pick_order_and_refusals() {
+        let roster = vec![
+            ("main".to_string(), "Агент".to_string(), true),
+            ("mira".to_string(), "Мира".to_string(), true),
+            ("off".to_string(), "Снятый".to_string(), false),
+        ];
+        // Ярлык сильнее сохранённого — и не сверяется с ним.
+        assert_eq!(
+            startup_pick(Some("mira".into()), Some("main".into()), &roster),
+            (Some("mira".into()), None)
+        );
+        // F10 (судейский фикс): ярлык на СНЯТОГО — мёртвого окна нет, отказ словами.
+        let (who, why) = startup_pick(Some("off".into()), None, &roster);
+        assert_eq!(who, None);
+        let why = why.expect("снятый с ярлыка обязан объясниться");
+        assert!(why.contains("Ярлык просит"), "{why}");
+        assert!(why.contains("Снятый"), "{why}");
+        // Ярлык на неизвестного проходит нарочно — «нет такого» скажет проверка ниже.
+        assert_eq!(
+            startup_pick(Some("ghost".into()), None, &roster),
+            (Some("ghost".into()), None)
+        );
+        // Сохранённый жив и включён — он и открывается.
+        assert_eq!(
+            startup_pick(None, Some("mira".into()), &roster),
+            (Some("mira".into()), None)
+        );
+        // Сохранённый снят — корневой, и слово об этом.
+        let (who, why) = startup_pick(None, Some("off".into()), &roster);
+        assert_eq!(who, None);
+        let why = why.expect("снятый сохранённый обязан объясниться");
+        assert!(why.contains("Снятый"), "{why}");
+        assert!(why.contains("снят"), "{why}");
+        // Сохранённый пропал (агент удалён) — корневой, слово другое.
+        let (who, why) = startup_pick(None, Some("ghost".into()), &roster);
+        assert_eq!(who, None);
+        let why = why.expect("пропавший сохранённый обязан объясниться");
+        assert!(why.contains("ghost"), "{why}");
+        assert!(why.contains("больше нет"), "{why}");
+        // Нет ни ярлыка, ни файла выбора — корневой молча, как было всегда.
+        assert_eq!(startup_pick(None, None, &roster), (None, None));
+    }
+
+    /// Судейский фикс P1 (06.10): реестр наблюдателей — дерево заявлено один
+    /// раз. Старт посмотрел — подъём пару не плодит; чужое дерево — новая пара.
+    #[test]
+    fn watched_trees_registry_is_one_pair_per_tree() {
+        let mut g = std::collections::HashSet::new();
+        assert!(claim_watch(&mut g, std::path::Path::new("C:/agents/main")));
+        // Повторный подъём того же агента: пара уже стоит — вторую не ставим.
+        assert!(!claim_watch(&mut g, std::path::Path::new("C:/agents/main")));
+        // Другое дерево — своя пара, свой сторож.
+        assert!(claim_watch(&mut g, std::path::Path::new("C:/agents/mira")));
+        assert!(!claim_watch(&mut g, std::path::Path::new("C:/agents/mira")));
+        assert_eq!(g.len(), 2);
+    }
+
+    /// 06.10 (фикс-волна, F1): конституция доезжает ОБЕИМИ формами — вложенной
+    /// `soul:{kind,text,from}` (карточка) и плоскими ключами (старый колер).
+    /// Вложенная сильнее; канон — все трое None, «как раньше».
+    #[test]
+    fn soul_forms_both_reach_the_seed() {
+        use super::merge_soul_forms;
+        // Канон: ни одной формы — питон не получит ни флага, ни файла.
+        let (k, t, f) = merge_soul_forms(None, None, None, None);
+        assert!((k, t, f) == (None, None, None));
+        // Вложенная форма карточки — как есть.
+        let soul = serde_json::json!({"kind": "text", "text": "Моя конституция"});
+        let (k, t, f) = merge_soul_forms(Some(&soul), None, None, None);
+        assert_eq!(k.as_deref(), Some("text"));
+        assert_eq!(t.as_deref(), Some("Моя конституция"));
+        assert_eq!(f, None);
+        // Плоская форма (camel или snake у трубы) — тот же результат.
+        let (k, t, f) = merge_soul_forms(None, Some("inherit".into()), Some("Наследство".into()), Some("mira".into()));
+        assert_eq!(k.as_deref(), Some("inherit"));
+        assert_eq!(t.as_deref(), Some("Наследство"));
+        assert_eq!(f.as_deref(), Some("mira"));
+        // Смешение: вложенная форма сильнее — плоские не перебивают её.
+        let soul = serde_json::json!({"kind": "text", "text": "Вложенная"});
+        let (k, t, _) = merge_soul_forms(Some(&soul), Some("canonical".into()), Some("Плоская".into()), None);
+        assert_eq!(k.as_deref(), Some("text"), "вложенный kind обязан победить плоский");
+        assert_eq!(t.as_deref(), Some("Вложенная"), "вложенный text обязан победить плоский");
+        // Пустые строки и не-объект — как отсутствие формы (канон молчит).
+        let (k, t, f) = merge_soul_forms(Some(&serde_json::json!("строка")), Some("  ".into()), None, None);
+        assert_eq!((k, t, f), (None, None, None), "пустота и не-объект — не конституция");
+        // Частичный вложенный (только kind) добирает остальное из плоских.
+        let soul = serde_json::json!({"kind": "inherit"});
+        let (k, t, f) = merge_soul_forms(Some(&soul), None, None, Some("main".into()));
+        assert_eq!(k.as_deref(), Some("inherit"));
+        assert_eq!(t, None);
+        assert_eq!(f.as_deref(), Some("main"));
+    }
+
+    /// agent-default.json: чтение терпимо к браку, запись атомарна и читается
+    /// обратно ровно тем же кодом, что и старт.
+    #[test]
+    fn agent_default_file_roundtrip_and_garbage() {
+        let dir = std::env::temp_dir().join(format!("helene-def-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        use super::{agent_default_id_from, agent_default_write_at};
+        let path = dir.join("agent-default.json");
+        assert_eq!(agent_default_id_from(&path), None, "файла нет — None, не отказ");
+        agent_default_write_at(&path, "Mira ").unwrap(); // регистр и хвост — терпимы
+        assert_eq!(agent_default_id_from(&path).as_deref(), Some("mira"));
+        // Брак — это «выбора нет», а не ошибка старта.
+        std::fs::write(&path, "{ не json").unwrap();
+        assert_eq!(agent_default_id_from(&path), None);
+        std::fs::write(&path, r#"{"id": ""}"#).unwrap();
+        assert_eq!(agent_default_id_from(&path), None);
+        std::fs::write(&path, r#"{"id": 7}"#).unwrap();
+        assert_eq!(agent_default_id_from(&path), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 06.10 (волна C): относительный путь из окна — от дерева ТЕКУЩЕГО агента.
+    /// «data/broker.log» — строка времён одного агента: у корневого дерево и
+    /// есть data/, у соседа тот же журнал лежит без префикса. Кандидат с
+    /// живым файлом в дереве выигрывает у мёртвой догадки.
+    #[test]
+    fn relative_targets_resolve_from_the_current_tree() {
+        let stamp = format!("helene-rel-{}-{}", std::process::id(), line!());
+        let root = std::env::temp_dir().join(&stamp);
+        let agent_tree = root.join("agents").join("mira").join("data");
+        let install_root = root.join("install");
+        std::fs::create_dir_all(&agent_tree).unwrap();
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::write(agent_tree.join("broker.log"), "журнал миры").unwrap();
+        // Окно второго агента просит «свой» журнал: строка с префиксом data/…
+        let got = resolve_target("data/broker.log", agent_tree.clone()).unwrap();
+        assert!(got.ends_with("broker.log"), "{got:?}");
+        assert!(
+            got.starts_with(agent_tree.canonicalize().unwrap()),
+            "должен открыться журнал миры, а не корневого: {got:?}"
+        );
+        // Префикс не глотает похожие имена: database.log не превращается в base.log.
+        std::fs::write(agent_tree.join("database.log"), "не журнал").unwrap();
+        let got = resolve_target("database.log", agent_tree.clone()).unwrap();
+        assert!(got.ends_with("database.log"), "{got:?}");
+        // Чужой относительный путь без файла в дереве — отказ, а не угадывание.
+        assert!(resolve_target("нет-такого.log", agent_tree.clone()).is_err());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Кого можно погасить/удалить, а кого нельзя — сама развилка, словами
+    /// отказа (живьём эти ветки требуют живых детей и окон).
+    #[test]
+    fn base_agent_is_never_disabled_or_removed() {
+        // Корневой — всегда нельзя: он и есть установка.
+        let why = agent_enabled_refusal(true, false).expect("корневой нельзя гасить");
+        assert!(why.contains("корневой"), "{why}");
+        let why = agent_remove_refusal(true, false, false).expect("корневой нельзя удалять");
+        assert!(why.contains("установка"), "{why}");
+        // Сосед: гасить можно, удалять — только негорящего и не в окне.
+        assert_eq!(agent_enabled_refusal(false, true), None);
+        assert_eq!(agent_remove_refusal(false, false, false), None);
+        let why = agent_remove_refusal(false, true, false).expect("работающего нельзя");
+        assert!(why.contains("работает") || why.contains("погаси"), "{why}");
+        let why = agent_remove_refusal(false, false, true).expect("текущего нельзя");
+        assert!(why.contains("в окне") || why.contains("переключись"), "{why}");
+    }
+
+    /// Флаг enabled для owner_state (1.4.1, живой случай 06.10): корневой и
+    /// битый конфиг — «включён»; снятый сосед — false. Чистая половина: файлы
+    /// во временном корне, никаких живых установок.
+    #[test]
+    fn owner_state_enabled_flag_reads_the_agent_config() {
+        let root = std::env::temp_dir().join(format!("helene-owner-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("agents/mira")).unwrap();
+        // Корневое дерево — всегда включён, что бы ни лежало в конфигах.
+        assert!(agent_enabled_flag(&root.join("helene.json"), &base_tree()));
+        // Конфиг соседа без ключа enabled — включён (унаследованное умолчание).
+        std::fs::write(&root.join("agents/mira/helene.json"), br#"{"agent": {"name": "mira"}}"#).unwrap();
+        assert!(agent_enabled_flag(&root.join("agents/mira/helene.json"), &root.join("agents/mira/data")));
+        // Снятый сосед — false; битый/отсутствующий конфиг — снова включён.
+        std::fs::write(&root.join("agents/mira/helene.json"), br#"{"enabled": false}"#).unwrap();
+        assert!(!agent_enabled_flag(&root.join("agents/mira/helene.json"), &root.join("agents/mira/data")));
+        std::fs::write(&root.join("agents/mira/helene.json"), b"not json").unwrap();
+        assert!(agent_enabled_flag(&root.join("agents/mira/helene.json"), &root.join("agents/mira/data")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     use super::{
-        admin_verdict, agent_name, blocked_script, broker_answer_row, broker_confirm_text,
+        admin_verdict, agent_enabled_flag, agent_enabled_refusal, agent_name, agent_remove_refusal, blocked_script, broker_answer_row, broker_confirm_text,
         broker_wish_ask, broker_wish_id, broker_wishes, decode_config, ensure_desk_token,
-        mask_secrets, parse_version, read_desk_token, unconfigured, version_newer, BrokerOp,
+        startup_pick, resolve_target, unconfigured, version_newer, BrokerOp,
         BrokerReceipt, BrokerWish,
     };
     // Брандмауэр, UAC, PowerShell и кодировка консоли — только Windows: этих
@@ -9370,8 +10504,8 @@ mod tests {
     /// а поднимает его надзор службы. Окно своих детей при службе не держит.
     #[test]
     fn engine_restart_request_speaks_the_channel_format() {
-        let tree = std::env::temp_dir().join(format!("helene-ask-restart-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tree);
+        let tree = std::env::temp_dir().join(format!("helene-ask-restart-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         assert!(super::ask_engine_restart(&tree, "window"));
         let raw = std::fs::read_to_string(tree.join("memory/.state/supervisor-request.json")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -9381,6 +10515,32 @@ mod tests {
         assert_eq!(v["by"], "window");
         assert!(v["id"].as_str().is_some_and(|s| s.len() == 16));
         assert!(v["asked_utc"].as_str().is_some_and(|s| s.ends_with('Z')));
+        // Windows rename() alone cannot replace an existing file: a second click
+        // must publish a new complete request rather than fail or truncate it.
+        for seq in 0..20 {
+            super::publish_supervisor_request(&tree.join("memory/.state/supervisor-request.json"),
+                &json!({"id":seq,"action":"restart"})).unwrap();
+            let got: serde_json::Value = serde_json::from_slice(&std::fs::read(
+                tree.join("memory/.state/supervisor-request.json")).unwrap()).unwrap();
+            assert_eq!(got["id"], seq);
+        }
+        assert_eq!(std::fs::read_dir(tree.join("memory/.state")).unwrap().count(), 1);
+        #[cfg(windows)]
+        {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+            assert_eq!(super::owner_pid_alive(std::process::id(), Some(now)), Some(true));
+            assert_eq!(super::owner_pid_alive(std::process::id(), Some(1.)), Some(false));
+            assert_eq!(super::owner_pid_alive(std::process::id(), None), None);
+        }
         let _ = std::fs::remove_dir_all(&tree);
     }
 }
+
+#[cfg(feature = "host")]
+include!("host_rpc.rs");
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn autostart_get() -> bool { linux_autostart_path().is_some_and(|p| p.is_file()) }
+#[cfg(target_os = "linux")]
+fn autostart_set_blocking(on: bool) -> Result<(), String> { linux_autostart_set(on) }

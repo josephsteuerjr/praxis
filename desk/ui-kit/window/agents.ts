@@ -66,34 +66,43 @@ export function mountSwitch(host: HTMLElement): void {
   menu.setAttribute("role", "listbox");
   menu.hidden = true;
 
-  for (const a of list) {
-    const row = el("button", "agent-row");
-    row.type = "button";
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", String(a.id === here));
-    const why = a.conflict
-      ? `спорит за порт ${a.port} с «${a.conflict}»`
-      : !a.enabled
-        ? "снят в настройках"
-        : `порт ${a.port}`;
-    row.innerHTML =
-      `<span class="agent-name">${esc(a.name)}</span><span class="agent-why">${esc(why)}</span>`;
-    if (a.id === here) row.classList.add("is-current");
-    // Спорящего за порт не открываем: окно ушло бы к каналу другого агента и
-    // показало бы его переписку под чужим именем.
-    if (a.conflict) row.disabled = true;
-    row.addEventListener("click", () => {
-      menu.hidden = true;
-      head.setAttribute("aria-expanded", "false");
-      if (a.id !== here) void switchTo(a.id);
-    });
-    menu.append(row);
-  }
+  const paintRows = (rows: AgentRow[]): void => {
+    menu.innerHTML = "";
+    for (const a of rows) {
+      const row = el("button", "agent-row");
+      row.type = "button";
+      row.dataset.id = a.id;
+      row.setAttribute("role", "option");
+      row.setAttribute("aria-selected", String(a.id === here));
+      const why = a.conflict
+        ? `спорит за порт ${a.port} с «${a.conflict}»`
+        : !a.enabled
+          ? "снят в настройках"
+          : `порт ${a.port}`;
+      row.innerHTML =
+        `<span class="agent-name">${esc(a.name)}</span><span class="agent-why">${esc(why)}</span>`;
+      if (a.id === here) row.classList.add("is-current");
+      // Спорящего за порт не открываем: окно ушло бы к каналу другого агента и
+      // показало бы его переписку под чужим именем.
+      if (a.conflict) row.disabled = true;
+      row.addEventListener("click", () => {
+        menu.hidden = true;
+        head.setAttribute("aria-expanded", "false");
+        if (a.id !== here) void switchTo(a.id);
+      });
+      menu.append(row);
+    }
+  };
+  paintRows(list);
 
   head.addEventListener("click", () => {
     const open = menu.hidden;
     menu.hidden = !open;
     head.setAttribute("aria-expanded", String(open));
+    // Открытие меню — самый нужный момент свежести: список обновляется и по
+    // таймеру, но владелец, открывающий переключатель, смотрит на него прямо
+    // сейчас (живой случай 06.10: удалённый агент жил в списке до перезапуска).
+    if (!menu.hidden) void refreshSwitch();
   });
   document.addEventListener("click", (ev) => {
     if (!box.contains(ev.target as Node)) {
@@ -103,4 +112,30 @@ export function mountSwitch(host: HTMLElement): void {
   });
   box.append(head, menu);
   host.prepend(box);
+
+  /**
+   * Живой список (1.4.1): ростер init-скрипта — снимок на момент постройки
+   * окна, и удаление/добавление агента жило в нём до перезапуска программы.
+   * Спрашиваем оболочку (agents_list) и перерисовываем МЕНЮ при изменении —
+   * только при изменении: сравнение по id, чтобы опрос каждые 5 секунд не
+   * дёргал DOM и не сбивал клавиатурную навигацию по закрытому списку.
+   * Отказ оболочки молча оставляет прошлый список: переключатель — не прибор,
+   * и обрыв связи не должен превращать его в пустой.
+   */
+  async function refreshSwitch(): Promise<void> {
+    try {
+      const got = await shell<{ agents: AgentRow[]; current: string }>("agents_list");
+      const next = Array.isArray(got?.agents) ? got.agents : [];
+      const same = next.length === menu.querySelectorAll(".agent-row").length
+        && next.every((a, i) => {
+          const row = menu.querySelectorAll<HTMLButtonElement>(".agent-row")[i];
+          return row?.dataset.id === a.id;
+        });
+      if (!same) paintRows(next);
+    } catch {
+      /* прошлый список остаётся */
+    }
+  }
+  void refreshSwitch();
+  setInterval(() => void refreshSwitch(), 5000);
 }

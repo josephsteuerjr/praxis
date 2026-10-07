@@ -843,6 +843,8 @@ pub struct Hit<E> {
 /// Отказ Accessibility при чтении узла — не свидетельство «не подошёл»: он рвёт поиск
 /// словами (как у UIA — «search incomplete»). Исключение одно — элемент исчез
 /// (`invalid_ui_element`): его нет, и это ответ.
+pub type Sweep<E> = Result<(Vec<Hit<E>>, usize, Option<&'static str>), AxFailure>;
+
 pub fn sweep<E: Element>(
     root: &E,
     select: &Selector,
@@ -850,7 +852,7 @@ pub fn sweep<E: Element>(
     max_depth: u64,
     deadline: Instant,
     screen: Screen,
-) -> Result<(Vec<Hit<E>>, usize, Option<&'static str>), AxFailure> {
+) -> Sweep<E> {
     let mut found: Vec<Hit<E>> = Vec::new();
     let mut queue: VecDeque<(E, u64, Option<String>)> = VecDeque::new();
     queue.push_back((root.clone(), 0, None));

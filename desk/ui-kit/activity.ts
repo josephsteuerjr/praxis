@@ -31,6 +31,11 @@ export function activityHTML(run: ActivityRun, detail: RunDetail | undefined,
 }
 
 export function updateActivity(card: HTMLElement, detail: RunDetail, duration: string): void {
+  // Пустой манифест — чтение попало в перезапись файла на событии хода: статус
+  // прогона при этом НЕ менялся, и карточка «Сейчас» не должна на такт терять
+  // заливку и подпись «Действия сейчас» (мигала, слово владельца 02.10).
+  const m = detail.manifest;
+  if (m && !m.status && !m.terminal?.status && !m.created_at) return;
   card.dataset.status = detail.manifest?.status || "";
   card.querySelector<HTMLElement>("[data-activity-status]")!.textContent = status(detail);
   card.querySelector<HTMLElement>(".turn-live-head .dot")!.classList.toggle("live", detail.manifest?.status === "running");

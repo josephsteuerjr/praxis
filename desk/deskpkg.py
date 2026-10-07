@@ -56,14 +56,15 @@ MANIFEST = "desk.json"
 STATIC_MANIFEST = ".helene-static.json"
 REQUIREMENTS = "requirements-desk.txt"
 
-SERVER, WINDOWS, MACOS = "server", "windows", "macos"
-FLAVORS = (SERVER, WINDOWS, MACOS)
+#: Linux (порт 28.09): Debian, Ubuntu, Astra — пакет .deb (`installer/build_linux.py`).
+SERVER, WINDOWS, MACOS, LINUX = "server", "windows", "macos", "linux"
+FLAVORS = (SERVER, WINDOWS, MACOS, LINUX)
 #: Настольные издания: окно Элен рядом с движком. Состав у них ОДИН — канал,
 #: читалки, окно Элен, телефон, движок, ресурсы; различается только то, что
 #: сборка кладёт вокруг пакета (exe и embedded CPython у Windows, .app и
 #: python-build-standalone у macOS). Вид в манифесте всё равно свой: по нему
 #: окно и выкладка отличают одну поставку от другой.
-DESKTOP = (WINDOWS, MACOS)
+DESKTOP = (WINDOWS, MACOS, LINUX)
 
 # Что не едет никогда: байт-код машины сборщика (его никто не проверял и он
 # чужой для целевой версии Python) и мусор файловых менеджеров.

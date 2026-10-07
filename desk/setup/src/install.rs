@@ -94,6 +94,7 @@ include!("../../common/service_op.rs");
 // состояния. Один текст на службу, окно и мастер — см. common/mac_service.rs.
 include!("../../common/mac_service.rs");
 include!("../../common/random_hex.rs");
+include!("../../common/owner_stop.rs");
 include!("../../common/run_hidden.rs");
 // Ярлыки — через COM из самого мастера (1.2.3): PowerShell с Add-Type у Егора не смог.
 include!("../../common/shortcut_win.rs");
@@ -1156,6 +1157,20 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     let Some(serde_json::Value::Object(old)) = existing else { return fresh };
     let serde_json::Value::Object(new) = fresh else { return serde_json::Value::Object(old) };
     let mut out = old;
+    // Images use the relay independently of the voice provider. Preserve its
+    // address and loop credentials before the wizard updates the voice model.
+    let image_relay = if out.get("images").and_then(|v| v.get("enabled")).and_then(|v| v.as_bool()) == Some(true) {
+        out.get("relay").and_then(|v| v.as_object()).cloned().map(|mut relay| {
+            if relay.get("key").and_then(|v| v.as_str()).unwrap_or("").trim().is_empty()
+                && relay.get("enabled").and_then(|v| v.as_bool()) == Some(true) {
+                if let Some(key) = out.get("model").and_then(|v| v.get("key")).and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()) {
+                    relay.insert("key".into(), key.into());
+                }
+            }
+            relay.insert("enabled".into(), false.into());
+            serde_json::Value::Object(relay)
+        })
+    } else { None };
     // Свой движок владельца переживает обновление: см. `keep_own_runner`.
     let own_runner = keep_own_runner(
         out.get("runner").and_then(|v| v.as_str()),
@@ -1164,6 +1179,11 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
     );
     for k in WIZARD_KEYS {
         if let Some(v) = new.get(k) {
+            // The wizard has no controls for storage/code locations. Updating
+            // its binaries must not point an existing agent at an empty default tree.
+            if (k == "tree" || k == "code") && out.get(k).and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty()) {
+                continue;
+            }
             if k == "model" {
                 continue; // ниже, по полям
             }
@@ -1189,13 +1209,17 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
         }
         out.insert("model".into(), serde_json::Value::Object(model));
     }
-    // Реле: появилось — ставим, провайдер сменился — убираем.
+    // A non-relay voice still needs the owner's auxiliary image relay.
     match new.get("relay") {
         Some(v) => {
             out.insert("relay".into(), v.clone());
         }
         None => {
-            out.remove("relay");
+            if let Some(relay) = image_relay {
+                out.insert("relay".into(), relay);
+            } else {
+                out.remove("relay");
+            }
         }
     }
     // Telegram: визард владеет только двумя полями и только когда их заполнили —
@@ -1726,8 +1750,13 @@ pub fn setup_from_installed(cfg: &serde_json::Value, soul: &str, dir: &str) -> O
 /// правила — в `setup_from_installed`.
 pub fn setup_from_dir(dir: &Path) -> Option<Setup> {
     let cfg = read_json(&dir.join("helene.json"))?;
-    let soul = std::fs::read_to_string(dir.join("data").join("soul").join("SOUL.md")).unwrap_or_default();
+    let soul = std::fs::read_to_string(configured_tree(dir, &cfg).join("soul").join("SOUL.md")).unwrap_or_default();
     setup_from_installed(&cfg, &soul, &dir.display().to_string())
+}
+
+fn configured_tree(dir: &Path, cfg: &serde_json::Value) -> PathBuf {
+    let path = PathBuf::from(cfg.get("tree").and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()).unwrap_or("data"));
+    if path.is_absolute() { path } else { dir.join(path) }
 }
 
 pub fn installed_info() -> Option<Installed> {
@@ -2220,6 +2249,8 @@ fn service_op(_op: &str, _name: &str, _script: Option<&Path>) -> Result<(), Stri
 /// спрашиваем SCM сами — квитанция о фактическом состоянии, не «запустил».
 #[cfg(windows)]
 fn install_service(dir: &Path) -> String {
+    // Registration survives owner stop: the service is a keeper of the latch,
+    // and session-host checks it before starting children. Never clear it here.
     let script = dir.join("install-service.ps1");
     if !script.exists() || !dir.join("helene-svc.exe").exists() {
         return "missing".into();
@@ -3388,7 +3419,9 @@ fn restore_after_abort(dir: &Path, before: &Before) -> Option<String> {
             format!("служба не вернулась ({state}) — поставь её в настройках окна")
         });
     }
-    if before.running && !before.service {
+    if owner_stopped() {
+        notes.push("Остановлен владельцем; восстановление не запускает агента".into());
+    } else if before.running && !before.service {
         match crate::win::launch_app(&shell_exe(dir)) {
             Ok(()) => notes.push("окно открыто снова".into()),
             Err(e) => notes.push(format!("окно не открылось само: {e}")),
@@ -3416,6 +3449,17 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     use crate::payload::{Skip, Stop};
     use crate::tx::{Carry, StaticCarry, Tx};
     validate_setup(s)?;
+    // 06.10, 1.4.1: повторный запуск поверх ОТКРЫТОГО испытания запрещён. Второй процесс
+    // затирает состояние/слепок первого и ломает его сторожа (кейс Егора: клик обновления
+    // в 16:07 поверх испытания 1.4.0, начатого в 15:51 → «код отличается» и самооткат).
+    if let Some(open) = crate::trial::open_trial(&target_dir(s)?) {
+        return Err(format!(
+            "в этой установке уже идёт испытание обновления {} → {}. \
+             Дождись его конца (кнопка «Принять»/откат в окне) или закрой программу — \
+             сторож доведёт испытание сам. Повторный запуск сейчас сломает приёмку.",
+            open.from_version, open.to_version
+        ));
+    }
     let source = source().ok_or_else(|| {
         "в установщике нет поставки — файл скачался не целиком? Скачай Helene-<версия>-setup.exe заново".to_string()
     })?;
@@ -3491,8 +3535,21 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // 2. Снимок памяти перед обновлением.
     let mut backup: Option<String> = None;
     if had_install && dir.join("data").is_dir() {
-        say("backup", "Снимок памяти агента", None, None, true, true, progress);
-        match crate::backup::snapshot(&dir, &dir.join("backups"), &format!("before-{version}"), cancel) {
+        say("backup", "Снимок памяти агента", None, Some("Считаю файлы…".into()), true, true, progress);
+        let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        let mut on_backup = |p: crate::backup::BackupProgress| {
+            if p.files < p.total_files && last_emit.elapsed() < std::time::Duration::from_millis(120) { return; }
+            last_emit = std::time::Instant::now();
+            // Живые файлы могут поменять размер после metadata. До завершения
+            // всех файлов не показываем 100%; байты в подписи — фактически прочитанные.
+            let frac = if p.files == p.total_files { 1.0 }
+                else if p.total_bytes > 0 { (p.bytes as f64 / p.total_bytes as f64).min(0.99) }
+                else { 0.0 };
+            say("backup", "Снимок памяти агента", Some(frac),
+                Some(format!("{} / {} файлов · {:.1} / {:.1} МБ", p.files, p.total_files,
+                    p.bytes as f64 / 1_048_576.0, p.total_bytes as f64 / 1_048_576.0)), true, false, progress);
+        };
+        match crate::backup::snapshot_with_progress(&dir, &dir.join("backups"), &format!("before-{version}"), cancel, &mut on_backup) {
             Ok((path, files)) => {
                 let gone = crate::backup::prune(&dir.join("backups"), "-before-", 10);
                 steps.push(Step {
@@ -3797,7 +3854,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         }
         let cfg = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
         write_atomic(&cfg_path, &(cfg + "\n"))?;
-        let soul_path = dir.join("data").join("soul").join("SOUL.md");
+        let soul_path = configured_tree(&dir, &merged).join("soul").join("SOUL.md");
         let soul_exists = std::fs::read_to_string(&soul_path).map(|t| !t.trim().is_empty()).unwrap_or(false);
         let mut note = existing.as_ref().map(|_| "настройки обновлены, прежние решения сохранены".to_string());
         if let Some(runner) = merged.get("runner").and_then(|v| v.as_str()) {
@@ -3869,8 +3926,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                 .and_then(|p| p.get("version").and_then(|v| v.as_str()).map(str::to_string))
                 .unwrap_or_default();
             say("carry", "Переношу правки агента в его коде", None, None, false, false, progress);
-            let (step, _) = carry_agent_code(&dir, &from, &from_version, &version);
+            let (step, report) = carry_agent_code(&dir, &from, &from_version, &version);
             steps.push(step);
+            if agent_code.is_null() { agent_code = report; }
         }
     }
 
@@ -3931,11 +3989,14 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // испытание: агент проверяет себя в новой версии делом, «сломано» или молчание — откат.
     // Та же версия поверх (починка, смена решений) — правки перенесены выше, а испытывать
     // нечего: «1.2.5 → 1.2.5» агенту на полчаса было бы странной запиской.
-    if trial_ready && old_version != version {
+    if trial_ready {
         let from = if old_version.is_empty() { "прежняя".to_string() } else { old_version.clone() };
         prune_kept_programs(&dir);
         match tx.commit_keep(&crate::trial::kept_path(&dir, &from)) {
             Ok(kept) => {
+                // Слепок кода снимается ПОСЛЕ переноса правок агента (шаг 7б): перенесённое —
+                // часть установки; сверка на приёмке ловит всё, что изменилось уже в испытании.
+                let checked = crate::trial::collect_code_hashes(&dir).unwrap_or_else(|_| manifest.code_sha256.clone());
                 crate::trial::begin(&dir, crate::trial::Begin {
                     from_version: &old_version,
                     to_version: &version,
@@ -3947,6 +4008,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                         StaticPlan::Fresh => "fresh",
                     },
                     new_top: manifest.top.clone(),
+                    code_sha256: checked,
                     service: s.wants_service(),
                     scope: &scope,
                     agent_code,
@@ -3979,6 +4041,13 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
             }
         }
     } else {
+        // Even a repair without a trial must not discard its preimage over an
+        // unverified installed layout. Agent carry remains an explicit mismatch.
+        let skip: Vec<String> = agent_code.get("carried")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        crate::trial::verify_code_manifest_except(&dir, &manifest.code_sha256, &skip)?;
         let cleanup = tx.commit();
         if let Ok(mut v) = CLEANUP.lock() {
             v.push(cleanup);
@@ -4305,7 +4374,10 @@ fn set_registered_version_for(dir: &Path, version: &str) {
 fn set_registered_version_for(_dir: &Path, _version: &str) {}
 
 /// Открыть окно установленной программы (после отката).
+pub(crate) fn owner_stopped_pub() -> bool { owner_stopped() }
+
 pub(crate) fn launch_pub(dir: &Path) -> Result<(), String> {
+    if owner_stopped() { return Err("Агент остановлен владельцем: обновление не возобновляет его".into()); }
     let exe = shell_exe(dir);
     #[cfg(windows)]
     {
@@ -4987,6 +5059,24 @@ mod tests {
         assert!(setup_from_installed(&blank, "с", "d").is_none());
     }
 
+    #[test]
+    fn update_keeps_storage_paths_and_reads_the_current_constitution() {
+        let root = std::env::temp_dir().join(format!("helene-update-paths-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let data = root.join("owner-data");
+        std::fs::create_dir_all(data.join("soul")).unwrap();
+        std::fs::write(data.join("soul/SOUL.md"), "Конституция владельца").unwrap();
+        let old = serde_json::json!({"agent":{"name":"А"},"owner":{"name":"Б"},"tree":"owner-data","code":"authored-core","port":9999});
+        std::fs::write(root.join("helene.json"), old.to_string()).unwrap();
+        let setup = setup_from_dir(&root).unwrap();
+        assert_eq!(setup.constitution, "Конституция владельца");
+        let merged = merge_config(Some(old), serde_json::json!({"tree":"data","code":"tree","agent":{"name":"А"}}), &setup);
+        assert_eq!(merged["tree"],"owner-data"); assert_eq!(merged["code"],"authored-core"); assert_eq!(merged["port"],9999);
+        assert_eq!(configured_tree(&root,&merged),data);
+        let absolute = serde_json::json!({"tree":data});
+        assert_eq!(configured_tree(&root,&absolute),data);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// ⚠⚠ Обновление возвращало штатный движок поверх своего.
     ///
     /// Живой случай 20.09.2026 (Mac, Сергей): его агент жил на собственном
@@ -5431,17 +5521,24 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn copy_replaces_files_with_a_new_inode() {
+        use std::io::Read;
         use std::os::unix::fs::MetadataExt;
         let src = temp_dir("ino-src");
         let dst = temp_dir("ino-dst");
         put(&src, "bin/helene", "v1");
         copy_dir_skip(&src, &dst, &[], &[]).unwrap();
+        // Держим старый исполняемый файл открытым: без этого файловая система
+        // вправе повторно выдать освобождённый inode, хотя файл заменён верно.
+        let mut old_reader = std::fs::File::open(dst.join("bin/helene")).unwrap();
         let before = std::fs::metadata(dst.join("bin/helene")).unwrap().ino();
         put(&src, "bin/helene", "v2");
         copy_dir_skip(&src, &dst, &[], &[]).unwrap();
         let after = std::fs::metadata(dst.join("bin/helene")).unwrap();
         assert_ne!(after.ino(), before, "файл переписан в тот же inode");
         assert_eq!(std::fs::read_to_string(dst.join("bin/helene")).unwrap(), "v2");
+        let mut old_bytes = String::new();
+        old_reader.read_to_string(&mut old_bytes).unwrap();
+        assert_eq!(old_bytes, "v1", "открытый читатель должен сохранить прежний файл");
         let _ = std::fs::remove_dir_all(&src);
         let _ = std::fs::remove_dir_all(&dst);
     }
@@ -5511,6 +5608,26 @@ mod tests {
         let s = setup_for("api");
         let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
         assert!(out.get("relay").is_none());
+    }
+
+    #[test]
+    fn merge_keeps_image_relay_when_voice_is_glm() {
+        let s = setup_for("anthropic");
+        for (enabled, explicit_key) in [(false, true), (true, false)] {
+            let mut old = serde_json::json!({
+                "images": {"enabled": true, "quality": "high"},
+                "relay": {"enabled": enabled, "port": 5129, "instructions": "owner-choice"},
+                "model": {"framework": "openai", "key": "legacy-loop"},
+            });
+            if explicit_key { old["relay"]["key"] = "image-loop".into(); }
+            let out = merge_config(Some(old), config_json(&s, None, RELAY_PORT), &s);
+            assert_eq!(out["relay"]["enabled"], false);
+            assert_eq!(out["relay"]["port"], 5129);
+            assert_eq!(out["relay"]["instructions"], "owner-choice");
+            assert_eq!(out["relay"]["key"], if explicit_key { "image-loop" } else { "legacy-loop" });
+            assert_eq!(out["model"]["framework"], "anthropic");
+            assert_eq!(out["images"]["quality"], "high");
+        }
     }
 
     /// Адрес обновлений: без него окно отказывает всегда, а умолчания не было

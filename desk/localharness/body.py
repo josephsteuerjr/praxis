@@ -123,13 +123,17 @@ BODY_EXE = exe_name("helene-body")
 #: CoreGraphics). На прочих POSIX его нет: ничего не поднимается, секции тела в
 #: снимке нет (`runner._computer_state` → None), тул `computer` снимается из
 #: набора. Та же правда со стороны каталога — `modes.HAS_COMPUTER`.
-HAS_BODY = os.name == "nt" or sys.platform == "darwin"
+#: С 28.09 — и на Linux (X11: окна, ввод, снимок; AT-SPI: дерево окна).
+HAS_BODY = os.name == "nt" or sys.platform == "darwin" or sys.platform.startswith("linux")
 #: Спрашивать ли у тела `desktop.status` ради разрешений системы (TCC): только
 #: там, где они есть. На Windows проба остаётся одной — `body.status`.
-ASKS_TCC = sys.platform == "darwin"
+#: На Linux разрешений TCC нет, но `desktop.status` тела говорит то же самое по сути:
+#: есть ли X-сервер, Wayland ли это, включена ли доступность, — и подсказки владельцу.
+#: Поэтому проба та же (`tcc` там `None`, `hints` и `platform` — есть).
+ASKS_TCC = sys.platform == "darwin" or sys.platform.startswith("linux")
 #: Имя устройства, когда у машины нет имени: как в умолчании самого клиента
 #: дерева на Windows и своё на Mac.
-DEFAULT_DEVICE = "windows-pc" if os.name == "nt" else "mac"
+DEFAULT_DEVICE = "windows-pc" if os.name == "nt" else ("mac" if sys.platform == "darwin" else "linux")
 #: Снимок для окна и телефона (сторож пишет его раз в несколько секунд).
 STATE_FILE = ("memory", ".state", "body.json")
 #: Токен устройства для ОКНА, когда движок поднят службой (macOS, §6 плана
@@ -150,7 +154,9 @@ def under_service() -> bool:
     значило бы менять проверенное поведение ради платформы, которой это не
     касается.
     """
-    return sys.platform == "darwin" and os.environ.get("HELENE_SERVICE") == "1"
+    # Linux (28.09): служба systemd ставит ту же переменную (`common/linux_service.rs`),
+    # и у процесса вне сеанса так же нет ни X-сервера, ни шины доступности.
+    return (sys.platform == "darwin" or sys.platform.startswith("linux")) and os.environ.get("HELENE_SERVICE") == "1"
 
 _CREATE_NO_WINDOW = 0x08000000
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -1276,6 +1282,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         # врали слова. Схему правит describe_for_mac, результаты — здесь.
         if sys.platform == "darwin" and isinstance(out, str):
             return mac_result_text(out)
+        if sys.platform.startswith("linux") and isinstance(out, str):
+            return linux_result_text(out)
         return out
 
     computer._helene_body = True
@@ -1285,6 +1293,9 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     if sys.platform == "darwin":
         describe_for_mac(agent_mod)
         speak_mac(agent_mod)
+    elif sys.platform.startswith("linux"):
+        describe_for_mac(agent_mod, texts=_LINUX_TOOL_TEXTS, platform="Linux")
+        speak_linux(agent_mod)
     log.info("тело: рука computer подключена — %s", windows_truth())
 
 
@@ -1363,7 +1374,7 @@ def mac_result_text(text: str) -> str:
     return text
 
 
-def results_for_mac(agent_mod) -> bool:
+def results_for_mac(agent_mod, say=None) -> bool:
     """`body_client.state_line` дерева — словами macOS. -> обёртка поставлена этим вызовом.
 
     `computer action=status` возвращает эту строку как есть, а рука зовёт её по имени
@@ -1374,9 +1385,11 @@ def results_for_mac(agent_mod) -> bool:
     if not callable(fn) or getattr(fn, "_helene_mac", False):
         return False
 
+    say = say or mac_result_text
+
     def state_line(*args, **kwargs):
         out = fn(*args, **kwargs)
-        return mac_result_text(out) if isinstance(out, str) else out
+        return say(out) if isinstance(out, str) else out
 
     state_line._helene_mac = True
     state_line.__wrapped__ = fn
@@ -1389,7 +1402,7 @@ def results_for_mac(agent_mod) -> bool:
     if callable(hand) and not getattr(hand, "_helene_mac", False):
         def computer(*args, **kwargs):
             out = hand(*args, **kwargs)
-            return mac_result_text(out) if isinstance(out, str) else out
+            return say(out) if isinstance(out, str) else out
 
         computer._helene_mac = True
         computer.__wrapped__ = hand
@@ -1422,7 +1435,7 @@ def _mac_walk(node, say=None) -> None:
 _MAC_TOOL_TEXTS = {"computer": mac_tool_text, "computer_access": mac_access_tool_text}
 
 
-def describe_for_mac(agent_mod) -> int:
+def describe_for_mac(agent_mod, texts=None, platform: str = "macOS") -> int:
     """Поправить описания тулов `computer` и `computer_access` во всех списках дерева.
 
     Правится ЗАГРУЖЕННЫЙ модуль, не файл: дерево — код Праксис, его файлы не
@@ -1438,14 +1451,14 @@ def describe_for_mac(agent_mod) -> int:
         for tool in lst:
             if not isinstance(tool, dict) or id(tool) in seen:
                 continue
-            say = _MAC_TOOL_TEXTS.get(tool.get("name"))
+            say = (texts or _MAC_TOOL_TEXTS).get(tool.get("name"))
             if say is None:
                 continue
             seen.add(id(tool))
             _mac_walk(tool, say)
     if seen:
-        log.info("тело: описания тулов computer/computer_access переведены на слова macOS "
-                 "(схем: %d)", len(seen))
+        log.info("тело: описания тулов computer/computer_access переведены на слова %s "
+                 "(схем: %d)", platform, len(seen))
     return len(seen)
 
 
@@ -1498,7 +1511,7 @@ def mac_owner_text(text: str) -> str:
     return text
 
 
-def pointers_for_mac(agent_mod) -> int:
+def pointers_for_mac(agent_mod, say=None) -> int:
     """Указатель руки `computer` — в обоих словарях дерева. -> сколько строк тронуто.
 
     `HAND_PURPOSE` — русский оригинал у самого дерева; `tool_text_en.POINTER_PURPOSE` —
@@ -1514,14 +1527,14 @@ def pointers_for_mac(agent_mod) -> int:
             continue
         old = table.get("computer")
         if isinstance(old, str):
-            new = mac_pointer_text(old)
+            new = (say or mac_pointer_text)(old)
             if new != old:
                 table["computer"] = new
                 touched += 1
     return touched
 
 
-def owner_words_for_mac(agent_mod) -> bool:
+def owner_words_for_mac(agent_mod, say=None) -> bool:
     """Блок владельца в кадре — словами macOS. -> обёртка поставлена этим вызовом.
 
     Текст блока — литерал внутри сборки промпта, снаружи его не поправить. Но
@@ -1541,9 +1554,11 @@ def owner_words_for_mac(agent_mod) -> bool:
             return False
         probe, hops = getattr(probe, "__wrapped__", None), hops + 1
 
+    words = say or mac_owner_text
+
     def mac_mark(name, zone, kind, text, *args, **kwargs):
         if name == OWNER_TOOLS_MARK and isinstance(text, str):
-            text = mac_owner_text(text)
+            text = words(text)
         return mark(name, zone, kind, text, *args, **kwargs)
 
     mac_mark._helene_mac = True
@@ -1563,4 +1578,100 @@ def speak_mac(agent_mod) -> dict:
     done = {"pointers": pointers_for_mac(agent_mod), "owner": owner_words_for_mac(agent_mod),
             "results": results_for_mac(agent_mod)}
     log.info("тело: указатель руки, блок владельца и строка состояния — словами macOS (%s)", done)
+    return done
+
+
+# --------------------------------------------------------------------------- #
+#  Linux (порт 28.09): те же места, что у macOS, — словами Linux
+# --------------------------------------------------------------------------- #
+#
+# Схема тула `computer`, указатель руки, блок владельца в кадре и строки результатов у
+# дерева написаны под Windows («PowerShell», «UI Automation», «Windows body»). На Linux
+# тело то же по глаголам, но механизмы другие: bash вместо PowerShell (`process.rs`),
+# X-сервер вместо Win32, AT-SPI вместо UI Automation. Механика — macOS-овская (подстроки,
+# загруженный модуль, идемпотентно); словари — свои. Стенд `tests/t_tool_text_linux.py`
+# краснеет на каждую пару, которой в живом дереве больше нет.
+
+LINUX_TOOL_TEXT: tuple[tuple[str, str], ...] = (
+    ("Use the connected Windows computer", "Use the connected computer (Linux)"),
+    ("run/poll/stop manage PowerShell processes", "run/poll/stop manage shell processes (bash)"),
+    ("native interactive-desktop hands (no Office COM)", "native desktop hands (X11 and AT-SPI)"),
+    ("coding path on Windows (no wcode proxy task needed; receipts bind to your current run "
+     "automatically)", "coding path on this computer (receipts bind to your current run automatically)"),
+    ("; .ps1/.psm1/.psd1 with non-ASCII text get a UTF-8 BOM so PowerShell 5.1 parses them", ""),
+    ("returns the UI Automation control tree", "returns the AT-SPI accessibility tree"),
+    ("It goes through UI Automation patterns", "It goes through AT-SPI actions and interfaces"),
+    ("many controls (WinForms TextBox) select all text when focus arrives with the window",
+     "some controls select all text when focus arrives with the window"),
+    ("one Win32 notch", "one wheel notch"),
+)
+
+LINUX_ACCESS_TOOL_TEXT: tuple[tuple[str, str], ...] = (
+    ("Owner-only root of trust for Windows access",
+     "Owner-only root of trust for computer access"),
+)
+
+LINUX_RESULT_TEXT: tuple[tuple[str, str], ...] = (
+    ("Windows body", "Body (Linux)"),
+    ("desktop недоступен из Session 0",
+     "рабочего стола у этого процесса нет — он вне графического сеанса (служба)"),
+    ("(UI Automation tree with names, values and centre coordinates)",
+     "(AT-SPI tree with names, values and centre coordinates)"),
+    ("UI Automation tree", "AT-SPI tree"),
+)
+
+LINUX_POINTER_TEXT: tuple[tuple[str, str], ...] = (
+    ("Windows-компьютер Егора", "компьютер владельца (Linux)"),
+    ("Yegor's Windows computer", "the owner's Linux computer"),
+    ("PowerShell", "bash"),
+)
+
+LINUX_OWNER_TEXT: tuple[tuple[str, str], ...] = (
+    ("The Windows PC is your DIRECT body", "This Linux computer is your DIRECT body"),
+    ("run/poll/stop PowerShell, observe files and screen",
+     "run/poll/stop shell (bash) processes, observe files and screen"),
+    # Прежняя третья пара («…spawning coding_agent subagents on Windows still goes
+    # through it. The PC has no LLM…») умерла изданием 1.3.x: пассаж про устаревший
+    # keyhole `coding_session(scope='windows')` вышел из блока владельца целиком.
+    # Словарь следует живому дереву — мёртвых пар не держим (t_tool_text_linux).
+)
+
+
+def _replace_all(text: str, pairs: tuple[tuple[str, str], ...]) -> str:
+    for old, new in pairs:
+        text = text.replace(old, new)
+    return text
+
+
+def linux_tool_text(text: str) -> str:
+    """Текст схемы `computer` словами Linux. Чистая функция, идемпотентна."""
+    return _replace_all(text, LINUX_TOOL_TEXT)
+
+
+def linux_access_tool_text(text: str) -> str:
+    return _replace_all(text, LINUX_ACCESS_TOOL_TEXT)
+
+
+def linux_result_text(text: str) -> str:
+    """Результат руки `computer` словами Linux. Чистая функция, идемпотентна."""
+    return _replace_all(text, LINUX_RESULT_TEXT)
+
+
+def linux_pointer_text(text: str) -> str:
+    return _replace_all(text, LINUX_POINTER_TEXT)
+
+
+def linux_owner_text(text: str) -> str:
+    return _replace_all(text, LINUX_OWNER_TEXT)
+
+
+_LINUX_TOOL_TEXTS = {"computer": linux_tool_text, "computer_access": linux_access_tool_text}
+
+
+def speak_linux(agent_mod) -> dict:
+    """Указатель руки, блок владельца и строка состояния — словами Linux (как `speak_mac`)."""
+    done = {"pointers": pointers_for_mac(agent_mod, say=linux_pointer_text),
+            "owner": owner_words_for_mac(agent_mod, say=linux_owner_text),
+            "results": results_for_mac(agent_mod, say=linux_result_text)}
+    log.info("тело: указатель руки, блок владельца и строка состояния — словами Linux (%s)", done)
     return done

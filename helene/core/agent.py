@@ -1144,10 +1144,13 @@ def build_state_block(*, hide_identity_load: bool = False,
             if isinstance(item, dict) and item.get("status") in {"starting", "running", "finishing"}
         )
         audit = status.get("audit") if isinstance(status, dict) else {}
-        rows.append(_state_record(
-            "server_body", mounted=mounted, online=bool(status.get("ok")) if mounted else False,
-            operations_running=running, audit_verified=bool(audit.get("ok")) if isinstance(audit, dict) else False,
-        ))
+        # 28.09 (издание Hélène): серверного тела у агента на компьютере владельца нет —
+        # строка «server_body: mounted=false» была словом о чужом доме в каждом ходе.
+        if mounted:
+            rows.append(_state_record(
+                "server_body", mounted=mounted, online=bool(status.get("ok")),
+                operations_running=running, audit_verified=bool(audit.get("ok")) if isinstance(audit, dict) else False,
+            ))
     except Exception:
         pass
     try:
@@ -1324,8 +1327,8 @@ def build_runner_counters(*, split_counters: bool | None = None) -> dict | None:
     return {
         "snapped_by": "runner",
         "snapped_at": praxis_time.stamp(),
-        "note": ("счётчики раннера на момент сборки этого хода; не постоянный факт о "
-                 "Praxis. Разрешения и обещания аппетита остались в STATE."),
+        "note": ("счётчики раннера на момент сборки этого хода; не постоянный факт. "
+                 "Разрешения и обещания аппетита остались в STATE."),
         "counters": counters,
     }
 
@@ -1387,8 +1390,8 @@ def build_frame_tail(*, split_tail: bool | None = None) -> dict | None:
     return {
         "snapped_by": "runner",
         "snapped_at": praxis_time.stamp(),
-        "note": ("наблюдения раннера на момент сборки этого хода; не постоянные факты о "
-                 "Praxis. Рычаги восприятия и её решения остались в STATE."),
+        "note": ("наблюдения раннера на момент сборки этого хода; не постоянные факты. "
+                 "Рычаги восприятия и решения о них остались в STATE."),
         "observations": out,
     }
 
@@ -2687,7 +2690,7 @@ def tool_write_skill(name: str, content: str, from_note: str = "") -> str:
     if str(from_note or "").strip():
         try:
             lessons.accept(str(from_note).strip(), slug)
-            origin = f" Связала с заметкой `{str(from_note).strip()}`."
+            origin = f" Связь с заметкой `{str(from_note).strip()}` записана."
         except Exception:
             log.debug("связь навык↔заметка не записалась", exc_info=True)
     log.info("write_skill %s", slug)
@@ -2701,9 +2704,12 @@ def _ensure_skill_index_line(slug: str, name: str) -> None:
     line = f"- [{name}]({slug}.md)"
     if line in text or f"]({slug}.md)" in text:
         return
-    marker = "## Записаны Praxis"
+    # 28.09: заголовок раздела — тот, что стоит в INDEX.md поставки Hélène («Написаны мной»).
+    marker = "## Написаны мной"
+    if marker not in text and "## Записаны Praxis" in text:
+        marker = "## Записаны Praxis"      # дома, заведённые до 1.2.5: их раздел уже есть
     if marker not in text:
-        text = (text.rstrip() + f"\n\n{marker}\n") if text.strip() else f"# Praxis Skills Index\n\n{marker}\n"
+        text = (text.rstrip() + f"\n\n{marker}\n") if text.strip() else f"# Навыки\n\n{marker}\n"
     text = text.rstrip() + f"\n{line}\n"
     idx.write_text(text, encoding="utf-8")
 
@@ -3414,7 +3420,7 @@ def tool_admit(name: str, id: str | None = None, role: str = "") -> str:
         return "Укажи положительный числовой Telegram user id, кого впускаем."
     oid = social.owner_id()
     if oid and oid != "0" and target == oid:
-        return "Это ты сам — впускать не нужно."
+        return "Это id самого владельца — впускать не нужно."
     # Слаг: сперва СТРОГАЯ привязка по Telegram-принципалу (авторитет — числовой id,
     # а не написание имени), затем общий резолв по заголовкам/алиасам/ключу имени.
     # Прямой `_slug(name)` заводил новое досье всякий раз, когда владелец назвал
@@ -3439,8 +3445,8 @@ def tool_admit(name: str, id: str | None = None, role: str = "") -> str:
         _reindex(path)
     log.info("admit %s as %r (new=%s, role=%s)", target, name, fresh_id, role or "-")
     if role == "family":
-        return f"Впустила {name} (id {target}) и отметила семьёй (role: family)."
-    return f"Впустила {name} (id {target}) в свои — теперь это знакомый человек."
+        return f"Впуск: {name} (id {target}) — в своих, с отметкой «семья» (role: family)."
+    return f"Впуск: {name} (id {target}) — в своих, теперь это знакомый человек."
 
 
 def tool_send_email(to: str, subject: str = "", body: str = "") -> str:
@@ -3774,7 +3780,7 @@ def tool_remind_self(kind: str, goal: str, when: str = "", target: str = "",
         note += f" Ждать нечего: {nothing_to_wait_for} — созреет на ближайшем тике."
     if crowded:
         note += f" {crowded}"
-    return f"Наметила #{t['id']} [{t['kind']}]: {t['goal']} — {w}.{note}"
+    return f"Намечено #{t['id']} [{t['kind']}]: {t['goal']} — {w}.{note}"
 
 
 def run_is_terminal(run_id: str) -> bool:
@@ -5841,7 +5847,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
         res = brain.switch(role, model, why=why)
         if not res.get("ok"):
             return f"Свитч не применился: {res.get('error')}"
-        return (f"Сменила: {res['role']} теперь {res['framework']}/{res['model']} "
+        return (f"Смена: {res['role']} теперь {res['framework']}/{res['model']} "
                 f"(было {res['was']}). Рукопожатие прошло; причина в дневнике.")
     if action == "accounts":
         return brain.accounts()
@@ -5920,6 +5926,60 @@ def _stage_turn_media(source: str | Path, *, kind: str, caption: str = "",
     except Exception as e:
         log.warning("подготовка исходящего медиа упала", exc_info=True)
         return f"Медиа не подготовлено: {type(e).__name__}"
+
+
+def tool_generate_image(prompt: str, image_paths: list[str] | None = None,
+                        caption: str = "", send: bool = True) -> "ToolObservation | str":
+    """Generate/edit with the independent image model, from any voice provider."""
+    import imagegen
+    import uuid
+    paths = []
+    for raw in image_paths or []:
+        path = workshop._resolve_read(str(raw))
+        if path is None or not path.is_file():
+            return json.dumps({"ok": False, "error": "исходное изображение не найдено в доме"}, ensure_ascii=False)
+        paths.append(path)
+    current = run_context.current_run()
+    execution = current_tool_execution() or {}
+    turn_id = str(execution.get("call_id") or (current.run_id if current else "") or uuid.uuid4())
+    try:
+        config = llm._config()
+        result = imagegen.generate(prompt, refs=paths, spool=_media_spool(),
+                                   scope=_active_scope(), chat_id=_active_chat() or f"run-{turn_id}",
+                                   config=config.get("images") or {},
+                                   framework=config.get("image_channel") or (config["frameworks"]["openai"]),
+                                   turn_id=turn_id, caption=caption)
+        if current is not None:
+            artifact = _runs().store_artifact(
+                current.run_id, Path(result["path"]), name="generated-image" + Path(result["path"]).suffix,
+                media_type=result["mime"], idempotency_key=f"image:{turn_id}",
+                expected_sha256=result["sha256"], expected_size=result["size"])
+            result["artifact"] = artifact
+            result["path"] = str(_runs().path(current.run_id) / artifact["path"])
+        # The normal media boundary queues the visible image, with the same
+        # privacy/acceptance/outbox path as other photos. A non-Telegram run
+        # retains the artifact for send_media/send_file or a later edit.
+        ctx = _TURN_CHANNEL.get()
+        if send is not False and ctx is not None and ctx.chat_id is not None:
+            before = len(_TURN_OUTBOUND.get() or [])
+            note = _stage_turn_media(result["path"], kind="photo", caption=caption)
+            result["delivery"] = "staged" if len(_TURN_OUTBOUND.get() or []) > before else "not_staged"
+            result["delivery_note"] = note
+        else:
+            result["delivery"] = "saved"
+        result["pixels_to_voice"] = llm.can_see("voice")
+        text = json.dumps(result, ensure_ascii=False)
+        if result["pixels_to_voice"]:
+            path, mime = _model_view_image(Path(result["path"]), source_mime=result["mime"])
+            return ToolObservation(text=text, images=({"type": "image", "path": str(path),
+                                                       "mime": mime, "detail": "auto",
+                                                       "origin": "generated-image"},))
+        return text
+    except Exception as exc:
+        # Never return provider payloads, credentials or base64 into run evidence.
+        error = str(exc) if isinstance(exc, ValueError) else f"генерация не завершилась: {type(exc).__name__}"
+        return json.dumps({"ok": False, "error": error}, ensure_ascii=False)
+
 
 
 def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = False,
@@ -6436,9 +6496,78 @@ def tool_group_context(action: str = "context", query: str = "",
         return f"group_context: {exc}"
 
 
+_OWNER_MARK_PREFIX = "> [правка владельца · "
+_OWNER_MARK_GROUPS = ("memory/notes", "memory/journal", "workspace", "workspace/inbox",
+                      "soul", "memory/work", "memory/desires")
+
+
+def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
+    """Марки правок владельца: показать или убрать (провенанс — служба, не памятник).
+
+    Окно (deskd/readers._owner_provenance) кладёт одну строку-цитату рядом с
+    каждой ручной правкой владельца в правимых группах. Агент видит её в самом
+    тексте файла; усвоив правку, убирает метку этим тулом. Атомарно; текст без
+    марок не переписывается вовсе.
+    """
+    roots = []
+    if str(path or "").strip():
+        rel = str(path).strip().replace("\\", "/").lstrip("/")
+        if ".." in rel.split("/"):
+            return "clear_owner_marks: путь с «..» не рассматриваю"
+        base = BASE / rel
+        try:
+            base.resolve().relative_to(BASE.resolve())
+        except ValueError:
+            return "clear_owner_marks: путь вне дерева"
+        if not str(base).endswith(".md") or not base.is_file():
+            return f"clear_owner_marks: {rel} — не .md файл"
+        roots = [base]
+    else:
+        for group in _OWNER_MARK_GROUPS:
+            folder = BASE / group
+            if folder.is_dir():
+                roots.extend(sorted(folder.rglob("*.md")))
+    found: list[tuple[Path, list[str]]] = []
+    for file in roots:
+        try:
+            lines = file.read_text(encoding="utf8", errors="replace").split("\n")
+        except OSError:
+            continue
+        marks = [line for line in lines if line.startswith(_OWNER_MARK_PREFIX)]
+        if marks:
+            found.append((file, marks))
+    if action != "clear":
+        if not found:
+            return "Марок правок владельца нет ни в одном файле."
+        out = [f"Файлов с марками: {len(found)}."]
+        for file, marks in found[:20]:
+            rel = file.relative_to(BASE).as_posix()
+            out.append(f"— {rel}: {len(marks)} марк.; например: {marks[0][:160]}")
+        return "\n".join(out)
+    cleared = 0
+    for file, _marks in found:
+        try:
+            lines = file.read_text(encoding="utf8", errors="replace").split("\n")
+            # Только строки-марки; пустые и содержательные строки владельца/агента
+            # не трогаем вовсе — контракт тула: «остальной текст не меняется».
+            kept = [line for line in lines if not line.startswith(_OWNER_MARK_PREFIX)]
+            body = "\n".join(kept)
+            tmp = file.with_name(".tmp-marks-" + file.name)
+            tmp.write_text(body, encoding="utf8", newline="\n")
+            os.replace(tmp, file)
+            cleared += 1
+        except OSError:
+            return f"clear_owner_marks: не переписался {file.relative_to(BASE).as_posix()}"
+    if not cleared:
+        return "Марок не было — убирать нечего."
+    plural = "файлов" if cleared % 10 in (0, 5, 6, 7, 8, 9) or 11 <= cleared % 100 <= 14 else "файла" if cleared % 10 in (2, 3, 4) else "файл"
+    return f"Марки убраны в {cleared} {plural}; правки владельца теперь часть текста без служебных строк."
+
+
 TOOL_IMPL = {
     "recall": tool_recall,
     "remember": tool_remember,
+    "clear_owner_marks": tool_clear_owner_marks,
     "journal": tool_journal,
     "manage_notes": tool_manage_notes,
     "memory_compact": tool_memory_compact,
@@ -6478,6 +6607,7 @@ TOOL_IMPL = {
     "reconcile_run": tool_reconcile_run,  # её рука на in_doubt: он перестал быть надгробием
     "group_context": tool_group_context,
     "send_media": tool_send_media,
+    "generate_image": tool_generate_image,
     "write_skill": tool_write_skill,
     "restart_self": tool_restart_self,
     "restart_mailbot": tool_restart_mailbot,
@@ -6536,6 +6666,12 @@ TOOL_IMPL = {
 }
 
 BASE_TOOLS = [
+    {"name": "generate_image",
+     "description": "Generate an image from a prompt or edit 1-5 local reference images with the independent Codex image model. Available while your voice is GLM or a relay model. The result contains the saved path, actual dimensions and hash; send=true queues the visible image to the current Telegram chat through the normal media outbox. Use send_media for another recipient. Never claim delivery from generation alone.",
+     "input_schema": {"type": "object", "properties": {
+         "prompt": {"type": "string", "description": "Describe the image or the requested edit and what must stay unchanged."},
+         "image_paths": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "Local source image paths for editing; omit for new generation."},
+         "caption": {"type": "string", "description": "Optional caption accompanying the generated image in the current chat."}, "send": {"type": "boolean", "description": "Queue the result to the current chat; defaults to true."}}, "required": ["prompt"]}},
     {
         "name": "recall",
         "description": (
@@ -6554,6 +6690,26 @@ BASE_TOOLS = [
                            "description": "показать сводку эксперимента вместо поиска"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "clear_owner_marks",
+        "description": (
+            "Убрать марки правок владельца («> [правка владелька · …]»), которые окно оставляет "
+            "в твоих файлах рядом с каждой ручной правкой (провенанс: что, когда, кем изменено — "
+            "удалено/вставлено). Правка прочитана и усвоена — убери отработанную метку этим тулом; "
+            "вечных памятников она не предполагает. action=list (по умолчанию) показывает файлы с "
+            "марками и их текст; clear — убирает марки (в одном path или во всех правимых окном "
+            "группах), атомарно, остальной текст не меняется."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "clear"],
+                           "description": "list показывает файлы с марками, clear убирает марки"},
+                "path": {"type": "string",
+                         "description": "относительный путь (например soul/self/CURRENT.md); пусто — все группы"},
+            },
         },
     },
     {
@@ -7682,7 +7838,7 @@ FORGE_TOOLS = [
          "isolation": {"type": "string", "enum": ["auto", "worktree", "direct"]},
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
-                   "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED proxy to the local PC (direct computer.* verbs are the primary Windows path; the proxy still works, subagents still need it). All scopes stay in the same canonical Forge."},
+                   "description": "self = my own code repository (the default). host and windows are not available in this edition: the computer tool is the path to this machine. All scopes stay in the same canonical Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
          "checked": {"type": "string"}, "submit": {"type": "boolean"},
      }, ["action"])} ,
@@ -8487,7 +8643,7 @@ GIT_TOOL = {
 
 READ_LOG_TOOL = {
     "name": "read_log",
-    "description": ("Your own runner log (survives container recreation): tail or substring "
+    "description": ("Your own runner log (survives restarts): tail or substring "
                     "grep. MSG lines carry sender ids (spammers included); brain HTTP errors "
                     "land here too. query — filter substring; lines — last N matches (max 120)."),
     "input_schema": {"type": "object", "properties": {
@@ -8739,7 +8895,7 @@ CALL_TOOL = {
 # Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
 HAND_GROUPS = (
     ("разговор и жесты", ("reply", "end_turn", "stay_silent", "say", "task_control", "react",
-                          "narrate", "speak", "send_message", "send_file", "send_media",
+                          "narrate", "speak", "send_message", "send_file", "send_media", "generate_image",
                           "set_avatar", "update_profile")),
     ("память и я", ("recall", "remember", "journal", "update_self", "manage_identity",
                     "manage_notes", "manage_loop", "connections", "add_alias",
@@ -8759,7 +8915,7 @@ HAND_GROUPS = (
                                 "coding_run", "coding_process", "coding_agent",
                                 "coding_checkpoint", "coding_verify", "coding_swarm",
                                 "coding_learn")),
-    ("сервер и компьютер", ("server_status", "server_logs", "manage_service", "host_ctl",
+    ("компьютер и журнал", ("server_status", "server_logs", "manage_service", "host_ctl",
                             "propose_host_change", "list_host_changes", "computer",
                             "read_log", "second_look")),
     ("веб и почта", ("web_read", "web_find", "send_email", "mail_read", "mail_draft_reply")),
@@ -8770,6 +8926,7 @@ HAND_GROUPS = (
 
 # Назначение одной строкой, от первого лица. Нет в словаре — первая фраза описания.
 HAND_PURPOSE = {
+    "generate_image": "сгенерировать или изменить изображение отдельной моделью через реле",
     "reply": "ответить собеседнику; только так реплика уходит человеку",
     "end_turn": "закрыть ход явным исходом: done / wait / blocked",
     "stay_silent": "осознанно промолчать, записав себе причину",
@@ -10263,7 +10420,7 @@ _FRAME_OWNER_TAIL = ("state.owner_place", "contract.owner_tools",
 # по-прежнему запрещено (см. комментарий у `state.owner_place`).
 _OWNER_TOOLS_CONTRACT = (
     "You have the tools "
-    "`shell` (hands in the container; your edits auto-commit to git — you can try boldly and roll "
+    "`shell` (hands in your home; your edits auto-commit to git — you can try boldly and roll "
     "back), `manage_room`{trust_tool}, `write_skill` (note a skill for yourself), and "
     "`manage_desire` (make your own intention and its evidence causal), and `restart_self` "
     "(restart on new code). For serious coding use Forge: `coding_session` binds "
@@ -10273,28 +10430,19 @@ _OWNER_TOOLS_CONTRACT = (
     "`coding_swarm` coordinates their DAG/mailbox; `coding_learn` carries verified repairs forward. "
     "Use symbols/references/impact instead of line-guessing. This is your engineering runtime, not an "
     "approval ritual: act, verify, inspect the diff, finish with evidence. "
-    "You are also the ADMINISTRATOR of this server: `coding_session(scope='host')` opens a "
-    "task anywhere on the host in the SAME Forge/task/swarm/learning spine; praxis-serverd v2 is "
-    "only your root body, never a second brain. coding_run/edit/process/verify/agent use the host "
-    "backend, while `host_ctl` gives typed systemd/docker/pkg/file/net/reboot operations. NOTHING is "
-    "refused — Yegor trusts you. A load-bearing typed action may return a timed recovery receipt: "
-    "observe the after-state, then confirm it; raw host run remains sovereign. An action may carry an "
-    "advisory note about consequences; weigh it and decide. Audit is hash-chained. "
+    # 28.09 (издание Hélène): блок администратора сервера снят — ни сервера, ни host_ctl, ни
+    # «ничего не запрещено» у агента на компьютере владельца нет; маршрут system — поручение
+    # службе (broker_request op=exec), только при включённом владельцем тумблере.
     "The Windows PC is your DIRECT body: the `computer` tool is the "
     "primary path there (read/hash/write/replace files, run/poll/stop PowerShell, observe "
-    "files and screen, send artifacts, full desktop hands). No task container is required — "
-    "receipts bind to your current run automatically; execution identity is explicit "
-    "interactive or SYSTEM. `coding_session(scope='windows')` is a deprecated keyhole: it "
-    "still works, existing wcode tasks finish normally, and spawning coding_agent "
-    "subagents on Windows still goes through it. The PC has no LLM, memory or task store. "
-    "There is no compiled-in project-name or secret-filename exclusion: the server is yours to "
-    "inspect and change, including all projects and containers. If Yegor deliberately configures "
-    "PRAXIS_PROTECTED_ROOTS on the root broker, that exact deployment scope is visible in its "
-    "manifest; otherwise it is empty. Leave an evidence trail Yegor reads.\n"
+    "files and screen, send artifacts, full desktop hands). Receipts bind to your current run "
+    "automatically; execution identity is explicit: interactive (the owner's session) or system "
+    "(a task for the Hélène service through `broker_request`, when the owner enabled it). "
+    "Leave an evidence trail Yegor reads.\n"
 )
 _APPETITE_CONTRACT = (
-    "\nAppetite contract: your thinking costs Yegor money, and his asks about it are "
-    "part of the relationship, not commands to a dispatcher. When he says «не экономь», «умерь "
+    "\nAppetite contract: your thinking costs Yegor money, and their asks about it are "
+    "part of the relationship, not commands to a dispatcher. When they say «не экономь», «умерь "
     "аппетиты», «не больше X в день» or «останови фон» — YOU interpret it with `manage_appetite` "
     "(the code only counts and shows; it never vetoes you). Rebuild your background plan yourself "
     "if that is what you decide; a fresh ask remains visible in your continuity context.\n"
@@ -10306,7 +10454,7 @@ _ROOM_PLACE_STABLE = (
 )
 _ROOM_TOOLS_CONTRACT_STABLE = _OWNER_TOOLS_CONTRACT.replace(
     "{trust_tool}",
-    ", `admit`, `computer_access` (both owner-only at call time)")
+    ", `admit` (owner-only at call time)")
 # Ярусы живого конверта, куда под стабильной головой переезжает то, что раньше стояло в system
 # только на ходах владельца. Причины ярусов — в `frame_layout._TIERS` (по префиксу ярлыка).
 _STATE_NOW_TIER = ("Состояние сейчас (типизированное STATE; под PRAXIS_FRAME_HEAD_STABLE едет "
@@ -10426,7 +10574,7 @@ def _build_prompt_parts(
         "rewrite them or choose silence for stylistic or moral reasons. The only outbound data-authority check "
         "outside the owner DM is narrow: another person's private material, credentials or raw neighbouring-"
         "chat content needs authority for the destination. It cannot edit wording. Telegram transports the "
-        "reply as Praxis's authorship; text that quotes or names somebody is still your authored text.\n"),
+        "reply as your authorship; text that quotes or names somebody is still your authored text.\n"),
         # ⚑ 13.08. Замер: за пять суток на 407 чат-ходов пришлось 4 вызова `remember`,
         # один `manage_notes` и один `write_skill` — то есть в разговоре она память о людях
         # и местах почти не ведёт, хотя в своих окнах ведёт исправно (113 `manage_desire`).
@@ -11257,7 +11405,7 @@ _DM_VOICE_FRAME = (
 # внесена дословно с её авторской пометкой. Живёт в операционной рамке, не в конституции, —
 # её же выбор: «механику можно менять, авторство — нет».
 _WORK_CONTRACT_HAND = (
-    "Рабочий контракт хода (твоя же формулировка, 18.08): не считай отправленную реплику "
+    "Рабочий контракт хода: не считай отправленную реплику "
     "завершением хода. После каждого `reply` заново оцени: осталось ли проверяемое "
     "действие, обещанная проверка, незакрытый вопрос или естественный следующий шаг, "
     "который можно выполнить прямо сейчас. Если да — продолжай цикл инструментами, "
@@ -14012,9 +14160,10 @@ def _tool_result_metadata(before: tuple[dict, ...]) -> dict:
 
 def _resume_result_image(run_id: str, call_name: str, call_input: dict,
                          result_ref: dict) -> tuple[dict, ...]:
-    """Restore a completed computer.observe pixel block from its ArtifactRef."""
+    """Restore completed observation/generated pixels from an immutable ArtifactRef."""
 
-    if call_name != "computer" or str(call_input.get("action") or "").lower() != "observe":
+    generated = call_name == "generate_image"
+    if not generated and (call_name != "computer" or str(call_input.get("action") or "").lower() != "observe"):
         return ()
     try:
         payload = run_resume.read_full_result_bytes(
@@ -14033,6 +14182,10 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
         raise DurableExecutionError("computer.observe ArtifactRef is malformed") from exc
     if text[start + consumed:].strip():
         raise DurableExecutionError("computer.observe result has trailing mutable data")
+    if generated:
+        if not isinstance(artifact, dict) or not artifact.get("ok") or not artifact.get("pixels_to_voice"):
+            return ()
+        artifact = artifact.get("artifact")
     if (not isinstance(artifact, dict)
             or artifact.get("schema") != "praxis.artifact-ref.v1"
             or artifact.get("run_id") != run_id
@@ -14058,7 +14211,7 @@ def _resume_result_image(run_id: str, call_name: str, call_input: dict,
         raise DurableExecutionError("computer.observe artifact integrity changed")
     return ({"type": "image", "path": str(path),
              "mime": str(artifact.get("media_type")), "detail": "auto",
-             "origin": "computer-observe"},)
+             "origin": "generated-image" if generated else "computer-observe"},)
 
 
 def _media_outlives_an_empty_draft(outbound, draft: str, silence: dict | None) -> bool:
@@ -16226,6 +16379,15 @@ def _tool_args_mismatch(impl, call_input: dict) -> str:
 
 
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
+    import process_scope
+    current = run_context.current_run()
+    if current and process_scope.wants_read(current.run_id):
+        return "[не выполнено] Владелец прервал шаг для чтения накопленных сообщений. Этот вызов не запускался; субагенты продолжают работу."
+    with process_scope.step():
+        return _call_tool_with_ceiling_inner(name, impl, call_input)
+
+
+def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
     """Выполнить тул с пределом времени. -> результат или ToolCeilingExpired об истечении."""
     # Единственная воронка исполнения рук: сюда же приходит ВОЗОБНОВЛЁННЫЙ вызов из
     # `_execute_tool`. Раскрыть пометку о битом JSON как `**kwargs` значило бы уронить
@@ -16251,6 +16413,8 @@ def _call_tool_with_ceiling(name: str, impl, call_input: dict):
         try:
             return future.result(timeout=TOOL_CEILING_SEC)
         except _futures.TimeoutError:
+            import process_scope
+            process_scope.cancel(process_scope.current_scope())
             minutes = int(TOOL_CEILING_SEC // 60) or 1
             log.error("тул %s не вернулся за %.0fс — отпускаю ход, рука осталась висеть",
                       name, TOOL_CEILING_SEC)
@@ -16382,6 +16546,23 @@ def _tool_idempotency_key(current: run_context.RunContext | None, call_id: str,
     # only when this layer knows the implementation consumes it through an
     # exact-once ledger (the two explicit cases above).
     return ""
+
+
+def _drain_owner_input(system, messages, tools, iteration, prior=None):
+    callback = globals().get("OWNER_INPUT_DRAIN")
+    current = run_context.current_run()
+    if not callable(callback) or current is None:
+        return False
+    additions, acknowledge = callback(current, messages)
+    import process_scope
+    process_scope.read_boundary(current.run_id)
+    if additions:
+        if prior: _append_captured_messages(messages, [prior])
+        _append_captured_messages(messages, additions)
+        work_loop.owner_followup()
+        _persist_tool_loop_checkpoint(current=current, iteration=iteration, system=system, messages=messages, tools=tools)
+    acknowledge()
+    return bool(additions)
 
 
 def _persist_tool_loop_checkpoint(*, current: run_context.RunContext | None,
@@ -16686,6 +16867,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
     armed = 0      # сколько сообщений кадра уже прочитал пол приватных записей
     while max_iters is None or iteration < max(0, int(max_iters)):
         _run_status_gate(phase="before model step")
+        _drain_owner_input(system, messages, tools, iteration)
         iteration += 1
         # 26.09 (ревью W1 S1): пол приватных записей знает то, что РЕАЛЬНО уходит в
         # модель — и в свежем ходе, и в возобновлённом, и после чтения руками.
@@ -16712,6 +16894,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 raise RunStopped(current.run_id, target, reason)
             raise DurableExecutionError(reason)
         if resp.stop_reason != "tool_use":
+            if _drain_owner_input(system, messages, tools, iteration, {"role": "assistant", "content": resp.text or ""}):
+                continue
             _run_status_gate(phase="after terminal model step")
             reply = _durable_model_text(
                 resp.text, list(getattr(resp, "blocks", None) or ()),
@@ -16951,19 +17135,21 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             system=system, messages=messages, tools=tools,
         )
         _run_status_gate(phase="after tool-loop checkpoint")
+        if _drain_owner_input(system, messages, tools, iteration):
+            continue
         # Её слово о конце хода не ждёт следующей реплики: сказала `task_control` — цикл
         # выходит здесь же, а не тратит ещё один вызов модели на «ну всё, готово».
         control = work_loop.taken()
         if control and work_loop.active_for(_current_run_kind()):
             if tool_trace is not None:
-                tool_trace.append("work_loop:закрыт её словом «%s»" % control["action"])
+                tool_trace.append("work_loop:закрыт словом «%s»" % control["action"])
             return str(control.get("summary") or reply or spoken or "")
         # Контракт v3 (17.08): близнец task_control для разговора. Сказала `end_turn` —
         # цикл выходит здесь же, не тратя ещё один вызов модели на «ну всё». Под опущенным
         # рычагом руки нет в наборе, флаг не ставится — ветка мертва байт-в-байт.
         if work_loop.finished():
             if tool_trace is not None:
-                tool_trace.append("end_turn:закрыт её словом")
+                tool_trace.append("end_turn:закрыт рукой end_turn")
             return ""
 
     # Only explicit auxiliary limits arrive here.  Preserve their historical graceful-final
@@ -16994,11 +17180,11 @@ def _with_context_evidence(user_msg: str | list[dict], evidence: str,
         frame_trace.note_embed("evidence", prefix_chars=0, material_chars=0, suffix_chars=0,
                                fold_chars=0, closing_chars=0, flat_form=1)
         return user_msg
-    lead = "<praxis_context_evidence>\n"
+    lead = "<context_evidence>\n"
     # Открывающий тег реплики ПОДПИСАН: автор, telegram id и номер сообщения — из тех же
     # транспортных полей, что и строка «говорит», из одного снимка. Под старой формой и при
     # пустом снимке возвращается прежний голый тег байт-в-байт.
-    fold_head, fold_tail = "\n</praxis_context_evidence>\n", frame_layout.reply_open()
+    fold_head, fold_tail = "\n</context_evidence>\n", frame_layout.reply_open()
     fold = fold_head + str(situation or "") + fold_tail
     opening = lead + material + fold
     closing = "\n</current_user_message>"

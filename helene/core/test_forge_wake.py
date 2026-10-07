@@ -411,9 +411,11 @@ class TestTheLongStepLeaseIsCountedNotGuessed(unittest.TestCase):
         orig = forge.TASKS_DIR
         forge.TASKS_DIR = tmp / "tasks"
         self.addCleanup(setattr, forge, "TASKS_DIR", orig)
+        (forge.BASE / "workspace" / "lease-probe").mkdir(parents=True, exist_ok=True)
         (forge.TASKS_DIR / "code-s").mkdir(parents=True, exist_ok=True)
         (forge.TASKS_DIR / "code-s" / "task.json").write_text(json.dumps({
-            "id": "code-s", "goal": "цель", "root": str(tmp), "scope": "self",
+            "id": "code-s", "goal": "цель",
+            "root": str(forge.BASE / "workspace" / "lease-probe"), "scope": "self",
             "proposal_id": "p1", "status": "active",
             "created": dt.datetime.now(dt.timezone.utc).isoformat(),
         }), encoding="utf-8")
@@ -605,12 +607,15 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
         self.assertIn("/proc/999/cmdline", doubt, "сказано, чем посмотреть самой")
         self.assertIn("kill -TERM -999", doubt, "и как снять руками — это совет, не забор")
 
-    def test_where_nothing_can_be_read_the_old_behaviour_stays(self):
-        """Windows и уже умерший номер: метки не прочитать — судим как раньше, иначе
-        правка превратилась бы в забор там, где доказывать нечего."""
-        with mock.patch.object(forge, "_proc_started_at", lambda pid: ""):
-            self.assertEqual(forge._kill_identity(999, "старая-метка"), "")
-            self.assertEqual(forge._kill_identity(999, ""), "")
+    def test_unreadable_identity_never_authorizes_signal(self):
+        with mock.patch.object(forge, "_proc_started_at", lambda pid: ""), \
+             mock.patch.object(forge, "_RUNNERS", {}), \
+             mock.patch.object(forge.subprocess, "run") as run, \
+             mock.patch.object(forge.os, "killpg", create=True) as killpg:
+            self.assertIn("не трогаю", forge._kill_identity(999, "старая-метка"))
+            self.assertIn("не трогаю", forge._kill_tree(999))
+        run.assert_not_called()
+        killpg.assert_not_called()
 
     def test_no_signal_is_sent_when_identity_is_unproven(self):
         """Главное: отказ обязан случиться ДО сигнала, а не после."""
@@ -624,18 +629,22 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
 
     def test_the_escalation_window_is_covered_too(self):
         """Между TERM и KILL номер может уйти другому: наш умер, ядро отдало номер —
-        и добивающий SIGKILL прилетел бы постороннему."""
-        marks = iter(["моя", "чужая", "чужая"])          # умер сразу после TERM
+        и добивающий SIGKILL прилетел бы постороннему.
+
+        03.10: после перехода на process_scope у дерева убиения нет «голого» killpg
+        ВООБГЕ — ни TERM, ни KILL. Окно «номер ушёл другому» закрыто построением:
+        сигнал уходит только через живой job/group handle своего спавна. Стенд держит
+        новое правило: без собственного scope не летит НИ ОДИН сигнал, и отказ
+        говорит почему.
+        """
         killpg = mock.Mock()
-        with mock.patch.object(forge, "_proc_started_at", lambda pid: next(marks, "чужая")), \
-             mock.patch.object(forge, "_RUNNERS", {}), \
-             mock.patch.object(forge, "signal", mock.Mock(SIGTERM=15, SIGKILL=9)), \
-             mock.patch.object(forge.os, "name", "posix"), \
-             mock.patch.object(forge.os, "killpg", killpg, create=True):
+        with mock.patch.object(forge, "_proc_started_at", lambda pid: "моя"),              mock.patch.object(forge, "_RUNNERS", {}),              mock.patch.object(forge, "signal", mock.Mock(SIGTERM=15, SIGKILL=9)),              mock.patch.object(forge.os, "name", "posix"),              mock.patch.object(forge.os, "killpg", killpg, create=True):
             # os.name/signal подменены, чтобы POSIX-ветка проверялась и на Windows: на
             # проде она единственная живая, а прогон гейта идёт не там.
-            forge._kill_tree(os.getpid(), "моя")
-        self.assertEqual(killpg.call_count, 1, "добивать чужой процесс нельзя")
+            out = forge._kill_tree(os.getpid(), "моя")
+        killpg.assert_not_called()
+        self.assertIn("не трогаю дерево", out)
+        self.assertIn("job/group handle", out)
 
     def test_all_three_stop_paths_go_through_the_proof(self):
         """Три вызова из находки: coding_process(stop), coding_verify(stop),
@@ -646,9 +655,11 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
         self.addCleanup(setattr, forge, "TASKS_DIR", orig)
         (forge.TASKS_DIR / "code-k").mkdir(parents=True, exist_ok=True)
         (forge.TASKS_DIR / "code-k" / "task.json").write_text(json.dumps({
-            "id": "code-k", "goal": "цель", "root": str(tmp), "scope": "self",
+            "id": "code-k", "goal": "цель",
+            "root": str(forge.BASE / "workspace" / "probe-k"), "scope": "self",
             "status": "active", "created": dt.datetime.now(dt.timezone.utc).isoformat(),
         }), encoding="utf-8")
+        (forge.BASE / "workspace" / "probe-k").mkdir(parents=True, exist_ok=True)
         for kind, unit_id in (("processes", "proc-1"), ("verifications", "verify-1"),
                               ("agents", "agent-1")):
             d = forge._unit_dir("code-k", kind, unit_id)
@@ -669,7 +680,12 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
                     forge.verify("code-k", "stop", verification_id="verify-1"),
                     forge.agent("code-k", "stop", agent_id="agent-1")]
         killpg.assert_not_called()
-        run.assert_not_called()
+        # subprocess.run теперь занят и мирными пробами (git rev-parse у проверки
+        # владения) — запрет касается только сигнальных команд убийства.
+        for call in run.call_args_list:
+            argv = " ".join(str(x) for x in (call.args[0] if call.args else []))
+            self.assertNotIn("taskkill", argv)
+            self.assertNotIn("kill", argv.split(" -", 1)[0])
         for text in said:
             self.assertIn("не трогаю", text, f"убийство вслепую осталось здесь: {text}")
 

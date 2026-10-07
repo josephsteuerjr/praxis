@@ -198,14 +198,34 @@ def _norm(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def _engine_stale(root: Path | None = None) -> str:
+    have = engine_installed(root)
+    if have.get("python") and not _same_python(str(have["python"])):
+        return f"движок голоса стоит от другого питона ({have['python']})"
+    if not engine_site(root).is_dir():
+        return ""
+    want = pack_record(root).get("dists")
+    if not isinstance(want, dict) or not want:
+        return ""
+    got = have.get("dists")
+    if not isinstance(got, dict):
+        # Перенос из старого runtime не записывал версии в installed.json.
+        # Читаем metadata без импорта тяжёлых библиотек и загрузки модели.
+        from importlib.metadata import distributions
+        got = {str(d.metadata.get("Name") or "").lower().replace("_", "-"): d.version
+               for d in distributions(path=[str(engine_site(root))])}
+    if any(str(got.get(name) or "") != str(version) for name, version in want.items()):
+        return "для этой версии программы нужен обновлённый движок голоса"
+    return ""
+
+
 def ensure_engine_path(root: Path | None = None) -> bool:
     """Скачанный после старта процесса движок — в путь, кэш импорта — заново. Движок от
     другого питона в путь не ставится (и убирается, если его добавил `.pth`): его .pyd
     всё равно не загрузятся, а find_spec соврал бы «есть». -> папка движка в пути."""
     site_dir = engine_site(root)
     mine = _norm(str(site_dir))
-    have = engine_installed(root)
-    if not site_dir.is_dir() or (have.get("python") and not _same_python(str(have["python"]))):
+    if not site_dir.is_dir() or _engine_stale(root):
         sys.path[:] = [p for p in sys.path if _norm(p) != mine]
         return False
     if all(_norm(p) != mine for p in sys.path):
@@ -224,10 +244,9 @@ def pack_record(root: Path | None = None) -> dict:
 def _engine_missing(what: str, fallback: str) -> dict:
     rec = pack_record()
     if rec.get("name") and rec.get("sha256"):
-        have = engine_installed()
         size = round(int(rec.get("bytes") or 0) / 1024 / 1024)
-        stale = have.get("python") and not _same_python(str(have["python"]))
-        why = (f"движок голоса стоит от другого питона ({have.get('python')}) — скачается заново"
+        stale = _engine_stale()
+        why = (f"{stale} — скачается заново"
                if stale else f"движок голоса ещё не скачан (~{size} МБ)")
         return {"present": False, "downloadable": True, "size_mb": size, "why": why}
     return {"present": False, "downloadable": False, "why": f"в рантайме нет {what} — {fallback}"}

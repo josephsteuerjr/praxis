@@ -110,7 +110,7 @@ import core_src  # noqa: E402 — ядро, слой издания и расх�
 # Aiogram/paramiko/stt — другие тела, в продукт не едут; cryptography не нужна
 # (telegram_confirmation агентом не импортируется — проверено грепом 31.08).
 TREE_DEPS = [
-    "anthropic", "openai", "httpx", "python-dotenv", "pillow",
+    "anthropic", "openai", "httpx>=0.27,<1", "python-dotenv", "pillow",
     "pypdf", "trafilatura", "charset-normalizer",
 ]
 
@@ -124,7 +124,10 @@ TREE_DEPS = [
 # не входит: 61 МБ на каждый, качает владелец из окна тем же помощником.
 # ⚠ Не Edge и не Silero: Edge — это голос Микрософта ПО СЕТИ, то есть текст
 # ответа агента уходил бы наружу на каждую фразу, а Silero тянет torch (~2 ГБ).
-VOICE_DEPS = ["faster-whisper", "piper-tts"]
+# faster-whisper 1.2.1 передаёт metadata_errors в av.open; PyAV 19 убрал
+# этот аргумент. Под CPython 3.14 нет колёс av<15 из requirements ядра:
+# совместимые колёса 15–18 поддерживают прежний API.
+VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19"]
 
 # Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
 # telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
@@ -451,6 +454,20 @@ def _run_timed(args: list[str], *, check: bool, timeout: int):
             "скорее всего недоступен индекс PyPI — сборка остановлена") from None
 
 
+def runtime_inventory(out: Path) -> str:
+    """Installed package metadata without executing or importing the runtime."""
+    import email.parser
+    rows = set()
+    for metadata in (out / "runtime").rglob("*.dist-info/METADATA"):
+        message = email.parser.Parser().parsestr(metadata.read_text(encoding="utf-8", errors="replace"))
+        name, version = message.get("Name"), message.get("Version")
+        if name and version:
+            rows.add(f"{name}=={version}")
+    if not rows:
+        raise SystemExit("нет метаданных пакетов рантайма; состав сборки неизвестен")
+    return "\n".join(sorted(rows, key=str.lower))
+
+
 def smoke_runtime(out: Path, imports: list[str] | tuple[str, ...] = SMOKE_IMPORTS) -> str:
     """Рантайм обязан импортировать то, ради чего он собран.
 
@@ -612,14 +629,26 @@ def split_voice(site: Path, stage: Path) -> dict:
 
 
 def smoke_voice(out: Path, stage: Path) -> None:
-    """База живёт БЕЗ голосового набора, а голос — с ним: оба утверждения проверяются."""
+    """Голос импортируется и декодирует WAV; модель и сеть не нужны."""
     py = out / "runtime" / "python.exe"
     code = f"import sys; sys.path.insert(0, {str(stage)!r}); import " + ", ".join(
-        VOICE_IMPORTS + VOICE_SMOKE_EXTRA)
+        VOICE_IMPORTS + VOICE_SMOKE_EXTRA) + "\n" + """
+import io, wave
+from faster_whisper.audio import decode_audio
+source = io.BytesIO()
+with wave.open(source, "wb") as wav:
+    wav.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+    wav.writeframes(bytes(32000))
+source.seek(0)
+audio = decode_audio(source)
+assert audio.shape == (16000,) and audio.dtype == numpy.float32
+print("voice decode: 16000 samples, float32")
+"""
     r = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
                        timeout=300, encoding="utf-8", errors="replace")
     if r.returncode != 0:
-        raise SystemExit("голосовой набор не импортируется рантаймом:\n" + (r.stderr or "").strip())
+        raise SystemExit("голосовой набор не импортируется или не декодирует аудио:\n" + (r.stderr or "").strip())
+    print("  " + r.stdout.strip())
 
 
 def pack_voice(stage: Path, dest: Path, meta: dict, *, level: int = 19) -> dict:
@@ -739,6 +768,12 @@ def _assign_secret(text: str) -> str:
         if _ASSIGN_DOTTED.fullmatch(v) or _ASSIGN_CONST.fullmatch(v):
             continue
         if v.lower() in _ASSIGN_PLACEHOLDER:
+            continue
+        # 05.10: пример из документации — значение, ОБОРВАННОЕ явным
+        # многоточием сразу после захвата («object_key": "runs/sha256/…» в
+        # docs/run_retention.md): класс захвата не-ASCII не ест, поэтому
+        # смотрим текст после. Живой секрет с «…» на конце не пишут.
+        if text[m.end():m.end() + 3].startswith(("…", "...")):
             continue
         return "присвоение секрета (" + m.group(0).split("=")[0].split(":")[0].strip()[:40] + "=…)"
     return ""
@@ -1630,6 +1665,8 @@ def main() -> None:
                         help="не собирать <Продукт>-<версия>-setup.exe (отладка)")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
+    parser.add_argument("--skip-smokes", action="store_true",
+                        help="пропустить импортные смоуки рантайма/голоса; записать это в паспорт")
     parser.add_argument("--from-core", action="store_true",
                         help="собрать дерево как «ядро (../praxis) + слой (../helene/core)», "
                              "а не из рабочей копии. Откажется, пока слой не описывает "
@@ -1700,11 +1737,15 @@ def main() -> None:
     print("  голосовой набор — отдельно от рантайма…")
     voice_split = split_voice(out / "runtime" / "Lib" / "site-packages", voice_stage)
     print(f"  голосу — {len(voice_split['dists'])} пакетов, передвинуто файлов: {voice_split['moved']}")
-    print("  дымовой тест рантайма (без голоса)…")
-    freeze = smoke_runtime(out, [m for m in SMOKE_IMPORTS if m not in VOICE_IMPORTS])
-    print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
-    smoke_voice(out, voice_stage)
-    print("  голос импортируется из набора")
+    if args.skip_smokes:
+        freeze = runtime_inventory(out)
+        print("  смоуки рантайма и голоса пропущены по --skip-smokes; состав взят из METADATA")
+    else:
+        print("  дымовой тест рантайма (без голоса)…")
+        freeze = smoke_runtime(out, [m for m in SMOKE_IMPORTS if m not in VOICE_IMPORTS])
+        print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
+        smoke_voice(out, voice_stage)
+        print("  голос импортируется из набора")
 
     # busybox лежит ПРЯМО РЯДОМ с python.exe, не в подпапке и не в PATH:
     # CreateProcess ищет команду в каталоге приложения и System32 РАНЬШЕ PATH,
@@ -1893,6 +1934,8 @@ def main() -> None:
         "version": version,
         "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "complete": not (missing or not staged["phone"]),
+        "validation": {"runtime_smoke": "skipped_by_request" if args.skip_smokes else "passed",
+                       "voice_smoke": "skipped_by_request" if args.skip_smokes else "passed"},
         "partial_reason": missing + ([] if staged["phone"] else ["телефон (mobile/dist)"]),
         # Хэш с суффиксом -dirty и отдельный флаг: по хэшу без суффикса сборку
         # нельзя было отличить от сборки самого коммита.
@@ -2033,6 +2076,9 @@ def write_payload_manifest(out: Path, version: str, product: str, *, voice: dict
         "bytes": total,
         "kit": kit,
         "top": top,
+        "code_sha256": {f: __import__('hashlib').sha256((out / f).read_bytes()).hexdigest()
+                        for f in files if f.startswith(('tree/', 'app/'))
+                        and '/__pycache__/' not in f and not f.endswith('.pyc')},
     }
     if voice:
         manifest["voice"] = voice

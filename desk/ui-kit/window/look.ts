@@ -6,6 +6,7 @@
 // настройка агента, и в helene.json ей делать нечего. Применяется сразу, без «Сохранить».
 // Тема по-прежнему — как в системе (слово владельца 07.09); палитры — у дня и у ночи свои.
 import type { FeelName, Overscroll } from "../feed/scroller";
+import { scrollSupportText, type ScrollSupport } from "../feed/scroll-support";
 import { el } from "./lib";
 import { electron } from "./api";
 import * as scroll from "./scroll";
@@ -82,8 +83,8 @@ export interface Look {
   edge: Overscroll;
 }
 
-/** То, что Егор одобрил 28.09: тёплая бумага, терракота, «тягуче», резинка. */
-export const DEFAULT_LOOK: Look = { paperDay: "warm", paperNight: "coal", accent: "terra", grain: "paper", text: "m", feel: "syrup", edge: "rubber" };
+/** Светлая бумага с лёгкой фактурой; сохранённый выбор владельца имеет приоритет. */
+export const DEFAULT_LOOK: Look = { paperDay: "light", paperNight: "coal", accent: "terra", grain: "soft", text: "m", feel: "syrup", edge: "rubber" };
 
 const KEY = "helene.look";
 
@@ -206,6 +207,13 @@ export function lookCard(): HTMLElement {
     pills("Движение", FEELS, "feel", (f) => f.hint),
     pills("Край ленты", EDGES, "edge"),
   );
+  const support = (window as Window & { __HELENE_SCROLL_SUPPORT?: ScrollSupport }).__HELENE_SCROLL_SUPPORT;
+  const supportText = scrollSupportText(support);
+  if (supportText) {
+    const row = el("div", "look-row");
+    row.append(el("div", "look-label", "Тачпад"), el("span", "look-name", supportText));
+    c.append(row);
+  }
 
   const reset = el("button", "look-reset", "Вернуть как было") as HTMLButtonElement;
   reset.type = "button";

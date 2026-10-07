@@ -32,11 +32,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{arg_after, load_plan, plan_usable, Log};
+#[cfg(target_os = "macos")]
+use super::arg_after;
+use super::{load_plan, plan_usable, Log};
 
 // Метка демона, путь к описанию, сборка plist и строки launchctl — общие с
 // оболочкой и мастером: расхождение здесь означало бы «поставили не тот демон».
 include!("../../common/mac_service.rs");
+
+#[cfg(target_os = "linux")]
+pub(crate) fn command_digest(bytes: &[u8]) -> String { mac_svc_sha256(bytes) }
 
 /// Просьба остановиться от launchd (SIGTERM) или от человека (Ctrl+C).
 /// `static`, а не канал: обработчик сигнала — это код, который исполняется
@@ -120,6 +125,7 @@ fn own_exe(root: &Path) -> PathBuf {
 }
 
 /// Описание демона для этой установки.
+#[cfg(target_os = "macos")]
 fn plist_for(config: &Path) -> Result<String, String> {
     let root = config
         .parent()
@@ -131,8 +137,8 @@ fn plist_for(config: &Path) -> Result<String, String> {
     Ok(mac_svc_plist(&own_exe(&root), config, &root, &user, &home, &log))
 }
 
-/// Демон: супервизор пары детей под launchd.
-fn run(config: &Path) -> i32 {
+/// Демон: супервизор пары детей под launchd (macOS) или systemd (Linux, `linux::main`).
+pub(crate) fn run(config: &Path) -> i32 {
     // Детям это скажет, что их поднял демон: движок тогда не поднимает тело
     // (графической сессии нет), а кладёт токен устройства для окна. Обычно
     // переменная приезжает из описания демона; ставим и здесь — запуск руками
@@ -141,6 +147,9 @@ fn run(config: &Path) -> i32 {
     // launchd уже направил stdout и stderr демона в тот же `data/service.log`,
     // куда пишет журнал (`StandardOutPath` в описании). Без этого флага каждая
     // строка ложилась бы в файл дважды — своей записью и эхом stderr.
+    // На Linux вывод службы забирает журнал systemd, а не файл: эхо в stderr там — это
+    // `journalctl -u helene@<имя>`, и гасить его нельзя.
+    #[cfg(target_os = "macos")]
     super::CONSOLE_GONE.store(true, Ordering::Relaxed);
     catch_signals();
     let stop = Arc::new(AtomicBool::new(false));
@@ -173,8 +182,9 @@ fn run(config: &Path) -> i32 {
 
     let mut log = Log::open(&plan.tree);
     log.line(&format!(
-        "демон launchd поднят: конфиг {} · дерево {} · владелец {} · окна и экрана у него нет \
+        "{} поднят: конфиг {} · дерево {} · владелец {} · окна и экрана у него нет \
          (тело поднимет окно Helene, когда его откроют)",
+        if cfg!(target_os = "linux") { "служба systemd" } else { "демон launchd" },
         plan.config.display(),
         plan.tree.display(),
         owner_name().unwrap_or_else(|_| "?".into()),
@@ -200,6 +210,7 @@ fn run(config: &Path) -> i32 {
 }
 
 /// Разбор командной строки на macOS. Два режима и ни одного Win32.
+#[cfg(target_os = "macos")]
 pub fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {

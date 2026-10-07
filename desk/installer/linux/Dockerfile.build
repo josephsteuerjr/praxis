@@ -1,0 +1,70 @@
+# Сборщик Hélène для семейства Debian (Debian, Ubuntu, Astra) — порт 28.09.
+#
+# ⚠ ПОЧЕМУ Debian 10, а не 12. Бинарь, слинкованный с glibc, запускается только там, где
+# glibc не старше той, с которой его собрали. Debian 12 — это glibc 2.36: собранное на нём
+# не запустится на Ubuntu 22.04 (2.35), Debian 11 (2.31) и Astra 1.7 (основа — Debian 10,
+# glibc 2.28; догадка по открытым описаниям Astra, проверить в ВМ). Поэтому порог поставки
+# — glibc 2.28, и собирается всё здесь: Rust-бинари (служба, реле, тело, мост), колёса
+# рантайма подбираются pip под эту же glibc (manylinux_2_28 и старше), а фронты (Node)
+# вообще не зависят от glibc целевой машины.
+#
+# OpenSSL реле линкуется СТАТИЧЕСКИ (`OPENSSL_STATIC=1`, libssl.a из libssl-dev): иначе
+# бинарь требовал бы libssl1.1 (Debian 10) и не запустился бы на Debian 12 / Ubuntu 22.04+,
+# где её нет вовсе.
+#
+#   docker build -f desk/installer/linux/Dockerfile.build -t helene-linux-build desk/installer/linux
+#   docker run --rm -v <репо>:/src -v <дерево>:/tree -v helene-build-cache:/cache \
+#       helene-linux-build python3 /src/desk/installer/build_linux.py --tree /tree --out /cache/out
+FROM debian:buster-slim
+
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
+# buster снят с зеркал в архив: адреса архива и без проверки срока подписи Release
+# (архив больше не переподписывают — это свойство архива, а не отключённая проверка ключа).
+RUN printf 'deb http://archive.debian.org/debian buster main\ndeb http://archive.debian.org/debian-security buster/updates main\n' \
+        > /etc/apt/sources.list \
+    && apt-get -o Acquire::Check-Valid-Until=false update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git xz-utils build-essential pkg-config libssl-dev \
+        dpkg-dev fakeroot file \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:/opt/node/bin:/opt/py/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+    && rustc --version
+
+# Node — та же линия 24, что у CI Mac (`.github/workflows/macos.yml`); официальная сборка
+# требует glibc 2.28 — ровно наш порог.
+RUN name="$(curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep -o 'node-v[0-9.]*-linux-x64.tar.xz' | head -1)" \
+    && curl -fsSL "https://nodejs.org/dist/latest-v24.x/$name" -o /tmp/node.tar.xz \
+    && curl -fsSL https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt | grep " $name\$" | sed "s| $name| /tmp/node.tar.xz|" | sha256sum -c - \
+    && mkdir -p /opt/node && tar -xJf /tmp/node.tar.xz -C /opt/node --strip-components=1 && rm /tmp/node.tar.xz \
+    && node --version
+
+# Питон для самого скрипта сборки — та же линия, что едет в поставку (python-build-standalone):
+# системный питон Debian 10 (3.7) скрипт не понимает.
+ARG PBS_TAG=20260901
+ARG PY=3.14.7
+RUN name="cpython-${PY}+${PBS_TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz" \
+    && base="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}" \
+    && curl -fsSL "$base/$name" -o /tmp/py.tgz \
+    && curl -fsSL "$base/SHA256SUMS" | grep " $name\$" | sed "s| $name| /tmp/py.tgz|" | sha256sum -c - \
+    && tar -xzf /tmp/py.tgz -C /opt && mv /opt/python /opt/py && rm /tmp/py.tgz \
+    && ln -s /opt/py/bin/python3 /usr/local/bin/python3 \
+    && python3 --version
+
+# Упаковка: nfpm — один конфиг на .deb и .rpm (слово Егора 28.09: «и rpm сделать»). Одна
+# статическая программа на Go; сумма сверяется с checksums.txt выпуска издателя. rpm — только
+# чтобы сборка могла прочитать собранный .rpm (`rpm -qip`), собирает его nfpm.
+RUN apt-get -o Acquire::Check-Valid-Until=false update \
+    && apt-get install -y --no-install-recommends rpm \
+    && rm -rf /var/lib/apt/lists/* \
+    && tag="$(curl -fsSI https://github.com/goreleaser/nfpm/releases/latest | grep -i '^location:' | sed 's|.*/tag/||' | tr -d '\r\n')" \
+    && ver="${tag#v}" && name="nfpm_${ver}_Linux_x86_64.tar.gz" \
+    && base="https://github.com/goreleaser/nfpm/releases/download/${tag}" \
+    && curl -fsSL "$base/$name" -o /tmp/nfpm.tgz \
+    && curl -fsSL "$base/checksums.txt" | grep " $name\$" | sed "s| $name| /tmp/nfpm.tgz|" | sha256sum -c - \
+    && tar -xzf /tmp/nfpm.tgz -C /usr/local/bin nfpm && rm /tmp/nfpm.tgz \
+    && nfpm --version
+
+WORKDIR /src

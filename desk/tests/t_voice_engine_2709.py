@@ -65,7 +65,8 @@ def fake_runtime(site: Path) -> None:
     dist(site, "idna", "3.10", [], {"idna/__init__.py": "i"})
     dist(site, "typing-extensions", "4.15.0", [], {
         "typing_extensions.py": "te", "__pycache__/typing_extensions.cpython-314.pyc": "pyc"})
-    dist(site, "faster-whisper", "1.2.1", ["ctranslate2", "huggingface-hub>=0.21",
+    dist(site, "av", "18.1.0", [], {"av/__init__.py": "av"})
+    dist(site, "faster-whisper", "1.2.1", ["av>=11", "ctranslate2", "huggingface-hub>=0.21",
                                            "tokenizers; extra == 'dev'", "typing-extensions"],
          {"faster_whisper/__init__.py": "fw"})
     dist(site, "ctranslate2", "4.6.0", ["numpy", "pyyaml"], {"ctranslate2/ctranslate2.dll": "dll"})
@@ -82,7 +83,7 @@ def fake_runtime(site: Path) -> None:
     (site / "numpy" / "__pycache__" / "__init__.cpython-314.pyc").write_text("late", encoding="utf-8")
 
 
-VOICE_ONLY = {"faster-whisper", "ctranslate2", "numpy", "pyyaml", "huggingface-hub",
+VOICE_ONLY = {"faster-whisper", "av", "ctranslate2", "numpy", "pyyaml", "huggingface-hub",
               "packaging", "piper-tts", "onnxruntime", "protobuf"}
 
 
@@ -223,6 +224,41 @@ class Engine(unittest.TestCase):
         self.assertGreaterEqual(said["library"]["size_mb"], 0)
         speech = said["speech"]
         self.assertTrue(speech["library"]["downloadable"])
+
+    def test_обновление_зависимостей_заменяет_старый_движок_без_потери_моделей(self):
+        voice.fetch_engine()
+        marker = voice.engine_home() / voice.INSTALLED
+        old = json.loads(marker.read_text(encoding="utf-8"))
+        old["dists"]["av"] = "19.0.0"
+        marker.write_text(json.dumps(old), encoding="utf-8")
+        model = self.root / "data" / "models" / "whisper" / "owner-model.bin"
+        model.parent.mkdir(parents=True)
+        model.write_bytes(b"owner model")
+        self.assertFalse(voice.library()["present"])
+        self.assertTrue(voice.library()["downloadable"])
+        self.assertIn("обновлённый движок", voice.library()["why"])
+        self.assertNotIn(str(voice.engine_site()), sys.path)
+        refreshed = voice.fetch_engine()
+        self.assertEqual(refreshed["source"], "download")
+        self.assertEqual(refreshed["dists"]["av"], "18.1.0")
+        self.assertTrue(voice.library()["present"])
+        self.assertEqual(model.read_bytes(), b"owner model")
+
+    def test_новая_версия_программы_с_тем_же_движком_не_требует_докачки(self):
+        voice.fetch_engine()
+        self.passport({"version": "10.0.0", "voice_pack": self.rec})
+        self.assertTrue(voice.library()["present"])
+        self.assertEqual(voice.fetch_engine(), {"state": "present"})
+
+    def test_перенесённый_движок_без_версий_сверяется_по_metadata(self):
+        voice.fetch_engine()
+        marker = voice.engine_home() / voice.INSTALLED
+        marker.write_text(json.dumps({"source": "carry", "python": PY}), encoding="utf-8")
+        self.assertTrue(voice.library()["present"])
+        metadata = voice.engine_site() / "av-18.1.0.dist-info" / "METADATA"
+        metadata.write_text(metadata.read_text(encoding="utf-8").replace("18.1.0", "19.0.0"), encoding="utf-8")
+        self.assertFalse(voice.library()["present"])
+        self.assertTrue(voice.library()["downloadable"])
 
     def test_без_записи_в_паспорте_качать_нечего(self):
         self.passport({"version": "9.9.9"})

@@ -20,6 +20,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -215,6 +216,7 @@ _MODE_UNKNOWN: dict = {
     "service_installed": None, "service_title": "", "service_text": "",
     "service_warning": "",
     "session0": False, "session0_set": False, "session0_warning": "",
+    "ladder_name": "", "ladder_title": "",
     "firewall": False, "firewall_set": False, "legacy_service": False,
     "notes": [], "choices": [], "service": None, "config": "",
 }
@@ -276,7 +278,10 @@ def mode_state() -> dict:
     except Exception:
         log.exception("режим не разобрался")
         return mode_unknown("режим не разобрался — смотри helene.log")
-    picture["choices"] = mod.catalogue()
+    # 04.10: каналу отдаётся ЛЕСТНИЦА (ограды + нулевая сессия там, где она есть).
+    # Прежний `catalogue()` — две ограды, и третья ступень, построенная в modes.ladder(),
+    # до окна не доезжала вовсе: карточка рисует только то, что здесь прислано.
+    picture["choices"] = getattr(mod, "ladder", mod.catalogue)()
     # Секции службы и тела — только там, где они есть: служба — Windows и macOS
     # (`modes.HAS_SERVICE`), тело — там же (`modes.HAS_COMPUTER`). Где чего нет — None вместо текстов,
     # и окно карточки не рисует (прячет по `app_info.platform`; `service_here` —
@@ -847,6 +852,13 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
     if path is None:
         return {}
     manifest = _load_json(path / "manifest.json")
+    if not manifest.get("status"):
+        # manifest.json переписывается на каждом событии хода (run_manager.append_event).
+        # Чтение, попавшее в подмену файла, на Windows ловит sharing violation —
+        # _load_json молча даёт {}, и карточка «Сейчас» на такт теряла статус:
+        # заливка running гасла и мигала. Одно повторное чтение снимает гонку.
+        time.sleep(0.04)
+        manifest = _load_json(path / "manifest.json")
     iterations: list[dict] = []
     current: dict | None = None
     tools_by_call: dict[str, dict] = {}
@@ -1357,7 +1369,7 @@ MEDIA_TYPES = {
 
 #: Откуда разрешено отдавать. Не «всё дерево»: в дереве лежат её память,
 #: конституция и `helene.json` соседей — там нечего проигрывать.
-MEDIA_ROOTS = ("media", "memory/.control/desk_inbox/attachments")
+MEDIA_ROOTS = ("media", "workspace/media", "memory/.control/desk_inbox/attachments")
 
 
 def media_file(rel: str) -> tuple[pathlib.Path | None, str, str]:
@@ -1791,6 +1803,7 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
     if busy and not run:
         run = _receipt_run(base, receipt, now)
     return {"alive": alive,
+            "pid": _receipt_int(receipt.get("pid")),
             "age_s": None if age is None else round(age, 1),
             "busy": busy,
             "run": run,
@@ -1801,6 +1814,49 @@ def reader_status(base: Path | None = None, now: float | None = None) -> dict:
             # владельца ложится в дерево и ждёт читателя, которого нет. Окно обязано
             # говорить это словами, а не обещать «прочитает в следующий ход».
             "ever": bool(receipt)}
+
+
+def _receipt_int(value) -> int:
+    """Untrusted receipt numbers must not take down /api/state."""
+    try:
+        n = int(value)
+        return n if 0 <= n <= 0xffffffff else 0
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
+
+def runner_activity(runner: dict) -> dict | None:
+    """Small current phase projection, independent of the optional history panel.
+
+    Never infer a phase from authored text or a finished tool. A terminal manifest
+    clears the projection even before the reader heartbeat clears its busy bit.
+    """
+    if not runner.get("alive") or not runner.get("busy"):
+        return None
+    rid = str(runner.get("run") or "")
+    path = run_dir(rid)
+    if path is None:
+        return None
+    manifest = _load_json(path / "manifest.json")
+    if manifest.get("status") != "running":
+        return None
+    phase, tool = "working", ""
+    phases = {"model_started": "model", "tool_started": "tool",
+              "model_completed": "working", "model_failed": "working",
+              "tool_completed": "working", "tool_failed": "working",
+              "tool_reconciled": "working"}
+    for row in reversed(tail_jsonl(path / "events.jsonl", 128)):
+        if row.get("kind") in phases:
+            phase = phases[row["kind"]]
+            tool = str(row.get("tool") or "") if phase == "tool" else ""
+            break
+    ctx = manifest.get("context") or {}
+    if not isinstance(ctx, dict):
+        ctx = {}
+    return {"run_id": rid, "phase": phase, "tool": tool,
+            "chat_id": str(ctx.get("delivery_chat_id") or ctx.get("origin_chat_id") or ""),
+            "kind": str(ctx.get("kind") or ""),
+            "event_seq": _receipt_int(manifest.get("event_seq"))}
 
 
 def _short_error(err) -> str:
@@ -2114,6 +2170,7 @@ def _state_impl() -> dict:
         "phrase": phrase,
         "action": action,
         "runner": runner,
+        "activity": runner_activity(runner),
         # anatomy=False при configured=True значит «снимок устройства не собрался»,
         # а не «модель не настроена»: это разные беды с разными действиями.
         "anatomy": bool(anatomy),
@@ -2141,6 +2198,70 @@ def _state_impl() -> dict:
         # сверяет, что канал встал именно с тем пакетом, который положен.
         "desk": desk_build(),
     }
+
+
+_OWNER_MARK_PREFIX = "> [правка владельца · "
+
+
+def _mark_quote(lines: list, verb: str, cap: int = 200) -> str:
+    if not lines:
+        return ""
+    text = " ⏎ ".join(line.strip() for line in lines if line.strip())
+    if len(text) > cap:
+        text = text[:cap].rstrip() + "…"
+    note = f" ({len(lines)} стр.)" if len(lines) > 1 else ""
+    return f"{verb}: «{text}»{note}"
+
+
+def _owner_provenance(rel: str, old, new: str):
+    """Вставить марку провенанса в текст, которым владелец правит файл агента.
+
+    Правка файлов агента из окна была для агента невидимой (слово владельца
+    01.10: «дичайшее нарушение провенанса»). Теперь в месте правки остаётся
+    ОДНА строка-цитата: кто, когда, что удалено/вставлено. Метки убирает сам
+    агент тулом clear_owner_marks — она служба, а не памятник. Возврат:
+    (текст с маркой, число добавленных марок). Дифф — общий префикс/суффикс по
+    строкам, как «Что изменилось» в самом окне: участок назван участком.
+
+    База сравнения — текст БЕЗ марок: марка служебная, и повторное сохранение
+    того же содержимого не должно ни плодить новые марки, ни отмечать «удалена
+    старая марка». Прежние марки владельца в новом тексте сохраняются как есть.
+    """
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    if old is None:
+        mark = f"{_OWNER_MARK_PREFIX}{stamp} · окно] файл создан владельцем\n"
+        return mark + new, 1
+    full_b = new.split("\n")
+    a = [line for line in str(old).split("\n") if not line.startswith(_OWNER_MARK_PREFIX)]
+    b = [line for line in full_b if not line.startswith(_OWNER_MARK_PREFIX)]
+    head = 0
+    while head < len(a) and head < len(b) and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while (tail < len(a) - head and tail < len(b) - head
+           and a[len(a) - 1 - tail] == b[len(b) - 1 - tail]):
+        tail += 1
+    gone = a[head:len(a) - tail]
+    came = b[head:len(b) - tail]
+    if not gone and not came:
+        return new, 0
+    parts = [p for p in (_mark_quote(gone, "удалено"), _mark_quote(came, "вставлено")) if p]
+    mark = f"{_OWNER_MARK_PREFIX}{stamp} · окно] " + " · ".join(parts)
+    # Позиция в ПОЛНОМ новом тексте: перед первой изменившейся строкой контента,
+    # приклеена к предыдущей содержательной строке, а не к пустому разделителю.
+    insert_at = len(full_b)
+    seen = 0
+    for i, line in enumerate(full_b):
+        if line.startswith(_OWNER_MARK_PREFIX):
+            continue
+        if seen == head:
+            insert_at = i
+            break
+        seen += 1
+    while insert_at > 0 and full_b[insert_at - 1].strip() == "":
+        insert_at -= 1
+    full_b.insert(insert_at, mark)
+    return "\n".join(full_b), 1
 
 
 def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
@@ -2181,6 +2302,14 @@ def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
     body = str(text or "").replace("\r\n", "\n")
     if not body.endswith("\n"):
         body += "\n"
+    # Провенанс: марка встаёт в текст ДО записи, рядом с изменившимся участком.
+    old = None
+    if stat is not None:
+        try:
+            old = path.read_text(encoding="utf8", errors="replace")
+        except OSError:
+            old = None
+    body, marks = _owner_provenance(clean, old, body)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if stat is not None:
@@ -2197,4 +2326,4 @@ def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
         written = str(path.stat().st_mtime_ns)   # строкой — см. safe_read_md
     except OSError:
         written = None
-    return {"path": clean, "size": len(body.encode("utf-8")), "mtime_ns": written}
+    return {"path": clean, "size": len(body.encode("utf-8")), "mtime_ns": written, "marks": marks}

@@ -54,7 +54,9 @@ export interface ModeChoice {
   title: string;
   text: string;
   needs_admin: boolean;
-  sandbox: boolean;
+  sandbox: boolean | null;
+  warning?: string;
+  requires_service?: boolean;
 }
 
 /** Галочка внутри опции службы: `modes.service_option().toggles[]`. */
@@ -149,6 +151,8 @@ export interface ComputerLive {
  */
 export interface ModeState {
   name: string;
+  ladder_name?: string;
+  ladder_title?: string;
   title: string;
   text: string;
   sandbox: boolean;
@@ -233,9 +237,9 @@ export async function loadMode(): Promise<ModeState> {
  * app/test/mode-key.test.mjs: он сверяет строку с питоном побайтно.
  */
 export const SESSION0_WARNING_FALLBACK =
-  "Опция для энтузиастов. Служба будет выполнять поручения агента правами СИСТЕМЫ сразу, " +
-  "без вопроса тебе, — это полный доступ к машине. Слабая модель может не понять, что " +
-  "просит. Все поручения — в журнале службы (broker.log).";
+  "Осторожно: права выше ваших собственных. Подтверждение администратора нужно " +
+  "только один раз при установке службы. Без выбранной опции права системы " +
+  "выдаваться не будут.";
 
 // Обёртки DOM — общие, из ui-kit/dom.ts (одна копия на все интерфейсы).
 

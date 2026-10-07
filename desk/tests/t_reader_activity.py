@@ -81,6 +81,38 @@ class ReaderActivity(unittest.TestCase):
             self.assertFalse(receipt["busy"])
             self.assertEqual(receipt["chat_id"], "")
 
+    def test_phase_follows_events_and_clears_before_idle_heartbeat(self):
+        name = self.run_file(-1)
+        self.receipt.update(run=name, pid=42)
+        path = self.root / "memory/runs" / (name[4:8] + "-" + name[8:10]) / name
+        with patch.object(readers, "tree", return_value=self.root):
+            for kind, expected in (("model_started", "model"), ("model_completed", "working"),
+                                   ("tool_started", "tool"), ("tool_completed", "working")):
+                with (path / "events.jsonl").open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({"kind": kind, "tool": "shell"}) + "\n")
+                state = self.read()
+                self.assertEqual(state["pid"], 42)
+                activity = readers.runner_activity(state)
+                self.assertEqual(activity["phase"], expected)
+                self.assertEqual(activity["chat_id"], "window-a")
+                self.assertEqual(activity["tool"], "shell" if expected == "tool" else "")
+            manifest = json.loads((path / "manifest.json").read_text())
+            manifest["status"] = "done"
+            (path / "manifest.json").write_text(json.dumps(manifest))
+            self.assertTrue(self.read()["busy"])
+            self.assertIsNone(readers.runner_activity(self.read()))
+
+    def test_no_live_phase_is_guessed_for_sleep_or_missing_run(self):
+        for run in ("sleep", "", "unknown", "../../escape"):
+            self.assertIsNone(readers.runner_activity({"alive": True, "busy": True, "run": run}))
+
+    def test_corrupt_pid_does_not_break_state(self):
+        self.receipt.update(run="explicit", busy=False)
+        for pid in (None, "NaN", float("nan"), float("inf"), -1, 2**64):
+            with self.subTest(pid=pid):
+                self.receipt["pid"] = pid
+                self.assertEqual(self.read()["pid"], 0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

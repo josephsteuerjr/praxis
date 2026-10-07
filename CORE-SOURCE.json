@@ -1,23 +1,18 @@
 {
- "mirror": "praxis",
- "source": "/opt/praxis (deployed; sanitized working-tree export)",
- "head": "e2a4a50e1d52422f763311708abd53abaae2a57c",
- "dirty": true,
- "source_checkout_dirty": true,
- "source_dirty_scope": "STATUS.md operational update after tested deployment; private runtime/workspace excluded",
- "taken_at": "2026-10-06T17:30:59.036926+00:00",
- "files": 617,
- "digest": "7ddcc2dcf96f45a2f51bf21baef5f6c4aaad0faeb4cbec7add15d7338154cfc6",
- "by": "verified deployed bytes; installer/core_src.py digest; public ancestry only",
- "sanitization": {
-  "excluded_private_helper_count": 1,
-  "redacted_comment_docstring_files": [
-   "agent.py",
-   "cjk_vkladki.py",
-   "test_sanitize_scripts.py"
-  ],
-  "behavior_preserved": "Sanitization only: 3 redacted comment/docstring files AST-equivalent to deployed source excluding docstrings; other exported bytes match deployed source after LF normalization"
- },
- "base_live_head": "2514439b76c144f48df634ad5337659092ef99fc",
- "state": "deployed"
+  "mirror": "praxis",
+  "source": "/opt/praxis; source-only sanitized snapshot",
+  "head": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
+  "dirty": false,
+  "taken_at": "2026-10-07T00:01:38.074117+00:00",
+  "files": 623,
+  "digest": "7081ec12ab4f11b7264205555d5b842d0acd7e88a25218dc0a85e809a87f21c5",
+  "private_history_published": false,
+  "excluded_runtime": true,
+  "sanitization": {
+    "comment_docstring_only_files": [
+      "agent.py",
+      "test_sanitize_scripts.py"
+    ],
+    "behavior_preserved": true
+  }
 }

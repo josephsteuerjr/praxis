@@ -66,6 +66,9 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
         // манифесте он обязан быть виден под своим именем, а не прикидываться UIA.
         name: if cfg!(target_os = "macos") {
             "ax-window-reader"
+        } else if cfg!(target_os = "linux") {
+            // Linux (порт 28.09): AT-SPI2 по D-Bus — свой механизм под своим именем.
+            "atspi-window-reader"
         } else {
             "uia-window-reader"
         }
@@ -76,7 +79,7 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
             crate::element::CAPABILITY.to_string(),
             crate::element::FIND_CAPABILITY.to_string(),
         ],
-        available: cfg!(any(windows, target_os = "macos")),
+        available: cfg!(any(windows, target_os = "macos", target_os = "linux")),
     }
 }
 
@@ -468,12 +471,15 @@ struct Node {
     ax_role: Option<String>,
     #[cfg(target_os = "macos")]
     ax_subrole: Option<String>,
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     patterns: Vec<&'static str>,
     /// Только macOS: поле пароля (`AXSecureTextField`). `value` у него всегда пуст — не
     /// «поле пустое», а «мы его не читаем».
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     secure: bool,
+    /// Только Linux: сырое имя роли AT-SPI (`push button`) — рядом со словом словаря.
+    #[cfg(target_os = "linux")]
+    atspi_role: Option<String>,
 }
 
 impl Node {
@@ -495,6 +501,11 @@ impl Node {
         // На macOS `text_contains: "AXButton"` — обычный способ спросить про сырую роль.
         #[cfg(target_os = "macos")]
         for part in [self.ax_role.as_deref(), self.ax_subrole.as_deref()].into_iter().flatten() {
+            text.push('\u{1}');
+            text.push_str(part);
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(part) = self.atspi_role.as_deref() {
             text.push('\u{1}');
             text.push_str(part);
         }
@@ -535,6 +546,18 @@ impl Node {
             }
             // Пустой список не печатается: «ничего нельзя» и так видно по отсутствию
             // ключа, а четыреста лишних `[]` — это токены, которые читает модель.
+            if !self.patterns.is_empty() {
+                object.insert("patterns".into(), json!(self.patterns));
+            }
+            if self.secure {
+                object.insert("secure".into(), json!(true));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(role) = &self.atspi_role {
+                object.insert("atspi_role".into(), json!(role));
+            }
             if !self.patterns.is_empty() {
                 object.insert("patterns".into(), json!(self.patterns));
             }
@@ -596,6 +619,7 @@ struct Walk {
     walk_ms: u64,
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))] // Windows-путь; Linux читает через atspi.rs
 impl Walk {
     fn mark(&mut self, reason: &'static str) {
         if !self.truncated_by.contains(&reason) {
@@ -606,6 +630,7 @@ impl Walk {
 
 /// Обрезка по единицам UTF-16 (как её видит Windows), а не по символам: иначе эмодзи
 /// и суррогатные пары считались бы «одним», и предел был бы не тем, что заявлен.
+#[cfg_attr(target_os = "linux", allow(dead_code))] // Windows-путь; Linux читает через atspi.rs
 fn clip_utf16(text: &str, limit: u64) -> (String, bool) {
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut result = String::new();
@@ -621,6 +646,7 @@ fn clip_utf16(text: &str, limit: u64) -> (String, bool) {
     (result, false)
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))] // Windows-путь; Linux читает через atspi.rs
 fn role_name(control_type: i32) -> String {
     let known = match control_type {
         0 => "unknown",
@@ -678,6 +704,7 @@ fn role_name(control_type: i32) -> String {
 
 /// Роль по имени оконного класса — только для запасного Win32-пути, где никакой роли
 /// не сообщают вообще.
+#[cfg_attr(target_os = "linux", allow(dead_code))] // Windows-путь; Linux читает через atspi.rs
 fn win32_role(class: &str) -> &'static str {
     let class = class.to_ascii_lowercase();
     if class.contains("richedit") || class == "edit" {
@@ -935,7 +962,7 @@ fn run(capability: &str, args: Value) -> Result<Value> {
     platform::read(&plan)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use anyhow::{Result, bail};
     use serde_json::Value;
@@ -1420,6 +1447,458 @@ mod platform {
             let by = if deadline > sweep_by { deadline } else { sweep_by };
             let (found, scanned, hit_limit) =
                 ax::sweep(&root, &plan.select, plan.max_nodes, plan.max_depth, by, screen)
+                    .map_err(|failure| anyhow!("{failure}"))?;
+            if !found.is_empty() || Instant::now() >= deadline {
+                let matched = found.len();
+                let shown: Vec<Value> = found.into_iter().take(plan.limit).map(|hit| hit.json).collect();
+                if matched == 0 {
+                    let (reason, hint) = crate::element::not_found(hit_limit, false, false);
+                    return Ok(serde_json::json!({
+                        "ok": false,
+                        "reason": reason,
+                        "matched": 0,
+                        "nodes_scanned": scanned,
+                        "searched_whole_window": hit_limit.is_none(),
+                        "waited_ms": started.elapsed().as_millis() as u64,
+                        "polls": polls,
+                        "hint": hint,
+                    }));
+                }
+                return Ok(crate::element::find_receipt(
+                    plan,
+                    matched,
+                    shown,
+                    scanned,
+                    hit_limit.is_none(),
+                    started.elapsed().as_millis() as u64,
+                    polls,
+                ));
+            }
+            thread::sleep(Duration::from_millis(120));
+        }
+    }
+}
+
+/// Linux (порт 28.09): те же три глагола через AT-SPI2. Всё, что знает о D-Bus, живёт в
+/// `atspi.rs`; здесь — поток под обход (зависшее приложение не должно вешать тело),
+/// привязка X-окна к AT-SPI-окну и перевод прочитанного в те же `Node`/`Walk`, что рендерит
+/// `render`. Без X-сервера (чистый Wayland) целевое окно — активное по AT-SPI.
+#[cfg(target_os = "linux")]
+mod platform {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use anyhow::{Result, anyhow, bail};
+    use serde_json::Value;
+
+    use super::{Node, Plan, Rect, Rendered, WORKER_GRACE_MS, Walk, WindowInfo, render};
+    use crate::atspi::live::{Attached, Obj, WindowHint, active_window, attach, connect, ensure_enabled};
+    use crate::atspi::{self, Screen, WalkLimits};
+    use crate::element::{Choice, choose};
+    use crate::x11::{self, X};
+
+    static ATSPI_WORKERS: AtomicU64 = AtomicU64::new(0);
+
+    const WINDOW_READ_ATSPI_DETAIL: &str =
+        "AT-SPI2 over D-Bus (org.a11y.atspi.*): role, name, states, interfaces, extents and actions per element, children fetched no further than the cap, walked breadth-first on a dedicated thread with a per-call D-Bus timeout";
+
+    /// Срок одного вызова D-Bus: не дольше срока просьбы и не дольше 5 с.
+    fn call_timeout(timeout_ms: u64) -> Duration {
+        Duration::from_millis(timeout_ms.clamp(100, 5_000))
+    }
+
+    /// Какое окно берём — со стороны X (номер, pid, заголовок, рамка), если X есть.
+    #[derive(Clone)]
+    struct Target {
+        hwnd: Option<u64>,
+        pid: Option<u32>,
+        title: Option<String>,
+        class: Option<String>,
+        rect: Option<(i32, i32, i32, i32)>,
+        resolved_from: &'static str,
+        foreground: bool,
+    }
+
+    fn target_window(said: Option<u64>) -> Result<Option<Target>> {
+        let Ok(x) = X::connect() else {
+            if let Some(value) = said {
+                bail!(
+                    "window 0x{value:X} cannot be resolved: this process has no X server ({}); omit \
+                     hwnd to use the active window of the accessibility tree",
+                    x11::session().hints().join("; ")
+                )
+            }
+            return Ok(None);
+        };
+        let (window, resolved_from) = match said {
+            Some(value) => {
+                let id = u32::try_from(value)
+                    .map_err(|_| anyhow!("window 0x{value:X} is not an X11 window id: they fit in 32 bits"))?;
+                let window = x
+                    .window_by_id(id)
+                    .ok_or_else(|| anyhow!("window 0x{value:X} no longer exists (the window manager does not list it)"))?;
+                (window, "argument")
+            }
+            None => {
+                let window = x
+                    .foreground()
+                    .ok_or_else(|| anyhow!("there is no active window in the interactive desktop"))?;
+                (window, "foreground")
+            }
+        };
+        let foreground = x.active() == Some(window.id);
+        Ok(Some(Target {
+            hwnd: Some(u64::from(window.id)),
+            pid: window.pid,
+            title: window.title.clone(),
+            class: window.class.clone(),
+            rect: Some((window.x, window.y, window.width, window.height)),
+            resolved_from,
+            foreground,
+        }))
+    }
+
+    fn screen() -> Screen {
+        match X::connect() {
+            Ok(x) => Screen { left: 0.0, top: 0.0, width: f64::from(x.width), height: f64::from(x.height) },
+            // Без X размер стола неизвестен: не выдумывать `offscreen` по чужой геометрии —
+            // экран «бесконечный», и видимость решает только состояние SHOWING.
+            Err(_) => Screen { left: f64::MIN / 4.0, top: f64::MIN / 4.0, width: f64::MAX / 2.0, height: f64::MAX / 2.0 },
+        }
+    }
+
+    /// Найти AT-SPI-окно и включить доступность, если была выключена.
+    fn attach_target(target: Option<&Target>, timeout: Duration) -> Result<(zbus::blocking::Connection, Attached, Vec<String>)> {
+        let mut notes = Vec::new();
+        match ensure_enabled(timeout) {
+            Ok(true) => notes.push(
+                "accessibility was switched off in this session and the body switched it on \
+                 (org.a11y.Status.IsEnabled): programs started before that may show no tree until \
+                 they are restarted"
+                    .to_string(),
+            ),
+            Ok(false) => {}
+            Err(words) => notes.push(words),
+        }
+        let conn = connect(timeout).map_err(|words| anyhow!("{words}"))?;
+        let attached = match target {
+            Some(target) => attach(
+                &conn,
+                &WindowHint { pid: target.pid, title: target.title.as_deref(), rect: target.rect },
+            ),
+            None => active_window(&conn),
+        }
+        .map_err(|words| anyhow!("{words}"))?;
+        Ok((conn, attached, notes))
+    }
+
+    fn rect_of(rect: Option<(i32, i32, i32, i32)>) -> Option<Rect> {
+        let (x, y, width, height) = rect?;
+        let rect = Rect { left: x, top: y, right: x + width, bottom: y + height };
+        (!rect.is_empty()).then_some(rect)
+    }
+
+    fn window_info(target: Option<&Target>, attached: &Attached) -> WindowInfo {
+        match target {
+            Some(target) => WindowInfo {
+                hwnd: target.hwnd.unwrap_or(0),
+                title: attached.title.clone().or_else(|| target.title.clone()).unwrap_or_default(),
+                class: target.class.clone().or_else(|| attached.application.clone()).unwrap_or_default(),
+                pid: target.pid.or(attached.pid).unwrap_or(0),
+                rect: rect_of(target.rect),
+                foreground: target.foreground,
+                resolved_from: target.resolved_from,
+                dpi: 96,
+            },
+            None => WindowInfo {
+                hwnd: 0,
+                title: attached.title.clone().unwrap_or_default(),
+                class: attached.application.clone().unwrap_or_default(),
+                pid: attached.pid.unwrap_or(0),
+                rect: rect_of(atspi::live::Obj::extents(&attached.window)),
+                foreground: true,
+                resolved_from: "atspi_active",
+                dpi: 96,
+            },
+        }
+    }
+
+    fn node_of(node: atspi::Node, hwnd: Option<u64>) -> Node {
+        Node {
+            parent: node.parent,
+            depth: node.depth,
+            role: node.role.to_string(),
+            localized_role: node.localized_role,
+            name: node.name,
+            value: node.value,
+            automation_id: node.automation_id,
+            class: None,
+            hwnd,
+            rect: node.rect.map(|(left, top, right, bottom)| Rect { left, top, right, bottom }),
+            enabled: node.enabled,
+            focused: node.focused,
+            offscreen: node.offscreen,
+            checked: node.checked,
+            selected: node.selected,
+            expanded: node.expanded,
+            text_truncated: node.text_truncated,
+            children_unread: node.children_unread,
+            atspi_role: node.atspi_role,
+            patterns: node.patterns,
+            secure: node.secure,
+        }
+    }
+
+    fn walk_of(walk: atspi::Walk, window_id: Option<u64>) -> Walk {
+        Walk {
+            nodes: walk
+                .nodes
+                .into_iter()
+                .enumerate()
+                .map(|(index, node)| node_of(node, if index == 0 { window_id } else { None }))
+                .collect(),
+            discovered_unread: walk.discovered_unread,
+            subtrees_unread: walk.subtrees_unread,
+            skipped_offscreen: walk.skipped_offscreen,
+            depth_reached: walk.depth_reached,
+            truncated_by: walk.truncated_by,
+            walk_ms: walk.walk_ms,
+        }
+    }
+
+    /// Запустить работу на своём потоке и дождаться её не дольше `grace`.
+    fn on_worker<T: Send + 'static>(
+        name: &str,
+        grace: Duration,
+        work: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> std::result::Result<Result<T>, RecvTimeoutError> {
+        let (sender, receiver) = mpsc::channel();
+        ATSPI_WORKERS.fetch_add(1, Ordering::SeqCst);
+        let spawned = thread::Builder::new().name(name.into()).spawn(move || {
+            let _ = sender.send(work());
+            ATSPI_WORKERS.fetch_sub(1, Ordering::SeqCst);
+        });
+        if let Err(error) = spawned {
+            ATSPI_WORKERS.fetch_sub(1, Ordering::SeqCst);
+            return Ok(Err(anyhow!("could not start the at-spi worker thread: {error}")));
+        }
+        receiver.recv_timeout(grace)
+    }
+
+    pub fn read(plan: &Plan) -> Result<Value> {
+        let started = Instant::now();
+        if plan.force_win32 {
+            bail!("backend=win32 is the Windows reader; on Linux the only reader is AT-SPI, ask for backend=auto")
+        }
+        let target = target_window(plan.hwnd)?;
+        let job = plan.clone();
+        let for_worker = target.clone();
+        let grace = Duration::from_millis(plan.limits.timeout_ms + WORKER_GRACE_MS);
+        match on_worker("praxis-atspi-read", grace, move || read_in_worker(for_worker.as_ref(), &job)) {
+            Ok(Ok((walk, window, notes))) => Ok(render(Rendered {
+                plan,
+                window: &window,
+                walk: &walk,
+                backend: "atspi",
+                backend_detail: WINDOW_READ_ATSPI_DETAIL,
+                fallback_reason: None,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                extra_notes: notes,
+                workers_live: ATSPI_WORKERS.load(Ordering::SeqCst),
+            })),
+            Ok(Err(error)) => Err(error),
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "AT-SPI did not answer within timeout_ms={} plus worker_grace_ms={}; the target \
+                 program is probably busy and its reader thread is still running (at-spi workers \
+                 live: {})",
+                plan.limits.timeout_ms,
+                WORKER_GRACE_MS,
+                ATSPI_WORKERS.load(Ordering::SeqCst)
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("the at-spi worker thread ended without an answer"),
+        }
+    }
+
+    fn read_in_worker(target: Option<&Target>, plan: &Plan) -> Result<(Walk, WindowInfo, Vec<String>)> {
+        let deadline = Instant::now() + Duration::from_millis(plan.limits.timeout_ms);
+        let (_conn, attached, mut notes) = attach_target(target, call_timeout(plan.limits.timeout_ms))?;
+        let limits = WalkLimits {
+            max_nodes: plan.limits.max_nodes,
+            max_depth: plan.limits.max_depth,
+            max_children_per_node: plan.limits.max_children_per_node,
+            max_text_chars: plan.limits.max_text_chars,
+        };
+        let walk = atspi::walk(attached.window.clone(), limits, deadline, screen(), plan.visible_only);
+        notes.push(format!(
+            "the AT-SPI window was matched by {} ({} accessible windows of the program compared)",
+            attached.matched_by, attached.compared
+        ));
+        notes.push(
+            "patterns lists which desktop.element.act verbs the element supports, derived from its \
+             AT-SPI actions, interfaces and states; a missing patterns key means none of the eight applies"
+                .to_string(),
+        );
+        notes.push(
+            "atspi_role is the raw AT-SPI role name; role is the same dictionary word as on Windows. \
+             Coordinates are X root pixels, 1:1 with desktop.input.perform"
+                .to_string(),
+        );
+        notes.push(
+            "secure: true marks a password field (AT-SPI «password text»): its value is never read \
+             (absent, not empty), it never carries set_value, and set_value on it is refused"
+                .to_string(),
+        );
+        if walk.read_failures > 0 {
+            notes.push(format!(
+                "{} elements answered with an AT-SPI error while being read (first: {})",
+                walk.read_failures,
+                walk.first_read_failure.clone().unwrap_or_default()
+            ));
+        }
+        let window = window_info(target, &attached);
+        Ok((walk_of(walk, target.and_then(|t| t.hwnd)), window, notes))
+    }
+
+    pub fn act(plan: &crate::element::Plan) -> Result<Value> {
+        let started = Instant::now();
+        let target = target_window(plan.hwnd)?;
+        let job = plan.clone();
+        let front = plan.hwnd.is_none();
+        let grace = Duration::from_millis(plan.timeout_ms + WORKER_GRACE_MS * 2);
+        match on_worker("praxis-atspi-act", grace, move || act_in_worker(target.as_ref(), front, &job, started)) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "AT-SPI did not answer within timeout_ms={} plus grace; the worker may still be \
+                 running; an in-flight action may have acted. Do not retry with a new idempotency key",
+                plan.timeout_ms
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("the at-spi worker thread died without answering"),
+        }
+    }
+
+    fn act_in_worker(
+        target: Option<&Target>,
+        front: bool,
+        plan: &crate::element::Plan,
+        started: Instant,
+    ) -> Result<Value> {
+        let deadline = started + Duration::from_millis(plan.timeout_ms.max(WORKER_GRACE_MS));
+        let (_conn, attached, _notes) = attach_target(target, call_timeout(plan.timeout_ms.max(WORKER_GRACE_MS)))?;
+        let root: Obj = attached.window.clone();
+        let screen = screen();
+        let mut polls = 0u64;
+        loop {
+            polls += 1;
+            let (found, scanned, hit_limit) =
+                atspi::sweep(&root, &plan.select, plan.max_nodes, plan.max_depth, deadline, screen)
+                    .map_err(|failure| anyhow!("{failure}"))?;
+            if let Some(limit) = hit_limit {
+                let (reason, hint) = crate::element::not_found(Some(limit), false, false);
+                return Ok(serde_json::json!({
+                    "ok": false, "reason": reason, "hint": hint,
+                    "matched": found.len(), "nodes_scanned": scanned,
+                    "searched_whole_window": false,
+                    "waited_ms": started.elapsed().as_millis() as u64, "polls": polls,
+                }));
+            }
+            let indexes: Vec<usize> = (0..found.len()).collect();
+            match choose(&indexes, plan.select.nth) {
+                Choice::One { index, .. } => {
+                    let hit = &found[index];
+                    let fresh = atspi::node_from(&hit.element, hit.node.depth, None, u64::MAX, screen)
+                        .map_err(|failure| anyhow!("re-reading the chosen element before the action: {failure}"))?;
+                    if !fresh.matches(&plan.select) {
+                        bail!("selected element changed before action")
+                    }
+                    let expected_hwnd = target.and_then(|t| t.hwnd).map(|h| h as u32);
+                    let expected_pid = target.and_then(|t| t.pid);
+                    let guard = || -> std::result::Result<(), String> {
+                        if Instant::now() >= deadline {
+                            return Err("element action deadline expired before mutation".into());
+                        }
+                        if let Some(hwnd) = expected_hwnd {
+                            let Ok(x) = X::connect() else {
+                                return Err("the X server went away before the element action".into());
+                            };
+                            match x.window_by_id(hwnd) {
+                                Some(now) if now.pid == expected_pid => {}
+                                _ => return Err("target window changed before element action".into()),
+                            }
+                            if front && x.active() != Some(hwnd) {
+                                return Err("foreground changed before element action".into());
+                            }
+                        }
+                        Ok(())
+                    };
+                    atspi::perform(&hit.element, &fresh, plan.act, plan.text.as_deref(), guard)
+                        .map_err(|words| anyhow!("{words}"))?;
+                    let after = match atspi::node_from(&hit.element, hit.node.depth, None, u64::MAX, screen) {
+                        Ok(node) => node.describe(),
+                        Err(_) => Value::Null,
+                    };
+                    return Ok(crate::element::receipt(
+                        plan,
+                        hit.json.clone(),
+                        after,
+                        started.elapsed().as_millis() as u64,
+                        polls,
+                    ));
+                }
+                Choice::Ambiguous { total } => {
+                    let candidates = found.iter().map(|hit| hit.json.clone()).collect();
+                    return Ok(crate::element::ambiguous_error(total, candidates));
+                }
+                Choice::None => {
+                    if plan.timeout_ms == 0 || Instant::now() >= deadline {
+                        let (reason, hint) =
+                            crate::element::not_found(hit_limit, plan.select.nth.is_some(), !found.is_empty());
+                        return Ok(serde_json::json!({
+                            "ok": false,
+                            "reason": reason,
+                            "matched": found.len(),
+                            "nodes_scanned": scanned,
+                            "searched_whole_window": hit_limit.is_none(),
+                            "waited_ms": started.elapsed().as_millis() as u64,
+                            "polls": polls,
+                            "hint": hint,
+                        }));
+                    }
+                    thread::sleep(Duration::from_millis(120));
+                }
+            }
+        }
+    }
+
+    pub fn find(plan: &crate::element::FindPlan) -> Result<Value> {
+        let target = target_window(plan.hwnd)?;
+        let job = plan.clone();
+        let grace = Duration::from_millis(super::find_worker_wait_ms(plan.timeout_ms));
+        match on_worker("praxis-atspi-find", grace, move || find_in_worker(target.as_ref(), &job)) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => bail!(
+                "AT-SPI did not answer within timeout_ms={} plus sweep/grace; the target program is \
+                 probably busy and its worker thread is still running",
+                plan.timeout_ms
+            ),
+            Err(RecvTimeoutError::Disconnected) => bail!("the at-spi worker thread died without answering"),
+        }
+    }
+
+    fn find_in_worker(target: Option<&Target>, plan: &crate::element::FindPlan) -> Result<Value> {
+        let started = Instant::now();
+        let deadline = started + Duration::from_millis(plan.timeout_ms);
+        let (_conn, attached, _notes) = attach_target(target, call_timeout(plan.timeout_ms.max(super::SWEEP_MS)))?;
+        let root = attached.window.clone();
+        let screen = screen();
+        let mut polls = 0u64;
+        loop {
+            polls += 1;
+            let sweep_by = Instant::now() + Duration::from_millis(super::SWEEP_MS);
+            let by = if deadline > sweep_by { deadline } else { sweep_by };
+            let (found, scanned, hit_limit) =
+                atspi::sweep(&root, &plan.select, plan.max_nodes, plan.max_depth, by, screen)
                     .map_err(|failure| anyhow!("{failure}"))?;
             if !found.is_empty() || Instant::now() >= deadline {
                 let matched = found.len();
@@ -2822,8 +3301,10 @@ mod platform {
     }
 }
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 const WINDOW_READ_UIA_DETAIL: &str =
     "IUIAutomation control view, properties and patterns read from one cache request, walked on a dedicated MTA thread";
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 const WINDOW_READ_WIN32_DETAIL: &str =
     "plain Win32 child-window walk with timed WM_GETTEXT; no COM involved";
 /// В какой системе координат прямоугольники ответа. На Windows — пиксели виртуального
@@ -2969,12 +3450,18 @@ mod tests {
                 crate::element::FIND_CAPABILITY.to_string(),
             ]
         );
-        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos")));
-        // На macOS под теми же глаголами — другой механизм, и манифест зовёт его своим
-        // именем; на Windows имя прежнее.
+        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos", target_os = "linux")));
+        // На macOS и Linux под теми же глаголами — другие механизмы, и манифест зовёт их
+        // своими именами; на Windows имя прежнее.
         assert_eq!(
             adapter.name,
-            if cfg!(target_os = "macos") { "ax-window-reader" } else { "uia-window-reader" }
+            if cfg!(target_os = "macos") {
+                "ax-window-reader"
+            } else if cfg!(target_os = "linux") {
+                "atspi-window-reader"
+            } else {
+                "uia-window-reader"
+            }
         );
         assert_eq!(adapter.version, "1");
     }
@@ -3287,7 +3774,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     #[test]
     fn without_windows_the_verb_says_why_instead_of_returning_nothing() {
         let error = run(CAPABILITY, json!({})).unwrap_err();
@@ -3297,6 +3784,35 @@ mod tests {
                 .contains("requires an interactive Windows session"),
             "{error}"
         );
+    }
+
+    /// Linux без стола (стенд в контейнере без DISPLAY и без шины сессии): чтение окна —
+    /// отказ словами про то, чего нет, а не пустой ответ.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_without_a_desktop_the_verb_says_why() {
+        if std::env::var_os("DISPLAY").is_some() || std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
+            return;
+        }
+        let error = run(CAPABILITY, json!({})).unwrap_err().to_string();
+        assert!(
+            error.contains("no D-Bus session bus") || error.contains("no active window")
+                || error.contains("accessibility"),
+            "{error}"
+        );
+    }
+
+    /// На Linux узел несёт сырую роль AT-SPI и список действий.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn on_linux_a_node_carries_its_atspi_role_and_patterns() {
+        let mut walk = sample_walk();
+        walk.nodes[2].atspi_role = Some("push button".into());
+        walk.nodes[2].patterns = vec!["invoke", "focus"];
+        let value = rendered(&test_plan(Shape::Flat, "push button"), &walk);
+        let save = &value["items"][0];
+        assert_eq!(save["atspi_role"], "push button");
+        assert_eq!(save["patterns"], json!(["invoke", "focus"]));
     }
 
     /// На macOS узел несёт сырую роль и список действий, а координаты названы пунктами:

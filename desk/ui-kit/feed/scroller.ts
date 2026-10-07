@@ -12,8 +12,8 @@ export type Overscroll = "stretch" | "rubber" | "none";
 
 /**
  * Характер движения. Егор 28.09: «ещё более тягучим всё и плавным», выбрал «тягуче».
- * Пропорции перетяга — «бережно»: предел ~треть окна, обычная оттяжка пальцами — 40–70 px
- * на экране; тягучесть — во времени (мягкий долгий возврат), а не в размахе.
+ * Оттяжка ощутима, но ограничена: ручной ход 300 px даёт около 70–95 px.
+ * Тягучесть — во времени (мягкий долгий возврат), а не в размахе.
  */
 export interface Feel {
   wheelTau: number; // мс: сглаживание щелчка колеса
@@ -27,13 +27,14 @@ export interface Feel {
 }
 
 export const FEELS: Record<"brisk" | "smooth" | "syrup", Feel> = {
-  // Возврат после отпускания — в ВИДИМЫХ пикселях и экспонентой с первого кадра
-  // (Егор 28.09: «очень долго отпускается»): 1/springW — постоянная времени, 95% пути
-  // за три таких. Раньше пружина шла в «пальцевом» пространстве резины и трогалась с
-  // места медленно — сжатая кривая «висела», потом доезжала рывком.
-  brisk: { wheelTau: 95, padTau: 18, followTau: 110, flingTau: 325, maxFling: 7, springW: 4 / 320, rubberC: 0.5, rubberD: 0.24 },
-  smooth: { wheelTau: 150, padTau: 30, followTau: 170, flingTau: 460, maxFling: 9, springW: 4 / 420, rubberC: 0.5, rubberD: 0.28 },
-  syrup: { wheelTau: 210, padTau: 45, followTau: 240, flingTau: 620, maxFling: 10, springW: 4 / 520, rubberC: 0.5, rubberD: 0.32 },
+  // Возврат и подхват — одна критическая пружина в ВИДИМЫХ пикселях.
+  // springW задаёт время возврата, padTau — время следования за рукой.
+  // Переключение цели не меняет положение или скорость мгновенно.
+  // Из покоя критическая пружина проходит 95% за 4.74/w вместо 3/w у
+  // прежней экспоненты: множитель 1.6 сохраняет длительность без резкого старта.
+  brisk: { wheelTau: 95, padTau: 18, followTau: 110, flingTau: 325, maxFling: 7, springW: 6.4 / 320, rubberC: 0.65, rubberD: 0.26 },
+  smooth: { wheelTau: 150, padTau: 30, followTau: 170, flingTau: 460, maxFling: 9, springW: 6.4 / 420, rubberC: 0.65, rubberD: 0.26 },
+  syrup: { wheelTau: 210, padTau: 45, followTau: 240, flingTau: 620, maxFling: 10, springW: 6.4 / 520, rubberC: 0.65, rubberD: 0.26 },
 };
 export type FeelName = keyof typeof FEELS;
 
@@ -71,80 +72,74 @@ export function overText(x: number, y: number): boolean {
   return false;
 }
 
-type Mode = "idle" | "wheel" | "drag" | "fling";
+type Mode = "idle" | "spring" | "drag" | "fling";
+// Старые браузеры/драйверы не помечают платформенную инерцию. Для них ни ноль,
+// ни скорость не дают права отбрасывать следующий ввод или держать ленту восемь секунд.
+const WHEEL_QUIET = 160;
+const ZERO_QUIET = 90;
+const CONTACT_LEASE = 600; // мс: запас живого канала контактов, не задержка отпускания
+const IMPACT_SPEED = 1.1; // px/мс: быстрый вход из ленты в край
+const IMPACT_INPUT = 0.12; // остаточная податливость края после удара
+const IMPACT_MEMORY = 60; // мс: хвост не накачивает удар обратно в ручную тягу
 
-/**
- * Жест тачпада. Проверено по живому журналу тачпада Егора (28.09, 17 жестов из 17):
- * Chromium на Windows шлёт wheel с НУЛЕВОЙ дельтой в миг, когда пальцы поднялись (конец
- * фазы; дальше — инерция системы теми же событиями ровно раз в кадр), и ещё раз, когда
- * инерция кончилась. Даже после полутора секунд неподвижных пальцев ноль приходит.
- *  fingers — пальцы на тачпаде: за краем оттяжка держится сколько угодно;
- *  inertia — пальцы подняли: у края смахивание упирается, оттяжка мягко возвращается;
- *  none    — жеста нет.
- * Новое касание посреди инерции узнаётся сразу — дельта растёт, меняет знак или сбивается
- * ровный шаг кадра, — поэтому после «парковки» у края тянуть можно немедленно.
- */
-type Pad = "none" | "fingers" | "inertia";
-
-const STREAM_GAP = 140; // мс тишины колеса — новый жест
-const INERTIA_GAP = 45; // мс: инерция идёт каждый кадр; дольше — это уже пальцы
-const HOLD_FALLBACK = 260; // мс: устройство без нулевых событий — держим так
-const HOLD_SAFETY = 8000; // мс: ноль потерялся — всё равно отпустить
+interface ScrollSession {
+  available: boolean; active: boolean; momentum: boolean;
+  source: "macos" | "wayland"; seq: number; sentAt: number;
+}
 
 export class Scroller {
   readonly el: HTMLElement;
   readonly inner: HTMLElement;
-  overscroll: Overscroll;
   feel: Feel;
-  private readonly canGrab: (t: Element, x: number, y: number) => boolean;
-  /** Ехать за низом, когда прилипли. Окно включает это только в чате. */
   stick: boolean;
+  private over: Overscroll;
+  private readonly canGrab: (t: Element, x: number, y: number) => boolean;
   private readonly pinSlack: number;
   private readonly onPinnedChange?: (p: boolean) => void;
 
-  private pos = 0; // логический scrollTop, дробный
-  private target = 0; // куда ведёт колесо
+  // ОДНА координата и скорость в видимых px. Внутри [0,max] это scrollTop,
+  // снаружи — scrollTop + видимая оттяжка. Переход через край непрерывен.
+  private pos = 0;
+  private target = 0;
+  private vel = 0;
   private tau = 150;
-  private notch = true; // последнее колесо — щелчок мыши (не тачпад)
-  private vel = 0; // px/мс — бросок
-  private raw = 0; // перетяг, показанный сейчас («как тянули»: −верх, +низ)
-  private rawVel = 0;
-  private pull = 0; // перетяг, который держат пальцы тачпада (к нему плавно идёт raw)
-  private free = false; // отпущен: raw — уже видимые пиксели и тает к нулю
+  private returning = false;
+  private impact = 0; // сторона поглощения: -1 верх, +1 низ; это физика, не фаза пальцев
   private mode: Mode = "idle";
   private raf = 0;
   private last = 0;
   private written = -1;
+  private contentHeight = 0;
+  private layoutMax = 0;
   private lastWheel = 0;
-  private pad: Pad = "none";
-  private padPrev = 0; // |dy| прошлого события инерции
-  private padDir = 0;
-  private sawLift = false; // устройство присылает нулевое «пальцы поднялись»
-  private holdTimer = 0;
+  private wheelDir = 0;
+  private wheelActive = false;
+  private momentum = false; // достоверная фаза браузера, когда WheelEvent её сообщает
+  private padHeld = false; // два настоящих контакта от нативной оболочки
+  // Mac/Wayland report a gesture lifetime, not a physical contact count.
+  private session: ScrollSession | null = null;
+  private sessionAt = 0;
+  private notch = false;
+  private releaseTimer = 0;
+  private releaseAt = 0;
   private pinnedState = true;
-  private follow = true; // ехать за низом, пока прилипли
+  private follow = true;
   private drag: null | {
-    id: number;
-    y0: number;
-    pos0: number;
-    raw0: number;
-    moved: boolean;
+    id: number; y0: number; start: number; moved: boolean;
     samples: Array<{ t: number; y: number }>;
   } = null;
   private ro: ResizeObserver;
 
   constructor(el: HTMLElement, inner: HTMLElement, opts: ScrollerOptions = {}) {
-    this.el = el;
-    this.inner = inner;
-    this.overscroll = opts.overscroll ?? "rubber";
+    this.el = el; this.inner = inner;
+    this.over = opts.overscroll ?? "rubber";
     this.feel = { ...FEELS[opts.feel ?? "syrup"] };
-    this.canGrab = opts.canGrab ?? ((t, x, y) => !t.closest(NO_GRAB) && !overText(x, y));
     this.stick = opts.stick ?? true;
     this.pinSlack = opts.pinSlack ?? 28;
+    this.canGrab = opts.canGrab ?? ((t,x,y) => !t.closest(NO_GRAB) && !overText(x,y));
     this.onPinnedChange = opts.onPinnedChange;
-    // Своя привязка прокрутки (preserve) — нативная в Chromium дёргала бы второй раз,
-    // а в WebKit её нет вовсе.
     el.style.overflowAnchor = "none";
+    this.measureContent();
     this.pos = this.target = el.scrollTop;
     el.addEventListener("wheel", this.onWheel, { passive: false });
     el.addEventListener("scroll", this.onScroll, { passive: true });
@@ -152,15 +147,25 @@ export class Scroller {
     el.addEventListener("pointermove", this.onMove);
     el.addEventListener("pointerup", this.onUp);
     el.addEventListener("pointercancel", this.onUp);
+    el.addEventListener("lostpointercapture", this.onUp);
+    window.addEventListener?.("pointerup", this.onUp, true);
+    window.addEventListener?.("pointercancel", this.onUp, true);
+    window.addEventListener?.("blur", this.onBlur);
+    window.addEventListener?.("helene-touchpad-contact", this.onPadContact);
+    const contact = (window as Window & { __HELENE_TOUCHPAD_CONTACT?: { available: boolean; contacts: number; sentAt: number } }).__HELENE_TOUCHPAD_CONTACT;
+    if (contact && Date.now()-contact.sentAt <= CONTACT_LEASE) this.padHeld = contact.available && contact.contacts >= 2;
+    window.addEventListener?.("helene-scroll-session", this.onScrollSession);
+    const session = (window as Window & { __HELENE_SCROLL_SESSION?: ScrollSession }).__HELENE_SCROLL_SESSION;
+    if (session) this.onScrollSession({detail: session} as CustomEvent<ScrollSession>);
     el.addEventListener("keydown", this.onKey);
     this.ro = new ResizeObserver(() => this.contentChanged());
-    this.ro.observe(inner);
-    this.ro.observe(el);
+    this.ro.observe(inner); this.ro.observe(el);
   }
 
   destroy() {
     cancelAnimationFrame(this.raf);
-    clearTimeout(this.holdTimer);
+    this.clearRelease();
+    this.endDrag();
     this.ro.disconnect();
     this.el.removeEventListener("wheel", this.onWheel);
     this.el.removeEventListener("scroll", this.onScroll);
@@ -168,501 +173,451 @@ export class Scroller {
     this.el.removeEventListener("pointermove", this.onMove);
     this.el.removeEventListener("pointerup", this.onUp);
     this.el.removeEventListener("pointercancel", this.onUp);
+    this.el.removeEventListener("lostpointercapture", this.onUp);
+    window.removeEventListener?.("pointerup", this.onUp, true);
+    window.removeEventListener?.("pointercancel", this.onUp, true);
+    window.removeEventListener?.("blur", this.onBlur);
+    window.removeEventListener?.("helene-touchpad-contact", this.onPadContact);
+    window.removeEventListener?.("helene-scroll-session", this.onScrollSession);
     this.el.removeEventListener("keydown", this.onKey);
   }
 
-  /** Состояние для журнала жестов лаборатории. */
-  debug(): { pos: number; max: number; raw: number; shown: number; pull: number; pad: Pad; notch: boolean } {
-    const r = (v: number) => Math.round(v * 10) / 10;
-    const shown = this.free ? this.raw : this.rubber(this.raw);
-    return { pos: Math.round(this.pos), max: Math.round(this.max), raw: r(this.raw), shown: r(shown), pull: r(this.pull), pad: this.pad, notch: this.notch };
-  }
-
-  get pinned(): boolean {
-    return this.pinnedState;
-  }
-
-  private get max(): number {
-    return Math.max(0, this.el.scrollHeight - this.el.clientHeight);
-  }
-
-  /** Плавно к низу (кнопка «новые ↓», своё отправленное). */
-  toBottom(smooth = true) {
-    this.setPinned(true);
-    this.follow = true;
-    if (!smooth) {
-      this.pos = this.target = this.max;
-      this.write();
-      return;
+  get overscroll(): Overscroll { return this.over; }
+  set overscroll(value: Overscroll) {
+    this.over = value;
+    if (value === "none") {
+      this.impact = 0;
+      this.pos = clamp(this.pos,0,this.max);
+      this.target = clamp(this.target,0,this.max);
     }
-    this.vel = 0;
-    this.mode = "wheel";
-    this.tau = this.feel.followTau * 1.2;
-    this.target = this.max;
-    this.kick();
-  }
-
-  /** Плавно к точке (переход к сообщению). */
-  scrollTo(y: number, smooth = true) {
-    const t = clamp(y, 0, this.max);
-    this.setPinned(this.max - t <= this.pinSlack);
-    this.follow = this.pinnedState;
-    if (!smooth) {
-      this.pos = this.target = t;
-      this.write();
-      return;
-    }
-    this.vel = 0;
-    this.mode = "wheel";
-    this.tau = this.feel.followTau * 1.2;
-    this.target = t;
-    this.kick();
-  }
-
-  /** Бросок со скоростью v px/мс (стенд лаборатории; жест мыши делает то же самое). */
-  fling(v: number) {
-    this.vel = clamp(v, -this.feel.maxFling, this.feel.maxFling);
-    this.mode = "fling";
-    if (v < 0) {
-      this.follow = false;
-      this.setPinned(false);
-    }
-    this.kick();
-  }
-
-  /** Сдвинуть без анимации (масштаб держит точку под курсором). */
-  shiftBy(dy: number) {
-    if (!dy) return;
-    this.pos = clamp(this.pos + dy, 0, this.max);
-    this.target = clamp(this.target + dy, 0, this.max);
     this.write();
   }
-
-  /**
-   * Правка содержимого без прыжка: то, что человек читает, остаётся на месте.
-   * Прилипшую ленту не держим — она сама поедет за низом.
-   */
-  preserve(mutate: () => void) {
-    if (this.pinnedState) {
-      mutate();
-      this.contentChanged();
-      return;
-    }
-    const anchor = this.anchor();
-    mutate();
-    if (anchor && anchor.el.isConnected) {
-      const now = anchor.el.getBoundingClientRect().top;
-      this.shiftBy(now - anchor.top);
-    }
+  get pinned(): boolean { return this.pinnedState; }
+  private get max(): number {
+    if (!this.inner.style.transform) this.contentHeight = this.el.scrollHeight;
+    return Math.max(0,this.contentHeight-this.el.clientHeight);
+  }
+  private measureContent() {
+    const transform = this.inner.style.transform;
+    if (transform) this.inner.style.transform = "";
+    this.contentHeight = this.el.scrollHeight;
+    this.layoutMax = Math.max(0,this.contentHeight-this.el.clientHeight);
+    if (transform) this.inner.style.transform = transform;
+  }
+  debug() {
+    const round = (v: number) => Math.round(v*10)/10;
+    const top = clamp(this.pos,0,this.max);
+    const over = this.pos-top;
+    return { pos: Math.round(top), max: Math.round(this.max), raw: round(over), shown: round(over),
+      pull: round(this.unrubber(this.target-clamp(this.target,0,this.max))),
+      // Совместимость журнала: это активный ввод/возврат, НЕ оценка контакта.
+      pad: this.momentum ? "inertia" : this.wheelActive ? "fingers" : this.returning ? "inertia" : "none", notch: this.notch };
   }
 
-  /** Первый видимый элемент содержимого и где он сейчас. */
+  toBottom(smooth = true) {
+    this.measureContent();
+    this.scrollTo(this.max,smooth);
+  }
+  scrollTo(y: number, smooth = true) {
+    this.measureContent();
+    this.clearRelease();
+    this.endDrag();
+    this.wheelActive = false; this.momentum = false; this.wheelDir = 0; this.lastWheel = 0;
+    this.returning = false; this.impact = 0;
+    this.target = clamp(y,0,this.max);
+    this.setPinned(this.max-this.target <= this.pinSlack);
+    this.follow = this.pinnedState;
+    if (!smooth) {
+      cancelAnimationFrame(this.raf); this.raf = 0;
+      this.pos = this.target; this.vel = 0; this.mode = "idle";
+      this.write();
+    } else {
+      this.mode = "spring"; this.tau = this.feel.followTau*1.2; this.kick();
+    }
+  }
+  fling(v: number) {
+    this.clearRelease(); this.wheelActive = false; this.momentum = false; this.returning = false; this.impact = 0;
+    this.vel = clamp(v,-this.feel.maxFling,this.feel.maxFling);
+    this.mode = "fling";
+    if (this.pos < 0 || this.pos > this.max) {
+      this.target = clamp(this.pos,0,this.max); this.returning = true; this.mode = "spring";
+      this.impact = Math.sign(this.pos-this.target);
+    }
+    if (v < 0) { this.follow = false; this.setPinned(false); }
+    this.kick();
+  }
+  shiftBy(dy: number) {
+    if (!dy) return;
+    this.pos = clamp(this.pos+dy,0,this.max);
+    this.target = clamp(this.target+dy,0,this.max);
+    this.write();
+  }
+  preserve(mutate: () => void) {
+    if (this.stick && this.pinnedState) {
+      mutate(); this.contentChanged(); return;
+    }
+    const anchor = this.anchor();
+    const previousMax = this.layoutMax;
+    mutate();
+    this.measureContent();
+    if (anchor && anchor.el.isConnected) this.shiftBy(anchor.el.getBoundingClientRect().top-anchor.top);
+    this.contentChanged(previousMax);
+  }
   private anchor(): { el: Element; top: number } | null {
     const box = this.el.getBoundingClientRect();
     const walk = (parent: Element): { el: Element; top: number } | null => {
       for (const child of Array.from(parent.children)) {
         const r = child.getBoundingClientRect();
-        if (r.bottom > box.top + 1) {
-          // Спуститься на уровень ниже, если элемент выше окна (длинный блок).
+        if (r.bottom > box.top+1) {
           if (r.top < box.top && child.children.length) {
-            const deeper = walk(child);
-            if (deeper) return deeper;
+            const deeper = walk(child); if (deeper) return deeper;
           }
-          return { el: child, top: r.top };
+          return {el:child,top:r.top};
         }
       }
       return null;
     };
     return walk(this.inner);
   }
-
   private setPinned(p: boolean) {
     if (p === this.pinnedState) return;
-    this.pinnedState = p;
-    this.onPinnedChange?.(p);
+    this.pinnedState = p; this.onPinnedChange?.(p);
   }
-
-  private contentChanged() {
+  private contentChanged(oldMax = this.layoutMax) {
+    this.measureContent();
     const max = this.max;
-    if (this.stick && this.pinnedState && this.follow && this.mode !== "drag") {
-      // Ехать за низом плавно: новое сообщение вырастает, лента едет вслед.
-      if (this.mode === "idle" || this.mode === "wheel") {
-        this.mode = "wheel";
-        this.tau = this.feel.followTau;
-        this.target = max;
-        this.kick();
-      }
-    } else if (this.pos > max) {
-      this.pos = this.target = max;
-      this.write();
+    if (this.stick && this.pinnedState && this.follow && !this.drag && !this.wheelActive) {
+      this.target = max; this.mode = "spring"; this.tau = this.feel.followTau; this.kick();
+    } else if (max !== oldMax && !this.drag) {
+      // Геометрия сменилась: старый низ больше не может быть целью пружины.
+      this.target = clamp(this.target,0,max);
+      if (this.pos > max && !this.wheelActive) this.pos = max;
+      this.write(); this.kick();
     }
   }
 
-  // ------------------------------------------------------------------ ввод
+  private edgeLength(): number {
+    // Один масштаб упругости у всех feel. Высокое окно не делает край вдвое
+    // мягче, а компактное окно не превращает его в почти неподвижную стену.
+    return clamp(Math.max(1,this.el.clientHeight)*this.feel.rubberD,112,184);
+  }
+  private rubber(x: number): number {
+    const d = this.edgeLength();
+    const a = Math.abs(x);
+    return a ? d*a*this.feel.rubberC/(d+a*this.feel.rubberC)*Math.sign(x) : 0;
+  }
+  private unrubber(y: number): number {
+    const d = this.edgeLength();
+    const a = Math.min(Math.abs(y),d*0.75);
+    return a ? a*d/((d-a)*this.feel.rubberC)*Math.sign(y) : 0;
+  }
+  private limitOver(y: number): number {
+    const max = this.max, edge = clamp(y,0,max);
+    if (this.over === "none") return edge;
+    const limit = this.edgeLength()*0.75;
+    return edge+clamp(y-edge,-limit,limit);
+  }
+  private fromInput(y: number): number {
+    const edge = clamp(y,0,this.max);
+    return this.limitOver(edge+this.rubber(y-edge));
+  }
 
   private onWheel = (e: WheelEvent) => {
-    if (e.ctrlKey || e.defaultPrevented) return; // масштаб — у zoom.ts
-    const now = performance.now();
-    const gap = now - this.lastWheel;
-    this.lastWheel = now;
-
-    // Нулевое событие — граница фазы жеста: пальцы поднялись или кончилась инерция.
-    if (e.deltaY === 0 && e.deltaX === 0) {
-      this.sawLift = true;
-      this.pad = this.pad === "fingers" ? "inertia" : "none";
-      this.padPrev = Infinity;
-      this.release();
+    if (e.ctrlKey || e.defaultPrevented || !Number.isFinite(e.deltaY) || !Number.isFinite(e.deltaX)) return;
+    if (!e.deltaY && !e.deltaX) {
+      // Нулевая дельта не означает подъём, если оболочка всё ещё видит пальцы.
+      if (this.wheelActive && !(this.handHeld && !this.notch && !this.momentum)) this.armRelease(ZERO_QUIET,false);
       return;
     }
-
     let dy = e.deltaY;
     if (e.deltaMode === 1) dy *= 40;
     else if (e.deltaMode === 2) dy *= this.el.clientHeight;
-    if (Math.abs(e.deltaX) > Math.abs(dy)) return;
-    if (innerScrollable(e.target as Element, this.el, dy)) return;
+    if (!dy || Math.abs(e.deltaX) > Math.abs(dy)) return;
+    if (innerScrollable(e.target as Element,this.el,dy)) return;
     e.preventDefault();
-
-    const notch = isNotch(e, dy, gap, this.pad);
-    this.notch = notch;
-    if (notch) {
-      this.pad = "none";
-    } else {
-      const a = Math.abs(dy);
-      const dir = Math.sign(dy);
-      if (gap > STREAM_GAP || this.pad === "none") this.pad = "fingers";
-      else if (this.pad === "inertia" && (dir !== this.padDir || gap > INERTIA_GAP || a > this.padPrev * 1.25 + 2)) this.pad = "fingers";
-      this.padPrev = a;
-      this.padDir = dir;
-    }
-    this.tau = notch ? this.feel.wheelTau : this.feel.padTau;
-    if (this.mode !== "wheel") this.target = this.pos;
-    this.mode = "wheel";
-    this.vel = 0;
+    const now = performance.now(), gap = now-this.lastWheel, dir = Math.sign(dy);
+    this.lastWheel = now;
+    const session = this.currentSession;
+    this.notch = e.deltaMode !== 0 || (!session && gap > WHEEL_QUIET && (Math.abs(dy)%120 === 0 || Math.abs(dy)%100 === 0));
+    this.endDrag();
     const max = this.max;
-
-    // Пальцы повели обратно из оттяжки — сначала вернуть её, потом прокручивать. Возврат
-    // идёт по ВИДИМОЙ оттяжке, один к одному с пальцами.
-    // ⚠ 29.09, Егор: «верхняя граница застряла на середине и отматывалась чуть выше
-    // середины максимум». Оттяжка копилась в «пространстве пальцев» без предела (на Windows
-    // нет нулевого «пальцы поднялись», и инерция после жеста тоже шла в оттяжку), видимая
-    // резинка насыщалась, а обратный ход съедал весь невидимый запас, почти не двигая ленту.
-    if (this.pull && Math.sign(dy) === -Math.sign(this.pull)) {
-      const shown = this.rubber(this.pull) + dy;
-      if (Math.sign(shown) === Math.sign(this.pull)) { this.pull = this.unrubber(shown); dy = 0; }
-      else { dy = shown; this.pull = 0; }
+    // Современный Chromium сообщает платформенную инерцию прямо. Её нельзя
+    // принимать за новый захват по знаку/скорости wheel: это повторно накачивает
+    // уже отпущенную резинку. Внутри ленты хвост едет, у края его цель ограничена
+    // границей; координата и скорость сохраняются, импульс снимает вязкость.
+    if ((e as WheelEvent & { momentum?: boolean }).momentum === true || (!this.notch && session?.momentum === true)) {
+      if (!this.momentum) this.target = clamp(this.target,0,max);
+      this.momentum = true; this.wheelActive = false;
+      const pending = Math.max(1,this.el.clientHeight)*1.5;
+      const next = clamp(this.target+dy,this.pos-pending,this.pos+pending), edge = clamp(next,0,max);
+      // Небольшая деформация остаётся: это поглощение с мягким последним ходом,
+      // а не запрет движения или мгновенное обнуление скорости у границы.
+      this.target = this.over === "none" ? edge : edge+this.rubber(next-edge)*0.04;
+      this.returning = this.pos < 0 || this.pos > max;
+      if (this.returning) this.impact = Math.sign(this.pos-clamp(this.pos,0,max));
+      this.mode = "spring"; this.tau = this.feel.padTau;
+      this.wheelDir = dir;
+      this.setPinned(max-this.target <= this.pinSlack); this.follow = this.pinnedState && dir > 0;
+      this.armRelease(WHEEL_QUIET,true); this.kick();
+      return;
     }
-
-    const want = this.target + dy;
-    const t = clamp(want, 0, max);
-    const excess = want - t;
-    if (dy < 0) {
-      this.follow = false;
-      if (max - t > this.pinSlack) this.setPinned(false);
+    this.momentum = false;
+    // Новое движение берёт текущую координату. Смена направления не должна
+    // отрабатывать невидимую очередь старой поездки; скорость меняется пружиной.
+    // Край уже тянет ленту к своей цели, а новое усилие направлено обратно:
+    // это подхват текущего положения даже внутри непрерывного wheel-потока.
+    // Не ждать тишины/смены знака/окончания возврата и не менять скорость.
+    const pickup = this.impact && dir*(this.target-this.pos) < 0;
+    if (!this.wheelActive || (this.wheelDir && dir !== this.wheelDir) || pickup) {
+      this.target = this.pos; this.impact = 0;
     }
-    this.target = t;
-
-    if (excess && this.overscroll !== "none") {
-      if (notch) {
-        // Щелчок мыши в край — едва заметный мягкий толчок, не прыжок.
-        if (Math.abs(this.raw) < 4) this.rawVel += Math.sign(excess) * 0.35;
-      } else if (this.pad === "fingers") {
-        // Оттягивание пальцами: держится, пока пальцы на тачпаде. Потолок — ¾ предела
-        // резинки: дальше видимое почти не растёт, а запас рос бы без конца (см. выше).
-        const cap = this.unrubber(this.el.clientHeight * this.feel.rubberD * 0.75);
-        this.pull = clamp(this.pull + excess, -cap, cap);
-        this.armHold();
-      }
-      // Инерция доехала до края — упирается: остаток глотаем.
+    this.wheelDir = dir; this.wheelActive = true; this.returning = false;
+    this.mode = "spring";
+    this.tau = this.notch ? this.feel.wheelTau : this.feel.padTau;
+    const previousTarget = this.target;
+    let base = this.target;
+    const edge = clamp(base,0,max), over = base-edge;
+    if (over && dir === Math.sign(over)) {
+      // Наружу — упругая кривая; обратно — видимые пиксели один к одному.
+      base = edge+this.unrubber(over);
+      this.target = this.fromInput(base+dy);
+    } else {
+      const next = base+dy;
+      this.target = over && Math.sign(next-edge) === Math.sign(over)
+        ? next : this.fromInput(next);
     }
+    // Вход не выбрасывается. При ударе та же сила вызывает лишь небольшую
+    // деформацию. Обратный/новый жест выше сразу возвращает обычную податливость.
+    if (this.impact === dir) this.target = previousTarget+(this.target-previousTarget)*IMPACT_INPUT;
+    const pending = Math.max(1,this.el.clientHeight)*1.5;
+    this.target = this.limitOver(clamp(this.target,this.pos-pending,this.pos+pending));
+    if (dir < 0) { this.follow = false; this.setPinned(max-clamp(this.target,0,max) <= this.pinSlack); }
+    else { this.setPinned(max-clamp(this.target,0,max) <= this.pinSlack); this.follow = this.pinnedState; }
+    this.armRelease(this.handHeld && !this.notch ? CONTACT_LEASE : WHEEL_QUIET,true);
     this.kick();
   };
-
-  /** Пальцы подняли (или устройство молчит): оттяжка мягко возвращается. */
+  private onPadContact = (e: Event) => {
+    const contact = (e as CustomEvent<{ available: boolean; contacts: number }>).detail;
+    if (!contact || typeof contact.available !== "boolean" || !Number.isInteger(contact.contacts) || contact.contacts < 0 || contact.contacts > 16) return;
+    const wasHeld = this.padHeld;
+    this.padHeld = contact.available && contact.contacts >= 2;
+    if (this.drag || !this.wheelActive || this.momentum || this.notch) return;
+    if (this.padHeld) this.armRelease(CONTACT_LEASE,true);
+    else if (wasHeld) this.release(); // подъём пальцев приходит отдельным сигналом
+  };
+  private get currentSession(): ScrollSession | null {
+    return this.session?.available && performance.now()-this.sessionAt < CONTACT_LEASE ? this.session : null;
+  }
+  private get handHeld(): boolean { return this.padHeld || this.currentSession?.active === true; }
+  private onScrollSession = (e: Event) => {
+    const v = (e as CustomEvent<ScrollSession>).detail;
+    if (!v || typeof v.available !== "boolean" || typeof v.active !== "boolean" || typeof v.momentum !== "boolean"
+      || (v.source !== "macos" && v.source !== "wayland") || !Number.isSafeInteger(v.seq) || v.seq < 0
+      || !Number.isFinite(v.sentAt) || Date.now()-v.sentAt > CONTACT_LEASE || v.sentAt-Date.now() > CONTACT_LEASE
+      || (v.active && v.momentum) || (this.session && (v.seq < this.session.seq || v.sentAt < this.session.sentAt))) return;
+    const wasActive = this.currentSession?.active;
+    this.session = v; this.sessionAt = performance.now();
+    if (this.drag || this.notch) return;
+    if (v.available && v.momentum && (this.wheelActive || this.momentum)) {
+      // Also absorb a phase that arrives just after its DOM wheel event.
+      this.release(); this.momentum = true; this.armRelease(WHEEL_QUIET,true);
+    } else if (this.wheelActive && !this.momentum) {
+      if (v.available && v.active) this.armRelease(CONTACT_LEASE,true);
+      else if (wasActive) this.release();
+    }
+  };
+  private clearRelease() {
+    clearTimeout(this.releaseTimer); this.releaseTimer = 0; this.releaseAt = 0;
+  }
+  private armRelease(delay: number, replace: boolean) {
+    const at = performance.now()+delay;
+    if (!replace && this.releaseTimer && this.releaseAt <= at) return;
+    this.clearRelease(); this.releaseAt = at;
+    this.releaseTimer = window.setTimeout(() => {
+      this.releaseTimer = 0; this.releaseAt = 0; this.padHeld = false; this.wheelActive = false; this.release();
+    },delay);
+  }
   private release() {
-    clearTimeout(this.holdTimer);
-    if (this.pull) {
-      this.pull = 0;
-      this.letGo();
-    }
-  }
-
-  /** Резиновая кривая iOS: сколько протянули → сколько видно. Чем дальше, тем туже. */
-  private rubber(x: number): number {
-    const d = (this.el.clientHeight || 1) * this.feel.rubberD;
-    const a = Math.abs(x);
-    return a ? (1 - 1 / ((a * this.feel.rubberC) / d + 1)) * d * Math.sign(x) : 0;
-  }
-
-  /** Обратно: сколько видно → сколько надо протянуть (чтобы подхватить возврат рукой). */
-  private unrubber(y: number): number {
-    const d = (this.el.clientHeight || 1) * this.feel.rubberD;
-    const a = Math.min(Math.abs(y), d * 0.995);
-    return a ? ((d / (d - a) - 1) * d) / this.feel.rubberC * Math.sign(y) : 0;
-  }
-
-  /** Отпустили: дальше перетяг живёт в видимых пикселях и тает экспонентой с первого кадра. */
-  private letGo() {
-    if (!this.raw) return;
-    if (!this.free) {
-      this.raw = this.rubber(this.raw);
-      this.free = true;
-    }
-    this.rawVel = -this.feel.springW * this.raw;
+    this.clearRelease();
+    this.wheelActive = false;
+    this.momentum = false;
+    const bounded = clamp(this.target,0,this.max);
+    this.returning = bounded !== this.target || this.pos !== clamp(this.pos,0,this.max);
+    this.target = bounded;
+    this.mode = "spring";
     this.kick();
   }
-
-  /** Рука снова взялась за возвращающийся перетяг — назад в пространство пальцев, без скачка. */
-  private grab() {
-    if (!this.free) return;
-    this.raw = this.unrubber(this.raw);
-    this.free = false;
-    this.rawVel = 0;
-  }
-
-  /** Страховка удержания: без нулевых событий устройство держит коротко, с ними — долго. */
-  private armHold() {
-    clearTimeout(this.holdTimer);
-    this.holdTimer = window.setTimeout(() => {
-      this.pad = "none";
-      this.release();
-    }, this.sawLift ? HOLD_SAFETY : HOLD_FALLBACK);
-  }
-
   private onScroll = () => {
     const top = this.el.scrollTop;
-    if (Math.abs(top - this.written) <= 1.5) return;
-    // Чужая прокрутка: клавиатура, полоса, поиск, scrollIntoView.
-    if (this.mode !== "drag") {
-      this.pos = this.target = top;
-      this.vel = 0;
-      this.mode = "idle";
-    }
-    this.written = top;
-    const bottom = this.max - top <= this.pinSlack;
-    this.setPinned(bottom);
-    this.follow = bottom;
+    if (Math.abs(top-this.written) <= 1.5) return;
+    if (this.drag) return;
+    // Полоса, поиск, native touch: новый явный источник позиции отменяет очередь.
+    this.clearRelease(); this.wheelActive = false; this.momentum = false; this.returning = false; this.impact = 0;
+    this.pos = this.target = top; this.vel = 0; this.mode = "idle";
+    this.written = top; this.paintOver();
+    this.setPinned(this.max-top <= this.pinSlack); this.follow = this.pinnedState;
   };
-
   private onKey = (e: KeyboardEvent) => {
     if (e.target !== this.el) return;
-    const page = this.el.clientHeight * 0.85;
-    const step: Record<string, number> = { ArrowDown: 64, ArrowUp: -64, PageDown: page, PageUp: -page, " ": e.shiftKey ? -page : page };
-    if (e.key === "End") { e.preventDefault(); this.toBottom(); return; }
-    if (e.key === "Home") { e.preventDefault(); this.scrollTo(0); return; }
-    const d = step[e.key];
-    if (d == null) return;
-    e.preventDefault();
-    if (this.mode !== "wheel") this.target = this.pos;
-    this.mode = "wheel";
-    this.tau = this.feel.followTau;
-    this.target = clamp(this.target + d, 0, this.max);
-    if (d < 0) { this.follow = false; this.setPinned(this.max - this.target <= this.pinSlack); }
+    if (e.key === "End") {e.preventDefault();this.toBottom();return;}
+    if (e.key === "Home") {e.preventDefault();this.scrollTo(0);return;}
+    const page = this.el.clientHeight*0.85;
+    const steps: Record<string,number> = {ArrowDown:64,ArrowUp:-64,PageDown:page,PageUp:-page," ":e.shiftKey?-page:page};
+    const dy = steps[e.key]; if (dy == null) return;
+    e.preventDefault(); this.scrollTo(this.target+dy);
+  };
+  private endDrag() {
+    const d = this.drag; this.drag = null; this.el.classList.remove("grabbing");
+    if (d && this.el.hasPointerCapture(d.id)) this.el.releasePointerCapture(d.id);
+  }
+  private onDown = (e: PointerEvent) => {
+    if (e.pointerType === "touch" || (e.button !== 0 && e.button !== 1)) return;
+    if (e.button !== 1 && !e.altKey && !this.canGrab(e.target as Element,e.clientX,e.clientY)) return;
+    if (e.clientX > this.el.getBoundingClientRect().left+this.el.clientWidth) return;
+    e.preventDefault(); this.clearRelease(); this.wheelActive = false; this.momentum = false;
+    const edge = clamp(this.pos,0,this.max);
+    this.drag = {id:e.pointerId,y0:e.clientY,start:edge+this.unrubber(this.pos-edge),moved:false,samples:[{t:e.timeStamp,y:e.clientY}]};
+    this.target = this.pos; this.returning = false; this.impact = 0; this.mode = "drag";
+    this.el.setPointerCapture(e.pointerId);
+    this.el.focus({preventScroll:true});
     this.kick();
   };
-
-  private onDown = (e: PointerEvent) => {
-    if (e.pointerType === "touch") return; // палец листает нативно, с инерцией системы
-    const middle = e.button === 1;
-    if (e.button !== 0 && !middle) return;
-    const t = e.target as Element;
-    if (!middle && !e.altKey && !this.canGrab(t, e.clientX, e.clientY)) return;
-    // Полоса прокрутки: клик правее содержимого.
-    if (e.clientX > this.el.getBoundingClientRect().left + this.el.clientWidth) return;
-    e.preventDefault(); // не начинать выделение и не уводить фокус
-    this.grab();
-    this.drag = { id: e.pointerId, y0: e.clientY, pos0: this.pos, raw0: this.raw, moved: false, samples: [{ t: e.timeStamp, y: e.clientY }] };
-    this.vel = 0;
-    this.rawVel = 0;
-    this.pull = 0;
-    this.mode = "drag";
-    this.el.focus({ preventScroll: true });
-  };
-
   private onMove = (e: PointerEvent) => {
-    const d = this.drag;
-    if (!d || e.pointerId !== d.id) return;
-    const dy = e.clientY - d.y0;
-    if (!d.moved) {
-      if (Math.abs(dy) < 4) return;
-      d.moved = true;
-      this.el.setPointerCapture(e.pointerId);
-      this.el.classList.add("grabbing");
-    }
-    const max = this.max;
-    const want = d.pos0 + d.raw0 - dy;
-    const p = clamp(want, 0, max);
-    this.pos = this.target = p;
-    this.raw = this.overscroll === "none" ? 0 : want - p;
-    if (dy > 0) {
-      this.follow = false;
-      if (max - p > this.pinSlack) this.setPinned(false);
-    }
-    d.samples.push({ t: e.timeStamp, y: e.clientY });
+    const d = this.drag; if (!d || e.pointerId !== d.id) return;
+    // Потерянный pointerup нельзя превращать в вечный захват.
+    if (e.buttons === 0) {this.onUp(e);return;}
+    const dy = e.clientY-d.y0;
+    if (!d.moved && Math.abs(dy) < 4) return;
+    d.moved = true; this.el.classList.add("grabbing");
+    this.target = this.fromInput(d.start-dy);
+    if (dy > 0) {this.follow = false;this.setPinned(this.max-clamp(this.target,0,this.max) <= this.pinSlack);}
+    d.samples.push({t:e.timeStamp,y:e.clientY});
     if (d.samples.length > 12) d.samples.shift();
     this.kick();
   };
-
   private onUp = (e: PointerEvent) => {
-    const d = this.drag;
-    if (!d || e.pointerId !== d.id) return;
-    this.drag = null;
-    this.el.classList.remove("grabbing");
-    if (this.el.hasPointerCapture(e.pointerId)) this.el.releasePointerCapture(e.pointerId);
-    if (!d.moved) {
-      this.mode = "idle";
-      return;
-    }
-    // Клик после «протащил» — не клик.
-    const eat = (ev: Event) => { ev.stopPropagation(); ev.preventDefault(); };
-    window.addEventListener("click", eat, { capture: true, once: true });
-    setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
-    // Скорость — по последним 90 мс; стоял перед отпусканием — броска нет.
-    const now = e.timeStamp;
-    const recent = d.samples.filter((s) => now - s.t <= 90);
+    const d = this.drag; if (!d || e.pointerId !== d.id) return;
+    this.endDrag();
     let v = 0;
-    if (recent.length >= 2) {
-      const a = recent[0], b = recent[recent.length - 1];
-      if (b.t > a.t && now - b.t < 50) v = -(b.y - a.y) / (b.t - a.t);
+    const recent = d.samples.filter(s=>e.timeStamp-s.t <= 90);
+    if (d.moved && e.type === "pointerup" && recent.length >= 2) {
+      const a = recent[0], b = recent[recent.length-1];
+      if (b.t > a.t && e.timeStamp-b.t < 50) v = -(b.y-a.y)/(b.t-a.t);
     }
-    v = clamp(v, -this.feel.maxFling, this.feel.maxFling);
-    if (Math.abs(v) > 0.08 && !this.raw) {
-      this.vel = v;
-      this.mode = "fling";
-    } else {
-      this.mode = "idle";
+    if (d.moved) {
+      const eat = (ev: Event) => {ev.stopPropagation();ev.preventDefault();};
+      window.addEventListener("click",eat,{capture:true,once:true});
+      setTimeout(()=>window.removeEventListener("click",eat,{capture:true}),0);
     }
-    if (this.raw) this.letGo();
-    this.setPinned(this.max - this.pos <= this.pinSlack && v >= 0);
+    if (Math.abs(v) > 0.08 && this.pos >= 0 && this.pos <= this.max && this.target >= 0 && this.target <= this.max) this.fling(v);
+    else this.release();
+    this.setPinned(this.max-clamp(this.pos,0,this.max) <= this.pinSlack && v >= 0);
     this.follow = this.pinnedState;
-    this.kick();
   };
-
-  // ------------------------------------------------------------------ кадр
+  private onBlur = () => {this.padHeld=false;this.session=null;this.endDrag();this.release();};
 
   private kick() {
     if (this.raf) return;
-    this.last = performance.now();
-    this.raf = requestAnimationFrame(this.frame);
+    this.last = performance.now(); this.raf = requestAnimationFrame(this.frame);
   }
-
   private frame = (now: number) => {
     this.raf = 0;
-    const dt = Math.min(48, Math.max(1, now - this.last));
-    this.last = now;
+    const dt = Math.min(48,Math.max(1,now-this.last)); this.last = now;
     const max = this.max;
-    let busy = false;
-
-    if (this.mode === "wheel") {
-      if (this.stick && this.follow && this.pinnedState) this.target = max;
-      const k = 1 - Math.exp(-dt / Math.max(1, this.tau));
-      this.pos += (this.target - this.pos) * k;
-      if (Math.abs(this.target - this.pos) < 0.35) {
-        this.pos = this.target;
-        this.mode = "idle";
-      } else busy = true;
-    } else if (this.mode === "fling") {
-      this.pos += this.vel * dt;
-      this.vel *= Math.exp(-dt / this.feel.flingTau);
-      if (this.pos < 0 || this.pos > max) {
-        // Бросок доехал до края — упирается (Егор 28.09); лишь мягкая подушка, не отскок.
-        if (this.overscroll !== "none") this.rawVel = this.vel * 0.12;
-        this.pos = clamp(this.pos, 0, max);
-        this.vel = 0;
-        this.mode = "idle";
-        if (this.pos >= max - 0.5) { this.setPinned(true); this.follow = true; }
-      } else if (Math.abs(this.vel) < 0.015) {
-        this.vel = 0;
-        this.mode = "idle";
-      } else busy = true;
+    // Короткие подшаги разрешают непрерывный вход в вязкий край при 60/120 Гц.
+    // Внутри ленты пружина по-прежнему решается аналитически.
+    for (let remaining=dt;remaining>0;) {
+      const step = Math.min(2,remaining); remaining -= step;
+      this.advanceMotion(step,max);
     }
-
-    if (this.mode === "drag") {
-      // Перетяг ведёт указатель напрямую.
-    } else if (this.pull) {
-      this.grab();
-      // Пальцы держат оттяжку: показанный перетяг плавно идёт за ними; скорость
-      // запоминается, чтобы возврат после подъёма пальцев начался без рывка.
-      const prev = this.raw;
-      this.raw += (this.pull - this.raw) * (1 - Math.exp(-dt / Math.max(1, this.feel.padTau)));
-      this.rawVel = (this.raw - prev) / dt;
-      if (Math.abs(this.pull - this.raw) > 0.2) busy = true;
-    } else if (this.raw || this.rawVel) {
-      // Возврат: критически затухающая пружина — без перелёта и без рывка.
-      let t = dt;
-      const w = this.feel.springW;
-      while (t > 0) {
-        const h = Math.min(4, t);
-        const a = -w * w * this.raw - 2 * w * this.rawVel;
-        this.rawVel += a * h;
-        this.raw += this.rawVel * h;
-        t -= h;
-      }
-      if (Math.abs(this.raw) < 0.3 && Math.abs(this.rawVel) < 0.005) {
-        this.raw = 0;
-        this.rawVel = 0;
-        this.free = false;
-      } else busy = true;
+    if (this.mode !== "fling" && Math.abs(this.target-this.pos) < 0.35 && Math.abs(this.vel) < 0.005) {
+      this.pos = this.target; this.vel = 0; this.returning = false;
+      if (this.pos >= 0 && this.pos <= max) this.impact = 0;
+      if (!this.drag) this.mode = "idle";
     }
-
     this.write();
-    if (busy || this.mode === "wheel" || this.mode === "fling") this.kick();
+    if (this.mode === "fling" || (this.mode !== "idle" && (this.pos !== this.target || this.vel))) this.kick();
   };
-
-  private write() {
-    const top = clamp(this.pos, 0, this.max);
-    if (Math.abs(this.el.scrollTop - top) >= 0.5) this.el.scrollTop = top;
-    this.written = this.el.scrollTop;
-    this.paintOver();
-  }
-
-  /** Перетяг: резиновая кривая iOS — чем дальше тянешь, тем туже. */
-  private paintOver() {
-    const s = this.inner.style;
-    const h = this.el.clientHeight || 1;
-    const shown = this.free ? this.raw : this.rubber(this.raw);
-    if (!shown || Math.abs(shown) < 0.2 || this.overscroll === "none") {
-      if (s.transform) { s.transform = ""; s.transformOrigin = ""; }
-      return;
+  private advanceMotion(step: number, max: number) {
+    if ((this.momentum || (this.wheelActive && this.impact)) && !this.drag) {
+      // Накопленную цель отпускает только инерция/удар. Продолжающийся ручной
+      // ввод удерживает оттяжку даже микродельтами; иначе медленные пальцы
+      // проигрывают утечке, и край возвращается прямо во время жеста.
+      const edge = clamp(this.target,0,max);
+      this.target = edge+(this.target-edge)*Math.exp(-step/IMPACT_MEMORY);
     }
-    if (this.overscroll === "rubber") {
+    if (this.mode === "fling") {
+      const decay = Math.exp(-step/this.feel.flingTau);
+      const next = this.pos+this.vel*this.feel.flingTau*(1-decay);
+      this.vel *= decay;
+      if (next < 0 || next > max) {
+        this.pos = this.limitOver(next); this.target = clamp(next,0,max);
+        this.returning = true; this.mode = "spring";
+        this.impact = this.over === "none" ? 0 : Math.sign(next-this.target);
+        if (this.over === "none") {this.vel=0;this.mode="idle";}
+        if (next > max) {this.setPinned(true);this.follow=true;}
+      } else {
+        this.pos = this.target = next;
+        if (Math.abs(this.vel) < 0.015) {this.vel = 0;this.mode = "idle";}
+      }
+    } else if (this.mode !== "idle") {
+      const w = this.returning || this.impact ? this.feel.springW : 2/Math.max(1,this.drag ? this.feel.padTau : this.tau);
+      const before = this.pos;
+      // Вязкость растёт гладко в первых 24px продавливания. Она снимает
+      // исходящий импульс за время, а не присваивает скорости долю на границе.
+      // При расправлении остаётся критическая пружина: остаточный ход тихий.
+      const depth = Math.abs(this.pos-clamp(this.pos,0,max));
+      const u = clamp(depth/24,0,1);
+      const viscosity = this.impact*this.vel > 0 ? 0.16*u*u*(3-2*u) : 0;
+      const loss = Math.exp(-viscosity*step/2);
+      const [next,speed] = damp(this.pos,this.vel*loss,this.target,w,step);
+      const travel = this.feel.maxFling*step;
+      this.pos = this.limitOver(this.pos+clamp(next-this.pos,-travel,travel));
+      this.vel = clamp(speed*loss,-this.feel.maxFling,this.feel.maxFling);
+      if (!this.drag && !this.returning && !this.impact && before >= 0 && before <= max && this.over !== "none") {
+        const side = Math.sign(this.pos-clamp(this.pos,0,max));
+        if (side*this.vel > IMPACT_SPEED) {
+          this.impact = side;
+          const edge = side < 0 ? 0 : max;
+          this.target = edge+(this.target-edge)*IMPACT_INPUT;
+        }
+      }
+      // Возврат к границе не перескакивает через неё из-за остаточной скорости.
+      if (this.returning && (before-this.target)*(this.pos-this.target) < 0) {this.pos=this.target;this.vel=0;}
+    }
+  }
+  private write() {
+    const top = clamp(this.pos,0,this.max);
+    if (this.el.scrollTop !== top) this.el.scrollTop = top;
+    this.written = this.el.scrollTop; this.paintOver();
+  }
+  private paintOver() {
+    const s = this.inner.style, h = this.el.clientHeight || 1;
+    const shown = this.pos-clamp(this.pos,0,this.max);
+    if (!shown || Math.abs(shown) < 0.2 || this.over === "none") {
+      if (s.transform) {s.transform = "";s.transformOrigin = "";}
+    } else if (this.over === "rubber") {
       s.transformOrigin = "";
       s.transform = `translate3d(0, ${(-shown).toFixed(2)}px, 0)`;
     } else {
-      // Растяжка: край окна неподвижен, содержимое вытягивается от него.
-      const edge = shown < 0 ? this.el.scrollTop : this.el.scrollTop + h;
-      const k = 1 + (Math.abs(shown) / h) * 0.35;
+      const edge = shown < 0 ? this.el.scrollTop : this.el.scrollTop+h;
       s.transformOrigin = `50% ${edge.toFixed(1)}px`;
-      s.transform = `scaleY(${k.toFixed(4)})`;
+      s.transform = `scaleY(${(1+Math.abs(shown)/h*0.35).toFixed(4)})`;
     }
   }
 }
-
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
+function clamp(v: number, lo: number, hi: number): number {return v < lo ? lo : v > hi ? hi : v;}
+function damp(x: number, v: number, goal: number, w: number, dt: number): [number,number] {
+  const offset=x-goal,c=v+w*offset,decay=Math.exp(-w*dt);
+  return [goal+(offset+c*dt)*decay,(v-w*c*dt)*decay];
 }
-
-/**
- * Щелчок колеса мыши, а не тачпад. Посреди жеста тачпада — всегда тачпад: первое событие
- * нового жеста у Егора бывало и −49 (журнал 28.09), это не щелчок.
- */
-function isNotch(e: WheelEvent, dy: number, gap: number, pad: Pad): boolean {
-  if (e.deltaMode !== 0) return true;
-  if (pad !== "none" && gap <= STREAM_GAP) return false;
-  const a = Math.abs(dy);
-  if (a < 50) return false;
-  const legacy = (e as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY;
-  if (typeof legacy === "number" && legacy !== 0 && Math.abs(legacy) % 120 === 0) return true;
-  return a % 100 === 0 || a % 120 === 0;
-}
-
-/** Внутри есть свой прокручиваемый блок (код, таблица), и ему есть куда ехать? */
+/** Вложенная прокрутка получает событие, пока ей есть куда двигаться. */
 function innerScrollable(t: Element | null, root: HTMLElement, dy: number): boolean {
-  for (let n = t; n && n !== root; n = n.parentElement) {
-    if (!(n instanceof HTMLElement)) continue;
-    if (n.scrollHeight <= n.clientHeight + 1) continue;
-    const oy = getComputedStyle(n).overflowY;
+  for (let n=t;n && n !== root;n=n.parentElement) {
+    if (!(n instanceof HTMLElement) || n.scrollHeight <= n.clientHeight+1) continue;
+    const oy=getComputedStyle(n).overflowY;
     if (oy !== "auto" && oy !== "scroll") continue;
-    if (dy < 0 ? n.scrollTop > 0 : n.scrollTop + n.clientHeight < n.scrollHeight - 1) return true;
+    if (dy < 0 ? n.scrollTop > 0 : n.scrollTop+n.clientHeight < n.scrollHeight-1) return true;
   }
   return false;
 }

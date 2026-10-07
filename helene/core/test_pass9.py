@@ -846,7 +846,7 @@ class TestMessageTaskResolve(TaskTargetBase):
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "known"
         out = agent.tool_remind_self("message", "поздравь с релизом", "in 2h", "@vasya")
-        self.assertIn("Наметила #", out)
+        self.assertIn("Намечено #", out)
         self.assertNotIn("незнаком", out)
         t = tasks_mod.list_open()[-1]
         self.assertEqual(t["target_id"], 555, "id должен резолвиться при постановке")
@@ -861,7 +861,7 @@ class TestMessageTaskResolve(TaskTargetBase):
         out = agent.tool_remind_self(
             "message", "разбуди Егора", "in 2h", "10101")
 
-        self.assertIn("Наметила #", out)
+        self.assertIn("Намечено #", out)
         self.assertNotIn("незнаком", out)
         task = tasks_mod.list_open()[-1]
         self.assertEqual(task["target_id"], 10101)
@@ -936,7 +936,7 @@ class TestMessageTaskResolve(TaskTargetBase):
 
     def test_other_kinds_untouched(self):
         out = agent.tool_remind_self("note", "не забыть про бэкап", "in 1h")
-        self.assertIn("Наметила #", out)
+        self.assertIn("Намечено #", out)
 
 
 class TestOverdueWhenWarning(TaskTargetBase):
@@ -956,7 +956,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
         self._ok()
         past = (_dt.datetime.now() - _dt.timedelta(hours=6)).isoformat(timespec="minutes")
         out = agent.tool_remind_self("message", "поздравь с релизом", past, "@vasya")
-        self.assertIn("Наметила #", out)
+        self.assertIn("Намечено #", out)
         self.assertIn("уже прошёл", out, "прошедший срок обязан быть назван громко")
         self.assertIn("не уйдёт автоматически", out)
         self.assertIn("решу заново", out)
@@ -979,7 +979,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
         # «in 0m» и пустой when — осознанное «сейчас»; предупреждение их не трогает,
         # иначе крикливость отучит читать предупреждения вообще.
         out = agent.tool_remind_self("note", "сейчас же", "in 0m")
-        self.assertIn("Наметила #", out)
+        self.assertIn("Намечено #", out)
         self.assertNotIn("уже прошёл", out)
 
     def test_invalid_time_does_not_create_an_immediate_task(self):
@@ -994,7 +994,7 @@ class TestOverdueWhenWarning(TaskTargetBase):
         for when in ("", "  ", "now", "сейчас", "in 0m", "in 0h"):
             with self.subTest(when=when):
                 out = agent.tool_remind_self("note", "explicit immediate task", when)
-                self.assertIn("Наметила #", out)
+                self.assertIn("Намечено #", out)
                 self.assertNotIn("уже прошёл", out)
 
 

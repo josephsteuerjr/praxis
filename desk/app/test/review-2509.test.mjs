@@ -22,7 +22,7 @@ for (const m of frame.matchAll(/shell(?:<[^>]*>)?\("(\w+)",\s*\{([^}]*)\}/g)) {
 
 // A7 F2: расписка «Сохранено» отличает блоки, которые движок читает только на старте.
 assert.match(frame, /blocksNeedingRestart\(c, out\)/, "расписка не сверяет блоки перезапуска");
-assert.match(frame, /restartBtn\.hidden = !\(modeNote \|\| restartNote\)/, "кнопка перезапуска не показывается при смене Telegram/тела/голоса");
+assert.match(frame, /restartBtn\.hidden = !\(modeNote \|\| restartNote \|\| cfg\.needs_local_setup\)/, "перезапуск нужен при смене блоков и первом запуске");
 assert.match(frame, /\["telegram", "Telegram"\]/);
 assert.match(frame, /\["sandbox", "ограда"\]/);
 
@@ -36,17 +36,11 @@ assert.match(agent, /setField\(spareModelSame, v\)/, "поле «Модель з
 assert.match(agent, /Запасному провайдеру нужно имя модели/, "«другой провайдер» без модели сохраняется молча");
 assert.match(agent, /spare === "other" && frameworkOf\(provider\) !== before/, "смена основного не чистит адрес/ключ запасного");
 
-// A7 F8/F9: кнопка остановки шлёт /api/interrupt и ждёт квитанцию движка из /api/supervisor.
+// A7 F8/F9: stop is scoped to the foreground run; receipts use request identity.
 const talk = read(win, "views", "talk.ts");
-assert.match(talk, /post<[^>]*>\("\/api\/interrupt", \{scope: "all"\}\)/, "кнопка не шлёт /api/interrupt");
-assert.match(talk, /"\/api\/supervisor"/, "квитанция остановки не читается");
-assert.match(talk, /interrupt_receipt/, "квитанция остановки не показывается");
-assert.match(talk, /Просьба записана/);
-assert.ok(!existsSync(join(here, "interrupt-browser.html")), "мёртвый ручной стенд interrupt-browser.html снова на месте");
-
-// Слова квитанции — чистая функция: проверяем текстом, что ветки на месте.
-assert.match(talk, /остановлено ходов: /);
-assert.match(talk, /ждут исхода тула: /);
-assert.match(talk, /движок не нашёл живых ходов/);
-
+assert.match(talk, /"\/api\/interrupt", \{ scope: target\.run_id \}/);
+assert.ok(!/scope: "all"/.test(talk), "foreground stop must not pause all autonomy");
+assert.match(talk, /"\/api\/supervisor"/);
+assert.match(talk, /interruptReceiptMatches\(requestId, receipt\)/);
+assert.ok(!existsSync(join(here, "interrupt-browser.html")));
 console.log("review-2509: OK");

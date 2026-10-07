@@ -382,6 +382,13 @@ html.electron #chrome a {
   box-shadow: var(--shadow-pop);
 }
 
+/* display:flex не имеет права побеждать родной hidden: переключатель агентов
+   (agents.ts) прячет меню именно атрибутом, и без гварда оно висело открытым
+   всегда, поверх навигации. Тот же паттерн, что .menu[hidden] ниже по файлу. */
+.agent-menu[hidden] {
+  display: none;
+}
+
 .agent-row {
   display: flex;
   flex-direction: column;
@@ -1131,6 +1138,7 @@ html.electron #chrome a {
 /* ---------- композер ---------- */
 
 .composer {
+  position: relative;
   padding: 6px 32px 14px;
 }
 
@@ -1139,15 +1147,17 @@ html.electron #chrome a {
   max-width: 800px;
   margin: 0 auto;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 8px;
-  padding: 11px 10px 11px 18px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--surface);
   box-shadow: var(--shadow);
   transition: border-color 0.15s ease;
 }
+
+.composer-box.multiline { align-items: flex-end; }
 
 .composer-box:focus-within {
   border-color: var(--line-strong);
@@ -1169,13 +1179,14 @@ html.electron #chrome a {
 
 #say {
   flex: 1;
-  min-height: 26px;
+  min-width: 0;
+  min-height: 32px;
   max-height: 180px;
   padding: 4px 0;
   border: 0;
   background: transparent;
   color: var(--ink);
-  font: 15px/1.5 var(--sans);
+  font: 15px/24px var(--sans);
   resize: none;
   outline: none;
 }
@@ -1185,8 +1196,8 @@ html.electron #chrome a {
 }
 
 .send {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: 0;
   border-radius: 50%;
   background: var(--accent);
@@ -1239,6 +1250,12 @@ html.electron #chrome a {
   gap: 6px;
 }
 
+/* Author display:flex must not override the native hidden attribute. */
+.composer-files[hidden],
+.composer-status [hidden] {
+  display: none;
+}
+
 .composer-files .chip {
   display: inline-flex;
   align-items: center;
@@ -1282,6 +1299,14 @@ html.electron #chrome a {
   background: var(--ctrl-hover);
   font-size: 14px;
 }
+
+.artifact-card { display: flex; gap: 12px; padding: 12px 16px; border: 1px solid var(--rule); border-radius: 12px; max-width: 460px; background: var(--paper); }
+.artifact-icon { font-size: 26px; flex: none; }
+.artifact-card strong { display: block; overflow-wrap: anywhere; font-size: 16px; }
+.artifact-size { display: block; color: var(--muted); font-size: 13px; }
+.artifact-actions { display: flex; gap: 16px; margin-top: 8px; font-size: 14px; }
+.artifact-download { display: inline-block; margin-top: 8px; font-size: 13px; }
+.composer-files .chip-ico { width: 28px; text-align: center; }
 
 .mic.recording {
   color: var(--err);
@@ -2406,16 +2431,104 @@ select.field-input {
   scroll-margin-top: 8px;
 }
 
+/* ---------- Система: материалы леджера — полоски-диаграмма ----------
+   Слово владельца 05.10: «можно было бы красивые полоски в общем бумажном
+   стиле» — длина заливки показывает долю веса материала, тон чернильный
+   поверх бумаги; sweep-мусор отличают более густой заливкой. */
+.material-strips {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 10px 0 4px;
+}
+
+.material-strip summary {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  cursor: pointer;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper, var(--ground));
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--dur-1) var(--ease-out);
+}
+
+/* Заливка-диаграмма лежит под текстом: она позиционирована и первая, текст
+ * позиционирован позже — потому рисуется поверх заливки. */
+.material-strip .strip-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--fill, 0%);
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  border-right: 1px solid var(--line);
+  pointer-events: none;
+}
+
+.material-strip.sweep .strip-fill {
+  background: color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.material-strip summary > span:not(.strip-fill) {
+  position: relative;
+}
+
+.material-strip summary:hover {
+  border-color: var(--ink-3);
+}
+
+.material-strip[open] summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.material-strip .fold-body {
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  padding: 8px 12px;
+}
+
+.material-strip .strip-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.material-strip .strip-size {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ---------- настройки: группы вкладками ----------
    Вкладки появляются, только если издание объявило группы И живых групп больше
    одной (settings-frame.ts::mountSettings). У Praxis их нет — он получает
    прежний плоский список, а не четыре вкладки, одна из которых пустая. */
 
 .settings-tabs {
+  /* Плашки групп не уезжают при прокрутке: смена группы — действие первого
+     уровня, доступное с любого места страницы (слово владельца 01.10).
+     Рецепт фона — как у прилипшей save-bar: полупрозрачная бумага + blur. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin: 0 0 16px;
+  padding: 8px 2px;
+  background: color-mix(in srgb, var(--ground) 92%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
 }
 
 .settings-tab {
@@ -4114,3 +4227,57 @@ body.first-run #state {
 .backup-list .muted {
   color: var(--ink-3);
 }
+
+/* Panel dividers live on the grid, outside the scrolling/re-rendered content. */
+.panel-resize { grid-row: 2; width: 9px; height: 100%; z-index: 5; cursor: col-resize; touch-action: none; }
+.panel-resize-rail { grid-column: 1; justify-self: end; }
+.panel-resize-panel { grid-column: 3; justify-self: start; }
+.panel-resize:hover, .panel-resize:focus-visible { background: var(--line); }
+#app.rail-collapsed .panel-resize-rail,
+#app.panel-collapsed .panel-resize-panel,
+#app:not(.with-panel) .panel-resize-panel { display: none; }
+#app.resizing-panels { transition: none; user-select: none; cursor: col-resize; }
+@media (max-width: 760px) { .panel-resize { display: none; } }
+
+
+/* Session controls share the quiet paper chrome and keep the feed stationary. */
+.engine-controls { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.engine-controls button { border: 1px solid var(--line); border-radius: 8px; background: transparent;
+  color: var(--ink-3); font: 400 11px/1.4 var(--sans); padding: 6px 8px; cursor: pointer; }
+.engine-controls button:hover:not(:disabled) { background: var(--surface); color: var(--ink); }
+.engine-controls button:disabled { opacity: .5; cursor: default; }
+.composer-status { position: absolute; left: 32px; right: 32px; bottom: 100%;
+  max-width: 800px; min-height: 24px; margin: 0 auto 6px; display: flex; pointer-events: none;
+  align-items: center; gap: 10px; color: var(--ink-3); font: 400 12px/1.4 var(--sans); }
+/* No invisible shelf when there is no activity, receipt or available action. */
+.composer-status:not(:has(.composer-activity:not(:empty), .turn-receipt:not(:empty), .composer-turn-controls > button:not([hidden]), > button:not([hidden]))) { display: none; }
+#app.with-panel .view {
+  padding-bottom: calc(var(--composer-status-h, 0px) + 18px);
+  /* Text passes under the independent status controls, fading at the input itself
+     instead of being cut at the rectangular footer boundary above the bubble. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-status-h, 0px) - 14px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--composer-status-h, 0px) - 14px), transparent 100%);
+}
+.composer-activity { flex: 0 1 auto; min-width: 0; margin-right: auto;
+  background: var(--paper, var(--ground)); border-radius: 5px; padding: 2px 4px; margin-left: -4px; }
+.composer-activity:empty { display: none; }
+.composer-turn-controls { display: flex; align-items: center; gap: 8px; }
+.turn-receipt { max-width: 230px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  background: var(--paper, var(--ground)); }
+.composer-status .notice-action { font: inherit; white-space: nowrap; pointer-events: auto; }
+@media (max-width: 980px) {
+  .composer-status { left: 18px; right: 18px; }
+}
+@container (max-width: 620px) {
+  #head { flex-wrap: wrap; gap: 6px; }
+  .head-copy { flex-basis: 100%; }
+  .head-side { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+  .head-side .pulse { display: none; }
+  .composer-status { flex-wrap: wrap; row-gap: 4px; }
+  .composer-activity { flex-basis: auto; }
+  .composer-turn-controls { margin-left: auto; }
+  .turn-receipt { max-width: 100px; }
+}
+.save-bar { padding: 8px 12px; }
+.save-bar > .field-hint { margin: 4px 0 0; font-size: 10px; }
+.settings-body { padding-bottom: 32px; }

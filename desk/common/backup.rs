@@ -21,7 +21,7 @@
 // пусто — `backups` рядом с программой, ВНЕ дерева агента: агент не должен уметь
 // переписать собственную страховку).
 #[allow(unused_imports)]
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -34,8 +34,35 @@ pub const DEFAULT_KEEP: usize = 8;
 pub const KEEP_BEFORE_UPDATE: usize = 10;
 
 pub fn skip_rel(rel: &str) -> bool {
-    let first = rel.split('/').next().unwrap_or("");
+    let parts: Vec<&str> = rel.split('/').collect();
+    let first = parts.first().copied().unwrap_or("");
     if SKIP_IN_DATA.iter().any(|s| s.eq_ignore_ascii_case(first)) {
+        return true;
+    }
+    // Скачанные голосовые модели живут здесь, а не в data/voice. Другие
+    // модели (в том числе созданные владельцем) остаются в снимке.
+    if first.eq_ignore_ascii_case("models")
+        && parts.get(1).map(|p| p.eq_ignore_ascii_case("whisper") || p.eq_ignore_ascii_case("piper")).unwrap_or(false)
+    {
+        return true;
+    }
+    // 01.10, слово владельца после живого замера (5,5 ГБ материалов, бэкап
+    // 772 МБ): рабочие проекты и их история — МАТЕРИАЛЫ, не память. Байты
+    // проектов в снимке не ездят — рядом в том же снимке лежит манифест
+    // леджера ретенции (memory/.state/retention.json); полный снимок рабочих
+    // папок делается отдельно. Исключение — workspace/inbox: необработанный
+    // ввод владельца обязан переживать обновление. Сам каталог workspace
+    // (один компонент) не срезается — иначе пропадёт и inbox.
+    if first.eq_ignore_ascii_case("workspace") && parts.len() > 1
+        && !parts[1].eq_ignore_ascii_case("inbox")
+    {
+        return true;
+    }
+    // Вложенные зависимости и кэши пересоздаются. История .git сама по себе
+    // тяжелее рабочих копий (замер 01.10: 367 МБ из 545) — не её объём
+    // переживать в КАЖДОМ снимке.
+    if parts.iter().any(|part| ["node_modules", ".venv", "__pycache__", ".cache",
+        ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache"].iter().any(|p| part.eq_ignore_ascii_case(p))) {
         return true;
     }
     // Журналы верхнего уровня data/ (runner.log, deskapp.log, service.log…) и их ротации.
@@ -88,22 +115,40 @@ pub fn stamp_now() -> String {
     stamp_at(now_secs())
 }
 
-fn add_dir(
-    zip: &mut zip::ZipWriter<std::fs::File>,
+struct BackupEntry {
+    path: PathBuf,
+    name: String,
+    bytes: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct BackupProgress {
+    pub files: u64,
+    pub total_files: u64,
+    pub bytes: u64,
+    pub total_bytes: u64,
+}
+
+pub const BACKUP_CHUNK: usize = 64 * 1024;
+
+fn backup_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) { Err("отменено".into()) } else { Ok(()) }
+}
+
+fn collect_dir(
+    entries: &mut Vec<BackupEntry>,
     root: &Path,
     here: &Path,
     prefix: &str,
     skip: &dyn Fn(&str) -> bool,
     cancel: &AtomicBool,
-    count: &mut u64,
 ) -> Result<(), String> {
+    backup_cancelled(cancel)?;
     let Ok(rd) = std::fs::read_dir(here) else { return Ok(()) };
-    let mut entries: Vec<_> = rd.flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("отменено".into());
-        }
+    let mut children: Vec<_> = rd.flatten().collect();
+    children.sort_by_key(|e| e.file_name());
+    for e in children {
+        backup_cancelled(cancel)?;
         let path = e.path();
         let Ok(rel) = path.strip_prefix(root) else { continue };
         let rel = rel.to_string_lossy().replace('\\', "/");
@@ -116,17 +161,9 @@ fn add_dir(
         }
         let name = format!("{prefix}{rel}");
         if meta.is_dir() {
-            add_dir(zip, root, &path, prefix, skip, cancel, count)?;
-        } else {
-            // Файл, занятый живым агентом на запись, читается как есть; не прочёлся —
-            // пропускаем: снимок из 9999 файлов лучше, чем никакого.
-            let Ok(bytes) = std::fs::read(&path) else { continue };
-            let opts = zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .large_file(bytes.len() as u64 >= 0xFFFF_FFFF);
-            zip.start_file(name, opts).map_err(|e| e.to_string())?;
-            zip.write_all(&bytes).map_err(|e| e.to_string())?;
-            *count += 1;
+            collect_dir(entries, root, &path, prefix, skip, cancel)?;
+        } else if meta.is_file() {
+            entries.push(BackupEntry { path, name, bytes: meta.len() });
         }
     }
     Ok(())
@@ -134,6 +171,39 @@ fn add_dir(
 
 /// Снять снимок установки `root` в `into`. -> путь и число файлов.
 pub fn snapshot(root: &Path, into: &Path, reason: &str, cancel: &AtomicBool) -> Result<(PathBuf, u64), String> {
+    snapshot_with_progress(root, into, reason, cancel, &mut |_| {})
+}
+
+/// Сначала считаем отобранные файлы по metadata; данные читаются блоками,
+/// отмена проверяется до/после каждого блока. Progress не включает модели/кэши.
+pub fn snapshot_with_progress(
+    root: &Path, into: &Path, reason: &str, cancel: &AtomicBool,
+    progress: &mut dyn FnMut(BackupProgress),
+) -> Result<(PathBuf, u64), String> {
+    backup_cancelled(cancel)?;
+    let mut entries = Vec::new();
+    for cfg in ["helene.json", "helene.json.bak"] {
+        let path = root.join(cfg);
+        if let Ok(meta) = std::fs::symlink_metadata(&path) {
+            if meta.is_file() && !meta.file_type().is_symlink() {
+                entries.push(BackupEntry { path, name: cfg.into(), bytes: meta.len() });
+            }
+        }
+    }
+    let data = root.join("data");
+    collect_dir(&mut entries, &data, &data, "data/", &skip_rel, cancel)?;
+    let agents = root.join("agents");
+    collect_dir(&mut entries, &agents, &agents, "agents/", &|rel| {
+        let parts: Vec<&str> = rel.splitn(3, '/').collect();
+        match parts.as_slice() {
+            [_, data, rest] if data.eq_ignore_ascii_case("data") => skip_rel(rest),
+            _ => false,
+        }
+    }, cancel)?;
+    let mut status = BackupProgress { total_files: entries.len() as u64,
+        total_bytes: entries.iter().map(|e| e.bytes).sum(), ..Default::default() };
+    progress(status);
+    backup_cancelled(cancel)?;
     std::fs::create_dir_all(into).map_err(|e| format!("{}: {e}", into.display()))?;
     let safe_reason: String = reason
         .chars()
@@ -150,45 +220,48 @@ pub fn snapshot(root: &Path, into: &Path, reason: &str, cancel: &AtomicBool) -> 
     let tmp = into.join(format!("{name}.zip.tmp"));
     let file = std::fs::File::create(&tmp).map_err(|e| format!("{}: {e}", tmp.display()))?;
     let mut zip = zip::ZipWriter::new(file);
-    let mut count = 0u64;
+    let mut buffer = [0u8; BACKUP_CHUNK];
     let result = (|| -> Result<(), String> {
-        for cfg in ["helene.json", "helene.json.bak"] {
-            if let Ok(bytes) = std::fs::read(root.join(cfg)) {
-                zip.start_file(cfg, zip::write::SimpleFileOptions::default()).map_err(|e| e.to_string())?;
-                zip.write_all(&bytes).map_err(|e| e.to_string())?;
-                count += 1;
+        for entry in entries {
+            backup_cancelled(cancel)?;
+            // Не объявляем успешным снимок с потерянными файлами.
+            let mut file = std::fs::File::open(&entry.path)
+                .map_err(|e| format!("{}: {e}", entry.path.display()))?;
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .large_file(entry.bytes >= 0xFFFF_FFFF);
+            zip.start_file(entry.name, opts).map_err(|e| e.to_string())?;
+            loop {
+                backup_cancelled(cancel)?;
+                let size = file.read(&mut buffer).map_err(|e| format!("{}: {e}", entry.path.display()))?;
+                backup_cancelled(cancel)?;
+                if size == 0 { break; }
+                zip.write_all(&buffer[..size]).map_err(|e| e.to_string())?;
+                status.bytes += size as u64;
+                progress(status);
             }
+            status.files += 1;
+            progress(status);
         }
-        let data = root.join("data");
-        add_dir(&mut zip, &data, &data, "data/", &skip_rel, cancel, &mut count)?;
-        // Соседние агенты: их настройки и память — тем же правилом.
-        let agents = root.join("agents");
-        if agents.is_dir() {
-            add_dir(
-                &mut zip,
-                &agents,
-                &agents,
-                "agents/",
-                &|rel: &str| {
-                    let parts: Vec<&str> = rel.splitn(3, '/').collect();
-                    match parts.as_slice() {
-                        [_, "data", rest] => skip_rel(rest),
-                        _ => false,
-                    }
-                },
-                cancel,
-                &mut count,
-            )?;
-        }
-        Ok(())
+        backup_cancelled(cancel)
     })();
-    let finished = zip.finish().map_err(|e| e.to_string());
-    if let Err(e) = result.and(finished.map(|_| ())) {
+    if let Err(e) = result {
+        // Drop у ZipWriter закрывает metadata. Убираем текущую запись прежде,
+        // чтобы он не завершал её сжатие; буфер ограничен 64 КБ.
+        let _ = zip.abort_file();
+        drop(zip);
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
-    std::fs::rename(&tmp, &final_path).map_err(|e| format!("{}: {e}", final_path.display()))?;
-    Ok((final_path, count))
+    if let Err(e) = zip.finish().map_err(|e| e.to_string()).and_then(|_| backup_cancelled(cancel)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, &final_path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("{}: {e}", final_path.display()));
+    }
+    Ok((final_path, status.files))
 }
 
 /// Снимки одного вида (`-auto`, `-before-`, `-manual`) в папке — по имени, старые первыми.

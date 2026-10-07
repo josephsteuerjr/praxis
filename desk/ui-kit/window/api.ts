@@ -9,6 +9,7 @@ export interface Cfg {
   product?: string;
   /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
   needs_remote?: boolean;
+  needs_local_setup?: boolean;
 }
 
 declare global {
@@ -61,11 +62,12 @@ export const electron: ElectronBridge | undefined = (window as unknown as { __HE
  */
 export const inTauri = "__TAURI_INTERNALS__" in window || !!electron;
 
-function url(path: string): string {
+export function channelURL(path: string): string {
   const full = (cfg.base || "") + path;
   if (!cfg.key) return full;
   return full + (path.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(cfg.key);
 }
+const url = channelURL;
 
 /**
  * Отказ трубы вместе с КОДОМ, а не только словами.
@@ -84,6 +86,10 @@ function url(path: string): string {
 export function mediaURL(rel: string): string {
   const base = (cfg.base || "") + "/api/media?path=" + encodeURIComponent(rel);
   return cfg.key ? base + "&key=" + encodeURIComponent(cfg.key) : base;
+}
+
+export function artifactURL(rel: string, preview = false): string {
+  return url("/api/artifact?path=" + encodeURIComponent(rel) + (preview ? "&preview=1" : ""));
 }
 
 export class ApiError extends Error {
@@ -210,7 +216,9 @@ export async function del<T = any>(path: string): Promise<T> {
 }
 
 async function request<T>(method: string, path: string, body: unknown): Promise<T> {
-  if (ready && sock) return tunnelCall<T>(path, method, body);
+  // Files use HTTP's bounded body reader instead of the small event socket.
+  const hasFiles = body != null && typeof body === "object" && Array.isArray((body as { attachments?: unknown }).attachments) && (body as { attachments: unknown[] }).attachments.length > 0;
+  if (ready && sock && !hasFiles) return tunnelCall<T>(path, method, body);
   const r = await fetch(url(path), {
     method,
     headers: body == null ? {} : { "Content-Type": "application/json" },

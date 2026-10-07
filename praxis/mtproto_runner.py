@@ -3981,6 +3981,9 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
     conversion_kwargs = {
         "voice_note": bool(item.voice_note),
         "force_document": force_document,
+        # The durable outbox stores every payload as .blob. Telethon guesses
+        # from extensions unless the recorded photo intent is explicit.
+        "as_image": item.kind == "photo",
     }
     if force_document:
         # The spool's collision-proof msg-<hash>-<nonce> prefix is private

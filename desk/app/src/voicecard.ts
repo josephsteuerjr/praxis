@@ -112,6 +112,8 @@ export function voiceCard(draft: Config): VoiceCard {
 
   let picker = choice<string>([], model, () => {});
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let refreshing = false;
+  let refreshAgain = false;
 
   const drawPicker = (state: VoiceState) => {
     const items = state.catalog.map((m) => ({
@@ -173,12 +175,17 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const fresh = (stamp: string): boolean => {
     const at = Date.parse(stamp || "");
-    return Number.isFinite(at) && Date.now() - at < 60_000;
+    const age = Date.now() - at;
+    return Number.isFinite(at) && age >= 0 && age < 60_000;
   };
 
   const refresh = async () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (refreshing) { refreshAgain = true; return; }
+    refreshing = true;
     try {
       const state = await api<VoiceState>("/api/voice");
+      if (!box.isConnected) return;
       // Выбор владельца в черновике главнее того, что лежит в файле: он мог
       // переключить модель и ещё не нажать «Сохранить».
       const shown = { ...state, model, enabled };
@@ -191,23 +198,26 @@ export function voiceCard(draft: Config): VoiceCard {
         const mine = { ...speech, voice: speakVoice, enabled: speak };
         if (!speechPicker.el.childElementCount) drawVoices(mine);
         sayVoice(mine);
-        const dv = speech.download;
-        if (dv && dv.state === "running" && fresh(dv.at || "")) {
-          timer = setTimeout(() => void refresh(), 2000);
-        }
       } else {
         speechStatus.textContent = "этот канал про голос агента ничего не знает";
         speechBtn.disabled = true;
       }
       const down = state.download;
-      if (down && down.state === "running" && fresh(down.updated_utc)) {
+      const dv = speech?.download;
+      if ((down && down.state === "running" && fresh(down.updated_utc))
+          || (dv && dv.state === "running" && fresh(dv.at || ""))) {
         timer = setTimeout(() => void refresh(), 2000);
-      } else if (timer) {
-        clearTimeout(timer);
-        timer = null;
       }
     } catch (e) {
-      status.textContent = "канал не ответил про голос: " + humanError(e).text;
+      if (box.isConnected) status.textContent = "канал не ответил про голос: " + humanError(e).text;
+    } finally {
+      refreshing = false;
+      const again = refreshAgain;
+      refreshAgain = false;
+      if (again && box.isConnected) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => void refresh(), 0);
+      }
     }
   };
 
@@ -218,7 +228,8 @@ export function voiceCard(draft: Config): VoiceCard {
     try {
       const said = await shell<string>("voice_fetch", { model });
       note.textContent = said;
-      setTimeout(() => void refresh(), 1500);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), 1500);
     } catch (e) {
       note.className = "receipt err";
       note.textContent = humanError(e).text;
@@ -295,7 +306,8 @@ export function voiceCard(draft: Config): VoiceCard {
     try {
       const said = await shell<string>("voice_fetch", { model: speakVoice, kind: "speak" });
       speechNote.textContent = said;
-      setTimeout(() => void refresh(), 1500);
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void refresh(), 1500);
     } catch (e) {
       speechNote.className = "receipt err";
       speechNote.textContent = humanError(e).text;
@@ -310,9 +322,18 @@ export function voiceCard(draft: Config): VoiceCard {
     el("hr", "card-split"),
     speakOff, speechStatus, speechPickBox, speechActions,
     el("p", "field-hint",
-      "⚠ Голосом агент отвечает в Telegram: в окне вложение пока приезжает строкой с путём к файлу, а не проигрывателем. " +
-      "Синтез местный — текст ответа никуда не уходит. Применяется перезапуском."));
+      "Синтез местный — текст ответа никуда не уходит. Настройки голоса применяются перезапуском."));
 
+  const onSection = (event: Event) => {
+    if (!box.closest(".page")) {
+      removeEventListener("frame-section", onSection);
+      if (timer) { clearTimeout(timer); timer = null; }
+      return;
+    }
+    if ((event as CustomEvent).detail === "settings" && box.isConnected) void refresh();
+    else if (timer) { clearTimeout(timer); timer = null; }
+  };
+  addEventListener("frame-section", onSection);
   void refresh();
 
   return {

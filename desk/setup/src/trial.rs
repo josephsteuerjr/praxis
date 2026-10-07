@@ -16,7 +16,8 @@
 //!     протокол, что у исполнителя на сервере: движок кладёт агенту записку, агент проверяет
 //!     себя ДЕЛОМ и говорит `update_request accept|reject` (принять — только с доказательством,
 //!     `localharness/trial_proof.py`), владелец может сказать своё кнопкой в окне;
-//!   * «принято» — прежняя программа удаляется; «сломано» или молчание до срока — откат:
+//!   * «принято» — прежняя программа удаляется; «сломано» — откат; молчание до
+//!     срока — новая версия ОСТАЁТСЯ, откат не принудительный (04.10, слово владельца):
 //!     правки агента за испытание — ему в workspace, программа останавливается, прежняя
 //!     встаёт на место той же транзакцией (`Tx::begin_from`), с данными, нажитыми за испытание.
 //!
@@ -79,6 +80,7 @@ pub struct Trial {
     pub static_plan: String,
     /// Имена верхнего уровня новой поставки: при откате они остаются в отвергнутой версии.
     pub new_top: Vec<String>,
+    pub code_sha256: std::collections::BTreeMap<String, String>,
     pub service: bool,
     pub scope: String,
     /// starting | trial | accepting | rollback | done | rolled_back | failed
@@ -137,6 +139,13 @@ pub fn state_path(dir: &Path) -> PathBuf {
     dir.join(STATE_REL[0]).join(STATE_REL[1])
 }
 
+/// Открытое испытание в этой установке: повторный запуск установщика поверх него запрещён —
+/// второй процесс затирает состояние/слепок и ломает сторожа (06.10, 1.4.0 поверх висящего
+/// испытания 1.4.0 → «код отличается» и самооткат живой установки).
+pub fn open_trial(dir: &Path) -> Option<Trial> {
+    load(dir).filter(|t| t.is_open())
+}
+
 pub fn kept_path(dir: &Path, version: &str) -> PathBuf {
     dir.join("backups").join(format!("{KEPT_PREFIX}{version}"))
 }
@@ -177,6 +186,7 @@ pub struct Begin<'a> {
     pub runtime_moved: bool,
     pub static_plan: &'a str,
     pub new_top: Vec<String>,
+    pub code_sha256: std::collections::BTreeMap<String, String>,
     pub service: bool,
     pub scope: &'a str,
     pub agent_code: Value,
@@ -195,6 +205,7 @@ pub fn begin(dir: &Path, b: Begin) -> Trial {
         runtime_moved: b.runtime_moved,
         static_plan: b.static_plan.into(),
         new_top: b.new_top,
+        code_sha256: b.code_sha256,
         service: b.service,
         scope: b.scope.into(),
         phase: "starting".into(),
@@ -476,6 +487,16 @@ pub fn watch(dir: &Path, args: &[String]) -> i32 {
             return 0;
         }
         lock.touch(dir);
+        if install::owner_stopped_pub() {
+            // An intentional stop is neither failed health nor elapsed trial time.
+            let now = epoch();
+            if t.channel_since > 0.0 { t.channel_since = now; }
+            t.last_tick = now;
+            last_up = now;
+            save(dir, &t);
+            std::thread::sleep(TICK);
+            continue;
+        }
         let p = probe(dir);
         let now = epoch();
         if p.channel || p.runner {
@@ -545,7 +566,7 @@ fn starting(dir: &Path, t: &mut Trial, p: &Probe, now: f64) {
         t.last_tick = now;
         save(dir, t);
         receipt(dir, t, "trial", "агент проверяет себя в новой версии",
-                &format!("{} поднята; теперь агент проверяет себя делом (до {}). «Сломано» или молчание до срока — откат",
+                &format!("{} поднята; теперь агент проверяет себя делом (до {}). «Сломано» — откат; молчание до срока — версия остаётся",
                          t.to_version, utc(now + t.left)), "");
         log(dir, &format!("испытание открыто, {} мин", t.minutes));
         return;
@@ -604,10 +625,13 @@ fn trial_tick(dir: &Path, t: &mut Trial, p: &Probe, now: f64) {
         receipt(dir, t, "trial", "агент ещё отвечает — даю на проверку ещё 10 минут", "", "");
         return;
     }
+    // 04.10, слово владельца: «откат лучше не делать принудительный». Молчание —
+    // не отказ: новая версия остаётся, владелец узнаёт из расписки, что испытание
+    // не отвечено. Вернуть прежнюю — план обновления на прежнюю версию.
     t.verdict = json!({"verdict": "timeout", "by": "", "words": "", "at_utc": utc(now)});
-    t.rollback_why = format!("агент не ответил на испытании за {} мин{}", t.minutes, if t.extended > 0.0 { " (с продлением)" } else { "" });
-    t.rollback_plain = format!("агент не подтвердил за {} мин, что в новой версии всё работает", t.minutes);
-    t.phase = "rollback".into();
+    t.phase = "accepting".into();
+    t.notes.push(format!("испытание не отвечено за {} мин{} — новая версия оставлена работать, откат не принудительный",
+        t.minutes, if t.extended > 0.0 { " (с продлением)" } else { "" }));
     save(dir, t);
 }
 
@@ -615,7 +639,18 @@ fn clip(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
+include!("../../common/code_manifest.rs");
+
 fn finish_accept(dir: &Path, t: &mut Trial) {
+    if install::owner_stopped_pub() { save(dir, t); return; }
+    if let Err(why) = verify_code_manifest(dir, &t.code_sha256) {
+        t.phase = "failed".into();
+        t.checks.push(check("installed-code", "код соответствует выпуску", false, &why));
+        t.notes.push(why.clone());
+        save(dir, t);
+        receipt(dir, t, "failed", "приёмка кода не подтверждена", &why, "Сохранена прежняя версия; изменённый код не выдан за выпуск.");
+        return;
+    }
     let by = t.verdict.get("by").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let words = t.verdict.get("words").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let (note, summary) = match by.as_str() {
@@ -709,6 +744,7 @@ fn rollback_once(dir: &Path, t: &mut Trial) -> Result<(), bool> {
     }
     // Не вышло после остановки — поднять новую версию обратно: агент не должен лежать.
     let back_up = |t: &mut Trial| {
+        if install::owner_stopped_pub() { save(dir, t); return; }
         if had_service {
             let state = install::install_service_pub(dir);
             t.notes.push(format!("новая версия снова поднята, служба: {state}"));
@@ -763,8 +799,8 @@ fn rollback_once(dir: &Path, t: &mut Trial) -> Result<(), bool> {
     if let Err(e) = install::mark_version_pub(dir, &t.scope, &t.from_version) {
         t.notes.push(format!("версия в настройках не записалась: {e}"));
     }
-    // 5. Служба — обратно, окно — открыть.
-    if had_service {
+    // 5. Old service binaries may not know the stop latch: do not restart them.
+    if had_service && !install::owner_stopped_pub() {
         let state = install::install_service_pub(dir);
         t.notes.push(format!("служба: {state}"));
     }
@@ -811,6 +847,15 @@ mod tests {
     }
 
     fn trial(dir: &Path) -> Trial {
+        use sha2::{Digest, Sha256};
+        let bytes = b"pass\n";
+        let mut code_sha256 = std::collections::BTreeMap::new();
+        for rel in ["tree/agent.py", "app/deskapp.py"] {
+            let path = dir.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            code_sha256.insert(rel.into(), format!("{:x}", Sha256::digest(bytes)));
+        }
         begin(dir, Begin {
             from_version: "1.2.4",
             to_version: "1.2.5",
@@ -818,6 +863,7 @@ mod tests {
             runtime_moved: true,
             static_plan: "keep",
             new_top: vec!["app".into()],
+            code_sha256,
             service: false,
             scope: "user",
             agent_code: json!({"summary": "правок нет"}),
@@ -863,6 +909,21 @@ mod tests {
     }
 
     #[test]
+    fn acceptance_without_code_proof_keeps_previous_program() {
+        let dir = tmp("no-code-proof");
+        let kept = kept_path(&dir, "1.2.4");
+        std::fs::create_dir_all(kept.join("app")).unwrap();
+        let mut t = trial(&dir);
+        t.kept = kept.display().to_string();
+        t.code_sha256.clear();
+        t.verdict = json!({"verdict": "accept", "by": "agent"});
+        finish_accept(&dir, &mut t);
+        assert_eq!(read_receipt(&dir)["state"], "failed");
+        assert!(kept.exists(), "без подтверждения кода прежняя программа остаётся");
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
     fn a_window_that_never_wakes_its_engine_is_rolled_back() {
         let dir = tmp("dead");
         let mut t = trial(&dir);
@@ -893,7 +954,8 @@ mod tests {
             at += 25.0;
             trial_tick(&dir, &mut t, &up, at);
         }
-        assert_eq!(t.phase, "rollback");
+        // 04.10: молчание — НЕ откат: новая версия остаётся (принимается с пометкой)
+        assert_eq!(t.phase, "accepting");
         assert_eq!(t.verdict["verdict"], "timeout");
         let _ = crate::tx::remove_tree(&dir);
     }
@@ -950,6 +1012,41 @@ mod tests {
         assert_eq!(r["state"], "done");
         let hist = std::fs::read_to_string(control(&dir, "update-history.jsonl")).unwrap();
         assert!(hist.contains("\"done\""));
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
+    fn carried_agent_edits_are_part_of_the_checked_snapshot_not_a_mismatch() {
+        // 06.10: правки агента, перенесённые установщиком, — часть установки. Слепок
+        // снимается ПОСЛЕ переноса, и приёмка сверяется со слепком, а не с манифестом релиза.
+        let dir = tmp("carry-snapshot");
+        let mut t = trial(&dir);
+        // Порядок установщика: правка «перенесена», затем снят слепок.
+        std::fs::write(dir.join("tree/agent.py"), b"print('edited by agent')\n").unwrap();
+        t.code_sha256 = collect_code_hashes(&dir).unwrap();
+        t.verdict = json!({"verdict": "accept", "by": "agent"});
+        std::fs::create_dir_all(dir.join("pristine")).unwrap();
+        finish_accept(&dir, &mut t);
+        assert_eq!(read_receipt(&dir)["state"], "done", "перенесённая правка не ломает приёмку");
+        // А изменение ПОСЛЕ слепка — ловится: код трогали уже в испытании.
+        let mut t2 = trial(&dir);
+        t2.code_sha256 = collect_code_hashes(&dir).unwrap();
+        std::fs::write(dir.join("tree/agent.py"), b"print('tampered during trial')\n").unwrap();
+        assert!(verify_code_manifest(&dir, &t2.code_sha256).is_err());
+        let _ = crate::tx::remove_tree(&dir);
+    }
+
+    #[test]
+    fn an_open_trial_blocks_a_second_installer_run() {
+        // 06.10: повторный клик обновления поверх висящего испытания — отказ словами.
+        let dir = tmp("second-run");
+        let t = trial(&dir);
+        assert_eq!(t.phase, "starting");
+        assert!(open_trial(&dir).is_some(), "испытание открыто");
+        let mut closed = t.clone();
+        closed.phase = "done".into();
+        std::fs::write(state_path(&dir), serde_json::to_string(&closed).unwrap()).unwrap();
+        assert!(open_trial(&dir).is_none(), "закрытое испытание не мешает новой установке");
         let _ = crate::tx::remove_tree(&dir);
     }
 }

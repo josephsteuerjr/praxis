@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -169,6 +170,260 @@ class Create(unittest.TestCase):
         self.assertNotEqual(first.id, second.id)
         self.assertNotEqual(first.port, second.port)
         self.assertEqual([a.id for a in agents.roster(self.root)], ["main", "mira", "mira-2"])
+
+
+class CreateSoul(unittest.TestCase):
+    """Сид души при рождении (1.4.0): чем станет конституция — выбирает владелец."""
+
+    SEED = "# Душа Мир\n\nМеня зовут {{agent}}, живу у {{owner}}.\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        lay_out(self.root, {"helene.json": {
+            "mode": "local", "python": "runtime/python.exe", "app": "app/deskapp.py",
+            "runner": "app/localharness/runner.py", "code": "tree", "tree": "data",
+            "port": 8094, "agent": {"name": "Hélène"}, "owner": {"name": "Егор", "room": "Hélène"},
+            "model": {"framework": "openai", "key": "sk-live", "model": "gpt-5"},
+            "telegram": {"bot_token": "111:AAA", "owner_id": 42},
+            "setup_complete": True,
+        }})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_text_seed_lies_by_the_config_and_config_stays_clean(self):
+        made = agents.create(self.root, "Мира", soul={"kind": "text", "text": self.SEED})
+        seed = made.dir / agents.SEED_NAME
+        self.assertTrue(seed.is_file())
+        self.assertEqual(seed.read_text(encoding="utf-8"), self.SEED)
+        self.assertNotIn("soul", agents.read_config(made.config), "конфиг души не знает")
+
+    def test_canonical_writes_no_seed(self):
+        made = agents.create(self.root, "Мира", soul={"kind": "canonical"})
+        self.assertFalse((made.dir / agents.SEED_NAME).exists())
+        made = agents.create(self.root, "Зоя")                      # и без параметра тоже
+        self.assertFalse((made.dir / agents.SEED_NAME).exists())
+
+    def test_repeat_name_does_not_spoil_the_seed(self):
+        first = agents.create(self.root, "Мира", soul={"kind": "text", "text": self.SEED})
+        agents.create(self.root, "Мира", soul={"kind": "text", "text": "другой текст\n"})
+        self.assertEqual((first.dir / agents.SEED_NAME).read_text(encoding="utf-8"),
+                         self.SEED, "сид первого не тронут вторым")
+
+    def test_empty_text_is_refused_before_any_writes(self):
+        with self.assertRaises(ValueError):
+            agents.create(self.root, "Мира", soul={"kind": "text", "text": "   "})
+        with self.assertRaises(ValueError):
+            agents.create(self.root, "Мира", soul={"kind": "text"})
+        with self.assertRaises(ValueError):
+            agents.create(self.root, "Мира", soul={"kind": "чужой"})
+        self.assertEqual([a.id for a in agents.roster(self.root)], ["main"],
+                         "отказ не оставляет половину агента")
+
+
+class CreateDoctor(unittest.TestCase):
+    """kind=doctor (1.4.1): канон — сидом, знания — skills-seed/, всё из поставки."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        # Мини-поставка: канон доктора и его знания, как их кладёт сборка
+        # (resources/ и app/resources/ — оба корня ищутся).
+        res = self.root / "resources"
+        (res / "souls").mkdir(parents=True)
+        (res / "souls" / "doctor.md").write_text("# Канон доктора\n", encoding="utf-8")
+        (res / "doctor-skills").mkdir(parents=True)
+        (res / "doctor-skills" / "silent-places.md").write_text(
+            "# Три нуля различаются всегда\n", encoding="utf-8")
+        lay_out(self.root, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094}})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_doctor_seeds_canon_and_knowledge_from_the_installation(self):
+        made = agents.create(self.root, "Доктор", soul={"kind": "doctor"})
+        seed = made.dir / agents.SEED_NAME
+        self.assertTrue(seed.is_file(), "канон доктора лежит сидом")
+        self.assertEqual(seed.read_text(encoding="utf-8"), "# Канон доктора\n")
+        skills = made.dir / "skills-seed" / "silent-places.md"
+        self.assertTrue(skills.is_file(), "знания доктора едут рядом с сидом")
+        self.assertIn("Три нуля", skills.read_text(encoding="utf-8"))
+        # Конфиг души не знает: рождение — файлами, не ключами.
+        cfg = json.loads((made.dir / "helene.json").read_text(encoding="utf-8"))
+        self.assertNotIn("soul", cfg)
+
+    def test_missing_canon_refuses_before_any_writes(self):
+        (self.root / "resources" / "souls" / "doctor.md").unlink()
+        with self.assertRaises(ValueError) as caught:
+            agents.create(self.root, "Доктор", soul={"kind": "doctor"})
+        self.assertIn("канон доктора не найден", str(caught.exception))
+        self.assertEqual([a.id for a in agents.roster(self.root)], ["main"],
+                         "отказ не оставляет половину доктора")
+
+    def test_missing_knowledge_is_not_an_error(self):
+        import shutil as _shutil
+        _shutil.rmtree(self.root / "resources" / "doctor-skills")
+        made = agents.create(self.root, "Доктор", soul={"kind": "doctor"})
+        self.assertTrue((made.dir / agents.SEED_NAME).is_file(), "канон есть")
+        self.assertFalse((made.dir / "skills-seed").exists(),
+                         "знаний в поставке нет — папки нет")
+
+
+class InheritSoul(unittest.TestCase):
+    """Наследование души (перенесено из CreateSoul, чтобы CreateDoctor был
+    только про доктора): донор, отказ без донора, inherit с текстом = text."""
+
+    SEED = "своя душа со своим текстом\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        lay_out(self.root, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094}})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_inherit_takes_the_donor_soul(self):
+        donor = agents.create(self.root, "Донор")
+        soul = donor.tree / "soul" / "SOUL.md"
+        soul.parent.mkdir(parents=True, exist_ok=True)
+        soul.write_text("душа донора целиком\n", encoding="utf-8", newline="\n")
+        made = agents.create(self.root, "Мира", soul={"kind": "inherit"}, donor_id=donor.id)
+        self.assertEqual((made.dir / agents.SEED_NAME).read_text(encoding="utf-8"),
+                         "душа донора целиком\n")
+
+    def test_inherit_without_a_donor_is_a_clear_error(self):
+        with self.assertRaises(ValueError) as caught:
+            agents.create(self.root, "Мира", soul={"kind": "inherit"}, donor_id="нет-такого")
+        self.assertIn("донор", str(caught.exception))
+        # и от корневого, у которого дома ещё нет: дом создаёт раннер, не create()
+        with self.assertRaises(ValueError) as caught:
+            agents.create(self.root, "Мира", soul={"kind": "inherit"})
+        self.assertIn("main", str(caught.exception))
+
+    def test_inherit_with_text_is_text(self):
+        # контракт UI-волны B1: текст всегда в поле text — «inherit с текстом» это text
+        made = agents.create(self.root, "Мира",
+                             soul={"kind": "inherit", "text": self.SEED})
+        self.assertEqual((made.dir / agents.SEED_NAME).read_text(encoding="utf-8"), self.SEED)
+
+
+class SetEnabled(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        lay_out(self.root, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094},
+                           "agents/mira/helene.json": {"agent": {"name": "Мира"}}})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_flags_flip_atomically(self):
+        got = agents.set_enabled(self.root, "mira", False)
+        self.assertFalse(got.enabled)
+        self.assertEqual([a.id for a in agents.raisable(self.root)], ["main"],
+                         "погашенный не поднимается")
+        got = agents.set_enabled(self.root, "MIRA", True)      # регистр не важен
+        self.assertTrue(got.enabled)
+        self.assertEqual([a.id for a in agents.raisable(self.root)], ["main", "mira"])
+        # конфиг остаётся целым JSON-ом, а не обрубком
+        cfg = agents.read_config(self.root / "agents" / "mira" / "helene.json")
+        self.assertEqual(cfg["agent"]["name"], "Мира")
+
+    def test_base_and_missing_refuse(self):
+        with self.assertRaises(ValueError):
+            agents.set_enabled(self.root, "main", False)
+        with self.assertRaises(ValueError):
+            agents.set_enabled(self.root, "нет-такого", True)
+
+
+class RemoveAgent(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        lay_out(self.root, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094},
+                           "agents/mira/helene.json": {"agent": {"name": "Мира"}}})
+        (self.root / "agents" / "mira" / "soul-seed.md").write_text(
+            "сид\n", encoding="utf-8", newline="\n")
+        (self.root / "agents" / "mira" / "data" / "memory").mkdir(parents=True)
+        (self.root / "agents" / "mira" / "data" / "memory" / "llm.json").write_text(
+            "{}", encoding="utf-8", newline="\n")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_folder_moves_to_attic_whole(self):
+        attic = self.root / "соседний" / "attic"
+        dest = agents.remove_agent(self.root, "mira", attic)
+        self.assertFalse((self.root / "agents" / "mira").exists(), "папка не ушла")
+        self.assertTrue(dest.is_dir())
+        self.assertTrue((dest / "helene.json").is_file())
+        self.assertTrue((dest / "soul-seed.md").is_file())
+        self.assertTrue((dest / "data" / "memory" / "llm.json").is_file(),
+                        "дом с памятью уехал целиком")
+        self.assertEqual([a.id for a in agents.roster(self.root)], ["main"],
+                         "из списка удалённый исчез")
+
+    def test_default_attic_is_next_to_the_installation(self):
+        # корень — вложенной папкой: чердак по умолчанию (`<base>/../_state/attic`)
+        # тогда ложится в тот же tmp и убирается им же, без мусора в %TEMP%
+        nested = self.root / "install"
+        lay_out(nested, {"helene.json": {"agent": {"name": "Hélène"}, "port": 8094},
+                         "agents/mira/helene.json": {"agent": {"name": "Мира"}}})
+        dest = agents.remove_agent(nested, "mira")
+        want = (nested.parent / "_state" / "attic").resolve()
+        self.assertEqual(dest.parent.resolve(), want)
+        self.assertTrue(dest.name.startswith("mira-"))
+
+    def test_second_removal_of_the_same_id_never_overwrites(self):
+        attic = self.root / "attic"
+        first = agents.remove_agent(self.root, "mira", attic)
+        lay_out(self.root, {"agents/mira/helene.json": {"agent": {"name": "Мира снова"}}})
+        second = agents.remove_agent(self.root, "mira", attic)
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.is_dir() and second.is_dir())
+
+    def test_refusals(self):
+        with self.assertRaises(ValueError):
+            agents.remove_agent(self.root, "main")            # корневой — сама установка
+        with self.assertRaises(ValueError):
+            agents.remove_agent(self.root, "нет-такого")
+        with self.assertRaises(ValueError):
+            agents.remove_agent(self.root, "")
+
+    def test_unwritable_attic_refuses_and_keeps_the_agent(self):
+        blocker = self.root / "blocker"
+        blocker.write_text("это файл, а не папка\n", encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            agents.remove_agent(self.root, "mira", blocker / "attic")
+        self.assertTrue((self.root / "agents" / "mira" / "helene.json").is_file(),
+                        "агент остался на месте")
+
+    @unittest.skipUnless(os.name == "nt", "Windows refuses renaming a directory held as a process cwd")
+    def test_busy_agent_refuses_whole_and_leaves_no_half_in_attic(self):
+        # Живой случай 06.10: пока процесс агента держит папку (тут — открытый
+        # cwd), перенос обязан отказать ЦЕЛИКОМ: ни половины агента в чердаке,
+        # ни стёртого источника. shutil.move в том же месте молча кромсал.
+        attic = self.root / "attic"
+        held_dir = str(self.root / "agents" / "mira").replace("'", r"\'")
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import os, time; os.chdir(r'%s'); print('held', flush=True); time.sleep(60)"
+             % held_dir],
+            stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            with self.assertRaises(RuntimeError) as caught:
+                agents.remove_agent(self.root, "mira", attic)
+            self.assertIn("движок ещё работает", str(caught.exception))
+            self.assertTrue((self.root / "agents" / "mira" / "helene.json").is_file(),
+                            "агент остался на месте")
+            self.assertFalse(attic.exists() and any(attic.iterdir()),
+                            "в чердаке не осталось половинки")
+        finally:
+            holder.kill()
+            holder.wait()
 
 
 if __name__ == "__main__":

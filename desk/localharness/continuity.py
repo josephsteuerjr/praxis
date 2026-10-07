@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 import transport
+import owner_stop
 
 log = logging.getLogger("helene.continuity")
 
@@ -71,6 +72,12 @@ class Continuity:
 
         @functools.wraps(original_persist)
         def persist(context, markdown):
+            with owner_stop.LOCK:
+                if self._activation is not None or context.kind != 'chat_turn':
+                    owner_stop.require_admission()
+                return persist_admitted(context, markdown)
+
+        def persist_admitted(context, markdown):
             activation = self._activation
             if activation is not None and not activation["run_id"]:
                 # Source stores the intended run id BEFORE the run exists.
@@ -91,6 +98,7 @@ class Continuity:
 
         @functools.wraps(original_resume)
         def resume(run_id):
+            owner_stop.require_admission()
             context = agent._runs().context(run_id)
             self.activity(run_id, str(context.delivery_chat_id or ""))
             return original_resume(run_id)

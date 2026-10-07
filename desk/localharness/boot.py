@@ -580,7 +580,11 @@ def seed_git(tree: Path, cfg: dict) -> bool:
         else:
             _top_up_ignore(ignore)
         steps = (
-            ("init", "-q", "-b", "main"),
+            # `init -b main` появился в git 2.28, а на Debian 10 (заявленный порог
+            # поставки) системный git 2.20: unborn HEAD переставляется на main
+            # `symbolic-ref`'ом — это работает у всех, от 2.20 до новых.
+            ("init", "-q"),
+            ("symbolic-ref", "HEAD", "refs/heads/main"),
             ("config", "user.name", agent_name(cfg)),
             ("config", "user.email", _agent_email(cfg)),
             ("config", "core.autocrlf", "false"),
@@ -604,7 +608,8 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     return True
 
 
-def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
+def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None = None,
+                  skills_seed: dict[str, str] | None = None) -> None:
     """Составляющие кадра — каждая в своей папке (слово владельца 30.08).
 
     Создаём только то, чего дерево само не заводит по дороге: дом конституции,
@@ -614,7 +619,13 @@ def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
 
     Конституция и весь комплект пишутся ТОЛЬКО если их ещё нет: принятый при
     установке текст и всё, что владелец или сам агент правил после, здесь не
-    трогаются.
+    трогаются. `soul_seed` (1.4.0) — текст рождения из `agents/<id>/soul-seed.md`,
+    который раннер читает рядом с конфигом: он ложится вместо канона ТОЖЕ только
+    при отсутствии души; живая душа сильнее сида. Подстановка имён — та же,
+    `{{agent}}`/`{{owner}}`, и только они: сид — текст, а не макрос.
+    `skills_seed` (1.4.1) — знания рождения из `agents/<id>/skills-seed/`:
+    ложатся в `soul/skills/` тоже только при отсутствии своего файла — живое
+    сильнее рождения, всегда.
 
     ⚠ Неписуемая папка (диск только для чтения, чужие права, антивирус) роняла
     руннер здесь голым PermissionError — оболочка видела «упал» и перезапускала
@@ -629,13 +640,31 @@ def ensure_layout(tree: Path, cfg: dict | None = None) -> None:
             raise LayoutError(f"не создаётся папка {tree / rel}: {exc}") from exc
     soul = tree / "soul" / "SOUL.md"
     if not soul.exists():
+        text = soul_text(cfg)
+        if soul_seed and soul_seed.strip():
+            # Сид рождения сильнее канона — но слабее живой души: файл существует,
+            # значит слово о себе уже сказано, и мы его не переписываем.
+            text = _names(soul_seed, cfg)
         try:
-            soul.write_text(soul_text(cfg), encoding="utf-8", newline="\n")
+            soul.write_text(text, encoding="utf-8", newline="\n")
         except OSError as exc:
             raise LayoutError(f"не пишется конституция {soul}: {exc}") from exc
     planted = _seed_kit(tree, cfg)
     if planted:
         log.info("стартовый комплект: положено файлов в дерево: %d", planted)
+    # Знания рождения (1.4.1, доктор): каждый файл — только при отсутствии
+    # своего места в soul/skills/; живое сильнее рождения.
+    if skills_seed:
+        skills_root = tree / "soul" / "skills"
+        try:
+            skills_root.mkdir(parents=True, exist_ok=True)
+            for fname, text in skills_seed.items():
+                target = skills_root / fname
+                if target.exists():
+                    continue
+                target.write_text(text, encoding="utf-8", newline="\n")
+        except OSError as exc:
+            raise LayoutError(f"не пишутся знания рождения {skills_root}: {exc}") from exc
     refreshed = refresh_kit(tree, cfg)
     if refreshed:
         log.info("стартовый комплект: обновлены нетронутые тексты поставки — %s",
@@ -1494,6 +1523,20 @@ def _brain_config(cfg: dict) -> dict:
     pricing = cfg.get("pricing")
     if isinstance(pricing, dict) and pricing:
         out["pricing"] = pricing
+    images = cfg.get("images") if isinstance(cfg.get("images"), dict) else {}
+    out["images"] = {"enabled": images.get("enabled") is True,
+                     "model": str(images.get("model") or "gpt-image-2"),
+                     "quality": str(images.get("quality") or "auto"),
+                     "size": str(images.get("size") or "auto"),
+                     "background": str(images.get("background") or "opaque")}
+    relay = cfg.get("relay") if isinstance(cfg.get("relay"), dict) else {}
+    app_dir = str(Path(__file__).resolve().parent.parent)
+    if app_dir not in sys.path:
+        sys.path.insert(1, app_dir)
+    from deskd.readers import RELAY_PORT_DEFAULT
+    relay_port = _int_or(relay.get("port") or RELAY_PORT_DEFAULT, RELAY_PORT_DEFAULT, what="relay.port")
+    relay_key = str(relay.get("key") or (voice.get("key") if relay.get("enabled") else "") or "")
+    out["image_channel"] = {"base_url": f"http://127.0.0.1:{relay_port}", "api_key": relay_key}
     return out
 
 
@@ -1550,6 +1593,9 @@ def _projected_fields(built: dict) -> dict[str, list[str]]:
             fields = sorted(k for k, v in sub.items() if v not in (None, ""))
             if fields:
                 out[str(name)] = fields
+    channel = built.get("image_channel")
+    if isinstance(channel, dict):
+        out["_image_channel"] = sorted(k for k, v in channel.items() if v not in (None, ""))
     return out
 
 
@@ -1590,6 +1636,15 @@ def _merge_brain(current: dict, built: dict, previously_projected: dict | None =
                 else:
                     block[name] = sub
             merged[key] = block
+        elif key == "image_channel" and isinstance(cur, dict) and isinstance(value, dict):
+            slot = dict(cur)
+            mine = set(prev.get("_image_channel") or ())
+            for field, val in value.items():
+                if val not in (None, "") or field not in slot:
+                    slot[field] = val
+                elif field in mine:
+                    slot.pop(field, None)
+            merged[key] = slot
         elif key == "roles" and isinstance(cur, dict) and isinstance(value, dict):
             block = dict(cur)
             for name, sub in value.items():

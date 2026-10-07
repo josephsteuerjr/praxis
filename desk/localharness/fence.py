@@ -1260,13 +1260,13 @@ class Container:
             if not job:
                 return None
             info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
-            info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_ACTIVE_PROCESS | 0x2000
             info.BasicLimitInformation.ActiveProcessLimit = _JOB_ACTIVE_PROCESS_LIMIT
             if not self.kernel32.SetInformationJobObject(
                     job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
                     ctypes.byref(info), ctypes.sizeof(info)):
-                log.warning("лимит процессов заданию не поставлен (код %d)",
-                            ctypes.get_last_error())
+                self.kernel32.CloseHandle(job)
+                return None
             return job
         except Exception as exc:
             log.warning("задание для команды не создалось: %s", exc)
@@ -1354,14 +1354,26 @@ class Container:
                 self.kernel32.CloseHandle(job)
             out_path.unlink(missing_ok=True)
             raise OSError(f"CreateProcess в контейнере не удался (код {err})")
-        if job and not self.kernel32.AssignProcessToJobObject(job, pi.hProcess):
-            log.warning("процесс не привязан к заданию (код %d): внуки переживут "
-                        "таймаут", ctypes.get_last_error())
+        if not job or not self.kernel32.AssignProcessToJobObject(job, pi.hProcess):
+            self.kernel32.TerminateProcess(pi.hProcess, 1)
+            self.kernel32.CloseHandle(pi.hThread)
+            self.kernel32.CloseHandle(pi.hProcess)
+            if job: self.kernel32.CloseHandle(job)
+            raise RuntimeError("containment unavailable: child stopped before resume")
+        import process_scope
+        def stop_job():
+            if not self.kernel32.TerminateJobObject(job, 124):
+                raise ctypes.WinError(ctypes.get_last_error())
+        def resume_child():
+            if self.kernel32.ResumeThread(pi.hThread) == 0xffffffff:
+                raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            custody = process_scope.admit_external(stop_job, resume_child)
+        except BaseException:
+            self.kernel32.CloseHandle(pi.hThread)
+            self.kernel32.CloseHandle(pi.hProcess)
             self.kernel32.CloseHandle(job)
-            job = None
-        # Резюмируем В ЛЮБОМ СЛУЧАЕ: не возобновить поток значило бы повесить
-        # команду навсегда ради ограничения, которое не встало.
-        self.kernel32.ResumeThread(pi.hThread)
+            raise
         timed_out = False
         wait = self.kernel32.WaitForSingleObject(pi.hProcess, int(timeout * 1000))
         if wait == _WAIT_TIMEOUT:
@@ -1372,6 +1384,7 @@ class Container:
             self.kernel32.WaitForSingleObject(pi.hProcess, 5000)
         code = wt.DWORD(0)
         self.kernel32.GetExitCodeProcess(pi.hProcess, ctypes.byref(code))
+        process_scope.release_external(custody)
         self.kernel32.CloseHandle(pi.hThread)
         self.kernel32.CloseHandle(pi.hProcess)
         if job:
@@ -1526,7 +1539,8 @@ class _SubprocessShim:
             opts.setdefault("stdout", self._real.PIPE)
             opts.setdefault("stderr", self._real.STDOUT)
         try:
-            done = self._real.run(args, *pargs, **opts)
+            import process_scope
+            done = process_scope.run(args, *pargs, **opts)
         except self._real.TimeoutExpired as exc:
             partial = exc.stdout if isinstance(exc.stdout, bytes) else b""
             raise self._real.TimeoutExpired(exc.cmd, exc.timeout,

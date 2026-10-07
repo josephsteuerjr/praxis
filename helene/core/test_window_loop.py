@@ -181,7 +181,7 @@ class TestTheMissingCapability(Base):
         with self.online():
             out = self.remind("wake", "прочитать диалоги @peer_test и ответить",
                               when="in 30m")
-        self.assertIn("Наметила", out)
+        self.assertIn("Намечено", out)
         self.assertEqual(self.only_task()["kind"], "wake")
 
     def test_the_confirmation_says_the_connection_will_be_live(self):
@@ -194,7 +194,7 @@ class TestTheMissingCapability(Base):
         with self.in_window(), self.inside():
             out = self.remind("wake", "прочитать живые диалоги и ответить",
                               after_run="run-inside")
-        self.assertIn("Наметила", out)
+        self.assertIn("Намечено", out)
         t = self.only_task()
         self.assertEqual((t["kind"], t.get("after_run")), ("wake", "run-inside"))
 
@@ -247,7 +247,7 @@ class TestTheCircleIsBroken(Base):
     def test_the_incident_configuration_becomes_a_wake(self):
         with self.in_window(), self.inside():
             out = self.remind("window", INCIDENT, after_run="run-inside")
-        self.assertIn("Наметила", out)
+        self.assertIn("Намечено", out)
         self.assertEqual(self.only_task()["kind"], "wake")
 
     def test_the_same_holds_without_any_after_run(self):
@@ -284,7 +284,7 @@ class TestTheCircleIsBroken(Base):
         """Ни одной ветки «не намечаю» здесь больше нет — только развилка."""
         with self.in_window(), self.inside():
             for goal in WORK + [INCIDENT]:
-                self.assertIn("Наметила", self.remind("window", goal), goal)
+                self.assertIn("Намечено", self.remind("window", goal), goal)
         self.assertEqual(len(tasks.list_open()), len(WORK) + 1)
 
 
@@ -377,14 +377,14 @@ class TestPaceIsAdviceNotAWall(Base):
     def test_the_seventh_rise_in_an_hour_is_still_scheduled(self):
         with self.online():
             for i in range(7):
-                self.assertIn("Наметила", self.remind("wake", f"дело {i}", when="in 30m"), i)
+                self.assertIn("Намечено", self.remind("wake", f"дело {i}", when="in 30m"), i)
         self.assertEqual(len(tasks.list_open()), 7)
 
     def test_but_the_count_is_said_out_loud(self):
         with self.online():
             for i in range(6):
                 out = self.remind("wake", f"дело {i}", when="in 30m")
-        # «Наметила», а не «поднялась»: счёт по созданным намерениям, и утверждать
+        # «Намечено», а не «поднялась»: счёт по созданным намерениям, и утверждать
         # событие, которого могло не быть, в её же дневнике — нельзя.
         self.assertIn("наметила себе 6 подъёмов", out)
 
@@ -403,7 +403,7 @@ class TestPaceIsAdviceNotAWall(Base):
     def test_notes_and_messages_are_not_burdened_with_any_of_it(self):
         with self.in_window(), self.inside():
             out = agent.tool_remind_self("note", "напомнить про 2FA", when="in 30m")
-        self.assertIn("Наметила", out)
+        self.assertIn("Намечено", out)
         self.assertEqual(self.only_task()["kind"], "note")
         self.assertNotIn("Telethon", out)
 
@@ -519,7 +519,7 @@ class TestTheHonestTruthAboutRuns(Base):
         """`parse_when` пропускает смещение из ISO как есть, и голое сравнение падало."""
         with self.in_window(), self.inside():
             out = self.remind("window", "разобрать память", when="2026-12-31T18:00+03:00")
-        self.assertIn("Наметила", out)
+        self.assertIn("Намечено", out)
         self.assertEqual(self.only_task()["kind"], "window",
                          "не знаем срок — не подменяем вид, который она назвала")
 
@@ -533,7 +533,7 @@ class TestTheHonestTruthAboutRuns(Base):
     def test_a_finished_run_is_named_but_the_intention_is_kept(self):
         with self.online(), self.inside():
             out = self.remind("wake", "прочитать итог", after_run="run-past")
-        self.assertIn("Наметила", out)
+        self.assertIn("Намечено", out)
         self.assertIn("уже завершился", out)
         self.assertEqual(self.only_task()["kind"], "wake")
 

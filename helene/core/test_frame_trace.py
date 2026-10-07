@@ -981,7 +981,7 @@ class TheEvidenceEnvelopeIsDescribedHonestly(FrameBase):
             seen = self.run_turn(extra_evidence="ход поднят пульсом")
         zone = next(z for z in seen["meta"]["zones"] if z["zone"] == "evidence")
         embed = zone["embed"]
-        self.assertEqual(embed["prefix_chars"], len("<praxis_context_evidence>\n"))
+        self.assertEqual(embed["prefix_chars"], len("<context_evidence>\n"))
         # ⚠ Хвост конверта вырос ДВАЖДЫ: между закрытием evidence и открытием реплики
         # встала зона «СЕЙЧАС», а сам тег реплики ПОДПИСАН (author/tg/message). Литерал
         # голого тега стал бы здесь обещанием, которого кадр не даёт: сверка берёт ту же
@@ -990,12 +990,12 @@ class TheEvidenceEnvelopeIsDescribedHonestly(FrameBase):
         situation_chars = next((row["chars"] for row in seen["meta"]["zones"]
                                 if row["zone"] == "situation"), 0)
         self.assertEqual(embed["suffix_chars"],
-                         len("\n</praxis_context_evidence>\n") + len(reply_open)
+                         len("\n</context_evidence>\n") + len(reply_open)
                          + len("\n</current_user_message>") + situation_chars)
         tail = seen["messages"][-1]["content"]
         text = tail if isinstance(tail, str) else "".join(
             str(b.get("text", "")) for b in tail if isinstance(b, dict))
-        self.assertTrue(text.startswith("<praxis_context_evidence>\n"))
+        self.assertTrue(text.startswith("<context_evidence>\n"))
         material = text[embed["prefix_chars"]:
                         embed["prefix_chars"] + embed["material_chars"]]
         self.assertTrue(material.endswith("ход поднят пульсом"))

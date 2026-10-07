@@ -9,14 +9,17 @@
 // и ошибок стоят ВНИЗУ, у поля ввода: наверху 250 сообщений их никто не видел.
 import { KeyedList } from "../../feed/keyed";
 import { api, mediaURL, post } from "../api";
+import { artifactCaption, mediaDescriptor, paperMediaHTML } from "../../paper-media";
 import { STARTERS } from "./learn";
-import { bindFail, esc, failHTML, fmtAge, fmtDay, fmtTime, humanError, md, q } from "../lib";
+import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
 import { confirmedByFeed } from "../pending";
+import { interruptReceiptMatches, sameRoom } from "../session";
 import * as scroll from "../scroll";
 import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWindowRoom, type Pending, type Run } from "../state";
 
 interface Msg {
+  source_id?: string;
   timestamp?: string;
   outgoing?: boolean;
   text?: string;
@@ -35,6 +38,9 @@ interface Msg {
    *  агента приезжает так; строковый `media` остаётся подписью telegram-вложения. */
   media_path?: string;
   media_kind?: string;
+  media_name?: string;
+  media_size?: number;
+  media_mime?: string;
   edited_at?: string;
 }
 
@@ -86,6 +92,8 @@ async function readArchive(peer: string): Promise<Msg[]> {
 }
 
 /** Ходы, которые не дошли до конца — на месте, под перепиской. */
+const readFailures = new Set<string>();
+try { for (const key of JSON.parse(localStorage.getItem("helene-read-failures") || "[]")) readFailures.add(String(key)); } catch { /* storage unavailable */ }
 function failedNotices(): string {
   // Окно суток: иначе один сбой месячной давности висел красной плашкой при
   // каждом открытии Чата.
@@ -93,7 +101,7 @@ function failedNotices(): string {
   const failed = roomRuns().filter((r) => {
     if (r.terminal_status !== "failed" && r.status !== "failed") return false;
     const at = new Date(r.created_at ?? "").getTime();
-    return isNaN(at) || at >= since;
+    return Number.isFinite(at) && at >= since && !readFailures.has(`${S.room}:${r.id}`);
   });
   if (!failed.length) return "";
   const last = failed[0];
@@ -103,7 +111,8 @@ function failedNotices(): string {
   return `<div class="notice err">
     <span class="dot failed"></span>
     <span>Ход ${esc(when)} не дошёл до конца${why}. ${failed.length > 1 ? `Таких ходов за сутки: ${failed.length}.` : ""}</span>
-    <button class="notice-action" data-go="journal" type="button">Открыть журнал</button>
+    <button class="notice-action" data-go="journal" data-read-failures="${esc(failed.map(r => `${S.room}:${r.id}`).join('|'))}" type="button">Открыть журнал</button>
+    <button class="notice-action" data-read-failures="${esc(failed.map(r => `${S.room}:${r.id}`).join('|'))}" type="button">Прочитано</button>
   </div>`;
 }
 
@@ -138,64 +147,93 @@ function brainNotice(): string {
  */
 /** Последняя квитанция остановки хода — чтобы перерисовка не возвращала «Остановить ход»
  *  поверх записанной просьбы (ревью 25.09, A7 F8). */
-let stopReceipt: { at: number; text: string } | null = null;
+let stopReceipt: { key: string; text: string; pending: boolean } | null = null;
+let turnControls: HTMLElement | null = null;
+let controlsBlocked = false;
 
-/** Слова квитанции движка: что отменено, что ждёт исхода тула, что не вышло. */
+export function currentTurn(): { run_id: string; key: string } | null {
+  const s = S.agentState;
+  const r = s?.runner;
+  if (!r?.alive || !r.busy || !r.run || r.run === "sleep") return null;
+  if (s && "activity" in s) {
+    const a = s.activity;
+    if (!a || a.run_id !== r.run || a.kind !== "chat_turn"
+        || !sameRoom(a.chat_id, S.room, WINDOW_ROOM, LEGACY_WINDOW_KEY)) return null;
+  } else if (!roomRuns().some(run => run.id === r.run && run.status === "running")) return null;
+  return { run_id: r.run, key: `${S.room}:${r.run}:${r.since}` };
+}
+
 export function interruptReceiptWords(receipt: Record<string, unknown> | null | undefined): string {
   if (!receipt || typeof receipt !== "object") return "";
-  const n = (k: string) => (Array.isArray(receipt[k]) ? (receipt[k] as unknown[]).length : 0);
-  const parts: string[] = [];
-  if (n("cancelled")) parts.push(`остановлено ходов: ${n("cancelled")}`);
-  if (n("pending_tool_outcomes")) parts.push(`ждут исхода тула: ${n("pending_tool_outcomes")}`);
-  if (n("skipped")) parts.push(`пропущено (родились позже просьбы): ${n("skipped")}`);
-  if (n("failed")) parts.push(`не вышло: ${n("failed")}`);
-  if (!parts.length && n("requested") === 0) return "движок не нашёл живых ходов";
-  return parts.join("; ");
+  const n = (k: string) => Array.isArray(receipt[k]) ? (receipt[k] as unknown[]).length : 0;
+  if (n("failed")) return "Не удалось подтвердить остановку — открой подробности хода";
+  if (n("pending_tool_outcomes")) return "Останавливается — ждёт результата текущего действия";
+  if (n("cancelled")) return "Ход остановлен";
+  if (!n("requested")) return "Ход уже завершён";
+  return "Остановка запрошена";
 }
 
-function turnNotice(): string {
-  const r = S.agentState?.runner;
-  if (!r || !r.alive || !r.busy) return "";
-  const since = r.since ? ` (идёт ${fmtAge(r.since)})` : "";
-  if (r.run === "sleep") {
-    // Ревью 26.09 (W3 S1): сон — не прогон, и «Остановить ход» ему нечего отменять.
-    return `<div class="notice" data-turn-stop-box>
-    <span class="dot live"></span>
-    <span>Агент спит — ночной цикл памяти${since}. Сообщения прочтёт, когда проснётся.</span>
-  </div>`;
-  }
-  if (stopReceipt && Date.now() - stopReceipt.at < 120_000) {
-    return `<div class="notice" data-turn-stop-box>
-    <span class="dot live"></span>
-    <span>${esc(stopReceipt.text)}</span>
-    <button class="notice-action" data-stop-turn="ask" type="button" disabled>Просьба записана</button>
-  </div>`;
-  }
-  return `<div class="notice" data-turn-stop-box>
-    <span class="dot live"></span>
-    <span>Агент сейчас работает${since} — действия справа.</span>
-    <button class="notice-action" data-stop-turn="ask" type="button">Остановить ход</button>
-  </div>`;
+export function mountTurnControls(container: HTMLElement) {
+  turnControls = container;
+  container.innerHTML = '<span class="turn-receipt" aria-live="polite"></span><button class="notice-action" data-stop-turn type="button" hidden>Остановить ход</button>';
+  container.querySelector("button")!.addEventListener("click", () => void stopCurrentTurn());
 }
 
-/** Дождаться квитанции движка на просьбу остановить ход (до ~15 с) и показать её словами. */
-async function awaitInterruptReceipt(requestedAt: number, box: Element): Promise<void> {
-  for (let i = 0; i < 15; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
-    try {
-      const sup = await api<{ interrupt_receipt?: Record<string, unknown> | null }>("/api/supervisor");
-      const receipt = sup?.interrupt_receipt;
-      const at = receipt && typeof receipt.at === "string" ? Date.parse(receipt.at) : NaN;
-      if (receipt && Number.isFinite(at) && at >= requestedAt - 2000) {
-        const words = interruptReceiptWords(receipt);
-        stopReceipt = { at: Date.now(), text: `Просьба записана — ${words}.` };
-        const text = box.querySelector("span:not(.dot)");
-        if (text) text.textContent = stopReceipt.text;
+export function onStateChange(blocked = false) {
+  controlsBlocked = blocked;
+  const target = currentTurn();
+  if (stopReceipt && stopReceipt.key !== target?.key) stopReceipt = null;
+  if (turnControls) {
+    const button = turnControls.querySelector<HTMLButtonElement>("button")!;
+    button.hidden = blocked || !target;
+    button.disabled = !!stopReceipt?.pending;
+    button.textContent = stopReceipt?.pending ? "Останавливается…" : "Остановить ход";
+    button.title = "Остановить этот ход; уже выполненные действия сохранятся";
+    const receipt = turnControls.querySelector<HTMLElement>(".turn-receipt")!;
+    receipt.textContent = !blocked && target ? stopReceipt?.text || "" : "";
+  }
+  if (root) {
+    const dom = doms.get(root);
+    if (dom) paintNotices(dom, stubNotice() + brainNotice() + failedNotices());
+  }
+}
+
+async function stopCurrentTurn() {
+  const target = currentTurn();
+  if (!target || controlsBlocked || stopReceipt?.pending) return;
+  const record = { key: target.key, text: "Остановка запрошена…", pending: true };
+  stopReceipt = record;
+  onStateChange(controlsBlocked);
+  try {
+    const answer = await post<{ ok: boolean; note?: string; request?: { id: string } }>("/api/interrupt", { scope: target.run_id });
+    if (!answer.ok) throw new Error(answer.note || "Просьба не записана");
+    if (stopReceipt !== record) return;
+    const requestId = answer.request?.id;
+    if (!requestId) throw new Error("Запрос принят, но подтверждение остановки пока недоступно");
+    for (let i = 0; i < 15; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (stopReceipt !== record) return;
+      try {
+        const sup = await api<{ interrupt_receipt?: Record<string, unknown> }>("/api/supervisor");
+        const receipt = sup?.interrupt_receipt;
+        if (!interruptReceiptMatches(requestId, receipt)) continue;
+        if (stopReceipt !== record || currentTurn()?.key !== target.key) return;
+        record.text = interruptReceiptWords(receipt);
+        record.pending = Array.isArray(receipt?.pending_tool_outcomes) && receipt.pending_tool_outcomes.length > 0;
+        onStateChange(controlsBlocked);
         return;
-      }
-    } catch {
-      /* квитанция придёт следующим опросом или не придёт — молчим, слова уже есть */
+      } catch { /* Connection can disappear while owned processes stop. */ }
     }
+    if (stopReceipt === record) {
+      record.text = "Остановка ещё не подтверждена";
+      record.pending = false;
+      onStateChange(controlsBlocked);
+    }
+  } catch (error) {
+    if (stopReceipt !== record) return;
+    record.text = humanError(error).text;
+    record.pending = false;
+    onStateChange(controlsBlocked);
   }
 }
 
@@ -218,18 +256,14 @@ function stubNotice(): string {
  * `preload="none"` — намеренно: в ленте бывают десятки голосовых, и грузить их
  * все ради прокрутки незачем.
  */
-function mediaBlock(m: { media_path?: string; media_kind?: string }): string {
+function mediaBlock(m: Msg): string {
   const rel = String(m.media_path || "").trim();
   if (!rel) return "";
   const src = mediaURL(rel);
-  const name = rel.split("/").pop() || rel;
   if (String(m.media_kind || "") === "audio") {
     return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
   }
-  if (String(m.media_kind || "") === "image") {
-    return `<div class="msg-media"><img loading="lazy" alt="${esc(name)}" src="${esc(src)}"></div>`;
-  }
-  return `<div class="msg-media"><a href="${esc(src)}" target="_blank" rel="noreferrer">${esc(name)}</a></div>`;
+  return paperMediaHTML(mediaDescriptor(m)!);
 }
 
 // ---------------------------------------------------------------- строки ленты
@@ -274,9 +308,10 @@ function buildRows(rows: Msg[], peer: string): Row[] {
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
+    const visibleText = artifactCaption(m.text || "", m.media_path);
     const body = birth
       ? `<details><summary>Первый запуск: ${esc(PRODUCT_NAME)} рассказала агенту, кто он, где его дом и кто владелец</summary>${md(m.text || "")}</details>`
-      : md(m.text || "");
+      : md(visibleText);
     const base = `${m.timestamp || ""}|${m.outgoing ? "a" : system ? "s" : "o"}|${m.sender_id ?? ""}`;
     const n = seen.get(base) ?? 0;
     seen.set(base, n + 1);
@@ -362,6 +397,7 @@ function skeleton(page: HTMLElement, peer: string): Dom {
 
 /** Перерисовать только пузыри отправляемого, не трогая ленту. */
 export function paintPending() {
+  dispatchEvent(new Event("frame-pending"));
   if (!root || S.view !== "talk") return;
   const dom = doms.get(root);
   if (!dom) return;
@@ -399,9 +435,6 @@ function paintEmpty(dom: Dom, hasRows: boolean) {
 /** Плашки внизу ленты: переписываются, только если слова изменились, и не посреди «прервать?». */
 function paintNotices(dom: Dom, html: string) {
   if (html === dom.noticesHTML) return;
-  // Владелец уже нажал «Остановить ход» и читает цену — не сносить вопрос у него из-под руки.
-  const asking = dom.notices.querySelector('[data-stop-turn="do"], [data-stop-turn][disabled]:not([data-stop-turn="ask"])');
-  if (asking) return;
   dom.noticesHTML = html;
   scroll.preserve(() => { dom.notices.innerHTML = html; });
   for (const b of dom.notices.querySelectorAll<HTMLButtonElement>("[data-go]")) {
@@ -418,8 +451,17 @@ function paintNotices(dom: Dom, html: string) {
       else dispatchEvent(new CustomEvent("frame-go", { detail: b.dataset.act }));
     });
   }
+  for (const b of dom.notices.querySelectorAll<HTMLButtonElement>("[data-read-failures]")) {
+    b.addEventListener("click", () => {
+      for (const key of (b.dataset.readFailures || "").split('|')) if (key) readFailures.add(key);
+      while (readFailures.size > 500) readFailures.delete(readFailures.values().next().value!);
+      try { localStorage.setItem("helene-read-failures", JSON.stringify([...readFailures])); } catch { /* in-memory acknowledgement stays */ }
+      if (root) void render(root);
+    });
+  }
+  for (const b of dom.notices.querySelectorAll("[data-live-runs]")) b.addEventListener("click", () => dispatchEvent(new Event("frame-live-runs")));
   bindFail(dom.notices, () => { if (root) void render(root); });
-  bindStopTurn(dom.notices);
+
 }
 
 export async function render(container: HTMLElement): Promise<void> {
@@ -466,8 +508,10 @@ export async function render(container: HTMLElement): Promise<void> {
       return false;
     });
   }
+  dispatchEvent(new Event("frame-pending"));
   const list = buildRows(rows, peer);
   const d = dom;
+  const firstPaint = !d.painted;
   scroll.preserve(() => {
     d.feed.set(list, {
       animate: d.painted,
@@ -477,7 +521,10 @@ export async function render(container: HTMLElement): Promise<void> {
   });
   d.painted = true;
   paintEmpty(d, list.length > 0);
-  paintNotices(d, stubNotice() + brainNotice() + turnNotice() + failedNotices());
+  paintNotices(d, stubNotice() + brainNotice() + failedNotices());
+  // История пришла после начального homeScroll на пустой странице. Ставим
+  // низ до первого кадра с сообщениями; последующие обновления следуют плавно.
+  if (firstPaint && S.view === "talk" && container.isConnected) scroll.view()?.toBottom(false);
   void paintFold(container, peer);
   // Прокрутку ведёт каркас (`homeScroll`) и физика окна: прилипшая лента сама едет к новому.
   await panel.render();
@@ -552,49 +599,6 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
       btn.textContent = "Свернуть сейчас";
       const text = box.querySelector("span:not(.dot)");
       if (text) text.textContent = humanError(e).text;
-    }
-  });
-}
-
-/**
- * Две ступени, потому что действие необратимо: первое нажатие говорит цену
- * словами, второе — записывает просьбу об остановке без перезапуска.
- */
-function bindStopTurn(container: HTMLElement) {
-  const box = container.querySelector<HTMLElement>("[data-turn-stop-box]");
-  if (!box) return;
-  const btn = box.querySelector<HTMLButtonElement>("[data-stop-turn]");
-  if (!btn) return;
-  btn.addEventListener("click", async () => {
-    if (btn.dataset.stopTurn === "ask") {
-      const text = box.querySelector("span:not(.dot)");
-      if (text) {
-        text.textContent =
-          "Движок остановит текущие ходы на ближайшей границе, без перезапуска. " +
-          "Отправленные сообщения, записанные файлы и потраченные деньги останутся; " +
-          "идущий вызов модели или тула не обрывается мгновенно.";
-      }
-      btn.dataset.stopTurn = "do";
-      btn.textContent = "Всё равно прервать";
-      return;
-    }
-    btn.disabled = true;
-    btn.textContent = "отправляю просьбу…";
-    try {
-      const requestedAt = Date.now();
-      const receipt = await post<{ok: boolean; note?: string}>("/api/interrupt", {scope: "all"});
-      if (!receipt.ok) throw new Error(receipt.note || "Просьба не записана");
-      const text = box.querySelector("span:not(.dot)");
-      if (text) text.textContent = receipt.note || "Просьба об остановке записана";
-      btn.textContent = "Просьба записана";
-      stopReceipt = { at: Date.now(), text: receipt.note || "Просьба об остановке записана — жду квитанцию движка…" };
-      void awaitInterruptReceipt(requestedAt, box);
-    } catch (error) {
-      const text = box.querySelector("span:not(.dot)");
-      const failure = humanError(error);
-      if (text) text.textContent = [failure.text, failure.detail].filter(Boolean).join(" ");
-      btn.disabled = false;
-      btn.textContent = "Повторить просьбу";
     }
   });
 }

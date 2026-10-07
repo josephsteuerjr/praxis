@@ -89,7 +89,7 @@ class Channel(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def request(self, host="127.0.0.1"):
-        return types.SimpleNamespace(query={}, cookies={}, transport=types.SimpleNamespace(
+        return types.SimpleNamespace(query={}, cookies={}, headers={}, transport=types.SimpleNamespace(
             get_extra_info=lambda key: (host, 50000)))
 
     def test_loopback_without_a_key_is_not_the_owner(self):

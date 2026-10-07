@@ -1,0 +1,35 @@
+# Стенд Linux-тела: живой рабочий стол без железа.
+#
+# Debian 12 (GNOME по умолчанию в нём — Wayland, но тело начинается с X11): Xvfb как
+# экран, openbox как оконный менеджер (без него у X-сервера нет EWMH — ни
+# `_NET_CLIENT_LIST`, ни `_NET_ACTIVE_WINDOW`, и список окон пуст по построению),
+# шина сессии и at-spi2-core (дерево элементов — аналог UIA), GTK-приложения для
+# проверки дерева и ввода. xdotool и xprop — независимые свидетели: тело говорит «кликнул»
+# и «окно такое», а они подтверждают со стороны.
+#
+#   docker build -f desk/installer/linux/Dockerfile.desk -t helene-linux-desk .
+#   docker run --rm -v <дерево>/body:/src -v helene-body-target:/target helene-linux-desk \
+#       sh /src/../desk/installer/linux/desk-stand.sh
+#
+# Rust — через rustup той же линии, что требует workspace тела (rust-version 1.94).
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 LC_ALL=C.UTF-8
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git build-essential pkg-config \
+        xvfb xauth x11-utils x11-xserver-utils xdotool wmctrl openbox xterm \
+        dbus dbus-x11 at-spi2-core libatk-adaptor libgail-common \
+        gtk-3-examples zenity gedit \
+        python3 python3-gi python3-pyatspi gir1.2-atspi-2.0 \
+        imagemagick procps \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.94.1 \
+    && rustc --version
+
+# Свидетель буфера обмена (xclip) — отдельным слоем, чтобы тяжёлый слой выше не пересобирался.
+RUN apt-get update && apt-get install -y --no-install-recommends xclip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src

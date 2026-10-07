@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+from contextvars import ContextVar
 import datetime as dt
 import json
 import logging
 import os
 import platform
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -50,6 +52,7 @@ import voice
 import alarm_clock
 import forge_events
 import updates
+import owner_stop
 
 # Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
 # читателя не пишется; сторож живых файлов сдох) диагностировались строками
@@ -63,6 +66,7 @@ logging.basicConfig(level=_LOG_LEVEL,
 log = logging.getLogger("frame.runner")
 
 STREAM = "window"          # комната окна: ключ архива memory/groups/window.jsonl
+_INITIAL_FILES = ContextVar("helene_initial_files", default=None)
 _POLL_SEC = 1.0
 _HEARTBEAT_SEC = 10.0
 
@@ -301,6 +305,10 @@ def _split_attachments(message: str) -> tuple[str, list[str]]:
 
 _AUDIO_EXT = frozenset({".webm", ".ogg", ".oga", ".opus", ".m4a", ".mp3", ".wav"})
 
+#: Расширения, которые руннер пробует показать модели пикселями (те же типы,
+#: что `_MODEL_IMAGE_MIME` дерева). Всё прочее — материал хода, не зрение.
+_IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".gif"})
+
 
 def _hear_attachments(paths: list[str]) -> tuple[list[str], list[str]]:
     """Голосовые из окна (0.6.0) -> строки расшифровки; остальные пути — обратно.
@@ -341,7 +349,8 @@ def _transcribe_note(rel: str) -> str:
     return f"[голосовое]: {text}" if text else "[голосовое: расшифровка пустая — тишина или не разобрать]"
 
 
-def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str) -> tuple[list, list[str]]:
+def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str,
+                        move: bool = True) -> tuple[list, list[str]]:
     """Файлы окна -> медиа-спул дерева (`ingest_path`, перенос) -> ссылки для кадра.
 
     Дерево кладёт картинку в кадр само (`_media_prompt`: блок `image` рядом с текстом)
@@ -374,11 +383,110 @@ def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str) -> t
             continue
         try:
             refs.append(spool.ingest_path(src, kind="photo", chat_id=chat_id,
-                                          message_id=message_id, scope="owner", move=True))
+                                          message_id=message_id, scope="owner", move=move))
         except Exception as exc:  # MediaValidationError и родня — словами
             log.warning("вложение окна отвергнуто спулом [%s]", rel, exc_info=True)
             notes.append(f"[вложение не прочитано: {src.name} — {type(exc).__name__}: {exc}]")
     return refs, notes
+
+
+def _batch_files(paths: list[str], *, run_id: str) -> list[str]:
+    """Файлы окна без слуха и зрения -> папка настоящего хода, агент работает ими руками.
+
+    Слово владельца 01.10: вложения — просто папка хода с артефактами. Копия,
+    не перенос: записка и исходник остаются source evidence до обычного sweep-а,
+    повтор до checkpoint идемпотентен по содержимому. Одноимённые файлы
+    разных записок не заменяют друг друга."""
+    if not paths:
+        return []
+    inbox = (Path(_tree) / "memory" / ".control" / "desk_inbox").resolve()
+    try:
+        folder = _agent._runs().path(str(run_id or "")) / "files"
+        folder.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        log.warning("папка хода недоступна — файлы названы исходными путями", exc_info=True)
+        return [f"[файл: {Path(p).name} — папка хода недоступна]" for p in paths]
+    lines: list[str] = []
+    for rel in paths:
+        src = (inbox / rel).resolve()
+        if inbox not in src.parents or not src.is_file():
+            lines.append(f"[файл не найден: {Path(rel).name}]")
+            continue
+        target = folder / src.name
+        import hashlib
+        with src.open("rb") as file:
+            digest = hashlib.file_digest(file, "sha256").hexdigest()
+        def identical(path):
+            if not path.is_file():
+                return False
+            with path.open("rb") as file:
+                return hashlib.file_digest(file, "sha256").hexdigest() == digest
+        if target.exists() and not identical(target):
+            target = folder / (src.stem + "-" + digest[:24] + src.suffix)
+        if not identical(target):
+            tmp = target.with_name(target.name + ".part")
+            shutil.copyfile(src, tmp)
+            if not identical(tmp):
+                tmp.unlink(missing_ok=True)
+                raise ValueError("вложение изменилось во время копирования")
+            os.replace(tmp, target)
+        lines.append(f"[файл хода: {target}]")
+    return lines
+
+
+def _drain_owner_inputs(current, messages):
+    """Initial files and later inbox batches enter the same durable run."""
+    import turn_inbox
+    additions, ack = turn_inbox.collect(sys.modules[__name__], current, messages)
+    initial = _INITIAL_FILES.get()
+    if current is not None and initial and str(current.delivery_chat_id) == initial["room"]:
+        prefix = "[Файлы сообщения владельца; " + initial["source_id"] + "]\n"
+        if not any(isinstance(m.get("content"), str) and m["content"].startswith(prefix)
+                   for m in messages):
+            lines = _batch_files(initial["paths"], run_id=current.run_id)
+            if lines:
+                additions.insert(0, {"role": "user", "content": prefix + "\n".join(lines)})
+    return additions, ack
+
+
+def _batch_images(text: str, paths: list[str], *, room: str, source_id: str,
+                  run_id: str) -> tuple[str | list[dict], str]:
+    """Use normal image admission/rendering, then make every pixel durable.
+
+    Keep inbox files until the ordinary sweeper: a crash before checkpoint must
+    be replayable from source, without trusting a derived binding sidecar.
+    """
+    refs, notes = _ingest_attachments(paths, chat_id=room, message_id=source_id, move=False)
+    caption = (text + ('\n' + '\n'.join(notes) if notes else '')).strip()
+    if not refs:
+        return caption, caption
+    # `_media_prompt` показывает последние max_turn_media и молча режет первые —
+    # для владельца это должно быть словами в той же реплике, а не тишиной.
+    try:
+        limit = _agent._media_spool().max_turn_media
+    except Exception:
+        limit = None
+    if limit is not None and len(refs) > limit:
+        dropped = ', '.join(Path(r.path).name for r in refs[:-limit])
+        caption = (caption + '\n' + f'[вложений больше лимита хода: {len(refs)} > {limit}; '
+                   f'показаны последние {limit}, не показаны: {dropped}]').strip()
+    ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True)
+    _augmented, content = _agent._media_prompt(caption, tuple(refs), ctx)
+    if not run_id:
+        raise RuntimeError('active image intake requires a durable run')
+    archived = _agent._archive_run_media(run_id, refs, prefix='inbox', strict=True)
+    if isinstance(content, list):
+        for block in content:
+            if block.get('type') == 'image':
+                replacement = archived.get(str(block.get('path') or ''))
+                if replacement is None:
+                    raise RuntimeError('active image was not archived')
+                block['path'] = str(replacement)
+    # Future text history can locate the exact durable media, without pretending
+    # it contains pixels. The current model input carries the image blocks.
+    locators = [f'[изображение: {path}]' for path in archived.values()]
+    archive = (caption + '\n' + '\n'.join(locators)).strip()
+    return content, archive
 
 
 def _orient(chat_id: str) -> str:
@@ -574,9 +682,20 @@ def deliver_one_media(item, chat_id: str) -> str:
             caption=str(getattr(item, "caption", "") or ""),
             media_kind=str(getattr(item, "kind", "document") or "document"),
             voice_note=bool(getattr(item, "voice_note", False))))
-    note = f"[файл] {Path(item.path).name} — {item.path}"
     caption = str(getattr(item, "caption", "") or "").strip()
-    return str(_room(target).deliver(note + ("\n" + caption if caption else "")))
+    room = _room(target)
+    try:
+        relative = Path(item.path).resolve().relative_to(room.tree.resolve()).as_posix()
+    except (ValueError, OSError):
+        relative = ""
+    media_kind = str(getattr(item, "kind", "document") or "document")
+    if media_kind == "photo":
+        media_kind = "image"
+    if not relative:
+        raise ValueError("исходящее вложение вне дерева агента")
+    note = caption
+    return str(room.deliver(note,
+                            media_path=relative, media_kind=media_kind if relative else ""))
 
 
 def _deliver_outbound(envelope, chat_id: str) -> int:
@@ -617,17 +736,30 @@ def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple
     now = _now()
     source_id = str(ingress_id or "").strip() or f"{room}-{int(now.timestamp() * 1000)}"
     desk = _room(room)
-    heard, pictures = _hear_attachments(list(attachments or ()))
-    refs, notes = _ingest_attachments(pictures, chat_id=room, message_id=source_id)
-    labels = heard + [f"[изображение: {Path(r.path).name}]" for r in refs] + notes
+    display_text = message
+    heard, remaining = _hear_attachments(list(attachments or ()))
+    pictures = [path for path in remaining if Path(path).suffix.lower() in _IMAGE_EXT]
+    files = [path for path in remaining if path not in pictures]
+    refs, notes = _ingest_attachments(pictures, chat_id=room, message_id=source_id, move=False)
+    labels = heard + [f"[изображение: {Path(r.path).name}]" for r in refs] + notes + [f"[файл: {Path(path).name}]" for path in files]
     if labels:
         message = (message + "\n" + "\n".join(labels)).strip()
     # Восприятие пишет память ДО кадра — как в живом раннере: кадр читает горячий
     # слой, и текущая реплика обязана быть в нём, иначе она отвечала бы на пустоту.
-    desk.archive(message, outgoing=False, now=now)
+    if display_text.strip() or not attachments:
+        desk.archive(display_text, outgoing=False, now=now, source_id=source_id)
+    for index, path in enumerate(attachments):
+        rel = "memory/.control/desk_inbox/" + str(path).replace("\\", "/")
+        kind = "image" if Path(path).suffix.lower() in _IMAGE_EXT else "file"
+        desk.archive("", outgoing=False, now=now, source_id=source_id + f"-file-{index}",
+                     media_path=rel, media_kind=kind)
     desk.life(message, direction="in", actor=_speaker, source_id=source_id, now=now)
-    _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message,
-                    media_refs=tuple(refs))
+    token = _INITIAL_FILES.set({"room": room, "source_id": source_id, "paths": list(attachments)} if attachments else None)
+    try:
+        _turn_in_window(source_id, speaker=_speaker, room=room, origin_text=message,
+                        media_refs=tuple(refs))
+    finally:
+        _INITIAL_FILES.reset(token)
 
 
 def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
@@ -1472,7 +1604,7 @@ def _sleep_due() -> None:
     (`_SLEEP_IDLE_SEC`, 20 минут без ходов) — иначе догон через 48 ч приходился на
     середину разговора, и агент немел на время сна, пока владелец за компьютером.
     """
-    if _agent is None or not _brain_ready() or not _sleep_cycle_on():
+    if owner_stop.paused() or _agent is None or not _brain_ready() or not _sleep_cycle_on():
         return
     import sleep as tree_sleep
     if not tree_sleep.due(None, _STARTED_AT):
@@ -1536,7 +1668,7 @@ def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
 
 def _resume_due() -> None:
     """Следующий шаг уже существующих задач — в том же потоке, что окно и бот."""
-    if _continuity is None or not _brain_ready():
+    if owner_stop.paused() or _continuity is None or not _brain_ready():
         return
     try:
         _continuity.resume_due()
@@ -1898,7 +2030,7 @@ def _alarm_note(task: dict) -> str:
 
 def _fire_due_tasks() -> None:
     """Адресное срабатывание: claim -> durable run -> погашение намерения."""
-    if _desk is None or _life is None or _alarms is None or not _brain_ready():
+    if owner_stop.paused() or _desk is None or _life is None or _alarms is None or not _brain_ready():
         return
     tasks = _alarms.tasks
     _alarms.reconcile_claims()
@@ -1949,7 +2081,7 @@ def _fire_due_tasks() -> None:
 
 
 def _forge_events_due() -> None:
-    if _forge_events is None or not _brain_ready():
+    if owner_stop.paused() or _forge_events is None or not _brain_ready():
         return
     try:
         _forge_events.tick()
@@ -2292,6 +2424,27 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
     if not message:
         _mark_done(processed, path.name, "empty")
         return
+    if message.strip() == "/resume":
+        # ⚠ 1.4.0: живой семенной стоп — RuntimeError, и прежде он ронял ГЛАВНЫЙ
+        # цикл движка: записка /resume в окно стопа убивала агента целиком.
+        # Теперь владелец получает записку-ошибку (как снять — словами в ней),
+        # движок живёт, а записка помечается разобранной: повторная доставка
+        # говорила бы одно и то же три раза, а потом врала бы «не дошла».
+        try:
+            owner_stop.resume()
+        except RuntimeError as exc:
+            log.error("записка /resume не прошла: %s", exc)
+            try:
+                _room(STREAM).deliver(
+                    f"⚠ /resume не прошёл: {exc}. Семенной стоп снимает только владелец "
+                    f"нативной командой Resume — передай ему это, записка здесь бессильна.",
+                    system=True)
+            except Exception:
+                log.exception("записка-ошибка о непринятом /resume не легла в окно")
+            _mark_done(processed, path.name, "resume refused: seed stop wants native Resume")
+            return
+        _mark_done(processed, path.name, "autonomy resumed explicitly")
+        return
     target = _inbox_target(path.stem)
     message, attached = _split_attachments(message)
     ingress_id = f"note:{path.stem}"
@@ -2327,6 +2480,8 @@ def _adopt_stale_processed(processed: Path, older_than_sec: int = 1800) -> int:
         return 0
     for path in entries:
         try:
+            if Path(str(path) + '.batch.json').exists():
+                continue  # run-bound input is reconciled by its checkpoint, never by age
             if path.stat().st_mtime < cutoff and not (processed / (path.name + ".done")).exists():
                 _mark_done(processed, path.name, "adopted")
                 adopted += 1
@@ -2405,8 +2560,13 @@ def _replay_unclaimed_notes(processed: Path, limit: int = 5,
     # Фильтр по `.done` — ДО среза: иначе пять старейших разобранных записок
     # закрывали бы дорогу настоящим кандидатам (A6 F1г).
     unclaimed = [path for path in sorted(processed.glob("*.md"))
-                 if not (processed / (path.name + ".done")).exists()]
+                 if not (processed / (path.name + ".done")).exists()
+                 and not Path(str(path) + '.batch.json').exists()]
     for path in unclaimed[:max(0, int(limit or 5))]:
+        if Path(str(path) + '.batch.json').exists():
+            # This input belongs to a recorded run, never replay as a new task.
+            # Its model-boundary consumer reconciles checkpoint/ack after resume.
+            continue
         # ⚠ 1.0.1: попыток не больше _REPLAY_MAX_TRIES. Записка, чей ход падает всякий
         # раз (детерминированная ошибка), переигрывалась бы вечно — а replay звался
         # КАЖДУЮ СЕКУНДУ главного цикла: каждая попытка — полный ход, новый прогон на
@@ -2534,7 +2694,33 @@ def main() -> None:
         # а selfgit и _git_state ниже зовут голое `git`.
         git_from = boot.arm_git()
         log.info("git: %s", git_from or "не найден — снимков правок не будет")
-        boot.ensure_layout(tree, cfg)
+        # 1.4.0: сид души — `soul-seed.md` рядом с конфигом (кладёт agents.create;
+        # файл НЕ удаляем — это запись о рождении). BOM-толерантно, как конфиг:
+        # файл мог пройти через руки владельца.
+        seed_path = config_path.with_name(agents.SEED_NAME)
+        soul_seed: str | None = None
+        try:
+            if seed_path.is_file():
+                soul_seed = boot.read_config_text(seed_path)
+        except (OSError, ValueError) as exc:
+            log.warning("сид души не читается (%s): родится каноническая конституция — %s",
+                        seed_path, exc)
+            soul_seed = None
+        # Знания рождения (1.4.1, доктор): skills-seed/ рядом с конфигом. Раннер
+        # только переносит — КУДА ложить, знает ensure_layout; неудача чтения
+        # не роняет старт (канон без знаний живёт), но говорится aloud.
+        skills_seed: dict[str, str] = {}
+        skills_dir = config_path.with_name("skills-seed")
+        try:
+            if skills_dir.is_dir():
+                for path in sorted(skills_dir.glob("*.md")):
+                    skills_seed[path.name] = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            log.warning("знания рождения не читаются (%s): агент родится без них — %s",
+                        skills_dir, exc)
+            skills_seed = {}
+        boot.ensure_layout(tree, cfg, soul_seed=soul_seed,
+                           skills_seed=skills_seed or None)
     except boot.LayoutError as exc:
         log.error("папка данных не готова: %s", exc)
         raise SystemExit(3)
@@ -2617,6 +2803,19 @@ def main() -> None:
     except Exception:
         log.exception("голос не поднялся — голосовые останутся нерасшифрованными")
     agent, memory_life = _load_tree(code_dir, tree, cfg)
+    owner_stop.configure(tree)
+    def edition_panic(reason=""):
+        import subprocess
+        exe = config_path.parent / "helene-svc.exe"
+        if os.name != "nt" or not exe.is_file():
+            raise RuntimeError("Native panic is unavailable on this platform; not restarting")
+        done = subprocess.run([str(exe), "panic", "--via", "agent"], capture_output=True, timeout=15)
+        if done.returncode != 0:
+            raise RuntimeError("Native panic refused; use the elevated owner control")
+        return "Стоп-флаг записан; надзор завершает дерево, не перезапускает."
+    agent.panic = edition_panic
+    if isinstance(getattr(agent, "TOOL_IMPL", None), dict):
+        agent.TOOL_IMPL["panic"] = edition_panic
     _name_the_owner(_speaker)
     _announce_git(tree)
     _desks = transport.Desks(tree, _speaker, _title, memory_life=memory_life,
@@ -2628,6 +2827,8 @@ def main() -> None:
         lambda run, chat: _set_busy(True, run, chat_id=chat),
         media_sender=deliver_one_media)
     _continuity.install()
+    import turn_inbox
+    agent.OWNER_INPUT_DRAIN = _drain_owner_inputs
     import tasks
     import forge
     import perception
@@ -2747,6 +2948,7 @@ def main() -> None:
         # окно: продукт остаётся рабочим локально, а причина названа в логе.
         try:
             _bot = botapi.BotTransport(agent, tree, memory_life, cfg)
+            _bot.owner_control = lambda: edition_panic("Telegram owner /panic")
             _bot.on_incoming = _note_incoming
             _bot.start()
             botapi.install(agent, _desks, _bot)
@@ -2792,6 +2994,9 @@ def main() -> None:
     # Control must run independently: the main loop is inside the model/tool turn.
     import atexit
     import control_watch
+    import process_scope
+    owner_stop.configure(tree)
+    process_scope.configure_admission(lambda: not owner_stop.stopped())
     control_stop, _control_thread = control_watch.start(
         tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES)
     atexit.register(control_stop.set)
@@ -2804,7 +3009,8 @@ def main() -> None:
     _warm_voice_models(cfg)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
-    _maybe_birth(tree)
+    if not owner_stop.paused():
+        _maybe_birth(tree)
     _sleep_seed_once()
     alarms_at = 0.0
     resume_at = 0.0
@@ -2812,6 +3018,9 @@ def main() -> None:
     update_at = 0.0
     sleep_at = time.time()
     while True:
+        if owner_stop.stopped():
+            process_scope.cancel_all()
+            sys.exit(owner_stop.OWNER_STOP_EXIT)
         if _restart_wanted[0]:
             # Между ходами: текущий ход дошёл до конца, новый не начат. Дальше — надзор.
             log.warning("перезапуск по просьбе владельца: выхожу кодом %d, надзор поднимет "
