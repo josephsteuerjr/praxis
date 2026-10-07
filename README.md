@@ -19,6 +19,9 @@ voice, files and a dedicated Doctor. An agent can run locally or on your server.
   edit an existing constitution, or write your own. Inspect the actual constitution file.
 - **Individual controls.** Start and stop one agent. Keep another running. Changes to the
   agent list appear immediately, and files open from the selected agent's own tree.
+- **Clear background work.** Setup and settings explain that active agents can keep
+  receiving messages and doing tasks after the window closes. A paper tray card shows
+  the selected agent, engine status, agent switching and explicit open, stop and exit actions.
 - **Recoverable removal.** Removal requires the agent ID and moves its files into an
   archive instead of silently erasing its memory.
 - **A Doctor.** Create a dedicated diagnostic agent from the Agents card. It measures
@@ -33,6 +36,12 @@ character can develop through the same authored mechanisms as other agents.
 
 - **Paper-like chat.** Readable typography, resizable panels, remembered drafts and reading
   positions, visible activity, and controls that reflect the actual engine state.
+- **Tasks and wake-ups.** Inspect ongoing work, schedule future wake-ups and return to
+  continuing intentions from dedicated views.
+- **Context and diagnostics.** Inspect retained context, files, activity and journals
+  when understanding or diagnosing an agent's work.
+- **Materials and storage.** View material sizes as a diagram and explicitly confirm
+  removal of eligible project or cache folders.
 - **Images.** Generate and edit images through the ChatGPT subscription relay from a
   Codex or GLM conversation. Images have independent settings and reference-image support.
   View the whole image inline, open the internal viewer, fit or zoom, then return to chat.
@@ -47,7 +56,7 @@ character can develop through the same authored mechanisms as other agents.
   conversation and settings. Configure an external HTTPS address for access away from home.
 
 An image relay can remain available while a different provider supplies the main voice.
-Hélène 1.4.1 fixes empty image credentials and preserves the auxiliary relay on update.
+Empty image credentials are handled correctly, and updates preserve the auxiliary relay.
 
 ## Telegram as a real place
 
@@ -57,7 +66,16 @@ have different capabilities; unsupported operations return an explicit explanati
 The runtime includes:
 
 - Private and group conversations, exact forum-topic routing, reply targets and room modes.
+- Messages from people are archived before wake-up and admission checks. The agent wakes
+  for its current name, authenticated profile name, exact @username or a reply to its message.
+- Offline startup and later connection loss recover automatically without reopening the
+  window. Telegram reception health reflects the actual connection, including reconnects.
 - Topic-aware archives, history retrieval, conversation search and participant orientation.
+- Real message IDs reconcile replayed posts and edits. MTProto catches up missed history,
+  includes the account's messages sent on another device, and applies received deletions.
+  Bot API catches up its retained update queue within Telegram's history and privacy limits.
+- An optional server gateway carries Bot API HTTPS and MTProto WSS with a private access
+  key and verified TLS. Configure the route in the Telegram settings card.
 - Contacts, membership, profile and moderation tools within the account's actual rights.
 - Durable outgoing messages and staged files, idempotency keys and delivery receipts.
 - Reactions, media, follow-ups and owner-controlled admission.
@@ -122,6 +140,9 @@ shows the capabilities and limits of the selected mode rather than promising a u
 - Installed-code receipts are captured after reconciliation, so a legitimate carried
   change does not trigger an automatic rollback by itself.
 - An open acceptance trial is reported explicitly before another update can begin.
+- Terminal turn cancellation releases the active turn while a model request is still
+  waiting and discards its late response. Network failures can retry the same channel
+  with the same conversation frame.
 - Windows has trial/rollback controls. Backup and agent-transfer paths preserve the
   relevant authored data and avoid duplicating downloaded dependency caches.
 
@@ -141,7 +162,7 @@ no `sudo`, no `su`. The installer opens the setup window in that person's sessio
 curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
 ```
 
-For an archive already downloaded, add `-s -- --from /path/to/Helene-1.4.1-macos-arm64.zip`
+For an archive already downloaded, add `-s -- --from /path/to/Helene-1.4.3-macos-arm64.zip`
 after `sh`. The script extracts the archive and opens the setup window.
 
 Linux Electron cannot infer a stationary touchpad contact from wheel events; its scrolling
