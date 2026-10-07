@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 import mimetypes
@@ -36,6 +37,7 @@ import os
 import threading
 
 import boot
+import telegram_proxy
 import time
 import urllib.error
 import urllib.parse
@@ -52,7 +54,6 @@ _MSG_LIMIT = 4096          # потолок sendMessage; длиннее — ре
 _CAPTION_LIMIT = 1024
 _POLL_TIMEOUT = 25         # long-poll: столько держит сервер, +10 наш сокет
 _STALE_SEC = 90            # связь считается живой, пока последний poll моложе
-_INGEST_TRIES = 5          # столько раз пробуем переварить один апдейт
 
 
 # --------------------------------------------------------------------------- #
@@ -91,8 +92,9 @@ def _multipart(fields: dict[str, str], file_field: str, path: Path,
 class BotClient:
     """Тонкий клиент Bot API. Ошибка метода — BotApiError, сеть — URLError."""
 
-    def __init__(self, token: str):
+    def __init__(self, token: str, *, proxy_url: str = "", proxy_key: str = ""):
         self._base = f"https://api.telegram.org/bot{token}/"
+        self._proxy_url, self._proxy_key = proxy_url, proxy_key
 
     def call(self, method: str, _http_timeout: float = 30.0, **params) -> dict | list:
         # `_http_timeout` с подчёркиванием: у самого API есть параметр `timeout`
@@ -118,8 +120,9 @@ class BotClient:
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         return self._read(method, req, timeout)
 
-    @staticmethod
-    def _read(method: str, req: urllib.request.Request, timeout: float):
+    def _read(self, method: str, req: urllib.request.Request, timeout: float):
+        if self._proxy_url:
+            req = telegram_proxy.bot_request(req, self._proxy_url, self._proxy_key)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
@@ -244,6 +247,7 @@ class Rooms:
         self._life = memory_life
         self.agent_name = agent_name
         self._titles: dict[str, dict] = {}   # chat_id -> {title, is_dm, size}
+        self._record_lock = threading.Lock()
 
     def describe(self, chat_id: str, *, title: str, is_dm: bool,
                  size: int | None = None,
@@ -272,7 +276,7 @@ class Rooms:
 
     def record(self, chat_id: str, text: str, *, outgoing: bool, sender: str = "",
                source_id: str = "", ts: float | None = None,
-               source: str = "botapi") -> None:
+               source: str = "botapi", edited: bool = False, historical: bool = False) -> None:
         import datetime as dt
         moment = dt.datetime.fromtimestamp(ts, dt.timezone.utc) if ts else \
             dt.datetime.now(dt.timezone.utc)
@@ -282,9 +286,46 @@ class Rooms:
         row = {"timestamp": moment.isoformat(timespec="seconds"),
                "outgoing": bool(outgoing), "text": str(text),
                "sender_name": (self.agent_name if outgoing else (sender or "?"))}
+        if source_id:
+            row["source_message_id"] = str(source_id)
+            row["source"] = source
         archive = self.tree / "memory" / "groups" / (str(chat_id) + ".jsonl")
-        _append_jsonl(archive, row)
-        self._registry(chat_id, archive)
+        with self._record_lock:
+            # Telegram message IDs identify the mirrored post, including edits
+            # and catch-up. Legacy rows can be adopted only on an exact match.
+            rows = []
+            if source_id and archive.exists():
+                rows = [json.loads(line) for line in archive.read_text(encoding="utf-8").splitlines()
+                        if line.strip()]
+            existing = next((r for r in rows if str(r.get("source_message_id") or "") == str(source_id)), None)
+            if existing is None and source_id:
+                matches = [r for r in rows if not r.get("source_message_id") and
+                           all(r.get(k) == row[k] for k in ("timestamp", "outgoing", "text", "sender_name"))]
+                existing = matches[0] if len(matches) == 1 else None
+            if existing is not None:
+                # Renaming must not relabel old authored messages.
+                row["sender_name"] = existing.get("sender_name") or row["sender_name"]
+                if all(existing.get(k) == v for k, v in row.items()):
+                    return
+                existing.update(row)
+                if edited:
+                    existing["edited"] = True
+                tmp = archive.with_name(".telegram-" + uuid.uuid4().hex + ".tmp")
+                tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                               encoding="utf-8", newline="\n")
+                os.replace(tmp, archive)
+            else:
+                if historical and rows:
+                    rows.append(row)
+                    rows.sort(key=lambda r: (str(r.get("timestamp") or ""),
+                                             int(r.get("source_message_id") or 0)))
+                    tmp = archive.with_name(".telegram-" + uuid.uuid4().hex + ".tmp")
+                    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                                   encoding="utf-8", newline="\n")
+                    os.replace(tmp, archive)
+                else:
+                    _append_jsonl(archive, row)
+            self._registry(chat_id, archive)
         if self._life is None:
             return
         is_dm = bool(self.meta(chat_id).get("is_dm", True))
@@ -311,7 +352,9 @@ class Rooms:
                 is_dm=is_dm,
                 ts=moment.timestamp(),
                 dedupe_key=(f"{source}:{chat_id}:{source_id}:"
-                            f"{'out' if outgoing else 'in'}" if source_id else ""),
+                            f"{'out' if outgoing else 'in'}"
+                            + (":" + hashlib.sha256(str(text).encode()).hexdigest() if edited else "")
+                            if source_id else ""),
                 **({"keat_occurrence": occurrence} if occurrence else {}))
         except Exception:
             log.exception("событие жизни не записалось [%s]", chat_id)
@@ -333,7 +376,7 @@ class Rooms:
                 row = json.loads(line)
             except ValueError:
                 continue
-            if not isinstance(row, dict) or row.get("system"):
+            if not isinstance(row, dict) or row.get("system") or row.get("deleted"):
                 continue
             text = str(row.get("text") or "").strip()
             if not text:
@@ -342,6 +385,25 @@ class Rooms:
                 self.agent_name if row.get("outgoing") else "?")
             out.append(f"{who}: {text}")
         return out
+
+    def delete(self, peer: str, message_ids: list[int]) -> None:
+        ids = {str(mid) for mid in message_ids}
+        with self._record_lock:
+            for path in (self.tree / "memory" / "groups").glob("*.jsonl"):
+                base = peer_thread(path.stem)[0]
+                if (peer and base != peer) or (not peer and base.startswith('-')):
+                    continue
+                rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+                changed = False
+                for row in rows:
+                    if str(row.get('source_message_id') or '') in ids and not row.get('deleted'):
+                        row['deleted'] = True
+                        changed = True
+                if changed:
+                    tmp = path.with_name('.telegram-' + uuid.uuid4().hex + '.tmp')
+                    tmp.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows), encoding='utf-8')
+                    os.replace(tmp, path)
+                    self._registry(path.stem, path)
 
     def dm_archives(self) -> list[str]:
         """Чаты-лички бота (для поиска по личкам): положительный id = человек."""
@@ -428,8 +490,10 @@ class BotTransport:
     def __init__(self, agent_mod, tree: Path, memory_life, cfg: dict):
         tg = dict(cfg.get("telegram") or {})
         self.agent = agent_mod
+        self._cfg = cfg
         self.tree = Path(tree)
-        self.client = BotClient(str(tg.get("bot_token") or ""))
+        proxy_url, proxy_key = telegram_proxy.settings(cfg)
+        self.client = BotClient(str(tg.get("bot_token") or ""), proxy_url=proxy_url, proxy_key=proxy_key)
         # Пульс хода (turn_pulse): последний входящий id по комнате — чтобы правка
         # поста «думаю» не перебивала человека, написавшего следом; крючок перед
         # первой отправкой наружу — снять пост до ответа.
@@ -470,6 +534,12 @@ class BotTransport:
         self._pending_set: set[str] = set()
         self._queue_lock = threading.Lock()
         self._last_poll_ok = 0.0
+        self._last_profile_ok = 0.0
+        self._ready = False
+        self._connection_state = "connecting"
+        self._thread = None
+        self._start_lock = threading.Lock()
+        self._wake_senders: dict[str, tuple[str, str]] = {}
         self._stop = threading.Event()
         self.sent_now: list[tuple[str, str]] = []   # (chat_id, text) этого хода
         if not self.owner_id and self.allow_from != "any":
@@ -480,22 +550,80 @@ class BotTransport:
 
     # ------------------------------------------------------------- жизнь
     def start(self) -> None:
-        self.me = self.client.call("getMe")
-        self.username = str(self.me.get("username") or "")
-        thread = threading.Thread(target=self._poll_forever,
-                                  name="botapi-poll", daemon=True)
-        thread.start()
-        log.info("бот: @%s (id %s) — long-poll запущен%s", self.username,
-                 self.me.get("id"),
-                 "" if self.me.get("can_read_all_group_messages")
-                 else " · ⚠ privacy mode ВКЛЮЧЁН: в группах бот видит только адресованное"
-                      " (/setprivacy off у BotFather)")
+        # getMe belongs to the receiving thread too: an offline first launch
+        # must keep the window responsive and recover without a manual restart.
+        with self._start_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            if self._stop.is_set():
+                return
+            self._thread = threading.Thread(target=self._poll_forever,
+                                            name="telegram-poll", daemon=True)
+            self._thread.start()
+
+    def refresh_identity(self) -> None:
+        profile = self.client.call("getMe")
+        if not isinstance(profile, dict) or not profile.get("id"):
+            raise RuntimeError("Telegram did not confirm its own profile")
+        self.me = dict(profile)
+        self.username = str(profile.get("username") or "")
+        self._last_profile_ok = time.monotonic()
+
+    def _connect(self) -> None:
+        self.refresh_identity()
+        self._ready = True
+        log.info("Telegram %s: @%s (id %s) — приём запущен", self.transport_kind,
+                 self.username, self.me.get("id"))
+
+    @property
+    def transport_kind(self) -> str:
+        return "Bot API" + (" через сервер" if getattr(self.client, "_proxy_url", "") else "")
+
+    def set_agent_name(self, name: str) -> None:
+        self._cfg = {**self._cfg, "agent": {"name": str(name)}}
+        self.rooms.agent_name = str(name)
+
+    def is_named(self, text: str) -> bool:
+        profile = getattr(self, "me", None) or {}
+        cfg = getattr(self, "_cfg", {})
+        names = [boot.agent_name(cfg)] if cfg else []
+        display = " ".join(str(profile.get(k) or "").strip()
+                           for k in ("first_name", "last_name")).strip()
+        names.extend([display, str(profile.get("first_name") or "").strip()])
+        username = str(profile.get("username") or getattr(self, "username", "")).strip().lstrip("@")
+        if re.fullmatch(r"[A-Za-z0-9_]+", username):
+            names.append("@" + username)
+            if re.search(r"(?<![\w@])/[A-Za-z0-9_]+@" + re.escape(username)
+                         + r"(?![\w@])", str(text or ""), re.IGNORECASE):
+                return True
+        return any(re.search(r"(?<![\w@])" + re.escape(name) + r"(?![\w@])",
+                             str(text or ""), re.IGNORECASE)
+                   for name in set(names) if name)
+
+    def wake_sender(self, chat_id: str) -> tuple[str, str]:
+        with self._queue_lock:
+            return self._wake_senders.get(str(chat_id)) or ("кто-то", "")
 
     def stop(self) -> None:
         self._stop.set()
 
     def connected(self) -> bool:
-        return (time.time() - self._last_poll_ok) < _STALE_SEC
+        stop = getattr(self, "_stop", None)
+        last_ok = getattr(self, "_last_poll_ok", 0)
+        return (not (stop is not None and stop.is_set()) and last_ok > 0
+                and (time.time() - last_ok) < _STALE_SEC)
+
+    def status_line(self) -> str:
+        state = "приём работает" if self.connected() else {
+            "connecting": "подключается; приём ещё не подтверждён",
+            "retrying": "связь потеряна; подключение повторяется автоматически",
+            "unauthorized": "авторизация не подтверждена; проверь настройки Telegram",
+            "conflict": "приём занят другим подключением с тем же токеном",
+            "syncing": "связь восстановлена; обновляется история сообщений",
+        }.get(getattr(self, "_connection_state", "connecting"), "приём не подтверждён")
+        if getattr(self, "_stop", None) is not None and self._stop.is_set():
+            state = "остановлен"
+        return f"Telegram: {self.transport_kind}; {state}. Ответ модели не подтверждает доставку Telegram."
 
     def identity_line(self) -> str:
         """Own Telegram identity from getMe, without changing authored identity."""
@@ -505,6 +633,10 @@ class BotTransport:
         username = str(profile.get("username") or "").strip().lstrip("@")
         ident = str(profile.get("id") or "")
         parts = []
+        display = " ".join(str(profile.get(k) or "").strip()
+                           for k in ("first_name", "last_name")).strip()
+        if display:
+            parts.append("имя " + json.dumps(display, ensure_ascii=False))
         if re.fullmatch(r"[A-Za-z0-9_]+", username):
             parts.append(f"ник @{username}")
         if ident.isascii() and ident.isdecimal() and int(ident) > 0:
@@ -541,29 +673,41 @@ class BotTransport:
         offset = self._load_offset()
         while not self._stop.is_set():
             try:
+                if not self._ready:
+                    self._connect()
+                elif time.monotonic() - self._last_profile_ok >= 60:
+                    self.refresh_identity()
                 updates = self.client.call(
                     "getUpdates", _http_timeout=_POLL_TIMEOUT + 10,
                     offset=offset or None, timeout=_POLL_TIMEOUT,
-                    allowed_updates=["message"])
+                    allowed_updates=["message", "edited_message", "channel_post", "edited_channel_post"])
             except BotApiError as exc:
                 self._last_poll_ok = 0.0
+                self._ready = False
+                self._connection_state = "unauthorized" if exc.code in (401, 403) else "retrying"
                 if exc.code == 409:
                     # Второй поллер этого же токена. Молча делить апдейты нельзя:
                     # половина сообщений уезжала бы в чужой процесс.
                     log.error("getUpdates 409: этот токен уже поллит кто-то ещё — "
                               "жду 30 с (%s)", exc.description)
-                    time.sleep(30)
+                    self._connection_state = "conflict"
+                    self._stop.wait(30)
                     continue
                 log.warning("getUpdates упал: %s — пауза %d c", exc,
                             max(3, int(exc.retry_after or 3)))
-                time.sleep(max(3, exc.retry_after or 3))
+                self._stop.wait(max(3, exc.retry_after or 3))
                 continue
             except Exception as exc:
                 self._last_poll_ok = 0.0
-                log.warning("сеть getUpdates: %s — пауза 5 с", exc)
-                time.sleep(5)
+                self._ready = False
+                self._connection_state = "retrying"
+                # Exception strings may contain credential-bearing request URLs.
+                log.warning("Telegram: подключение не удалось (%s) — повтор через 5 с",
+                            type(exc).__name__)
+                self._stop.wait(5)
                 continue
             self._last_poll_ok = time.time()
+            self._connection_state = "connected"
             stalled = False
             for update in updates or []:
                 update_id = int(update.get("update_id") or 0)
@@ -576,24 +720,16 @@ class BotTransport:
                     # обещанию шапки этого файла («упали между — Telegram отдаст
                     # сообщение снова»). Теперь курсор стоит на непереваренном
                     # апдейте и Telegram отдаёт его снова (dedupe_key отсеет
-                    # повтор) — но не вечно: неперевариваемый апдейт после
-                    # _INGEST_TRIES попыток пропускается ГРОМКО, иначе одна
-                    # битая запись заглушила бы весь транспорт навсегда.
+                    # повтор). Пока запись не подтверждена, курсор остаётся
+                    # на сообщении; пауза растёт до 30 секунд.
                     if self._stuck.get("id") == update_id:
                         self._stuck["n"] = int(self._stuck.get("n") or 0) + 1
                     else:
                         self._stuck = {"id": update_id, "n": 1}
-                    if self._stuck["n"] >= _INGEST_TRIES:
-                        log.exception("апдейт %s не переваривается %d раз — ПРОПУСКАЮ "
-                                      "его (сообщение потеряно): %s", update_id,
-                                      self._stuck["n"], str(update)[:200])
-                        self._stuck = {}
-                    else:
-                        log.exception("апдейт %s не переварился (попытка %d) — курсор "
-                                      "оставляю на нём: %s", update_id,
-                                      self._stuck["n"], str(update)[:200])
-                        stalled = True
-                        break
+                    log.exception("апдейт %s не записался (попытка %d) — курсор "
+                                  "оставляю на нём", update_id, self._stuck["n"])
+                    stalled = True
+                    break
                 else:
                     if self._stuck.get("id") == update_id:
                         self._stuck = {}
@@ -602,10 +738,14 @@ class BotTransport:
                 # Восприятие уже в памяти — теперь можно подтвердить курсор.
                 self._save_offset(offset)
             if stalled:
-                time.sleep(2)      # не крутить холостой цикл на застрявшем апдейте
+                self._stop.wait(min(30, 2 * int(self._stuck.get("n") or 1)))
 
     def _ingest(self, update: dict) -> None:
-        message = update.get("message")
+        if update.get('_deleted'):
+            self.rooms.delete(str(update.get('_peer') or ''), update['_deleted'])
+            return
+        message = (update.get("message") or update.get("edited_message")
+                   or update.get("channel_post") or update.get("edited_channel_post"))
         if not isinstance(message, dict):
             return
         chat = message.get("chat") or {}
@@ -614,8 +754,10 @@ class BotTransport:
         if not chat_id:
             return
         self_id = str((getattr(self, "me", None) or {}).get("id") or "")
+        outgoing = bool(update.get("_outgoing"))
         if self_id and str(sender.get("id") or "") == self_id:
-            return                      # своё эхо уже записано при отправке
+            if not outgoing:
+                return                  # bot echoes; MTProto marks true own posts
         # Другие боты — тоже участники разговора. Их сообщения попадают в
         # память до гейтов адресации и допуска, как сообщения людей; эти
         # гейты ниже решают только, запускать ли ход.
@@ -653,9 +795,14 @@ class BotTransport:
         text = str(message.get("text") or "").strip() or _placeholder(message)
         if not text:
             return
-        self.rooms.record(conversation, text, outgoing=False, sender=sender_name,
+        edited = bool(update.get("edited_message") or update.get("edited_channel_post")
+                      or update.get("_edited"))
+        self.rooms.record(conversation, text, outgoing=outgoing, sender=sender_name,
                           source_id=str(message.get("message_id") or ""),
-                          ts=float(message.get("date") or 0) or None)
+                          ts=float(message.get("date") or 0) or None, edited=edited,
+                          historical=bool(update.get('_history')))
+        if outgoing or edited or update.get("_history"):
+            return
         if not (is_dm or self._addressed(message)):
             return
         sender_id = str(sender.get("id") or "")
@@ -693,6 +840,8 @@ class BotTransport:
                      ts=float(message.get("date") or 0) or None)
             except Exception:
                 log.debug("крючок приёма (уведомления) упал [%s]", conversation, exc_info=True)
+        with self._queue_lock:
+            self._wake_senders[conversation] = (sender_name, sender_id)
         self._enqueue(conversation)
 
     def is_allowed(self, sender_id) -> bool:
@@ -725,13 +874,14 @@ class BotTransport:
         return False
 
     def _addressed(self, message: dict) -> bool:
-        """В группе ход начинается только с обращения: @username или reply боту.
+        """В группе ход начинается с актуального имени, @username или своего reply.
         Всё остальное она видит памятью, но не отвечает — v1 без самоинициативы."""
-        text = str(message.get("text") or message.get("caption") or "").lower()
-        if self.username and ("@" + self.username.lower()) in text:
+        text = str(message.get("text") or message.get("caption") or "")
+        if self.is_named(text):
             return True
         replied = (message.get("reply_to_message") or {}).get("from") or {}
-        return str(replied.get("id") or "") == str(self.me.get("id") or "")
+        own_id = str(self.me.get("id") or "")
+        return bool(own_id) and str(replied.get("id") or "") == own_id
 
     # ----------------------------------------------------------- доставка
     def _before_send(self, chat_id: str = "") -> None:
@@ -780,8 +930,9 @@ class BotTransport:
                     raise
             if first_id is None:
                 first_id = (sent or {}).get("message_id")
-        self.rooms.record(chat_id, text, outgoing=True,
-                          source_id=str(first_id or ""))
+            self.rooms.record(chat_id, part, outgoing=True,
+                              source_id=str((sent or {}).get("message_id") or ""),
+                              ts=float((sent or {}).get("date") or 0) or None)
         self.sent_now.append((str(chat_id), str(text)))
         label = str(self.rooms.meta(chat_id).get("title") or "") \
             or self.contacts.label(peer)
@@ -988,6 +1139,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
         try:
             if name:
                 bot.client.call("setMyName", name=name[:64])
+                bot.refresh_identity()
                 done.append(f"имя → «{name[:64]}»")
             if str(about or "").strip():
                 bot.client.call("setMyShortDescription",
@@ -1016,6 +1168,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
         "resolve_entity": _get_id,
         "send_reaction": _react,
         "update_profile": _update_profile,
+        "is_named": bot.is_named,
         "set_profile_photo": _set_avatar,
         "transport_state": _transport_state,
     })

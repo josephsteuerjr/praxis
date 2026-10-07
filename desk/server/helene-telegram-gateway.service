@@ -1,0 +1,23 @@
+[Unit]
+Description=Helene Telegram gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=access-key:/opt/helene-telegram/access.key
+Environment=HELENE_TG_GATEWAY_KEY_FILE=%d/access-key
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/helene-telegram/venv/bin/python /opt/helene-telegram/telegram_gateway.py
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

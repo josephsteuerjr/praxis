@@ -102,7 +102,12 @@ async def main(args) -> None:
     session = Path(args.session)
     session.parent.mkdir(parents=True, exist_ok=True)
     codehash = session.with_suffix(".codehash")
-    client = TelegramClient(str(session), int(args.api_id), args.api_hash)
+    import telegram_proxy
+    config = Path(args.config) if getattr(args, 'config', '') else session.parent.parent.parent / 'helene.json'
+    cfg = json.loads(config.read_text(encoding='utf-8-sig')) if config.exists() else {}
+    proxy_url, proxy_key = telegram_proxy.settings(cfg)
+    connection = {'connection': telegram_proxy.connection_type(proxy_url, proxy_key)} if proxy_url else {}
+    client = TelegramClient(str(session), int(args.api_id), args.api_hash, **connection)
     await client.connect()
     try:
         if args.step == "logout":
@@ -210,6 +215,7 @@ def _from_env(args) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
+    ap.add_argument("--config", default="")
     ap.add_argument("--api-id", default="")
     ap.add_argument("--api-hash", default="")
     ap.add_argument("--phone", default="")

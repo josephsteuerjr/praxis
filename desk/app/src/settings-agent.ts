@@ -640,7 +640,21 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
     codeGrid,
     el("p", "field-hint", "Агент говорит из своего аккаунта Telegram, как человек: нужен отдельный номер и ключи приложения с my.telegram.org. Вход один раз; сессия лежит в data/telegram. Применяется перезапуском."),
   );
-  tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint);
+  const tgProxy = { ...(draft.telegram.proxy || {}) };
+  const proxyFields = el("div", "form-grid two");
+  proxyFields.style.marginTop = "12px";
+  proxyFields.hidden = !tgProxy.enabled;
+  proxyFields.append(
+    field("Адрес сервера", String(tgProxy.url || ""), (v) => (tgProxy.url = v), { mono: true, placeholder: "https://…/helene/telegram" }),
+    field("Ключ доступа", String(tgProxy.key || ""), (v) => (tgProxy.key = v), { type: "password", mono: true }),
+  );
+  const proxyToggle = toggle("Telegram через сервер", tgProxy.enabled === true, (v) => {
+    tgProxy.enabled = v;
+    proxyFields.hidden = !v;
+  });
+  proxyToggle.style.marginTop = "14px";
+  tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
+    proxyToggle, proxyFields, el("p", "field-hint", "Сообщения и сессия остаются у агента. Сервер помогает Telegram подключиться без VPN. Сохрани настройки перед входом в аккаунт; новый маршрут применяется при перезапуске агента."));
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
@@ -910,7 +924,15 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
           return "Для Telegram нужен и твой id: число. Без него бот включится и будет молчать на всё — "
                  + "ход разрешён только владельцу. Узнать id: напиши @userinfobot в Telegram, он ответит числом.";
         }
-        out.telegram = keepBlock(out.telegram, { owner_id: ownerIdRaw ? Number(ownerIdRaw) || 0 : 0, mode: tgMode, status_message: tgStatus });
+        if (tgProxy.enabled) {
+          try {
+            const address = new URL(String(tgProxy.url || "").trim());
+            if (address.protocol !== "https:" || address.username || address.password || address.search || address.hash || !String(tgProxy.key || "").trim()) throw new Error();
+          } catch {
+            return "Для Telegram через сервер нужны адрес https://… и ключ доступа.";
+          }
+        }
+        out.telegram = keepBlock(out.telegram, { owner_id: ownerIdRaw ? Number(ownerIdRaw) || 0 : 0, mode: tgMode, status_message: tgStatus, proxy: tgProxy });
         // Ограда — в `agent_mode`, галочки службы — в `service`. Ключ `mode`
         // (местожительство харнесса: local | remote) не трогаем ни при каких
         // обстоятельствах: режим, записанный туда, оставляет окно без харнесса, а

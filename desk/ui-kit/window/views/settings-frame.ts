@@ -76,7 +76,7 @@ export interface Config {
   // заново, и ручка исчезала при первом же «Сохранить».
   relay?: { enabled?: boolean; port?: number; instructions?: string; [k: string]: unknown };
   images?: { enabled?: boolean; model?: string; quality?: string; size?: string; background?: string; [k: string]: unknown };
-  telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string; status_message?: boolean };
+  telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string; status_message?: boolean; proxy?: { enabled?: boolean; url?: string; key?: string }; history_initial_limit?: number };
   // ⚠ `mounts` и `mounts_denied` карточка монтирования ТОЖЕ пишет, а
   // `[k: string]` держит и то, чего экран не знает: блок обязан СЛИВАТЬСЯ при
   // сохранении, иначе список смонтированных папок исчезает при первом же клике.

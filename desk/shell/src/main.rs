@@ -8554,6 +8554,7 @@ async fn telegram_account(
     // процесса: запущенный не ярлыком helene.exe клал сессию Telethon в чужое
     // место, и руннер не находил её никогда.
     let tree = current_tree();
+    let config_path = current_config_path();
     shell_adapter::async_runtime::spawn_blocking(move || {
         let python = bundled_python(&base);
         let script = base.join("app").join("localharness").join("mtproto_login.py");
@@ -8565,6 +8566,7 @@ async fn telegram_account(
         cmd.arg("-u")
             .arg(script)
             .arg("--session").arg(&session)
+            .arg("--config").arg(&config_path)
             // ⚠ Секреты — ОКРУЖЕНИЕМ, не аргументами. Командную строку чужого
             // процесса на Windows читает любой процесс того же пользователя
             // (Win32_Process.CommandLine), и она же пишется в аудит запусков
