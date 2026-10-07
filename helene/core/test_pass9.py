@@ -544,6 +544,9 @@ class TestImmuneReview(ImmuneBase):
 
 # PASS 16.4: submit требует её ревью — живая строка для тестов иммунитета
 RV_16_4 = "прочитала дифф: меняется ровно заявленное, рисков не вижу, тесты держат"
+# 28.09: submit несёт ещё гномий гейт — свежий вердикт reviewer-юнита по диффу (a9b5be36)
+GN_16_4 = ("Гном смотрел дифф целиком (свежий контекст): VERDICT: APPROVED — блокирующих "
+           "находок нет, дифф узкий, тесты покрывают")
 
 
 class TestImmuneAutoZone(ImmuneBase):
@@ -556,7 +559,7 @@ class TestImmuneAutoZone(ImmuneBase):
     def test_red_is_recorded_advice_but_does_not_take_her_decision(self):
         pid, title = self._proposal()
         self._stub_review("red", "противоречит инвариантам")
-        msg = selfdev.submit(pid, title, review=RV_16_4)
+        msg = selfdev.submit(pid, title, review=RV_16_4, reviewer=GN_16_4)
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "merged")
         self.assertEqual(t["zone"], "auto")
@@ -567,7 +570,7 @@ class TestImmuneAutoZone(ImmuneBase):
     def test_ok_merges(self):
         pid, title = self._proposal()
         self._stub_review("ok")
-        selfdev.submit(pid, title, review=RV_16_4)
+        selfdev.submit(pid, title, review=RV_16_4, reviewer=GN_16_4)
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "merged")
         self.assertEqual(t["immune"]["verdict"], "ok")
@@ -575,18 +578,30 @@ class TestImmuneAutoZone(ImmuneBase):
     def test_warn_merges_and_journals(self):
         pid, title = self._proposal()
         self._stub_review("warn", "вкусовщина")
-        selfdev.submit(pid, title, review=RV_16_4)
+        selfdev.submit(pid, title, review=RV_16_4, reviewer=GN_16_4)
         self.assertEqual(selfdev.get(pid)["status"], "merged", "warn не блокирует")
         # журнал selfdev пишет в песочницу PRAXIS_BASE — проверяем через леджер
         self.assertEqual(selfdev.get(pid)["immune"], {"verdict": "warn", "why": "вкусовщина"})
 
-    def test_red_tests_still_reach_advisory_review_but_do_not_wait_for_egor(self):
+    def test_red_tests_blocked_by_immunity_and_review_not_called(self):
+        # 26.09: красный тест-гейт блокирует автомёрж ДО advisory review —
+        # иммунитет тестов владеет входом, advisory владеет мнением.
         pid, title = self._proposal(rel="core.py", content="VALUE = 99\n")
         calls = self._stub_review("red", "не должно владеть решением")
-        msg = selfdev.submit(pid, title, review=RV_16_4)
+        msg = selfdev.submit(pid, title, review=RV_16_4, reviewer=GN_16_4)
+        self.assertEqual(len(calls), 0, "мёржа нет — advisory review не вызывается")
+        self.assertEqual(selfdev.get(pid)["status"], "proposed")
+        self.assertIn("НЕ смёржено", msg)
+
+    def test_red_tests_with_override_still_reach_advisory_review(self):
+        # осознанный override открывает мёрж — и advisory review вызывается как раньше
+        pid, title = self._proposal(rel="core.py", content="VALUE = 99\n")
+        calls = self._stub_review("red", "не должно владеть решением")
+        msg = selfdev.submit(pid, title, review=RV_16_4, reviewer=GN_16_4,
+                             override_reason="красный smoke известен и не относится к диффу")
         self.assertEqual(len(calls), 1, "красный test verdict не должен выключать advisory review")
         self.assertEqual(selfdev.get(pid)["status"], "merged")
-        self.assertIn("предупреждение постфактум", msg)
+        self.assertIn("смёржила сама", msg)
 
 
 class TestImmuneQueue(ImmuneBase):

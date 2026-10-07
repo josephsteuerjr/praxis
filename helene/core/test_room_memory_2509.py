@@ -369,13 +369,19 @@ class FoldIsOfferedNotForced(unittest.TestCase):
                     with self.assertRaises(AssertionError):
                         ml.compact_if_due("-100777")
 
-    def test_hard_threshold_folds_without_asking(self):
+    def test_hard_threshold_offers_too_since_night_cycle(self):
+        # 05.10 (ночной цикл честности памяти): жёсткий порог днём тоже ПРЕДЛАГАЕТСЯ —
+        # решает голос (memory_compact(fold) / ночная сборка). Прежняя семантика 25.09
+        # «жёсткий сворачивает без спроса» снята вместе с авточворачиванием.
         rows = _rows(ml.GROUP_HOT_HARD_HI + 5)
         with mock.patch.dict(os.environ, {"PRAXIS_FOLD_OFFER": "on"}):
             with contextlib_all(self._patches(rows)):
                 with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("свернула сама")):
-                    with self.assertRaises(AssertionError):
-                        ml.compact_if_due("-100777")
+                    out = ml.compact_if_due("-100777")
+        self.assertTrue(out.get("offered"), out)
+        self.assertTrue(out.get("hard"), out)
+        self.assertEqual(out.get("folded"), 0)
+        self.assertIn("-100777", ml.fold_offers())
 
     def test_fold_now_is_forced_and_clears_the_offer(self):
         ml._note_fold_offer("-100777", {"count": 410, "tokens": 5, "fold": 160})

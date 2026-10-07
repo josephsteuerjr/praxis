@@ -89,13 +89,11 @@ EN: dict[str, dict] = {
     # ─────────────────────────────────────────────────────────── память и самоописание
     "recall": {
         "d": ("Search your own memory and skills (people, journal, reflections, self, "
-              "skills). report=true searches nothing: it shows the observable summary of "
-              "your semantic-seed experiment — how many explicit recalls there were, which "
-              "genres the seed was built from, how many candidates arrived ONLY through it "
-              "and how many reached the output, and your real interval between recalls. "
-              "Whether it helped is not in there: that conclusion is yours, from your turns."),
+              "skills). report=true searches nothing: it returns the closed-epitaph line "
+              "of the semantic-seed experiment (ended 03.08.2026, removed 05.10.2026; "
+              "final numbers 680 seed-only candidates, 0 reached output)."),
         "p": {"query": "keywords to search for",
-              "report": "show the experiment summary instead of searching"},
+              "report": "show the closed-experiment epitaph instead of searching"},
     },
     "remember": {
         "d": ("Remember a fact about a person. visibility='private' for secrets: do not "
@@ -715,6 +713,8 @@ EN: dict[str, dict] = {
               "task_id": "the task to act on",
               "goal": "what this task is for",
               "isolation": "auto | worktree | direct",
+              "success_criteria": "start: readiness criteria (advisory)",
+              "verify_commands": "start: check commands, not auto-run",
               "title": "finish: what the change does",
               "review": "finish: your own verdict on your diff",
               "checked": "finish: what you actually checked",

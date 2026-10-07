@@ -655,6 +655,117 @@ def _manifest_hints(root: Path) -> list[str]:
     return [row["command"] for row in forge_intelligence.discovered_checks(root)]
 
 
+def _contract_text(task: dict) -> str:
+    """Расписка контракта задачи: критерии готовности и команды проверки, построчно.
+
+    06.10: контракт сохраняется в task.json при старте (success_criteria +
+    verify_commands). Ориентация и finish survey обязаны показывать ОДИН И ТОТ ЖЕ
+    контракт, поэтому текст собирается здесь один раз. Контракт — advisory-расписка,
+    не гейт: критики советуют, не блокируют (закон 3 AGENTS.md)."""
+    criteria = [str(c).strip() for c in (task.get("success_criteria") or []) if str(c).strip()]
+    verify_commands = [str(c).strip() for c in (task.get("verify_commands") or []) if str(c).strip()]
+    if not criteria and not verify_commands:
+        return ""
+    rows = ["Контракт задачи:"]
+    for index, criterion in enumerate(criteria, 1):
+        rows.append(f"  {index}. {criterion}")
+    for command in verify_commands:
+        rows.append(f"  $ {command}")
+    return "\n".join(rows)
+
+
+def _task_tree_sha(root: Path) -> str:
+    """tree-sha корня задачи — мерило «то же дерево» для дедупа проверок.
+
+    06.10: `_git_text` при отказе git возвращает диагностическую строку «[git …]», а
+    не пустоту; hex-проверка отсеивает её, чтобы диагностикой не «дедупились» разные
+    деревья. Non-git корень — пустая строка: без дерева дедупить нечем."""
+    git = _git_root(root)
+    if git is None:
+        return ""
+    sha = _git_text(git, "rev-parse", "HEAD^{tree}").strip()
+    return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
+
+
+def _dedup_against_green(task_id: str, tree_sha: str, checks: list[dict]) -> tuple[list[dict], list[str]]:
+    """Убрать из новой матрицы команды, уже зелёные НА ЭТОМ ЖЕ дереве. -> (checks, notes).
+
+    06.10. Повторный заход в задачу гонял одну и ту же матрицу заново — а зелёный
+    прогон на неизменном дереве доказывает ровно то же, что доказал в прошлый раз.
+    Ключ дедупа — байт-идентичная команда + тот же tree-sha; зелёное на другом
+    дереве ничего не доказывает и не дедупится. Прошлое читается из записанных
+    verifications-юнитов задачи. Замена — та же команда с skip=True и статусом
+    skipped_already_green: supervisor пишет расписку, не запуская процесс.
+    advisory-экономия, не блок (закон 3 AGENTS.md)."""
+    if not tree_sha:
+        return checks, []
+    # статус result.json пишется только терминальным матрицам; request.json знает
+    # лишь starting/running — так отличаем законченное прошлое от живого
+    _TERMINAL_MATRIX = {"passed", "failed", "passed_with_skips", "stopped", "error"}
+    green: dict[str, str] = {}      # command -> "unit_id/check-id" первой зелёной
+    for row in _units(task_id, "verifications"):
+        if row.get("status") not in _TERMINAL_MATRIX:
+            continue
+        if str(row.get("tree_sha") or "") != tree_sha:
+            continue      # зелёное на другом дереве — не доказательство для этого
+        unit = str(row.get("id") or "")
+        for check_row in (row.get("checks") or []):
+            if str(check_row.get("status") or "") != "passed":
+                continue
+            command = str(check_row.get("command") or "").strip()
+            if command and command not in green:
+                green[command] = f"{unit}/{check_row.get('id') or ''}"
+    if not green:
+        return checks, []
+    out: list[dict] = []
+    notes: list[str] = []
+    for row in checks:
+        ref = green.get(str(row.get("command") or "").strip())
+        if not ref:
+            out.append(row)
+            continue
+        skipped = dict(row)
+        skipped["skip"] = True
+        skipped["skip_status"] = "skipped_already_green"
+        skipped["skip_reference"] = ref
+        out.append(skipped)
+        notes.append(f"{row.get('id') or row.get('command')}: уже зелёная в {ref} "
+                     f"(tree {tree_sha[:10]}) — не запускаю, пишу расписку")
+    return out, notes
+
+
+def _contract_evidence(task: dict, verification_rows: list[dict]) -> dict:
+    """Сводка контракта по матрицам задачи: met/unmet/unknown на каждую команду.
+
+    06.10. Команда метится met, если хоть одна её проверка прошла passed или была
+    дедупнута как skipped_already_green; unmet — лучший доказанный статус failed;
+    unknown — прогонов не было вовсе (или они кончились error/таймаутом — это не
+    вердикт). Отдаётся в finish survey и урок как advisory; finish не блокирует
+    (закон 3 AGENTS.md). Пустой dict = контракта не было."""
+    criteria = [str(c).strip() for c in (task.get("success_criteria") or []) if str(c).strip()]
+    commands = [str(c).strip() for c in (task.get("verify_commands") or []) if str(c).strip()]
+    if not criteria and not commands:
+        return {}
+    _RANK = {"skipped_already_green": 3, "passed": 3, "failed": 2, "timed_out": 1}
+    _TERMINAL_MATRIX = {"passed", "failed", "passed_with_skips", "stopped", "error"}
+    rank_by_command: dict[str, int] = {}
+    for row in verification_rows:
+        if row.get("status") not in _TERMINAL_MATRIX:
+            continue      # живая матрица ничего ещё не доказала
+        for check_row in (row.get("checks") or []):
+            command = str(check_row.get("command") or "").strip()
+            rank = _RANK.get(str(check_row.get("status") or ""), 0)
+            if not command or not rank:
+                continue
+            if rank > rank_by_command.get(command, 0):
+                rank_by_command[command] = rank
+    met = sum(1 for c in commands if rank_by_command.get(c, 0) >= _RANK["passed"])
+    unmet = sum(1 for c in commands if rank_by_command.get(c, 0) == _RANK["failed"])
+    unknown = len(commands) - met - unmet
+    return {"criteria": criteria,
+            "verify": {"met": met, "unmet": unmet, "unknown": unknown}}
+
+
 def _orientation_text(task: dict) -> str:
     root = Path(task["root"])
     # Наблюдение за чужим upstream дописывается ПОСЛЕ кап-среза и у всех бэкендов:
@@ -700,7 +811,13 @@ def _orientation_text(task: dict) -> str:
         f"{row['language']}:{row['server'] or row['mode']}" for row in model.get("adapters", [])
     ) or "не распознаны"
     lessons = forge_learning.recall(STATE_DIR, str(task.get("goal") or ""), root, limit=3)
-    lines = [
+    lines: list[str] = []
+    # Контракт — ПЕРВОЙ секцией: пока не прочитаны обзоры и кандидаты проверок, она
+    # уже знает, по каким признакам задача считается сделанной (06.10).
+    contract = _contract_text(task)
+    if contract:
+        lines.append(contract)
+    lines.extend([
         f"coding-задача {task['id']}: {task['goal']}",
         f"корень: {root}",
         f"режим: {task.get('isolation')}" + (f"; proposal {task.get('proposal_id')}" if task.get("proposal_id") else ""),
@@ -711,7 +828,7 @@ def _orientation_text(task: dict) -> str:
         f"инструкции/карта: {', '.join(instructions) or 'не найдены'}",
         f"semantic adapters: {adapters}",
         f"кандидаты проверки: {', '.join(_manifest_hints(root)) or 'определить по проекту'}",
-    ]
+    ])
     if lessons:
         lines.append("похожие доказуемые уроки:\n" + forge_learning.format_recall(lessons))
     if git:
@@ -787,15 +904,55 @@ def _scan_worker_completions() -> list[dict]:
                 encoding="utf-8", errors="replace"))
         except Exception:
             task = {}
+        priority = _norm_priority(task.get("priority"))
+        verdict_escalation = ""
+        if verdict_close_enabled() and priority == "normal":
+            # 07.10 (oro/forge-verdict-0710): дефинитивный вердикт контракта —
+            # повод закрыть forge-цикл сейчас, а не ждать часового окна. Вердикт
+            # «неизвестен» остаётся на обычном пути (grace-окно живо). Вердикт
+            # считается из уже прочитанного task — без второго обхода каталога.
+            verdict = _verdict_for(task)
+            if verdict in ("выполнен", "не выполнен"):
+                priority = "urgent"
+                verdict_escalation = verdict
         out.append({
             "key": f"{task_id}:{agent_id}",
             "task_id": task_id, "agent_id": agent_id,
-            "priority": _norm_priority(task.get("priority")),
+            "priority": priority,
             "status": status,
             "goal": str(task.get("goal") or "")[:140],
             "summary": str(d.get("result") or "").strip().replace("\n", " ")[:300],
+            **({"verdict_escalation": verdict_escalation} if verdict_escalation else {}),
         })
     return out
+
+
+def verdict_close_enabled() -> bool:
+    """PRAXIS_FORGE_CLOSE_ON_VERDICT=on — её рычаг, по умолчанию off (закон 2).
+
+    07.10 (oro/forge-verdict-0710): читается при каждом скане, не на импорте —
+    переворот рычага не требует рестарта раннера, откат тоже. Форма как у
+    PRAXIS_WORK_ENGINE: {"1","true","yes","on"} после lower().
+    """
+    return str(os.getenv("PRAXIS_FORGE_CLOSE_ON_VERDICT", "off") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _verdict_for(task: dict) -> str:
+    """Вердикт контракта задачи одним словом — из единого источника forge_learning.
+
+    07.10: та же сводка met/unmet/unknown, что у finish и урока
+    (_contract_evidence по терминальным матрицам). Никаких новых суждений: нет
+    контракта или не решён — «неизвестно», путь нормальный.
+    """
+    try:
+        evidence = _contract_evidence(task, _units(str(task.get("id") or ""), "verifications"))
+        if not evidence:
+            return "неизвестно"
+        import forge_learning
+        return forge_learning.contract_status(evidence)
+    except Exception:
+        return "неизвестно"
 
 
 def has_urgent_pending() -> bool:
@@ -842,7 +999,10 @@ def wake_invitation(items: list[dict]) -> str:
         else:
             verb = f"упал ({c['status']})"
         goal = c["goal"] or c["task_id"]
-        lines.append(f"{mark} воркер по «{goal}» ({c['task_id']}) {verb}: {c['summary']}")
+        verdict = str(c.get("verdict_escalation") or "").strip()
+        verdict_note = f" [контракт {verdict}]" if verdict else ""
+        lines.append(f"{mark} воркер по «{goal}» ({c['task_id']}) {verb}{verdict_note}: "
+                     f"{c['summary']}")
     return ("Твои Forge-воркеры завершились — это твой плод, а не задача-повинность. "
             "Глянь, если хочешь: прочитай, прими работу как свою, отклони или отложи.\n"
             + "\n".join(lines))
@@ -1992,7 +2152,9 @@ def _task_run_context(task_id: str) -> dict:
 
 
 def start(goal: str, target: str = "self", isolation: str = "auto",
-          priority: str = "normal", origin_chat: str = "") -> str:
+          priority: str = "normal", origin_chat: str = "",
+          success_criteria: list[str] | None = None,
+          verify_commands: list[str] | None = None) -> str:
     """Open a durable coding task and return its factual orientation."""
     goal = str(goal or "").strip()
     if not goal:
@@ -2081,6 +2243,11 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
         # Молчаливой подмены изоляции не бывает: если попросили worktree, а вышло direct,
         # это стоит на задаче и попадает в ориентировку — читается до первой правки.
         "isolation_note": isolation_note,
+        # 06.10, контракт задачи (PR oro/forge-contract-0610): явные критерии готовности
+        # и команды проверки. Старые задачи без полей читаются как «контракта нет» —
+        # оба поля task.get-геттеры терпят пустоту. Advisory-расписка, не гейт (закон 3).
+        "success_criteria": [str(c).strip() for c in (success_criteria or []) if str(c).strip()],
+        "verify_commands": [str(c).strip() for c in (verify_commands or []) if str(c).strip()],
         # PASS 30 Этап 2: тред-заказчик — для наррации по ходу и forge_event
         "origin_chat": str(origin_chat or ""),
         "run_context": _task_run_context(task_id),
@@ -2910,13 +3077,23 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
             return _cap(json.dumps(plan, ensure_ascii=False, indent=2), 30000)
         if not plan.get("checks"):
             return "Ни одной проверки не найдено; передай commands по одной на строку."
+        # 06.10, дедуп верификации (PR oro/forge-contract-0610): команды, уже зелёные на
+        # ЭТОМ ЖЕ дереве, повторно не гоняются — supervisor пишет расписку skip. Место —
+        # здесь, ДО спавна: решение видимо в запросе и событии, а не внутри чёрного ящика.
+        # Remote-корни не дедупим: их дерево этот процесс не меряет.
+        tree_sha = "" if remote is not None else _task_tree_sha(root)
+        checks_dedup, dedup_notes = _dedup_against_green(task_id, tree_sha, plan["checks"])
+        skipped_now = sum(1 for row in checks_dedup if row.get("skip"))
         unit_id = _id("verify")
         d = _unit_dir(task_id, "verifications", unit_id)
         request = {
             "id": unit_id, "task_id": task_id, "root": str(root),
             "goal": str(task.get("goal") or ""), "device_id": str(task.get("device_id") or ""),
             "scope": str(task.get("scope") or "self") if remote is not None else "self",
-            "checks": plan["checks"],
+            "checks": checks_dedup,
+            # Дерево, на котором гоняется матрица: без него следующий заход не отличит
+            # «то же дерево, можно не гонять» от «новое — обязано доказать себя заново».
+            "tree_sha": tree_sha,
             "max_parallel": max(1, min(int(max_parallel or 2), 8)),
             "timeout": max(0, int(timeout or 0)), "created": _now(), "status": "starting",
         }
@@ -2934,9 +3111,17 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
                        status="running")
         _atomic_json(req, request)
         _event(task_id, "verification_started", verification_id=unit_id,
-               summary=f"{unit_id}: {len(plan['checks'])} checks, parallel={request['max_parallel']}")
-        return (f"Стартовала матрица {unit_id}: {len(plan['checks'])} проверок, "
-                f"parallel={request['max_parallel']}. poll не блокирует ход.")
+               summary=f"{unit_id}: {len(plan['checks'])} checks, parallel={request['max_parallel']}"
+                       + (f", dedup: {skipped_now} уже зелёные на tree {tree_sha[:10]}"
+                          if skipped_now else ""))
+        for note in dedup_notes:
+            _event(task_id, "verification_dedup", verification_id=unit_id, summary=note)
+        reply = (f"Стартовала матрица {unit_id}: {len(plan['checks'])} проверок, "
+                 f"parallel={request['max_parallel']}.")
+        if skipped_now:
+            reply += (f" Из них {skipped_now} не запускаю повторно — уже зелёные на этом "
+                      f"дереве (tree {tree_sha[:10]}), статус будет skipped_already_green.")
+        return reply + " poll не блокирует ход."
     d = _unit_dir(task_id, "verifications", verification_id)
     if not d.is_dir():
         return f"Нет матрицы {verification_id}."
@@ -3262,6 +3447,10 @@ def _finish_survey(task_id: str, beat=None) -> dict:
     verification_rows = _units(task_id, "verifications")
     agent_rows = _units(task_id, "agents")
     job_rows = _units(task_id, "processes")
+    # 06.10, контракт в осмотре (PR oro/forge-contract-0610): сводка met/unmet/unknown
+    # по verify_commands из всех терминальных матриц задачи. Advisory-информация: она
+    # попадает в survey, ответ finish и урок, но НЕ блокирует закрытие (закон 3 AGENTS.md).
+    contract_evidence = _contract_evidence(task, verification_rows)
     active_agents = [x for x in agent_rows if x.get("status") in _LIVE_UNIT_STATES]
     active_jobs = [x for x in job_rows if x.get("status") in _LIVE_UNIT_STATES]
     active_checks = [x for x in verification_rows if x.get("status") in _LIVE_UNIT_STATES]
@@ -3336,6 +3525,8 @@ def _finish_survey(task_id: str, beat=None) -> dict:
         "changed": changed, "notes": notes,
         "verification_before": verification_rows[0] if verification_rows else {},
     }
+    if contract_evidence:
+        survey["contract"] = contract_evidence
     if active_agents or active_jobs or active_checks or active_remote_ops or remote_ops_unknown:
         survey["blocked"] = (
             f"Задача ещё живая: agents running={len(active_agents)}, processes running="
@@ -3360,8 +3551,59 @@ def _finish_survey(task_id: str, beat=None) -> dict:
     return survey
 
 
+def _reviewer_evidence(task_id: str) -> str:
+    """След адверсарного ревьюера (гнома) из леджера задачи — для гейта submit.
+
+    #43746: пока запуск ревью — отдельное решение, оно конкурирует с решением его
+    пропустить; след, который инструмент ставит сам, надёжнее. finish берёт свежий
+    done-вердикт reviewer-юнита и подставляет его в reviewer= сам; она вправе
+    перезаписать это явным reviewer= в coding_session(finish) или задать skip.
+
+    Свежесть — юниту не больше 48ч и он done ПОСЛЕ последнего коммита worktree-ветки:
+    гном, смотревший старую версию диффа, не освобождает новую.
+    """
+    try:
+        rows = _units(task_id, "agents")
+    except Exception:
+        return ""
+    reviewers = [r for r in rows if str(r.get("role") or "") == "reviewer"]
+    if not reviewers:
+        return ""
+    task, _root, _err = _task_root(task_id)
+    branch = str((task or {}).get("branch") or "")
+    latest_commit = ""
+    if branch:
+        git = (task or {}).get("source_git") or ""
+        if git:
+            latest_commit = _git_text(Path(git), "log", "-1", "--format=%cI", branch).strip()
+    best = ""
+    for r in reviewers:
+        if str(r.get("status")) != "done":
+            continue
+        finished = str(r.get("finished") or "")
+        if not finished:
+            continue
+        try:
+            age_h = (time.time() - _dt.datetime.fromisoformat(finished).timestamp()) / 3600
+        except ValueError:
+            age_h = -1.0
+        if age_h < 0 or age_h > 48:
+            continue
+        if latest_commit:
+            try:
+                if _dt.datetime.fromisoformat(finished) < _dt.datetime.fromisoformat(latest_commit):
+                    continue      # вердикт старше последнего коммита — не считается
+            except (ValueError, TypeError):
+                pass
+        result = str(r.get("result") or "").strip()
+        if result:
+            best = result
+    return best[:6000]
+
+
 def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: str = "",
-                     submit: bool = True, survey: dict | None = None, beat=None) -> str:
+                     submit: bool = True, survey: dict | None = None, beat=None,
+                     reviewer: str = "") -> str:
     task, root, err = _task_root(task_id)
     if err:
         return err
@@ -3376,6 +3618,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             return str(survey["blocked"])
     changed_before = list(survey.get("changed") or [])
     verification_before = survey.get("verification_before") or {}
+    contract = survey.get("contract") or {}      # 06.10: сводка контракта из осмотра
     unknowns = [str(n) for n in (survey.get("notes") or [])]
     stat_before = str(survey.get("stat_before") or "")
     git_before = _git_root(root) if remote is None else None
@@ -3387,16 +3630,28 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
     elif submit and task.get("proposal_id"):
         if not str(review or "").strip():
             return "Для submit собственного кода нужен review: твой вердикт после coding_inspect(diff)."
-        # Объявленный долгий шаг: внутри submit крутится гейт тестов
+        # 28.09, гномье ревью в рельсе (#43746): finish подставляет свежий вердикт
+        # reviewer-юнита этой же задачи сам — след, который инструмент ставит без
+        # «не забыть». Она вправе перезаписать: coding_session(finish, reviewer=…).
+        reviewer_evidence = str(reviewer or "").strip() or _reviewer_evidence(task_id)
+        # Объявленный долгый шаг: внутри submit крутится гейт тестов
         # (PRAXIS_PROPOSAL_TEST_TIMEOUT, по умолчанию 600с), полтора десятка вызовов git и
         # ревью иммунитета моделью. Один вызов, разбить его на удары нечем — поэтому лизинг
         # честно объявляется заранее и считается по срокам самого submit (_submit_lease).
         beat(_submit_lease())
         submission = selfdev.submit(str(task["proposal_id"]), title or task.get("goal") or task_id,
-                                    why=task.get("goal") or "", review=review, checked=checked)
+                                    why=task.get("goal") or "", review=review, checked=checked,
+                                    reviewer=reviewer_evidence)
         beat()
         lower = submission.lower()
-        if lower.startswith("не ") or "отказ" in lower or "нет изменений" in lower:
+        # Классификатор статуса по тексту ответа submit. Порядок важен: сначала
+        # блокировки («НЕ смёржено», «Стоп», «отказ», «нет изменений») — только потом
+        # «смёрж». Раньше «НЕ смёржено» матчилось в «смёрж» и штамповало done
+        # поверх заблокированного гейтом мёржа (красные тесты, BLOCKED гнома).
+        # Регрессия закреплена тестом test_forge_contract_0610 (06.10).
+        if (lower.startswith("не ") or lower.startswith("стоп")
+                or "отказ" in lower or "нет изменений" in lower
+                or "не смёржено" in lower or "не смёрж" in lower):
             new_status = "active"
         elif "смёрж" in lower:
             new_status = "done"
@@ -3482,6 +3737,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
             STATE_DIR, task=task, root=root, events=_events(task_id, 2000),
             changed=changed_before, verification=verification_before,
             lesson=evidence_lesson, regression=str(checked or ""), outcome=new_status,
+            contract=contract,
         )
         _event(task_id, "lesson_recorded", lesson_id=lesson_row["id"],
                summary=lesson_row["lesson"][:180])
@@ -3500,10 +3756,19 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
                              f"life={episode.get('life_event_id') or 'not-promoted'}")
         except Exception as exc:
             evidence_note = f"computer evidence не свелась: {type(exc).__name__}: {exc}"
+    contract_note = ""
+    if contract:
+        # Контракт — advisory-расписка: исход честно назван, finish не блокирован (закон 3).
+        # Вердикт — из единого источника (forge_learning.contract_status), как в уроке.
+        verify = contract.get("verify") or {}
+        contract_note = (f"контракт {forge_learning.contract_status(contract)}: "
+                         f"verify met={verify.get('met', 0)} unmet={verify.get('unmet', 0)} "
+                         f"unknown={verify.get('unknown', 0)}")
     return _cap("\n".join([
         f"{task_id}: {new_status}",
         f"изменения: {stat_before.strip() or 'diffstat пуст'}",
         f"проверено: {checked or 'не указано'}",
+        contract_note,
         ("чего не было известно при закрытии: " + "; ".join(unknowns)) if unknowns else "",
         lesson_note,
         evidence_note,
@@ -3512,7 +3777,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
 
 
 def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
-           submit: bool = True) -> str:
+           submit: bool = True, reviewer: str = "") -> str:
     try:
         # Замок берётся ПЕРВЫМ и только потом идут удалённые вызовы осмотра. Иначе
         # (проверено пробой) занятый замок всё равно отказывает, но три RPC в демон
@@ -3535,7 +3800,7 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
                 return str(survey["blocked"])
             beat()          # осмотр кончился — дальше снова мерится тишина, не работа
             return _finish_unlocked(task_id, title=title, review=review, checked=checked,
-                                    submit=submit, survey=survey, beat=beat)
+                                    submit=submit, survey=survey, beat=beat, reviewer=reviewer)
     except TimeoutError as exc:
         return f"Finish не начался: {exc}. Другой worker ещё фиксирует изменение."
 

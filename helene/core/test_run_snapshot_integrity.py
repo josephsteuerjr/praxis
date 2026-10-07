@@ -1351,8 +1351,10 @@ class FrameDidNotMove(unittest.TestCase):
         # словом 17.08, а в норму замера рычаг входит ПОЛОЖЕНИЕМ ИЗ МАНИФЕСТА
         # (_рычаг_реплики_как_в_манифесте): опускание рычага с синком манифеста —
         # заказанное изменение кадра, и этот пин обязан его заметить и перемериться.
-        # 25.09: суверенных 66 -> 67 — `memory_compact` (её руки на своих свёртках).
-        self.assertEqual(self._digest(line), "9f507d747f61061d",
+        # 25.09: суверенных 66 -> 67 — `memory_compact` (её руки на своих свёртках: list /
+        # read / rewrite / refold); перемерено тем же кодом, который печатает строку ей.
+        # 06.10: generate_image is an owner-requested base hand (27 -> 28).
+        self.assertEqual(self._digest(line), "7408a3548ea06696",
                          f"строка состояния изменилась: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):
@@ -1499,8 +1501,9 @@ class FrameDidNotMove(unittest.TestCase):
             probes = (
                 ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
                 ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),
-                ("describe('group')", capabilities.describe("group"), "1f39896873d3cc14"),
-                ("describe('known')", capabilities.describe("known"), "e311635fe4872595"),
+                # 06.10: both descriptions now include the generate_image hand.
+                ("describe('group')", capabilities.describe("group"), "3a77347742233afd"),
+                ("describe('known')", capabilities.describe("known"), "abe1bbf79c4b2027"),
             )
         for name, value, expected in probes:
             with self.subTest(probe=name):

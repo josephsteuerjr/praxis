@@ -122,7 +122,86 @@ def pending_compacts(limit: int = SOURCE_LIMIT) -> list[dict]:
         resolved = memory_provenance.compact_evidence(compact_id, evidence)
         if resolved.get("automatic"):
             eligible.append(meta)
+    eligible += _pending_run_digests(done)
     return eligible[-limit:]
+
+
+def _pending_run_digests(done: set[str]) -> list[dict]:
+    """07.10 (oro/runs-nightly-0710): дайджесты прогонов как источники формирования.
+
+    Фронтир пишет runs_nightly.publish_for_formation (только при
+    PRAXIS_RUNS_NIGHTLY=on); потребляются тем же processed_compacts — один
+    дайджест, как один компакт. Не automatic-компакт: у него свой text, и
+    claim-evidence к нему не применяется (это не диалоговое событие).
+    """
+    path = life.STATE_DIR / "formation_runs.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    for meta in (data or {}).get("frontier") or []:
+        if not isinstance(meta, dict) or meta.get("kind") != "run_digest":
+            continue
+        if str(meta.get("id") or "") in done:
+            continue
+        out.append({"id": str(meta.get("id") or ""), "kind": "run_digest",
+                    "created_at": meta.get("created_at"),
+                    "task_id": meta.get("task_id"), "text": meta.get("text")})
+    return out
+
+
+def _harvest(source_text: str) -> dict:
+    """Чанковый HARVEST: большой бандл режется на куски, каждый спросится отдельно,
+    результаты сливаются. Один вызов с 50к входа на glm не влезает в потолок выхода —
+    отсюда были ночи «0 проходов, model_unavailable»."""
+    if not source_text:
+        return {}
+    CHUNK = 15000
+    # бандл — это JSON-события, склеенные через \n\n; слайс по байтам резал бы
+    # событие пополам (обрезанная головка с валидным id оставалась в чанке,
+    # хвост ехал мусором в следующий). Режем только по сепараторам.
+    parts = source_text.split("\n\n")
+    header = parts[0] if parts and parts[0].startswith("#") else ""
+    events = parts[1:] if header else parts
+    chunks: list[str] = []
+    buf: list[str] = []
+    size = 0
+    for ev in events:
+        n = len(ev) + 2
+        if n > CHUNK:  # одно событие длиннее чанка — целиком отдельным чанком
+            if buf:
+                chunks.append("\n\n".join(buf))
+                buf, size = [], 0
+            chunks.append(ev)
+            continue
+        if buf and size + n > CHUNK:
+            chunks.append("\n\n".join(buf))
+            buf, size = [], 0
+        buf.append(ev)
+        size += n
+    if buf:
+        chunks.append("\n\n".join(buf))
+    if header:  # анти-инъционный префикс нужен КАЖДОМУ чанку: там цитируемый текст
+        chunks = [header + "\n\n" + c for c in chunks]
+    merged: dict = {}
+    for chunk in chunks:
+        part = _ask(_HARVEST_SYS, chunk, max_tokens=2200)
+        if not part:
+            continue
+        for key in ("entities", "claims", "open_threads", "contradictions"):
+            items = part.get(key)
+            if isinstance(items, list):
+                merged.setdefault(key, []).extend(items)
+    if merged.get("entities"):
+        seen: set[str] = set()
+        dedup: list = []
+        for e in merged["entities"]:
+            if isinstance(e, dict) and str(e.get("name")) not in seen:
+                seen.add(str(e.get("name")))
+                dedup.append(e)
+        merged["entities"] = dedup
+    return merged
 
 
 def _json_obj(raw: str) -> dict:
@@ -139,14 +218,27 @@ def _json_obj(raw: str) -> dict:
 def _ask(system: str, user: str, max_tokens: int = 1800) -> dict:
     if not llm.configured("evaluator"):
         return {}
-    try:
-        resp = llm.chat("evaluator", system=system,
-                        messages=[{"role": "user", "content": user[:60000]}],
-                        max_tokens=max_tokens)
-        return _json_obj(resp.text)
-    except Exception:
-        log.warning("formation phase failed", exc_info=True)
-        return {}
+    # ⚠ 02.10.2026. HARVEST на glm-5.3 рвал JSON по потолку max_tokens (кириллица:
+    # 6022 символа на 2200 токенов), _json_obj возвращал {} и три ночи формирование
+    # стопорилось с ложным диагнозом model_unavailable. Теперь обрыв распознаётся по
+    # stop_reason и даётся один повтор с удвоенным потолком — не «модель недоступна».
+    for attempt in range(3):
+        try:
+            resp = llm.chat("evaluator", system=system,
+                            messages=[{"role": "user", "content": user[:60000]}],
+                            max_tokens=max_tokens * (2 ** attempt))
+            obj = _json_obj(resp.text)
+            if obj:
+                return obj
+            if str(getattr(resp, "stop_reason", "")) != "max_tokens":
+                # пустой JSON при end_turn — модель так отвечает; это не обрыв
+                return {}
+            log.warning("formation: ответ оборван max_tokens (%d ток.), пробую удвоенный",
+                        max_tokens * (2 ** attempt))
+        except Exception:
+            log.warning("formation phase failed", exc_info=True)
+            return {}
+    return {}
 
 
 # ⚠ 10.08.2026, её решение. Прежде первая строка каждой фазы звучала как «ты — фаза
@@ -210,6 +302,20 @@ def _source_bundle(metas: list[dict]) -> tuple[str, set[str]]:
     for meta in metas:
         cid = str(meta.get("id") or "")
         if not cid:
+            continue
+        if meta.get("kind") == "run_digest":
+            # 07.10 (oro/runs-nightly-0710): дайджест прогона — свой собственный
+            # источник: event-строки уже в мете (runs_nightly.digest_events);
+            # claim-evidence диалогов к нему не применяется.
+            for event in meta.get("events") or []:
+                event_id = str(event.get("id") or "")
+                if not event_id:
+                    continue
+                allowed.add(event_id)
+                chunks.append(json.dumps({
+                    "id": event_id, "kind": event.get("kind"),
+                    "text": str(event.get("text") or "")[:4000],
+                }, ensure_ascii=False, separators=(",", ":")))
             continue
         resolved = memory_provenance.compact_evidence(cid, evidence)
         if not resolved.get("automatic"):
@@ -401,8 +507,13 @@ def _apply_supported(candidate: dict, claim_id: str) -> list[str]:
     ops = []
     if candidate["kind"] == "person":
         slug = graph.resolve(candidate["subject"])
+        # 06.10: confidence едет в маркер факта (clm-…|observed) — прежде она
+        # терялась на пути claim → досье, и hook не мог предпочесть наблюдение
+        # выводу (memory_catalog._derive_person_hook читает обе формы маркера).
+        confidence = str(candidate.get("confidence") or "uncertain").lower()
         people.append_fact(slug, candidate["subject"], candidate["text"],
-                           candidate["visibility"], candidate["salience"], source_ref=claim_id)
+                           candidate["visibility"], candidate["salience"],
+                           source_ref=f"{claim_id}|{confidence}")
         ops.append(f"people/{slug}.md ← {claim_id}")
     if candidate["kind"] == "relation" and candidate.get("other"):
         if candidate.get("visibility") == "private":
@@ -488,7 +599,7 @@ def run(depth: str = "full", *, force: bool = False, reason: str = "сон") -> 
         created_at = life._utc_iso()
         source_text, allowed = _source_bundle(sources)
         source_ids = [str(x.get("id")) for x in sources]
-        harvest = _ask(_HARVEST_SYS, source_text, max_tokens=2200) if source_text else {}
+        harvest = _harvest(source_text) if source_text else {}
         entities = [x for x in (harvest.get("entities") or []) if isinstance(x, dict) and str(x.get("name") or "").strip()]
         claims = _merge_claims([x for x in (harvest.get("claims") or []) if isinstance(x, dict)], allowed)
         max_passes = MAX_PASSES_LIGHT if depth == "light" else MAX_PASSES_FULL
