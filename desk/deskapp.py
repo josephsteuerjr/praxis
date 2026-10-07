@@ -542,7 +542,14 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
     """
     with _DEVICES_LOCK:
         row = _PAIRS.get(token)
-        if not row or row["expires"] < time.time() or row["uses"] <= 0:
+        if row is None:
+            # QR выдан ДРУГИМ каналом (окно за одним адресом, телефон пришёл
+            # к другому): пары живут в памяти процесса, и раньше оба случая
+            # носили один текст — телефон вечно показывал «код устарел», и
+            # никто не называл причину (07.10, слово владельца).
+            raise web.HTTPForbidden(
+                text="этот канал не выдавал такой код — QR с другого адреса")
+        if row["expires"] < time.time() or row["uses"] <= 0:
             raise web.HTTPForbidden(
                 text="код устарел или уже использован — покажи QR заново")
         if row.get("key"):
