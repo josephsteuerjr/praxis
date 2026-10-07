@@ -81,7 +81,7 @@ class SelfdevFlow(unittest.TestCase):
     def test_submit_review_zone_merges_her_reviewed_decision(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
         msg = selfdev.submit(pid, "поднять VALUE", "для дела", review=RV, reviewer=GN)
-        self.assertIn("смёржила сама", msg)
+        self.assertIn("смёржено самостоятельно", msg)
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "merged")
         self.assertEqual(t["zone"], "review")
@@ -98,7 +98,7 @@ class SelfdevFlow(unittest.TestCase):
         # осознанный override_reason открывает мёрж; рестарт просится как раньше
         msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=GN,
                              override_reason="smoke в песочнице не относится к диффу")
-        self.assertIn("смёржила сама", msg)
+        self.assertIn("смёржено самостоятельно", msg)
         self.assertIn("VALUE = 99", (self.repo / "core.py").read_text(encoding="utf-8"))
         self.assertEqual(selfdev.get(pid)["status"], "merged")
         self.assertIn("merged", selfdev.restart_requested())
@@ -107,7 +107,7 @@ class SelfdevFlow(unittest.TestCase):
     def test_auto_zone_merges_itself(self):
         pid = self._begin_and_edit("soul/note.md", "# n\nновая строка\n")
         msg = selfdev.submit(pid, "дописать заметку", review=RV, reviewer=GN)
-        self.assertIn("смёржила сама", msg)
+        self.assertIn("смёржено самостоятельно", msg)
         self.assertEqual(selfdev.get(pid)["status"], "merged")
         self.assertIn("новая строка", (self.repo / "soul" / "note.md").read_text(encoding="utf-8"))
 
@@ -132,7 +132,7 @@ class SelfdevFlow(unittest.TestCase):
                              override_reason="красный smoke не относится к диффу: старый known-fail")
         t = selfdev.get(pid)
         self.assertEqual(t["status"], "merged")
-        self.assertIn("смёржила сама", msg)
+        self.assertIn("смёржено самостоятельно", msg)
         self.assertIn("VALUE = 99", (self.repo / "core.py").read_text(encoding="utf-8"))
 
     def test_protected_zone_is_risk_evidence_not_a_veto(self):
@@ -337,7 +337,7 @@ class GnomeGate(SelfdevFlow):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
         msg = selfdev.submit(pid, "поднять VALUE", review=RV,
                              reviewer="skip: тривиальная правка одной константы, гном не нужен по пакетной приёмке 12.09")
-        self.assertIn("смёржила сама", msg)
+        self.assertIn("смёржено самостоятельно", msg)
         self.assertIn("гном пропущен", msg)
         self.assertEqual(selfdev.get(pid)["status"], "merged")
         self.assertIn("skip", str(selfdev.get(pid).get("reviewer", "")))
