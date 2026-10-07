@@ -12,6 +12,8 @@ let pending = false;
 let timer: number | undefined;
 let error = '';
 let generation = 0;
+let contextError = false;
+let snapshot = '';
 const element = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text = '') => {
   const node = document.createElement(tag); node.className = cls; node.textContent = text; return node;
 };
@@ -19,12 +21,16 @@ const hide = () => shell('tray_hide').catch(() => {});
 
 async function action(run: () => Promise<unknown>, close = true) {
   if (pending) return;
-  pending = true; error = ''; paint();
+  const focusKey = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.action : undefined;
+  pending = true; error = ''; contextError = false; paint();
   try { await run(); if (close) await hide(); }
   catch (e) {
     error = e instanceof Error ? e.message : String(e); paint();
     if (!document.hasFocus()) void shell('notify', { title: 'Hélène', body: error }).catch(() => {});
-  } finally { pending = false; if (!close && !error) await refresh(); paint(); }
+  } finally {
+    pending = false; if (!close && !error) await refresh(); paint();
+    if (focusKey && document.hasFocus()) root.querySelector<HTMLElement>(`[data-action="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+  }
 }
 
 function button(label: string, run: () => Promise<unknown>, close = true) {
@@ -34,6 +40,8 @@ function button(label: string, run: () => Promise<unknown>, close = true) {
 
 function paint() {
   const focused = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.action : undefined;
+  const scrollTop = root.scrollTop;
+  const agentsScroll = root.querySelector('.tray-agents')?.scrollTop || 0;
   root.replaceChildren();
   root.style.maxHeight = state?.max_height ? Math.max(160, state.max_height - 48) + 'px' : '';
   root.append(element('div', 'tray-brand', 'Hélène'));
@@ -73,6 +81,8 @@ function paint() {
   const quit = button('Выйти из Элен', () => shell('tray_exit')); quit.dataset.action = 'exit'; footer.append(quit);
   if (state) footer.append(element('p', 'tray-note', exitNote(state)));
   root.append(footer);
+  root.scrollTop = scrollTop;
+  const list = root.querySelector('.tray-agents'); if (list) list.scrollTop = agentsScroll;
   if (focused) root.querySelector<HTMLElement>(`[data-action="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   if (document.hasFocus()) void fit();
 }
@@ -89,10 +99,14 @@ async function refresh() {
   try {
     const fresh = await shell<TrayState>('tray_context');
     if (stamp !== generation) return;
-    state = fresh; paint();
+    const next = JSON.stringify(fresh);
+    if (next === snapshot && !contextError) return;
+    state = fresh; snapshot = next;
+    if (contextError) { contextError = false; error = ''; }
+    paint();
   } catch (e) {
     if (stamp !== generation) return;
-    error = e instanceof Error ? e.message : String(e); paint();
+    contextError = true; error = e instanceof Error ? e.message : String(e); paint();
   }
 }
 
