@@ -595,8 +595,14 @@ class BotTransport:
         chat = message.get("chat") or {}
         sender = message.get("from") or {}
         chat_id = str(chat.get("id") or "")
-        if not chat_id or bool(sender.get("is_bot")):
-            return                      # чужих ботов не слушаем: петли и эхо
+        if not chat_id:
+            return
+        self_id = str((getattr(self, "me", None) or {}).get("id") or "")
+        if self_id and str(sender.get("id") or "") == self_id:
+            return                      # своё эхо уже записано при отправке
+        # Другие боты — тоже участники разговора. Их сообщения попадают в
+        # память до гейтов адресации и допуска, как сообщения людей; эти
+        # гейты ниже решают только, запускать ли ход.
         is_dm = str(chat.get("type") or "") == "private"
         sender_name = " ".join(x for x in (sender.get("first_name"),
                                            sender.get("last_name")) if x).strip() \
