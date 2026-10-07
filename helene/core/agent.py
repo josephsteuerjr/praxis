@@ -73,6 +73,7 @@ import mailroom
 import media
 import media_audio
 import memory_index
+import model_watch
 import memory_life
 import memory_provenance
 import run_context
@@ -8369,7 +8370,8 @@ def second_look(brief: str) -> str:
     report = ""
     try:
         for _ in range(llm.limits().max_tool_iters):
-            resp = llm.chat("voice", system=_SCOUT_FRAME, messages=messages, tools=tools)
+            # Разведчик — рука хода: его вызовы тоже не пережидают стопа (05.10).
+            resp = _chat_cancellable("voice", system=_SCOUT_FRAME, messages=messages, tools=tools)
             if resp.stop_reason == "tool_use":
                 blocks, results = [], []
                 for b in resp.blocks:
@@ -12022,6 +12024,42 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
         keat_live.discard_provider()
 
 
+def _chat_cancellable(role: str, **kwargs):
+    """Вызов модели, не пережидающий остановку хода (05.10, слово владельца).
+
+    Остановка хода терминальна: вызов уходит в дочерний поток (`model_watch`),
+    а поток хода между порциями ожидания перечитывает МАНИФЕСТ прогона — не
+    `status()`: тот пересобирает весь леджер рук под локом прогона, и поллинг
+    два раза в секунду спорил бы с самим путём остановки (py-spy-улика в
+    run_manager называет `status()` тем, что съедал 84% живого прода). Не
+    «running» — RunStopped немедленно, сеть не ждётся; брошенный вызов
+    доделывается вхолостую, его ответ выбрасывается, а поздний сбой призрака
+    глушится в llm (abandon_call). Вызов без привязанного прогона (фон между
+    ходами) ждёт как раньше: останавливать нечего.
+    """
+    current = run_context.current_run()
+    if current is None:
+        return llm.chat(role, **kwargs)
+
+    def _stop():
+        try:
+            manifest = _runs().manifest(current.run_id)
+        except Exception:
+            return None  # наша слепота — не повод рвать живой вызов
+        status = str(manifest.get("status") or "running")
+        if status == "running":
+            return None
+        terminal = manifest.get("terminal") or {}
+        control = manifest.get("control") or {}
+        why = str(terminal.get("reason") or control.get("reason")
+                  or "остановлено владельцем")
+        return RunStopped(current.run_id, status, why)
+
+    return model_watch.call_with_stop(
+        lambda: llm.chat(role, **kwargs), _stop,
+        on_abandon=llm.abandon_call, on_settle=llm.settle_call)
+
+
 def _model_call_impl(system: str, messages: list[dict], tools: list | None = None):
     """Call the voice model while journaling the full model phase into the bound run."""
     started = time.monotonic()
@@ -12197,9 +12235,13 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         # канала: без этого пустота уходила в ретраи и фолбэк, и свежая модель слала
         # ту же реплику заново — четыре копии за две минуты. Под опущенным рычагом
         # spoken() пуст всегда, и поведение байт-в-байт прежнее.
-        response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
+        response = _chat_cancellable(
+            "voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
     except Exception as exc:
-        if current is not None:
+        # RunStopped — останов по воле владельца или дюрабельность, не сбой
+        # модели: писать model_failed и бампать ревизию терминального манифеста
+        # значило бы врать статистикой «модель падала» на каждом стопе (05.10).
+        if current is not None and not isinstance(exc, RunStopped):
             try:
                 _run_event_strict(
                     "model_failed", call_id=call_id, role="voice",
@@ -17874,9 +17916,10 @@ def evaluate_reply(text: str, context: str = "", tool_trace: str = "",
     else:
         blocks = content
     try:
-        response = llm.chat("evaluator", max_tokens=_GUARD_VERDICT_MAX_TOKENS,
-                            system=_OUTBOUND_PRIVACY_SYS,
-                            messages=[{"role": "user", "content": blocks}])
+        # Судья — внутри хода: остановка владельца не ждёт его сети (05.10).
+        response = _chat_cancellable("evaluator", max_tokens=_GUARD_VERDICT_MAX_TOKENS,
+                                     system=_OUTBOUND_PRIVACY_SYS,
+                                     messages=[{"role": "user", "content": blocks}])
         out = (response.text or "").strip()
     except Exception:
         return ("unavailable", "outbound_media: evaluator unavailable" if has_media

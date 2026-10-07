@@ -2,16 +2,16 @@
   "version": "1.4.1",
   "windows_desk": "d71054b0c575678ee9287ea86f7e8cf02fc1e4c6",
   "linux_desk": "6ff3c06d708136166b495c02026efbd0a9500f22",
-  "ci_desk": "f71af85ab257641c65194d28c1e31d98dd39169b",
-  "frozen_tree": "295dac8e3b70d2335499c0374378d0ff01f55c36",
+  "ci_desk": "aad144b54ce9cb3e041abb27997df3414b9edf64",
+  "frozen_tree": "fb929656c4803ddfb04b1ef620bd9e709fbca348",
   "praxis_base_source": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
-  "frozen_tree_digest": "9902b98cefa575f11c5b209b6c80bf60c8049ec2f1665d37d617ca74be7df44a",
+  "frozen_tree_digest": "e282d624f3d7c0fd5b80701f407184014d58be80d1d5c3a66ad74a3026d08eb9",
   "frozen_tree_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".env.example": "98a350964b445a30036d9d16f9c14c315016fa9e7882284e8f52c712db8f27db",
     ".gitattributes": "066ea1b66070539e6165ef10d0cb566f703ccfb03e2b571f8fe876942a9540c2",
     "absence.py": "295f3d67f08b59557b33f84334c4002f6fd830c63c9a4499a858658badfe22c9",
-    "agent.py": "804233b605b0ef7abc5fba719cfe2c22601f275764b7a8539144d7fb80bda4d1",
+    "agent.py": "927ed3e1526b65efa24ca085b4eeea3bd70b10ce931be2bb66c84a1e58d4e028",
     "AGENTS.md": "aadf18377a65bcec731d2100e6cd4820247c8b10bb2857875350dc5b6be090a2",
     "appetite.py": "194966b865581b4450c554d7f530c85aca229d0d7a2492b43a4ebc43a6c16d91",
     "ARCHITECTURE.md": "11bdbc67989f4366cda775b2417a96a865a0144da301b27c6f06f0004fce26a9",
@@ -77,7 +77,7 @@
     "keat_source.py": "f2c72e544bb60ab9b67717972b7720abcaffe491f4e4233e9b2c05abb399cb18",
     "keat_stats.py": "3f2955affda46dff42fc0ef218bfc8931bab31407e10466510853e1b0f699df3",
     "lessons.py": "75cda5e2f9ba9bb336371dd85630410a9a4d101836cf047b7fd4bf800c6f116c",
-    "llm.py": "bdc0390c0de154612fc871b1e90fbbeef15625960b185656390eb29b25744d3b",
+    "llm.py": "6170740f031957b0ce15bf6f827c431e9a7618b434ca8448b38b7936ab38dad0",
     "logical_send.py": "206ef3e11be52df9add565909e67d8a952ba29b29ffda3fe5a59e7d8ea1485f1",
     "logsink.py": "6bb8c01e77560c604985e76d1d7af53acb99672b173624d09be58e580db9bcc1",
     "mailer.py": "4b867ecec207d700994e4305bc5c622f5dd76ce6e61ffe521f1c902a080e8b0f",
@@ -92,6 +92,7 @@
     "memory_provenance.py": "486d6047a250af62e4017afd189e0b73e7ec28d050c879a4adcc5ab8335ffa9b",
     "memory_viz.py": "a3661e39f3866937ae8077b5a581fdd14431c5b807e576a274402db46e7299b1",
     "migrate_places.py": "cc3e46027ec362a35be3db92a818aba4bcf0ebd1d81e15eac6757e5c4c4ecc20",
+    "model_watch.py": "59a8e5d99396066b213c99a9093cfd52db513c93f6e19b6101267228cacbd896",
     "moderation_shadow.py": "ebd62bbe59813745c392af919b4d34fa3408d995a10f4c996e21f3bf6cbd61b3",
     "moderation_shadow_corpus.json": "048ebe72a1359657edf10f839490c98bd7ec617ae6bb758f1edb4a10caf97360",
     "mtproto_login.py": "6678c693071a4cc6e7a1d06493d9f0e17a36b2928c56c46c83964882e7509e47",
@@ -635,7 +636,7 @@
     "body/crates/praxis-body/src/uia.rs": "d529240323e798cd04321497cfb6cbef1f32e481c0427a1d07c3e0d4baf46adf",
     "body/crates/praxis-body/src/x11.rs": "ff51d0968cf014b861b9804f799cc5a88a90300fec23d585b55587e9cd0e405a"
   },
-  "layer_files": 194,
+  "layer_files": 195,
   "base_files_not_in_frozen_tree": [
     "cjk_vkladki.py",
     "docs/run_retention.md",
@@ -660,5 +661,11 @@
     "test_send_message_cjk_0310.py",
     "test_tool_pointers.py"
   ],
-  "note": "Frozen payload provenance is distinct from current live Praxis. Layer carries the exact edition differences; identity/runtime are excluded."
+  "note": "Frozen payload provenance is distinct from current live Praxis. Layer carries the exact edition differences; identity/runtime are excluded.",
+  "restored_edition_patch": "4910ef605fc9d6086d0bf88636d29672d1b1be5e",
+  "corrected_core_paths": [
+    "agent.py",
+    "llm.py",
+    "model_watch.py"
+  ]
 }

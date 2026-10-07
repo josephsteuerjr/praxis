@@ -33,6 +33,12 @@ character can develop through the same authored mechanisms as other agents.
 
 - **Paper-like chat.** Readable typography, resizable panels, remembered drafts and reading
   positions, visible activity, and controls that reflect the actual engine state.
+- **Tasks and wake-ups.** Inspect ongoing work, schedule future wake-ups and return to
+  continuing intentions from dedicated views.
+- **Context and diagnostics.** Inspect retained context, files, activity and journals
+  when understanding or diagnosing an agent's work.
+- **Materials and storage.** View material sizes as a diagram and explicitly confirm
+  removal of eligible project or cache folders.
 - **Images.** Generate and edit images through the ChatGPT subscription relay from a
   Codex or GLM conversation. Images have independent settings and reference-image support.
   View the whole image inline, open the internal viewer, fit or zoom, then return to chat.
@@ -122,6 +128,9 @@ shows the capabilities and limits of the selected mode rather than promising a u
 - Installed-code receipts are captured after reconciliation, so a legitimate carried
   change does not trigger an automatic rollback by itself.
 - An open acceptance trial is reported explicitly before another update can begin.
+- Terminal turn cancellation releases the active turn while a model request is still
+  waiting and discards its late response. Network failures can retry the same channel
+  with the same conversation frame.
 - Windows has trial/rollback controls. Backup and agent-transfer paths preserve the
   relevant authored data and avoid duplicating downloaded dependency caches.
 
@@ -133,6 +142,16 @@ shows the capabilities and limits of the selected mode rather than promising a u
 | Linux | DEB and RPM packages, Electron desktop, service and rights-broker integration |
 | macOS, Apple Silicon | Native archive and installer script built by GitHub CI from the matching Windows release |
 | Server / phone | Server channel, paired mobile interface and Telegram Mini App |
+
+On macOS, install or update from Terminal as the user signed into the desktop:
+no `sudo`, no `su`. The installer opens the setup window in that person's session.
+
+```sh
+curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
+```
+
+For an archive already downloaded, add `-s -- --from /path/to/Helene-1.4.1-macos-arm64.zip`
+after `sh`. The script extracts the archive and opens the setup window.
 
 Linux Electron cannot infer a stationary touchpad contact from wheel events; its scrolling
 settings expose that limitation. macOS screen and accessibility operations depend on TCC

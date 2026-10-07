@@ -26,10 +26,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+TREE = Path(os.environ.get('HELENE_TREE_SRC', str(ROOT / 'helene' / 'core')))
 os.environ['PRAXIS_TEST'] = '1'
 # Ретраи без пауз: стенд обязан быть быстрым, проверяет он механику, а не сон.
 os.environ['PRAXIS_NET_RETRY_PAUSE_SEC'] = '0'
-sys.path[:0] = [str(ROOT / 'helene/core'), str(ROOT / 'praxis')]
+sys.path[:0] = [str(TREE), str(ROOT / 'praxis')]
 import _sandbox  # noqa: E402
 assert _sandbox.activate_if_testing()
 import llm  # noqa: E402
@@ -279,7 +280,7 @@ class NetRetries(unittest.TestCase):
 
 class Wiring(unittest.TestCase):
     def test_voice_call_goes_through_the_watch(self):
-        src = (ROOT / "helene" / "core" / "agent.py").read_text(encoding="utf-8")
+        src = (TREE / "agent.py").read_text(encoding="utf-8")
         self.assertIn('response = _chat_cancellable(\n            "voice",',
                       src, "прямой llm.chat голоса вернулся — стоп снова ждёт сети")
         self.assertIn("model_watch.call_with_stop", src)
