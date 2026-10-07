@@ -534,6 +534,20 @@ def _cooldown(is_dm: bool, room_mode: str = "normal", *, addressed: bool = False
     return base
 
 
+# ⚠ 07.10: ПРИОРИТЕТНЫЙ ПРЕФИКС. Просьба Егора: сообщение с «!» в начале —
+# срочное, его кадр обязан подняться следующим ходом, минуя кулдаун, с меткой
+# «требуется действие». Префикс — часть текста: буферы, память и реплаи видят
+# его как есть; вырезаем ТОЛЬКО для решения о пробуждении и баннера в кадре.
+# Парсер и рычаг живут в леджере (нет тяжёлых импортов): `telegram_followups.
+# priority_prefix` / `split_priority`. Здесь — только делегирование.
+def _priority_prefix() -> str:
+    return telegram_followups.priority_prefix()
+
+
+def split_priority(text: str) -> tuple[bool, str]:
+    return telegram_followups.split_priority(text)
+
+
 def _life_source_key(chat_id: str, source_id: str | int | None) -> tuple[str, str, object]:
     return str(chat_id), str(source_id or ""), memory_life.record_message
 
@@ -3609,6 +3623,10 @@ async def on_new(event) -> None:
     suppress_boundary_reply = bool(
         not is_private and replied and _consume_boundary_reply(
             chat_id, reply_to_mid, sender_id, is_owner=is_owner))
+    # ⚠ 07.10: приоритетный префикс («!») — срочность для её ума, не для людей:
+    # буферы/память/реплаи пишут текст КАК ЕСТЬ, а флаг уходит в meta, чтобы ход
+    # миновал кулдаун и открылся баннером «требуется действие».
+    priority_msg, _priority_text = split_priority(text)
     _meta[chat_id] = {"entity": event.chat_id, "peer_id": peer_id,
                       "topic_id": route.topic_id, "sender_id": sender_id,
                       "origin_message_id": (int(mid) if mid is not None else None),
@@ -3619,7 +3637,8 @@ async def on_new(event) -> None:
                       "title": topic_title, "size": desc.get("size"),
                       "addressed": bool(addressed),
                       "addressed_mid": (int(mid) if (addressed and mid is not None) else None),
-                      "room_mode": room_mode, "room_policy": room_policy}
+                      "room_mode": room_mode, "room_policy": room_policy,
+                      "priority": bool(priority_msg)}
     log.info("MSG [%s] %s (id=%s, %s): %r", "DM" if is_private else chat_id, name, sender_id, cat, body[:60])
     # 25.09 (G §1): обращение к ней или личка — в накопитель уведомлений. Не будильник:
     # ход этой комнаты придёт своим порядком и сам снимет запись (`clear_chat` в
@@ -4904,14 +4923,20 @@ async def _run_pass(chat_id: str) -> None:
         meta["room_mode"] = room_mode
     elapsed = time.time() - _last_pass[chat_id]
     addressed = bool(meta.get("addressed", False)) if is_dm else bool(wake.addressed)
-    cd = _cooldown(is_dm, meta.get("room_mode", "normal"), addressed=addressed)
-    if elapsed < cd:
-        _defer_pass(chat_id, cd - elapsed + 0.05)  # transport retry, не task и не loop
-        perception.note_skip("cooldown", "отложила", chat_id=chat_id,
-                             detail=(f"transport retry через {cd - elapsed:.0f}с; "
-                                     "после него актуальность решается заново"),
-                             count_repeats=False)
-        return
+    # ⚠ 07.10: приоритетный префикс («!») минует кулдаун. Ум остаётся один
+    # (_ONE_MIND не тронут: занят — ход встанет в очередь за живым), но срочная
+    # реплика не ждёт своего темпа: «следующим ходом» — часть просьбы Егора.
+    priority_pass = bool(meta.get("priority")) if is_dm else bool(
+        getattr(wake, "priority", False))
+    if not priority_pass:
+        cd = _cooldown(is_dm, meta.get("room_mode", "normal"), addressed=addressed)
+        if elapsed < cd:
+            _defer_pass(chat_id, cd - elapsed + 0.05)  # transport retry, не task и не loop
+            perception.note_skip("cooldown", "отложила", chat_id=chat_id,
+                                 detail=(f"transport retry через {cd - elapsed:.0f}с; "
+                                         "после него актуальность решается заново"),
+                                 count_repeats=False)
+            return
     # A queued moderation review is the next live turn once a current pass has finished.
     # Do not let a newly due ordinary chat debounce claim the only mind first.
     if _MODERATION_PRIORITY_PENDING:
@@ -5142,6 +5167,16 @@ async def _run_pass(chat_id: str) -> None:
         topic_token = _TURN_TOPIC_ROUTE.set(route)
         try:
             if is_dm:
+                if priority_pass:
+                    # ⚠ 07.10: баннер приоритета — первый элемент кадра: «сработал
+                    # приоритет, требуются срочные действия». Суть — теми же словами,
+                    # как прислал человек (без префикса).
+                    topic_orient = (
+                        "[ПРИОРИТЕТ — срочное действие] Реплика ниже помечена «!»: "
+                        "она миновала обычный темп именно потому, что человек назвал "
+                        "её срочной. Прочитай её как просьбу, требующую действия "
+                        "сейчас; не откладывай на окно и не своди к наблюдению.\n\n"
+                        + topic_orient)
                 envelope, cancellation_seen = await _await_despite_cancellation(
                     _voice_turn_with_typing(
                         entity, chat_id, last_n, speaker,
@@ -7989,6 +8024,25 @@ def _sync_send_message(to, text) -> str:
     frozen = _frozen_refusal(peer_id, who)
     if frozen:
         return agent.DirectSendRefusal(frozen)
+    # ⚠ 07.10: ДЕДУП ОТПРАВКИ. Три письма Роме с одним текстом (17:27, 17:39, 18:15)
+    # — каждая новая нить = новое письмо, повтора никто не проверял. Повтор её же
+    # реплики тому же адресату с тем же текстом внутри окна (PRAXIS_FOLLOWUP_DEDUP_SEC,
+    # умолчание 1ч; 0 выключает) — отказ словами: она увидит причину и сможет
+    # переформулировать, а человек не получит дубль. Тихий дубль хуже отказа:
+    # следующая нить всё равно всплывёт как «открытое обязательство».
+    try:
+        dup = telegram_followups.LEDGER.recent_same_text(
+            target_peer_id=peer_id, text=str(text or ""))
+        if dup is not None:
+            age_min = max(0.0, (time.time() - float(dup.get("sent_at") or 0)) / 60)
+            return agent.DirectSendRefusal(
+                f"Не отправила повтор: этому адресату уже ушла та же реплика "
+                f"({age_min:.0f} мин назад, нить {dup.get('id')}, ответа ещё не было). "
+                f"Если нужно другое — скажи то же самое другими словами; "
+                f"повтор доставлю только после ответа или окончания окна.")
+    except Exception:
+        log.debug("follow-up дедуп не проверился [%s] — отправляю без него", peer_id,
+                  exc_info=True)
     target_user_id = (getattr(ent, "id", None)
                       if _entity_kind(ent) == "user" else None)
     active_chat = str(agent._active_chat() or "")
