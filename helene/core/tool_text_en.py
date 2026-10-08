@@ -87,25 +87,13 @@ EN: dict[str, dict] = {
               "args_json": "the tool's arguments as a JSON object, e.g. {\"path\": \"soul/SOUL.md\"}"},
     },
     # ─────────────────────────────────────────────────────────── память и самоописание
-    "clear_owner_marks": {
-        "d": ("Remove owner-edit marks (the \"> [\" provenance quote lines) that the window "
-              "leaves in your files next to each manual owner edit (what, when and by whom "
-              "changed — deleted/inserted). Once the edit is read and absorbed, remove the "
-              "spent mark with this tool; it is not a permanent monument. action=list (default) "
-              "shows files with marks and their text; clear removes the marks (one path or all "
-              "window-editable groups), atomically, leaving the rest of the text untouched."),
-        "p": {"action": "list shows marked files, clear removes the marks",
-              "path": "relative path (for example soul/self/CURRENT.md); empty — all editable groups"},
-    },
     "recall": {
         "d": ("Search your own memory and skills (people, journal, reflections, self, "
-              "skills). report=true searches nothing: it shows the observable summary of "
-              "your semantic-seed experiment — how many explicit recalls there were, which "
-              "genres the seed was built from, how many candidates arrived ONLY through it "
-              "and how many reached the output, and your real interval between recalls. "
-              "Whether it helped is not in there: that conclusion is yours, from your turns."),
+              "skills). report=true searches nothing: it returns the closed-epitaph line "
+              "of the semantic-seed experiment (ended 03.08.2026, removed 05.10.2026; "
+              "final numbers 680 seed-only candidates, 0 reached output)."),
         "p": {"query": "keywords to search for",
-              "report": "show the experiment summary instead of searching"},
+              "report": "show the closed-experiment epitaph instead of searching"},
     },
     "remember": {
         "d": ("Remember a fact about a person. visibility='private' for secrets: do not "
@@ -545,9 +533,9 @@ EN: dict[str, dict] = {
               "when": "'in 0m' for now (default), 'today 23:00' and so on"},
     },
     "manage_appetite": {
-        "d": ("The appetite agreement with Yegor: thinking costs Yegor money, requests about "
+        "d": ("The appetite agreement with Yegor: thinking costs his money, requests about "
               "spending are part of the relationship, and YOU interpret them (the code only "
-              "counts). The four formulations: 'do not save / dig as deep as needed' -> "
+              "counts). His four formulations: 'do not save / dig as deep as needed' -> "
               "interpret(mode=free); 'moderate your appetites' -> interpret(mode=considerate) "
               "— rebuild the background (windows, sleep depth) and say what you are "
               "sacrificing; 'no more than X per day' -> pledge(daily_tokens/daily_cost), your "
@@ -626,7 +614,7 @@ EN: dict[str, dict] = {
     },
     "restart_self": {
         "d": ("Restart yourself (for example after editing your own code). Memory on disk "
-              "survives; the program brings you back up on the new code. Give a reason — "
+              "survives; the container brings you back up on the new code. Give a reason — "
               "it goes to the journal."),
         "p": {"reason": "why you are restarting"},
     },
@@ -663,10 +651,13 @@ EN: dict[str, dict] = {
 
     # ────────────────────────────────────────────────────────────── файлы, код, машина
     "shell": {
-        "d": ("Your hands in your own home: a full shell. The soul lives in soul/ "
-              "(SOUL.md, provenance-validated self/CURRENT.md, skills/), memory in memory/, "
-              "drafts in workspace/. Use full paths rather than relative ones. Look, try, "
-              "build; you may write yourself skills into soul/skills/."),
+        "d": ("Your hands in your own home. A full shell in the container. Your home is "
+              "/app: the soul in /app/soul (SOUL.md, provenance-validated self/CURRENT.md, "
+              "skills/), memory in /app/memory, your code in /app/*.py, drafts in "
+              "/app/workspace. cwd defaults to /app; if a temporary configured cwd "
+              "disappears, the shell returns to /app by itself. Use full paths "
+              "(/app/soul/...) rather than relative ones. Look, try, build; you may write "
+              "yourself skills into /app/soul/skills/."),
         "p": {"command": "the shell command"},
     },
     "fs_read": {"p": {"path": "file path in your home",
@@ -722,6 +713,8 @@ EN: dict[str, dict] = {
               "task_id": "the task to act on",
               "goal": "what this task is for",
               "isolation": "auto | worktree | direct",
+              "success_criteria": "start: readiness criteria (advisory)",
+              "verify_commands": "start: check commands, not auto-run",
               "title": "finish: what the change does",
               "review": "finish: your own verdict on your diff",
               "checked": "finish: what you actually checked",
@@ -897,7 +890,6 @@ BASE_SHA: dict[str, str] = {
     "add_alias": "1429a0d6",
     "admit": "443ccc94",
     "coding_inspect": "3c0863eb",
-    "clear_owner_marks": "a0d26309",
     "consolidate_context": "29d1b41a",
     "end_turn": "4930be44",
     "focus": "f066613b",
@@ -1135,7 +1127,7 @@ POINTER_PURPOSE: dict[str, str] = {
     "server_logs": "log of one of my services",
     "server_status": "the server I live on: health and services (read-only)",
     "set_avatar": "set my own avatar in Telegram",
-    "shell": "full shell in my home; my edits auto-commit to git",
+    "shell": "full shell in my home /app; my edits auto-commit to git",
     "speak": "voice the answer and attach audio to the chat",
     "start_proposal": "open a proposal to change my code: branch and working copy",
     "stay_silent": "deliberately stay silent, noting the reason to myself",
@@ -1158,7 +1150,7 @@ POINTER_GROUPS: dict[str, str] = {
     "Telegram и люди": "Telegram and people",
     "файлы и код дома": "files and code at home",
     "Forge — большая работа": "Forge — the big work",
-    "компьютер и журнал": "computer and log",
+    "сервер и компьютер": "server and computer",
     "веб и почта": "web and mail",
     "мозг, восприятие, аппетит": "brain, perception, appetite",
     "прогоны": "runs",
@@ -1216,7 +1208,7 @@ POINTER_SHA: dict[str, str] = {
     "group:память и я": "22449c9c",
     "group:прогоны": "77e47edc",
     "group:разговор и жесты": "7467944f",
-    "group:компьютер и журнал": "1dc60503",
+    "group:сервер и компьютер": "d86b5b01",
     "group:файлы и код дома": "65f8ac3c",
     "group_context": "646d30d1",
     "home_note": "7b329f3a",

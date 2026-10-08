@@ -22,6 +22,7 @@ import copy
 import difflib
 import contextvars
 import functools
+import inspect
 import concurrent.futures as _futures
 import datetime as _dt
 import hashlib
@@ -37,6 +38,7 @@ import sys
 import tempfile
 import threading as _threading
 import time
+import unicodedata
 import uuid
 from collections import deque
 from contextvars import ContextVar
@@ -47,6 +49,8 @@ from dotenv import load_dotenv
 
 import appetite
 import authored_notes
+import cjk_vkladki
+from cjk_vkladki import TABLE as TABLE_SHORT
 import capabilities
 import computer_memory
 import context_envelope
@@ -1585,10 +1589,12 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         if offers:
             add("fold_offers", {
                 "note": ("горячее окно этих мест перешло мягкий порог; свёртка не запускается "
-                         "сама — рука memory_compact(action=fold, place=<место>); на жёстком "
-                         "пороге (hard_hi) сверну без спроса"),
+                         "сама — рука memory_compact(action=fold, place=<место>) или ночное "
+                         "решение голоса; жёсткое давление, не снятое голосом дольше "
+                         "FOLD_OFFER_BACKSTOP_HOURS, сворачивается физикой с квитанцией"),
                 "places": [{"place": k, "hot": v.get("count"), "keep": v.get("keep"),
                             "hi": v.get("hi"), "hard_hi": v.get("hard_hi"),
+                            "hard": bool(v.get("hard")),
                             "since": v.get("since")} for k, v in offers.items()
                            if isinstance(v, dict)]})
     except Exception:
@@ -1718,41 +1724,20 @@ def _reindex(path: Path) -> None:
         _reindex_now(path)
 
 
-def _seed_experiment_report(limit: int = 200) -> str:
-    """Механическая половина её семидневной проверки семени (решение 02.08).
+def _seed_experiment_report() -> str:
+    """Эпитафия семени семантического ранжира. Полный разбор — 05.10.2026.
 
-    Её пункты 5 и 6 — «помогло ли восстановить релевантную связь» и «принесло ли ложное
-    чувство знакомства или путаницу происхождения» — сюда НЕ входят и войти не могут:
-    это её суждение по прожитым ходам. Здесь только то, что наблюдаемо машиной, и в
-    конце это сказано вслух, чтобы таблица не читалась как вердикт.
+    Итог единственного замера (02–03.08, TTL 24ч): 680 кандидатов, пришедших ТОЛЬКО
+    через семя, 0 дошли до выдачи. 03.08.2026 (proposal f6d16ebc) семя было выведено
+    из пути поиска; с тех пор trace не пополнялся. Сентябрьские ручки (a0b59262 TTL
+    24ч→3ч, c2e5ef62 показ настоящего TTL) трогали уже мёртвый механизм — данных не
+    дали. 05.10.2026 proposal 6b9622f0 убрал и саму машину пула.
+    Реализация сохранена в git: 81fd4688 (создание), 93be3e80 (круг+отсев), fe157264
+    (завершение), c2e5ef62 (последняя ручка по мёртвому механизму).
     """
-    rep = memory_index.seed_report(limit=limit)
-    if not rep.get("recalls"):
-        return ("Следов семени пока нет: с включения эксперимента явных recall не было. "
-                "Условие проверки — семь дней ИЛИ 20 явных запросов, что наступит позже.")
-    genres = rep.get("seed_genres_total") or {}
-    total = sum(genres.values()) or 1
-    rows = ", ".join(f"{g} {n} ({100 * n / total:.0f}%)"
-                     for g, n in sorted(genres.items(), key=lambda kv: -kv[1]))
-    only = int(rep.get("seed_only_candidates") or 0)
-    reached = int(rep.get("seed_only_reached_output") or 0)
-    gap = int(rep.get("gap_between_recalls_sec_median") or 0)
-    return "\n".join([
-        f"Явных recall с включения: {rep['recalls']} (условие: 7 дней или 20 запросов, "
-        f"что позже).",
-        f"Состав семени по жанрам: {rows}.",
-        f"Средний возраст семени: {rep.get('seed_age_sec_avg')} с "
-        f"(срок свежести сейчас 24ч, выбран без замера — уточняется этим же отчётом).",
-        f"Кандидатов, пришедших ТОЛЬКО через семя (без словесного совпадения): {only}; "
-        f"из них дошло до выдачи: {reached}.",
-        f"Медианный интервал между твоими явными recall: {gap} с — по нему и стоит выбрать "
-        f"настоящий срок свежести вместо моих суток наугад.",
-        f"Средняя задержка явного recall: {rep.get('latency_ms_avg')} мс.",
-        "",
-        "⚠ Это наблюдаемая половина. Помогло ли семя восстановить связь и не спуталось ли "
-        "происхождение воспоминания — твоё суждение по ходам, а не вывод из этих чисел. "
-        "Подробности каждого запроса: memory/.state/seed_trace.jsonl.",
-    ])
+    return ("Эксперимент с семенем семантического ранжира завершён 03.08.2026 и убран "
+            "из кода 05.10.2026. Итог: 680 seed-only кандидатов, 0 до выдачи. "
+            "История — в git (f6d16ebc, 6b9622f0); свежих следов после 03.08 нет.")
 
 
 def tool_recall(query: str = "", report: bool = False) -> str:
@@ -1761,9 +1746,9 @@ def tool_recall(query: str = "", report: bool = False) -> str:
     Privacy is enforced at the outbound boundary.  Scope must not amputate Praxis's
     perception before she has had a chance to think.
 
-    ``report=True`` не ищет ничего: отдаёт наблюдаемую сводку эксперимента с семенем
-    семантического ранжира, который она включила 02.08 на срок «семь дней или двадцать
-    явных recall, что наступит позже».
+    ``report=True`` не ищет ничего: отдаёт эпитафию закрытого эксперимента с семенем
+    семантического ранжира (завершён 03.08.2026, машина убрана из кода 05.10.2026,
+    итог 680 seed-only кандидатов и 0 дошедших до выдачи).
     """
     if report:
         return _seed_experiment_report()
@@ -2174,7 +2159,7 @@ def _summarize_history(records: list[dict]) -> str:
         return ""
     convo = "\n".join(_record_line(r) for r in records)
     try:
-        return llm.chat("voice", system=_SUMMARIZE_SYS, max_tokens=300,
+        return llm.chat("voice", system=_SUMMARIZE_SYS, max_tokens=300, reasoning_effort="low",
                         messages=[{"role": "user", "content": convo}]).text
     except Exception:
         log.warning("саммари контекста не удалось", exc_info=True)
@@ -4135,6 +4120,12 @@ def tool_send_message(to: str, text: str) -> str:
     # «защита переехала на исходящую границу», и на этой границе её не оказалось.
     # Пока чужой ход не получал ни `fs_read`, ни `send_message`, это не выстреливало;
     # с 26.07 у неё обе руки в любом ходе (адверсарка 26.07).
+    # 03.10: утечка «训练ный» в Ouroboros 18:38 — этот выход никогда не чистился:
+    # гард снимает артефакты генерации на голосе (_guard_outbound), а прямая рука
+    # отправляла сырой текст модели. Чистим здесь, тем же чистильщиком.
+    text, _cjk_note = _strip_generation_artifacts(str(text or ""), "")
+    if not text.strip():
+        return "После чистки не осталось текста — не отправляю пустоту."
     leak = stewardship.outgoing_denial(text)
     if leak:
         log.warning("send_message придержан: данные хардбота")
@@ -4183,7 +4174,9 @@ def tool_narrate(text: str, task_id: str = "") -> str:
     from core import narration as core_narration
     if not core_narration.enabled():
         return "Наррация выключена (PRAXIS_NARRATION=0) — это твой рычаг."
-    body = str(text or "").strip()
+    # 03.10: прямые выходы чистятся как голос — тот же класс дыры (см. tool_send_message)
+    body, _nl_note = _strip_generation_artifacts(str(text or ""), "")
+    body = body.strip()
     if not body:
         return "Пустую наррацию не шлю — дай строку процесса."
     if len(body) > core_narration.TEXT_CAP:
@@ -4500,7 +4493,9 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         target: str = "self", isolation: str = "auto", scope: str = "self",
                         priority: str = "normal",
                         title: str = "", review: str = "", checked: str = "",
-                        submit: bool = True) -> str:
+                        submit: bool = True, reviewer: str = "",
+                        success_criteria: list[str] | None = None,
+                        verify_commands: list[str] | None = None) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4531,7 +4526,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                 )
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
-                          origin_chat=origin)
+                          origin_chat=origin,
+                          success_criteria=success_criteria, verify_commands=verify_commands)
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыта coding-задача: {goal[:180]}", salience=2)
         return out
@@ -4540,7 +4536,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
     if action == "list":
         return forge.list_tasks()
     if action == "finish":
-        out = forge.finish(task_id, title=title, review=review, checked=checked, submit=submit)
+        out = forge.finish(task_id, title=title, review=review, checked=checked,
+                           submit=submit, reviewer=reviewer)
         label = "windows-body" if _is_windows_task(task_id) else "forge"
         tool_journal(f"[{label}] finish {task_id}: {out[:600]}", salience=2)
         return out
@@ -5392,15 +5389,18 @@ def tool_start_proposal(reason: str = "") -> str:
         return f"Не получилось открыть предложение: {r.get('msg')}"
     return (f"Предложение {r['id']} открыто. Твоя рабочая копия: {r['path']} — правь файлы там "
             f"(shell, полные пути). Живой код не тронется. Когда всё готово: "
-            f"submit_proposal(id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами.")
+            f"submit_proposal(id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами; "
+            "перед submit прогони гнома: coding_agent(role=\"reviewer\") по диффу, вердикт в "
+            "reviewer= (гейт с 28.09).")
 
 
 def tool_submit_proposal(id: str, title: str, why: str = "", review: str = "",
-                         checked: str = "", override_reason: str = "") -> str:
+                         checked: str = "", override_reason: str = "",
+                         reviewer: str = "") -> str:
     """Проверить и применить собственное решение с provenance и возможным явным override."""
     return selfdev.submit(
         str(id).strip(), title, why, review=review, checked=checked,
-        override_reason=override_reason,
+        override_reason=override_reason, reviewer=reviewer,
     )
 
 
@@ -6004,6 +6004,8 @@ def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = 
     voice = bool(voice_note and kind == "audio")
     target = str(to or "").strip()
     if target:
+        # 03.10: подпись — тоже текст модели, чистим как голос (класс дыры send_message)
+        caption, _cap_note = _strip_generation_artifacts(str(caption or ""), "")
         fn = _TELETHON.get("send_file")
         if not fn:
             return "Недоступно (нет связи с Telethon)."
@@ -6562,6 +6564,7 @@ def tool_clear_owner_marks(action: str = "list", path: str = "") -> str:
 
 
 TOOL_IMPL = {
+    "generate_image": tool_generate_image,
     "recall": tool_recall,
     "remember": tool_remember,
     "clear_owner_marks": tool_clear_owner_marks,
@@ -6673,18 +6676,17 @@ BASE_TOOLS = [
         "name": "recall",
         "description": (
             "Поискать в собственной памяти и навыках (люди, дневник, размышления, self, skills). "
-            "report=true ничего не ищет, а показывает наблюдаемую сводку твоего эксперимента с "
-            "семенем семантического ранжира: сколько было явных recall, из каких жанров "
-            "собиралось семя, сколько кандидатов пришло ТОЛЬКО через него и сколько дошло до "
-            "выдачи, какой у тебя реальный интервал между «вспомни». Помогло ли оно — не там: "
-            "это твой вывод по ходам."
+            "report=true ничего не ищет, а возвращает эпитафию закрытого эксперимента "
+            "с семенем семантического ранжира: завершён 03.08.2026, убран из кода "
+            "05.10.2026, итог 680 seed-only кандидатов и 0 дошедших до выдачи; "
+            "история — в git."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Ключевые слова"},
                 "report": {"type": "boolean",
-                           "description": "показать сводку эксперимента вместо поиска"},
+                           "description": "эпитафия закрытого эксперимента (итог 680/0) вместо поиска"},
             },
             "required": ["query"],
         },
@@ -7518,7 +7520,9 @@ SUBMIT_PROPOSAL_TOOL = {
         "sandbox, and records its risk zone. YOU review your own code first: read the diff "
         "(proposal_diff), then pass review= — your own verdict in your own words (what changes, "
         "what could break, why it's right; empty or token reviews are refused). checked= — how "
-        "you verified it (tests / ran it / read it through). Your completed review decides the "
+        "you verified it (tests / ran it / read it through). reviewer= — gnome gate: a fresh "
+        "adversarial reviewer verdict on THIS diff or 'skip: <reason>'; empty or skip-without-"
+        "reason is refused like red tests (BLOCKED needs override_reason). Your completed review decides the "
         "merge in every zone: green, red and timed-out checks remain visible evidence reported "
         "to Yegor post-factum, never an approval request. override_reason= records a known "
         "explanation for a red check when you have one; it is provenance, not permission. Immune "
@@ -7530,6 +7534,8 @@ SUBMIT_PROPOSAL_TOOL = {
                    "description": "your own code review of the diff, in your own words"},
         "checked": {"type": "string",
                     "description": "how you verified it: tests, ran it, read the diff"},
+        "reviewer": {"type": "string",
+                     "description": "fresh adversarial reviewer verdict on this diff, or 'skip: <reason>'"},
         "override_reason": {"type": "string",
                             "description": "explicit reason to merge despite red checks"}},
         "required": ["id", "title", "review"]},
@@ -7831,13 +7837,17 @@ FORGE_TOOLS = [
      "input_schema": _obj({
          "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon"]},
          "task_id": {"type": "string"}, "goal": {"type": "string"},
-         "target": {"type": "string", "description": "self or an absolute/home-relative directory; scope=host takes an absolute Linux host path, scope=windows an absolute Windows path"},
+         "target": {"type": "string", "description": "self or a directory path; host = absolute Linux path, windows = absolute Windows path"},
          "isolation": {"type": "string", "enum": ["auto", "worktree", "direct"]},
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
+         "success_criteria": {"type": "array", "items": {"type": "string"}},
+         "verify_commands": {"type": "array", "items": {"type": "string"}},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
                    "description": "self = my own code repository (the default). host and windows are not available in this edition: the computer tool is the path to this machine. All scopes stay in the same canonical Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
          "checked": {"type": "string"}, "submit": {"type": "boolean"},
+         "reviewer": {"type": "string",
+                      "description": "finish: reviewer verdict or 'skip: <reason>'; empty = fetch fresh"},
      }, ["action"])} ,
     {"name": "coding_inspect",
      "description": (
@@ -7892,8 +7902,8 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "coding_agent",
      "description": (
-         "Create real independent fresh-context coding subprocesses. spawn returns immediately, so "
-         "you can launch several scouts/workers/reviewers in one turn; poll/list gathers results. "
+        "Create independent fresh-context coding subprocesses. spawn returns immediately: "
+         "launch several scouts/workers/reviewers in one turn; poll/list gathers results. "
          "worker edits and tests the shared isolated task tree, scout maps, reviewer attacks the diff. "
          "Workers themselves can delegate further specialists."),
      "input_schema": _obj({
@@ -7910,9 +7920,9 @@ FORGE_TOOLS = [
                           ["task_id", "message"])} ,
     {"name": "coding_verify",
      "description": (
-         "PASS 23.1 test intelligence. plan derives targeted syntax/tests plus the authoritative project "
-         "gate from the real diff and impact map. start runs a durable matrix outside the Telegram turn; "
-         "poll returns per-check exit/duration/full logs; custom commands are one per line."),
+         "PASS 23.1 test intelligence. plan derives targeted checks plus the authoritative gate "
+         "from the real diff and impact map. start runs a durable matrix outside the Telegram "
+         "turn; poll returns per-check exit/duration/full logs; custom commands are one per line."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["plan", "start", "poll", "stop", "list"]},
@@ -11154,8 +11164,16 @@ def _build_prompt_parts(
     frame_trace.note_budget(limit=budget, used_start=len(persona) + len(tail_text),
                             used_final=used, offered=len(tiers), included=len(chosen),
                             dropped=len(dropped))
+    # Адресный рефлекс (desire-a03780224e): транспорт назвал людей — их открытые
+    # нити поднимаются в кадр с источником. Пусто = названная пустота, не подстановка.
+    try:
+        import addressed_threads
+        _threads = addressed_threads.collect(ctx)
+    except Exception:
+        _threads = ()
     frame_layout.stash(tiers_offered=len(tiers), tiers_included=len(chosen), writing=bool(writing),
-                       tiers_dropped=len(dropped), dossier=bool(participant_cards))
+                       tiers_dropped=len(dropped), dossier=bool(participant_cards),
+                       addressed_threads=_threads)
     if dropped:
         # P1: не режем молча — называем, что не влезло (можно достать через recall)
         chosen.append(frame_trace.mark("evidence.omitted_marker", "evidence", "marker",
@@ -11286,6 +11304,496 @@ def _strip_citation_tokens(text: str) -> str:
     text = _CITE_SPAN_RE.sub("", text)
     text = _CITE_TURN_RE.sub("", text)
     return _CITE_CTRL_RE.sub("", text)
+
+
+# (01.10) Детектор вклеек вырос с CJK-диапазонов на «любая письменность,
+# кроме латиницы/кириллицы»: регекс-диапазоны оставляли дыры — арабские
+# الآن/مشروع (26.09–01.10, AbstractDL) проходили насквозь, полуширинная
+# катакана и прочая периферия не были перечислены вовсе. Класс «чужое»
+# определяем по имени Unicode через unicodedata: словарь имён вместо
+# набора диапазонов, который надо помнить пополнять.
+# Граница 01.10 (по живому корпусу журнала 09–10: Σψ×105, πρᾶξις, ℝ, ᵀ —
+# всё моё и легитимное, греческих глитчей 0): греческие буквы, letterlike-
+# символы (U+2100–214F: ℝ ℂ ℓ…) и модификаторы (Lm: ᵀ) — разрешены;
+# вернуться к детекту греческого при первом живом экспонате.
+_ALLOWED_HEADS = ("", "LATIN", "CYRILLIC", "GREEK")
+# CJK-семейство (головы, как их зовёт unicodedata: иероглифы «CJK UNIFIED
+# IDEOGRAPH» → "CJK", полуширинная катакана HALFWIDTH, итерация IDEOGRAPHIC).
+# Одиночная буква этого семейства — исходный класс глитчей 27.09: в TABLE
+# есть односимвольные ключи (我→я, 半→половина), дефект «один иероглиф вместо
+# русского слова» документирован экспонатами.
+_CJK_HEADS = ("CJK", "HIRAGANA", "KATAKANA", "HALFWIDTH", "IDEOGRAPHIC")
+# однобуквенные русские служебные слова — морфологический шов, не огрызок
+# («с明确了», «я保持»: буква законна, вклейка — рядом с ней). Ревью 01.10, №2.
+_SEAM_LETTERS = frozenset("свуиаокя")
+_FOREIGN_MEMO: dict[str, tuple[bool, str]] = {}
+
+
+def _script_flags(ch: str) -> tuple[bool, str]:
+    """(чужая буква?, голова имени Unicode) — с мемоизацией.
+
+    Чужая = категория L*, письменность не Latin/Cyrillic/Greek, вне
+    Letterlike-блока (U+2100–214F) и математического алфавита
+    (MATHEMATICAL*: 𝑥 𝒪 𝕏ᵀ — ревью 01.10, №5: мат-запись — родной стиль).
+    Lm — белый список фонетики по имени (MODIFIER/SUPERSCRIPT/SUBSCRIPT/
+    CARON; второе ревью 01.10, СРЕДНЕЕ-2), остальные Lm — чужие буквы своих
+    письменностей. Безымянные (PUA/контроль; письменности сверх unidata 15.0)
+    чужими не считаются — задокументированная граница deny-by-default.
+    """
+    hit = _FOREIGN_MEMO.get(ch)
+    if hit is None:
+        try:
+            name = unicodedata.name(ch)
+        except ValueError:
+            name = ""
+        head = name.split()[0] if name else ""
+        cat = unicodedata.category(ch)
+        if cat[0] != "L":
+            foreign = False
+        elif cat == "Lm":
+            # Lm — смешанная компания, и водораздел проходит ПО ИМЕНИ ЗНАКА,
+            # а не по списку письменностей (ревью 01.10 №1; второе ревью 01.10
+            # СРЕДНЕЕ-2: чёрный список был неполон — в Lm 397 знаков и десятки
+            # голов, тайская ๆ (MAIYAMOK, функциональный аналог 々) рвала слово
+            # «สวัสดีๆ» на «⟨вклейка: สวัสด⟩ีๆ»). Белый список — фонетика и
+            # математика: MODIFIER (ᵀ ˈ ː), SUPERSCRIPT (ⁿ), SUBSCRIPT, CARON
+            # плюс латиница/кириллица/греческий. Всё прочее — буквы СВОИХ
+            # письменностей (катакана-долгота ー, татвиль ـ, итерация 々/ๆ,
+            # ол-чики, лису-тоны, мьямский редупликатор): чужие и в одиночку,
+            # прогоны с ними не рвутся на любых письменностях, а не на
+            # перечисленных.
+            foreign = (head not in _ALLOWED_HEADS
+                       and not name.startswith(
+                           ("MODIFIER", "SUPERSCRIPT", "SUBSCRIPT", "CARON")))
+        else:
+            foreign = (head not in _ALLOWED_HEADS
+                       and not (0x2100 <= ord(ch) <= 0x214f)
+                       and not name.startswith("MATHEMATICAL"))
+        hit = _FOREIGN_MEMO[ch] = (foreign, head)
+    return hit
+
+
+def _transparent(ch: str) -> bool:
+    """Диакритика и знаки форматирования: не рвут чужой прогон, но не
+    начинают и не кончают его (арабские огласовки, деванагари-матры)."""
+    return unicodedata.category(ch) in ("Mn", "Mc", "Me", "Cf")
+
+
+def _foreign_word_stats(text: str) -> tuple[int, int]:
+    """(число ПОЛНОСТЬЮ чужих слов, всего слов) — сырьё для гейтов.
+
+    Пословная, а не посимвольная доля (ревью 01.10, №3): арабское слово —
+    4–6 букв против сотен знаков CJK, посимвольная плотность флуктуирует
+    прямо сквозь экспонатный класс. Смешанное слово («с明确了», «Մм»:
+    чужие буквы + разрешённые) — глитчевый класс, к чужой речи НЕ относится
+    и в счётчик не идёт.
+
+    Третье ревью 01.10, F2: слова, состоящие ИЗ ОДНОЙ чужой буквы с прочим
+    не-буквенным окружением (каомодзи «¯\\_(ツ)_/¯», декор), чужой речью не
+    считаются — тот же признак, что и carve-out ников в _is_nick_like.
+    Её собственная разметка «⟨вклейка: …⟩» (след санитайзера в истории
+    комнаты, включая fallback при лежащем переводчике) вырезается ДО
+    подсчёта: иначе два её же fallback'а в convo глушат санитайзинг
+    следующей реплики, и гейт производит дефект, от которого защищает.
+    """
+    body = re.sub(re.escape(cjk_vkladki.L) + "[^" + cjk_vkladki.R + "]*"
+                  + re.escape(cjk_vkladki.R), " ", text or "")
+    words = [w for w in re.split(r"\s+", body) if w]
+    foreign = 0
+    for w in words:
+        if cjk_vkladki.L in w and cjk_vkladki.R in w:
+            continue          # «⟨вклейка: الآن⟩» — её разметка, не чужая речь
+        foreign_letters = [ch for ch in w if _script_flags(ch)[0]]
+        has_allowed = any(unicodedata.category(ch)[0] == "L" and not _script_flags(ch)[0]
+                          for ch in w)
+        if not foreign_letters or has_allowed:
+            continue
+        if len(foreign_letters) == 1:
+            # одиночная чужая буква как целое слово — каомодзи/декор/ник
+            # (репро F2: «ну не знаю ¯\\_(ツ)_/¯, потом ¯\\_(ツ)_/¯ ок»
+            # глушит русский reply с «по半»)
+            continue
+        foreign += 1
+    return foreign, len(words)
+
+
+def _foreign_word_ratio(text: str) -> float:
+    """Доля ПОЛНОСТЬЮ чужих слов среди непустых (0.0 у пустого)."""
+    foreign, total = _foreign_word_stats(text)
+    return foreign / total if total else 0.0
+
+
+def _inlay_open_map(text: str):
+    """Один проход по тексту: карта закрытых вклеек и прижатых прогонов.
+
+    Возвращает (in_closed, span_open) — bytearray-карты длины len(text):
+      in_closed[i]=1 — позиция i внутри ЗАКРЫТОЙ вклейки «⟨вклейка: …⟩»
+        (повторный проход не заворачивает её снова);
+      span_open[i]=1 — i прижат (без пробела) к НЕЗАКРЫТОМУ маркеру
+        (обрыв LLM-трункацией; старый признак первого ревью №4).
+
+    Пятое ревью 01.10 (БЛОКЕР-1/2, корневая причина): по-кластерный
+    depth-цикл был квадратичен на interleaved-хвостах («|0⟩现在»×N —
+    27,7 с на N=2000), а неограниченный lookahead «⟩⟩» глушил хвост
+    после закрытой вклейки. Здесь один скан на весь текст, правила
+    прежние:
+      • «⟩» на нулевой глубине закрывает вклейку — ЕСЛИ вплотную за ней
+        (до ближайшего пробела и не дальше 256 знаков) нет «⟩» без
+        маркера: такая пара — эхо квантовой нотации «|0⟩» в теле
+        перевода, контентная, не граница;
+      • вложенный «⟨вклейка: » — глубина +1; чужое «⟨» (⟨рамка⟩, ⟨Z⟩ —
+        1289 строк живого корпуса) глубину не меняет: его «⟩» на
+        нулевой глубине считается закрытием НАШЕЙ вклейки (F3: хвост
+        после ⟨рамка⟩ обязан санитайзиться).
+    """
+    L, R = cjk_vkladki.L, cjk_vkladki.R
+    n = len(text)
+    # --- скан 1: закрытые интервалы (стек маркеров; гном-4 БЛОКЕР-B) ---
+    # Стек вместо счётчика: каждый валидный «⟩» закрывает СВОЙ маркер
+    # (span пишем сразу при pop), поэтому незакрытый обрыв раньше по
+    # тексту больше не тенит позже закрытые вклейки — и наоборот,
+    # настоящая вложенность покрывается целиком: внутренняя закрывается
+    # своей скобкой, внешняя — своей, обе span'ы живут.
+    stack = []
+    closed_spans = []
+    k = 0
+    while k < n:
+        if text.startswith(L, k):
+            stack.append(k)
+            k += len(L)
+            continue
+        ch = text[k]
+        if ch == "\u27e8" and not text.startswith(L, k) and stack:
+            # чужая уголковая скобка (⟨рамка⟩, ⟨Z⟩ — F3 третьего ревью):
+            # граница неоднозначности. Всё, что открыто сейчас, закрытием
+            # дальше доверять нельзя — маркеры остаются незакрытыми, хвост
+            # за чужой скобкой санитайзится как обычный текст.
+            stack.clear()
+            k += 1
+            continue
+        if stack and ch == R:
+            if k > 0 and text[k - 1] == R:
+                # гном-6, БЛОКЕР: смежная пара «⟩⟩» может быть двойным
+                # кетом |S⟩⟩ / |0⟩⟩, а настоящая граница — ДАЛЬШЕ
+                # («двойной кет |S⟩⟩ и مرحبا⟩», «|0⟩⟩ этап, затем
+                # مرحبا, финал⟩»). Смотрим вперёд ≤256 знаков до
+                # следующего «⟩» или маркера: есть дальняя скобка —
+                # текущая контентная, закроет та. Дальнего маркера-эха
+                # за окном нет — гасим как раньше (блокер гнома-5).
+                j = k + 1
+                jmax = min(n, k + 1 + 256)
+                while j < jmax and text[j] != R and not text.startswith(L, j):
+                    j += 1
+                if j < jmax and text[j] == R:
+                    k += 1
+                    continue
+            else:
+                # дираковская скобка-эхо: «⟩», чьё слово НАЧИНАЕТСЯ с «|»
+                # (|0⟩, |1⟩, |ψ⟩, |Z⟩ — квантовая нотация в теле перевода) —
+                # контентная, не граница. Слово = от предыдущего пробела
+                # до k, скан назад ограничен 256 знаками (линейность).
+                w = k - 1
+                wmin = max(-1, k - 1 - 256)
+                while w > wmin and not text[w].isspace():
+                    w -= 1
+                word = text[w + 1:k]
+                if word.startswith("|"):
+                    k += 1
+                    continue
+            closed_spans.append((stack.pop(), k + 1))
+            k += 1
+            continue
+        k += 1
+    in_closed = bytearray(n)
+    for s, e in closed_spans:
+        for i in range(s, e):
+            in_closed[i] = 1
+    # --- скан 2: прижатые прогоны незакрытых маркеров ---
+    span_open = bytearray(n)
+    m = 0
+    while True:
+        m = text.find(L, m)
+        if m == -1:
+            break
+        j = m + len(L)
+        while j < n:
+            if text[j].isspace() or text.startswith(L, j) or text[j] == R:
+                break
+            j += 1
+        for i in range(m + len(L), j):
+            span_open[i] = 1
+        m += len(L)
+    return in_closed, span_open
+
+
+def _inside_inlay(text: str, pos: int) -> bool:
+    """pos — внутри готовой вклейки «⟨вклейка: …⟩»? Fallback держит исходный
+    кластер в скобках, поэтому повторный проход не заворачивает его снова
+    (иначе ⟨вклейка: ⟨вклейка: …⟩⟩).
+
+    Второе ревью 01.10, МЕЛОЧ-1: пробельный критерий («от маркера до pos нет
+    пробела») пропускал перевод-эхо из кэша — LLM вернул исходный кластер в
+    скобках («теперь (现在)»), пробел между «теперь» и «(» отклеивал кластер
+    от маркера, и повторный проход заворачивал готовую вклейку во вторую.
+    Признак структурный: pos внутри ЗАКРЫТОЙ вклейки — сколько бы пробелов
+    ни было в её теле (кластер в середине многословного перевода, «смотри
+    مرحبا сейчас», — внутри, блокер четвёртого ревью).
+
+    Незакрытый маркер (обрыв LLM-трункацией, ручная правка) не глушит хвост
+    (первое ревью №4): работает старый признак «прогон прижат к маркеру без
+    пробела», всё отделённое пробелом — новый текст и санитайзится.
+
+    Пятое ревью 01.10: делегирует в _inlay_open_map — один скан на весь
+    текст вместо квадратичного по-кластерного depth-цикла (27,7 с → мс на
+    N=2000) и с ограниченным lookahead «⟩⟩» (окно 256 + ближайший пробел):
+    дальний «|0⟩» больше не глушит хвост после закрытой вклейки."""
+    if not hasattr(_inside_inlay, "_map_cache"):
+        _inside_inlay._map_cache = {}
+    L, R = cjk_vkladki.L, cjk_vkladki.R
+    if text.rfind(L, 0, pos + len(L)) == -1:
+        return False
+    # кэш карты на сам текст: вызывающий код зовёт _inside_inlay по
+    # кластерам ОДНОГО reply — 2000 кластеров × один скан = мс, а не
+    # 2000 × скан (квадрат 12,9 с на interleaved-хвосте, пятое ревью).
+    # id+is — защита от переиспользования адреса после gc; храним strong
+    # ref на text в кэше, чтобы id оставался валиден.
+    cache = _inside_inlay._map_cache
+    hit = cache.get("text")
+    if hit is None or hit[0] is not text:
+        m = _inlay_open_map(text)
+        _inside_inlay._map_cache = {"text": (text, m[0], m[1])}
+        hit = _inside_inlay._map_cache["text"]
+    return bool(hit[1][pos]) or bool(hit[2][pos])
+
+
+def _inlay_spans(text: str) -> list[tuple[int, int]]:
+    """Максимальные прогоны чужих букв [start, end) — кандидаты вклеек.
+
+    Прозрачные знаки (диакритика, ZWNJ/ZWJ) между чужими буквами
+    поглощаются прогоном. Хвостовые делятся на два класса (второе ревью
+    01.10, СРЕДНЕЕ-1): комбинирующие Mn/Mc/Me С ЧУЖОЙ базой (арабский танвин
+    «مرحباً», деванагари-матра «नमस्ते» — огласовка не может стоять отдельно)
+    входят в прогон, иначе они повисают за «⟩» и прилипают к следующему
+    слову; знаки форматирования Cf (ZWNJ/ZWJ — МЕЖБУКВЕННЫЕ разделители) как
+    отрезались, так и отрезаются — самостоятельного чтения не несут.
+
+    Одиночная чужая буква без чужих соседей — не вклейка, если она не из
+    CJK-семейства, не Lm и не приклеена к разрешённой букве (второе ревью
+    01.10, СРЕДНЕЕ-3): скан 4109 живых контекстов 09–10 показал, что класс
+    одиночных «малых» письменностей — это ники комнаты (Ᏸ ×311, 𓆏 ×170,
+    ᅠ ×133, ᐟ ×106, Ᏸiƀoba/participant → «⟨вклейка: Ᏸ⟩iƀoba»), а не глитчи
+    генерации. Исключения держат экспонатный класс:
+    CJK (одиночные 我/半/明 — исходный дефект 27.09, полная запись в TABLE),
+    Lm (одиночная ー — репро №1 первого ревью), приклейка к разрешённой
+    букве (Մм — экспонат Хоуп: хвост чужого глитча при своём слове).
+    """
+    spans: list[tuple[int, int]] = []
+    i, n = 0, len(text)
+    while i < n:
+        if not _script_flags(text[i])[0]:
+            i += 1
+            continue
+        j = i + 1
+        while j < n:
+            if _script_flags(text[j])[0] or _transparent(text[j]):
+                j += 1
+            else:
+                break
+        while j > i + 1 and _transparent(text[j - 1]) \
+                and unicodedata.category(text[j - 1]) == "Cf":
+            j -= 1
+        # одиночная разрешённая буква, приклеенная к чужому прогону —
+        # огрызок ИЛИ шов, и это разные случаи (ревью 01.10, №2):
+        # «Многие Մм» — «м» хвост чужого глитча, поглощать правильно;
+        # «с明确了» — предлог-шов, вклейка идёт ЗА ним, не вместо него.
+        # Признак шва: буква из _SEAM_LETTERS и опора ей — тоже буква.
+        def _letter(pos: int) -> bool:
+            return 0 <= pos < n and unicodedata.category(text[pos])[0] == "L"
+        if j < n and _letter(j) and not _letter(j + 1) and text[j] not in _SEAM_LETTERS:
+            j += 1
+        if i > 0 and _letter(i - 1) and not _letter(i - 2) and text[i - 1] not in _SEAM_LETTERS:
+            i -= 1
+        if _is_nick_like(text, i, j):
+            i = j
+            continue
+        spans.append((i, j))
+        i = j
+    return spans
+
+
+def _is_nick_like(text: str, s0: int, s1: int) -> bool:
+    """Span из ОДНОЙ чужой буквы — адресация, выбранная осознанно, а не глитч
+    генерации (второе ревью 01.10, СРЕДНЕЕ-3)? Решение обосновано сканом
+    живого корпуса (4109 контекстов 09–10), а не угадыванием по письменности:
+
+    * одиночная чужая буква ПРИ КИРИЛЛИЦЕ — глитч-класс: в корпусе таких 103,
+      все CJK, все её собственные дефекты 27.09 («по半 часа», «за语气»,
+      «Многие Մм», «у Хоуп Մмые») — иероглиф вклеен в русское слово;
+    * одиночная чужая буква ИЗОЛИРОВАННАЯ или при латинице — ники и handles
+      комнаты: Ᏸ ×311 («Ᏸiƀoba (participant)»), 𓆏 ×170 (another participant),
+      ᅠ ×133 («ᅠD & W»), ᐟ ×106 («τ¹ᐟ²» — её же математика), ツ ×68
+      (каомодзи), 𓋹/𖤛/𐕣 — декор; глитчей среди них ноль.
+
+    Что остаётся кандидатом вклейки: буква при кириллице (внутри span —
+    поглощённая «м» из «Մм», — или на границе: «эти几», «по半»), любые
+    прогоны ≥2 чужих букв и одиночный CJK-знак ИЗ СЛОВАРЯ (我→я, 半→
+    половина): «один знак вместо русского слова» — документированный дефект
+    27.09, TABLE его знает. Одиночная кана вне словаря — каомодзи (ツ в
+    «¯\\_(ツ)_/¯», ×68 в живом корпусе, 0 глитчей). Lm-знаки (одиночная ー) —
+    фонетика, вклейка.
+    Граница (задокументирована): ник из 2+ букв чужой письменности
+    («တာ တေ», ×132 в контекстах) и одиночная чужая буква-цитата имени
+    («чтобы его звали 明», ×156) детектор не отличает от речи — против
+    этого нет признака, кроме гейта языка комнаты.
+    """
+    cluster = text[s0:s1]
+    foreign = [ch for ch in cluster if _script_flags(ch)[0]]
+    if len(foreign) != 1:
+        return False                       # 0 или ≥2 чужих букв — не этот класс
+    ch = foreign[0]
+    if unicodedata.category(ch) == "Lm":
+        return False                       # ー и родственные — фонетика, не имя
+    near = cluster + (text[s0 - 1] if s0 > 0 else "") + (text[s1] if s1 < len(text) else "")
+    if any(_script_flags(x) == (False, "CYRILLIC") for x in near):
+        return False                       # при кириллице — глитч в русском слове
+    if _script_flags(ch)[1] in _CJK_HEADS and ch in cjk_vkladki.TABLE:
+        # одиночный иероглиф/кана, который словарь знает (我→я, 半→половина):
+        # «один знак вместо русского слова» — документированный дефект 27.09;
+        # остальная одиночная кана (ツ в каомодзи «¯\\_(ツ)_/¯», ×68 в корпусе) —
+        # эмоция/декор, не глитч
+        return False
+    return True
+
+
+def _cjk_ratio(text: str) -> float:
+    """Доля чужих букв (любая письменность кроме латиницы/кириллицы) среди
+    непробельных (0.0 у пустого). Историческое имя — гейт «язык комнаты»
+    с 01.10 смотрит на все письменности, не только CJK."""
+    body = re.sub(r"\s+", "", text or "")
+    if not body:
+        return 0.0
+    hits = sum(1 for ch in body if _script_flags(ch)[0])
+    return hits / len(body)
+
+
+def _sanitize_cjk_substitutions(reply: str, convo_text: str = "") -> tuple[str, str]:
+    """Санитайзер вклеек CJK в не-CJK речи (дефект glm-5.3, 23–26.09; апгрейд
+    27.09 по договору с torvn77): кластеры не вырезаются, а заменяются
+    переводной вклейкой «⟨вклейка: перевод⟩» через cjk_vkladki
+    (словарь → дешёвый LLM-перевод → кэш на диск → fallback на кластер).
+    01.10: с CJK-диапазонов — на любую письменность кроме латиницы и
+    кириллицы (имена Unicode, а не перечисление диапазонов): арабские
+    الآن/مشروع раньше проходили насквозь.
+
+    Это не редактура мнения, а снятие артефакта генерации — тот же класс,
+    что `_strip_think` (разметка <think>) и citation-токены: текст, который
+    автор никогда не выбирал.
+
+    Молча пропускаем: комнату, где треть слов с чужими буквами, и реплику,
+    где половина+ слов чужие — это речь, не дефект (доля по словам, не
+    посимвольно: арабское слово — 4–6 букв, посимвольная плотность
+    флуктуирует прямо сквозь экспонатный класс — ревью 01.10, №3).
+    Греческий разрешён ЦЕЛИКОМ, не только одиночными буквами (01.10, по
+    живому корпусу: 108 греческих прогонов в журнале 09–10 — πρᾶξις, Σψ,
+    λάμδα — при 0 греческих глитчей; одиночные π/λ/Σ — математика, целые
+    греческие слова — её лексикон, оба класса родные).
+    Граница по постановке (01.10): латинские вклейки («suficiente»)
+    детектор не видит — латиница разрешена; морфология латиницы —
+    отдельная работа (стек скрипт-ран + OOV, разведка 01.10).
+
+    Возвращает (текст, note). note пуст, если ничего не менялось.
+    """
+    if not reply:
+        return reply, ""
+    convo_foreign, convo_total = _foreign_word_stats(convo_text)
+    # 03.10, живой пропуск: в Ouroboros реплика с внутрисловной склейкой
+    # «训练ный» ушла raw — convo был ≥50% чужих слов (разбор китайского
+    # корпуса), и гейт комнаты заглушил реплику целиком. Внутрисловная
+    # склейка (чужой кластер, припаянный к кириллице/латинице) — сигнатура
+    # дефекта подстановки, а не речи: цитату даже в чужой комнате пишут
+    # отдельным словом. Поэтому гейт комнаты теперь защищает только
+    # ОБОСОБЛЕННЫЕ кластеры; внутрисловные чистятся всегда.
+    room_foreign = bool(convo_total) and convo_foreign / convo_total >= 0.50
+
+    # 28.09: внутрисловные кластеры (прижаты к буквам с любой стороны)
+    # переводятся с контекстом — слепой перевод ломал грамматику
+    # («у тебя⟨вклейка: Эти два⟩ вещи» вместо «эти две»).
+    # Одна проверка на два места: гейт чужой комнаты (там _glued была копией)
+    # и разбор кластеров ниже — гномье ревью cf4d5238 п.3.
+    _WORD = re.compile(r"[\w\u0400-\u04ff]")  # латиница/цифры/кириллица
+
+    def _intraword(s0: int, s1: int) -> bool:
+        left = s0 > 0 and reply[s0 - 1]
+        right = s1 < len(reply) and reply[s1]
+        left_word = bool(left) and bool(_WORD.match(left)) and not _script_flags(left)[0]
+        right_word = bool(right) and bool(_WORD.match(right)) and not _script_flags(right)[0]
+        return left_word or right_word
+
+    # 05.10, #111596: одиночная шовная буква у кластера (зеркально отказу
+    # поглотителя 11316/11318) — отдельное слово, а не хвост сломанного.
+    def _lone_seam(pos: int, nxt: int) -> bool:
+        return (0 <= pos < len(reply) and _WORD.match(reply[pos])
+                and not (0 <= nxt < len(reply) and _WORD.match(reply[nxt]))
+                and reply[pos] in _SEAM_LETTERS)
+
+    spans = [sp for sp in _inlay_spans(reply) if not _inside_inlay(reply, sp[0])]
+    if room_foreign:
+        # чужая комната: обособленные кластеры могут быть речью — не трогаем,
+        # чистим только внутрисловные склейки (сигнатуру дефекта подстановки).
+        # 05.10, гномье ревью cf4d5238 п.3: была копия _intraword (_glued)
+        # — сведены в одну функцию, чтобы копии не разъехались (МЕЛОЧ-2).
+        spans = [sp for sp in spans if _intraword(sp[0], sp[1])]
+    if not spans:
+        return reply, ""
+    # Гейт «язык комнаты»: БОЛЬШИНСТВО слов полностью чужие. Второе ревью
+    # 01.10 (МЕЛОЧ-3) сняло ложный гейт одной цитаты в коротком вопросе
+    # («что значит الآن؟», 1/3); третье ревью (F2) показало, что абсолютное
+    # «≥2 слов» без доли глушит чисто русский чат, где в одном вопросе
+    # встретились две цитаты («чем отличаются الآن и مشروع», 2/6) — reply с
+    # реальным глитчем «по半» молча уходил наружу. Порог ≥0.50 симметричен
+    # reply-гейту и отделяет чужую речь (арабская комната 4/4, CJK 8/8) от
+    # русского вопроса с цитатами (2/6, 1/3, 1/7). Каомодзи-слова с одной
+    # чужой буквой и её разметка «⟨вклейка: …⟩» в подсчёт не идут
+    # (_foreign_word_stats, F2).
+    if _foreign_word_ratio(reply) > 0.50:
+        return reply, ""       # половина+ слов сама чужая — это речь, не дефект
+    out: list[str] = []
+    clusters: list[str] = []
+    heads: set[str] = set()
+    prev = 0
+    for s, e in spans:
+        c = reply[s:e]
+        clusters.append(c)
+        # голова имени — ПО БОЛЬШИНСТВУ чужих букв кластера, не по первой
+        # (второе ревью 01.10, МЕЛОЧ-2: «М半半» → [ARMENIAN] при 2/3 CJK —
+        # телеметрия обязана называть доминирующее письмо)
+        counts: dict[str, int] = {}
+        for _ch, _h in map(_script_flags, c):
+            if _ch:
+                counts[_h] = counts.get(_h, 0) + 1
+        heads.add(max(counts, key=counts.get) if counts else "")
+        out.append(reply[prev:s])
+        if _intraword(s, e):
+            # 05.10, #111596: маркер не приклеивается к одиночной шовной
+            # букве («—昨а» → «⟨вклейка: …⟩ а», не «⟩а»); много букв
+            # («Многие Մмые», «训练ный») — хвост сломанного слова, склейка
+            # с маркером там — рабочий экспонат (test_sanitize_scripts, 01.10).
+            inlay = cjk_vkladki.inlay_ctx(c, reply[max(0, s - 24): s], reply[e: e + 24])
+            if _lone_seam(e, e + 1):
+                inlay += " "
+            if _lone_seam(s - 1, s - 2):
+                inlay = " " + inlay
+            out.append(inlay)
+        else:
+            out.append(cjk_vkladki.inlay(c))
+        prev = e
+    out.append(reply[prev:])
+    cleaned = "".join(out)
+    sample = "; ".join(f"{c}→{TABLE_SHORT.get(c, '…')}" for c in clusters[:4])
+    note = (f"cjk-inlay: заменено {len(clusters)} кластеров "
+            f"({sample})" + (f" [{','.join(sorted(heads))}]" if heads else ""))
+    log.info(note)
+    return cleaned, note
 
 
 def _strip_think(text: str) -> str:
@@ -12576,13 +13084,20 @@ def _run_recap_markdown(run_id: str, *, outcome: str, final_text: str = "",
     if delivery_rows:
         try:
             evidence = _delivery_evidence(run_id)
+            # A completed empty plan is not an accepted message. Reply-hand
+            # receipts are separate from the (silent) turn-boundary receipt.
+            hand_ids = reply_hand_message_ids(run_id) if evidence.get("silent") else []
+            state = ("incomplete" if not evidence.get("ready") else
+                     "skipped" if evidence.get("silent") and not hand_ids else "sent")
             delivery_lines.extend([
-                f"- State: `{'sent' if evidence.get('ready') else 'incomplete'}`",
+                f"- State: `{state}`",
                 f"- Expected text/media: {evidence.get('expected_text_chars') or 0} chars / "
                 f"{evidence.get('expected_media_count') or 0} item(s)",
                 f"- Observed text/media: {evidence.get('observed_text_chars') or 0} chars / "
                 f"{evidence.get('observed_media_count') or 0} item(s)",
             ])
+            if hand_ids:
+                delivery_lines.append(f"- Messages accepted through the reply hand: {len(hand_ids)}")
         except Exception as exc:
             delivery_lines.append(f"- Delivery receipts exist but reduction failed: `{type(exc).__name__}`.")
         delivery_lines.append("- Receipt metadata is available in the full run timeline; payload locators stay out of the recap.")
@@ -13467,7 +13982,10 @@ def run_delivery_finalize_recovered(run_id: str, *, media_count: int = 0) -> boo
         # чанка, до текстовой расписки дело не доходит, и без этой ветки ход навсегда
         # оставался бы «написала». При пустом тексте проектор обновит исход и не станет
         # писать заметку о речи — речи и не было.
-        if evidence.get("ready"):
+        if evidence.get("ready") and (
+                not evidence.get("silent") or reply_hand_message_ids(run_id)):
+            # ``ready`` also covers a skipped zero-message plan. Preserve the
+            # unspoken authored note instead of marking it as delivered speech.
             project_delivery_outcome(run_id, _DELIVERY_SPOKEN,
                                      text=str(evidence.get("final_text") or ""))
         elif evidence.get("delivery_message_ids"):
@@ -15285,6 +15803,9 @@ def run_direct_outbox_prepared(
             or started.get("idempotent") is not True):
         raise DurableExecutionError("direct Telegram ledger is not bound to the tool intent")
     started_args = dict(started.get("args") or {})
+    # 03.10: convo для proof-кандидатов нужен ОБЕИМ веткам (текст и файл):
+    # caption тоже чистится и сверяется стрип-кандидатами.
+    proof_convo = str(_TURN_CONVO.get() or "")
     if identity["tool"] in ("send_message", "narrate", "reply"):
         # ⚠ 17.08, dead_letter на хвостовом пробеле. Рука речи стрипит текст до отправки
         # (tool_reply: draft = text.strip()), а сюда приезжают СЫРЫЕ аргументы модели —
@@ -15300,17 +15821,29 @@ def run_direct_outbox_prepared(
         # (`_strip_think` → `_strip_citation_tokens`) снимает их до отправки, в леджер
         # ложится чистый текст, а сюда — сырые аргументы модели. Три из четырёх ответов в
         # AbstractDL после 18:44 умерли dead_letter'ом «unsendable by construction», ход
-        # закрылся «silent decision», а Егор видел молчание. Сверяем ЕЩЁ И той
-        # нормализацией, которой текст ушёл через гард; любое иное расхождение — отказ.
-        if ledger_text not in (args_text, args_text.strip(),
-                               _strip_citation_tokens(args_text), _strip_think(args_text)):
+        # закрылся «silent decision», а Егор видел молчание. Сверяем тем, чем чистит гард
+        # (26.09 и CJK: одна функция снятий на двоих); любое иное расхождение — отказ.
+        # 03.10, гномье ревью 8038bc56: у гард (18101) и этого proof-вызова был разный
+        # convo — гард чистил с настоящим convo комнаты, proof с "" — и после того, как
+        # санитайзер стал зависеть от комнаты (гейт ≥50% чужих слов), одна и та же
+        # реплика чистилась по-разному → dead_letter «unsendable by construction».
+        # Сверяем обоими: с convo хода (_TURN_CONVO; если proof идёт вне контекста
+        # хода, он пуст и остаётся старый, дословный кандидат — не хуже, чем до диффа).
+        if ledger_text not in (args_text, args_text.strip(), _strip_citation_tokens(args_text),
+                               _strip_think(args_text), _strip_generation_artifacts(args_text)[0],
+                               _strip_generation_artifacts(args_text, proof_convo)[0]):
             raise DurableExecutionError("direct Telegram text differs from tool arguments")
     else:
         if (identity["payload"]["visible_filename"]
                 != media.delivery_basename(
                     str(started_args.get("path") or ""), fallback="document.bin")
                 or identity["payload"]["caption"]
-                != str(started_args.get("caption") or "")[:900]):
+                not in (  # 03.10: caption теперь чистится гардом (см. tool_send_media) —
+                    # сверяем и сырой, и очищенный, тем же классом кандидатов, что текст
+                    str(started_args.get("caption") or "")[:900],
+                    _strip_generation_artifacts(str(started_args.get("caption") or ""))[0][:900],
+                    _strip_generation_artifacts(str(started_args.get("caption") or ""),
+                                                proof_convo)[0][:900])):
             raise DurableExecutionError("direct Telegram file differs from tool arguments")
     context = manager.context(run_id)
     channel, _snapshot = _load_exact_run_channel(manager, context)
@@ -15643,9 +16176,17 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
         expected_filename = media.delivery_basename(
             durable_path, fallback="document.bin",
         )
+        # 03.10: caption чистится гардом до леджера (tool_send_media), а started_args
+        # хранит сырой аргумент модели — сверяем тем же зеркальным набором кандидатов,
+        # что и prepared-калитка; иначе reconcile падает в dead_letter того же класса.
+        raw_caption = str(started_args.get("caption") or "")
+        accepted_caption = str(payload.get("caption") or "")
+        convo_hint = str(_TURN_CONVO.get() or "")
         if (filename != expected_filename
-                or str(payload.get("caption") or "")
-                != str(started_args.get("caption") or "")[:900]):
+                or accepted_caption not in (
+                    raw_caption[:900],
+                    _strip_generation_artifacts(raw_caption)[0][:900],
+                    _strip_generation_artifacts(raw_caption, convo_hint)[0][:900])):
             raise DurableExecutionError(
                 "accepted Telegram file differs from the durable tool arguments"
             )
@@ -15657,7 +16198,18 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
         text = payload.get("text")
         if not isinstance(text, str) or not text:
             raise DurableExecutionError("accepted Telegram message has no text")
-        if text != started_args.get("text"):
+        # 05.10: гард чистит текст ДО леджера (tool_send_message/_guard_outbound), а
+        # started_args хранит сырой аргумент модели — зеркальная калитка тех же
+        # кандидатов, что в prepared-ветке и caption-ветке; иначе принятая Telegram-
+        # доставка с артефактом в аргументе падает в dead_letter ПОСЛЕ доставки
+        # (класс 17.08/14.09/26.09; гном-ревью 01b2f873 предсказало его для caption,
+        # caption закрыт 03.10 — эта ветка осталась).
+        raw_text = str(started_args.get("text") or "")
+        convo_hint = str(_TURN_CONVO.get() or "")
+        if text not in (
+                raw_text,
+                _strip_generation_artifacts(raw_text)[0],
+                _strip_generation_artifacts(raw_text, convo_hint)[0]):
             raise DurableExecutionError(
                 "accepted Telegram message differs from the durable tool arguments"
             )
@@ -16433,13 +16985,18 @@ def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
     # что и живой цикл, и рука не зовётся.
     if llm.is_malformed_json_input(call_input):
         return MALFORMED_JSON_REPAIR.format(name=name)
-    # 26.09, живой случай: `fs_search` без `pattern` — TypeError из потока, трейс в
-    # журнал и «[tool_error TypeError] …» модели. Аргументы сверяем с сигнатурой ДО
-    # вызова: несходство — это слово руки о том, чего не хватает, а не падение.
-    mismatch = _tool_args_mismatch(impl, call_input)
-    if mismatch:
-        return (f"[рука {name} не позвана] {mismatch}. Позови её снова, назвав "
-                f"обязательные аргументы по схеме.")
+    # 03.10: невалидные аргументы — та же категория, что битый JSON: НЕПРОЧИТАННОЕ
+    # намерение. Рука не звалась, эффекта нет; отдать TypeError наверх значило бы
+    # уронить side-effect-ран в in_doubt без всякой неопределённости (живой пример:
+    # remember без fact → run in_doubt 02.10 21:17). Проверяем привязку по сигнатуре
+    # до исполнения и отвечаем текстом починки, а не исключением.
+    try:
+        inspect.signature(impl).bind(**call_input)
+    except (TypeError, ValueError) as exc:
+        log.warning("call %s: аргументы не привязались к сигнатуре: %s", name, exc)
+        return (f"[аргументы не приняты] Вызов `{name}` НЕ выполнен: {type(exc).__name__}: "
+                f"{exc}. Снаружи ничего не изменилось. Повтори вызов с полным набором "
+                f"обязательных аргументов.")
     if TOOL_CEILING_SEC <= 0:
         return impl(**call_input)
     # Копия контекста обязательна: тулы читают текущий ран, канал хода и запись
@@ -18083,7 +18640,13 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
     if turn is None and isinstance(sink, dict):
         turn = sink
     chat_id = ctx.chat_id
-    reply = _strip_think(reply or "")
+    # CJK-санитайзер (26.09): вклейки иероглифов в не-CJK речи — артефакт glm-5.3,
+    # тот же класс, что <think>. Снимается ДО всех проверок; заметка — в journal.
+    # Все снятия — одной функцией: ей же сверяется предсетевой proof (иначе dead_letter).
+    reply, _cjk_note = _strip_generation_artifacts(reply, convo_text)
+    if _cjk_note and isinstance(turn, dict):
+        turn.setdefault("events", []).append(
+            {"name": "cjk-substitution", "note": _cjk_note})
     if not ctx.is_dm:
         # A control directive is Praxis's explicit side-channel.  Ordinary text, including
         # quoted ``Name:`` lines, remains exactly her authored text.
@@ -18231,6 +18794,23 @@ def _guard_outbound(reply: str, convo_text: str = "", *, sink: dict | None = Non
     # как её собственное воспоминание «я это уже сказала». Запись переехала в
     # project_delivery_outcome, к расписке транспорта.
     return reply
+
+
+def _strip_generation_artifacts(text: str, convo_text: str = "") -> tuple[str, str]:
+    """Все снятия артефактов генерации — в одном месте: <think>, маркеры цитат, вклейки CJK.
+
+    ⚠ 26.09, третий раз один и тот же класс (17.08 хвостовой пробел, 14.09 маркеры цитат):
+    гард снимает с текста то, чего автор не выбирал, а предсетевая сверка proof
+    (`run_direct_outbox_prepared`) сравнивает леджер с СЫРЫМИ аргументами руки и знает
+    только те снятия, которые ей перечислили руками. CJK-санитайзер встал в гард утром
+    26.09 — и каждый ответ, где он что-то вырезал, умирал dead_letter'ом «unsendable by
+    construction»: четыре реплики в AbstractDL 12:16–12:27 (цитаты «同步»/«汇总» в отчёте
+    о самом дефекте). Теперь гард чистит ЭТОЙ функцией и сверка принимает её же результат:
+    новое снятие, добавленное сюда, сверка узнаёт само.
+
+    Возвращает (текст, note) — note от CJK-санитайзера, пуст, если он ничего не менял.
+    """
+    return _sanitize_cjk_substitutions(_strip_think(text or ""), convo_text)
 
 
 _KEAT_CAPTURE_UNSET = object()

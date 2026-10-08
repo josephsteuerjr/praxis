@@ -505,16 +505,6 @@ def note_finished(note: str = "", run_id: str = "") -> None:
             slot["finish_note"] = str(note).strip()
 
 
-def owner_followup() -> None:
-    """New owner input supersedes closure, not spend or delivered speech."""
-    slot = _slot(_run_key(), create=True)
-    if slot is not None:
-        with _LOCK:
-            slot["finished"] = False
-            slot["finish_note"] = ""
-            slot["control"] = None
-
-
 def finished(run_id: str = "") -> bool:
     """Закончен ли ход её явным `end_turn`."""
     slot = _slot(str(run_id or "") or _run_key())

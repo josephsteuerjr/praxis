@@ -10,11 +10,6 @@ import signal
 import subprocess
 import time
 from pathlib import Path
-import sys
-
-# Embedded ._pth runtimes ignore PYTHONPATH and omit the script directory.
-if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import process_liveness
 

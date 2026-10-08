@@ -143,6 +143,28 @@ def _fold_offers_read() -> dict:
 #: два потока теряли чужое предложение и ловили FileNotFoundError на replace.
 _FOLD_OFFERS_LOCK = threading.RLock()
 
+#: 05.10 (ревью D3): сколько жёсткое давление может ждать голос без физической свёртки.
+#: Окно ночи 03–05 + суточный ритм + запас на held-сон и неголосовой ход — 26 часов:
+#: две ночи подряд без решения, после чего потолок возвращается (с квитанцией).
+FOLD_OFFER_BACKSTOP_HOURS = max(0.0, float(
+    os.getenv("PRAXIS_FOLD_OFFER_BACKSTOP_HOURS", "26") or 26))
+
+
+def _fold_offer_age_h(place: str | int) -> float:
+    """Возраст предложения свёртки в часах (нет оффера — 0)."""
+    key = str(place)
+    with _FOLD_OFFERS_LOCK:
+        prev = _fold_offers_read().get(key)
+    if not isinstance(prev, dict):
+        return 0.0
+    try:
+        since = _dt.datetime.fromisoformat(str(prev.get("since") or ""))
+    except ValueError:
+        return 0.0
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=_dt.timezone.utc)
+    return max(0.0, (_dt.datetime.now(_dt.timezone.utc) - since).total_seconds() / 3600.0)
+
 
 def _fold_offers_write(data: dict) -> None:
     _FOLD_OFFERS.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +178,7 @@ def fold_offers() -> dict:
     return dict(_fold_offers_read())
 
 
-def _note_fold_offer(place: str | int, plan: dict) -> None:
+def _note_fold_offer(place: str | int, plan: dict, *, hard: bool = False) -> None:
     key = str(place)
     lo, hi, hard_hi, _cap = hot_bounds(key)
     with _FOLD_OFFERS_LOCK:
@@ -166,11 +188,27 @@ def _note_fold_offer(place: str | int, plan: dict) -> None:
         data[key] = {"place": key, "count": int(plan.get("count") or 0),
                      "tokens": int(plan.get("tokens") or 0), "fold": int(plan.get("fold") or 0),
                      "keep": lo, "hi": hi, "hard_hi": hard_hi,
+                     "hard": bool(hard),
+                     "reason": str(plan.get("reason") or ""),
                      "since": (prev or {}).get("since") or now, "updated": now}
         _fold_offers_write(data)
     if prev is None:
-        log.info("свёртка предлагается [%s]: горячих %s ≥ %s — жду руку memory_compact(fold); "
-                 "без неё сверну сама на %s", key, plan.get("count"), hi, hard_hi)
+        log.info("свёртка предлагается [%s]: горячих %s — жду руку memory_compact(fold) "
+                 "или ночное решение голоса", key, plan.get("count"))
+
+
+def reject_fold(place: str | int, reason: str = "") -> bool:
+    """Снять предложение свёртки с причиной (решение голоса). -> было ли предложение."""
+    with _FOLD_OFFERS_LOCK:
+        data = _fold_offers_read()
+        key = str(place)
+        if key not in data:
+            return False
+        data.pop(key, None)
+        _fold_offers_write(data)
+    append_event("fold_offer", chat_id=place, text=f"отклонено голосом: {reason or 'без причины'}",
+                 source="night_memory")
+    return True
 
 
 def clear_fold_offer(place: str | int) -> bool:
@@ -1292,7 +1330,7 @@ def _anchor_self(data: dict, *, llm, user: str, inputs: list[dict], manifest: di
             f"мои строки помечены [Я]; {who} и все остальные — в третьем лице по имени. Перепиши сводку.")
     resp = llm.chat(_memory_role(), system=compact_system(),
                     messages=[{"role": "user", "content": user + note}],
-                    max_tokens=COMPACT_RETRY_MAX_TOKENS)
+                    max_tokens=COMPACT_RETRY_MAX_TOKENS, reasoning_effort="low")
     fixed = _json_obj(getattr(resp, "text", "") or "")
     summary = fixed.get("summary")
     if isinstance(summary, str) and summary.strip() and not _foreign_self(summary, authors):
@@ -1318,7 +1356,7 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
         # разбирается, и место сворачивалось запасной сводкой без модели.
         resp = llm.chat(role, system=system,
                         messages=[{"role": "user", "content": user}],
-                        max_tokens=COMPACT_MAX_TOKENS)
+                        max_tokens=COMPACT_MAX_TOKENS, reasoning_effort="low")
         data = _json_obj(resp.text)
         if isinstance(data.get("summary"), str) and data["summary"].strip():
             data["_manifest"] = manifest
@@ -1334,7 +1372,7 @@ def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool
                     COMPACT_RETRY_MAX_TOKENS)
         resp = llm.chat(role, system=system,
                         messages=[{"role": "user", "content": user}],
-                        max_tokens=COMPACT_RETRY_MAX_TOKENS)
+                        max_tokens=COMPACT_RETRY_MAX_TOKENS, reasoning_effort="low")
         data = _json_obj(resp.text)
         if isinstance(data.get("summary"), str) and data["summary"].strip():
             data["_manifest"] = manifest
@@ -2215,11 +2253,26 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
                 clear_fold_offer(chat_id)      # окно снова в норме — предложение снято
             return {"ok": True, "folded": 0, "plan": plan,
                     "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
-        if not force and fold_offer_enabled() and not plan.get("hard"):
-            # 25.09, слово Егора: на мягком пороге свёртка ПРЕДЛАГАЕТСЯ, а не делается.
-            _note_fold_offer(chat_id, plan)
-            return {"ok": True, "folded": 0, "offered": True, "plan": plan,
-                    "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
+        if not force and fold_offer_enabled():
+            # 05.10 (ночной цикл честности памяти): и мягкий, и ЖЁСТКИЙ порог днём
+            # только предлагают свёртку — решает голос в том же ходе (рука
+            # memory_compact(fold)/ночная сборка resolve_fold_offers). Причина
+            # давления едет в оффере, чтобы решение было осмысленным.
+            # Бэкстоп (ревью D3, 05.10): жёсткое давление (token_cap/tape_chars/
+            # hard_hi), не снятое голосом дольше FOLD_OFFER_BACKSTOP_HOURS, сворачивается
+            # физикой с явной квитанцией. Потолок нужен для сломанного или молчащего
+            # голоса, а не для перебивки живого решения: reject снимает оффер, и часы
+            # стартуют заново; ночь (resolve_fold_offers) успевает первой.
+            hard = bool(plan.get("hard"))
+            if not (hard and _fold_offer_age_h(chat_id) >= FOLD_OFFER_BACKSTOP_HOURS):
+                _note_fold_offer(chat_id, plan, hard=hard)
+                return {"ok": True, "folded": 0, "offered": True, "hard": hard, "plan": plan,
+                        "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
+            append_event("fold_offer", chat_id=chat_id,
+                         text=(f"жёсткое давление {plan.get('reason')} держится "
+                               f"{_fold_offer_age_h(chat_id):.0f}ч без решения голоса — "
+                               f"сворачиваю физикой (бэкстоп, не решение)"),
+                         source="memory_life")
         fold = int(plan["fold"])
         inputs = provable[:fold]
     result = _model_compact(inputs, tier=1, depth=1, continued=bool(plan.get("continued")))

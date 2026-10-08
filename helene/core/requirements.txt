@@ -1,5 +1,5 @@
 anthropic>=1.6  # издание шлёт output_config родным полем (GLM); проверено на 1.6.0
-openai>=1.66  # Responses API — путь к настоящему OpenAI (28.09)
+openai>=1.40
 python-dotenv>=1.0
 cryptography>=43,<49
 aiogram>=3.4
@@ -7,7 +7,10 @@ aiogram>=3.4
 # (динамический get_running_loop -> мёртвый луп из воркер-тредов, все sync-тулы таймаутили)
 telethon==1.44.0
 # Мультимодальный Telegram: локальный STT; neural female TTS + локальный Piper fallback.
+# faster-whisper 1.2.1 зовёт av.open(..., metadata_errors=...) — в PyAV 15+ аргумент убрали,
+# каждая расшифровка падает. Пин, пока апстрим не починит.
 faster-whisper==1.2.1
+av<15
 piper-tts==1.4.2
 edge-tts==7.2.8
 # JPEG-вид скринов для модели (перекодировка observe в agent.py; мягкий фолбэк без него)

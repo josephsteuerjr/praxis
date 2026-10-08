@@ -7,17 +7,17 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::fs::{self, File};
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::io::{self, BufWriter, Write};
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use praxis_body_protocol::{AdapterDescriptor, CapabilityDescriptor};
 use serde_json::Value;
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,9 +138,6 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
     // (порт 19.09), и доступен он ровно там, где собран.
     let (name, version) = if cfg!(target_os = "macos") {
         ("native-macos-desktop", "1")
-    } else if cfg!(target_os = "linux") {
-        // Linux (порт 28.09): X-сервер (EWMH, XTest, GetImage) — те же глаголы и формы.
-        ("native-x11-desktop", "1")
     } else {
         ("native-win32-desktop", "3")
     };
@@ -151,18 +148,18 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
             .iter()
             .map(|capability| capability.name.to_string())
             .collect(),
-        available: cfg!(any(windows, target_os = "macos", target_os = "linux")),
+        available: cfg!(any(windows, target_os = "macos")),
     }
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_CAPTURE_PIXELS: u64 = 40_000_000;
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_CAPTURE_RAW_BYTES: usize = 128 * 1024 * 1024;
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 const MAX_CAPTURE_PNG_BYTES: usize = 128 * 1024 * 1024;
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn capture_allocation(width: i32, height: i32) -> Result<usize> {
     if width <= 0 || height <= 0 {
         bail!("capture rectangle must have positive width and height")
@@ -182,14 +179,14 @@ fn capture_allocation(width: i32, height: i32) -> Result<usize> {
     Ok(raw_bytes)
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 struct SizeLimitedWriter<W> {
     inner: W,
     written: usize,
     limit: usize,
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 impl<W> SizeLimitedWriter<W> {
     fn new(inner: W, limit: usize) -> Self {
         Self {
@@ -200,7 +197,7 @@ impl<W> SizeLimitedWriter<W> {
     }
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 impl<W: Write> Write for SizeLimitedWriter<W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if buffer.len() > self.limit.saturating_sub(self.written) {
@@ -222,7 +219,7 @@ impl<W: Write> Write for SizeLimitedWriter<W> {
     }
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn write_png(path: &Path, width: i32, height: i32, bgra: &[u8]) -> Result<()> {
     let expected = capture_allocation(width, height)?;
     if bgra.len() != expected {
@@ -253,7 +250,7 @@ fn write_png(path: &Path, width: i32, height: i32, bgra: &[u8]) -> Result<()> {
                 .context("capture RGB row size overflow")?;
             let mut rgb_row = vec![0u8; rgb_row_bytes];
             for bgra_row in bgra.chunks_exact(bgra_row_bytes) {
-                for (source, target) in bgra_row.as_chunks::<4>().0.iter().zip(rgb_row.as_chunks_mut::<3>().0.iter_mut()) {
+                for (source, target) in bgra_row.chunks_exact(4).zip(rgb_row.chunks_exact_mut(3)) {
                     target.copy_from_slice(&[source[2], source[1], source[0]]);
                 }
                 stream.write_all(&rgb_row).context("write PNG pixels")?;
@@ -280,7 +277,7 @@ fn write_png(path: &Path, width: i32, height: i32, bgra: &[u8]) -> Result<()> {
     committed
 }
 
-#[cfg(any(windows, target_os = "macos", target_os = "linux", test))]
+#[cfg(any(windows, target_os = "macos", test))]
 fn capture_name(requested: &str) -> String {
     let mut filtered: String = requested
         .chars()
@@ -349,7 +346,7 @@ pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value
     })
 }
 
-#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use std::path::Path;
 
@@ -367,11 +364,9 @@ mod platform {
 /// Mac, а живая часть (`platform` под `target_os = "macos"`) только шлёт готовое в
 /// CoreGraphics. Формы JSON — те же, что у Windows-ветки: дерево Праксис и
 /// `body_client.py` не должны заметить платформу иначе как по полю `platform`.
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", test))]
 // Вне macOS модуль живёт только ради стендов: аргументы глаголов и планировщик там никто
-// не зовёт, и предупреждать об этом на каждой сборке Windows незачем. На Linux (порт 28.09)
-// из него берутся аргументы, планировщик ввода и формы строк; Mac-особое (раскладка
-// CGImage, пакеты .app, разбор `ps`) там не зовётся.
+// не зовёт, и предупреждать об этом на каждой сборке Windows незачем.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod mac_pure {
     use anyhow::{Context, Result, bail};
@@ -438,10 +433,7 @@ mod mac_pure {
                 }
             };
             if value == 0 || value > u64::from(u32::MAX) {
-                bail!(
-                    "invalid hwnd: a window id (CGWindowID on macOS, X11 window on Linux) is a \
-                     nonzero 32-bit number"
-                )
+                bail!("invalid hwnd: a CGWindowID is a nonzero 32-bit number")
             }
             Ok(value as u32)
         }
@@ -772,43 +764,15 @@ mod mac_pure {
         (clamped as i32, clamped != i64::from(value))
     }
 
-    /// Таблица клавиш ОС: чем набирать перевод строки и табуляцию и как имя клавиши
-    /// становится кодом. Планировщик ввода — один на macOS и Linux (порт 28.09); разные у
-    /// них только коды: на Mac это `kVK_*`, на Linux — keysym X11, который отправитель
-    /// переводит в код клавиши по живой раскладке сервера.
-    #[derive(Clone, Copy)]
-    pub(super) struct Keys {
-        pub(super) ret: u16,
-        pub(super) tab: u16,
-        pub(super) by_name: fn(&str) -> Result<u16>,
-    }
-
-    pub(super) const MAC_KEYS: Keys = Keys {
-        ret: KEY_RETURN,
-        tab: KEY_TAB,
-        by_name: key_code_by_name,
-    };
-
-    /// Планировщик с клавишами macOS — прежнее имя и прежнее поведение.
-    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub(super) fn prepare_input_events(
         events: &[InputEvent],
         inter_event_delay_ms: u64,
         screen: Screen,
     ) -> Result<Vec<PreparedChunk>> {
-        prepare_input_events_with(events, inter_event_delay_ms, screen, MAC_KEYS)
-    }
-
-    pub(super) fn prepare_input_events_with(
-        events: &[InputEvent],
-        inter_event_delay_ms: u64,
-        screen: Screen,
-        keys: Keys,
-    ) -> Result<Vec<PreparedChunk>> {
         let mut total = 0usize;
         let mut chunks: Vec<PreparedChunk> = Vec::with_capacity(events.len());
         for (index, event) in events.iter().enumerate() {
-            let produced = event_chunks(event, screen, keys)?;
+            let produced = event_chunks(event, screen)?;
             for chunk in &produced {
                 total = total
                     .checked_add(chunk.records.len())
@@ -892,7 +856,7 @@ mod mac_pure {
         Ok(held.into_iter().map(MouseButton::name).collect())
     }
 
-    fn event_chunks(event: &InputEvent, screen: Screen, keys: Keys) -> Result<Vec<PreparedChunk>> {
+    fn event_chunks(event: &InputEvent, screen: Screen) -> Result<Vec<PreparedChunk>> {
         match event {
             InputEvent::Drag {
                 button,
@@ -912,11 +876,11 @@ mod mac_pure {
                 (*hold_ms, *step_delay_ms, *settle_ms),
                 screen,
             ),
-            InputEvent::Text { text } => text_chunks(text, keys),
+            InputEvent::Text { text } => text_chunks(text),
             _ => {
                 let (press, release) = event_button_effect(event)?;
                 let mut clamped_moves = 0usize;
-                let records = event_records(event, screen, &mut clamped_moves, keys)?;
+                let records = event_records(event, screen, &mut clamped_moves)?;
                 Ok(vec![PreparedChunk {
                     records,
                     pause_ms: 0,
@@ -931,7 +895,7 @@ mod mac_pure {
     /// Текст — по одному знаку на отправку с паузой TEXT_UNIT_PAUSE_MS после каждого.
     /// Перевод строки и табуляция — настоящими клавишами: юникодный `\n` многие
     /// программы Mac не считают за Return, а Return считают все.
-    fn text_chunks(text: &str, keys: Keys) -> Result<Vec<PreparedChunk>> {
+    fn text_chunks(text: &str) -> Result<Vec<PreparedChunk>> {
         let units = text.encode_utf16().count();
         if units > MAX_INPUT_TEXT_UTF16_UNITS {
             bail!("input text has {units} UTF-16 units (maximum {MAX_INPUT_TEXT_UTF16_UNITS})")
@@ -945,8 +909,8 @@ mod mac_pure {
             }
             previous = value;
             let records = match value {
-                '\r' | '\n' => vec![Record::KeyDown(keys.ret), Record::KeyUp(keys.ret)],
-                '\t' => vec![Record::KeyDown(keys.tab), Record::KeyUp(keys.tab)],
+                '\r' | '\n' => vec![Record::KeyDown(KEY_RETURN), Record::KeyUp(KEY_RETURN)],
+                '\t' => vec![Record::KeyDown(KEY_TAB), Record::KeyUp(KEY_TAB)],
                 _ => {
                     let mut buffer = [0u16; 2];
                     let encoded = value.encode_utf16(&mut buffer).to_vec();
@@ -1047,11 +1011,10 @@ mod mac_pure {
         event: &InputEvent,
         screen: Screen,
         clamped_moves: &mut usize,
-        table: Keys,
     ) -> Result<Vec<Record>> {
         match event {
-            InputEvent::Hotkey { keys } => hotkey_records(keys, table),
-            InputEvent::Key { key, action } => key_action_records(key, action, table),
+            InputEvent::Hotkey { keys } => hotkey_records(keys),
+            InputEvent::Key { key, action } => key_action_records(key, action),
             InputEvent::Mouse { x, y, relative } => {
                 if *relative {
                     Ok(vec![Record::MoveBy { dx: *x, dy: *y }])
@@ -1113,25 +1076,22 @@ mod mac_pure {
         Ok(records)
     }
 
-    fn hotkey_records(keys: &[KeyArg], table: Keys) -> Result<Vec<Record>> {
+    fn hotkey_records(keys: &[KeyArg]) -> Result<Vec<Record>> {
         if keys.is_empty() {
             bail!("hotkey keys must not be empty")
         }
         if keys.len() > MAX_HOTKEY_KEYS {
             bail!("hotkey has {} keys (maximum {MAX_HOTKEY_KEYS})", keys.len())
         }
-        let codes = keys
-            .iter()
-            .map(|key| key_code_with(key, table))
-            .collect::<Result<Vec<_>>>()?;
+        let codes = keys.iter().map(key_code).collect::<Result<Vec<_>>>()?;
         let mut records = Vec::with_capacity(codes.len() * 2);
         records.extend(codes.iter().map(|code| Record::KeyDown(*code)));
         records.extend(codes.iter().rev().map(|code| Record::KeyUp(*code)));
         Ok(records)
     }
 
-    fn key_action_records(key: &KeyArg, action: &str, table: Keys) -> Result<Vec<Record>> {
-        let code = key_code_with(key, table)?;
+    fn key_action_records(key: &KeyArg, action: &str) -> Result<Vec<Record>> {
+        let code = key_code(key)?;
         match action.trim().to_ascii_lowercase().as_str() {
             "down" => Ok(vec![Record::KeyDown(code)]),
             "up" => Ok(vec![Record::KeyUp(code)]),
@@ -1234,16 +1194,11 @@ mod mac_pure {
     pub(super) const KEY_RETURN: u16 = 0x24;
     pub(super) const KEY_TAB: u16 = 0x30;
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn key_code(key: &KeyArg) -> Result<u16> {
-        key_code_with(key, MAC_KEYS)
-    }
-
-    pub(super) fn key_code_with(key: &KeyArg, table: Keys) -> Result<u16> {
         match key {
             KeyArg::Number(0) => bail!("virtual key must be nonzero"),
             KeyArg::Number(value) => Ok(*value),
-            KeyArg::Text(raw) => (table.by_name)(raw),
+            KeyArg::Text(raw) => key_code_by_name(raw),
         }
     }
 
@@ -1665,7 +1620,7 @@ mod mac_pure {
         let mut out = Vec::with_capacity(row_bytes * height);
         for row in 0..height {
             let start = row * bytes_per_row;
-            for pixel in bytes[start..start + row_bytes].as_chunks::<4>().0 {
+            for pixel in bytes[start..start + row_bytes].chunks_exact(4) {
                 let (b, g, r) = match layout {
                     PixelLayout::Bgra => (pixel[0], pixel[1], pixel[2]),
                     PixelLayout::Argb => (pixel[3], pixel[2], pixel[1]),
@@ -1761,7 +1716,7 @@ mod mac_pure {
         height: usize,
         factor: usize,
     ) -> Option<(Vec<u8>, usize, usize)> {
-        if factor < 2 || !width.is_multiple_of(factor) || !height.is_multiple_of(factor) || bgra.len() != width * height * 4 {
+        if factor < 2 || width % factor != 0 || height % factor != 0 || bgra.len() != width * height * 4 {
             return None;
         }
         let (target_w, target_h) = (width / factor, height / factor);
@@ -3069,1134 +3024,6 @@ mod platform {
             "chars": units,
             "platform": "macos",
         }))
-    }
-}
-
-/// Linux (порт 28.09): экран, ввод, окна — через X-сервер (`x11.rs`: EWMH, XTest,
-/// GetImage), процессы — `/proc`, буфер обмена — `arboard`. Формы JSON — Windows-ветки
-/// (как у macOS); отличия названы полями `platform` и `session`. Координаты — пиксели
-/// корня X, снимок 1:1 с кликом. Под Wayland X-сервер — это XWayland, и тело обязано
-/// сказать, что видит только X-программы (`x11::Session::hints`).
-#[cfg(target_os = "linux")]
-mod platform {
-    use std::collections::HashMap;
-    use std::fs;
-    use std::path::Path;
-    use std::sync::{Mutex, OnceLock};
-    use std::thread;
-    use std::time::Duration;
-
-    use anyhow::{Context, Result, anyhow, bail};
-    use serde_json::{Value, json};
-
-    use super::mac_pure::{
-        ActivateArgs, CaptureArgs, ClipboardReadArgs, ClipboardWriteArgs, HwndArg, InputArgs,
-        InputEvent, Keys, MAX_ACTIVATE_TIMEOUT_MS, MAX_CLIPBOARD_CHARS, MAX_INPUT_EVENTS,
-        MAX_TOTAL_INPUT_DELAY_MS, MouseButton, PreparedChunk, ProcessListArgs, PsRow, Record,
-        Screen, TEXT_UNIT_PAUSE_MS, WindowFacts, WindowListArgs, hwnd_hex, input_limits, page,
-        plan_totals, prepare_input_events_with, process_row, window_row,
-    };
-    use super::{capture_allocation, capture_name, write_png};
-    use crate::x11::{self, Keymap, NO_SYMBOL, WindowInfo, X};
-
-    // ─── клавиши X11 ─────────────────────────────────────────────────────────────────
-
-    const XK_RETURN: u16 = 0xff0d;
-    const XK_TAB: u16 = 0xff09;
-    const XK_SHIFT_L: u32 = 0xffe1;
-
-    /// Имена — те же, что у Windows- и Mac-веток; коды — keysym X11. Буквы и цифры —
-    /// сами знаки (keysym латиницы совпадает с ASCII): отправитель найдёт их клавишу по
-    /// живой раскладке сервера. Чистая функция.
-    pub(super) fn keysym_by_name(raw: &str) -> Result<u16> {
-        let key = raw.trim().to_ascii_lowercase();
-        let value = match key.as_str() {
-            "backspace" => 0xff08,
-            "tab" => XK_TAB,
-            "enter" | "return" => XK_RETURN,
-            "escape" | "esc" => 0xff1b,
-            "shift" | "left_shift" => 0xffe1,
-            "right_shift" => 0xffe2,
-            "ctrl" | "control" | "left_ctrl" => 0xffe3,
-            "right_ctrl" | "right_control" => 0xffe4,
-            "caps_lock" | "capslock" => 0xffe5,
-            "alt" | "option" | "left_alt" => 0xffe9,
-            "right_alt" | "right_option" => 0xffea,
-            "altgr" | "alt_gr" => 0xfe03,
-            "win" | "meta" | "super" | "left_win" | "cmd" | "command" | "left_cmd" => 0xffeb,
-            "right_win" | "right_cmd" | "right_command" => 0xffec,
-            "space" => 0x20,
-            "page_up" | "pageup" => 0xff55,
-            "page_down" | "pagedown" => 0xff56,
-            "end" => 0xff57,
-            "home" => 0xff50,
-            "left" => 0xff51,
-            "up" => 0xff52,
-            "right" => 0xff53,
-            "down" => 0xff54,
-            "insert" => 0xff63,
-            "delete" | "del" => 0xffff,
-            "print_screen" | "printscreen" => 0xff61,
-            "pause" => 0xff13,
-            "menu" | "apps" => 0xff67,
-            "num_lock" | "numlock" => 0xff7f,
-            "scroll_lock" | "scrolllock" => 0xff14,
-            _ if key.chars().count() == 1 => {
-                let value = key.chars().next().unwrap_or('\0');
-                if !(' '..='~').contains(&value) {
-                    bail!(
-                        "unsupported named key {raw:?}: a single key name must be a printable ASCII \
-                         character; type other text with a text event"
-                    )
-                }
-                u16::from(value as u8)
-            }
-            _ if key.starts_with('f') => {
-                let number = key[1..].parse::<u16>().unwrap_or_default();
-                if !(1..=24).contains(&number) {
-                    bail!("function key must be f1 through f24")
-                }
-                0xffbe + number - 1
-            }
-            _ => bail!("unsupported named key {raw:?}; pass a numeric X11 keysym"),
-        };
-        Ok(value)
-    }
-
-    pub(super) const LINUX_KEYS: Keys = Keys {
-        ret: XK_RETURN,
-        tab: XK_TAB,
-        by_name: keysym_by_name,
-    };
-
-    fn is_modifier(keysym: u32) -> bool {
-        (0xffe1..=0xffee).contains(&keysym) || keysym == 0xfe03
-    }
-
-    fn keysym_name(keysym: u32) -> String {
-        let name = match keysym {
-            0xffe1 => "shift",
-            0xffe2 => "right_shift",
-            0xffe3 => "ctrl",
-            0xffe4 => "right_ctrl",
-            0xffe5 => "capslock",
-            0xffe9 => "alt",
-            0xffea => "right_alt",
-            0xfe03 => "altgr",
-            0xffeb => "super",
-            0xffec => "right_super",
-            _ => return format!("keysym 0x{keysym:x}"),
-        };
-        name.to_string()
-    }
-
-    fn button_code(button: MouseButton) -> u8 {
-        match button {
-            MouseButton::Left => 1,
-            MouseButton::Middle => 2,
-            MouseButton::Right => 3,
-        }
-    }
-
-    /// Пределы ввода — Mac-ветки (планировщик один), со словами про X11.
-    fn linux_input_limits() -> Value {
-        let mut limits = input_limits();
-        limits["coordinates"] = json!(
-            "pixels of the X root window (origin at the top-left of the virtual screen, Y down); \
-             absolute x/y are clamped into virtual_screen; clamped_moves says how many were pulled \
-             to the edge"
-        );
-        limits["keys"] = json!(
-            "same names as on Windows; win/cmd/meta/super = Super, alt/option = Alt, ctrl = Control, \
-             altgr = ISO_Level3_Shift; single printable ASCII characters are keys of the current \
-             keymap (hotkeys). Text: a character present in the ACTIVE layout group is typed with \
-             its real key (Shift when it is on the second level); a character the active group \
-             lacks (Cyrillic under a Latin group and vice versa) goes through a temporarily \
-             remapped spare key - so the active keyboard layout never changes what is typed"
-        );
-        limits["numeric_keys"] = json!("a numeric key is an X11 keysym, not a Windows VK code");
-        limits["permissions"] = json!(
-            "input goes through the XTEST extension of the X server; under Wayland only X11 \
-             (XWayland) windows receive it"
-        );
-        limits["modifier_hold"] = json!(
-            "keys pressed with `key down` live only until this call returns - modifiers still down \
-             are released AFTER the last event and named in modifiers_auto_released, other keys in \
-             keys_auto_released (a key left down would autorepeat). Hold and use a modifier in ONE \
-             batch: a hotkey event, or key down -> key press -> key up together"
-        );
-        limits
-    }
-
-    // ─── общее ───────────────────────────────────────────────────────────────────────
-
-    pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value> {
-        match capability {
-            "desktop.status" => desktop_status(),
-            "os.process.list" => process_list(serde_json::from_value(args)?),
-            "desktop.window.list" => window_list(serde_json::from_value(args)?),
-            "desktop.window.activate" => window_activate(serde_json::from_value(args)?),
-            "desktop.input.perform" => input_perform(serde_json::from_value(args)?),
-            "desktop.screen.capture" => screen_capture(serde_json::from_value(args)?, state_dir),
-            "desktop.clipboard.read" => clipboard_read(serde_json::from_value(args)?),
-            "desktop.clipboard.write" => clipboard_write(serde_json::from_value(args)?),
-            _ => bail!("unknown native desktop capability {capability}"),
-        }
-    }
-
-    /// X-сервер для глагола — или отказ словами, с тем, что знает сессия. Отказ — ОШИБКА
-    /// рамки, не `ok:false` (см. Mac-ветку `refused_by_tcc`: `ok` результата накрывается
-    /// рамкой транспорта, и «не сделано» доехало бы до модели как успех).
-    fn x_for(what: &str) -> Result<X> {
-        X::connect().map_err(|error| {
-            let session = x11::session();
-            anyhow!(
-                "{what} needs the X server: {error:#}; {} (session: {}, platform=linux)",
-                session.hints().join("; "),
-                session.kind
-            )
-        })
-    }
-
-    fn facts(window: &WindowInfo) -> WindowFacts {
-        WindowFacts {
-            id: window.id,
-            pid: window.pid.map_or(0, |pid| pid as i32),
-            owner: window
-                .pid
-                .and_then(x11::process_name)
-                .or_else(|| window.class.clone())
-                .unwrap_or_default(),
-            title: window.title.clone(),
-            layer: window.layer(),
-            x: f64::from(window.x),
-            y: f64::from(window.y),
-            width: f64::from(window.width),
-            height: f64::from(window.height),
-            on_screen: window.on_screen,
-            z_order: window.z_order,
-        }
-    }
-
-    /// Строка окна — форма Windows/Mac-ветки плюс то, что знает X: тип окна EWMH, свёрнуто
-    /// ли (у Mac `minimized: null`, здесь — правда), instance из `WM_CLASS`. Не узнали pid —
-    /// `null`, а не ноль: ноль был бы чужим процессом.
-    fn row(window: &WindowInfo, about: &(Option<String>, Option<u64>), foreground: Option<bool>) -> Value {
-        let mut value = window_row(
-            &facts(window),
-            about.0.as_deref(),
-            window.class.as_deref(),
-            about.1,
-            true,
-            foreground,
-        );
-        value["minimized"] = json!(window.hidden);
-        value["window_type"] = json!(window.window_type.unwrap_or("normal"));
-        if let Some(instance) = &window.instance {
-            value["instance"] = json!(instance);
-        }
-        if window.pid.is_none() {
-            value["pid"] = Value::Null;
-            value["note"] = json!(
-                "pid unknown: the client set no _NET_WM_PID and the X server did not name it (XRes)"
-            );
-        }
-        value
-    }
-
-    fn about(pid: Option<u32>) -> (Option<String>, Option<u64>) {
-        match pid {
-            Some(pid) => (x11::process_path(pid), x11::process_started(pid)),
-            None => (None, None),
-        }
-    }
-
-    fn screen_of(x: &X) -> Screen {
-        Screen { left: 0, top: 0, width: i32::from(x.width), height: i32::from(x.height) }
-    }
-
-    fn virtual_screen(x: &X) -> Value {
-        let screen = x.virtual_screen();
-        json!({
-            "left": screen.left,
-            "top": screen.top,
-            "width": screen.width,
-            "height": screen.height,
-            "right": screen.left + screen.width,
-            "bottom": screen.top + screen.height,
-            "displays": screen.displays,
-            "monitors": screen.monitors,
-        })
-    }
-
-    fn foreground_value(id: Option<u32>) -> Value {
-        id.map_or(Value::Null, |id| Value::String(hwnd_hex(id)))
-    }
-
-    // ─── desktop.status ──────────────────────────────────────────────────────────────
-
-    fn desktop_status() -> Result<Value> {
-        let session = x11::session();
-        let mut hints = session.hints();
-        let interactive = unsafe { libc::geteuid() } != 0;
-        let atspi = crate::atspi::status();
-        if !atspi["enabled"].as_bool().unwrap_or(false)
-            && let Some(hint) = atspi["hint"].as_str()
-        {
-            hints.push(hint.to_string());
-        }
-        let session_id = std::env::var("XDG_SESSION_ID").ok().filter(|s| !s.is_empty());
-        if !session.x11_reachable {
-            return Ok(json!({
-                "ok": true, "interactive": interactive, "console": false,
-                "session_id": session_id, "platform": "linux", "session": session,
-                "foreground": null, "cursor": null, "virtual_screen": null, "scale": null,
-                "window_manager": null, "xtest": null, "atspi": atspi, "hints": hints,
-            }));
-        }
-        let x = x_for("desktop.status")?;
-        let window_manager = x.window_manager();
-        if window_manager.is_none() {
-            hints.push(
-                "no EWMH window manager on this X server: desktop.window.list is empty and \
-                 activation cannot work (there is nobody to ask); input and screenshots still do"
-                    .into(),
-            );
-        }
-        let xtest = x.has_xtest();
-        if !xtest {
-            hints.push("the X server has no XTEST extension: desktop.input.perform cannot send input".into());
-        }
-        let foreground = x.foreground().map(|window| {
-            let about = about(window.pid);
-            row(&window, &about, None)
-        });
-        // Фокус ввода и зажатые клавиши — правда о столе, которую не видно по окнам:
-        // «активное» окно менеджера и окно, куда идёт клавиатура, бывают разными, а
-        // зажатая кем-то клавиша превращает любой набор в сочетания.
-        let input_focus = x.input_focus();
-        let keys_down: Vec<String> = match x.keymap() {
-            Ok(map) => x
-                .keys_down()
-                .into_iter()
-                .map(|code| map.first_keysym(code).map_or(format!("keycode {code}"), keysym_name))
-                .collect(),
-            Err(_) => Vec::new(),
-        };
-        if !keys_down.is_empty() {
-            hints.push(format!(
-                "keys held down on the X server right now: {} — typing will turn into shortcuts \
-                 until they are released",
-                keys_down.join(", ")
-            ));
-        }
-        Ok(json!({
-            "ok": true,
-            "interactive": interactive,
-            "console": true,
-            "session_id": session_id,
-            "foreground": foreground,
-            "cursor": x.pointer().map(|(cx, cy)| json!({"x": cx, "y": cy})),
-            "virtual_screen": virtual_screen(&x),
-            "platform": "linux",
-            "session": session,
-            // Пиксели корня и есть координаты клика: масштаба между ними у X нет.
-            "scale": 1.0,
-            "window_manager": window_manager,
-            "xtest": xtest,
-            "input_focus": input_focus.map(hwnd_hex),
-            "keys_down": keys_down,
-            "atspi": atspi,
-            "hints": hints,
-        }))
-    }
-
-    // ─── os.process.list ─────────────────────────────────────────────────────────────
-
-    fn process_list(args: ProcessListArgs) -> Result<Value> {
-        if args.session_id.is_some() {
-            bail!("os.process.list: session_id is a Windows session number; Linux has none here — omit it")
-        }
-        let needle = args.name_contains.to_lowercase();
-        let mut items: Vec<Value> = x11::proc_rows()
-            .into_iter()
-            .filter_map(|(row, started)| {
-                let path = x11::process_path(row.pid);
-                let ps = PsRow { pid: row.pid, ppid: row.ppid, uid: row.uid, comm: row.comm };
-                let mut value = process_row(&ps, path.as_deref(), started);
-                // `comm` у Linux — короткое имя (15 знаков), а не путь: имя строки берём у
-                // пути, когда он читается, иначе — `comm` как есть.
-                if path.is_none() {
-                    value["name"] = json!(ps.comm);
-                }
-                if ps.uid == u32::MAX {
-                    value["uid"] = Value::Null;
-                }
-                let matches = needle.is_empty()
-                    || value["name"].as_str().is_some_and(|n| n.to_lowercase().contains(&needle))
-                    || value["path"].as_str().is_some_and(|p| p.to_lowercase().contains(&needle));
-                matches.then_some(value)
-            })
-            .collect();
-        items.sort_by_key(|row| row["pid"].as_u64().unwrap_or_default());
-        let mut result = page(items, args.page);
-        result["platform"] = json!("linux");
-        Ok(result)
-    }
-
-    // ─── desktop.window.list ─────────────────────────────────────────────────────────
-
-    fn window_list(args: WindowListArgs) -> Result<Value> {
-        let x = x_for("desktop.window.list")?;
-        let session = x11::session();
-        let (_, managed) = x.client_windows();
-        let windows = x.window_list(args.visible_only)?;
-        let foreground = x.active();
-        let needle = args.title_contains.to_lowercase();
-        let mut rows = Vec::new();
-        let mut seen: HashMap<Option<u32>, (Option<String>, Option<u64>)> = HashMap::new();
-        for window in &windows {
-            if !args.all_layers && !window.is_ordinary() {
-                continue;
-            }
-            if let Some(expected) = args.pid
-                && window.pid != Some(expected)
-            {
-                continue;
-            }
-            if !needle.is_empty()
-                && !window.title.as_deref().is_some_and(|t| t.to_lowercase().contains(&needle))
-            {
-                continue;
-            }
-            let info = seen.entry(window.pid).or_insert_with(|| about(window.pid)).clone();
-            let mut value = row(window, &info, Some(Some(window.id) == foreground));
-            value["z_order"] = json!(rows.len());
-            rows.push(value);
-        }
-        let mut result = page(rows, args.page);
-        result["foreground_hwnd"] = foreground_value(foreground);
-        result["platform"] = json!("linux");
-        result["session"] = json!(session.kind);
-        result["layers"] = json!(if args.all_layers {
-            "every client window the window manager lists (docks, desktop and panels included)"
-        } else {
-            "ordinary windows only (_NET_WM_WINDOW_TYPE normal, dialog, utility, toolbar, splash or \
-             unset); pass all_layers: true for docks, the desktop and panels"
-        });
-        let mut notes: Vec<String> = Vec::new();
-        if !managed {
-            notes.push(
-                "no EWMH window manager: the X server does not know which windows are programs, \
-                 so the list is empty by construction, not because nothing is open"
-                    .into(),
-            );
-        }
-        if session.kind == "wayland" {
-            notes.push(
-                "Wayland session: only X11 (XWayland) programs are listed; native Wayland windows \
-                 are invisible to the X server"
-                    .into(),
-            );
-        }
-        if !notes.is_empty() {
-            result["note"] = json!(notes.join("; "));
-            result["hints"] = json!(session.hints());
-        }
-        Ok(result)
-    }
-
-    // ─── desktop.window.activate ─────────────────────────────────────────────────────
-
-    /// Поднять окно — и сказать правду о том, поднялось ли оно (см. Mac-ветку: «не
-    /// подняли» — ОШИБКА, потому что `ok` результата накрывается рамкой). Путь один:
-    /// просьба к менеджеру окон `_NET_ACTIVE_WINDOW`; успех — по факту
-    /// `_NET_ACTIVE_WINDOW` корня.
-    fn window_activate(args: ActivateArgs) -> Result<Value> {
-        let id = args.hwnd.value()?;
-        if args.timeout_ms > MAX_ACTIVATE_TIMEOUT_MS {
-            bail!("activation timeout must not exceed {MAX_ACTIVATE_TIMEOUT_MS}ms")
-        }
-        let x = x_for("desktop.window.activate")?;
-        if x.window_manager().is_none() {
-            bail!(
-                "window {} was not activated: this X server has no EWMH window manager, and \
-                 activation is a request to it (platform=linux)",
-                hwnd_hex(id)
-            )
-        }
-        let window = x.window_by_id(id).with_context(|| {
-            format!("window {} no longer exists (the window manager does not list it)", hwnd_hex(id))
-        })?;
-        if let Some(expected) = args.expected_pid
-            && window.pid != Some(expected)
-        {
-            bail!(
-                "window pid changed: expected {expected}, actual {}",
-                window.pid.map_or("unknown".to_string(), |pid| pid.to_string())
-            )
-        }
-        if window.hidden && !args.restore {
-            bail!(
-                "window {} is minimized and restore=false: on X11 activating a window always \
-                 restores it, so the request cannot be honoured as asked",
-                hwnd_hex(id)
-            )
-        }
-        let before = x.active();
-        let timeout = args.timeout_ms.clamp(100, MAX_ACTIVATE_TIMEOUT_MS);
-        x.request_activate(id)?;
-        let mut waited = 0u64;
-        let mut attempts = 1u32;
-        while x.active() != Some(id) && waited < timeout {
-            thread::sleep(Duration::from_millis(25));
-            waited += 25;
-            if waited.is_multiple_of(500) {
-                x.request_activate(id)?;
-                attempts += 1;
-            }
-        }
-        let actual = x.active();
-        let won = actual == Some(id);
-        let activated = won
-            || (window.pid.is_some() && actual.and_then(|a| x.pid(a)) == window.pid);
-        let restored = window.hidden && x.window_by_id(id).is_some_and(|w| !w.hidden);
-        if !won {
-            let did = if activated {
-                "another window of the same program is active, but THIS window did not come up"
-            } else {
-                "the window manager did not activate it (focus-stealing prevention or a modal window \
-                 of another program is the usual reason)"
-            };
-            return Err(anyhow!(
-                "window {} was not activated: {did} (method=ewmh, activated={activated}, \
-                 restored={restored}, attempts={attempts}, waited_ms={waited}, foreground_before={}, \
-                 foreground_hwnd={}; platform=linux)",
-                hwnd_hex(id),
-                foreground_value(before),
-                foreground_value(actual),
-            ));
-        }
-        Ok(json!({
-            "ok": true,
-            "requested_hwnd": hwnd_hex(id),
-            "foreground_before": foreground_value(before),
-            "foreground_hwnd": foreground_value(actual),
-            "method": "ewmh",
-            "activated": activated,
-            "restored": restored,
-            "attempts": attempts,
-            "waited_ms": waited,
-            "platform": "linux",
-        }))
-    }
-
-    // ─── desktop.input.perform ───────────────────────────────────────────────────────
-
-    /// Что этот процесс держит нажатым ПРЯМО СЕЙЧАС: кнопки, коды клавиш, и какая
-    /// запасная клавиша переназначена. Для сторожа родителя: `process::exit` не
-    /// разматывает стек, и `Drop` не сработает (см. Mac-ветку `HELD_NOW`).
-    static HELD_NOW: Mutex<(Vec<u8>, Vec<u8>, Option<u8>)> = Mutex::new((Vec::new(), Vec::new(), None));
-
-    fn arm_release_on_parent_death() {
-        static ARMED: OnceLock<()> = OnceLock::new();
-        ARMED.get_or_init(|| {
-            x11::on_parent_death(Box::new(release_everything_held));
-        });
-    }
-
-    fn release_everything_held() {
-        let Ok(held) = HELD_NOW.lock() else { return };
-        let (buttons, keys, scratch) = (held.0.clone(), held.1.clone(), held.2);
-        drop(held);
-        if buttons.is_empty() && keys.is_empty() && scratch.is_none() {
-            return;
-        }
-        let Ok(x) = X::connect() else { return };
-        for code in keys.into_iter().rev() {
-            let _ = x.fake_key(code, false);
-        }
-        for button in buttons.into_iter().rev() {
-            let _ = x.fake_button(button, false);
-        }
-        if let (Some(code), Ok(map)) = (scratch, x.keymap()) {
-            let _ = x.remap(code, map.per, NO_SYMBOL);
-        }
-        let _ = x.flush();
-    }
-
-    /// Отправитель в XTest: живое положение курсора, что нажато (кнопки и клавиши) и
-    /// запасная клавиша под знаки текста.
-    struct Poster<'a> {
-        x: &'a X,
-        keymap: Keymap,
-        /// Действующая группа раскладки на момент пачки (XKB): знаки текста ищутся в ней.
-        group: u8,
-        scratch: Option<u8>,
-        scratch_used: bool,
-        cursor: (i32, i32),
-        held: Vec<MouseButton>,
-        /// (keysym, код клавиши, нажат ли Shift ради неё) — в порядке нажатия.
-        held_keys: Vec<(u32, u8, bool)>,
-        screen: Screen,
-        clamped_moves: usize,
-    }
-
-    impl<'a> Poster<'a> {
-        fn new(x: &'a X, screen: Screen) -> Result<Self> {
-            let keymap = x.keymap()?;
-            let scratch = keymap.scratch();
-            Ok(Self {
-                x,
-                cursor: x.pointer().unwrap_or((0, 0)),
-                group: x.xkb_group().unwrap_or(0),
-                keymap,
-                scratch,
-                scratch_used: false,
-                held: Vec::new(),
-                held_keys: Vec::new(),
-                screen,
-                clamped_moves: 0,
-            })
-        }
-
-        fn remember(&self) {
-            if let Ok(mut board) = HELD_NOW.lock() {
-                board.0 = self.held.iter().map(|b| button_code(*b)).collect();
-                board.1 = self.held_keys.iter().map(|(_, code, _)| *code).collect();
-                board.2 = self.scratch_used.then_some(self.scratch).flatten();
-            }
-        }
-
-        /// Клавиша под символ: сначала своя клавиша раскладки (сочетания и служебные
-        /// клавиши обязаны идти настоящим кодом — программы сверяют сочетания по нему),
-        /// иначе — запасная, переназначенная на этот символ.
-        fn key_for(&mut self, keysym: u32) -> Result<(u8, bool)> {
-            if let Some(found) = self.keymap.find(keysym) {
-                return Ok(found);
-            }
-            if is_modifier(keysym) {
-                bail!(
-                    "{} is not on this keyboard map: a modifier cannot be emulated by remapping a \
-                     spare key (the X modifier map would not know it)",
-                    keysym_name(keysym)
-                )
-            }
-            self.remap_scratch(keysym)
-        }
-
-        fn remap_scratch(&mut self, keysym: u32) -> Result<(u8, bool)> {
-            let code = self.scratch.context(
-                "the keyboard map has no free key to remap for this character (every keycode \
-                 carries a symbol)",
-            )?;
-            self.x.remap(code, self.keymap.per, keysym)?;
-            self.scratch_used = true;
-            Ok((code, false))
-        }
-
-        fn press_key(&mut self, keysym: u32, code: u8, shift: bool) -> Result<()> {
-            let shift_code = if shift && !self.held_keys.iter().any(|(sym, _, _)| *sym == XK_SHIFT_L) {
-                self.keymap.find(XK_SHIFT_L).map(|(c, _)| c)
-            } else {
-                None
-            };
-            if let Some(shift_code) = shift_code {
-                self.x.fake_key(shift_code, true)?;
-            }
-            self.x.fake_key(code, true)?;
-            self.held_keys.push((keysym, code, shift_code.is_some()));
-            Ok(())
-        }
-
-        fn release_key(&mut self, keysym: u32) -> Result<()> {
-            let Some(index) = self.held_keys.iter().rposition(|(sym, _, _)| *sym == keysym) else {
-                // Отпустить ненажатое — это нажатие наоборот: шлём по раскладке, как есть.
-                let (code, _) = self.key_for(keysym)?;
-                return self.x.fake_key(code, false);
-            };
-            let (_, code, shifted) = self.held_keys.remove(index);
-            self.x.fake_key(code, false)?;
-            if shifted && let Some((shift_code, _)) = self.keymap.find(XK_SHIFT_L) {
-                self.x.fake_key(shift_code, false)?;
-            }
-            Ok(())
-        }
-
-        fn post(&mut self, record: &Record) -> Result<()> {
-            match record {
-                Record::KeyDown(keysym) => {
-                    let keysym = u32::from(*keysym);
-                    let (code, shift) = self.key_for(keysym)?;
-                    self.press_key(keysym, code, shift)?;
-                }
-                Record::KeyUp(keysym) => self.release_key(u32::from(*keysym))?,
-                Record::Unicode { units, down } => {
-                    let value = char::decode_utf16(units.iter().copied())
-                        .next()
-                        .and_then(|decoded| decoded.ok())
-                        .context("text event carries a broken UTF-16 unit")?;
-                    let keysym = x11::keysym_for_char(value);
-                    if *down {
-                        // Знак есть в ДЕЙСТВУЮЩЕЙ группе раскладки — настоящей клавишей (с
-                        // Shift, если он на втором уровне), как xdotool и как человек: раскладку
-                        // тогда трогать не нужно, и программе нечего перечитывать. Живой стенд
-                        // 28.09: при переназначении на КАЖДЫЙ знак GTK иногда не успевал
-                        // перечитать раскладку, и «abc» терялось целиком.
-                        // Нет в группе (кириллица при латинской группе и наоборот) — запасная
-                        // клавиша со знаком во ВСЕХ столбцах: у неё группа ни на что не влияет,
-                        // а своя клавиша под чужой группой дала бы другую букву («a» → «ф»).
-                        if let Some((code, shift)) = self.keymap.find_in_group(keysym, self.group) {
-                            self.press_key(keysym, code, shift)?;
-                        } else {
-                            let (code, _) = match self.scratch {
-                                Some(_) => self.remap_scratch(keysym)?,
-                                None => self.keymap.find(keysym).with_context(|| {
-                                    format!("character {value:?} is not on the keyboard map and there is no free key to remap")
-                                })?,
-                            };
-                            self.x.fake_key(code, true)?;
-                            self.held_keys.push((keysym, code, false));
-                        }
-                    } else {
-                        self.release_key(keysym)?;
-                        // Раскладку клиенты перечитывают по уведомлению — дождаться, что
-                        // сервер всё принял, прежде чем переназначать клавишу под следующий знак.
-                        self.x.sync()?;
-                    }
-                }
-                Record::MoveTo { x, y } => {
-                    self.x.fake_motion(*x, *y)?;
-                    self.cursor = (*x, *y);
-                }
-                Record::MoveBy { dx, dy } => {
-                    let (cx, cy, pulled) =
-                        self.screen.clamp(self.cursor.0.saturating_add(*dx), self.cursor.1.saturating_add(*dy));
-                    if pulled {
-                        self.clamped_moves += 1;
-                    }
-                    self.x.fake_motion(cx, cy)?;
-                    self.cursor = (cx, cy);
-                }
-                Record::ButtonDown { button, .. } => {
-                    self.x.fake_button(button_code(*button), true)?;
-                    if !self.held.contains(button) {
-                        self.held.push(*button);
-                    }
-                }
-                Record::ButtonUp { button, .. } => {
-                    self.x.fake_button(button_code(*button), false)?;
-                    self.held.retain(|value| value != button);
-                }
-                Record::Wheel { vertical, horizontal } => {
-                    // Колесо в X — щелчки кнопок 4/5 (вверх/вниз) и 6/7 (влево/вправо), по
-                    // щелчку на зарубку; планировщик считает строки (три на зарубку).
-                    for (lines, positive, negative) in [(*vertical, 4u8, 5u8), (*horizontal, 7u8, 6u8)] {
-                        if lines == 0 {
-                            continue;
-                        }
-                        let notches = lines.unsigned_abs().div_ceil(3).max(1);
-                        let button = if lines > 0 { positive } else { negative };
-                        for _ in 0..notches {
-                            self.x.fake_button(button, true)?;
-                            self.x.fake_button(button, false)?;
-                        }
-                    }
-                }
-            }
-            self.x.flush()?;
-            self.remember();
-            Ok(())
-        }
-
-        /// Отпустить всё, что пачка оставила нажатым, и вернуть запасную клавишу в пустоту.
-        /// -> (модификаторы, прочие клавиши, кнопки) словами.
-        fn release_all(&mut self) -> (Vec<String>, Vec<String>, Vec<&'static str>) {
-            let mut modifiers = Vec::new();
-            let mut keys = Vec::new();
-            for (keysym, code, shifted) in std::mem::take(&mut self.held_keys).into_iter().rev() {
-                let _ = self.x.fake_key(code, false);
-                if shifted && let Some((shift_code, _)) = self.keymap.find(XK_SHIFT_L) {
-                    let _ = self.x.fake_key(shift_code, false);
-                }
-                if is_modifier(keysym) {
-                    modifiers.push(keysym_name(keysym));
-                } else {
-                    keys.push(keysym_name(keysym));
-                }
-            }
-            let buttons: Vec<&'static str> = self.held.iter().map(|b| b.name()).collect();
-            for button in std::mem::take(&mut self.held).into_iter().rev() {
-                let _ = self.x.fake_button(button_code(button), false);
-            }
-            if self.scratch_used
-                && let Some(code) = self.scratch
-            {
-                let _ = self.x.remap(code, self.keymap.per, NO_SYMBOL);
-                self.scratch_used = false;
-            }
-            let _ = self.x.flush();
-            modifiers.reverse();
-            keys.reverse();
-            self.remember();
-            (modifiers, keys, buttons)
-        }
-    }
-
-    fn ensure_foreground(x: &X, expected: Option<&HwndArg>, expected_pid: Option<u32>) -> Result<Option<u32>> {
-        let actual = x.active();
-        if let Some(expected) = expected {
-            let id = expected.value()?;
-            match actual {
-                Some(window) if window == id => {}
-                Some(window) => bail!(
-                    "foreground changed: expected {}, actual {}",
-                    hwnd_hex(id),
-                    hwnd_hex(window)
-                ),
-                None => bail!("foreground changed: expected {}, but no window is active", hwnd_hex(id)),
-            }
-        }
-        if let Some(expected_pid) = expected_pid {
-            let pid = actual.and_then(|window| x.pid(window));
-            if pid != Some(expected_pid) {
-                bail!(
-                    "foreground pid changed: expected {expected_pid}, actual {}",
-                    pid.map_or("unknown".to_string(), |pid| pid.to_string())
-                )
-            }
-        }
-        Ok(actual)
-    }
-
-    fn input_perform(args: InputArgs) -> Result<Value> {
-        if args.events.is_empty() {
-            bail!("events must not be empty")
-        }
-        if args.events.len() > MAX_INPUT_EVENTS {
-            bail!("too many input events: {} (maximum {MAX_INPUT_EVENTS})", args.events.len())
-        }
-        let x = x_for("desktop.input.perform")?;
-        let screen = screen_of(&x);
-        // Пачка раскладывается и проверяется ДО первой отправки (как на Mac и Windows).
-        let chunks = prepare_input_events_with(&args.events, args.inter_event_delay_ms, screen, LINUX_KEYS)?;
-        let totals = plan_totals(&chunks)?;
-        if totals.pause_ms > MAX_TOTAL_INPUT_DELAY_MS {
-            let typed = args.events.iter().any(|event| matches!(event, InputEvent::Text { .. }));
-            bail!(
-                "total input delay is {}ms (maximum {MAX_TOTAL_INPUT_DELAY_MS}ms){}",
-                totals.pause_ms,
-                if typed {
-                    format!(
-                        "; text is paced at {TEXT_UNIT_PAUSE_MS}ms per character, so keep one call \
-                         under {} characters",
-                        MAX_TOTAL_INPUT_DELAY_MS / TEXT_UNIT_PAUSE_MS
-                    )
-                } else {
-                    String::new()
-                }
-            )
-        }
-        if !x.has_xtest() {
-            bail!("input refused: the X server has no XTEST extension, nothing was sent (platform=linux)")
-        }
-        let before = ensure_foreground(&x, args.expected_foreground.as_ref(), args.expected_pid)?;
-        arm_release_on_parent_death();
-        let mut poster = Poster::new(&x, screen)?;
-        let guarded = args.expected_foreground.is_some() || args.expected_pid.is_some();
-        let mut paused_ms = 0u64;
-        let outcome = (|| -> Result<()> {
-            for (index, chunk) in chunks.iter().enumerate() {
-                if guarded {
-                    ensure_foreground(&x, args.expected_foreground.as_ref(), args.expected_pid)?;
-                }
-                post_chunk(&mut poster, chunk)?;
-                if chunk.pause_ms > 0 && index + 1 < chunks.len() {
-                    thread::sleep(Duration::from_millis(chunk.pause_ms));
-                    paused_ms = paused_ms.saturating_add(chunk.pause_ms);
-                }
-            }
-            Ok(())
-        })();
-        let (modifiers_released, keys_released, buttons_released) = poster.release_all();
-        if let Err(error) = outcome {
-            if modifiers_released.is_empty() && keys_released.is_empty() && buttons_released.is_empty() {
-                return Err(error);
-            }
-            return Err(anyhow!(
-                "{error:#}; released before returning: buttons [{}], modifiers [{}], keys [{}]",
-                buttons_released.join(", "),
-                modifiers_released.join(", "),
-                keys_released.join(", ")
-            ));
-        }
-        let after = x.active();
-        let mut notes: Vec<String> = Vec::new();
-        if !modifiers_released.is_empty() || !keys_released.is_empty() {
-            notes.push(format!(
-                "keys do not survive the call: [{}] stayed down at the end of this batch and were \
-                 released after its last event. Hold and use a modifier in ONE batch",
-                modifiers_released.iter().chain(keys_released.iter()).cloned().collect::<Vec<_>>().join(", ")
-            ));
-        }
-        let session = x11::session();
-        if session.kind == "wayland" {
-            notes.push(
-                "Wayland session: input reached only X11 (XWayland) windows; a native Wayland window \
-                 in front did not receive it"
-                    .into(),
-            );
-        }
-        Ok(json!({
-            "ok": true,
-            "events": args.events.len(),
-            "input_batches": totals.batches,
-            "input_records": totals.records,
-            "planned_pause_ms": totals.pause_ms,
-            "paused_ms": paused_ms,
-            "clamped_moves": totals.clamped_moves + poster.clamped_moves,
-            "buttons_auto_released": buttons_released,
-            "buttons_held_at_exit": Vec::<&str>::new(),
-            "modifiers_auto_released": modifiers_released,
-            "keys_auto_released": keys_released,
-            "modifiers_held_at_exit": Vec::<&str>::new(),
-            "notes": notes,
-            "foreground_before": foreground_value(before),
-            "foreground_after": foreground_value(after),
-            "virtual_screen": virtual_screen(&x),
-            "limits": linux_input_limits(),
-            "platform": "linux",
-        }))
-    }
-
-    fn post_chunk(poster: &mut Poster<'_>, chunk: &PreparedChunk) -> Result<()> {
-        for record in &chunk.records {
-            poster.post(record)?;
-        }
-        Ok(())
-    }
-
-    // ─── desktop.screen.capture ──────────────────────────────────────────────────────
-
-    fn screen_capture(args: CaptureArgs, state_dir: &Path) -> Result<Value> {
-        let x = x_for("desktop.screen.capture")?;
-        let target = args.target.to_ascii_lowercase();
-        let (requested, target_hwnd, composition) = match target.as_str() {
-            "desktop" => (
-                (0, 0, i32::from(x.width), i32::from(x.height)),
-                None,
-                "everything on screen inside the rectangle",
-            ),
-            "region" => (
-                (
-                    args.x.context("region requires x")?,
-                    args.y.context("region requires y")?,
-                    args.width.context("region requires width")?,
-                    args.height.context("region requires height")?,
-                ),
-                None,
-                "everything on screen inside the rectangle",
-            ),
-            "window" => {
-                let id = args.hwnd.context("window capture requires hwnd")?.value()?;
-                let window = x
-                    .window_by_id(id)
-                    .with_context(|| format!("window {} no longer exists", hwnd_hex(id)))?;
-                if window.hidden {
-                    bail!(
-                        "window {} is minimized: X11 keeps no picture of a hidden window; activate it \
-                         first (platform=linux)",
-                        hwnd_hex(id)
-                    )
-                }
-                (
-                    (window.x, window.y, window.width, window.height),
-                    Some(id),
-                    "the window's rectangle as it is on screen (X11 without a compositor keeps no \
-                     private picture of a window): windows above it are in the image",
-                )
-            }
-            _ => bail!("capture target must be desktop, region, or window"),
-        };
-        let (left, top, width, height) = requested;
-        if width <= 0 || height <= 0 {
-            bail!("capture rectangle must have positive width and height")
-        }
-        let (cl, ct, cw, ch) = x11::clip_to_root(left, top, width, height, i32::from(x.width), i32::from(x.height))
-            .with_context(|| {
-                format!(
-                    "capture rectangle {left},{top} {width}x{height} lies outside the screen \
-                     (0,0 {}x{})",
-                    x.width, x.height
-                )
-            })?;
-        capture_allocation(cw, ch)?;
-        let bgra = x.capture(cl, ct, cw, ch)?;
-        let directory = state_dir.join("desktop").join("captures");
-        fs::create_dir_all(&directory)?;
-        let path = directory.join(capture_name(&args.name));
-        write_png(&path, cw, ch, &bgra)?;
-        let size = fs::metadata(&path)?.len();
-        let mut notes: Vec<String> = Vec::new();
-        if (cl, ct, cw, ch) != (left, top, width, height) {
-            notes.push(format!(
-                "the rectangle {left},{top} {width}x{height} reached past the screen and was cut to \
-                 {cl},{ct} {cw}x{ch}; left/top/width/height describe the image"
-            ));
-        }
-        if x11::session().kind == "wayland" {
-            notes.push(
-                "Wayland session: the X server draws only X11 (XWayland) windows; native Wayland \
-                 windows are missing or black in this image"
-                    .into(),
-            );
-        }
-        Ok(json!({
-            "ok": true,
-            "path": path,
-            "format": "png",
-            "mime": "image/png",
-            "size": size,
-            "left": cl,
-            "top": ct,
-            "width": cw,
-            "height": ch,
-            "frame_width": width,
-            "frame_height": height,
-            "pixel_width": cw,
-            "pixel_height": ch,
-            "source_pixel_width": cw,
-            "source_pixel_height": ch,
-            "scale": 1.0,
-            "native": args.native,
-            "downscale": "none",
-            "notes": notes,
-            "target": target,
-            "target_hwnd": target_hwnd.map(hwnd_hex),
-            "composition": composition,
-            "visible_desktop_capture": true,
-            "platform": "linux",
-        }))
-    }
-
-    // ─── буфер обмена ────────────────────────────────────────────────────────────────
-
-    /// Буфер X11 — это владелец выделения CLIPBOARD, который отвечает на запросы, пока
-    /// жив. Поэтому объект один на процесс и живёт вместе с телом: записанный текст
-    /// доступен другим программам, пока тело не закроется (дальше его подхватит менеджер
-    /// буфера рабочего стола, если он есть — у GNOME и KDE есть).
-    static CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
-
-    fn with_clipboard<T>(what: &str, work: impl FnOnce(&mut arboard::Clipboard) -> Result<T>) -> Result<T> {
-        let mut slot = CLIPBOARD.lock().map_err(|_| anyhow!("{what}: clipboard lock poisoned"))?;
-        if slot.is_none() {
-            *slot = Some(arboard::Clipboard::new().map_err(|error| {
-                anyhow!(
-                    "{what}: the clipboard is unavailable ({error}); {} (platform=linux)",
-                    x11::session().hints().join("; ")
-                )
-            })?);
-        }
-        work(slot.as_mut().expect("clipboard was just created"))
-    }
-
-    fn clipboard_read(args: ClipboardReadArgs) -> Result<Value> {
-        with_clipboard("desktop.clipboard.read", |clipboard| match clipboard.get_text() {
-            Ok(text) => {
-                let units: Vec<u16> = text.encode_utf16().collect();
-                let length = units.len();
-                let limit = args.limit_chars.clamp(1, MAX_CLIPBOARD_CHARS).min(length);
-                Ok(json!({
-                    "ok": true,
-                    "available": true,
-                    "format": "unicode_text",
-                    "text": String::from_utf16_lossy(&units[..limit]),
-                    "chars": length,
-                    "truncated": limit < length,
-                    "platform": "linux",
-                }))
-            }
-            Err(arboard::Error::ContentNotAvailable) => Ok(json!({
-                "ok": true,
-                "available": false,
-                "format": null,
-                "text": null,
-                "chars": 0,
-                "truncated": false,
-                "note": "the clipboard holds no text (it is empty or holds an image or files)",
-                "platform": "linux",
-            })),
-            Err(error) => Err(anyhow!("desktop.clipboard.read: {error} (platform=linux)")),
-        })
-    }
-
-    fn clipboard_write(args: ClipboardWriteArgs) -> Result<Value> {
-        let units = args.text.encode_utf16().count();
-        if units > MAX_CLIPBOARD_CHARS {
-            bail!("clipboard text has {units} UTF-16 units (maximum {MAX_CLIPBOARD_CHARS})")
-        }
-        with_clipboard("desktop.clipboard.write", |clipboard| {
-            clipboard
-                .set_text(args.text.clone())
-                .map_err(|error| anyhow!("desktop.clipboard.write: {error} (platform=linux)"))?;
-            Ok(json!({
-                "ok": true,
-                "format": "unicode_text",
-                "chars": units,
-                "note": "on X11 the body owns the clipboard selection and serves it while it runs; \
-                         a desktop clipboard manager (GNOME, KDE) keeps it after that",
-                "platform": "linux",
-            }))
-        })
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn key_names_become_x11_keysyms() {
-            assert_eq!(keysym_by_name("Enter").unwrap(), 0xff0d);
-            assert_eq!(keysym_by_name("ctrl").unwrap(), 0xffe3);
-            assert_eq!(keysym_by_name("cmd").unwrap(), 0xffeb);
-            assert_eq!(keysym_by_name("win").unwrap(), 0xffeb);
-            assert_eq!(keysym_by_name("c").unwrap(), 0x63);
-            assert_eq!(keysym_by_name("C").unwrap(), 0x63);
-            assert_eq!(keysym_by_name("7").unwrap(), 0x37);
-            assert_eq!(keysym_by_name("f1").unwrap(), 0xffbe);
-            assert_eq!(keysym_by_name("f12").unwrap(), 0xffc9);
-            assert!(keysym_by_name("f25").is_err());
-            assert!(keysym_by_name("я").is_err());
-            assert!(keysym_by_name("nonsense").is_err());
-        }
-
-        #[test]
-        fn the_shared_planner_uses_x11_keys_for_text_and_hotkeys() {
-            let events: Vec<InputEvent> = serde_json::from_value(serde_json::json!([
-                {"type": "text", "text": "a\n"},
-                {"type": "hotkey", "keys": ["ctrl", "c"]},
-            ]))
-            .unwrap();
-            let screen = Screen { left: 0, top: 0, width: 800, height: 600 };
-            let chunks = prepare_input_events_with(&events, 0, screen, LINUX_KEYS).unwrap();
-            assert_eq!(chunks[1].records, vec![Record::KeyDown(0xff0d), Record::KeyUp(0xff0d)]);
-            assert_eq!(
-                chunks[2].records,
-                vec![
-                    Record::KeyDown(0xffe3),
-                    Record::KeyDown(0x63),
-                    Record::KeyUp(0x63),
-                    Record::KeyUp(0xffe3)
-                ]
-            );
-        }
-
-        #[test]
-        fn limits_speak_about_x11() {
-            let limits = linux_input_limits();
-            assert!(limits["numeric_keys"].as_str().unwrap().contains("X11 keysym"));
-            assert!(limits["coordinates"].as_str().unwrap().contains("X root"));
-        }
     }
 }
 
@@ -6020,7 +4847,7 @@ mod tests {
         }
         assert_eq!(
             adapter_descriptor().version,
-            if cfg!(any(target_os = "macos", target_os = "linux")) { "1" } else { "3" }
+            if cfg!(target_os = "macos") { "1" } else { "3" }
         );
     }
 
@@ -6045,16 +4872,10 @@ mod tests {
     #[test]
     fn adapter_is_only_advertised_as_available_where_it_runs() {
         let adapter = adapter_descriptor();
-        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos", target_os = "linux")));
+        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos")));
         assert_eq!(
             adapter.name,
-            if cfg!(target_os = "macos") {
-                "native-macos-desktop"
-            } else if cfg!(target_os = "linux") {
-                "native-x11-desktop"
-            } else {
-                "native-win32-desktop"
-            }
+            if cfg!(target_os = "macos") { "native-macos-desktop" } else { "native-win32-desktop" }
         );
     }
 

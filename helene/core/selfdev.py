@@ -361,13 +361,62 @@ def _fingerprint(diff: str) -> str:
     return hashlib.sha256(diff.encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def _reviewer_verdict(text: str) -> str | None:
+    """Машиночитаемый вердикт гнома из его результата: 'blocked' | 'approved' | None.
+
+    Каналы, по порядку надёжности: строка 'VERDICT: APPROVED/BLOCKED' (её просит
+    системный промпт reviewer-юнита), маркер '**BLOCKED**'/'**APPROVE...**' из
+    markdown-вердикта. Проза не парсится: «no blocking issues found» не должно
+    читаться как блок — поэтому ловим только явные маркеры."""
+    t = str(text or "")
+    m = re.search(r"(?:verdict|вердикт)\s*[:=]\s*\**\s*(approved?|unblocked|clear|blocked|block)\b",
+                  t, re.IGNORECASE)
+    if m:
+        tok = m.group(1).lower()
+        return "blocked" if tok.startswith("block") else "approved"
+    up = t.upper()
+    if "**BLOCKED**" in up or up.lstrip().startswith("BLOCKED"):
+        return "blocked"
+    if "**APPROVE" in up or up.lstrip().startswith("APPROVE"):
+        return "approved"
+    return None
+
+
+def reviewer_gate(reviewer: str) -> dict:
+    """Контракт гномьего ревью для submit: вердикт гнома, 'skip: причина' или пусто.
+
+    Возвращает {'status': 'ok'|'skip'|'missing', 'note': …, 'verdict': …}.
+    Пусто и «skip» без записанной причины — 'missing': слово Егора 27.09 (#43744) —
+    гном обязан быть пунктом мёржа наравне с тестами, и право пропуска = записанное
+    основание, не молчание."""
+    r = str(reviewer or "").strip()
+    if not r:
+        return {"status": "missing", "note": "гномье ревью не передано"}
+    low = r.lower()
+    if low.startswith("skip"):
+        why_skip = r[4:].lstrip(":").strip()
+        if len(why_skip) < REVIEW_MIN_CHARS:
+            return {"status": "missing",
+                    "note": (f"пропуск без основания («{r[:60]}»): право пропуска — "
+                             "записанная причина, не молчание")}
+        return {"status": "skip", "note": why_skip, "verdict": None}
+    v = _reviewer_verdict(r)
+    if v is None and len(r) < 10:
+        return {"status": "missing", "note": f"вердикт {len(r)} симв. — отписка, не находка"}
+    return {"status": "ok", "note": r, "verdict": v}
+
+
 def submit(pid: str, title: str, why: str = "", review: str = "", checked: str = "",
-           override_reason: str = "") -> str:
+           override_reason: str = "", reviewer: str = "") -> str:
     """Commit, verify, classify and enact Praxis's reviewed decision.
 
     PASS 16.4: review — её собственный вердикт по диффу (обязателен; пустой/отписочный —
     отказ с подсказкой посмотреть proposal_diff); checked — чем проверено (тесты/запуск/глазами).
-    ``override_reason`` is the explicit, durable way to proceed despite red tests."""
+    ``override_reason`` is the explicit, durable way to proceed despite red tests.
+    28.09 (#43746 → слово Егора #43744): reviewer= — гномье ревью как гейт самой рельсы:
+    вердикт reviewer-юнита (coding_agent role=reviewer) либо 'skip: <причина>'. Пустой
+    reviewer при автомёрже — отказ завершаться, как с красными тестами; BLOCKED без
+    override_reason — тоже. forge.finish подставляет вердикт гнома из леджера задачи сам."""
     t = get(pid)
     if not t:
         return f"Не вижу предложения {pid} — начни с start_proposal."
@@ -394,6 +443,23 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
              _git("diff", "--name-only", f"{main}...HEAD", cwd=wt).stdout.splitlines() if l.strip()]
     if not files:
         return "В предложении нет изменений — нечего отправлять. Правь файлы в его копии или закрой его (reject)."
+    # 28.09, гномий гейт (#43744/#43746): ревью — не пункт чек-листа, а часть действия.
+    # Точка — после коммита и проверки пустого диффа (нечего ревьювать — нечего и гномить),
+    # но до капа диффов и платы за тест-гейт: незачем жечь 20 минут тестов, если гнома не было.
+    rg = reviewer_gate(reviewer)
+    if rg["status"] == "missing":
+        _deny("proposal_reviewer", "submit", f"{pid}: гномье ревью {rg['note']}")
+        return ("Не отправляю: гномье ревью " + rg["note"] + ". Обязательный пункт мёржа "
+                "наравне с тестами (слово Егора 27.09): прогони адверсарный ревьюер со свежим "
+                "контекстом — coding_agent(role=\"reviewer\") по диффу, а в Forge-задаче finish "
+                "подставит его вердикт сам — и передай результат в reviewer=, либо "
+                "reviewer=\"skip: <записанная причина>\". «Я сама прочитала дифф» — не замена: "
+                "в прошлом заходе я сама видела 2 из 4 дыр.")
+    if rg.get("verdict") == "blocked" and not str(override_reason or "").strip():
+        _deny("proposal_reviewer", "submit", f"{pid}: гном BLOCKED без override_reason")
+        return ("Не отправляю: гном дал BLOCKED. Почини находки и прогони гнома заново "
+                "(свежий вердикт по новому диффу), либо передай override_reason — почему блок "
+                "не относится к этому диффу. Ровно как с красными тестами.")
     # 16.4: кап идентичных диффов — анти-жвачка, не цензура. Изменившийся дифф = новый отпечаток.
     fp = _fingerprint(_git("diff", f"{main}...HEAD", cwd=wt).stdout)
     same_rejected = [x for x in _load()
@@ -416,10 +482,15 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
             files=files, diffstat=diffstat)
     tests = run_tests(pid)
     zone = zone_for(files)
+    # Гномье ревью — часть действия (#43746): след остаётся в леджере предложения, а не
+    # только в ответе тул-вызова. Вердикт гнома важен для археологии мёржа: кто смотрел,
+    # что нашёл (или почему пропущен) — рядом с тестами и её собственным ревью.
+    reviewer_note = (f"[{rg['status']}] {rg.get('verdict') or '—'}: {rg['note']}"[:400])
     _update(pid, title=title.strip(), why=(why or t.get("why") or "").strip(),
             review=review.strip(), checked=(checked or "").strip(), fingerprint=fp,
             override_reason=override_reason,
             files=files, diffstat=diffstat, tests=tests, zone=zone,
+            reviewer=reviewer_note,
             status="proposed", notified=False)
     _journal(f"моё ревью «{title.strip() or pid}» ({pid}): {review.strip()[:300]}"
              + (f" | проверено: {checked.strip()[:120]}" if (checked or "").strip() else ""))
@@ -438,16 +509,32 @@ def submit(pid: str, title: str, why: str = "", review: str = "", checked: str =
                 f"\"{pid}\", …) с тем же ревью — гейт прогонится заново.")
 
     if should_automerge(zone):
-        # Sovereign contract: a completed own review is the merge decision. Test outcomes
-        # remain evidence and a post-factum warning, never a hidden request for Yegor to
-        # approve. ``override_reason`` is still useful provenance when I know why a red
-        # check is inapplicable, but its absence cannot silently hand my merge to him.
+        # 26.09 immunity contract (по слову Егора): красные тесты — блок, не предупреждение.
+        # Sovereign contract сохраняется: моё завершённое review — решение о мёрже, но
+        # решение не может игнорировать красный гейт. ``override_reason`` — осознанный
+        # именованный обход блока (provenance), а не молчаливая выдача красного в master.
+        state0 = test_status(tests)
+        if state0 == "failed" and not override_reason:
+            _update(pid, status="proposed", reason="блок иммунитета: красные тесты без override_reason")
+            _journal(f"[иммунитет] мёрж «{title.strip() or pid}» ({pid}) заблокирован: "
+                     "тесты красные, override_reason не дан. Стоит в proposed — "
+                     "исправь тесты или дай осознанный override_reason.")
+            return (f"Предложение {pid} «{title.strip()}» НЕ смёржено (зона {zone}): "
+                    f"гейт красный ({state0}). Иммунитет по слову Егора от 26.09: "
+                    "красные тесты блокируют автомёрж. Исправь тесты/код или передай "
+                    "override_reason с объяснением, почему красное в этом диффе не относится к нему.")
         res = apply(pid, by="auto", override_reason=override_reason)
         how = f"self-authority, зона {zone}"
         if res["ok"]:
             state = test_status(tests)
-            if state == "passed":
+            if state == "passed" and rg["status"] in ("ok", "skip"):
                 proof = "тесты зелёные"
+                if rg["status"] == "ok" and rg.get("verdict") == "approved":
+                    proof += ", гном approve"
+                elif rg["status"] == "skip":
+                    proof += f", гном пропущен: {rg['note'][:80]}"
+                elif rg["status"] == "ok":
+                    proof += ", гном смотрел дифф (вердикт без маркера — читай его текст)"
             elif override_reason:
                 proof = f"красные тесты; объяснение: {override_reason}"
             else:

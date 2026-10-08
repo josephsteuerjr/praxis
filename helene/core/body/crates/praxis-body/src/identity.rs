@@ -23,11 +23,11 @@ pub fn current() -> ExecutionIdentity {
     {
         windows_identity()
     }
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
         macos_identity()
     }
-    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let user = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
         let root = unsafe { libc::geteuid() } == 0;
@@ -56,8 +56,7 @@ pub fn current() -> ExecutionIdentity {
 /// root → integrity `system` и `elevated`, обычный пользователь → `medium`.
 /// SID у macOS нет; `user_sid` = `uid:<effective uid>` — то, что можно сверить с `ps`.
 /// `session_id` — понятие Windows, здесь его нет: `None`, не выдумка.
-/// Linux (порт 28.09) — та же модель, что у macOS: не root — владелец в своей сессии.
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(target_os = "macos")]
 fn macos_identity() -> ExecutionIdentity {
     let uid = unsafe { libc::geteuid() };
     let root = uid == 0;
@@ -74,9 +73,21 @@ fn macos_identity() -> ExecutionIdentity {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux", test))]
+#[cfg(any(target_os = "macos", test))]
 fn macos_execution_kind(uid: u32) -> ExecutionKind {
     if uid == 0 { ExecutionKind::System } else { ExecutionKind::Interactive }
+}
+
+#[cfg(test)]
+mod macos_identity_tests {
+    use super::*;
+
+    #[test]
+    fn user_identity_does_not_depend_on_console_presence() {
+        assert_eq!(macos_execution_kind(501), ExecutionKind::Interactive);
+        assert_eq!(macos_execution_kind(502), ExecutionKind::Interactive);
+        assert_eq!(macos_execution_kind(0), ExecutionKind::System);
+    }
 }
 
 #[cfg(windows)]
@@ -292,16 +303,4 @@ fn hostname() -> String {
                 .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
         })
         .unwrap_or_else(|| "unknown".into())
-}
-
-#[cfg(test)]
-mod macos_identity_tests {
-    use super::*;
-
-    #[test]
-    fn user_identity_does_not_depend_on_console_presence() {
-        assert_eq!(macos_execution_kind(501), ExecutionKind::Interactive);
-        assert_eq!(macos_execution_kind(502), ExecutionKind::Interactive);
-        assert_eq!(macos_execution_kind(0), ExecutionKind::System);
-    }
 }

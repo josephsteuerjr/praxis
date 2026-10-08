@@ -10,3 +10,4 @@ COPY --from=helene-linux-build /opt/node /opt/node
 ENV PATH=/opt/node/bin:/opt/cargo/bin:$PATH
 RUN useradd --create-home --uid 1000 tester
 WORKDIR /test
+

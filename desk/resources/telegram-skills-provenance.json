@@ -13,7 +13,7 @@
         "telethon",
         "telegram_account"
       ],
-      "target_sha256": "92fdbcf7eae582324421e2355df2a54faa55783adeebc8b72a4445d182a42382"
+      "target_sha256": "a15a40af4eae83308f0f529db1b8a07238aaabe7a73ec517bb6d768ad02f4217"
     },
     {
       "target": "telegram-search-history.md",
@@ -23,7 +23,7 @@
       "terms": [
         "telegram_account"
       ],
-      "target_sha256": "6da0641cd821bdbab042a98336b93a02f5a6f65ea1bc832fc27eaffba53d71c5"
+      "target_sha256": "ace5a39dbcde7c104acc74e1e5dc96470bec4edefb8c2513fd6b9ff878f973f7"
     },
     {
       "target": "telegram-reconnect-delivery.md",
@@ -33,7 +33,7 @@
       "terms": [
         "telethon"
       ],
-      "target_sha256": "b3ef9f1a4dfef0b5a67c43d1fcf80aa122872978ad7cb5afbec21f8dc916eb85"
+      "target_sha256": "443053a1b1a14a4e1c7cc8104a95b168c26fd46315c81f302e1d09d9083ce196"
     },
     {
       "target": "telegram-thread-hygiene.md",
@@ -43,7 +43,7 @@
       "terms": [
         "telegram_account"
       ],
-      "target_sha256": "a07b911ce43d634e2c9d07bceebfe1bb35e871815263a2b295ffefa5333944e9"
+      "target_sha256": "cda4594b9e9eadff00d05a1c2d8dcf314ddd9f953450ec0579ce77483690ac57"
     },
     {
       "target": "telegram-mtproto-moderation.md",
@@ -53,7 +53,7 @@
       "terms": [
         "telegram_account"
       ],
-      "target_sha256": "19d98413d0f90320cc207ea88d2b1a0919a0a39da7971e0d5d270d987dc17618"
+      "target_sha256": "27a8d172676ec6f782694a971e252521d742bf1b51925c0d70e81d55c4ee0a95"
     },
     {
       "target": "telegram-history-archaeology.md",
@@ -63,7 +63,7 @@
       "terms": [
         "telegram_account"
       ],
-      "target_sha256": "74afc9d19b0099ba9b69e1e2bdef201e0c01c6e6ae87274d9b931745a704c485"
+      "target_sha256": "1989e59078f1f66c8fc05a2935acb27c0c437b7940ca88909029f9c68ca0d283"
     }
   ],
   "excluded": {

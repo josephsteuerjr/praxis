@@ -1122,10 +1122,7 @@ def _dialogue(snap: dict) -> list[Own]:
     if available is not None and int(available) > delivered:
         bits.append(own("из " + str(int(available)) + " — ОБРЕЗАНО сверху"))
     elif available is not None:
-        # `available` counts the history supplied to the frame builder. The
-        # runner may already have folded hot memory and applied tape_window.
-        # Equality proves this local slice is whole, not that the archive is.
-        bits.append(own("переданная история целиком; полнота архива не установлена"))
+        bits.append(own("полнота архива не установлена"))
     limit = snap.get("tape_limit")
     if limit is not None:
         bits.append(own("предел выборки " + str(int(limit))))
@@ -1177,12 +1174,13 @@ def _working(ctx, snap: dict) -> tuple[Own, str]:
     # источником. Если таких нет — `в работе: нет адресной активной нити`. Пустота здесь
     # лучше ассоциации».
     #
-    # Сегодня источника адресных нитей у зоны НЕТ вовсе: реестр нитей живёт в follow-up и
-    # ключуется не по этому ходу. Поэтому печатается названная пустота, а не молчание и
-    # не подстановка «открытых нитей» по факту их существования — именно этого она и
-    # просила не делать. Слот появится вместе с источником, а не раньше.
     threads = tuple(snap.get("addressed_threads") or ())
-    bits.append(DOT.join([own(str(item)) for item in threads]) if threads
+    # 07.10: источник — addressed_threads.collect (proposal 05f8ad68): транспортное
+    # присутствие + principal → досье LOOPS + pending follow-ups. Строки несут чужой
+    # текст (выжимки sent_excerpt, формулировки нитей) — каждая через inline():
+    # перенос → ⟨CR⟩, «» → <>, SLOT_SEP недостижим, иначе реплика человека
+    # расщепляла бы слот кадра (BLOCK-дефект ревью 6aa57124).
+    bits.append(DOT.join([inline(item) for item in threads]) if threads
                 else own("нет адресной активной нити"))
     included, offered = snap.get("tiers_included"), snap.get("tiers_offered")
     if included is not None and offered is not None:

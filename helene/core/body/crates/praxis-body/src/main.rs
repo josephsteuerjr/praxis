@@ -1,7 +1,5 @@
 mod ax;
 mod mac;
-mod atspi;
-mod x11;
 mod dpi;
 mod artifact;
 mod compose;
@@ -119,12 +117,6 @@ async fn main() -> Result<()> {
     #[cfg(target_os = "macos")]
     if !std::env::args().any(|a| a == "supervise") {
         mac::watch_parent("praxis-body");
-    }
-    // Linux (порт 28.09): тот же сторож — ни job-объекта, ни launchd-сиротства там нет,
-    // а тело, пережившее движок, держало бы X-сервер и шину доступности чужому никому.
-    #[cfg(target_os = "linux")]
-    if !std::env::args().any(|a| a == "supervise") {
-        x11::watch_parent("praxis-body");
     }
     // ⚠ ПЕРЕД первым обращением к экрану, окнам и вводу. Windows отвечает
     // неосведомлённому о масштабе процессу ВЫДУМАННЫМИ числами: `GetWindowRect`,

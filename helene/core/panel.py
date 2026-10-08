@@ -579,7 +579,7 @@ def explain_generate(rel: str, func: str = "", force: bool = False) -> dict | No
         return {"status": "error", "error": "мозг не настроен (плитка «Мозг»)"}
     what = f"{rel}::{func}" if func else rel
     try:
-        resp = llm.chat("voice", max_tokens=900, system=_EXPLAIN_SYS,
+        resp = llm.chat("voice", max_tokens=900, system=_EXPLAIN_SYS, reasoning_effort="low",
                         messages=[{"role": "user",
                                    "content": f"File: {what}\n\n```\n{ctx[:EXPLAIN_MAX_CHARS]}\n```"}])
         text, model = resp.text.strip(), resp.model
@@ -604,7 +604,7 @@ def ask(rel: str, question: str) -> dict:
         return {"status": "error", "error": "мозг не настроен (плитка «Мозг»)"}
     ctx = file_source(rel) or "(файл не найден)"
     try:
-        resp = llm.chat("voice", max_tokens=700, system=_ASK_SYS,
+        resp = llm.chat("voice", max_tokens=700, system=_ASK_SYS, reasoning_effort="low",
                         messages=[{"role": "user",
                                    "content": f"Node: {rel}\n\n```\n{ctx[:ASK_MAX_CHARS]}\n```\n\n"
                                               f"Owner's question: {question}"}])

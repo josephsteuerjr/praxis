@@ -41,19 +41,6 @@ windows = { workspace = true, features = ["Win32_System_Com", "Win32_UI_Accessib
 [target.'cfg(not(windows))'.dependencies]
 libc.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Порт тела на Linux (28.09): окна (EWMH), ввод (XTest), снимок (GetImage) и мониторы
-# (RandR) — чистым Rust поверх сокета X-сервера, без libX11: бинарь не тянет C-библиотек
-# и переносим между Debian 10 (Astra 1.7), Ubuntu и Debian 12. `res` — XRes: pid окна,
-# когда клиент не поставил `_NET_WM_PID`.
-x11rb = { version = "0.13", default-features = false, features = ["xtest", "randr", "res", "xkb"] }
-# Дерево окна — AT-SPI2 по D-Bus (аналог UI Automation). zbus — чистый Rust, без libdbus;
-# синхронный интерфейс, потому что обход идёт на своём потоке, как COM у Windows-ветки.
-zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
-# Буфер обмена X11: выделение CLIPBOARD живёт, пока владелец отвечает на запросы, — arboard
-# держит для этого свой поток; картинки не нужны (`image-data` выключен).
-arboard = { version = "3", default-features = false }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 # Порт тела на macOS (19.09): снимок экрана, окна, мышь и клавиатура — CoreGraphics;
 # словари окон и строки — CoreFoundation. Дерево окна (Accessibility) — свои

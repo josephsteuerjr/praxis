@@ -894,15 +894,55 @@ def _scan_worker_completions() -> list[dict]:
                 encoding="utf-8", errors="replace"))
         except Exception:
             task = {}
+        priority = _norm_priority(task.get("priority"))
+        verdict_escalation = ""
+        if verdict_close_enabled() and priority == "normal":
+            # 07.10 (oro/forge-verdict-0710): дефинитивный вердикт контракта —
+            # повод закрыть forge-цикл сейчас, а не ждать часового окна. Вердикт
+            # «неизвестен» остаётся на обычном пути (grace-окно живо). Вердикт
+            # считается из уже прочитанного task — без второго обхода каталога.
+            verdict = _verdict_for(task)
+            if verdict in ("выполнен", "не выполнен"):
+                priority = "urgent"
+                verdict_escalation = verdict
         out.append({
             "key": f"{task_id}:{agent_id}",
             "task_id": task_id, "agent_id": agent_id,
-            "priority": _norm_priority(task.get("priority")),
+            "priority": priority,
             "status": status,
             "goal": str(task.get("goal") or "")[:140],
             "summary": str(d.get("result") or "").strip().replace("\n", " ")[:300],
+            **({"verdict_escalation": verdict_escalation} if verdict_escalation else {}),
         })
     return out
+
+
+def verdict_close_enabled() -> bool:
+    """PRAXIS_FORGE_CLOSE_ON_VERDICT=on — её рычаг, по умолчанию off (закон 2).
+
+    07.10 (oro/forge-verdict-0710): читается при каждом скане, не на импорте —
+    переворот рычага не требует рестарта раннера, откат тоже. Форма как у
+    PRAXIS_WORK_ENGINE: {"1","true","yes","on"} после lower().
+    """
+    return str(os.getenv("PRAXIS_FORGE_CLOSE_ON_VERDICT", "off") or "").strip().lower() in {
+        "1", "true", "yes", "on"}
+
+
+def _verdict_for(task: dict) -> str:
+    """Вердикт контракта задачи одним словом — из единого источника forge_learning.
+
+    07.10: та же сводка met/unmet/unknown, что у finish и урока
+    (_contract_evidence по терминальным матрицам). Никаких новых суждений: нет
+    контракта или не решён — «неизвестно», путь нормальный.
+    """
+    try:
+        evidence = _contract_evidence(task, _units(str(task.get("id") or ""), "verifications"))
+        if not evidence:
+            return "неизвестно"
+        import forge_learning
+        return forge_learning.contract_status(evidence)
+    except Exception:
+        return "неизвестно"
 
 
 def has_urgent_pending() -> bool:
@@ -949,7 +989,10 @@ def wake_invitation(items: list[dict]) -> str:
         else:
             verb = f"упал ({c['status']})"
         goal = c["goal"] or c["task_id"]
-        lines.append(f"{mark} воркер по «{goal}» ({c['task_id']}) {verb}: {c['summary']}")
+        verdict = str(c.get("verdict_escalation") or "").strip()
+        verdict_note = f" [контракт {verdict}]" if verdict else ""
+        lines.append(f"{mark} воркер по «{goal}» ({c['task_id']}) {verb}{verdict_note}: "
+                     f"{c['summary']}")
     return ("Твои Forge-воркеры завершились — это твой плод, а не задача-повинность. "
             "Глянь, если хочешь: прочитай, прими работу как свою, отклони или отложи.\n"
             + "\n".join(lines))

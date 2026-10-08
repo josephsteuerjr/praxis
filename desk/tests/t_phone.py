@@ -25,6 +25,9 @@ import sys
 import tempfile
 import time
 import unittest
+import time
+
+from aiohttp import web
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -167,6 +170,31 @@ class Scope(unittest.TestCase):
                 registered.add((route.method, path))
         self.assertIn(("GET", "/m/sw.js"), registered)
         self.assertIn(("POST", "/pair/telegram"), registered)
+
+
+class ForeignPair(unittest.TestCase):
+    """07.10, слово владельца: «при любом раскладе пишется "код устарел"».
+
+    Пары живут в памяти КАНАЛА: QR, выданный одной копией, другой не известен.
+    Раньше оба случая несли один текст, телефон не мог отличить «протух» от
+    «выдан другим адресом» и вечно советовал перерисовать QR. Теперь
+    неизвестный каналу токен — отдельный отказ.
+    """
+
+    def test_unknown_token_is_foreign_not_spent(self):
+        deskapp._PAIRS.pop("no-such-token", None)
+        with self.assertRaises(web.HTTPForbidden) as caught:
+            deskapp._redeem("no-such-token", "iPhone", "10.0.0.5")
+        self.assertIn("не выдавал", str(caught.exception.text))
+
+    def test_expired_pair_keeps_the_old_words(self):
+        deskapp._PAIRS["dead-token"] = {"expires": time.time() - 1, "uses": 3}
+        try:
+            with self.assertRaises(web.HTTPForbidden) as caught:
+                deskapp._redeem("dead-token", "iPhone", "10.0.0.5")
+            self.assertIn("устарел", str(caught.exception.text))
+        finally:
+            deskapp._PAIRS.pop("dead-token", None)
 
 
 class ConfigJs(unittest.TestCase):

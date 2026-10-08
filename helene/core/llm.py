@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import tempfile
 import contextvars as _cv
 import threading
 import time as _time
@@ -1570,6 +1571,135 @@ _VISION_PREPASS_SYS = (
 )
 _VISION_PREPASS_ASK = "Опиши, что на этой картинке, и дословно перепиши весь текст на ней."
 
+#: 05.10: глубина мышления узкого взгляда. Описание картинки — не её собственная мысль,
+#: и glm-«high» роли voice не имеет права съедать потолок 1200 изнутри: за один вечер
+#: 04.10 26 описаний были обрезаны до нуля или полуслова именно так.
+VISION_PREPASS_EFFORT = "low"
+#: 05.10: кэш описаний по контенту картинки. Одна и та же картинка в ленте комнаты
+#: пересматривалась КАЖДОЙ итерацией хода (100 описаний одних и тех же стикеров за вечер):
+#: файловый идемпотентный кэш под memory/.state, TTL честный — контент меняется редко,
+#: но вечный кэш описаний лгал бы о комнате, где картинку заменили.
+# 05.10: v2 — смена файла после гномьего ревью: в старом могли лежать записи,
+# подписанные запрошенной моделью, а снятые другой (блокер №2), и «NO pixels»-тексты
+# (блокер №1). Кэш — не память: чистый старт дешевле вычитания легаси.
+VISION_PREPASS_CACHE = MEM_DIR / ".state" / "vision_prepass_cache_v2.json"
+VISION_PREPASS_TTL_SEC = 14 * 24 * 3600
+
+
+def _vision_cache_load() -> dict:
+    try:
+        raw = json.loads(VISION_PREPASS_CACHE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            return raw
+    except Exception:
+        pass
+    return {}
+
+
+def _vision_cache_save(cache: dict) -> None:
+    tmp_name: str | None = None
+    try:
+        VISION_PREPASS_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        # 05.10 (гном-ревью, неблокирующее): уникальный tmp вместо общего файла —
+        # параллельные ходы с картинками не дерутся за один vision_prepass_cache.tmp
+        # и не шумят WARNING-трейсбеками на os.replace.
+        fd, tmp_name = tempfile.mkstemp(dir=str(VISION_PREPASS_CACHE.parent),
+                                        prefix="vision_prepass_cache.",
+                                        suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(cache, ensure_ascii=False))
+        os.replace(tmp_name, VISION_PREPASS_CACHE)
+        tmp_name = None
+    except Exception:
+        log.warning("узкий взгляд: кэш описаний не записан", exc_info=True)
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _vision_block_key(block: dict, model: str = "") -> str:
+    """Стабильный ключ контента картинки: (модель, mime, пиксели).
+
+    Модель входит в ключ: маркер подмены называет зрячую модель, и текст из кэша
+    обязан быть снят именно ею — смена зрячей модели не подаёт чужое описание
+    под новым именем.
+
+    05.10 (гном-ревью, блокер): прежний ключ читал только block["source"], а живой
+    прод-путь подаёт картинки в path-форме (фото из чата, computer-observe) — все
+    они коллапсировали в ОДИН ключ, и вторая картинка получала чужое описание, ни
+    разу не увидев зрячую модель. Ключ строится по фактическому контенту через
+    _image_payload: path- и base64-форма одной картинки дают один ключ, разные
+    файлы — разные. Контент недоступен — пустой ключ: под него ничего не пишется
+    (chat() падает тем же чтением), читать нечего, prepass честно отступает.
+    """
+    payload = ""
+    try:
+        mime, data = _image_payload(block)
+        payload = mime + "\x00" + data
+    except Exception:
+        pass
+    if not payload:
+        # 05.10 (гном-ревью, блокер №3): контент недоступен — общий сентинел, не
+        # sha1(model+"\x00"): файл может появиться между ключом и chat(), и разные
+        # картинки не должны склеиваться общим «пустым» ключом. Под сентинел никто
+        # не пишет и никто не читает — prepass честно отступает (см. _look_once).
+        return _VISION_UNAVAILABLE_KEY
+    return hashlib.sha1(
+        (str(model or "") + "\x00" + payload).encode("utf-8", "replace")
+    ).hexdigest()
+
+
+# Ключ недоступного контента: под него не пишется и не читается ничего.
+_VISION_UNAVAILABLE_KEY = hashlib.sha1(b"__pixels_unavailable__").hexdigest()
+
+
+def _vision_cache_get(key: str) -> str | None:
+    """Описание из кэша; None — мимо (или протухло). Неудачные описания не кэшируем."""
+    hit = _vision_cache_load().get(key)
+    if not isinstance(hit, dict):
+        return None
+    # 05.10 (гном-ревью, блокер №4): одна битая запись ("ts": "2026-10-05") не имеет
+    # права валить ход с картинкой: float() вне try убивал chat(). Битая ts = промах.
+    try:
+        ts = float(hit.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    text = str(hit.get("text") or "")
+    if not text or (_time.time() - ts) > VISION_PREPASS_TTL_SEC:
+        return None
+    if text.startswith(_NO_PIXELS_RESPONSE):
+        # 05.10 (гном-ревью раунд-3, блокер №1): отравленная запись (не-описание)
+        # читается как промах — какой бы путь её ни записал. ПРЕФИКСНЫЙ тест:
+        # _mark_no_pixels_response ставит маркер В НАЧАЛО ответа; честное описание
+        # скриншота может ЦИТИРОВАТЬ сентинел в середине (промпт сам требует
+        # «дословно перепиши весь текст») — подстрочный тест отверг бы его.
+        return None
+    return text
+
+
+def _vision_cache_put(key: str, text: str) -> None:
+    if not text:
+        return
+    cache = _vision_cache_load()
+    cache[key] = {"text": text[:6000], "ts": _time.time()}
+    # 05.10: кэш живёт в одном файле и только растёт, если не чистить. При записи
+    # выметаем протухшее и ограничиваем объём: редкая запись — дешёвая уборка,
+    # частая — сама не даст файлу разжиреться.
+    now = _time.time()
+    def _ts(v):
+        try:
+            return float(v.get("ts") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    cache = {k: v for k, v in cache.items()
+             if isinstance(v, dict) and now - _ts(v) <= VISION_PREPASS_TTL_SEC}
+    if len(cache) > 2000:
+        keep = sorted(cache.items(), key=lambda kv: -_ts(kv[1]))[:2000]
+        cache = dict(keep)
+    _vision_cache_save(cache)
+
 
 def vision_prepass_enabled() -> bool:
     """Рычаг узкого взгляда. Умолчание — ВЫКЛЮЧЕНО: кадр прежний байт-в-байт."""
@@ -1578,6 +1708,9 @@ def vision_prepass_enabled() -> bool:
 
 
 def _vision_prepass_marker(model: str, text: str) -> str:
+    # 05.10 (гном-ревью, блокер №2): маркер обязан называть модель, которая ФАКТИЧЕСКИ
+    # смотрела. Раньше сюда приходило запрошенное имя, а описание снимала другая
+    # (фолбэк-нога) — текст подавался под чужим именем.
     return ("[эту картинку посмотрела зрячая модель " + str(model or "?")
             + " отдельным узким обращением: твоего кадра она не видела, и пикселей в "
             "ЭТОМ кадре нет — ниже её описание, а не твоё зрение]\n" + text)
@@ -1615,12 +1748,12 @@ def _describe_images_narrowly(role: str, framework: str, model: str, messages):
                 if not _is_image_block(block):
                     blocks.append(block)
                     continue
-                text = _look_once(role, sighted, block)
+                text, author = _look_once(role, sighted, block)
                 if not text:
                     # Ни одной подмены в этом сообщении: пусть едет прежним путём.
                     return messages, 0
                 blocks.append({"type": "text",
-                               "text": _vision_prepass_marker(sighted, text)})
+                               "text": _vision_prepass_marker(author, text)})
                 described += 1
             out.append(dict(message, content=blocks))
     finally:
@@ -1628,20 +1761,50 @@ def _describe_images_narrowly(role: str, framework: str, model: str, messages):
     return (out, described) if described else (messages, 0)
 
 
-def _look_once(role: str, sighted: str, block: dict) -> str:
-    """Одно обращение к зрячей модели: картинка и просьба. Пусто — значит не вышло."""
+def _look_once(role: str, sighted: str, block: dict) -> tuple[str, str]:
+    """Одно обращение к зрячей модели: (описание, модель-автор). Пусто — не вышло.
+
+    05.10: кэш по контенту (одна картинка в ленте — одно описание за TTL) и явная
+    глубина мышления low — вспомогательный вызов не наследует glm-«high» роли voice,
+    иначе мышление съедает потолок 1200 изнутри и описание режется до нуля.
+    """
+    key = _vision_block_key(block, sighted)
+    if key == _VISION_UNAVAILABLE_KEY:
+        # 05.10 (гном-ревью, блокер №3): контент недоступен — читать нечего и писать
+        # некуда; картинка поедет прежним путём (зрячая подмена или честное снятие).
+        return "", ""
+    cached = _vision_cache_get(key)
+    if cached is not None:
+        return cached, sighted
     try:
         answer = chat(role, system=_VISION_PREPASS_SYS,
                       messages=[{"role": "user", "content": [
                           block, {"type": "text", "text": _VISION_PREPASS_ASK}]}],
-                      max_tokens=VISION_PREPASS_MAX_TOKENS, model=sighted)
+                      max_tokens=VISION_PREPASS_MAX_TOKENS, model=sighted,
+                      reasoning_effort=VISION_PREPASS_EFFORT)
     except Exception:
         log.warning("узкий взгляд упал — картинка поедет прежним путём", exc_info=True)
-        return ""
+        return "", ""
     text = str(getattr(answer, "text", "") or "").strip()
-    if not text:
-        log.warning("узкий взгляд вернул пустое — картинка поедет прежним путём")
-    return text
+    if not text or text.startswith(_NO_PIXELS_RESPONSE):
+        # 05.10 (гном-ревью раунд-3, блокер №1): не-описание («NO pixels…» в начале)
+        # не имеет права стать кэшированным описанием. ПРЕФИКСНЫЙ тест: маркер ставится
+        # в начало ответа; честное описание, цитирующее сентинел в середине, проходит.
+        log.warning("узкий взгляд вернул пустое/без пикселей — картинка поедет прежним путём")
+        return "", ""
+    if str(getattr(answer, "stop_reason", "")) == "max_tokens":
+        # Обрезанное описание хуже, чем поездка прежним путём: полукадр «на картинке
+        # слева виден фрагм» хуже честной подмены модели. Не кэшируем и отступаем.
+        log.warning("узкий взгляд обрезан потолком (%d симв.) — картинка поедет прежним "
+                    "путём, обрезок не кэширую", len(text))
+        return "", ""
+    # 05.10 (гном-ревью, блокер №2): ключ и маркер — по модели, которая ФАКТИЧЕСКИ
+    # ответила (resp.model после возможной ротации), иначе описание ляжет под чужим
+    # именем и переживёт смену зрячей модели.
+    answered = str(getattr(answer, "model", "") or "").strip() or sighted
+    actual_key = key if answered == sighted else _vision_block_key(block, answered)
+    _vision_cache_put(actual_key, text)
+    return text, answered
 
 
 def _route_image_leg(role: str, framework: str, model: str, messages):
@@ -1881,182 +2044,16 @@ def _max_tokens_field(cli) -> str:
     «профиля провайдера», где адресат объявляет свои поля сам; но и профиль должен
     исходить из того же: спрашивать адресата, а не угадывать по имени модели.
     """
-    return "max_completion_tokens" if _direct_openai(cli) else "max_tokens"
-
-
-def _direct_openai(cli) -> bool:
-    """Клиент смотрит прямо в настоящий OpenAI (`openai.com` и поддомены), мимо реле."""
     try:
         host = (urlparse(str(getattr(cli, "base_url", "") or "")).hostname or "").lower()
     except (ValueError, TypeError, AttributeError):
         host = ""
-    return host == "openai.com" or host.endswith(".openai.com")
-
-
-# ─────────────────── настоящий OpenAI — через Responses API ───────────────────
-# ⚠ 28.09.2026, баг-репорт Йоно (агент Дмитрия К) через Arête. Издание 1.2.3, мозг по
-# ключу OpenAI на gpt-5.6-terra: первый же ход с инструментами — 400 «Function tools with
-# reasoning_effort are not supported for gpt-5.6-terra in /v1/chat/completions. To use
-# function tools, use /v1/responses or set reasoning_effort to 'none'». То же у gpt-6-sol;
-# gpt-5 проходит. Убрать ступень у роли не помогло: `_effective_effort` берёт её и из
-# thinking основного цикла. Резать рассуждение до none — значит отнять у новых моделей то,
-# ради чего их выбирают. Поэтому к настоящему OpenAI этот путь ходит в /v1/responses, где
-# инструменты и глубина живут вместе. Реле и прочие openai-совместимые серверы остаются на
-# chat/completions: реле само говорит с Codex на Responses, а чужой сервер Responses может
-# и не знать.
-def tools_to_responses(tools: list | None) -> list | None:
-    """Наши схемы -> инструменты Responses API (плоская форма, strict выключен явно:
-    в Responses он по умолчанию включён, а на chat/completions был выключен)."""
-    out = []
-    for t in tools_to_openai(tools) or []:
-        if t.get("type") == "function":
-            fn = t.get("function") or {}
-            out.append({"type": "function", "name": fn.get("name", ""),
-                        "description": fn.get("description", ""),
-                        "parameters": fn.get("parameters") or {"type": "object", "properties": {}},
-                        "strict": False})
-        elif t.get("type") == "web_search":
-            item = {"type": "web_search"}
-            if t.get("search_context_size"):
-                item["search_context_size"] = t["search_context_size"]
-            out.append(item)
-    return out or None
-
-
-def messages_to_responses(messages: list) -> list:
-    """Наша история (anthropic-форма) -> входные элементы Responses API.
-
-    Текст — простыми сообщениями `{role, content: str}`; вызовы рук — `function_call`
-    (без `id`: он принадлежал бы ответу, сохранённому у OpenAI, а мы шлём `store=False`),
-    ответы рук — `function_call_output`; картинки — `input_image` с data URL.
-    """
-    items: list[dict] = []
-    for m in messages or []:
-        role, content = m.get("role", "user"), m.get("content", "")
-        if isinstance(content, str):
-            if content:
-                items.append({"role": role, "content": content})
-            continue
-        if role == "assistant":
-            texts, calls = [], []
-            for b in content:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "text" and str(b.get("text", "")):
-                    texts.append(str(b.get("text", "")))
-                elif b.get("type") == "tool_use":
-                    calls.append({"type": "function_call", "call_id": str(b.get("id", "")),
-                                  "name": str(b.get("name", "")),
-                                  "arguments": json.dumps(b.get("input") or {}, ensure_ascii=False)})
-            if texts:
-                items.append({"role": "assistant", "content": "\n".join(texts)})
-            items.extend(calls)
-            continue
-        parts: list[dict] = []
-        for b in content:
-            if not isinstance(b, dict):
-                continue
-            if b.get("type") == "tool_result":
-                items.append({"type": "function_call_output", "call_id": str(b.get("tool_use_id", "")),
-                              "output": str(b.get("content", ""))})
-            elif b.get("type") == "text":
-                parts.append({"type": "input_text", "text": str(b.get("text", ""))})
-            elif b.get("type") == "image":
-                mime, data = _image_payload(b)
-                detail = str(b.get("detail") or "").lower()
-                parts.append({"type": "input_image", "image_url": f"data:{mime};base64,{data}",
-                              "detail": detail if detail in ("low", "high", "auto") else "auto"})
-            elif _is_image_block(b):
-                raise ValueError("non-canonical image block reached responses adapter")
-        if parts:
-            if all(p["type"] == "input_text" for p in parts):
-                items.append({"role": role, "content": "\n".join(p["text"] for p in parts)})
-            else:
-                items.append({"role": role, "content": parts})
-    return items
-
-
-def _field(obj, name: str, default=None):
-    """Поле ответа SDK: объект или словарь (фейки стендов отдают словари)."""
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
-
-
-def _openai_from_response(resp, model: str) -> LLMResponse:
-    """Ответ Responses API -> блоки anthropic-формы, как у chat/completions-пути."""
-    if str(_field(resp, "status", "") or "") == "failed":
-        err = _field(resp, "error") or {}
-        raise RuntimeError(f"openai responses: {_field(err, 'code', '') or 'failed'}: "
-                           f"{str(_field(err, 'message', '') or '')[:300]}")
-    texts: list[str] = []
-    calls: list[dict] = []
-    for item in _field(resp, "output") or []:
-        kind = _field(item, "type")
-        if kind == "message":
-            for part in _field(item, "content") or []:
-                if _field(part, "type") == "output_text" and _field(part, "text"):
-                    texts.append(str(_field(part, "text")))
-        elif kind == "function_call":
-            raw = _field(item, "arguments") or ""
-            malformed = {MALFORMED_JSON_KEY: str(raw)[:MALFORMED_JSON_KEEP]}
-            try:
-                args = json.loads(raw) if str(raw).strip() else {}
-            except Exception:
-                args = malformed
-            if not isinstance(args, dict):
-                args = malformed
-            calls.append({"type": "tool_use", "id": str(_field(item, "call_id", "") or ""),
-                          "name": str(_field(item, "name", "") or ""), "input": args})
-    text = "\n".join(texts).strip()
-    blocks = ([{"type": "text", "text": text}] if text else []) + calls
-    reason = str(_field(_field(resp, "incomplete_details") or {}, "reason", "") or "")
-    if calls:
-        stop = "tool_use"
-    elif str(_field(resp, "status", "") or "") == "incomplete" and reason == "max_output_tokens":
-        stop = "max_tokens"
-    else:
-        stop = "end_turn"
-    usage = _field(resp, "usage") or {}
-    total_in = int(_field(usage, "input_tokens", 0) or 0)
-    cached = int(_field(_field(usage, "input_tokens_details") or {}, "cached_tokens", 0) or 0)
-    return LLMResponse(
-        text=text, blocks=blocks, stop_reason=stop,
-        usage={"schema": USAGE_SCHEMA, "in": max(0, total_in - max(0, cached)),
-               "out": int(_field(usage, "output_tokens", 0) or 0),
-               **({"cache_read": cached} if cached else {})},
-        framework="openai", model=model)
-
-
-def _openai_responses_answer(cli, model: str, *, system, messages, tools, max_tokens, thinking,
-                             reasoning_effort: str | None = None) -> LLMResponse:
-    """Вызов Responses API и разбор ответа — БЕЗ сторожа: его ставит `_call_openai`,
-    один на все пути (стенд `test_empty_response` сверяет каждый возврат)."""
-    # Потолок Responses — не меньше 16 (меньшее API отвергает); рукопожатие просит мало.
-    kw: dict = {"model": model, "input": messages_to_responses(messages), "store": False,
-                "max_output_tokens": max(16, int(max_tokens or 16))}
-    sys_text = system_text(system)
-    if sys_text:
-        kw["instructions"] = sys_text
-    address = cache_address(model, sys_text)
-    if address:
-        kw["extra_body"] = {"prompt_cache_key": address}
-    effort = _effective_effort(thinking, reasoning_effort)
-    if effort:
-        kw["reasoning"] = {"effort": effort}
-    rt = tools_to_responses(tools)
-    if rt:
-        kw["tools"] = rt
-    resp = cli.responses.create(**kw)
-    return _openai_from_response(resp, model)
+    direct_openai = host == "openai.com" or host.endswith(".openai.com")
+    return "max_completion_tokens" if direct_openai else "max_tokens"
 
 
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                  reasoning_effort: str | None = None) -> LLMResponse:
-    if _direct_openai(cli) and hasattr(cli, "responses"):
-        return _guard_answer(_openai_responses_answer(
-            cli, model, system=system, messages=messages, tools=tools, max_tokens=max_tokens,
-            thinking=thinking, reasoning_effort=reasoning_effort))
     msgs = messages_to_openai(messages)
     sys_text = system_text(system)
     if sys_text:
@@ -2131,6 +2128,18 @@ def _note_truncation(out: "LLMResponse", role: str) -> None:
     гадания по часам (см. turns.clear_truncation).
     """
     truncated = str(getattr(out, "stop_reason", "")) == "max_tokens"
+    if _IN_VISION_PREPASS.get():
+        # 05.10: это ВСПОМОГАТЕЛЬНЫЙ вызов (узкий взгляд описывает картинку), не её
+        # фраза. Писать его обрыв в кольцо ходов значило «ответ оборван» о ходе, где
+        # её собственный ответ ещё не начинался: за вечер 04.10 кольцо набрало 26 таких
+        # ложных «обрывов её фразы». Стирать чужую отметку успехом описания — тоже
+        # нельзя: описание — не «полный ответ роли». Лог WARNING остаётся, биография
+        # хода не трогается ни в одну сторону.
+        if truncated:
+            log.warning("обрыв вспомогательного узкого взгляда (%s, %d симв.) — в кольцо "
+                        "не пишу: это не её фраза",
+                        getattr(out, "model", "?"), len(out.text or ""))
+        return
     if truncated:
         log.warning("ответ оборван потолком max_tokens (роль %s, %s): %d символов, "
                     "блоков %d — это НЕ законченная фраза",
@@ -2502,28 +2511,7 @@ def _fallbackable(e: Exception) -> bool:
             return True
     except (TypeError, ValueError):
         pass
-    if _incompatible_model(e):
-        return True
     return isinstance(e, TimeoutError)
-
-
-def _incompatible_model(e: Exception) -> bool:
-    """400/404 «эта модель так не умеет / такой модели нет» — повод уйти на запасную.
-
-    28.09: агент сам переключил мозг на модель, которой не подходил запрос, и каждый его
-    ход падал 400 — а 400 фолбэком не считался, и выйти он не мог. После `switch_brain`
-    запасная — это прежняя основная, значит ход уйдёт туда, где он двигался. Узко: только
-    несовместимость модели, а не любая ошибка запроса.
-    """
-    try:
-        status = int(getattr(e, "status_code", 0) or 0)
-    except (TypeError, ValueError):
-        return False
-    if status not in (400, 404):
-        return False
-    text = str(e).lower()
-    return any(mark in text for mark in ("not supported", "unsupported", "does not support",
-                                         "model_not_found", "does not exist"))
 
 
 # ─────────────────── транспортный повтор на пустом ответе ───────────────────
@@ -2694,7 +2682,8 @@ def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
 
 def chat(role: str, *, system=None, messages: list, tools: list | None = None,
          max_tokens: int | None = None, thinking: int | None = None,
-         end_after_spoken: bool = False, model: str | None = None) -> LLMResponse:
+         end_after_spoken: bool = False, model: str | None = None,
+         reasoning_effort: str | None = None) -> LLMResponse:
     """Вызов модели по роли, с необязательным адресным override без смены роли.
 
     Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
@@ -2739,7 +2728,14 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     mt = int(max_tokens or rc.get("max_tokens") or DEFAULT_MAX_TOKENS[role])
     # ЕЁ фоновая ступень рассуждения роли (switch_brain action=reasoning, 19.08).
     # Явный thinking вызывающего кода сильнее — правило в _effective_effort.
-    role_effort = str(rc.get("reasoning_effort") or "").strip() or None
+    # 05.10: и явный reasoning_effort вызывающего кода тоже сильнее роли. Вспомогательный
+    # вызов (узкий взгляд и ему подобные) — не голос роли: его глубина мышления задаётся
+    # самим вызовом, иначе glm-«high» роли съедает маленький потолок изнутри (26 описаний
+    # за вечер резались о 1200 токенов до первого текстового блока).
+    if reasoning_effort is not None:
+        role_effort = str(reasoning_effort).strip().lower() or None
+    else:
+        role_effort = str(rc.get("reasoning_effort") or "").strip() or None
     st = _STATE[role]
     t0 = _time.time()
     # Пауза до этого вызова — рядом с исходом. Префикс остывает ВРЕМЕНЕМ, и
@@ -2803,6 +2799,11 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # (после ротации _resolve_model конфигное имя может врать в by-model разрезе).
         resp.vision = bool(vision_used)
         if pixels_omitted:
+            # 05.10 (гном-ревью, блокер №1): слепая нога в prepass-режиме тоже маркируется —
+            # маркер нужен ФИЛЬТРУ во _look_once (без него галлюцинация слепой ноги
+            # закэшировалась бы как описание). Без raise: подъём исключения до _usage_add
+            # потерял бы учёт потраченных токенов и размножал бы сторож пустых ответов
+            # за пределы _guard_answer (инвариант OneGuardNotFourCopies).
             _mark_no_pixels_response(resp)
         _usage_add(role, resp.usage, model=(resp.model or model), vision=vision_used)
         _lat = (_time.time() - t0) * 1000
@@ -2828,6 +2829,12 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # запирал бы эндпойт живому следующему ходу (ревью 05.10).
             log.warning("llm: брошенный вызов %s упал (%s) — состояние канала не трогаю",
                         _ROLE_RU.get(role, role), type(e).__name__)
+            raise
+        if _IN_VISION_PREPASS.get():
+            # 05.10 (гном-ревью, блокер №1): узкий взгляд — вспомогательный вызов, не
+            # голос роли. Фолбэк-нога может быть слепой или другой моделью, её ответ
+            # (включая «NO pixels…») не имеет права стать описанием картинки. Падение
+            # уходит наверх: _look_once честно отступит, картинка поедет прежним путём.
             raise
         _synthetic = bool(getattr(e, "synthetic", False))
         if isinstance(e, RelayTerminalError) and not _synthetic:
@@ -3127,11 +3134,6 @@ def _brain_note(role: str, framework: str, model: str, **kw) -> None:
         log.debug("brain note не записался", exc_info=True)
 
 
-#: Рука рукопожатия: вызывать её незачем, она нужна, чтобы запрос был «с инструментами».
-_PING_TOOL = {"name": "handshake_probe", "description": "Handshake probe. Do not call it.",
-              "input_schema": {"type": "object", "properties": {}}}
-
-
 def ping(role: str) -> tuple[bool, str]:
     """Проверка ОСНОВНОГО канала роли (без фолбэка): минимальный вызов. -> (ok, err).
 
@@ -3147,13 +3149,8 @@ def ping(role: str) -> tuple[bool, str]:
         framework = str(rc["framework"])
         model = str(rc["model"])
         thinking = 1024 if framework == "anthropic" and model.strip().lower() == "glm-5.3" else None
-        # 28.09: рукопожатие — тем же вызовом, что настоящий ход: с рукой и со ступенью роли.
-        # Голый ping без инструментов проходил на gpt-6-sol по ключу OpenAI, а первый же ход
-        # с руками падал 400 — агент Дмитрия сам поставил себе мозг, на котором не мог
-        # двигаться, и вернуть прежний мог только человек правкой llm.json.
         resp = _call(framework, model, system="", messages=[{"role": "user", "content": "ping"}],
-                     tools=[_PING_TOOL], max_tokens=1, thinking=thinking,
-                     reasoning_effort=rc.get("reasoning_effort"))
+                     tools=None, max_tokens=1, thinking=thinking)
         _usage_add(role, resp.usage, model=model)  # 18.5: пинг — тоже расход, не мимо счётчика
         return (True, "")
     except Exception as e:
