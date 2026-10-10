@@ -1002,6 +1002,7 @@ fn python_path(base: &Path, cfg: &serde_json::Value) -> PathBuf {
 /// Телефон подключается по Wi-Fi: труба слушает все адреса, а не только петлю.
 /// Доступ не с петли deskapp даёт только по ключу устройства.
 fn phone_enabled(cfg: &serde_json::Value) -> bool {
+    if cfg.get("phone").and_then(|p| p.get("mode")).and_then(|v| v.as_str()) == Some("automatic") { return false; }
     cfg.get("phone")
         .and_then(|p| p.get("enabled"))
         .and_then(|v| v.as_bool())
@@ -3144,6 +3145,9 @@ fn engine_restart() -> Result<String, String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 fn owner_control(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
+    if action=="resume" && SERVER_TRANSFER_BUSY.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Перенос на сервер ещё идёт. Дождись его результата, чтобы не запустить второго агента.".into());
+    }
     #[cfg(target_os = "linux")]
     {
         return match action.as_str() {
@@ -3164,6 +3168,22 @@ fn owner_control(action: String) -> Result<String, String> {
     }
     #[cfg(windows)]
     {
+        if action == "panic" {
+            let config = install_root().join("helene.json");
+            if let Ok(raw) = std::fs::read(&config) {
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                    let raw_tree = PathBuf::from(value.get("tree").and_then(|v| v.as_str()).unwrap_or("data"));
+                    let tree = if raw_tree.is_absolute() { raw_tree } else { install_root().join(raw_tree) };
+                    if let Some(token) = broker_token_read(&tree) {
+                        let ask = BrokerAsk::new(&token, BrokerOp::Panic, "", &["window".into()], "Аварийная остановка Hélène");
+                        if broker_call_deadline(&broker_pipe_name(&install_root()), &ask, Duration::from_secs(6))
+                            .is_ok_and(|r| r.ok) && owner_stopped() {
+                            return Ok("Аварийный стоп включён; надзор завершает все агентские процессы".into());
+                        }
+                    }
+                }
+            }
+        }
         let exe = install_root().join("helene-svc.exe");
         let file = exe.to_string_lossy().replace('\'', "''");
         let script = format!("$ErrorActionPreference='Stop'; $p=Start-Process -FilePath '{file}' -ArgumentList '{action}' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode");
@@ -4942,6 +4962,7 @@ fn broker_confirm_text_for(wish: &BrokerWish, mac: bool) -> String {
         }
         (BrokerOp::SpawnInteractive, _) => "твоими правами, в твоей сессии",
         (BrokerOp::Ping, _) => "ничего не выполняя (проверка связи)",
+        (BrokerOp::Panic, _) => "включив аварийный стоп всей установки",
         // Узкая дверь: агент выбирает только порт, само правило собирает служба.
         // Показывать её теми же словами, что и «права системы», было бы враньём
         // в сторону страха — а пугать там, где риска нет, тоже обман.
@@ -5599,6 +5620,7 @@ fn mac_wish_check(wish: &BrokerWish) -> Result<(), String> {
     }
     match wish.op {
         BrokerOp::Ping => Ok(()),
+        BrokerOp::Panic => Err("Используй нативный стоп-кран".into()),
         // Правило брандмауэра — дверь Windows: там его ставит служба ради кнопки
         // «Телефон». На macOS брандмауэр спрашивает владельца сам при первом
         // входящем, и ставить нечего.
@@ -5836,6 +5858,7 @@ fn mac_broker_run(prepared: &MacPrepared) -> BrokerRun {
         // До вопроса владельцу сюда не доходит (`mac_wish_check`); на всякий
         // случай ответ — тот же отказ, а не паника.
         BrokerOp::Firewall => BrokerRun::Refused("на macOS брандмауэр спрашивает сам".to_string()),
+        BrokerOp::Panic => BrokerRun::Refused("Используй нативный стоп-кран".to_string()),
         BrokerOp::SpawnInteractive => {
             // Та же сверка, что у `exec`, только своими руками: диалога пароля
             // здесь нет, но окно подтверждения есть, и между «Да» и запуском
@@ -6283,7 +6306,15 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
 
 fn bootstrap() -> Option<Boot> {
     if std::env::args().any(|a| a == "--panic") {
-        if let Err(e) = owner_control("panic".into()) { eprintln!("{e}"); std::process::exit(1); }
+        let notify = std::env::args().any(|a| a == "--notify");
+        match owner_control("panic".into()) {
+            Ok(note) => { if notify { message_box_info("Hélène · аварийный стоп", &note); } }
+            Err(e) => {
+                eprintln!("{e}");
+                if notify { message_box("Hélène · остановка не подтверждена", &e); }
+                std::process::exit(1);
+            }
+        }
         return None;
     }
     let base = install_root();
@@ -6321,6 +6352,7 @@ fn bootstrap() -> Option<Boot> {
 
     let mut children: Vec<Managed> = Vec::new();
     let mut init_script = String::new();
+    let mut window_key: Option<String> = None;
     let mut tree: Option<PathBuf> = None;
     let mut plans: Vec<SpawnPlan> = Vec::new();
     let notify_text = cfg
@@ -6441,10 +6473,12 @@ fn bootstrap() -> Option<Boot> {
             "remote" => {
                 let base_url = cfg.get("base").and_then(|v| v.as_str()).unwrap_or("");
                 let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                window_key = Some(key.to_owned());
                 if !base_url.is_empty() {
                     init_script = format!(
                         "window.DESK_CONFIG_OVERRIDE = {};",
-                        serde_json::json!({"base": base_url, "key": key, "agent": agent, "product": product_ui()})
+                        serde_json::json!({"base": base_url, "key": key, "agent": agent, "product": product_ui(), "local_agent":false,
+                            "discover_server":cfg.get("server_locator").and_then(|v|v.as_str())==Some("telegram-menu")})
                     );
                 } else {
                     // Praxis распакован, но адрес сервера ещё не вписан. Раньше окно
@@ -6481,19 +6515,19 @@ fn bootstrap() -> Option<Boot> {
             "base": "", "key": "", "agent": agent, "product": product_ui(), "needs_local_setup": !configured,
         }));
     }
-    Some(Boot { base, children, plans, init_script, tree, notify_text })
+    Some(Boot { base, children, plans, init_script, window_key, tree, notify_text })
 }
 
 struct Boot {
     base: PathBuf, children: Vec<Managed>, plans: Vec<SpawnPlan>,
-    init_script: String, tree: Option<PathBuf>, notify_text: bool,
+    init_script: String, window_key: Option<String>, tree: Option<PathBuf>, notify_text: bool,
 }
 
 #[cfg(feature = "desktop")]
 fn main() {
     let context = tauri::generate_context!();
     init_product(context.config());
-    let Some(Boot { base, children, plans, init_script, tree, notify_text }) = bootstrap() else { return };
+    let Some(Boot { base, children, plans, init_script, window_key, tree, notify_text }) = bootstrap() else { return };
     let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
@@ -6552,6 +6586,7 @@ fn main() {
             telegram_account,
             voice_fetch,
             carry_export,
+            server_transfer,
             agents_list,
             switch_agent,
             agent_add,
@@ -6583,7 +6618,7 @@ fn main() {
                 "../", env!("HELENE_ICON_DIR"), "/tray-template@2x.png"
             )))?;
             debug_assert_eq!(app.config().identifier, toast_id());
-            open_window(app, &init_script, Some(window_icon))?;
+            open_window(app, &init_script, Some(window_icon), window_key.as_deref())?;
             #[cfg(windows)]
             touchpad::start(app.handle().clone());
             #[cfg(target_os = "macos")]
@@ -6813,6 +6848,7 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
     manager: &M,
     init_script: &str,
     icon: Option<tauri::image::Image<'_>>,
+    window_key: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = tauri::WebviewWindowBuilder::new(
         manager,
@@ -6826,7 +6862,7 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
             // канала ключ не попадает (маскируется), а тем же `?key=` уже ходят проба
             // порта и телефон. (17.09 этим искали причину мёртвого окна; она оказалась
             // в кэше страницы — см. `serve_static`.)
-            let key = desk_token();
+            let key = window_key.map(str::to_owned).unwrap_or_else(desk_token);
             log_line(&format!(
                 "окно открывается: ключ {} ({} знаков), скрипт инициализации {} знаков",
                 if key.is_empty() { "ПУСТ" } else { "есть" }, key.len(), init_script.len()
@@ -6879,7 +6915,7 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
 
 #[cfg(feature = "desktop")]
 fn replace_main(app: &ShellHandle, script: &str) -> Result<(), String> {
-    open_window(app, script, None).map_err(|e| e.to_string())
+    open_window(app, script, None, None).map_err(|e| e.to_string())
 }
 #[cfg(feature = "host")]
 fn replace_main(app: &ShellHandle, script: &str) -> Result<(), String> { app.replace(script) }
@@ -8644,11 +8680,48 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
     }
 }
 
-/// Экспорт агента одним архивом — `app/localharness/carry.py export`: данные
-/// с личным git, helene.json с ключами и паспорт `helene-carry.json`. Возвращает
-/// путь к архиву; окно показывает его в Проводнике. Импорт на ПК — только из
-/// консоли при закрытой программе: подменять data/ под живым харнессом нельзя,
-/// и команды на это у окна намеренно нет.
+/// Настройка сервера из окна. SSH credentials идут по stdin в локальный helper.
+static SERVER_TRANSFER_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn server_transfer(action: String, request: String) -> Result<serde_json::Value, String> {
+    if !["probe", "run", "locate", "status", "telegram-check"].contains(&action.as_str()) || request.len() > 32768 {
+        return Err("неверный запрос подключения сервера".into());
+    }
+    let base = install_root();
+    let config = current_config_path();
+    if action == "run" {
+        let input:serde_json::Value=serde_json::from_str(&request).map_err(|_|"неверные данные подключения".to_string())?;
+        if input.get("expected_config").and_then(|v|v.as_str())!=Some(config.to_string_lossy().as_ref()) {
+            return Err("В окне выбран другой агент. Вернись к переносимому агенту и повтори.".into());
+        }
+        let state=owner_state();
+        if state.get("stopped").and_then(|v|v.as_bool())!=Some(true)
+            || state.get("runner_alive").and_then(|v|v.as_bool())==Some(true)
+            || (state.get("pid").and_then(|v|v.as_u64()).unwrap_or(0)>0 && state.get("runner_alive").map(|v|v.is_null()).unwrap_or(true)) {
+            return Err("Местный агент ещё не остановлен. Дождись остановки перед переносом.".into());
+        }
+    }
+    let moving=action=="run";
+    if moving && SERVER_TRANSFER_BUSY.swap(true,std::sync::atomic::Ordering::SeqCst) {
+        return Err("Перенос уже идёт. Дождись его результата перед повтором.".into());
+    }
+    shell_adapter::async_runtime::spawn_blocking(move || {
+        struct Clear(bool);
+        impl Drop for Clear { fn drop(&mut self) { if self.0 { SERVER_TRANSFER_BUSY.store(false,std::sync::atomic::Ordering::SeqCst); } } }
+        let _clear=Clear(moving);
+        let script=base.join("app/localharness/server_transfer.py");
+        if !script.is_file() { return Err("в этой версии ещё нет встроенного переноса; обнови Hélène".into()); }
+        let mut cmd=Command::new(bundled_python(&base));
+        cmd.arg("-u").arg(script).arg(&action).arg("--config").arg(config).arg("--program").arg(&base)
+            .current_dir(&base).env("PYTHONUTF8","1");
+        let limit=if action=="run" { 3600 } else { 90 };
+        let output=run_hidden_input_for(&mut cmd,Duration::from_secs(limit),Some(request.as_bytes()))?;
+        let text=String::from_utf8_lossy(&output.stdout);
+        text.lines().rev().find_map(|line|serde_json::from_str::<serde_json::Value>(line).ok())
+            .ok_or_else(||"помощник подключения не вернул результат; местные данные сохранены".into())
+    }).await.map_err(|_|"подключение сервера прервалось".to_string())?
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn carry_export() -> Result<String, String> {
     let base = install_root();

@@ -50,7 +50,7 @@ export async function serverEdition({ draft, saved }: EditionContext): Promise<E
     // куда телефону идти незачем. Правило брандмауэра здесь ни при чём.
     phoneBase: base,
     qrSvg: (text: string) =>
-      QRCode.toString(text, { type: "svg", margin: 1, width: 240,
+      QRCode.toString(text, { type: "svg", margin: 4, width: 240,
                               color: { dark: "#262320", light: "#ffffff" } }),
     note: () => "",
     collect(_out: Config): string {

@@ -97,14 +97,12 @@ class UpdateHandTextTellsTheTruthAboutSilence(unittest.TestCase):
     def test_desk_text_does_not_promise_a_silent_rollback(self):
         text = updates.TOOL_DESK["description"]
         self.assertNotIn("если промолчишь", text, "старая ложь ещё в тексте руки")
-        self.assertIn("ОСТАЕТСЯ работать", text)
-        self.assertIn("не принудительный", text)
+        self.assertIn("не ждёт твоей приёмки", text)
 
     def test_server_text_does_not_promise_a_silent_rollback(self):
         text = updates.TOOL["description"]
         self.assertNotIn("если промолчишь", text, "старая ложь ещё в тексте руки")
-        self.assertIn("ОСТАЕТСЯ работать", text)
-        self.assertIn("не принудительный", text)
+        self.assertIn("не ждёт твоей приёмки", text)
 
 
 class ReceiptFailureIsNeverSilent(unittest.TestCase):

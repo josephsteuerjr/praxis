@@ -39,6 +39,7 @@ import threading
 import boot
 import telegram_proxy
 import addressing
+import telegram_media
 import time
 import urllib.error
 import urllib.parse
@@ -139,6 +140,46 @@ class BotClient:
             raise BotApiError(method, int(payload.get("error_code") or 0),
                               str(payload.get("description") or "not ok"))
         return payload.get("result")
+
+    def download_file(self, file_id: str, destination: Path):
+        if self._proxy_url:
+            token=urllib.parse.urlsplit(self._base).path.removeprefix('/bot').strip('/')
+            request=telegram_proxy.file_request(file_id,token,self._proxy_url,self._proxy_key)
+            try:
+                self._download(request,destination)
+                self._proxy_media_status='ready'
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code==404:
+                    self._proxy_media_status='upgrade_required'
+                    raise BotApiError('download',404,'Прокси Telegram нужно обновить: он ещё не передаёт вложения.') from None
+                if exc.code==413: raise ValueError('Вложение больше 20 МБ — этот Telegram-канал не может его загрузить.') from None
+                self._proxy_media_status='retry'
+                raise
+            except urllib.error.URLError:
+                self._proxy_media_status='retry'
+                raise
+        info = self.call('getFile', file_id=file_id, _http_timeout=15)
+        relative = str(info.get('file_path') or '')
+        if not relative or relative.startswith('/') or '..' in relative.split('/'):
+            raise ValueError('Telegram вернул неверный путь медиа.')
+        url = self._base.replace('/bot', '/file/bot', 1).rstrip('/') + '/' + urllib.parse.quote(relative, safe='/')
+        self._download(url,destination)
+
+    @staticmethod
+    def _download(url, destination):
+        with urllib.request.urlopen(url, timeout=30) as response:
+            with Path(destination).open('wb') as target:
+                total = 0
+                while chunk := response.read(65536):
+                    total += len(chunk)
+                    if total > telegram_media.LIMIT: raise ValueError('Медиа больше доступного размера.')
+                    target.write(chunk)
+
+    def download_media(self, message: dict, destination: Path):
+        selected = telegram_media.item(message)
+        if not selected or not selected[1].get('file_id'): raise ValueError('Telegram не передал файл медиа.')
+        self.download_file(selected[1]['file_id'],destination)
 
 
 # --------------------------------------------------------------------------- #
@@ -277,7 +318,8 @@ class Rooms:
 
     def record(self, chat_id: str, text: str, *, outgoing: bool, sender: str = "",
                source_id: str = "", ts: float | None = None,
-               source: str = "botapi", edited: bool = False, historical: bool = False) -> None:
+               source: str = "botapi", edited: bool = False, historical: bool = False,
+               media: dict | None = None, reply: dict | None = None, sender_id: str = "") -> None:
         import datetime as dt
         moment = dt.datetime.fromtimestamp(ts, dt.timezone.utc) if ts else \
             dt.datetime.now(dt.timezone.utc)
@@ -287,6 +329,16 @@ class Rooms:
         row = {"timestamp": moment.isoformat(timespec="seconds"),
                "outgoing": bool(outgoing), "text": str(text),
                "sender_name": (self.agent_name if outgoing else (sender or "?"))}
+        if sender_id: row['sender_id']=sender_id
+        if media: row.update(media)
+        if reply and reply.get('message_id'):
+            row['reply_to_message_id']=reply['message_id']
+            row['reply_to_sender_name']=' '.join(str(x) for x in ((reply.get('from') or {}).get('first_name'),(reply.get('from') or {}).get('last_name')) if x)
+            row['reply_to_text'] = str(reply.get('text') or reply.get('caption') or '')[:1000]
+            for kind in ('photo', 'video', 'animation', 'sticker', 'voice', 'audio', 'document'):
+                if reply.get(kind):
+                    row['reply_to_media'] = kind
+                    break
         if source_id:
             row["source_message_id"] = str(source_id)
             row["source"] = source
@@ -298,12 +350,24 @@ class Rooms:
             if source_id and archive.exists():
                 rows = [json.loads(line) for line in archive.read_text(encoding="utf-8").splitlines()
                         if line.strip()]
+            if row.get('reply_to_message_id') and not row.get('reply_to_text'):
+                original = next((r for r in reversed(rows)
+                    if str(r.get('source_message_id') or '') == str(row['reply_to_message_id'])
+                    and not r.get('deleted')), None)
+                if original is not None:
+                    row['reply_to_text'] = str(original.get('text') or '')[:1000]
+                    row['reply_to_sender_name'] = original.get('sender_name') or row.get('reply_to_sender_name') or ''
+                    if original.get('media_kind') or original.get('media'):
+                        row['reply_to_media'] = original.get('media_kind') or original.get('media')
             existing = next((r for r in rows if str(r.get("source_message_id") or "") == str(source_id)), None)
             if existing is None and source_id:
                 matches = [r for r in rows if not r.get("source_message_id") and
                            all(r.get(k) == row[k] for k in ("timestamp", "outgoing", "text", "sender_name"))]
                 existing = matches[0] if len(matches) == 1 else None
             if existing is not None:
+                if media and media.get('media_source') and existing.get('media_source') != media['media_source']:
+                    for key in list(existing):
+                        if key.startswith('media_'): existing.pop(key,None)
                 # Renaming must not relabel old authored messages.
                 row["sender_name"] = existing.get("sender_name") or row["sender_name"]
                 if all(existing.get(k) == v for k, v in row.items()):
@@ -319,7 +383,7 @@ class Rooms:
                 if historical and rows:
                     rows.append(row)
                     rows.sort(key=lambda r: (str(r.get("timestamp") or ""),
-                                             int(r.get("source_message_id") or 0)))
+                                             int(r.get("source_message_id") or 0) if str(r.get("source_message_id") or '').lstrip('-').isdigit() else 0))
                     tmp = archive.with_name(".telegram-" + uuid.uuid4().hex + ".tmp")
                     tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
                                    encoding="utf-8", newline="\n")
@@ -359,6 +423,20 @@ class Rooms:
                 **({"keat_occurrence": occurrence} if occurrence else {}))
         except Exception:
             log.exception("событие жизни не записалось [%s]", chat_id)
+
+    def attach_media(self, chat_id: str, source_id: str, expected: dict, media: dict):
+        if not re.fullmatch(r'-?\d+(?:__topic__\d+)?',chat_id): return False
+        archive=self.tree/'memory/groups'/f'{chat_id}.jsonl'
+        with self._record_lock:
+            if not archive.is_file(): return False
+            rows=[json.loads(line) for line in archive.read_text(encoding='utf-8').splitlines() if line.strip()]
+            row=next((r for r in rows if str(r.get('source_message_id') or '')==source_id),None)
+            if row is None or row.get('media_source')!=expected: return False
+            row.pop('media_error',None);row.update(media)
+            temporary=archive.with_name('.telegram-'+uuid.uuid4().hex+'.tmp')
+            temporary.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows),encoding='utf-8')
+            os.replace(temporary,archive)
+        return True
 
     def lines(self, chat_id: str, limit: int = 200) -> list[str]:
         archive = self.tree / "memory" / "groups" / (str(chat_id) + ".jsonl")
@@ -437,6 +515,8 @@ def _placeholder(message: dict) -> str:
         base = f"[стикер {(message['sticker'] or {}).get('emoji') or ''}]".replace(" ]", "]")
     elif "video" in message:
         base = "[видео]"
+    elif "animation" in message:
+        base = "[анимация]"
     elif "location" in message:
         loc = message["location"] or {}
         base = f"[локация {loc.get('latitude')}, {loc.get('longitude')}]"
@@ -505,6 +585,7 @@ class BotTransport:
         # узнать о сообщении в следующем вводе модели. Зовётся из потока приёма.
         self.on_incoming = None
         self.owner_control = None
+        self._cooldown_init_lock = threading.RLock()
         # .strip(): id сверяется СТРОКОЙ (`ident == str(self.owner_id)`), и
         # " 111 " из руками правленного helene.json не совпал бы с "111"
         # никогда — владелец получил бы бота, молчащего лично на него.
@@ -549,6 +630,7 @@ class BotTransport:
         # хода несёт строки «Имя: текст», парсить её задним числом ненадёжно;
         # гист фиксируется в момент приёма, вместе с флагом.
         self._wake_priority_gist: dict[str, str] = {}
+        self._wake_priority_rows: dict[str, list[dict]] = {}
         self._stop = threading.Event()
         self.sent_now: list[tuple[str, str]] = []   # (chat_id, text) этого хода
         if not self.owner_id and self.allow_from != "any":
@@ -591,6 +673,18 @@ class BotTransport:
     def set_agent_name(self, name: str) -> None:
         self._cfg = {**self._cfg, "agent": {"name": str(name)}}
         self.rooms.agent_name = str(name)
+
+    def proxy_line(self) -> str:
+        url=str(getattr(self.client,'_proxy_url','') or '')
+        if not url: return 'Telegram: прямое соединение с этого компьютера; серверный прокси выключен.'
+        status=getattr(self.client,'_proxy_media_status','unknown')
+        media={'upgrade_required':'Прокси ещё не умеет передавать файлы: требуется обновление шлюза на сервере.',
+               'ready':'Загрузка файлов через этот прокси проверена.',
+               'retry':'Загрузка файлов через прокси временно не прошла; ожидает повтора.'}.get(status,'Файловая часть прокси ещё не проверена в этом запуске.')
+        if self.transport_kind.startswith('MTProto'): media='Медиа и сообщения идут тем же MTProto-соединением через WSS.'
+        return (f'Telegram: серверный прокси {telegram_proxy.public_address(url)}. {media} '
+                'Настройка принадлежит этому агенту: блок telegram.proxy в helene.json, карточка Telegram → Telegram через сервер. '
+                'Сессия Telegram, архив и решения о пробуждении остаются на этом компьютере. Ключ прокси — секрет; в сообщения его не выводить.')
 
     def is_named(self, text: str) -> bool:
         profile = getattr(self, "me", None) or {}
@@ -669,11 +763,29 @@ class BotTransport:
             self._pending_set.discard(chat_id)
             return chat_id
 
-    def _enqueue(self, chat_id: str) -> None:
+    def take_priorities(self, chat_id: str) -> list[dict]:
         with self._queue_lock:
+            self._wake_priority.pop(str(chat_id), None)
+            self._wake_priority_gist.pop(str(chat_id), None)
+            return self._wake_priority_rows.pop(str(chat_id), [])
+
+    def restore_priorities(self, chat_id: str, rows: list[dict]) -> None:
+        if not rows:
+            return
+        with self._queue_lock:
+            pending = self._wake_priority_rows.setdefault(str(chat_id), [])
+            seen = {row['id'] for row in pending}
+            pending[:0] = [row for row in rows if row['id'] not in seen]
+
+    def _enqueue(self, chat_id: str, *, urgent: bool = False) -> None:
+        with self._queue_lock:
+            if urgent and chat_id in self._pending_set:
+                self._pending.remove(chat_id)
+                self._pending.appendleft(chat_id)
+                return
             if chat_id not in self._pending_set:
                 self._pending_set.add(chat_id)
-                self._pending.append(chat_id)
+                (self._pending.appendleft if urgent else self._pending.append)(chat_id)
 
     # ------------------------------------------------------------- приём
     def _load_offset(self) -> int:
@@ -756,6 +868,9 @@ class BotTransport:
                 self._save_offset(offset)
             if stalled:
                 self._stop.wait(min(30, 2 * int(self._stuck.get("n") or 1)))
+            if not self._stop.is_set():
+                try: telegram_media.recover(self.tree,self.client,self.rooms)
+                except Exception: log.warning('Вложения Telegram ждут повторной загрузки.')
 
     def _ingest(self, update: dict) -> None:
         if update.get('_deleted'):
@@ -814,21 +929,38 @@ class BotTransport:
             return
         edited = bool(update.get("edited_message") or update.get("edited_channel_post")
                       or update.get("_edited"))
+        media = {}
+        if telegram_media.item(message):
+            media['media_source']=telegram_media.source(message)
+            try:
+                media.update(telegram_media.persist(self.client,self.tree,conversation,message))
+            except ValueError as exc:
+                media['media_error']=str(exc)
+            except Exception:
+                media['media_error']='Сервер подключения Telegram ещё не передаёт файлы — нужно обновить шлюз.' if getattr(self.client,'_proxy_media_status',None)=='upgrade_required' else 'Вложение пока не загрузилось из Telegram. Повторяю автоматически, когда появится связь.'
+                telegram_media.defer(self.tree,conversation,message)
         self.rooms.record(conversation, text, outgoing=outgoing, sender=sender_name,
                           source_id=str(message.get("message_id") or ""),
                           ts=float(message.get("date") or 0) or None, edited=edited,
-                          historical=bool(update.get('_history')))
+                          historical=bool(update.get('_history')), media=media,
+                          reply=message.get('reply_to_message'), sender_id=str(sender.get('id') or ''))
         if outgoing or edited or update.get("_history"):
             return
-        if not (is_dm or self._addressed(message)):
-            return
         sender_id = str(sender.get("id") or "")
-        if text == "/panic" and self.owner_id and sender_id == str(self.owner_id):
+        # Control has priority over wake, busy turns and model admission. Match
+        # the authenticated bot username; a command for another bot is inert.
+        command = str(message.get('text') or '').strip().split(maxsplit=1)
+        panic = re.fullmatch(r'/panic(?:@([A-Za-z0-9_]+))?', command[0], re.I) if command else None
+        if panic and (not panic[1] or panic[1].lower() == str(self.username).lower()):
+            if not self.owner_id or sender_id != str(self.owner_id):
+                return
             try:
                 if self.owner_control is None: raise RuntimeError("native control unavailable")
                 self.owner_control()
             except Exception as exc:
                 self.client.call("sendMessage", chat_id=chat_id, text=f"Остановка не подтверждена: {exc}")
+            return
+        if not (is_dm or self._addressed(message)):
             return
         if not self.is_allowed(sender_id):
             # ⚠ ГЛАВНЫЙ ГЕЙТ ПРОДУКТА, которого здесь не было вовсе.
@@ -865,7 +997,24 @@ class BotTransport:
             if urgent:
                 self._wake_priority[conversation] = True
                 self._wake_priority_gist[conversation] = str(gist)[:600]
-        self._enqueue(conversation)
+                rows = self._wake_priority_rows.setdefault(conversation, [])
+                source_id = f"{conversation}:{message.get('message_id') or message.get('date') or ''}"
+                if not any(row['id'] == source_id for row in rows):
+                    rows.append({'id': source_id, 'sender': sender_name, 'sender_id': sender_id, 'gist': gist})
+        self._enqueue(conversation, urgent=urgent)
+
+    def refresh_admission(self, tg: dict) -> None:
+        """Apply the owner's changed sender policy to future ingress, never replay history."""
+        mode = str(tg.get('allow_from') or 'owner').strip().lower()
+        if mode not in ('owner', 'listed', 'any'):
+            mode = 'owner'
+        allowed = {str(value).strip() for value in tg.get('allowed_ids') or [] if str(value).strip()}
+        if mode == self.allow_from and allowed == self.allowed_ids:
+            return
+        self.allowed_ids = allowed
+        self.allow_from = mode
+        self._muted.clear()
+        log.info('допуск Telegram применён без перезапуска: %s', mode)
 
     def is_allowed(self, sender_id) -> bool:
         """Может ли этот человек ЗАПУСТИТЬ ход. Владелец — всегда.
@@ -927,11 +1076,61 @@ class BotTransport:
             except Exception:
                 log.debug("крючок before_send отказал", exc_info=True)
 
+    def _send_guard(self):
+        import owner_stop
+        from telegram_retry import DeliveryCancelled
+        if owner_stop.paused() or (getattr(self, '_stop', None) is not None and self._stop.is_set()):
+            raise DeliveryCancelled('Отправка остановлена владельцем.')
+        guard = getattr(self, 'send_guard', None)
+        if guard is not None:
+            guard()
+
+    def _cooldown_note(self, peer, method, delay, retries):
+        if delay > 0:
+            log.warning('Telegram %s: ждём %.1f с, автоматический повтор %d', method, delay, retries)
+        if not getattr(self, 'tree', None):
+            return
+        path = Path(self.tree) / 'memory/.state/telegram-delivery.json'
+        try:
+            with self._cooldown.lock:
+                try: data = json.loads(path.read_text(encoding='utf-8'))
+                except (OSError, ValueError): data = {}
+                state = 'waiting' if delay > 0 else 'accepted' if delay == 0 else 'cancelled' if delay == -2 else 'failed'
+                data[str(peer)] = {'state': state, 'method': method,
+                                   'pid': os.getpid(),
+                                   'retry_at': time.time() + delay if delay > 0 else 0,
+                                   'retries': retries, 'at': time.time()}
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_suffix('.tmp')
+                temporary.write_text(json.dumps(data), encoding='utf-8')
+                os.replace(temporary, path)
+        except Exception:
+            log.warning('статус ожидания Telegram не записался', exc_info=True)
+
+    def _retry_send(self, peer, method, operation):
+        from telegram_retry import Cooldown, DeliveryCancelled
+        with getattr(self, '_cooldown_init_lock', threading.RLock()):
+            if not hasattr(self, '_cooldown'):
+                def wait(seconds):
+                    stop = getattr(self, '_stop', None)
+                    if stop is not None:
+                        if stop.wait(seconds): raise DeliveryCancelled('Транспорт остановлен.')
+                    else: time.sleep(seconds)
+                self._cooldown = Cooldown(guard=self._send_guard, notify=self._cooldown_note, wait=wait)
+        def confirmed_operation():
+            result = operation()
+            if not (result or {}).get('message_id'):
+                raise RuntimeError('Telegram не подтвердил id сообщения; доставка не считается принятой.')
+            return result
+        result, retries = self._cooldown.call(str(peer), method, confirmed_operation)
+        return result, retries
+
     def deliver_text(self, chat_id: str, text: str, reply_to: str = "") -> str:
         self._before_send(chat_id)
         peer, thread = peer_thread(chat_id)
         parts = _chunks(text)
         first_id = None
+        cooldown_retries = 0
         for i, part in enumerate(parts):
             params: dict = {"chat_id": peer, "text": part}
             if thread is not None:
@@ -941,12 +1140,10 @@ class BotTransport:
                 params["reply_parameters"] = {"message_id": int(target),
                                               "allow_sending_without_reply": True}
             try:
-                sent = self.client.call("sendMessage", **params)
+                sent, retries = self._retry_send(peer, 'sendMessage', lambda: self.client.call("sendMessage", **params))
+                cooldown_retries += retries
             except BotApiError as exc:
-                if exc.code == 429 and exc.retry_after:
-                    time.sleep(min(30.0, exc.retry_after + 0.5))
-                    sent = self.client.call("sendMessage", **params)
-                elif exc.permanent:
+                if exc.permanent:
                     if i:
                         raise  # часть уже ушла — это не «не отправила», пусть видно
                     return self.agent.DirectSendRefusal(
@@ -959,11 +1156,12 @@ class BotTransport:
                 first_id = (sent or {}).get("message_id")
             self.rooms.record(chat_id, part, outgoing=True,
                               source_id=str((sent or {}).get("message_id") or ""),
-                              ts=float((sent or {}).get("date") or 0) or None)
+                              ts=float((sent or {}).get("date") or 0) or None,
+                              **({'reply': {'message_id': int(target)}} if i == 0 and target.isdigit() else {}))
         self.sent_now.append((str(chat_id), str(text)))
         label = str(self.rooms.meta(chat_id).get("title") or "") \
             or self.contacts.label(peer)
-        extra = f", частей {len(parts)}" if len(parts) > 1 else ""
+        extra = (f", частей {len(parts)}" if len(parts) > 1 else "") + (", после ожидания Telegram" if cooldown_retries else "")
         return f"Отправлено → {label} (Telegram, id {first_id}{extra})"
 
     def deliver_file(self, path: Path, *, chat_id: str, caption: str = "",
@@ -977,19 +1175,26 @@ class BotTransport:
         if voice_note:
             method, field = "sendVoice", "voice"
         try:
-            sent = self.client.upload(method, field, Path(path),
+            sent, retries = self._retry_send(peer, method, lambda: self.client.upload(method, field, Path(path),
                                       chat_id=peer, message_thread_id=thread,
-                                      caption=(caption or "")[:_CAPTION_LIMIT] or None)
+                                      caption=(caption or "")[:_CAPTION_LIMIT] or None))
         except BotApiError as exc:
             if exc.permanent:
                 return self.agent.DirectSendRefusal(
                     f"файл не отправлен: Telegram отказал — {exc.description}.")
-            raise
+            else:
+                raise
+
         note = f"[файл] {Path(path).name}" + (f"\n{caption}" if caption else "")
+        try:
+            visual = telegram_media.outbound(self.tree, Path(path), media_kind=media_kind)
+        except Exception:
+            log.exception('Отправленный файл не сохранён для просмотра в чате')
+            visual = {'media_error': 'Telegram принял файл; локальная копия для просмотра недоступна.'}
         self.rooms.record(chat_id, note, outgoing=True,
-                          source_id=str((sent or {}).get("message_id") or ""))
+                          source_id=str((sent or {}).get("message_id") or ""), media=visual)
         return (f"Отправлен файл → {self.contacts.label(chat_id)} "
-                f"(id {(sent or {}).get('message_id')})")
+                f"(id {(sent or {}).get('message_id')})" + (" — после ожидания Telegram" if retries else ""))
 
     def typing(self, chat_id: str) -> None:
         peer, thread = peer_thread(chat_id)

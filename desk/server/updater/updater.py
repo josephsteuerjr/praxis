@@ -1013,7 +1013,7 @@ class Updater:
                 "to_version", "release", "backup", "extensions", "checks", "rollback_checks",
                 "carried", "confirmed", "created_utc", "updated_utc", "awaiting_until_utc",
                 "awaiting_since_epoch", "finished_utc", "finished_epoch", "rollback", "phase",
-                "code_preview", "agent_code", "trial", "data_restored", "owner_files")
+                "code_preview", "agent_code", "trial", "retired_trial", "data_restored", "owner_files")
         out = {"schema": protocol.UPDATE_SCHEMA}
         out.update({k: self.state[k] for k in keys if k in self.state})
         if self.state.get("state") == "awaiting":
@@ -2036,84 +2036,14 @@ class Updater:
     # --- испытание --------------------------------------------------------------
 
     def _after_checks(self) -> None:
-        """Механика прошла — дальше слово агента. Мозга нет — спросить некого, так и сказать."""
-        st = self.state
-        body = _dict(_dict(_dict(self._last_probe).get("state")).get("body"))
-        if _dict(body.get("brain")).get("configured") is not True:
-            self._success(extra="испытание агентом пропущено: мозг не настроен — проверь его сам")
-            return
-        now = self.clock()
-        minutes = int((st.get("plan") or {}).get("trial_min") or protocol.UPDATE_TRIAL_DEFAULT)
-        until = now + minutes * 60
-        st.update(state="trial", phase="trial",
-                  trial={"key": secrets.token_hex(12), "since_epoch": now, "since_utc": utc(now),
-                         "until_epoch": until, "until_utc": utc(until), "minutes": minutes,
-                         "extended": 0},
-                  note=(f"{st['to_version']} поднята и прошла проверки; теперь агент проверяет себя "
-                        f"(до {utc(until)}). «Сломано» — откат; молчание до срока — версия остаётся, откат не принудительный"))
-        self.step("агент проверяет себя в новой версии")
+        """Mechanical checks finish the update; no agent-dependent probation."""
+        self._success(extra="Обновление завершено без ожидания проверки агентом")
 
     def trial_tick(self) -> None:
-        """Слово на испытании или истёкший срок.
-
-        Исход — слово и что из него следует («принимаю» / «откат») — записывается ДО любых
-        действий, и расписка сразу уходит из «испытания»: упади я посреди отката или
-        уборки, перезапуск доводит начатое, а не ждёт срока испытания с остановленным
-        агентом; и кнопка «Принять» во время отката не находит испытания, которого нет.
-        """
+        """Retire a legacy probation left by an older updater without claiming acceptance."""
         st = self.state
-        trial = _dict(st.get("trial"))
-        verdict = self.shared.read(*CTL, protocol.UPDATE_VERDICT)
-        if (verdict.get("id") == st.get("id") and trial.get("key")
-                and verdict.get("key") == trial.get("key")
-                and verdict.get("verdict") in protocol.UPDATE_VERDICTS):
-            trial["verdict"] = {"verdict": verdict["verdict"], "by": str(verdict.get("by") or "")[:40],
-                                "words": str(verdict.get("words") or "")[:1500],
-                                "at_utc": str(verdict.get("at_utc") or "")[:40]}
-            by_agent = trial["verdict"]["by"] == "agent"
-            who = "агент" if by_agent else "владелец"
-            words = trial["verdict"]["words"]
-            if verdict["verdict"] == "accept":
-                extra = f"{who} принял на испытании" + (f": «{words[:300]}»" if words else "")
-                st.update(trial=trial, state="running", phase="accepting", success_extra=extra)
-                self.save()
-                self.shared.remove(*CTL, protocol.UPDATE_VERDICT)
-                self._success(extra=extra)
-            else:
-                why = f"{who} на испытании сказал «сломано»" + (f": «{words[:300]}»" if words else "")
-                plain = (("агент сказал, что в новой версии не всё работает"
-                          + (f": «{words[:200]}»" if words else "")) if by_agent
-                         else "ты попросил вернуть прежнюю версию")
-                st.update(trial=trial, state="running", phase="rollback", rollback_why=why,
-                          rollback_plain=plain)
-                self.save()
-                self.shared.remove(*CTL, protocol.UPDATE_VERDICT)
-                self._rollback(why, plain=plain)
-            return
-        if self.clock() < _num(trial.get("until_epoch")):
-            return
-        allowance = int(trial.get("minutes") or protocol.UPDATE_TRIAL_DEFAULT) * 60
-        if self._agent_busy() and _num(trial.get("extended")) + TRIAL_EXTEND <= allowance:
-            trial["extended"] = _num(trial.get("extended")) + TRIAL_EXTEND
-            trial["until_epoch"] = _num(trial.get("until_epoch")) + TRIAL_EXTEND
-            trial["until_utc"] = utc(trial["until_epoch"])
-            st["trial"] = trial
-            self.step("агент ещё отвечает — даю ему на проверку ещё 10 минут")
-            return
-        # 04.10, слово владельца: «откат лучше не делать принудительный». Молчание
-        # до срока — не отказ и не согласие: новая версия ОСТАЁТСЯ работать, а владелец
-        # узнаёт из записки, что испытание не отвечено. Вернуть прежнюю можно словом:
-        # агенту — reject не принять (испытание закрыто), но план на прежнюю версию
-        # (`update_request` с version=прежней) — это штатный путь вниз.
-        trial["verdict"] = {"verdict": "timeout", "by": "", "words": "", "at_utc": utc(self.clock())}
-        st["trial"] = trial
-        self.save()
-        self._success(extra=(
-            f"испытание не отвечено за {trial.get('minutes')} мин"
-            + (" (с продлением)" if trial.get("extended") else "")
-            + " — новая версия оставлена работать, откат не принудительный"))
-
-    # --- откат и итог -----------------------------------------------------------
+        st["retired_trial"] = st.pop("trial", {})
+        self._success(extra="Прежнее автоматическое испытание снято; проверка агентом не требуется")
 
     def _undo_code(self) -> list[str]:
         """Вернуть прежнюю поставку на место. -> что вернулось.

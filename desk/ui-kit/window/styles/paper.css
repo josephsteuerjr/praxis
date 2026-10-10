@@ -1,5 +1,55 @@
 @import "./paper-tokens.css";
 
+/* Меню — небольшой лист той же бумаги, с общей линией и почерком окна. */
+.menu {
+  background: var(--surface);
+  border-color: var(--line-ink);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.menu button:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--ctrl-hover);
+}
+.text-menu { z-index: 240; max-width: calc(100vw - 16px); }
+.text-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 34px;
+}
+.text-menu-key { color: var(--muted); font-size: 12px; }
+
+.images-options > .field { margin-top: 18px; }
+.images-options .choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.images-options .choice-item { min-width: 0; }
+.images-options .choice-title { font-weight: 600; }
+.images-options .choice-text { line-height: 1.45; }
+
+.composer-meta { max-width: 800px; margin: 0 auto 8px; padding: 0 14px; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; min-height: 22px; }
+.composer-meta .composer-target { position: static; flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; padding: 0; font-size: 13px; line-height: 1.45; letter-spacing: 0; color: var(--ink-2); font-weight: 600; text-transform: none; }
+.composer-meta .composer-status { position: static; flex: 0 1 auto; min-width: 0; max-width: 100%; margin: 0; padding: 0; background: none; flex-wrap: wrap; }
+.composer-meta .composer-activity { text-align: right; color: var(--ink-2); }
+.composer-meta:has(.composer-target:empty):not(:has(.composer-activity:not(:empty), .turn-receipt:not(:empty), .composer-turn-controls > button:not([hidden]))) { display: none; }
+.talk .msg .msg-head { font-size: .84em; line-height: 1.4; margin-bottom: .35em; gap: .65em; }
+.talk .msg-head b { font-size: 1.05em; font-weight: 600; color: var(--ink); }
+.talk .msg-head > span:not(.who-hand) { color: var(--muted); }
+.talk .msg-head .msg-reply { padding: 2px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--ink-2); }
+.qr { --qr-paper: color-mix(in srgb, var(--terra, #b46b3c) 10%, #fff); border: 1px solid var(--line-ink); border-radius: 16px; }
+::selection { background: var(--accent-soft); color: var(--ink); }
+#connection-guide > .choice { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 10px; }
+#connection-guide .choice-item { text-align: left; min-width: 0; padding: 14px 16px; }
+#connection-guide .choice-title, #connection-guide .choice-text { display: block; }
+#connection-guide .choice-title { font-weight: 600; margin-bottom: 6px; }
+#connection-guide .choice-text { font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+#connection-guide .choice-item[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.guide-content { margin-top: 22px; }
+.guide-content > .actions, .guide-content > .form-grid, .server-move-guide { margin-top: 16px; }
+.guide-checks p { padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.server-move-guide .mono { overflow-wrap: anywhere; }
+
 /* ---------------------------------------------------------------- бумага */
 
 body {

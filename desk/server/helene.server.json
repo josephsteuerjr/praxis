@@ -26,7 +26,8 @@
     "owner_id": 0
   },
   "phone": {
-    "enabled": true
+    "enabled": true,
+    "mode": "automatic"
   },
   "sandbox": {
     "enabled": false,

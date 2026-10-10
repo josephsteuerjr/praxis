@@ -1846,6 +1846,41 @@ def _fold_tiers(chat_id, state: dict) -> list[str]:
     return made
 
 
+def _prefix_conflict(inputs: list[dict], provable: list[dict]) -> dict | None:
+    """Сверка результата модели с живым кольцом по ИДЕНТИЧНОСТИ строк, не позиции.
+
+    Прежняя сверка сравнивала позиционные срезы как полные dict-и — и любое
+    событие с ts ВНУТРИ префикса (бэклог, перенос времени, ревизия) сдвигало
+    позиции при целых источниках: модельный вызов на десятки секунд выбрасывался
+    целиком, а владельцу выставлялась расписка «нажми ещё раз» (10.10, место
+    -1001240718803: HTTP 200 в 15:32:01 → state_changed в 15:32:52). Идентичность
+    строки — id + суть сказанного (line, direction); метадаты (tokens, observed_at,
+    salience-обогащение) и хвост кольца доказательством конфликта не являются.
+
+    None — конфликта нет, результат можно применять. Dict с `kind` — конфликт:
+    `gone` (источник исчез из кольца: правка/удаление/конкурирующая свёртка),
+    `changed` (содержимое строки изменилось), `reordered` (источники живы, но
+    лента больше не читает их в том порядке, каком их видела модель).
+    """
+    live = {str(r.get("id")): r for r in provable}
+    seen: set[str] = set()
+    order: list[str] = []
+    for row in inputs:
+        rid = str(row.get("id"))
+        fresh = live.get(rid)
+        if fresh is None:
+            return {"kind": "gone", "id": rid}
+        if (str(row.get("line") or "") != str(fresh.get("line") or "")
+                or str(row.get("direction") or "") != str(fresh.get("direction") or "")):
+            return {"kind": "changed", "id": rid}
+        seen.add(rid)
+        order.append(rid)
+    tape_order = [str(r.get("id")) for r in provable if str(r.get("id")) in seen]
+    if tape_order != order:
+        return {"kind": "reordered", "id": order[0] if order else ""}
+    return None
+
+
 def _drop_unprovable_inputs(inputs: list[dict], chat_id) -> list[dict]:
     """Убрать из свёртки строки, которых не видит индекс доказательств.
 
@@ -2236,7 +2271,22 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
 
     Сворачивается МЕСТО целиком: новые компакты пишутся под ключом места, а не ветки,
     иначе один разговор продолжал бы копить по свёртке на каждую свою ветку.
+
+    Конфликт префикса (правка/удаление/конкурирующая свёртка под рукой) повторяется
+    ОДИН раз автоматически — новым планом по живому кольцу, не по протухшему. Второй
+    конфликт подряд — честный `state_changed` с причиной: дальше гонка не ловится,
+    и крутить модель по кругу было бы спином.
     """
+    out = _compact_once(chat_id, force=force)
+    if str(out.get("reason") or "") != "state_changed":
+        return out
+    retry = _compact_once(chat_id, force=force)
+    retry["retried"] = True
+    return retry
+
+
+def _compact_once(chat_id: str | int, *, force: bool = False) -> dict:
+    """Одна попытка свёртки: план → модель → commit с сверкой идентичности."""
     chat_id = adopt_place(chat_id)
     with _state_write_guard(chat_id), _WRITE_LOCK:
         state = _load_state(chat_id, rebuild=True)
@@ -2301,11 +2351,17 @@ def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
 
     with _state_write_guard(chat_id), _WRITE_LOCK:
         state = _rebuild_state_locked(chat_id)
-        # Сверяемся с той же подпоследовательностью, по которой планировали: в кольце
-        # между свёрнутыми строками могут стоять помеченные, и позиционный префикс с
-        # ними не совпадёт никогда — свёртка возвращала бы `state_changed` вечно.
-        if _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)[:fold] != inputs:
-            return {"ok": False, "reason": "state_changed", "folded": 0,
+        # Сверяемся с той же подпоследовательностью, по которой планировали — но по
+        # ИДЕНТИЧНОСТИ строк, а не позиционным срезом dict-ов. Позиционная сверка
+        # срывала commit при любом событии с ts ВНУТРИ префикса (бэклог, ревизия)
+        # и при помеченных строках между свёрнутыми: источники целы — а «нажми ещё
+        # раз» (10.10). Конфликт — только исчезновение, изменение или перестановка
+        # источника: тогда результат модели применять нельзя.
+        conflict = _prefix_conflict(
+            inputs, _drop_unprovable_inputs(list(state.get("hot") or []), chat_id))
+        if conflict is not None:
+            return {"ok": False, "reason": "state_changed", "conflict": conflict,
+                    "folded": 0,
                     "plan": plan, "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
         source_ids = [str(x.get("id")) for x in inputs]
         # Привязка пишется ДО компакта: компакт, чьи события ещё никуда не привязаны,

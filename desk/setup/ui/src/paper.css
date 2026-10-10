@@ -247,3 +247,21 @@ body::before {
 #hint {
   bottom: 96px;
 }
+
+#setup-tips {
+  position: absolute;
+  z-index: 21;
+  left: 50%;
+  bottom: 15px;
+  width: min(760px, 52%);
+  margin: 0;
+  transform: translateX(-50%);
+  font: 400 14px/1.45 var(--sans);
+  text-align: center;
+  color: var(--ink-3);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity .3s ease;
+}
+#setup-tips.changing { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { #setup-tips { transition: none; } }

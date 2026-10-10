@@ -30,7 +30,7 @@ mod payload;
 #[cfg(feature = "praxis")]
 mod praxis;
 mod probe;
-mod trial;
+mod update_backup;
 mod tx;
 #[cfg(windows)]
 mod win;
@@ -53,6 +53,7 @@ fn focus_main(app: &tauri::AppHandle) {
 /// Отмена установки, начатой с экрана: кнопка «Отмена» ставит флаг, фазы проверяют
 /// его между файлами; поднятому исполнителю флаг уходит файлом `cancel`.
 static CANCEL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static WINDOW_FINISHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Задание поднятому исполнителю (`--worker <папка обмена>`): что сделать и с чем.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -445,6 +446,7 @@ async fn found() -> Vec<probe::Found> {
 #[cfg(windows)]
 #[tauri::command]
 fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
+    WINDOW_FINISHING.store(true, std::sync::atomic::Ordering::Relaxed);
     let path = std::path::PathBuf::from(&exe);
     // Окно установщика прячем сразу, а процесс держим ещё несколько секунд:
     // Windows отдаёт передний план новому окну, только пока запустивший его
@@ -478,6 +480,7 @@ fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
 #[tauri::command]
 fn open_frame(app: tauri::AppHandle, exe: String) -> Result<(), String> {
     install::launch_installed(std::path::Path::new(&exe)).map_err(|e| format!("Hélène не запустилась: {e}"))?;
+    WINDOW_FINISHING.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }
@@ -621,14 +624,17 @@ fn main() {
     let _ = win::adopt_self_into_job();
     // Сторож испытания новой версии после обновления (1.2.5): без окна, пока испытание не
     // закрыто. Зовут его установка (`install_tx`) и движок, если сторожа не слышно.
-    if args.iter().any(|a| a == trial::TRIAL_ARG) {
+    if args.iter().any(|a| a == "--trial") {
         let dir = args
             .iter()
             .position(|a| a == "--dir")
             .and_then(|i| args.get(i + 1))
             .map(std::path::PathBuf::from)
             .unwrap_or_else(install::exe_dir);
-        std::process::exit(trial::watch(&dir, &args));
+        match update_backup::retire_legacy(&dir) {
+            Ok(_) => std::process::exit(0),
+            Err(e) => { eprintln!("{e}"); std::process::exit(1); }
+        }
     }
     if args.iter().any(|a| a == "--configure")
         || install::nsis_root().is_some()
@@ -921,7 +927,8 @@ fn main() {
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(4));
                 if let Some(window) = handle.get_webview_window("main") {
-                    if !window.is_visible().unwrap_or(false) {
+                    if !WINDOW_FINISHING.load(std::sync::atomic::Ordering::Relaxed)
+                        && !window.is_visible().unwrap_or(false) {
                         let _ = window.show();
                         let _ = window.set_focus();
                     }

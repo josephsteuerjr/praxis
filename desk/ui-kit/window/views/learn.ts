@@ -32,6 +32,7 @@ import { esc } from "../lib";
 import { LOCAL_AGENT, S, foreignHarness, type Run, type View } from "../state";
 import { isMacPlatform } from "../../platform";
 import { copyText } from "../../dom";
+import { mountConnectionGuide } from "../connection-guide";
 
 // ------------------------------------------------------------------ задачки
 
@@ -83,7 +84,7 @@ const TASKS: Task[] = [
     id: "remind",
     cat: "time",
     title: "Напомнить вовремя",
-    what: "Поставит будильник и придёт сам, даже если окно закрыто.",
+    what: "Поставит будильник и придёт сам, пока движок агента работает.",
     template: "Напомни мне <когда> про <что>.",
   },
   {
@@ -251,7 +252,9 @@ function stages(): Stage[] {
       sub: "досье, дневник, архив, свёртки",
       body:
         "Всё, что агент знает о людях, о работе и о себе, лежит обычными файлами: досье, " +
-        "дневник, архив каждой комнаты и свёртки старых разговоров. Их можно открыть и прочитать.",
+        "дневник, архив каждой комнаты и свёртки старых разговоров. Их можно открыть и прочитать. " +
+        "Горячая память — свежие сообщения, ещё не вошедшие в сводку. Её счётчик виден под лентой чата; " +
+        "«Как работает память» объясняет текущие пороги и предложение свёртки. Число на боковой панели — весь архив, который свёртка не удаляет.",
       go: { view: "files", label: "Файлы" },
     },
     {
@@ -758,6 +761,13 @@ const HOW: Array<[string, string]> = [
     "Что он записал о тебе и о работе, останется после закрытия окна и после обновления программы. " +
       "Всё это лежит файлами — раздел «Файлы».",
   ],
+  [
+    "Аварийный стоп всегда под рукой",
+    "Закрытие окна оставляет фоновую работу включённой. Чтобы остановить всех агентов и их процессы, " +
+      "нажми «Аварийный стоп» в окне или трее, открой одноимённый ярлык, отправь своему боту /panic либо " +
+      "выполни helene.exe --panic из папки установки (PowerShell: & \"C:\\Program Files\\Helene\\helene.exe\" --panic). " +
+      "Агент может остановиться сам инструментом panic. Запуск после стопа — только твоим явным действием.",
+  ],
 ];
 
 // ------------------------------------------------------------ сборка страницы
@@ -773,8 +783,8 @@ function hero(): string {
   const alive = foreignHarness() ? S.connected : !!st?.runner?.alive;
   const model = (st?.brain?.model || "").trim();
   const lead = LOCAL_AGENT
-    ? "Агент живёт на этом компьютере: помнит разговоры, сам приходит по будильникам, ночью спит — " +
-      "сводит день в память — и работает руками: ищет, читает, пишет, а с твоего разрешения — и за компьютером."
+    ? "Агент живёт на этом компьютере. Дай ему понятное поручение: он прочитает, найдёт, подготовит результат и покажет, что сделал. " +
+      "Переписка и память останутся здесь; с телефона ты обращаешься к тому же агенту."
     : "Агент живёт на сервере, а это окно — дверь к нему: разговор, его память и то, как идёт каждый ход.";
   const status = st
     ? `<span class="hero-pill${alive ? " is-live" : ""}"><i></i>${alive ? "на связи" : "не на связи"}</span>` +
@@ -782,7 +792,7 @@ function hero(): string {
     : "";
   return `<header class="lrn-hero reveal" id="lrn-top">
     <div class="lrn-hero-text">
-      <p class="lrn-kicker">Знакомство</p>
+      <p class="lrn-kicker">Онбординг</p>
       <h2 class="lrn-hero-title">Знакомься: <span class="lrn-name">${esc(name)}<svg class="lrn-underline" viewBox="0 0 200 14" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M3 9 C 40 3, 70 12, 104 7 S 170 4, 197 8"/></svg></span></h2>
       <p class="lrn-lead">${esc(lead)}</p>
       ${status ? `<div class="hero-pills">${status}</div>` : ""}
@@ -803,6 +813,7 @@ function hero(): string {
 function toc(): string {
   const items: Array<[string, string]> = [
     ["lrn-start", "С чего начать"],
+    ["lrn-connect", "Связь и перенос"],
     ["lrn-flow", "Как идёт ход"],
     ["lrn-tasks", "Что поручить"],
     ["lrn-how", "Как говорить"],
@@ -811,14 +822,12 @@ function toc(): string {
     ["lrn-economy", "Экономно"],
     ["lrn-limits", "Границы"],
   ];
-  return `<nav class="lrn-toc" aria-label="Разделы знакомства">
+  return `<nav class="lrn-toc" aria-label="Разделы онбординга">
     ${items.map(([id, label]) => `<button type="button" data-jump="${id}">${esc(label)}</button>`).join("")}
   </nav>`;
 }
 
 function firstSteps(): string {
-  const st = S.agentState;
-  const telegram = LOCAL_AGENT && !!st && !st.telegram?.enabled;
   const steps = [
     `<li class="lrn-step">
       <span class="lrn-step-num">1</span>
@@ -840,22 +849,12 @@ function firstSteps(): string {
     `<li class="lrn-step">
       <span class="lrn-step-num">3</span>
       <div class="lrn-step-body">
-        <b>Посмотри, как он думал</b>
-        <p>После первого хода открой «Контекст»: там по слоям видно, из чего агент собирал кадр этого хода.</p>
-        <button class="btn btn-quiet" type="button" data-go="frame">Открыть «Контекст» <span aria-hidden="true">→</span></button>
+        <b>Проверь результат</b>
+        <p>Ответ и файлы появятся в чате. Картинку можно увеличить, запись — прослушать, файл — сохранить. В «Сейчас» видно, что ещё выполняется и чем закончился ход.</p>
+        <button class="btn btn-quiet" type="button" data-go="now">Открыть «Сейчас» <span aria-hidden="true">→</span></button>
       </div>
     </li>`,
   ];
-  if (telegram) {
-    steps.push(`<li class="lrn-step">
-      <span class="lrn-step-num">4</span>
-      <div class="lrn-step-body">
-        <b>Позови его в Telegram</b>
-        <p>Тогда говорить с агентом можно и с телефона — в личке или в группе.</p>
-        <button class="btn btn-quiet" type="button" data-go="settings">В настройки <span aria-hidden="true">→</span></button>
-      </div>
-    </li>`);
-  }
   return `<ol class="lrn-steps">${steps.join("")}</ol>`;
 }
 
@@ -911,8 +910,15 @@ export async function render(container: HTMLElement): Promise<void> {
 
     <section class="lrn-sec reveal" id="lrn-start">
       <p class="lrn-kicker">С чего начать</p>
-      <h3 class="lrn-h">Три шага, и вы знакомы</h3>
+      <h3 class="lrn-h">Первое дело и связь с агентом</h3>
       ${firstSteps()}
+    </section>
+
+    <section class="lrn-sec reveal" id="lrn-connect">
+      <p class="lrn-kicker">Подключения</p>
+      <h3 class="lrn-h">Где тебе удобнее быть с агентом</h3>
+      <p class="lrn-sub">Выбери нужное — введём данные, проверим связь и покажем следующий шаг здесь.</p>
+      <div id="connection-guide"></div>
     </section>
 
     <section class="lrn-sec reveal" id="lrn-flow">
@@ -1232,4 +1238,5 @@ export async function render(container: HTMLElement): Promise<void> {
 
   // ---- сутки: настоящие ходы за сегодня (не блокирует страницу)
   void fillDay(root);
+  mountConnectionGuide(root.querySelector<HTMLElement>("#connection-guide")!);
 }

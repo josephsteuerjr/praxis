@@ -174,7 +174,20 @@ def fold_state(tree: Path, room: str) -> dict:
     ctl = Path(tree) / "memory" / ".control"
     pending = _read(ctl / FOLD_REQUEST) or _read(ctl / FOLD_PROCESSING)
     receipt = _read(_state_dir(tree) / FOLD_RECEIPT)
-    return {"room": room, "hot": hot, "keep": keep, "offer_at": offer_at, "hard_at": hard_at,
+    policy = _read(_state_dir(tree) / "fold-policy.json")
+    bounds = policy.get("group" if room.startswith("-") else "chat") or {}
+    delivery = _read(_state_dir(tree) / "telegram-delivery.json").get(room.split('__topic__', 1)[0])
+    reader = _read(Path(tree) / 'memory/.control/desk_inbox/.reader.json')
+    if delivery and (delivery.get('pid') != reader.get('pid')
+                     or time.time() - float(reader.get('at') or 0) > 30):
+        delivery = None  # a dead/replaced sender cannot promise an automatic repeat
+    return {"room": room, "hot": hot, "keep": bounds.get("keep", keep),
+            "offer_at": bounds.get("offer_at", offer_at), "hard_at": bounds.get("hard_at", hard_at),
+            "token_cap": bounds.get("token_cap"), "tape_chars": bounds.get("tape_chars"),
+            "offer_mode": policy.get("offer_mode", True),
+            "backstop_hours": policy.get("backstop_hours", 26),
+            "policy_source": "runtime" if bounds else "core_defaults",
+            "delivery": delivery,
             "offer": offers.get(room) if isinstance(offers.get(room), dict) else None,
             "pending": pending if pending.get("room") == room else None,
             "receipt": receipt if receipt.get("room") == room else None}
@@ -725,49 +738,8 @@ def update_confirm(tree: Path, plan_id: str, nonce: str, decision: str, by: str 
 
 def update_verdict(tree: Path, plan_id: str, key: str, verdict: str, by: str = "agent",
                    words: str = "", proof: dict | None = None) -> dict:
-    """Слово на испытании: «принимаю» — обновление закрывается, «сломано» — откат.
-
-    Говорит агент (рука update_request) или владелец кнопкой в окне; первое слово берёт
-    исполнитель. Ключ — из расписки «испытание»: слово относится ровно к этой версии.
-    """
-    verdict = str(verdict or "").strip().lower()
-    if verdict not in UPDATE_VERDICTS:
-        return {"ok": False, "note": "слово бывает accept (принимаю) или reject (сломано — откат)"}
-    receipt = _read(_control_dir(tree) / UPDATE_RECEIPT)
-    trial = receipt.get("trial") if isinstance(receipt.get("trial"), dict) else {}
-    # Испытание открыто, только пока исполнитель в нём: слово уже сказано (идёт откат или
-    # приём) — второе «принять» посреди отката записалось бы как ложное «прошло».
-    if str(receipt.get("state") or "") != "trial" or str(receipt.get("phase") or "trial") != "trial":
-        what = receipt.get("step") or receipt.get("state") or "расписки нет"
-        return {"ok": False, "note": f"испытания сейчас нет ({what})"}
-    if str(plan_id or "") != str(receipt.get("id") or ""):
-        return {"ok": False, "note": "испытывается другой план — перечитай расписку"}
-    if not key or str(key) != str(trial.get("key") or ""):
-        return {"ok": False, "note": "ключ испытания не тот — перечитай расписку"}
-    row = {"schema": UPDATE_SCHEMA, "id": str(plan_id), "key": str(key), "verdict": verdict,
-           "by": str(by or "agent")[:40], "words": " ".join(str(words or "").split())[:1500],
-           "at_utc": _utc(), "at_epoch": time.time()}
-    if isinstance(proof, dict) and proof:
-        # Доказательство делом (1.2.5): что агент сделал в новой версии — для расписки.
-        row["proof"] = {"hands": [str(n)[:60] for n in (proof.get("hands") or [])][:20],
-                        "recall": int(proof.get("recall") or 0),
-                        "line": str(proof.get("line") or "")[:400]}
-    _write(_control_dir(tree) / UPDATE_VERDICT, row)
-    desktop = bool(receipt.get("desktop"))
-    if verdict == "accept":
-        return {"ok": True, "verdict": row,
-                "note": f"слово записано: {receipt.get('to_version') or 'новая версия'} принята. "
-                        + ("Установщик закроет обновление и уберёт прежнюю программу" if desktop else
-                           "Исполнитель закроет обновление и уберёт старые копии")}
-    if desktop:
-        return {"ok": True, "verdict": row,
-                "note": f"слово записано: сломано — установщик вернёт "
-                        f"{receipt.get('from_version') or 'прежнюю версию'} (прежнюю программу; память "
-                        "остаётся как есть). Окно на минуту закроется и откроется прежней версией"}
-    return {"ok": True, "verdict": row,
-            "note": f"слово записано: сломано — исполнитель вернёт "
-                    f"{receipt.get('from_version') or 'прежнюю версию'} (код и образ; память "
-                    "остаётся как есть). Агент на минуту пропадёт"}
+    """Compatibility route for older clients: no verdict file is ever written."""
+    return {"ok":False,"note":"Автоматическая приёмка обновления отменена. О найденной проблеме сообщи владельцу; новая версия не ждёт слова агента."}
 
 
 def update_unreported(tree: Path, max_age_days: float = 3.0) -> dict | None:

@@ -46,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from deskd import agentcfg
 from deskd import artifacts
 from deskd import control
+from deskd import connection_checks
 from deskd import readers
 from deskd import rooms
 from deskd import usage
@@ -71,6 +72,12 @@ try:
     import boot as _boot  # noqa: E402 — путь добавлен выше
 except ImportError:
     _boot = None
+
+try:
+    import phone_access
+except ImportError:
+    phone_access = None
+_PHONE_ACCESS = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("frame.desk")
@@ -144,7 +151,7 @@ _ALLOWED_HOST_SUFFIXES = (".ts.net", ".local")
 # Пускается ДО ключа: телефон приходит по QR ровно за тем ключом, которого у
 # него ещё нет. Без этого списка спаривание физически невозможно — телефон
 # получал 403 на самой первой странице, и в Wi-Fi, и через Tailscale.
-_OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
+_OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem", "/tg/", "/tg/config.js", "/api/phone/probe",
                # Раннер спрашивает «эта записка твоя?» (deskd/inbox_seal.py) — ключа у него
                # нет и быть не должно; маршрут только с петли и отвечает да/нет.
                "/api/inbox/claim",
@@ -177,7 +184,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem",
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt", "/api/interrupt-step"}
+                 "/api/interrupt", "/api/interrupt-step", "/api/panic"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/")
 
@@ -239,6 +246,8 @@ def _host_ok(request: web.Request) -> bool:
     # Внешний адрес канала (`phone.external`, 06.10): телефон приходит по нему
     # через сервер с белым IP ровно за тем ключом, которого у него ещё нет.
     if name and name == _phone_external_host():
+        return True
+    if _PHONE_ACCESS is not None and name and name == _PHONE_ACCESS.host():
         return True
     try:
         import ipaddress
@@ -434,7 +443,7 @@ def _scope_ok(role: str, path: str) -> bool:
 
 
 def _open_path(path: str) -> bool:
-    return path in _OPEN_PATHS or path.startswith("/m/assets/")
+    return path in _OPEN_PATHS or path == '/tg/icon-192.png' or path.startswith(("/m/assets/", "/tg/assets/"))
 
 
 @web.middleware
@@ -543,15 +552,13 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
     with _DEVICES_LOCK:
         row = _PAIRS.get(token)
         if row is None:
-            # QR выдан ДРУГИМ каналом (окно за одним адресом, телефон пришёл
-            # к другому): пары живут в памяти процесса, и раньше оба случая
-            # носили один текст — телефон вечно показывал «код устарел», и
-            # никто не называл причину (07.10, слово владельца).
             raise web.HTTPForbidden(
-                text="этот канал не выдавал такой код — QR с другого адреса")
+                text=json.dumps({'code': 'pair_unknown', 'error': 'Код не найден: ссылка могла истечь или канал перезапустился. Покажи QR заново.'}, ensure_ascii=False),
+                content_type='application/json')
         if row["expires"] < time.time() or row["uses"] <= 0:
             raise web.HTTPForbidden(
-                text="код устарел или уже использован — покажи QR заново")
+                text=json.dumps({'code': 'pair_expired', 'error': 'Код устарел или уже использован — покажи QR заново.'}, ensure_ascii=False),
+                content_type='application/json')
         if row.get("key"):
             row["uses"] -= 1
             return {"key": row["key"], "uses_left": row["uses"]}
@@ -1161,7 +1168,56 @@ def _room_op(fn, *args):
 
 
 async def _r_pair_new(c: Call):
-    return _new_pair()
+    pair = _new_pair()
+    if _PHONE_ACCESS is not None:
+        pair['url'] = _PHONE_ACCESS.url
+    return pair
+
+
+async def _r_phone_state(c: Call):
+    return _PHONE_ACCESS.state() if _PHONE_ACCESS is not None else {
+        'state': 'unavailable', 'message': 'Этот канал не поддерживает автоматическое подключение телефона.'}
+
+
+async def _r_telegram_check(c: Call):
+    path=readers.config_path()
+    config=json.loads(path.read_text(encoding='utf-8-sig')) if path else {}
+    return await asyncio.to_thread(connection_checks.check_telegram,config,(c.body or {}).get('telegram'))
+
+
+async def _r_phone_probe(c: Call):
+    value={'instance': _PHONE_ACCESS.instance if _PHONE_ACCESS is not None else ''}
+    challenge=str(c.query.get('challenge') or '')
+    if TOKEN and re.fullmatch(r'[A-Za-z0-9_-]{16,128}',challenge):
+        from localharness import remote_locator
+        value.update(challenge=challenge,proof=remote_locator.signature(TOKEN,challenge,value['instance']))
+    return value
+
+
+async def _r_phone_retry(c: Call):
+    if _PHONE_ACCESS is not None:
+        _PHONE_ACCESS.retry()
+    return await _r_phone_state(c)
+
+
+async def _r_panic(c: Call):
+    # Stop-only authority for already paired owner devices; no remote resume.
+    config = readers.config_path()
+    if config is None:
+        return {'ok': False, 'note': 'Не найден конфиг установки для аварийной остановки.'}
+    try:
+        from localharness import emergency
+        return await asyncio.to_thread(emergency.request, config, via='phone' if c.role == 'device' else 'window')
+    except Exception:
+        return {'ok': False, 'note': 'Стоп не подтверждён. Используй /panic в Telegram или аварийный ярлык на компьютере.'}
+
+
+async def _r_panic_state(c: Call):
+    try:
+        from localharness import emergency
+        return emergency.state()
+    except ImportError:
+        return {'stopped': None, 'resume_remote': False}
 
 
 async def _r_devices(c: Call):
@@ -1380,6 +1436,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
     Route("POST", "/api/interrupt", _r_interrupt),
+    Route("POST", "/api/panic", _r_panic),
+    Route("GET", "/api/panic", _r_panic_state),
     Route("POST", "/api/interrupt-step", _r_interrupt_step),
     Route("GET", "/api/memory-fold/{room}", _r_fold_state),
     Route("POST", "/api/memory-fold", _r_fold),
@@ -1410,6 +1468,10 @@ ROUTES: tuple[Route, ...] = (
     # реплик. Ключу устройства сюда по-прежнему нельзя: /pair/* нет ни в
     # _DEVICE_PATHS, ни в префиксах (стенд t_phone.py).
     Route("POST", "/pair/new", _r_pair_new),
+    Route("GET", "/api/phone", _r_phone_state),
+    Route("POST", "/api/telegram/check", _r_telegram_check),
+    Route("GET", "/api/phone/probe", _r_phone_probe),
+    Route("POST", "/api/phone/retry", _r_phone_retry),
     Route("GET", "/pair/devices", _r_devices),
     Route("POST", "/pair/revoke", _r_revoke),
 )
@@ -1586,12 +1648,8 @@ async def _say(text: str, chat: str = "", attachments=None, via: str = "owner") 
     if chat and chat not in (rooms.ROOM_DEFAULT, rooms.ROOM_LEGACY) and not _CHAT_KEY_RE.match(chat) \
             and not rooms.is_room(chat):
         raise web.HTTPBadRequest(text=f"не похоже на адрес комнаты: {chat!r}")
-    if files and chat and _CHAT_KEY_RE.match(chat) and not rooms.is_room(chat):
-        # Вложения из окна едут только в комнаты окна: в Telegram-комнату записка
-        # уходит как реплика владельца через её бот-транспорт, и картинку туда
-        # переправить пока нечем — честный отказ вместо молча потерянного файла.
-        raise web.HTTPBadRequest(text="вложения из окна пока не едут в Telegram-комнаты — "
-                                      "отправь текст, а картинку пришли в Telegram сама")
+    # A Telegram-room note is a private owner instruction to the agent. Files
+    # follow that same route; the instruction itself is not posted by the bot.
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     body = (f"# Сообщение с окна владельца · {stamp}\n\n{text}\n")
     # Адресная записка — и в Telegram-комнату, и в другую комнату окна
@@ -2015,7 +2073,8 @@ def _mobile_file(name: str):
     return handler
 
 
-def build_app() -> web.Application:
+def build_app(*, port: int | None = None) -> web.Application:
+    global _PHONE_ACCESS
     app = web.Application(middlewares=[auth_middleware],
                           client_max_size=_ATTACH_MAX_TOTAL * 4 // 3 + 1024 * 1024)
     app.router.add_get("/", index)
@@ -2029,6 +2088,28 @@ def build_app() -> web.Application:
     app.router.add_get("/m/manifest.webmanifest", mobile_manifest)
     app.router.add_get("/m/sw.js", mobile_sw)
     app.router.add_get("/m/config.js", config_js)
+    mini = next((p for p in (_HERE / 'miniapp/dist', _HERE / 'miniapp')
+                 if (p / 'index.html').is_file()), _HERE / 'miniapp')
+    async def mini_index(request):
+        if not (mini / 'index.html').is_file():
+            raise web.HTTPServiceUnavailable(text='Миниапп не вошёл в поставку — обнови Hélène.')
+        return web.FileResponse(mini / 'index.html', headers={'Cache-Control': 'no-store'})
+    app.router.add_get('/tg/', mini_index)
+    app.router.add_get('/tg/config.js', config_js)
+    if (mini / 'icon-192.png').is_file():
+        async def mini_icon(request): return web.FileResponse(mini / 'icon-192.png')
+        app.router.add_get('/tg/icon-192.png', mini_icon)
+    if (mini / 'assets').is_dir():
+        app.router.add_static('/tg/assets/', mini / 'assets')
+    if phone_access is not None:
+        def load_phone_config():
+            path = readers.config_path()
+            return readers._load_json(path) if path else {}
+        _PHONE_ACCESS = phone_access.PhoneAccess(
+            readers.tree() / 'memory/.state/phone-access', load_phone_config,
+            port if port is not None else int(os.environ.get('HELENE_PORT') or os.environ.get('PRAXIS_DESK_PORT') or DEFAULT_PORT),
+            owner_token=bool(TOKEN))
+        app.cleanup_ctx.append(_PHONE_ACCESS.context)
     if (MOBILE / "assets").is_dir():
         app.router.add_static("/m/assets/", MOBILE / "assets")
     for name in ("icon-192.png", "icon-512.png", "apple-touch-icon.png"):
@@ -2073,7 +2154,7 @@ def main() -> None:
         # SIGTERM канал ловит сам aiohttp (GracefulExit в run_app) — сторожу
         # достаточно его послать. На Windows и без HELENE_PARENT_PID — no-op.
         _boot.watch_parent("канал")
-    app = build_app()
+    app = build_app(port=port)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     threading.Thread(target=_watcher, args=(loop,), daemon=True).start()

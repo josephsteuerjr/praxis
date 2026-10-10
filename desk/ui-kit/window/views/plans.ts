@@ -24,13 +24,16 @@ interface ForgeTask {
   agents?: Array<{ id: string; role?: string; status?: string; error?: string; result_head?: string }>;
 }
 
+const STATUS: Record<string, string> = { active: "в работе", running: "выполняется", pending: "ожидает", scheduled: "запланировано", completed: "завершено", done: "завершено", paused: "на паузе", cancelled: "отменено", failed: "ошибка", error: "ошибка", blocked: "нужна помощь", waiting: "ожидает" };
+const statusLabel = (s = "") => STATUS[s] || s;
+
 function agendaRow(t: Agenda["active"][number]): string {
   return `<div class="row">
     <span class="badge">${esc(AGENDA_KIND[t.kind || ""] || t.kind || "?")}</span>
     ${t.when ? ` <b class="mono">${esc(t.when)}</b>` : ""}
     ${t.recur ? ` <span class="muted mono">повтор: ${esc(t.recur)}</span>` : ""}
     ${t.target ? ` <span class="muted">→ ${esc(String(t.target))}</span>` : ""}
-    <span class="muted mono"> · ${esc(t.status || "")}</span>
+    <span class="muted"> · ${esc(statusLabel(t.status))}</span>
     <div class="muted" style="margin-top:4px">${esc((t.goal || "").slice(0, 220))}</div>
   </div>`;
 }
@@ -40,15 +43,15 @@ function forgeCard(t: ForgeTask): string {
     .map(
       (a) => `<div class="row">
       <span class="mono">${esc(a.id)}</span> <span class="badge">${esc(a.role || "?")}</span>
-      <b class="${a.status === "error" || a.status === "failed" ? "err-msg" : ""}">${esc(a.status || "")}</b>
+      <b class="${a.status === "error" || a.status === "failed" ? "err-msg" : ""}">${esc(statusLabel(a.status))}</b>
       ${a.error ? `<span class="err-msg"> ${esc(a.error.slice(0, 120))}</span>` : ""}
       ${a.result_head ? `<div class="muted" style="font-size:12.5px">${esc(a.result_head.slice(0, 160))}</div>` : ""}
     </div>`,
     )
     .join("");
   return `<details class="fold">
-    <summary><b>${esc(t.id)}</b> · ${esc(t.status || "")}${t.priority && t.priority !== "normal" ? " · " + esc(t.priority) : ""} · ${(t.agents || []).length} юнитов — ${esc((t.goal || "").slice(0, 90))}</summary>
-    <div class="fold-body">${agents || '<span class="muted">юнитов нет</span>'}</div>
+    <summary><b>${esc((t.goal || t.id).split("\n")[0].slice(0, 150))}</b> · ${esc(statusLabel(t.status))} · исполнителей: ${(t.agents || []).length}</summary>
+    <div class="fold-body"><p class="muted">Номер задачи: <span class="mono">${esc(t.id)}</span>${t.priority ? " · приоритет: " + esc(t.priority) : ""}</p>${t.goal ? `<p>${esc(t.goal)}</p>` : ""}${agents || '<span class="muted">Исполнители ещё не назначены.</span>'}</div>
   </details>`;
 }
 

@@ -4,6 +4,8 @@
 // Firefox по умолчанию браузер и «Установить» съедают заходы ещё до значка —
 // поэтому токен пары годится трижды (06.10), а манифест несёт его в start_url.
 import "./styles.css";
+import { setAnimationPlayer } from '../../ui-kit/paper-media';
+setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
 import { toast } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
@@ -47,9 +49,10 @@ async function redeem(token: string): Promise<{ result: Redeem; key?: string; ag
     // Канал отвечает 403 и «код израсходован/протух», и «телефон не пускают
     // ворота»: диагноз разный, различаем по телу.
     const body = await r.text().catch(() => "");
-    // 07.10: «этот канал не выдавал такой код» — QR с другого адреса, окно
-    // и телефон говорят с разными копиями канала. Это не «устарел».
-    if (/не выдавал|другого адреса/i.test(body)) return { result: "foreign" };
+    let code = '';
+    try { code = JSON.parse(body).code || ''; } catch { /* older channel */ }
+    if (code === 'pair_unknown' || /не выдавал|другого адреса/i.test(body)) return { result: "foreign" };
+    if (code === 'pair_expired') return { result: 'spent' };
     return { result: /устарел|использован/i.test(body) ? "spent" : "closed" };
   }
   if (r.status === 404 || r.status === 410) return { result: "spent" };
@@ -74,14 +77,14 @@ function pairScreen(pair: Redeem | null): { title: string; text: string; retry: 
     case "broke":
       return { title: "Компьютер ответил ошибкой", text: "Обмен кода на ключ не удался на стороне компьютера. Покажи QR заново и попробуй ещё раз.", retry: true };
     case "offline":
-      return { title: "Нет связи", text: "Компьютер с агентом не отвечает. Телефон должен быть в той же Wi-Fi, что и компьютер, или подключён к Tailscale.", retry: true };
+      return { title: "Нет связи", text: "Компьютер с агентом не отвечает. Дождись подключения в Hélène; если её адрес изменился после перезапуска, открой новый QR или кнопку миниаппа в боте.", retry: true };
     case "spent":
       return { title: "Код устарел", text: "Ссылка из QR живёт десять минут и годится трижды. Покажи QR на компьютере заново и открой его снова.", retry: true };
     case "foreign":
       return {
-        title: "Код с другого адреса",
-        text: "QR выдан другим каналом — окно и телефон говорят с разными копиями. Попроси агента поставить внешний домен (Настройки → Телефон, поле внешнего адреса), чтобы оба ходили к одному каналу, затем покажи QR заново.",
-        retry: false,
+        title: "Код не найден",
+        text: "Ссылка могла истечь или канал перезапустился. Покажи QR в Hélène заново — он приведёт к текущему подключению.",
+        retry: true,
       };
     default:
       return { title: "Нужен ключ", text: "Открой на компьютере Настройки → Телефон → «Показать QR» и наведи камеру. Ссылка подключит этот телефон.", retry: true };
@@ -129,7 +132,9 @@ if (insecureLink() && !warned) {
   }
   toast("Связь с компьютером не шифруется — это обычный Wi-Fi. В чужой сети сосед может прочитать переписку; надёжно — через Tailscale.");
 } else if (isApple && !standalone && pairToken) {
-  toast("Чтобы открывать как приложение: «Поделиться» → «На экран „Домой“». Первое открытие из значка допишет ключ само.");
+  toast(location.hostname.endsWith('.trycloudflare.com')
+    ? "Для входа после перезапуска открывай миниапп через своего Telegram-бота или новый QR в Hélène. Адрес этой страницы может измениться."
+    : "Чтобы открывать как приложение: «Поделиться» → «На экран „Домой“». Первое открытие из значка допишет ключ само.");
 }
 
 // ------------------------------------------------------------ service worker

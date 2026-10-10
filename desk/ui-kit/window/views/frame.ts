@@ -2,12 +2,18 @@
 // дифф соседних захватов (где порвался префикс кэша) и метрики.
 import { api } from "../api";
 import { esc, fmtN, md, q, safeRender } from "../lib";
-import { S } from "../state";
+import { S, isWindowRoom } from "../state";
 
 interface Stream {
   stream: string;
   captures: number;
   latest?: string;
+}
+
+function streamTitle(stream: string): string {
+  const peer = stream.replace(/^chat-/, "");
+  return S.rooms.find(r => r.key === stream || r.key === peer)?.name
+    || (isWindowRoom(stream) ? S.agent : stream);
 }
 
 export async function render(container: HTMLElement): Promise<void> {
@@ -23,10 +29,10 @@ export async function render(container: HTMLElement): Promise<void> {
     <div class="list">${streams
       .map(
         (s) => `<div class="item" role="button" aria-current="${s.stream === S.stream}" data-stream="${esc(s.stream)}">
-          <span>${esc(s.stream)}</span><span class="n">${s.captures}</span></div>`,
+          <span title="${esc(s.stream)}">${esc(streamTitle(s.stream))}</span><span class="n">${s.captures}</span></div>`,
       )
       .join("")}
-      <p class="field-hint" style="margin:14px 10px">Тень пишется по PRAXIS_FRAME_SHADOW: если потока нет, значит тени там нет, и это честно.</p>
+      <p class="field-hint" style="margin:14px 10px">Здесь сохранён контекст, который агент отправлял модели. Выбери чат и нужный момент.</p>
     </div>
     <div class="reading" id="frame-main"><div class="empty">…</div></div>
   </div>`;

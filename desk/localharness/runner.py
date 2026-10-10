@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import sys
 import time
@@ -48,11 +49,13 @@ import broker
 import modes
 import transport
 import continuity
+import control_watch
 import voice
 import alarm_clock
 import forge_events
 import updates
 import owner_stop
+import run_trigger
 
 # Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
 # читателя не пишется; сторож живых файлов сдох) диагностировались строками
@@ -161,7 +164,26 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     import memory_life
     boot.apply_env(knobs, where="после импорта")
     _agent, _life = agent, memory_life
+    _publish_fold_policy(tree)
     return agent, memory_life
+
+
+def _publish_fold_policy(tree: Path) -> None:
+    """Publish the loaded core's actual policy, without importing it in the channel."""
+    try:
+        policy = {"schema": 1, "offer_mode": _life.fold_offer_enabled(),
+                  "backstop_hours": _life.FOLD_OFFER_BACKSTOP_HOURS}
+        for kind, place in (("chat", "window"), ("group", "-1")):
+            keep, offer, hard, cap = _life.hot_bounds(place)
+            policy[kind] = {"keep": keep, "offer_at": offer, "hard_at": hard,
+                            "token_cap": cap, "tape_chars": _life.tape_chars_for(place)}
+        target = tree / "memory" / ".state" / "fold-policy.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(".tmp")
+        temporary.write_text(json.dumps(policy), encoding="utf-8")
+        os.replace(temporary, target)
+    except Exception:
+        log.warning("политика свёртки не передана окну", exc_info=True)
 
 
 def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], str]:
@@ -337,6 +359,10 @@ def _transcribe_note(rel: str) -> str:
     src = (inbox / rel).resolve()
     if inbox not in src.parents or not src.is_file():
         return f"[голосовое не найдено: {name}]"
+    return _transcribe_path(src)
+
+
+def _transcribe_path(src: Path) -> str:
     if not _voice_state.get("ready"):
         return f"[голосовое не расшифровано: {_voice_state.get('why') or 'слух не поднят'} — Настройки → Голос]"
     try:
@@ -344,7 +370,7 @@ def _transcribe_note(rel: str) -> str:
         with _low_priority():
             text = str(importlib.import_module("media_audio").transcribe(src) or "").strip()
     except Exception as exc:  # noqa: BLE001 — любая причина называется словами
-        log.warning("голосовое из окна не расшифровалось [%s]", rel, exc_info=True)
+        log.warning("голосовое не расшифровалось [%s]", src.name, exc_info=True)
         return f"[голосовое не расшифровано: {type(exc).__name__}: {str(exc)[:160]}]"
     return f"[голосовое]: {text}" if text else "[голосовое: расшифровка пустая — тишина или не разобрать]"
 
@@ -505,8 +531,21 @@ def _orient(chat_id: str) -> str:
             status = getattr(_bot, "status_line", None)
             if callable(status):
                 bits.append(status())
+            proxy=getattr(_bot,'proxy_line',None)
+            if callable(proxy): bits.append(proxy())
         except Exception:
             log.debug("профиль Telegram не вошёл в контекст", exc_info=True)
+    elif _install_root is not None:
+        try:
+            import telegram_proxy
+            config=json.loads(boot.read_config_text(_install_root/'helene.json'))
+            proxy=(config.get('telegram') or {}).get('proxy') or {}
+            if proxy.get('enabled'):
+                bits.append(f"Telegram: выбран серверный прокси {telegram_proxy.public_address(str(proxy.get('url') or ''))}, "
+                    "но транспорт не запущен; связь не подтверждена. Настройка — telegram.proxy в helene.json, "
+                    "карточка Telegram → Telegram через сервер. Ключ прокси секретный, в сообщения его не выводить.")
+        except (OSError,ValueError,TypeError):
+            pass
     # 1.2.5: на чём агент работает сейчас и кто менял последним — в каждом ходе. Без этого
     # модель узнавалась рукой из снимка раннера, а смена владельцем читалась «обновлением».
     try:
@@ -718,22 +757,192 @@ def deliver_one_media(item, chat_id: str) -> str:
                             media_path=relative, media_kind=media_kind if relative else ""))
 
 
+def _media_receipt_message_id(receipt: str) -> str:
+    """message_id из расписки транспорта. Формат — контракт квитанции, не украшение.
+
+    Telegram-квитанция: «Отправлен файл → … (id 12345)» (`botapi.deliver_file`),
+    окно: «Отправлено → … (окно Frame, id 7)» (`transport.Desk.deliver`). Успех
+    заявляется только по принятым message_id — durable-расписка ядра кладёт его в
+    `run_delivery_media_result`, и без числа повтор после рестарта не отличил бы
+    доставленный файл от потерянного. Хвостовой «id N)» общий у обоих форматов.
+    """
+    match = re.search(r"id (\d+)\)", str(receipt or ""))
+    return match.group(1) if match else ""
+
+
 def _deliver_outbound(envelope, chat_id: str) -> int:
     """Медиа, спуленное ходом (`send_media`): документы/фото/аудио этого чата.
 
     В живом раннере это делает mtproto на исходящей границе; здесь — мы, тем же
     правилом: только то, что адресовано этому чату, и с распиской в лог.
+
+    ⚑ 10.10: ОШИБКА КАНАЛА БОЛЬШЕ НЕ ГЛОТАЕТСЯ. Живой сбой #113214: 429 на
+    sendPhoto, файл потерян, ошибка не дошла ни агенту, ни владельцу, ход закрыт
+    «отправлено». Теперь порядок — как у mtproto-границы ядра (`_queue_and_send_media`)
+    и `continuity.deliver_pending_media`: намерение durable ДО отправки
+    (`run_delivery_started` с точными `media_queue_ids`), на успех —
+    `run_delivery_media_result(ok=True, message_id)` и погашение спула, на ошибку —
+    `run_delivery_media_result(ok=False, permanent=…)` при предмете, ОСТАЮЩЕМСЯ в
+    спуле. Прогон не закрывается, пока долг жив: `resume_due` (45 с) вернётся к файлу
+    через `continuity.deliver_pending_media`, и policy-опрос перед попыткой не даст
+    отправить второй раз уже принятый.
+
+    Идемпотентность дублей — по ключу `queue_id`: перед каждой попыткой спрашиваем
+    `run_delivery_media_retry_policy` (ack — уже принято, drop — отказано навсегда);
+    это тот же запрос, которым живая граница гасит долги.
     """
+    items = list(getattr(envelope, "outbound", ()) or ())
+    if not items:
+        return 0
+    run_id = str(getattr(envelope, "run_id", "") or "")
+    queue_ids = [str(getattr(item, "queue_id", "") or "") for item in items]
+    if (run_id and all(queue_ids)
+            and not getattr(envelope, "deferred", False)
+            and not getattr(envelope, "failed", False)):
+        try:
+            # Намерение — до первой отправки. Текст в намерении не наш: его
+            # доставляет граница (рука `reply` или `_close_run`), у нас — только
+            # медиа-часть; text_chars=0 держит `text_ok` честным (нет плана —
+            # нет и пустого долга по тексту).
+            _agent.run_delivery_started(
+                run_id, chat_id=chat_id, text_chars=0, media_count=len(items),
+                media_queue_ids=queue_ids)
+        except Exception:
+            # Конфликт/пауза/отмена: намерение уже лежит иначе или прогон закрыт —
+            # отправлять без него нельзя, расписание повтора видит только durable
+            # намерение. Файл остаётся у прогона (байты — артефакт хода): следующий
+            # шаг за durable-механикой — resume сам перепланирует доставку.
+            log.exception("медиа-намерение хода не записалось [%s]", run_id)
+            return 0
     delivered = 0
-    for item in getattr(envelope, "outbound", ()) or ():
+    spool = None
+    if run_id:
+        try:
+            spool = _agent._media_spool()
+        except Exception:
+            spool = None
+    if spool is not None and all(queue_ids):
+        # Предмет живого хода резолвится БЕЗ постановки в очередь
+        # (`resolve_outbound` — только байты и валидация). Повтору после ошибки
+        # нужен durable-предмет — как у mtproto-границы (`spool.enqueue` до
+        # попытки): иначе `continuity.deliver_pending_media` не найдёт файл, и
+        # долг останется намерением без тела.
+        for item, queue_id in zip(items, queue_ids):
+            try:
+                spool.enqueue(item)
+            except Exception:
+                # Дубль queue_id (повтор конверта) — предмет уже стоит; любая
+                # иная ошибка отфильтруется ниже по pending(): попытка без
+                # durable-тела стала бы молчаливой потерей, какой она и была 10.10.
+                log.exception("медиа-предмет не встал в спул [%s]", queue_id)
+        try:
+            pending_ids = {str(p.queue_id) for p in spool.pending()}
+        except Exception:
+            pending_ids = set()
+        kept = [(item, queue_id) for item, queue_id in zip(items, queue_ids)
+                if queue_id in pending_ids]
+        items = [item for item, _ in kept]
+        queue_ids = [queue_id for _, queue_id in kept]
+        if not items:
+            return 0
+    closed_slots = 0
+    for item in items:
         target = str(getattr(item, "target_chat_id", "") or chat_id)
+        queue_id = str(getattr(item, "queue_id", "") or "")
+        if run_id and queue_id:
+            # До попытки: возможно, расписка уже лежит (прошлый заход упал после
+            # приёма Telegram). ack/drop гасят слот без второй отправки человеку.
+            try:
+                policy = _agent.run_delivery_media_retry_policy(run_id, queue_id)
+            except Exception:
+                policy = ""
+            if policy in {"ack", "drop"}:
+                if spool is not None:
+                    try:
+                        if policy == "drop":
+                            # Отказано навсегда — терминальный «failed», не «delivered»:
+                            # та же честность, что у очистки mtproto-границы.
+                            spool.fail(queue_id, reason="linked durable run refused this upload")
+                        else:
+                            spool.discard(queue_id, receipt={"policy": policy})
+                    except Exception:
+                        log.exception("спул не погасил медиа-долг [%s]", queue_id)
+                closed_slots += 1
+                if policy == "ack":
+                    delivered += 1  # доставлено прошлым заходом; drop — не доставка
+                continue
         try:
             receipt = deliver_one_media(item, chat_id)
-            delivered += 1
-            log.info("медиа хода доставлено: %s", str(receipt)[:120])
-            _ext_hook("on_delivery", chat_id, item, receipt)
-        except Exception:
+        except Exception as exc:
+            # Канал не принял файл: долг живёт. Прогон не терминализуется —
+            # `resume_due` вернётся к предмету, владелец видит честный статус
+            # («в очереди на повтор»), а не «отправлено».
+            if run_id and queue_id:
+                permanent = bool(
+                    isinstance(exc, botapi.BotApiError) and exc.permanent)
+                try:
+                    _agent.run_delivery_media_result(
+                        run_id, queue_id, ok=False,
+                        error=f"{type(exc).__name__}: {exc}"[:200],
+                        permanent=permanent, chat_id=target,
+                        path=str(getattr(item, "path", "") or ""),
+                        caption=str(getattr(item, "caption", "") or ""))
+                except Exception:
+                    log.exception("расписка неудачи медиа не записалась [%s]", queue_id)
             log.exception("медиа хода не доставилось [%s]", target)
+            continue
+        # Успех: сначала durable-расписка, затем гашение спула (образец
+        # continuity.deliver_pending_media) — падение между ними вернёт предмет в
+        # очередь, а расписка не даст отправить второй раз.
+        refusal = getattr(_agent, "DirectSendRefusal", None)
+        message_id = ""
+        if refusal is not None and isinstance(receipt, refusal):
+            # Telegram отказал навсегда (4xx≠429): это терминальный исход СЛОТА,
+            # не повод для вечного повтора (728 отказов за 13 часов — уже было).
+            if run_id and queue_id:
+                try:
+                    _agent.run_delivery_media_result(
+                        run_id, queue_id, ok=False, permanent=True,
+                        error=str(receipt)[:200], chat_id=target,
+                        path=str(getattr(item, "path", "") or ""),
+                        caption=str(getattr(item, "caption", "") or ""))
+                    if spool is not None:
+                        # В живом раннере отказанные предметы собирает отдельный
+                        # цикл выверки; в издании его нет — гасим сразу после
+                        # durable-расписки отказа, иначе pending-запись бессмертна.
+                        spool.fail(queue_id,
+                                    reason="telegram refused this upload permanently")
+                except Exception:
+                    log.exception("расписка отказа медиа не записалась [%s]", queue_id)
+            log.warning("медиа хода отказано навсегда [%s]: %s", target, str(receipt)[:160])
+            closed_slots += 1
+            continue
+        message_id = _media_receipt_message_id(receipt)
+        if run_id and queue_id:
+            try:
+                _agent.run_delivery_media_result(
+                    run_id, queue_id, ok=True, message_id=message_id,
+                    chat_id=target, path=str(getattr(item, "path", "") or ""),
+                    caption=str(getattr(item, "caption", "") or ""))
+            except Exception:
+                log.exception("расписка приёма медиа не записалась [%s]", queue_id)
+        if spool is not None and queue_id:
+            try:
+                spool.discard(queue_id, receipt={"message_id": message_id})
+            except Exception:
+                log.exception("спул не погасил доставленное медиа [%s]", queue_id)
+        delivered += 1
+        closed_slots += 1
+        log.info("медиа хода доставлено: %s", str(receipt)[:120])
+        _ext_hook("on_delivery", chat_id, item, receipt)
+    if run_id and closed_slots == len(items) and items:
+        # Все слоты закрыты (принято/отказано/погашено политикой) — предложить ядру
+        # терминализацию: `ready` у медиа-хода без текста теперь истинен. Ошибку
+        # не логируем: не-`ready` (текст ещё в пути) — законное состояние.
+        try:
+            _agent.run_delivery_finalize_recovered(run_id)
+        except Exception:
+            pass
     return delivered
 
 
@@ -784,7 +993,7 @@ def handle_desk(message: str, room: str = STREAM, attachments: list[str] | tuple
 
 def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
                     room: str = STREAM, origin_text: str = "",
-                    media_refs: tuple = ()) -> str:
+                    media_refs: tuple = (), trigger_kind: str = "") -> str:
     """Ход в комнате окна по уже записанному в память входящему.
 
     `origin_text` — точный текст повода (записка владельца, текст будильника):
@@ -820,6 +1029,12 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
         envelope = _run_turn(room, convo, speaker, ctx, media_refs=media_refs)
     finally:
         _set_busy(False, str(getattr(envelope, "run_id", "") or ""))
+    if trigger_kind == "wake" and envelope is not None:
+        try:
+            run_trigger.record_wake(_tree, str(getattr(envelope, "run_id", "") or ""),
+                                    room, source_id)
+        except (OSError, ValueError):
+            log.exception("повод пробуждения не записался [%s]", source_id)
     if envelope is None:
         desk.deliver("⚠ ход не дошёл до конца — подробности в логе движка.",
                      source_id=source_id, system=True)
@@ -833,6 +1048,15 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
         text = str(getattr(envelope, "text", "") or "").strip()
         run_id = str(getattr(envelope, "run_id", "") or "")
         media_count = _deliver_outbound(envelope, room)
+        _pending_media = len(getattr(envelope, "outbound", ()) or ()) - media_count
+        if _pending_media > 0:
+            # ⚑ 10.10: сбой канала больше не молчит. Файл не потерян — он в durable
+            # очереди, и владелец видит это, а не пустоту после «отправлено». Слово
+            # «повтор» не обещается: «повтор или отказ» — два честных исхода очереди.
+            desk.deliver(f"⏳ файлов не доставлено сейчас: {_pending_media} "
+                         f"(запуск {run_id}) — не потеряны: повтор или отказ, "
+                         "статус в карточке хода.",
+                         source_id=source_id, system=True)
         ending, word = ("", "")
         if not spoken and not text:
             # Рука reply молчала и конверт пуст. Медиа этого НЕ отменяет: 06.09 ход
@@ -894,7 +1118,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     return "spoken" if (spoken or text or media_count) else "silent"
 
 
-def handle_owner_note(chat_id: str, message: str) -> None:
+def handle_owner_note(chat_id: str, message: str, attachments=(), *, ingress_id: str = '') -> None:
     """Реплика владельца ИЗ ОКНА в telegram-комнату (записка `__to__` композера).
 
     Окно — ещё одна дверь владельца в любую его комнату (слово владельца 31.08):
@@ -910,10 +1134,27 @@ def handle_owner_note(chat_id: str, message: str) -> None:
     _bot.rooms.describe(chat_id, title=_room_title(chat_id),
                         is_dm=bool(_bot.rooms.meta(chat_id).get("is_dm", True)),
                         sender=(_speaker, _bot.owner_id))
-    _bot.rooms.record(chat_id, message, outgoing=False, sender=_speaker,
-                      source_id=f"desk-{int(now.timestamp() * 1000)}",
-                      ts=now.timestamp(), source="window")
-    handle_bot(chat_id)
+    import mimetypes
+    from deskd import artifacts
+    staged=[]
+    inbox=(Path(_tree)/'memory/.control/desk_inbox').resolve() if _tree is not None else None
+    for rel in attachments or ():
+        source=(inbox/rel).resolve() if inbox is not None else None
+        if source is None or inbox not in source.parents or not source.is_file(): raise ValueError('Вложение не найдено в записке владельца.')
+        path=artifacts.stage(_tree,source)
+        suffix=source.suffix.lower()
+        kind='image' if suffix in _IMAGE_EXT else 'audio' if suffix in _AUDIO_EXT else 'file'
+        payload={'media_path':path,'media_kind':kind,'media_name':artifacts.display_name(source),
+                 'media_size':source.stat().st_size,'media_mime':mimetypes.guess_type(str(source))[0] or 'application/octet-stream'}
+        if kind=='image':payload['media_preview_path']=path
+        staged.append(payload)
+    source_id=str(ingress_id or f"desk-{int(now.timestamp()*1000)}")
+    for index,payload in enumerate(staged or [{}]):
+        text=message if index==0 else ''
+        if payload: text=(text+'\n'+f"[Вложение владельца: {payload['media_name']}; файл: {payload['media_path']}]").strip()
+        _bot.rooms.record(chat_id,text,outgoing=False,sender=_speaker,source_id=source_id+f'-{index}',
+            ts=now.timestamp(),source='window',sender_id=str(_bot.owner_id or ''),media=payload)
+    handle_bot(chat_id, sender_override=(_speaker, str(_bot.owner_id or '')))
 
 
 def _room_title(chat_id: str) -> str:
@@ -930,24 +1171,63 @@ def _room_title(chat_id: str) -> str:
     return label if label != peer else ""
 
 
-def handle_bot(chat_id: str) -> None:
+def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
+    if _tree is None: return [], []
+    archive=Path(_tree)/'memory/groups'/f'{chat_id}.jsonl'
+    try:
+        rows=[json.loads(line) for line in archive.read_text(encoding='utf-8').splitlines() if line.strip()][-_last_n():]
+        spool=_agent._media_spool()
+    except Exception: return [], []
+    scope='owner' if getattr(ctx,'owner',False) else 'group' if not getattr(ctx,'is_dm',True) else 'known' if getattr(ctx,'known',False) else 'unknown'
+    refs,notes=[],[]
+    eligible=[row for row in rows if row.get('media_preview_path')][-getattr(spool,'max_turn_media',4):]
+    def owned(path: Path,row: dict):
+        roots=[Path(_tree)/'memory/telegram-media']
+        if row.get('source')=='window':roots.append(Path(_tree)/'media/artifacts')
+        return any(root.resolve() in path.parents for root in roots)
+    for row in rows:
+        if row.get('media_kind')=='audio' and row.get('media_path'):
+            src=(Path(_tree)/row['media_path']).resolve()
+            if not owned(src,row) or not src.is_file(): continue
+            cache=src.with_suffix(src.suffix+'.transcript.json')
+            import package_notice
+            heard=package_notice.read(cache).get('text')
+            if not heard:
+                heard=_transcribe_path(src)
+                if heard.startswith('[голосовое]: '): package_notice.write(cache,{'text':heard})
+            notes.append(f"{row.get('sender_name') or 'Собеседник'} (голосовое, сообщение {row.get('source_message_id') or '?'}): {heard}")
+            continue
+        rel=row.get('media_preview_path')
+        if not rel:
+            if row.get('media_path') or row.get('media_error'):
+                notes.append(f"[Медиа из Telegram: {row.get('media_name') or 'вложение'}. Превью для зрения недоступно; не описывай содержимое по догадке.]")
+            continue
+        if row not in eligible: continue
+        path=(Path(_tree)/str(rel)).resolve()
+        if not owned(path,row): continue
+        try:
+            ref=spool.ingest_path(path,kind='photo',chat_id=chat_id,
+                message_id=str(row.get('source_message_id') or ''),scope=scope,move=False,
+                caption=f"{row.get('sender_name') or 'Собеседник'}, сообщение {row.get('source_message_id') or '?'}: {row.get('text') or ''}")
+            refs.append(ref)
+            if row.get('media_kind') in ('animation','video','sticker_tgs') or row.get('media_mime')=='image/gif':
+                notes.append(f"[Превью медиа: {row.get('media_name') or 'анимация'}; полный файл: {row.get('media_path')}. Превью — отдельный кадр, не вся анимация.]")
+        except Exception:
+            notes.append('[Изображение из Telegram не удалось передать в зрение; не описывай его по догадке.]')
+    return refs[-getattr(spool,'max_turn_media',4):],notes
+
+
+def handle_bot(chat_id: str, *, sender_override=None) -> None:
     """Ход в бот-чате: сообщение уже в памяти (его записал поток приёма)."""
     meta = _bot.rooms.meta(chat_id)
     is_dm = bool(meta.get("is_dm", True))
-    sender_name, sender_id = _bot.wake_sender(chat_id)
+    sender_name, sender_id = sender_override or _bot.wake_sender(chat_id)
     owner = bool(_bot.owner_id) and str(sender_id) == str(_bot.owner_id)
     # 07.10 (Джарвис): фокус-окно. Приоритетная реплика (префикс) открывает
     # кадр секцией «ПРИОРИТЕТ — требуется действие»: в любом состоянии следующим
     # ходом агент видит, что сработал приоритет и что его просят сделать.
     # Гист зафиксирован в момент приёма (история хода несёт «Имя: текст» —
     # парсить её задним числом ненадёжно).
-    priority_note = ""
-    with _bot._queue_lock:
-        if _bot._wake_priority.pop(str(chat_id), False):
-            gist = str(_bot._wake_priority_gist.pop(str(chat_id), "") or "")
-            if gist:
-                import addressing as _addressing
-                priority_note = _addressing.priority_banner(sender_name, gist)
     convo = "\n".join(_bot.rooms.lines(chat_id, _last_n()))
     if not convo.strip():
         return
@@ -962,18 +1242,11 @@ def handle_bot(chat_id: str) -> None:
                                 addressed=True,
                                 title=_room_title(chat_id) or str(chat_id))
     _bot.sent_now.clear()
-    # 07.10: приоритетный баннер — в orient ЭТОГО хода (первая секция кадра).
-    # Реплику ищем в истории хода: префикс остаётся в тексте для людей, здесь
-    # вырезаем его для сути. Не нашли (флаг устарел) — баннера нет, ход обычный.
-    if priority_note:
-        import addressing as _addressing
-        for line in reversed(convo.splitlines()):
-            urgent, gist = _addressing.split_priority(line)
-            if urgent and gist:
-                priority_note = _addressing.priority_banner(sender_name, gist)
-                break
-        else:
-            priority_note = ""
+    import addressing as _addressing
+    priorities = _bot.take_priorities(chat_id)
+    priority_note = '\n'.join(_addressing.priority_banner(row['sender'], row['gist']) for row in priorities)
+    media_refs,media_notes=_telegram_media_refs(chat_id,ctx)
+    if media_notes: convo+='\n'+'\n'.join(media_notes)
     started = time.time()
     _set_busy(True, chat_id=chat_id)
     # 25.09 (F): видно, что агент думает, — «печатает…» всё время хода (раньше один
@@ -981,17 +1254,21 @@ def handle_bot(chat_id: str) -> None:
     # (telegram.status_message) у долгого хода — пост «думаю (ЧЧ:ММ)…».
     import turn_pulse
     pulse = turn_pulse.TurnPulse(_bot, chat_id, typing=True,
-                                 status=bool(_status_message)).start()
+                                 status=bool(_status_message))
     failed = ""
+    envelope = None
     try:
+        pulse.start()
         envelope = _run_turn(chat_id, convo, sender_name, ctx,
-                             priority_note=priority_note)
+                             priority_note=priority_note, media_refs=tuple(media_refs))
         if envelope is None:
             failed = "ход не дошёл до конца"
     except BaseException as exc:
         failed = type(exc).__name__
         raise
     finally:
+        if envelope is None:
+            _bot.restore_priorities(chat_id, priorities)
         _set_busy(False)
         pulse.stop(failed=failed)
     if envelope is None:
@@ -1011,6 +1288,19 @@ def handle_bot(chat_id: str) -> None:
         text = str(getattr(envelope, "text", "") or "").strip()
         run_id = str(getattr(envelope, "run_id", "") or "")
         media_count = _deliver_outbound(envelope, chat_id)
+        _pending_media = len(getattr(envelope, "outbound", ()) or ()) - media_count
+        if _pending_media > 0:
+            # ⚑ 10.10: сбой канала больше не молчит — тот же инцидент #113214.
+            # «Повтор или отказ», не «в очереди на повтор»: очередь кончается и
+            # отказом, и обещать доставку нельзя (728 отказов — уже было).
+            if is_dm and owner:
+                try:
+                    _bot.deliver_text(
+                        chat_id,
+                        f"⏳ файлов не доставлено сейчас: {_pending_media} "
+                        f"(запуск {run_id}) — не потеряны: повтор или отказ.")
+                except Exception:
+                    log.exception("не доложила владельцу об очереди медиа [%s]", chat_id)
         if getattr(envelope, "deferred", False) or getattr(envelope, "failed", False):
             # Чужим людям внутренности не выкладываем — как в живом раннере: сбой
             # виден в карточке хода и логе, владельцу в личке — словами.
@@ -1237,6 +1527,7 @@ def _config_watch_forever(config_path: Path, tree: Path) -> None:
         _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
         if _bot is not None:
             _bot.set_agent_name(boot.agent_name(cfg))
+            _bot.refresh_admission(cfg.get('telegram') or {})
         if _agent is not None and hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
             _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
         # Ревью 25.09 (A6 F11): галочка «Пост «думаю…»» тоже читается на тике — расписка
@@ -1470,14 +1761,19 @@ def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
         out = _life.fold_now(room) or {}
         folded = int(out.get("folded") or 0)
         if out.get("ok") is False and out.get("reason") == "state_changed":
-            put(state="retry", note="пока сворачивала, в чат пришло новое — нажми ещё раз")
+            # Автоповтор уже случился внутри compact_if_due: до расписки дошёл
+            # ВТОРОЙ конфликт подряд — честно зовём владельца, не раньше.
+            put(state="retry", note="дважды подряд что-то менялось в памяти под рукой — "
+                                    "нажми ещё раз")
         elif folded:
-            put(state="done", folded=folded,
-                note=f"свёрнуто сообщений: {folded} — старое теперь в сводке её словами")
+            note = f"свёрнуто сообщений: {folded} — старое теперь в сводке словами агента"
+            if out.get("retried"):
+                note += " (после второго захода)"
+            put(state="done", folded=folded, note=note)
         else:
             reason = str((out.get("plan") or {}).get("reason") or out.get("reason") or "")
             put(state="nothing", reason=reason,
-                note="сворачивать нечего: горячей памяти не больше, чем она держит сама")
+                note="сворачивать нечего: горячая память укладывается в текущий хвост")
         log.info("свёртка по кнопке [%s]: %s", room, {k: out.get(k) for k in ("ok", "folded", "reason")})
     except Exception as exc:  # noqa: BLE001 — причина уходит владельцу распиской
         log.exception("свёртка по кнопке [%s] не прошла", room)
@@ -1723,6 +2019,17 @@ def _resume_due() -> None:
         _set_busy(False)
 
 
+def _guard_telegram_send() -> None:
+    run_id, started = control_watch.active_delivery() or (
+        str(_busy.get('run') or ''), float(_busy.get('since') or 0))
+    if run_id and _agent is not None and control_watch.cancelled(_agent._runs().status(run_id)):
+        from telegram_retry import DeliveryCancelled
+        raise DeliveryCancelled('Ход отменён владельцем; отправка прекращена.')
+    if _tree is not None and control_watch.pending_interrupt(Path(_tree), run_id, started):
+        from telegram_retry import DeliveryCancelled
+        raise DeliveryCancelled('Отправка отменена владельцем во время ожидания Telegram.')
+
+
 _BIRTH_NOTE = (
     "Это твой первый запуск {where}. Ты — {agent}, твой владелец — {owner}, "
     "и {owner} говорит с тобой в этом окне.\n\n"
@@ -1855,7 +2162,7 @@ def _update_report_due() -> None:
     if receipt is None:
         return
     plan_id, state = str(receipt.get("id") or ""), str(receipt.get("state") or "")
-    mark = updates.report_mark(_tree)
+    mark = updates.report_mark(_tree, receipt)
     same = mark.get("id") == plan_id and mark.get("state") == state
     tries = int(mark.get("tries") or 0) if same else 0
     if same and time.time() < float(mark.get("retry_at") or 0.0):
@@ -1874,14 +2181,17 @@ def _update_report_due() -> None:
     except Exception:
         brain = False
     if not brain:
-        updates.mark_reported(_tree, receipt, done=True, tries=tries, noted=True)
-        log.info("обновление: мозг не настроен — только запиской")
+        wait=receipt.get('kind')=='package'
+        updates.mark_reported(_tree, receipt, done=not wait, tries=tries, noted=True, retry_at=time.time()+_UPDATE_RETRY_SEC)
+        log.info("обновление: мозг ещё не настроен — %s",'записка лежит, ход подождёт' if wait else 'только запиской')
         return
     tries += 1
     # До хода — «записка лежит, попытка N»: убитый посреди хода раннер не положит её
     # второй раз, а последняя попытка закрывает отметку и без удачи.
-    updates.mark_reported(_tree, receipt, done=tries >= _UPDATE_TRIES, tries=tries, noted=True,
-                          retry_at=time.time() + _UPDATE_RETRY_SEC)
+    package=receipt.get('kind')=='package'
+    retry=_UPDATE_RETRY_SEC if not package else min(3600,_UPDATE_RETRY_SEC*2**min(tries-1,5))
+    updates.mark_reported(_tree, receipt, done=not package and tries >= _UPDATE_TRIES, tries=tries, noted=True,
+                          retry_at=time.time() + retry)
     outcome = "failed"
     try:
         outcome = _turn_in_window(source_id, speaker=updates.SYSTEM_SPEAKER, origin_text=note)
@@ -2118,7 +2428,8 @@ def _fire_due_tasks() -> None:
             desk = _room(room)
             desk.archive(note, outgoing=False, now=now, sender="Hélène")
             desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
-            _turn_in_window(source_id, speaker="Hélène", room=room, origin_text=note)
+            _turn_in_window(source_id, speaker="Hélène", room=room, origin_text=note,
+                            trigger_kind="wake")
 
         try:
             if _alarms.fire(task, invoke):
@@ -2500,12 +2811,7 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
             handle_desk(message, room=target, attachments=attached,
                         ingress_id=ingress_id)
         else:
-            if attached:
-                # Канал отказывает таким запискам сам; если файл всё же
-                # приехал — не терять молча.
-                log.warning("вложения окна в Telegram-комнату не едут [%s]: %s",
-                            target, ", ".join(attached))
-            handle_owner_note(target, message)
+            handle_owner_note(target,message,attachments=attached,ingress_id=ingress_id)
     except Exception:
         log.exception("ход окна упал [%s] — записка без .done, replay повторит", target)
         return
@@ -2852,14 +3158,8 @@ def main() -> None:
     agent, memory_life = _load_tree(code_dir, tree, cfg)
     owner_stop.configure(tree)
     def edition_panic(reason=""):
-        import subprocess
-        exe = config_path.parent / "helene-svc.exe"
-        if os.name != "nt" or not exe.is_file():
-            raise RuntimeError("Native panic is unavailable on this platform; not restarting")
-        done = subprocess.run([str(exe), "panic", "--via", "agent"], capture_output=True, timeout=15)
-        if done.returncode != 0:
-            raise RuntimeError("Native panic refused; use the elevated owner control")
-        return "Стоп-флаг записан; надзор завершает дерево, не перезапускает."
+        import emergency
+        return emergency.request(config_path, via="agent", reason=reason)['note']
     agent.panic = edition_panic
     if isinstance(getattr(agent, "TOOL_IMPL", None), dict):
         agent.TOOL_IMPL["panic"] = edition_panic
@@ -2984,6 +3284,8 @@ def main() -> None:
         try:
             import mtproto
             _bot = mtproto.MtprotoTransport(agent, tree, memory_life, cfg)
+            _bot.owner_control = lambda: __import__('emergency').request(config_path, via="telegram")
+            _bot.send_guard = _guard_telegram_send
             _bot.on_incoming = _note_incoming
             _bot.start()
             botapi.install(agent, _desks, _bot)
@@ -2995,7 +3297,8 @@ def main() -> None:
         # окно: продукт остаётся рабочим локально, а причина названа в логе.
         try:
             _bot = botapi.BotTransport(agent, tree, memory_life, cfg)
-            _bot.owner_control = lambda: edition_panic("Telegram owner /panic")
+            _bot.owner_control = lambda: __import__('emergency').request(config_path, via="telegram")
+            _bot.send_guard = _guard_telegram_send
             _bot.on_incoming = _note_incoming
             _bot.start()
             botapi.install(agent, _desks, _bot)
@@ -3053,6 +3356,13 @@ def main() -> None:
         memory_life, cooldown=float(os.getenv("PRAXIS_REFRESH_COOLDOWN_SEC", "600") or 600)).start()
     atexit.register(_refresh_care.stop)
     _start_supervisor(tree)
+    if not updates.on_server():
+        try:
+            program=Path(__file__).resolve().parents[2]
+            if not (program/'helene-build.json').is_file(): program=config_path.parent
+            updates.package_notice.observe(tree,program,cfg)
+        except Exception:
+            log.exception('версия пакета не записалась — проверка обновления пока не назначена')
     _warm_voice_models(cfg)
     # Рождение — после того, как всё поднято и квитанция читателя уже пишется:
     # окно видит «думает», а не мёртвый руннер, пока идёт первый ход.
@@ -3147,13 +3457,6 @@ def main() -> None:
                 _update_report_due()
             except Exception:
                 log.exception("отчёт об обновлении не прошёл (повтор не делается)")
-            # ПК (1.2.5): испытание не закрыто, а сторожа не слышно — позвать его.
-            try:
-                said = updates.ensure_watcher(_install_root, _tree)
-                if said:
-                    log.info("обновление: %s", said)
-            except Exception:
-                log.exception("сторож испытания не позван")
         # Её сон — последним: живое слово, продолжение задач и будильники вперёд.
         if time.time() - sleep_at > _SLEEP_CHECK_SEC:
             sleep_at = time.time()

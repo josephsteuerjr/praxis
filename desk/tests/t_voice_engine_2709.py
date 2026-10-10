@@ -26,6 +26,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -132,6 +133,16 @@ class Split(unittest.TestCase):
         self.assertEqual(again["moved"], 0)
         self.assertEqual(set(again["dists"]), VOICE_ONLY)
 
+    def test_complete_base_runtime_restores_the_full_voice_dependency_closure(self):
+        got=build_dist.bundle_voice(self.site,self.stage)
+        self.assertEqual(set(got['dists']),VOICE_ONLY)
+        for rel in ('faster_whisper/__init__.py','yaml/__init__.py','_yaml/__init__.py',
+                    'ctranslate2/ctranslate2.dll','numpy.libs/openblas.dll','onnxruntime/capi/onnx.dll'):
+            self.assertEqual((self.site/rel).read_bytes(),(self.stage/rel).read_bytes(),rel)
+        self.assertFalse((self.site/build_dist.VOICE_PTH).exists())
+        build_dist.bundle_voice(self.site,self.stage)
+        self.assertTrue((self.site/'yaml/__init__.py').is_file())
+
     def test_без_голоса_в_рантайме_сборка_останавливается(self):
         empty = Path(self.tmp.name) / "empty"
         dist(empty, "anthropic", "0.70.0", [], {"anthropic/__init__.py": "a"})
@@ -174,6 +185,8 @@ class Engine(unittest.TestCase):
                 sys.modules.pop(name, None)
 
         self.addCleanup(restore)
+        platform = patch.object(voice, '_windows_pack_supported', return_value=True)
+        platform.start(); self.addCleanup(platform.stop)
 
     def passport(self, data: dict) -> None:
         (self.root / "helene-build.json").write_text(json.dumps(data), encoding="utf-8")
@@ -190,6 +203,23 @@ class Engine(unittest.TestCase):
         self.assertEqual(voice.engine_installed()["sha256"], self.rec["sha256"])
         leftovers = [p.name for p in voice.engine_home().iterdir() if p.name.startswith(".")]
         self.assertEqual(leftovers, [], "ни .part, ни .new, ни .old")
+
+    def test_builtin_runtime_disables_legacy_bundle_path_and_download(self):
+        self.passport({'version':'9.9.9','voice_runtime':True,'voice_pack':self.rec})
+        old=voice.engine_site();old.mkdir(parents=True)
+        sys.path.insert(0,str(old))
+        self.assertFalse(voice.ensure_engine_path())
+        self.assertNotIn(str(old),sys.path)
+        self.assertEqual(voice.pack_record(),{})
+        with patch('importlib.util.find_spec',return_value=object()),patch('urllib.request.urlopen') as network:
+            self.assertEqual(voice.fetch_engine()['state'],'present')
+        network.assert_not_called()
+
+    def test_partial_faster_whisper_without_yaml_is_not_reported_ready(self):
+        with patch('importlib.util.find_spec',side_effect=lambda name:None if name=='yaml' else object()):
+            result=voice.library()
+        self.assertFalse(result['present']);self.assertIn('yaml',result['why'])
+        self.assertTrue(result['downloadable'])
 
     def test_чужой_архив_не_оставляет_движка(self):
         self.passport({"version": "9.9.9", "voice_pack": dict(self.rec, sha256="0" * 64)})
@@ -250,6 +280,27 @@ class Engine(unittest.TestCase):
         self.assertTrue(voice.library()["present"])
         self.assertEqual(voice.fetch_engine(), {"state": "present"})
 
+    def test_failed_engine_rename_and_receipt_restore_previous_files(self):
+        voice.fetch_engine()
+        marker = voice.engine_home() / voice.INSTALLED
+        old = json.loads(marker.read_text())
+        old['dists']['av'] = '19.0.0'
+        marker.write_text(json.dumps(old))
+        sentinel = voice.engine_site() / 'previous-owner-engine'
+        sentinel.write_bytes(b'previous engine')
+        replace = voice.os.replace
+        for stage in ('rename', 'receipt'):
+            def fail(src, dst):
+                if stage == 'rename' and Path(src).name == 'site-packages' and Path(src).parent.name.startswith('.new-'):
+                    raise OSError('new engine rename failed')
+                return replace(src, dst)
+            with self.subTest(stage=stage), patch.object(voice.os, 'replace', side_effect=fail):
+                with patch.object(voice, '_write', side_effect=OSError('receipt disk full')) if stage == 'receipt' else patch.object(voice, '_write', wraps=voice._write):
+                    with self.assertRaises(OSError):voice.fetch_engine()
+            self.assertEqual(sentinel.read_bytes(), b'previous engine')
+            self.assertEqual(json.loads(marker.read_text()),old)
+            self.assertEqual([p for p in voice.engine_home().iterdir() if p.name.startswith('.')],[])
+
     def test_перенесённый_движок_без_версий_сверяется_по_metadata(self):
         voice.fetch_engine()
         marker = voice.engine_home() / voice.INSTALLED
@@ -267,6 +318,12 @@ class Engine(unittest.TestCase):
         self.assertIn("поставка собрана без голоса", lib["why"])
         with self.assertRaises(SystemExit):
             voice.fetch_engine()
+
+    def test_linux_cannot_offer_or_install_windows_engine(self):
+        with patch.object(voice,'_windows_pack_supported',return_value=False):
+            self.assertFalse(voice._engine_missing('piper-tts','missing')['downloadable'])
+            with self.assertRaisesRegex(SystemExit,'Windows-движок'):voice.fetch_engine()
+        self.assertFalse(voice.engine_site().exists())
 
     def test_адрес_выпуска_из_настроек_обновления(self):
         os.environ.pop("HELENE_VOICE_PACK_URL")

@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-server.txt
 # был целым сам по себе: репетиция расширений исполнителя гоняет его без монтирования.
 COPY app/ ./app/
 COPY tree/ ./tree/
-COPY server/serverboot.py ./server/serverboot.py
+COPY server/serverboot.py server/emergency_stop.py ./server/
 
 # Реле подписки ChatGPT — Linux-бинарь из поставки. Скобки делают его
 # НЕОБЯЗАТЕЛЬНЫМ: поставка без реле (собранная там, где нет докера) соберётся

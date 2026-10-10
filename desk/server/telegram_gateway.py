@@ -11,6 +11,7 @@ import ipaddress
 import os
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import web, ClientSession, ClientTimeout, ClientError, WSMsgType
 
@@ -99,11 +100,37 @@ def application(key: str, prefix: str = '/helene/telegram') -> web.Application:
             await ws.close()
         return ws
 
+    async def file(request):
+        token=request.headers.get('X-Telegram-Bot-Token','')
+        if not re.fullmatch(r'\d+:[A-Za-z0-9_-]+',token): raise web.HTTPBadRequest()
+        data=await request.post()
+        ident=str(data.get('file_id') or '')
+        if not ident or len(ident)>4096: raise web.HTTPBadRequest()
+        try:
+            async with sessions[0].post('https://api.telegram.org/bot'+token+'/getFile',json={'file_id':ident}) as response:
+                info=await response.json()
+                if response.status!=200 or info.get('ok') is not True: raise web.HTTPBadGateway(text='Telegram did not provide the attachment')
+            details=info.get('result') or {}
+            path=str(details.get('file_path') or '')
+            if not re.fullmatch(r'[A-Za-z0-9_./-]+',path) or path.startswith('/') or '..' in path.split('/'):
+                raise web.HTTPBadGateway(text='Telegram returned an invalid attachment path')
+            if int(details.get('file_size') or 0)>20*1024*1024: raise web.HTTPRequestEntityTooLarge(max_size=20*1024*1024,actual_size=int(details['file_size']))
+            async with sessions[0].get('https://api.telegram.org/file/bot'+token+'/'+quote(path,safe='/'),allow_redirects=False) as response:
+                if response.status!=200: raise web.HTTPBadGateway(text='Telegram attachment unavailable')
+                payload=bytearray()
+                async for chunk in response.content.iter_chunked(65536):
+                    payload.extend(chunk)
+                    if len(payload)>20*1024*1024: raise web.HTTPRequestEntityTooLarge(max_size=20*1024*1024,actual_size=len(payload))
+                return web.Response(body=bytes(payload),content_type='application/octet-stream',headers={'Cache-Control':'no-store'})
+        except (ClientError,OSError,asyncio.TimeoutError,ValueError,TypeError):
+            raise web.HTTPBadGateway(text='Telegram attachment connection unavailable')
+
     app.on_startup.append(start)
     app.on_cleanup.append(close)
     app.router.add_post(prefix + '/bot/{method}', bot)
+    app.router.add_post(prefix + '/file',file)
     app.router.add_get(prefix + '/connect', connect)
-    async def health(request): return web.json_response({'ok': True})
+    async def health(request): return web.json_response({'ok': True,'capabilities':['bot','file','mtproto']})
     app.router.add_get(prefix + '/health', health)
     return app
 

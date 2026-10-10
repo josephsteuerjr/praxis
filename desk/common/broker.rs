@@ -197,6 +197,8 @@ fn broker_sddl(owner_sid: &str) -> Option<String> {
 enum BrokerOp {
     /// Живой ли брокер. Ничего не выполняет и в журнал действий не пишется.
     Ping,
+    /// Stop only, authenticated like every pipe request; no command or resume.
+    Panic,
     /// Поднять процесс ПРАВАМИ СИСТЕМЫ. Только при включённой галочке нулевой
     /// сессии — иначе отказ.
     Exec,
@@ -221,6 +223,7 @@ impl BrokerOp {
     fn as_str(self) -> &'static str {
         match self {
             BrokerOp::Ping => "ping",
+            BrokerOp::Panic => "panic",
             BrokerOp::Exec => "exec",
             BrokerOp::SpawnInteractive => "spawn_interactive",
             BrokerOp::Firewall => "firewall",
@@ -229,6 +232,7 @@ impl BrokerOp {
     fn parse(raw: &str) -> Option<BrokerOp> {
         match raw {
             "ping" => Some(BrokerOp::Ping),
+            "panic" => Some(BrokerOp::Panic),
             "exec" => Some(BrokerOp::Exec),
             "spawn_interactive" => Some(BrokerOp::SpawnInteractive),
             "firewall" => Some(BrokerOp::Firewall),
@@ -238,8 +242,14 @@ impl BrokerOp {
     /// Поднимает ли эта просьба процесс. `ping` — нет, и потому не требует ни
     /// команды, ни записи в журнал действий.
     fn runs(self) -> bool {
-        !matches!(self, BrokerOp::Ping)
+        !matches!(self, BrokerOp::Ping | BrokerOp::Panic)
     }
+}
+
+/// Turning privileged execution off must leave the authenticated stop usable.
+#[allow(dead_code)]
+fn broker_request_enabled(enabled: bool, op: BrokerOp) -> bool {
+    enabled || op == BrokerOp::Panic
 }
 
 #[derive(Clone, Debug)]
@@ -434,6 +444,10 @@ impl BrokerAsk {
         }
 
         let cmd = value.get("cmd").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if op == BrokerOp::Panic && (!cmd.is_empty() || args.len() > 1 ||
+            args.first().is_some_and(|v| !matches!(v.as_str(), "agent" | "telegram" | "phone" | "window" | "cli" | "start"))) {
+            return Err("panic принимает только источник остановки, без команды".into());
+        }
         if op.runs() {
             broker_cmd_ok(&cmd)?;
         }
@@ -908,6 +922,21 @@ mod broker_protocol_tests {
         let err = BrokerAsk::parse(&ask_json("\"args\":[],\"why\":\"долго\",\"timeout_sec\":100000"))
             .unwrap_err();
         assert!(err.contains("600"), "{err}");
+    }
+
+    #[test]
+    fn panic_is_authenticated_stop_only_even_with_execution_disabled() {
+        let raw = r#"{"v":1,"token":"synthetic-secret","op":"panic","args":["telegram"],"why":"Аварийная остановка"}"#;
+        let ask = BrokerAsk::parse(raw).unwrap();
+        assert_eq!(ask.op, BrokerOp::Panic);
+        assert!(!ask.op.runs());
+        assert!(broker_request_enabled(false, ask.op));
+        assert!(!broker_request_enabled(false, BrokerOp::Exec));
+        let changed = raw.replace("\"telegram\"", "\"resume\"");
+        assert!(BrokerAsk::parse(&changed).is_err());
+        let changed = raw.replace("\"args\"", "\"cmd\":\"C:\\\\fake.exe\",\"args\"");
+        assert!(BrokerAsk::parse(&changed).is_err());
+        assert!(BrokerAsk::parse(&raw.replace("\"synthetic-secret\"", "\"\"")).is_err());
     }
 
     /// `ping` команды не требует: он ничего не поднимает. Но «зачем» требует и

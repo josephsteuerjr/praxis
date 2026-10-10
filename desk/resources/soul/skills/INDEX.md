@@ -64,3 +64,4 @@
 | [telegram-thread-hygiene](telegram-thread-hygiene.md) | закрытие темы, follow-up и свежая проверка процесса |
 | [telegram-mtproto-moderation](telegram-mtproto-moderation.md) | реестр модерации, текущие права и журнал действий |
 | [telegram-history-archaeology](telegram-history-archaeology.md) | источник прошлого отдельно от адреса новой реплики |
+| [emergency-stop](emergency-stop.md) | аварийный стоп установки и явное возобновление владельцем |

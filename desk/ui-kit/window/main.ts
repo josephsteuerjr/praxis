@@ -28,6 +28,7 @@ import { clientIsMac, isMacPlatform, kbdLabel, platformOf } from "../../ui-kit/p
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
 import { mountSwitch } from "../../ui-kit/window/agents";
 import { mountWindowMedia, pickPaperFiles } from "./paper-files";
+import { mountTextMenu } from "./text-menu";
 import * as panel from "../../ui-kit/window/panel";
 import * as now from "../../ui-kit/window/views/now";
 import * as talk from "../../ui-kit/window/views/talk";
@@ -73,7 +74,7 @@ export interface WindowOptions {
 
 export function start(opts: WindowOptions): void {
   setProductName(opts.productName);
-  setLocalAgent(opts.localAgent !== false);
+  setLocalAgent(opts.localAgent !== false && cfg.local_agent !== false);
 
 
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
@@ -90,6 +91,7 @@ export function start(opts: WindowOptions): void {
   scroll.mountView(view, viewInner);
   const app = q<HTMLElement>("#app");
   mountWindowMedia(app, opts.localAgent !== false);
+  const disposeTextMenu = mountTextMenu(app);
   const railNav = q<HTMLElement>("#rail-nav");
   const railBottom = q<HTMLElement>("#rail-bottom");
   const railSign = q<HTMLElement>("#rail-sign");
@@ -120,17 +122,12 @@ export function start(opts: WindowOptions): void {
   const turnControls = document.createElement("div");
   turnControls.className = "composer-turn-controls";
   activityRow.append(activityLabel, turnControls);
-  composer.prepend(activityRow);
+  const composerMeta = document.createElement("div");
+  composerMeta.className = "composer-meta";
+  composerMeta.append(q<HTMLElement>("#composer-target"), activityRow);
+  composer.prepend(composerMeta);
   talk.mountTurnControls(turnControls);
-  // Status floats above the input, without turning the whole area above it into
-  // an invisible clipping shelf. Reserve room only at the end of the transcript.
-  const statusSize = new ResizeObserver(() => {
-    composer.parentElement!.style.setProperty("--composer-status-h", `${activityRow.getBoundingClientRect().height}px`);
-  });
-  statusSize.observe(activityRow);
-  window.addEventListener("pagehide", (event: PageTransitionEvent) => {
-    if (!event.persisted) statusSize.disconnect();
-  });
+  // Target, activity and controls occupy their own row above the input.
 
   const engineControls = document.createElement("div");
   engineControls.className = "engine-controls";
@@ -150,20 +147,14 @@ export function start(opts: WindowOptions): void {
 
   function paintEngineControls() {
     powerButton.hidden = !ownerState?.supported;
-    // Снятый агент (1.4.1): «остановить движок» здесь гасил бы ВСЮ установку —
-    // чужое действие в окне погашенного. Кнопка честно выключена и объясняет,
-    // что произошло и кто исполнит подъём. Старая оболочка (нет enabled) — как было.
-    const disarmed = ownerState?.enabled === false && !ownerState?.stopped;
-    if (disarmed) {
-      powerButton.textContent = ownerState?.service ? "Агент снят · служба держит" : "Агент снят в настройках";
-      powerButton.title = ownerState?.service
-        ? "Агент снят; его процессы отпустит перезапуск службы («Система» → «Перезапустить»)"
-        : "Верни галочку в настройках агента — движок поднимется сам";
-    } else {
-      powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Остановить движок";
-      powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить движок и его работу";
+    // Installation-wide stop remains usable if this profile is disabled:
+    // another profile or a privileged job may still run.
+    {
+      powerButton.textContent = ownerState?.stopped ? "Возобновить" : "Аварийный стоп";
+      powerButton.title = ownerState?.stopped ? "Запустить остановленный движок" : "Остановить всех агентов Hélène, их процессы и привилегированные поручения до явного возобновления";
+      powerButton.classList.toggle("emergency-stop", !ownerState?.stopped);
     }
-    powerButton.disabled = !!engineOperation || disarmed;
+    powerButton.disabled = !!engineOperation;
     restartButton.hidden = foreignHarness();
     restartButton.disabled = !!engineOperation || !!ownerState?.stopped;
     restartButton.title = ownerState?.stopped ? "Сначала возобнови движок" : "Перезапустить движок, сохранив окно";
@@ -562,7 +553,7 @@ export function start(opts: WindowOptions): void {
   // «Настройками». Без подзаголовка строка кикера схлопывается
   // (`.head-kicker:empty { display: none }`), и заголовок подпрыгивает на каждый Ctrl+`,`.
   const FOOT: Array<{ id: View; label: string; kicker: string; key: string }> = [
-    { id: "learn", label: "Что поручить", kicker: "С чего начать и как идёт ход", key: "9" },
+    { id: "learn", label: "Онбординг", kicker: "С чего начать и как идёт ход", key: "9" },
     { id: "settings", label: "Настройки", kicker: "Как настроена программа", key: "," },
   ];
 
@@ -627,7 +618,7 @@ export function start(opts: WindowOptions): void {
   setCollapsed("panel", readFlag("frame.panel"));
   const disposeWidths = mountPanelWidths(app);
   window.addEventListener("pagehide", (event: PageTransitionEvent) => {
-    if (!event.persisted) disposeWidths();
+    if (!event.persisted) { disposeWidths(); disposeTextMenu(); }
   });
   function togglePanel(which: "rail" | "panel") {
     setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
@@ -1308,8 +1299,8 @@ export function start(opts: WindowOptions): void {
   let composerRoom = "";
   function syncComposer() {
     const room = S.rooms.find((r) => r.key === S.room);
-    composerTarget.textContent = isWindowRoom(S.room) ? "" : `в «${S.roomName}»`;
-    say.placeholder = room?.stub ? "Чат-заглушка: писать сюда пока нельзя" : isWindowRoom(S.room) ? "Написать агенту…" : `Написать в «${S.roomName}»…`;
+    composerTarget.textContent = isWindowRoom(S.room) ? "" : `Ответ агента — в «${S.roomName}»`;
+    say.placeholder = room?.stub ? "Чат-заглушка: писать сюда пока нельзя" : isWindowRoom(S.room) ? "Написать агенту…" : `Поручить агенту в «${S.roomName}»…`;
     say.disabled = !!room?.stub;
     const blocked = !!ownerState?.stopped || !!engineOperation;
     send.disabled = !!room?.stub || sending || blocked;
@@ -1423,7 +1414,7 @@ export function start(opts: WindowOptions): void {
     talk.paintPending();
     const slow = window.setTimeout(() => {
       if (pending.state === "sending") {
-        pending.note = "агент не отвечает уже пять секунд…";
+        pending.note = "отправка ещё идёт…";
         talk.paintPending();
       }
     }, 5000);

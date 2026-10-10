@@ -181,11 +181,12 @@ class ForeignPair(unittest.TestCase):
     неизвестный каналу токен — отдельный отказ.
     """
 
-    def test_unknown_token_is_foreign_not_spent(self):
+    def test_unknown_token_does_not_assert_foreign_issuer(self):
         deskapp._PAIRS.pop("no-such-token", None)
         with self.assertRaises(web.HTTPForbidden) as caught:
             deskapp._redeem("no-such-token", "iPhone", "10.0.0.5")
-        self.assertIn("не выдавал", str(caught.exception.text))
+        self.assertEqual(json.loads(caught.exception.text)['code'], 'pair_unknown')
+        self.assertNotIn('другого адреса', caught.exception.text)
 
     def test_expired_pair_keeps_the_old_words(self):
         deskapp._PAIRS["dead-token"] = {"expires": time.time() - 1, "uses": 3}

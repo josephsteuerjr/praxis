@@ -31,23 +31,29 @@ const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/
 const phone = code(readFileSync(join(kit, "phone.ts"), "utf8"));
 const talk = code(readFileSync(join(kit, "window", "views", "talk.ts"), "utf8"));
 const api = code(readFileSync(join(kit, "window", "api.ts"), "utf8"));
+const paper = code(readFileSync(join(kit, "paper-media.ts"), "utf8"));
+const main = code(readFileSync(join(kit, "window", "main.ts"), "utf8"));
 
 for (const [name, text] of [["телефон", phone], ["окно", talk + api]]) {
   // 1. адрес строится ручкой канала
-  assert.ok(/\/api\/media\?path=/.test(text), `${name}: адрес вложения обязан идти через /api/media?path=`);
-  assert.ok(/encodeURIComponent\(rel\)/.test(text), `${name}: путь обязан кодироваться`);
+  assert.ok(/\/api\/artifact\?path=/.test(text), `${name}: вложение обязано идти через авторизованный artifact client`);
 
   // 2. ключ — в адресе, потому что тег идёт за файлом сам
-  assert.ok(/key=/.test(text) && /encodeURIComponent\(key\)|encodeURIComponent\(cfg\.key\)/.test(text),
-    `${name}: ключ обязан уезжать в адресе вложения`);
+  assert.ok(/withKey\(/.test(text) || /url\("\/api\/artifact/.test(text), `${name}: авторизация вложения`);
 
   // 3. звук — проигрывателем
-  assert.ok(/<audio controls preload="none"/.test(text), `${name}: звук обязан рисоваться <audio controls>`);
-  assert.ok(/media_kind[^\n]*===\s*"audio"/.test(text), `${name}: вид вложения обязан читаться из media_kind`);
+  assert.match(text,/paperMediaHTML\(mediaDescriptor\(m\)!\)/, `${name}: общий проигрыватель читает тип медиа`);
 
   // 4. нет пути от дерева — нет проигрывателя
   assert.ok(/if \(!rel\) return "";/.test(text), `${name}: без media_path блок обязан быть пустым`);
 }
+assert.match(main,/mountWindowMedia\(/);
+assert.match(code(readFileSync(join(kit,"window","paper-files.ts"),"utf8")),/mountPaperMedia\(/);
+assert.match(paper,/URL\.createObjectURL\(blob\)/,'теги получают авторизованные байты');
+assert.match(paper,/<audio preload="metadata" hidden>/);
+assert.match(paper,/<video playsinline preload="metadata" hidden>/);
+assert.match(paper,/data-paper-play/);
+assert.match(paper,/data-paper-save/);
 
 // Телефон обязан СОХРАНИТЬ прежнюю строку для файлов снаружи дерева: у них
 // media_path нет вовсе, и молча терять упоминание файла нельзя.

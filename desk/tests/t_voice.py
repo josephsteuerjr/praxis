@@ -15,9 +15,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -65,6 +67,24 @@ class NoLibrary(Ground):
 
 
 class WhatIsReady(Ground):
+    def test_server_volume_is_recognized_only_by_server_supervisor_and_enabled_gate(self):
+        mounted=self.tree/'mounted-model'
+        mounted.mkdir(); (mounted/'model.bin').write_bytes(b'model'); (mounted/'config.json').write_text('{}')
+        with patch.dict(os.environ,{'HELENE_SUPERVISOR':'serverboot','PRAXIS_STT_MODEL':str(mounted)}):
+            cfg={'voice':{'enabled':True}}
+            said=voice.state(self.tree,cfg)
+            self.assertTrue(said['ready'])
+            self.assertEqual(said['installed']['source'],'server-volume')
+            self.assertEqual(voice.env_for(self.tree,cfg)['PRAXIS_STT_MODEL'],str(mounted))
+            self.assertEqual(voice.env_for(self.tree,{'voice':{'enabled':False}}),{})
+        with patch.dict(os.environ,{'HELENE_SUPERVISOR':'window','PRAXIS_STT_MODEL':str(mounted)}):
+            self.assertFalse(voice.state(self.tree,{'voice':{'enabled':True}})['ready'])
+
+    def test_half_server_volume_does_not_claim_ready(self):
+        mounted=self.tree/'half-model'; mounted.mkdir(); (mounted/'model.bin').write_bytes(b'model')
+        with patch.dict(os.environ,{'HELENE_SUPERVISOR':'serverboot','PRAXIS_STT_MODEL':str(mounted)}):
+            self.assertFalse(voice.state(self.tree,{'voice':{'enabled':True}})['ready'])
+
     def test_выключенный_голос_не_готов_и_сказано_почему(self):
         said = voice.state(self.tree, {"voice": {"enabled": False}})
         self.assertFalse(said["ready"])

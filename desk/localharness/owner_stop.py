@@ -17,6 +17,8 @@ _tree = None
 
 def seed_file():
     if os.name != 'nt':
+        if os.environ.get('HELENE_SUPERVISOR') == 'serverboot' and os.environ.get('HELENE_TREE'):
+            return Path(os.environ['HELENE_TREE']) / '.owner-stop' / 'stop.json'
         # Linux (03.10, слово владельца): движок всегда идёт от имени владельца,
         # флаг лежит в его XDG-state — ВНЕ дерева данных, чтобы снос дерева не
         # снимал стоп. HOME, не $XDG_STATE_HOME: у службы systemd из юнита есть

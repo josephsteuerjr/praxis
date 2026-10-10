@@ -3,6 +3,8 @@
 // владельца; подпись initData проверяет канал (`POST /pair/telegram`,
 // КОНТРАКТ-B→A §6) и выдаёт ключ устройства той же природы, что у QR.
 import "./styles.css";
+import { setAnimationPlayer } from '../../ui-kit/paper-media';
+setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
 import { applyTheme, type Theme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
@@ -72,7 +74,7 @@ async function redeem(): Promise<{ result: Redeem; key?: string; agent?: string 
 function pairScreen(pair: Redeem | null): { title: string; text: string; retry: boolean } {
   switch (pair) {
     case "foreign":
-      return { title: "Канал ещё не умеет вход из Telegram", text: "Ручка /pair/telegram появится в следующей версии канала (контракт 0.3.3). Пока сюда можно войти ключом устройства из окна.", retry: true };
+      return { title: "Кнопка ведёт на прежний канал", text: "На компьютере открой Знакомство → Телефон и Telegram и проверь подключение. После обновления HTTPS-адреса бот получит новую кнопку миниаппа.", retry: true };
     case "closed":
       return { title: "Это не твой агент", text: "Мини-апп открывает переписку только владельцу: канал сверил подпись Telegram и id — и не совпало.", retry: false };
     case "offline":

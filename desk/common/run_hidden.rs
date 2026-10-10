@@ -7,13 +7,24 @@
 // (на Windows) `CommandExt` из включающего файла.
 
 fn run_hidden_for(cmd: &mut std::process::Command, limit: std::time::Duration) -> Result<std::process::Output, String> {
+    run_hidden_input_for(cmd, limit, None)
+}
+
+fn run_hidden_input_for(cmd: &mut std::process::Command, limit: std::time::Duration, input: Option<&[u8]>) -> Result<std::process::Output, String> {
     use std::io::Read;
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd.stdin(std::process::Stdio::null())
+    cmd.stdin(if input.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() })
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    // A child that never reads stdin must still be covered by the deadline.
+    let in_pipe=child.stdin.take();
+    let in_bytes=input.map(|bytes|bytes.to_vec());
+    let in_thread=std::thread::spawn(move || {
+        use std::io::Write;
+        match (in_pipe,in_bytes) { (Some(mut pipe),Some(bytes))=>pipe.write_all(&bytes).is_ok(), _=>true }
+    });
     let out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
     // Трубы читаем в отдельных потоках: иначе полный буфер вывода
@@ -36,8 +47,10 @@ fn run_hidden_for(cmd: &mut std::process::Command, limit: std::time::Duration) -
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
+                let accepted=in_thread.join().unwrap_or(false);
                 let stdout = out_thread.join().unwrap_or_default();
                 let stderr = err_thread.join().unwrap_or_default();
+                if !accepted { return Err("помощник подключения не прочитал запрос".into()); }
                 return Ok(std::process::Output { status, stdout, stderr });
             }
             Ok(None) => {}

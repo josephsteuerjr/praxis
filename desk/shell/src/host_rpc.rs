@@ -46,6 +46,7 @@ async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -
         "telegram_account" => serde_json::to_value(telegram_account(argument::<String>(args, "step", "step")?, argument::<String>(args, "api_id", "apiId")?, argument::<String>(args, "api_hash", "apiHash")?, argument::<String>(args, "phone", "phone")?, argument::<String>(args, "code", "code")?, argument::<String>(args, "password", "password")?).await?).map_err(|e| e.to_string()),
         "voice_fetch" => serde_json::to_value(voice_fetch(argument::<String>(args, "model", "model")?, argument::<Option<String>>(args, "kind", "kind")?)?).map_err(|e| e.to_string()),
         "carry_export" => serde_json::to_value(carry_export().await?).map_err(|e| e.to_string()),
+        "server_transfer" => server_transfer(argument::<String>(args,"action","action")?,argument::<String>(args,"request","request")?).await,
         "agents_list" => serde_json::to_value(agents_list(app.state::<LocalHarness>())).map_err(|e| e.to_string()),
         "switch_agent" => serde_json::to_value(switch_agent(app.clone(), argument::<String>(args, "id", "id")?)?).map_err(|e| e.to_string()),
         "agent_add" => serde_json::to_value(agent_add(app.clone(), argument::<String>(args, "name", "name")?, argument::<Option<serde_json::Value>>(args, "soul", "soul")?, argument::<Option<String>>(args, "soul_kind", "soulKind")?, argument::<Option<String>>(args, "soul_text", "soulText")?, argument::<Option<String>>(args, "soul_from", "soulFrom")?).await?).map_err(|e| e.to_string()),

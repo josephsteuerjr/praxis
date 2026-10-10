@@ -47,6 +47,8 @@ class MtprotoClient:
         self._me = None
         self._handler_installed = False
         session.parent.mkdir(parents=True, exist_ok=True)
+        self._media_root = session.parent / 'media-cache'
+        self._media_thumbs = {}
         self._proxy_url = proxy_url
         connection = {'connection': telegram_proxy.connection_type(proxy_url, proxy_key)} if proxy_url else {}
         self.client = TelegramClient(str(session), int(api_id), str(api_hash), **connection,
@@ -55,6 +57,9 @@ class MtprotoClient:
 
     # ------------------------------------------------------------- жизнь
     def _run(self, coro, timeout: float = 60.0):
+        if threading.current_thread() is self._thread:
+            coro.close()
+            raise RuntimeError('Медиа Telegram ещё не загружено; повторная загрузка придёт вне приёма истории.')
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         try:
             return future.result(timeout)
@@ -156,15 +161,41 @@ class MtprotoClient:
         if m.media is not None:
             message["caption"] = text
             if getattr(m, "photo", None):
-                message["photo"] = [{}]
+                message["photo"] = [{'file_unique_id':f'{event.chat_id}:{m.id}'}]
             else:
                 file = getattr(m, "file", None)
-                kind = next((k for k in ("voice", "video_note", "audio", "video", "sticker")
+                kind = next((k for k in ("sticker", "gif", "voice", "video_note", "audio", "video")
                              if getattr(m, k, None)), "document")
+                if kind == 'gif': kind='animation'
                 message[kind] = {"file_name": getattr(file, "name", "") or "",
-                                 "duration": getattr(file, "duration", 0) or 0}
+                                 "duration": getattr(file, "duration", 0) or 0,
+                                 "mime_type":getattr(file,'mime_type','') or '',
+                                 "file_unique_id":f'{event.chat_id}:{m.id}',
+                                 "thumbnail":{'file_id':f'thumb:{event.chat_id}:{m.id}'}}
+                if kind=='sticker':
+                    message[kind]['is_video']=getattr(file,'mime_type','')=='video/webm'
+                    message[kind]['is_animated']=getattr(file,'mime_type','')=='application/x-tgsticker'
         else:
             message["text"] = text
+        if m.media is not None:
+            import hashlib
+            import telegram_media
+            try:
+                self._media_root.mkdir(parents=True,exist_ok=True)
+                file=getattr(m,'file',None)
+                ext=getattr(file,'ext','') or '.jpg'
+                if ext not in {'.jpg','.jpeg','.png','.webp','.gif','.tgs','.webm','.mp4','.ogg','.mp3','.m4a','.wav','.pdf','.txt'}: ext='.bin'
+                cache=self._media_root/(hashlib.sha256(f'{event.chat_id}:{m.id}'.encode()).hexdigest()[:24]+ext)
+                if int(getattr(file,'size',0) or 0)>telegram_media.LIMIT: raise ValueError('Медиа больше доступного размера.')
+                if not cache.is_file(): await self.client.download_media(m,file=str(cache))
+                message['_media_local']=str(cache)
+                thumb=cache.with_suffix('.thumb.jpg')
+                if not thumb.is_file():
+                    try: await self.client.download_media(m,file=str(thumb),thumb=-1)
+                    except Exception: pass
+                if thumb.is_file(): self._media_thumbs[f'thumb:{event.chat_id}:{m.id}']=thumb
+            except Exception:
+                pass  # text/update still reaches the archive
         reply = getattr(m, "reply_to", None)
         if reply is not None:
             if getattr(reply, "forum_topic", False):
@@ -183,6 +214,12 @@ class MtprotoClient:
                 sender_id = getattr(replied, "sender_id", None)
                 if sender_id:
                     message["reply_to_message"]["from"] = {"id": int(sender_id)}
+                if replied is not None:
+                    message["reply_to_message"]["text"] = str(getattr(replied, "message", "") or "")
+                    for kind in ('photo', 'video', 'sticker', 'voice', 'audio', 'document'):
+                        if getattr(replied, kind, None):
+                            message["reply_to_message"][kind] = True
+                            break
         action = getattr(m, "action", None)
         if isinstance(action, MessageActionTopicCreate):
             message["forum_topic_created"] = {"name": action.title}
@@ -228,6 +265,31 @@ class MtprotoClient:
                     ingest(update)
 
     # ------------------------------------------------------------- Bot API
+    def download_media(self, message: dict, destination: Path):
+        if message.get('_media_local'):
+            import shutil
+            source=Path(message['_media_local']).resolve()
+            if self._media_root.resolve() not in source.parents: raise ValueError('Неверный путь медиа Telegram.')
+            shutil.copyfile(source,destination)
+            return
+        self._run(self._download_message(int(message['chat']['id']),int(message['message_id']),destination),timeout=60)
+
+    def download_file(self, file_id: str, destination: Path):
+        if file_id in self._media_thumbs:
+            import shutil
+            shutil.copyfile(self._media_thumbs[file_id],destination)
+            return
+        kind,peer,ident=file_id.split(':')
+        if kind!='thumb': raise ValueError('Неизвестное превью Telegram.')
+        self._run(self._download_message(int(peer),int(ident),destination,thumb=True),timeout=60)
+
+    async def _download_message(self, peer: int, ident: int, destination: Path, *, thumb=False):
+        import telegram_media
+        message=await self.client.get_messages(peer,ids=ident)
+        if not message or int(getattr(getattr(message,'file',None),'size',0) or 0)>telegram_media.LIMIT:
+            raise ValueError('Медиа недоступно или больше доступного размера.')
+        await self.client.download_media(message,file=str(destination),**({'thumb':-1} if thumb else {}))
+
     def call(self, method: str, _http_timeout: float = 30.0, **params):
         if method == "getMe":
             me = self._run(self.client.get_me(), timeout=_http_timeout)

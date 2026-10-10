@@ -158,7 +158,9 @@ def manifest(tree: Path) -> dict:
 
 # --- движок голоса (1.2.1) ----------------------------------------------------
 #
-# Егор 27.09: «почему установщик так много весит?» — больше половины был голос. С 1.2.1
+# 1.5.5: по просьбе владельца весь голосовой runtime снова входит в основную
+# Windows-поставку, включая PyYAML. Прежняя папка voice/ не перекрывает его.
+# Историческая совместимость: Егор27.09 попросил уменьшить установщик. С1.2.1
 # на Windows движок (faster-whisper, piper, ctranslate2, onnxruntime, av, numpy — ~315 МБ,
 # ~94 МБ сжатыми) не едет в установщике, а докачивается ВМЕСТЕ с моделью или голосом:
 # один архив выпуска `Helene-voice-<версия>-windows.tar.zst`, сверенный по сумме из
@@ -225,6 +227,12 @@ def ensure_engine_path(root: Path | None = None) -> bool:
     всё равно не загрузятся, а find_spec соврал бы «есть». -> папка движка в пути."""
     site_dir = engine_site(root)
     mine = _norm(str(site_dir))
+    if _read(Path(root or install_root()) / 'helene-build.json').get('voice_runtime') is True:
+        # The current runtime owns these modules. An old downloaded bundle
+        # must not override its compiled extensions or transitive libraries.
+        sys.path[:] = [p for p in sys.path if _norm(p) != mine]
+        importlib.invalidate_caches()
+        return False
     if not site_dir.is_dir() or _engine_stale(root):
         sys.path[:] = [p for p in sys.path if _norm(p) != mine]
         return False
@@ -237,12 +245,21 @@ def ensure_engine_path(root: Path | None = None) -> bool:
 def pack_record(root: Path | None = None) -> dict:
     """Что паспорт этой установки говорит об архиве движка. Пусто — движок в рантайме."""
     passport = _read(Path(root or install_root()) / "helene-build.json")
+    if passport.get('voice_runtime') is True:
+        return {}
     rec = passport.get("voice_pack")
     return dict(rec, version=str(passport.get("version") or "")) if isinstance(rec, dict) else {}
 
 
+def _windows_pack_supported() -> bool:
+    return sys.platform == "win32"
+
+
 def _engine_missing(what: str, fallback: str) -> dict:
     rec = pack_record()
+    if rec.get("name", "").endswith("-windows.tar.zst") and not _windows_pack_supported():
+        return {"present": False, "downloadable": False,
+                "why": f"в серверном рантайме нет {what}; Windows-движок сюда не подходит — обнови зависимости серверной поставки"}
     if rec.get("name") and rec.get("sha256"):
         size = round(int(rec.get("bytes") or 0) / 1024 / 1024)
         stale = _engine_stale()
@@ -275,9 +292,12 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
     import importlib.util  # noqa: PLC0415
 
     root = Path(root or install_root())
-    if ensure_engine_path(root) and importlib.util.find_spec("faster_whisper") is not None:
+    provided = ensure_engine_path(root) or _read(root / 'helene-build.json').get('voice_runtime') is True
+    if provided and importlib.util.find_spec("faster_whisper") is not None and importlib.util.find_spec('yaml') is not None:
         return {"state": "present"}
     rec = pack_record(root)
+    if rec.get("name", "").endswith("-windows.tar.zst") and not _windows_pack_supported():
+        raise SystemExit("Windows-движок голоса не подходит этой системе; нужны зависимости серверной поставки")
     if not rec.get("name") or not rec.get("sha256"):
         raise SystemExit("в этой сборке движок голоса едет в рантайме — качать нечего")
     home = engine_home(root)
@@ -288,6 +308,8 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
     url = _pack_url(root, rec)
     digest = hashlib.sha256()
     got = 0
+    installed_new = False
+    committed = False
     try:
         with urllib.request.urlopen(url, timeout=300) as src, part.open("wb") as sink:
             while True:
@@ -313,13 +335,23 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
         if site_dir.exists():
             os.replace(site_dir, old)
         os.replace(fresh / "site-packages", site_dir)
+        installed_new = True
         result = {"schema": SCHEMA, "source": "download", "version": rec.get("version", ""),
                   "python": str(meta.get("python") or rec.get("python") or ""),
                   "sha256": rec["sha256"], "bytes": got, "dists": meta.get("dists") or {},
                   "got_utc": _utc()}
         _write(home / INSTALLED, result)
+        committed = True
+    except BaseException:
+        # The previous engine stays recoverable until its new receipt is durable.
+        # A failed rename or full disk must not erase an otherwise working voice.
+        if installed_new:
+            os.replace(engine_site(root), fresh / "site-packages")
+        if old.exists():
+            os.replace(old, engine_site(root))
+        raise
     finally:
-        for leftover in (part, fresh, old):
+        for leftover in (part, fresh, *([old] if committed else [])):
             if leftover.is_dir():
                 shutil.rmtree(leftover, ignore_errors=True)
             elif leftover.exists():
@@ -337,6 +369,10 @@ def library() -> dict:
 
     ensure_engine_path()
     if importlib.util.find_spec("faster_whisper") is not None:
+        if importlib.util.find_spec('yaml') is None:
+            result = _engine_missing('PyYAML (yaml)', 'обнови полную установку Hélène')
+            result['why'] = 'В движке голоса отсутствует yaml (PyYAML). ' + result['why']
+            return result
         return {"present": True, "why": ""}
     return _engine_missing("faster-whisper", "поставка собрана без голоса")
 
@@ -423,6 +459,11 @@ def state(tree: Path, cfg: dict) -> dict:
     lib = library()
     have = manifest(tree)
     ready_model = bool(have.get("path")) and Path(str(have.get("path"))).is_dir()
+    if not ready_model and os.environ.get("HELENE_SUPERVISOR") == "serverboot":
+        external = Path(os.environ.get("PRAXIS_STT_MODEL") or "/nonexistent-model")
+        if external.is_dir() and (external / "model.bin").is_file() and (external / "config.json").is_file():
+            have = {"model": "server:" + external.name, "path": str(external), "source": "server-volume"}
+            ready_model = True
     enabled = bool(block(cfg).get("enabled"))
     out = {
         "schema": SCHEMA,
@@ -446,8 +487,7 @@ def state(tree: Path, cfg: dict) -> dict:
         out["why"] = "модель не скачана — голосовые не расшифровываются"
     elif have.get("model") != want:
         out["ready"] = True
-        out["why"] = (f"скачана модель «{have.get('model')}», а выбрана «{want}» — "
-                      "работает скачанная, пока не скачана выбранная")
+        out["why"] = (f"работает модель «{have.get('model')}»; выбранную «{want}» ещё нужно скачать")
     else:
         out["ready"] = True
         out["why"] = ""
@@ -598,8 +638,9 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
         if not quiet:
             print(f"готово: {path}", flush=True)
     except ImportError as exc:
-        say("failed", f"в рантайме нет faster-whisper: {exc}", 0)
-        raise SystemExit("в рантайме нет faster-whisper — поставка собрана без голоса")
+        missing = str(getattr(exc, 'name', '') or 'зависимость голоса')
+        say("failed", f"Не загрузилась библиотека голоса {missing}. Обнови полную установку Hélène.", 0)
+        raise SystemExit(f"Не загрузилась библиотека голоса {missing}; требуется полная установка Hélène")
     except Exception as exc:  # noqa: BLE001 — причина обязана доехать до окна
         say("failed", f"{type(exc).__name__}: {exc}"[:400], max(0, dir_size(dest) - base))
         raise SystemExit(f"модель не скачалась: {exc}")

@@ -26,6 +26,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from deskd import rooms  # noqa: E402  — комнаты окна (реестр и архивы)
+from .run_trigger import wake_source
 
 log = logging.getLogger("helene.readers")
 
@@ -525,7 +526,8 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
             manifest = _load_json(month / name / "manifest.json")
             context = manifest.get("context") or {}
             run_kind = str(context.get("kind") or "")
-            if kind and run_kind != kind:
+            display_kind = "wake" if wake_source(month / name, manifest) else run_kind
+            if kind and display_kind != kind:
                 continue
             goal = str(context.get("goal") or "").strip()
             terminal = manifest.get("terminal") or {}
@@ -536,7 +538,8 @@ def list_runs(limit: int = 80, kind: str = "", before: str = "",
                 "updated_at": manifest.get("updated_at") or "",
                 "event_seq": manifest.get("event_seq"),
                 "status": manifest.get("status") or "",
-                "kind": run_kind,
+                "kind": display_kind,
+                "kernel_kind": run_kind,
                 "chat_id": chat_id,
                 "chat_title": _title_for(chat_id, titles),
                 "forge_task_id": context.get("forge_task_id") or "",
@@ -989,7 +992,8 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
             "status": manifest.get("status"),
             "terminal": manifest.get("terminal") or {},
             "event_seq": manifest.get("event_seq"),
-            "kind": context.get("kind"),
+            "kind": "wake" if wake_source(path, manifest) else context.get("kind"),
+            "kernel_kind": context.get("kind"),
             "goal": context.get("goal"),
             "model_profile": context.get("model_profile"),
             "chat_id": context.get("delivery_chat_id") or context.get("origin_chat_id"),
@@ -1365,11 +1369,12 @@ MEDIA_TYPES = {
     ".opus": "audio/ogg", ".m4a": "audio/mp4",
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
+    ".mp4": "video/mp4", ".webm": "video/webm",
 }
 
 #: Откуда разрешено отдавать. Не «всё дерево»: в дереве лежат её память,
 #: конституция и `helene.json` соседей — там нечего проигрывать.
-MEDIA_ROOTS = ("media", "workspace/media", "memory/.control/desk_inbox/attachments")
+MEDIA_ROOTS = ("media", "workspace/media", "memory/.control/desk_inbox/attachments", "memory/telegram-media")
 
 
 def media_file(rel: str) -> tuple[pathlib.Path | None, str, str]:
@@ -1394,7 +1399,11 @@ def media_file(rel: str) -> tuple[pathlib.Path | None, str, str]:
         return None, "", "этот путь окно не отдаёт: вложения живут в " + ", ".join(MEDIA_ROOTS)
     path = (root / said)
     suffix = path.suffix.lower()
-    if suffix not in MEDIA_TYPES:
+    if suffix == '.json' and said.startswith('memory/telegram-media/'):
+        kind = 'application/json'
+    else:
+        kind = MEDIA_TYPES.get(suffix)
+    if not kind:
         return None, "", f"расширение {suffix or '(нет)'} канал не отдаёт"
     try:
         real = path.resolve()
@@ -1403,7 +1412,7 @@ def media_file(rel: str) -> tuple[pathlib.Path | None, str, str]:
         return None, "", "файл вне дерева"
     if not real.is_file():
         return None, "", "файла нет"
-    return real, MEDIA_TYPES[suffix], ""
+    return real, kind, ""
 
 
 def chat_turns(peer_id: str, n: int = 120) -> list[dict]:

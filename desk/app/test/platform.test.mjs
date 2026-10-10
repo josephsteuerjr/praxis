@@ -111,9 +111,8 @@ assert.match(chrome, /if \(cfg\.needs_local_setup\) \{\s*await shell\("restart_s
 assert.match(frame, /edition\(\{ draft, saved: c, loaded, host, platform, freshness \}\)/, "каркас не отдаёт изданию систему хоста");
 assert.match(frame, /const posix = mac \|\| linux;/, "Linux должен использовать системные подписи и POSIX пути");
 assert.match(frame, /posix \? "Запускать при входе в систему" : "Запускать при входе в Windows"/, "подпись автозапуска на POSIX говорит про Windows");
-// 06.10: правило — только для LAN-пути (тумблер включён и сохранён): внешний
-// адрес идёт туннелем с самой машины, и UAC-вопрос ему не нужен.
-assert.match(frame, /if \(inTauri && !posix && lanOn\(\)\) \{[\s\S]{0,240}"firewall_allow"/, "правило Windows просится на macOS/Linux");
+// Automatic HTTPS binds loopback and does not ask any platform for a LAN rule.
+assert.doesNotMatch(frame.slice(frame.indexOf('function phoneCard(')), /firewall_allow|lanOn\(/, "автоматический телефон снова просит LAN/UAC");
 assert.ok(
   !/if \(!mac\) \{[\s\S]{0,120}"service_state"/.test(frame),
   "расписка «Сохранено» снова не спрашивает службу на macOS — а она там есть",

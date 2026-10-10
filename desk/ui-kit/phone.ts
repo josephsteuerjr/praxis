@@ -47,6 +47,9 @@ export interface Msg {
   media_kind?: string;
   media_name?: string;
   media_size?: number;
+  media_original_path?: string;
+  media_mime?: string;
+  media_error?: string;
 }
 
 export interface Room {
@@ -329,10 +332,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
    * когда он есть: иначе тег молча покажет пустоту, и это читалось бы как
    * «файла нет», а не как «не пустили». Так же устроен и адрес в окне.
    */
-  function mediaURL(rel: string): string {
-    const full = base + "/api/media?path=" + encodeURIComponent(rel);
-    return key ? full + "&key=" + encodeURIComponent(key) : full;
-  }
 
   /** Вложение реплики: звук — проигрывателем, картинка — картинкой, иначе ссылкой.
    *
@@ -343,10 +342,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   function mediaBlock(m: Msg): string {
     const rel = String(m.media_path || "").trim();
     if (!rel) return "";
-    const src = mediaURL(rel);
-    if (String(m.media_kind || "") === "audio") {
-      return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
-    }
     return paperMediaHTML(mediaDescriptor(m)!);
   }
   const artifact = (path: string) => withKey("/api/artifact?path=" + encodeURIComponent(path) + "&preview=1");
@@ -518,7 +513,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // целиком, и вешать слушателей на каждую кнопку значило бы копить их пачками.
   screen.addEventListener("click", async (ev) => {
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
-      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt]");
+      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-panic]");
     if (!spot) return;
     const note = screen.querySelector<HTMLElement>("#sys-note");
     const view = screen.querySelector<HTMLPreElement>("#sys-log");
@@ -527,6 +522,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       note.className = bad ? "err" : "muted";
       note.textContent = text;
     };
+    if (spot.hasAttribute("data-panic")) {
+      (spot as HTMLButtonElement).disabled = true;
+      say("включаю аварийный стоп…");
+      try {
+        const answer = await post<{ ok: boolean; note: string }>("/api/panic", {});
+        say(answer.note, !answer.ok);
+        if (!answer.ok) (spot as HTMLButtonElement).disabled = false;
+      } catch {
+        say("Связь оборвалась во время остановки; подтверждения нет. Проверь стоп в окне Hélène или используй /panic в Telegram.", true);
+        (spot as HTMLButtonElement).disabled = false;
+      }
+      return;
+    }
     if (spot.hasAttribute("data-interrupt")) {
       say("прошу остановить ход…");
       try {
@@ -861,8 +869,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}</span>`;
       const media = mediaBlock(m)
         || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
+      const mediaError = m.media_error ? `<p class="media-error">${esc(m.media_error)}</p>` : "";
       const text = artifactCaption(m.text || "", m.media_path);
-      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(text)}${media}</div></div>`);
+      html.push(`<div class="msg ${cls}" data-at="${esc(m.timestamp || "")}"><div class="msg-head">${head}</div><div class="msg-body">${md(text)}${media}${mediaError}</div></div>`);
     }
     const next = html.join("");
     if (next === lastFeed && feedReady) return false;
@@ -893,8 +902,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   // ---------------------------------------------------------------- композер (только в открытом чате)
   function syncComposer() {
-    target.textContent = isWindowRoom(room) ? "" : `в «${roomName}»`;
-    say.placeholder = isWindowRoom(room) ? `Написать ${agent}…` : `Написать в «${roomName}»…`;
+    target.textContent = isWindowRoom(room) ? "" : `Ответ агента — в «${roomName}»`;
+    say.placeholder = isWindowRoom(room) ? `Написать ${agent}…` : "Поручить агенту…";
+    say.setAttribute("aria-label", isWindowRoom(room) ? `Сообщение ${agent}` : `Поручение агенту в чате «${roomName}»`);
   }
   say.addEventListener("input", () => {
     say.style.height = "auto";
@@ -964,10 +974,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const text = say.value.trim();
     const files = shots.slice();
     if ((!text && !files.length) || !room) return;
-    if (files.length && !isWindowRoom(room)) {
-      toast("Картинка едет только агенту: в Telegram-комнату её пока нечем везти.");
-      return;
-    }
     send.disabled = true;
     try {
       const payload: Record<string, unknown> = { text };
@@ -980,7 +986,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const unread = state?.runner?.ever === false;
       toast(
         !isWindowRoom(room)
-          ? `Ушло в «${roomName}»`
+          ? `Поручение передано агенту. Его ответ придёт в «${roomName}».`
           : unread
             ? "Легло в дерево: этот агент окно не читает"
             : "Ушло — агент прочитает в следующий ход",
@@ -1013,14 +1019,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   async function renderSystem(guard: () => boolean = () => tab === "system") {
     screen.innerHTML = '<div class="empty">читаю…</div>';
-    const [boxes, brain, models] = await Promise.all([
+    const [boxes, brain, models, panicState] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
       scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
       scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
+      api<{ stopped: boolean | null }>("/api/panic").catch(() => null),
     ]);
     if (!guard()) return;
     // 12.09: прерывание живого хода — просьба в memory/.control, движок снимает ход на тике.
     const interruptHTML = `<div class="screen-title">Агент</div>
+      <div class="task-row">
+        <div class="actions"><button type="button" class="chip emergency-stop" data-panic${panicState?.stopped ? " disabled" : ""}>${panicState?.stopped ? "Аварийный стоп включён" : "Аварийный стоп"}</button></div>
+        <div class="muted">Останавливает всех агентов Hélène и их процессы, включая привилегированные поручения. Работает при закрытом окне. Возобновление — явным действием владельца на компьютере или сервере.</div>
+      </div>
       <div class="task-row">
         <div class="actions"><button type="button" class="chip" data-interrupt="all">Прервать ход</button></div>
         <div class="muted">Останавливает живой ход: руки дальше не зовутся, ответ не уходит. Идущий вызов модели дорабатывает до границы, обычно до 10 секунд.</div>
@@ -1321,22 +1332,25 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     if (running && !document.hidden) void tickState();
   }
 
-  let live: EventSource | null = null;
+  let live: WebSocket | null = null;
   let liveTries = 0;
   function openLive() {
     if (live || !running || document.hidden || liveTries >= 1) return;
     liveTries += 1;
     try {
-      live = new EventSource(withKey("/events"));
+      const url = new URL(withKey("/tunnel"), location.href);
+      url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+      live = new WebSocket(url.toString());
     } catch {
       live = null;
       return;
     }
     live.addEventListener("open", () => (liveTries = 0));
+    const socket = live;
     live.addEventListener("message", (e) => {
       let ev: { t?: unknown; run_id?: unknown } = {};
       try {
-        ev = JSON.parse(String(e.data));
+        ev = JSON.parse(String(e.data)).event || {};
       } catch {
         return;
       }
@@ -1365,8 +1379,11 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         bumpState();
       }
     });
-    live.addEventListener("error", () => {
-      if (live && live.readyState === EventSource.CLOSED) live = null;
+    live.addEventListener("close", () => {
+      if (live !== socket) return;
+      live = null;
+      liveTries = 0;
+      if (running && !document.hidden) window.setTimeout(openLive, 2000);
     });
   }
   function closeLive() {

@@ -122,11 +122,38 @@ window_key() {
   done
 }
 
+# A failed first transfer can be continued without importing the archive twice.
+# Never run this against a running agent; its later life belongs to the server.
+prepare_archive() {
+  [ -n "$ARCHIVE" ] || return 0
+  sum=$(sha256sum "$ARCHIVE" | cut -d ' ' -f 1)
+  marker="$INSTALL/.transfer-import.sha256"
+  (cd "$INSTALL" && quiet docker compose -f server/docker-compose.yml build) \
+    || die "сборка не удалась — агент ещё не запущен"
+  if [ ! -f "$marker" ]; then
+    say "· разворачиваю агента из архива"
+    quiet docker run --rm -v "$INSTALL:/opt/helene" -v "$ARCHIVE:/carry.zip:ro" -w /opt/helene \
+      --entrypoint python helene-helene app/localharness/carry.py import \
+      --config /opt/helene/helene.json --archive /carry.zip \
+      || die "архив агента не развернулся — данные сохранены; повтори перенос"
+    printf '%s\n' "$sum" > "$marker"
+  else
+    [ "$(cat "$marker")" = "$sum" ] || die "эта установка уже перенесена из другого архива"
+  fi
+  say "· готовлю включённые слух и голос агента"
+  connect_args=""
+  [ "${HELENE_AUTOMATIC_CONNECTION:-}" != "1" ] || connect_args="--connect"
+  quiet docker run --rm --init -v "$INSTALL:/opt/helene" -w /opt/helene \
+    --entrypoint python helene-helene app/localharness/server_prepare.py --config /opt/helene/helene.json $connect_args \
+    || die "слух или голос не подготовлен — агент ещё не запущен; повтори перенос"
+}
+
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
   if [ -f "$INSTALL/server/docker-compose.yml" ] && [ -d "$INSTALL/data" ]; then
     # Установка есть, а контейнера нет (его удалили): сначала поднять то, что стоит, —
     # обновлять дальше будет исполнитель, с переносом правок агента.
     say "· Hélène лежит в $INSTALL, но не запущена — запускаю то, что стоит"
+    prepare_archive
     up_agent
   else
     say "· ставлю Hélène $VERSION в $INSTALL"
@@ -137,15 +164,7 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
     [ -f "$INSTALL/helene.json" ] || cp "$INSTALL/server/helene.server.json" "$INSTALL/helene.json"
     mkdir -p "$INSTALL/data" "$INSTALL/server/models"
     remember_host
-    if [ -n "$ARCHIVE" ]; then
-      say "· разворачиваю агента из архива $(basename "$ARCHIVE") (сначала сборка — несколько минут)"
-      (cd "$INSTALL" && quiet docker compose -f server/docker-compose.yml build) \
-        || die "сборка не удалась — вывод выше"
-      quiet docker run --rm -v "$INSTALL:/opt/helene" -v "$ARCHIVE:/carry.zip:ro" -w /opt/helene \
-        --entrypoint python helene-helene app/localharness/carry.py import \
-        --config /opt/helene/helene.json --archive /carry.zip \
-        || die "архив агента не развернулся — вывод выше"
-    fi
+    prepare_archive
     up_agent
     up_updater
     lock_folder

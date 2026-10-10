@@ -432,7 +432,7 @@ class Base(unittest.TestCase):
 
     def verdict(self, word: str, by: str = "agent", words: str = "проверено: думаю, помню, руки живы"):
         r = self.receipt()
-        got = control.update_verdict(self.install / "data", r["id"], r["trial"]["key"], word,
+        got = control.update_verdict(self.install / "data", r["id"], (r.get("trial") or {"key":"obsolete-key"})["key"], word,
                                      by=by, words=words)
         self.assertTrue(got["ok"], got)
 
@@ -521,7 +521,7 @@ class UpdaterFlow(Base):
         self.u.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertIn("Испытание агентом пропущено: мозг не настроен", r["note"])
+        self.assertIn("без ожидания проверки агентом", r["note"])
         self.assertNotIn("nonce", r)
         desk = json.loads(self.code("app/desk.json"))
         self.assertEqual(desk["version"], NEW)
@@ -688,98 +688,37 @@ class AgentCodeConflicts(ConflictBase):
 
 
 @unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
-class Trial(Base):
+class NoAutomaticTrial(Base):
     def setUp(self):
         super().setUp()
         self.docker.brain = True
 
-    def test_испытание_и_слово_агента_принимаю(self):
+    def test_configured_agent_finishes_without_a_verdict(self):
         r = self.run_update()
-        self.assertEqual(r["state"], "trial", r.get("note"))
-        self.assertTrue(r["trial"]["key"])
-        self.assertEqual(r["trial"]["minutes"], control.UPDATE_TRIAL_DEFAULT)
-        self.assertIn("агент проверяет себя", r["note"])
-        self.assertFalse(self.u.reexec)
-        # чужой ключ — не слово
-        up.Shared(self.install / "data").write(*up.CTL, control.UPDATE_VERDICT,
-                                              {"id": r["id"], "key": "чужой", "verdict": "accept"})
-        self.u.tick()
-        self.assertEqual(self.receipt()["state"], "trial")
-        self.verdict("accept")
-        self.u.tick()
-        r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertIn("Агент принял на испытании", r["note"])
-        self.assertEqual(r["trial"]["verdict"]["by"], "agent")
+        self.assertNotIn("trial", r)
         self.assertTrue(self.u.reexec)
-        # об итоге, принятом самим агентом, записки второй раз не будет
-        self.assertIsNone(control.update_unreported(self.install / "data"))
+        self.assertIsNotNone(control.update_unreported(self.install / "data"))
+        self.assertTrue(Path(self.u.state["backup_dir"]).is_dir())
 
-    def test_сломано_откат_память_цела(self):
+    def test_old_verdict_does_not_rollback_a_finished_update(self):
         self.run_update()
-        life = self.install / "data" / "memory" / "journal" / "2026-09-27-trial.md"
-        life.write_text("- 10:30 испытание: владелец спросил, как я\n", encoding="utf-8")
-        self.verdict("reject", words="не вызывается рука shell")
-        self.u.tick()
-        r = self.receipt()
-        self.assertEqual(r["state"], "rolled_back", r.get("note"))
-        self.assertIn("не вызывается рука shell", r["note"])
-        self.assertIn(f"VERSION = {OLD!r}", self.code("tree/agent.py"))
-        self.assertEqual(self.docker.image, "sha256:old")
-        self.assertTrue(life.is_file(), "откат стёр жизнь агента за время испытания")
-        self.assertNotIn("data_restored", r)
-        self.assertIn("данные агента не трогал", r["note"])
-        self.assertTrue(all(c["ok"] for c in r["rollback_checks"]))
-
-    def test_владелец_поверх_агента(self):
-        self.run_update()
-        self.verdict("reject", by="window", words="")
-        self.u.tick()
-        r = self.receipt()
-        self.assertEqual(r["state"], "rolled_back")
-        self.assertIn("владелец на испытании сказал «сломано»", r["note"])
-
-    def test_молчание_до_срока_не_откат(self):
-        """04.10, слово владельца: «откат лучше не делать принудительный».
-
-        Молчание до срока — новая версия ОСТАЁТСЯ работать; расписка говорит
-        владельцу, что испытание не отвечено. Вернуть прежнюю — план на неё.
-        """
-        self.run_update()
-        self.now[0] += control.UPDATE_TRIAL_DEFAULT * 60 + 1
-        self.u.tick()
-        r = self.receipt()
-        self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertIn("откат не принудительный", r["note"])
-        self.assertEqual(r["trial"]["verdict"]["verdict"], "timeout")
-        # агенту новой версии придёт записка «не отвечено — версия оставлена»
-        self.assertEqual(control.update_unreported(self.install / "data")["state"], "done")
-
-    def test_занятому_агенту_срок_продлевается_но_не_бесконечно(self):
-        self.run_update(trial_min=10)
-        busy = self.install / "data" / "memory" / ".control" / "desk_inbox"
-        busy.mkdir(parents=True)
-        self.now[0] += 10 * 60 + 1
-        # квитанция — по тем же часам, что у исполнителя (прежде он смотрел на настоящие)
-        (busy / ".reader.json").write_text(json.dumps({"busy": True, "at": self.now[0]}))
-        self.u.tick()
-        r = self.receipt()
-        self.assertEqual(r["state"], "trial")
-        self.assertEqual(r["trial"]["extended"], up.TRIAL_EXTEND)
-        self.now[0] += up.TRIAL_EXTEND + 1
+        up.Shared(self.install/"data").write(*up.CTL,control.UPDATE_VERDICT,{"id":self.u.state["id"],"key":"obsolete-key","verdict":"reject"})
         self.u.tick()
         self.assertEqual(self.receipt()["state"], "done")
-        self.assertIn("с продлением", self.receipt()["note"])
-        self.assertIn("откат не принудительный", self.receipt()["note"])
+        self.assertEqual(self.docker.image, "sha256:new")
 
-    def test_испытание_переживает_перезапуск_исполнителя(self):
+    def test_legacy_trial_retires_with_evidence_without_agent_acceptance(self):
         self.run_update()
-        again = self.again()
-        again.recover()
-        self.assertEqual(self.receipt()["state"], "trial")
-        self.verdict("accept")
-        again.tick()                     # compose нужен для уборки — health спросит себя сам
-        self.assertEqual(self.receipt()["state"], "done")
+        original={"key":"legacy-key","minutes":30,"since_epoch":self.now[0]}
+        self.u.state.update(state="trial",phase="trial",trial=original)
+        self.u.save()
+        again=self.again();again.recover();again.tick()
+        r=self.receipt()
+        self.assertEqual(r["state"],"done")
+        self.assertEqual(r["retired_trial"],original)
+        self.assertNotIn("trial",r)
+        self.assertIn("проверка агентом не требуется",r["note"])
 
 
 @unittest.skipUnless(LINUX, "исполнитель живёт на Linux: O_NOFOLLOW и dir_fd")
@@ -1069,8 +1008,17 @@ class Recovery(Base):
     def trial(self) -> dict:
         self.docker.brain = True
         r = self.run_update()
-        self.assertEqual(r["state"], "trial", r.get("note"))
+        self.assertEqual(r["state"], "done", r.get("note"))
         return r
+
+    def verdict(self, word, by="agent", words="mechanical recovery fixture"):
+        # Reconstruct an interrupted mechanical rollback/cleanup, never ask the
+        # removed agent acceptance hand to start one.
+        if word=="reject":
+            self.u.state.update(state="running",phase="rollback",rollback_why=words,rollback_plain=words)
+        else:
+            self.u.state.update(state="running",phase="accepting",success_extra="Обновление завершено без ожидания проверки агентом")
+        self.u.save()
 
     def test_слово_записано_до_отката_и_перезапуск_его_доводит(self):
         self.trial()
@@ -1082,7 +1030,7 @@ class Recovery(Base):
         self.assertEqual((r["state"], r["phase"]), ("running", "rollback"))
         self.assertFalse(self.docker.running)              # агента успели остановить
         # «Принять» посреди отката — не ложное «прошло»
-        got = control.update_verdict(self.install / "data", r["id"], r["trial"]["key"], "accept",
+        got = control.update_verdict(self.install / "data", r["id"], (r.get("trial") or {"key":"obsolete-key"})["key"], "accept",
                                      by="window")
         self.assertFalse(got["ok"], got)
         # прежняя версия не получит «поднята новая — проверь себя»
@@ -1105,7 +1053,7 @@ class Recovery(Base):
         again.tick()
         r = self.receipt()
         self.assertEqual(r["state"], "done", r.get("note"))
-        self.assertIn("Агент принял на испытании", r["note"])     # слово не потерялось
+        self.assertIn("без ожидания проверки агентом", r["note"])
         self.assertTrue(again.reexec)
 
     def test_контейнера_нет_откат_поднимает_по_записанному_проекту(self):
@@ -1124,7 +1072,7 @@ class Recovery(Base):
         self.docker.fail_up = 99
         self.verdict("reject")
         with self.assertRaises(up.UpdateError):
-            self.u.tick()                    # попытка 1: наверх, повтор — через минуту
+            self.u._rollback("mechanical recovery fixture") # первая операция оборвалась; тик продолжит её
         self.assertEqual(self.receipt()["state"], "running")
         self.u.tick()                        # раньше минуты — не повторяет
         self.assertEqual(self.u.state["rollback_tries"], 1)

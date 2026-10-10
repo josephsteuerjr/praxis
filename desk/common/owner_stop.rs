@@ -111,6 +111,7 @@ fn owner_stop_via_said(via: &str) -> &'static str {
         "start" => "ярлыком «Пуска»",
         "window" => "кнопкой в окне",
         "telegram" => "из Telegram",
+        "phone" => "с телефона",
         "agent" => "самим агентом",
         "cli" => "командой helene-svc panic",
         _ => "",
@@ -155,7 +156,7 @@ fn request_owner_stop(via: &str) -> Result<(), String> {
         Ok(mut f) => {
             let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| e.to_string())?.as_secs();
-            let bytes = serde_json::to_vec(&serde_json::json!({"at": at, "via": via, "by": "owner"})).map_err(|e| e.to_string())?;
+            let bytes = serde_json::to_vec(&serde_json::json!({"at": at, "via": via, "by": if via == "agent" { "agent" } else { "owner" }})).map_err(|e| e.to_string())?;
             f.write_all(&bytes).and_then(|_| f.sync_all()).map_err(|e| e.to_string())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),

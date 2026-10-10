@@ -8,5 +8,10 @@
 // спрашивать не у кого.
 import { start } from "../../ui-kit/window/main";
 import { agentEdition } from "./settings-agent";
+import { setAnimationPlayer } from '../../ui-kit/paper-media';
+import QRCode from "qrcode";
+import { setGuideQrRenderer } from "../../ui-kit/window/connection-guide";
+setGuideQrRenderer(text=>QRCode.toString(text,{type:"svg",margin:4,width:240,color:{dark:"#262320",light:"#00000000"}}));
+setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
 
 start({ settingsEdition: agentEdition, productName: "Hélène" });

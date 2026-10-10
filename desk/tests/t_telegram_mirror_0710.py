@@ -15,6 +15,16 @@ class Mirror(unittest.TestCase):
     setUp = fixtures.Contract.setUp
     transport = fixtures.Contract.transport
     message = fixtures.Contract.message
+    def test_outgoing_reply_keeps_original_excerpt_from_canonical_archive(self):
+        obj = self.transport()
+        obj._ingest({'message': self.message('Original words', message_id=7)})
+        obj.rooms.record('-100777', 'Agent reply', outgoing=True, source_id='8', reply={'message_id':7})
+        archive = self.root / 'memory/groups/-100777.jsonl'
+        rows = [json.loads(line) for line in archive.read_text('utf-8').splitlines()]
+        reply = next(row for row in rows if row.get('source_message_id') == '8')
+        self.assertEqual(reply['reply_to_text'], 'Original words')
+        self.assertEqual(reply['reply_to_sender_name'], rows[0]['sender_name'])
+
     def test_repeated_update_and_edit_keep_one_archived_message(self):
         obj = self.transport()
         obj._ingest({'message': self.message('first')})

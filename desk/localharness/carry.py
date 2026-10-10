@@ -64,7 +64,7 @@ PASSPORT = "helene-carry.json"
 CONFIG_NAME = "helene.json"
 
 #: Блоки конфига, которые едут с агентом (архив побеждает при импорте).
-AGENT_KEYS = ("agent", "owner", "model", "telegram", "relay", "env", "update")
+AGENT_KEYS = ("agent", "owner", "model", "telegram", "relay", "env", "update", "voice")
 #: Блоки конфига, которые остаются за местом (архив их не трогает).
 HOST_KEYS = ("mode", "python", "app", "runner", "tree", "code", "port", "agent_mode",
              "sandbox", "service", "computer", "phone", "installed", "setup_complete",
@@ -78,6 +78,7 @@ SKIP_PATHS = ("body/", "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
               ".serverboot/", ".channel/",
               "relay/logs/", "memory/.state/harness.lock", "memory/.state/desk-token",
               "memory/.state/body.json",
+              "memory/.state/phone-access/", # tunnel binary, origin and menu lease belong to this host
               # Модели голоса (`models/whisper`, 0,5–1,6 ГБ) — не агент, а
               # снаряжение машины: они скачиваются заново одной кнопкой, а в
               # архиве превратили бы перенос памяти в перенос гигабайтов.
@@ -381,23 +382,21 @@ def export(config_path: Path, out: Path | None = None) -> dict:
     files = 0
     total = 0
     tmp = out.with_suffix(out.suffix + ".part")
-    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for src, arc in _walk(data):
-            try:
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for src, arc in _walk(data):
                 zf.write(src, arc)
                 files += 1
                 total += src.stat().st_size
-            except OSError as exc:
-                print(f"  ⚠ не поехал {arc}: {exc}", file=sys.stderr)
-        passport["files"] = files
-        passport["bytes"] = total
-        try:
+            passport["files"] = files
+            passport["bytes"] = total
             passport["code"] = _export_code(zf, config_path.parent, cfg)
-        except Exception as exc:                  # правки кода — не повод терять перенос памяти
-            passport["code"] = {"note": f"правки кода не поехали: {type(exc).__name__}: {exc}"}
-        zf.writestr(CONFIG_NAME, json.dumps(exported_cfg, ensure_ascii=False, indent=2) + "\n")
-        zf.writestr(PASSPORT, json.dumps(passport, ensure_ascii=False, indent=2) + "\n")
-    os.replace(tmp, out)
+            zf.writestr(CONFIG_NAME, json.dumps(exported_cfg, ensure_ascii=False, indent=2) + "\n")
+            zf.writestr(PASSPORT, json.dumps(passport, ensure_ascii=False, indent=2) + "\n")
+        os.replace(tmp, out)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     passport["archive"] = str(out)
     passport["archive_bytes"] = out.stat().st_size
     return passport
@@ -440,6 +439,16 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
     config_path = Path(config_path).resolve()
     archive = Path(archive).resolve()
     passport = read_passport(archive)
+    # Validate the complete archive before moving the current agent aside.
+    # A CRC error or an invalid path must leave the existing installation usable.
+    with zipfile.ZipFile(archive) as zf:
+        names = zf.namelist()
+        if len(names) != len(set(names)) or any(not _safe_member(name) for name in names):
+            raise ValueError('Архив переноса содержит повторяющиеся или недопустимые пути.')
+        bad = zf.testzip()
+        if bad: raise ValueError(f'Архив переноса повреждён: {bad}. Скачай или собери его заново.')
+        carried = json.loads(zf.read(CONFIG_NAME).decode('utf-8'))
+        if not isinstance(carried, dict): raise ValueError('В архиве нет корректных настроек агента.')
     if config_path.is_file():
         local = _read_config(config_path)
     else:

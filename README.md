@@ -36,6 +36,11 @@ character can develop through the same authored mechanisms as other agents.
 
 - **Paper-like chat.** Readable typography, resizable panels, remembered drafts and reading
   positions, visible activity, and controls that reflect the actual engine state.
+- **Emergency stop.** Stop the headless agent from the app, a Windows shortcut or CMD/PowerShell,
+  an agent self-command, or the owner's Telegram `/panic`. Restart keeps the stop in place
+  until the owner explicitly resumes.
+- **Onboarding.** Guided first steps cover phone pairing, Telegram proxy and server transfer;
+  setup shows changing tips without hiding validation errors.
 - **Tasks and wake-ups.** Inspect ongoing work, schedule future wake-ups and return to
   continuing intentions from dedicated views.
 - **Context and diagnostics.** Inspect retained context, files, activity and journals
@@ -53,7 +58,8 @@ character can develop through the same authored mechanisms as other agents.
   Whisper for recognition and Piper for synthesis; the server supports its STT/TTS lane.
   Engine updates preserve downloaded models where compatible.
 - **Phone and web.** Use the paired mobile interface or Telegram Mini App with the same
-  conversation and settings. Configure an external HTTPS address for access away from home.
+  conversation and settings. Guided pairing opens a protected HTTPS route and recovers
+  its origin when the connection changes; the computer must remain online.
 
 An image relay can remain available while a different provider supplies the main voice.
 Empty image credentials are handled correctly, and updates preserve the auxiliary relay.
@@ -78,6 +84,9 @@ The runtime includes:
   key and verified TLS. Configure the route in the Telegram settings card.
 - Contacts, membership, profile and moderation tools within the account's actual rights.
 - Durable outgoing messages and staged files, idempotency keys and delivery receipts.
+- Incoming and outgoing images remain available in chat; reply previews show the original text.
+- Explicit Telegram 429 refusals wait the full `retry_after` and retry again if needed.
+  Confirmed chunks are not replayed; pending delivery remains cancellable.
 - Reactions, media, follow-ups and owner-controlled admission.
 - Reusable Telegram skills for raw account operations, search, history archaeology,
   reconnect delivery, thread hygiene and moderation.

@@ -22,6 +22,8 @@ import { WhereScene } from "./scenes/where";
 import { installedSetup, isMac, loadDefaults, machine, setup, uninstallLaunch, type Found, type Setup } from "./setup";
 import { T, sleep, type Dir } from "./wind";
 import { paperButton, paperDialog } from "../../../ui-kit/paper-dialog";
+import { setupWindowClose } from "./window-close";
+import { startSetupTips } from "./tips";
 
 // Сорвался модуль — окно не должно остаться пустым: оно рождается невидимым и
 // показывается отсюда, поэтому исключение до show() давало живой процесс вообще
@@ -199,8 +201,9 @@ function closingDuringInstall(): boolean {
   if (current.canCancel) ui.footer.append(paperButton(current === update ? "Отменить обновление" : "Отменить установку", () => { ui.dialog.close(); current.requestCancel(); }));
   ui.dialog.addEventListener("close", () => { closeDialog = null; }, { once: true }); return true;
 }
-async function requestClose() { if (!closingDuringInstall()) await win?.close(); }
-if (win) void win.onCloseRequested(e => { if (closingDuringInstall()) e.preventDefault(); });
+const requestClose = setupWindowClose(win, closingDuringInstall, () => {
+  hint.textContent = "Окно не закрылось. Попробуй ещё раз."; hint.classList.add("show");
+});
 
 function showHint(text: string, delayMs: number) {
   clearTimeout(hintTimer);
@@ -504,3 +507,7 @@ declare global {
 window.__frame = { go, index: () => index, busy: () => busy, animate };
 
 void start();
+if (!uninstallMode) {
+  const stopTips = startSetupTips(stage, () => hint.classList.contains("show") || !!closeDialog?.open);
+  addEventListener("pagehide", stopTips, { once: true });
+}

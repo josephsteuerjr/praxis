@@ -36,6 +36,6 @@ rail.events.pointermove({pointerId:1,clientX:280});
 rail.events.pointercancel();
 assert.equal(classes.has('resizing-panels'),false);
 const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'utf8');
-assert.ok(main.includes('if (!event.persisted) disposeWidths();'),'bfcache pagehide retains controls');
+assert.match(main,/if \(!event\.persisted\)\s*\{[^}]*disposeWidths\(\)/,'bfcache pagehide retains controls');
 dispose();
 console.log('PASS panel widths: capped keyboard, persistence, pointer cancellation, bfcache disposal guard');

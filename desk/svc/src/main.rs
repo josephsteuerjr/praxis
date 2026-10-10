@@ -619,6 +619,12 @@ struct Plan {
 /// права понимать его по-разному. ПЕРВЫЙ-ЗАПУСК.md зовёт править этот файл
 /// руками, а Блокнот, VS Code и `Set-Content` из PowerShell 5.1 пишут именно так;
 /// со строгим UTF-8 служба не стартовала вовсе, называя причиной «не разобрался».
+fn phone_lan_enabled(cfg: &serde_json::Value) -> bool {
+    let phone = cfg.get("phone");
+    phone.and_then(|p| p.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false)
+        && phone.and_then(|p| p.get("mode")).and_then(|v| v.as_str()) != Some("automatic")
+}
+
 fn decode_config(bytes: &[u8]) -> Result<String, String> {
     if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
         let big = bytes[0] == 0xFE;
@@ -699,11 +705,7 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
             .filter(|s| !s.is_empty())
             .unwrap_or("minimal")
             .to_string(),
-        phone: cfg
-            .get("phone")
-            .and_then(|p| p.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+        phone: phone_lan_enabled(&cfg),
         // Умолчание — false, и оно должно оставаться false даже если ключа нет
         // вовсе: «не сказано» здесь означает «не разрешено».
         session0: cfg
@@ -1091,11 +1093,7 @@ fn supervise(
             _ => plan.python.clone(),
         };
         let app = resolve(&a.dir, cfg.get("app").and_then(|v| v.as_str()).unwrap_or("deskapp.py"));
-        let phone = cfg
-            .get("phone")
-            .and_then(|p| p.get("enabled"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        let phone = phone_lan_enabled(&cfg);
         kids.push(Kid {
             role: Role::Trube,
             label: "канал",
@@ -1282,11 +1280,7 @@ fn supervise(
                 kid.started = None;
                 kid.backoff = 0;
                 kid.not_before = now;
-                kid.phone = agent_config(&kid.config)
-                    .get("phone")
-                    .and_then(|p| p.get("enabled"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
+                kid.phone = phone_lan_enabled(&agent_config(&kid.config));
             }
         }
 
@@ -2475,7 +2469,7 @@ fn broker_wait_child(child: &mut Child, timeout: Duration) -> (Option<i32>, bool
             Ok(None) => {}
             Err(_) => return (None, false),
         }
-        if Instant::now() >= deadline {
+        if owner_stopped() || Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             return (None, true);
@@ -2520,7 +2514,9 @@ fn broker_run_as_system(ask: &BrokerAsk) -> Ran {
     let pid = child.id();
     if let Err(e) = adopt(&child) { let _ = child.kill(); let _ = child.wait(); return Ran::failed(&e, started); }
     let (code, killed) = broker_wait_child(&mut child, Duration::from_secs(ask.timeout_sec));
-    let note = if killed {
+    let note = if killed && owner_stopped() {
+        "прерван аварийным стопом".to_string()
+    } else if killed {
         format!("убит по таймауту ({} с)", ask.timeout_sec)
     } else if code.is_none() {
         "не жду завершения (timeout_sec=0)".to_string()
@@ -3112,7 +3108,7 @@ fn broker_handle(mut pipe: Pipe, config: PathBuf) {
     let firewall_rule = plan.as_ref().map(|p| p.firewall_rule).unwrap_or(true);
     // Выключатель из Настроек: конфиг перечитан только что, значит он
     // действует немедленно, а не «после перезапуска службы».
-    if !plan.as_ref().map(|p| p.broker).unwrap_or(true) {
+    if !broker_request_enabled(plan.as_ref().map(|p| p.broker).unwrap_or(true), ask.op) {
         let why = "брокер выключен в Настройках";
         broker_note(&tree, &format!("ОТКАЗ: {why} · зачем: {} · {whom}", ask.why));
         refuse(&mut pipe, Some(&ask), why);
@@ -3120,6 +3116,11 @@ fn broker_handle(mut pipe: Pipe, config: PathBuf) {
     }
 
     let ran = match ask.op {
+        BrokerOp::Panic => match request_owner_stop(ask.args.first().map(String::as_str).unwrap_or("cli")) {
+            Ok(()) => Ran { ok: true, code: Some(0), pid: None, out: String::new(),
+                err: String::new(), ms: 0, note: "Аварийный стоп записан; надзор завершает дерево".into() },
+            Err(why) => Ran::failed(&why, Instant::now()),
+        },
         BrokerOp::Ping => Ran {
             ok: true,
             code: Some(0),
@@ -3222,13 +3223,12 @@ fn broker_serve(config: PathBuf, stop: Arc<AtomicBool>) {
         };
         if !plan.broker {
             if !said_off {
-                log.line("брокер выключен (service.broker=false) — канала нет");
+                log.line("брокер выключен (service.broker=false) — доступна только аварийная остановка");
                 said_off = true;
             }
-            std::thread::sleep(Duration::from_secs(3));
-            continue;
+        } else {
+            said_off = false;
         }
-        said_off = false;
         let Some(root) = install_root(&config) else {
             log.line("брокер: рядом с конфигом нет helene-svc.exe — это не папка установки, канал не открываю");
             return;
@@ -3895,7 +3895,20 @@ fn cli() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     match mode.as_str() {
         "panic" | "resume" => {
-            let result = if mode == "panic" { request_owner_stop("cli") } else { resume_agent(&config_path()) };
+            let result = if mode == "panic" {
+                let argv: Vec<String> = std::env::args().collect();
+                let via = argv.windows(2).find(|v| v[0] == "--via").map(|v| v[1].as_str()).unwrap_or("cli");
+                let via = if matches!(via, "agent" | "telegram" | "phone" | "window" | "cli" | "start") { via } else { "cli" };
+                request_owner_stop(via).or_else(|direct_error| {
+                    let config = config_path();
+                    let plan = load_plan(&config)?;
+                    let root = install_root(&config).ok_or(direct_error)?;
+                    let token = broker_token_read(&plan.tree).ok_or("Нет секрета службы; используй helene.exe --panic для повышения")?;
+                    let ask = BrokerAsk::new(&token, BrokerOp::Panic, "", &[via.into()], "Аварийная остановка Hélène");
+                    let receipt = broker_call(&broker_pipe_name(&root), &ask)?;
+                    if receipt.ok && owner_stopped() { Ok(()) } else { Err(receipt.note) }
+                })
+            } else { resume_agent(&config_path()) };
             if let Err(error) = result {
                 eprintln!("{error}");
                 std::process::exit(1);

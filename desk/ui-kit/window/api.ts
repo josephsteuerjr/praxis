@@ -10,6 +10,8 @@ export interface Cfg {
   /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
   needs_remote?: boolean;
   needs_local_setup?: boolean;
+  local_agent?: boolean;
+  discover_server?: boolean;
 }
 
 declare global {
@@ -127,7 +129,20 @@ function tunnelURL(): string {
   return cfg.key ? ws + "?key=" + encodeURIComponent(cfg.key) : ws;
 }
 
-export function connect() {
+let discovery:Promise<void>|null=null;
+let originVerified=false;
+async function discover() {
+  if(!cfg.discover_server||originVerified)return;
+  if(!discovery)discovery=(async()=>{
+    const result=await shell<{ok:boolean;base?:string;message?:string}>("server_transfer",{action:"locate",request:"{}"});
+    if(!result.ok||!result.base)throw new Error(result.message||"Сервер ещё не ответил. Повторяю подключение.");
+    cfg.base=result.base;originVerified=true;
+  })().finally(()=>{discovery=null;});
+  return discovery;
+}
+
+export async function connect() {
+  try{await discover();}catch{for(const fn of connHandlers)fn(false);setTimeout(connect,4000);return;}
   let s: WebSocket;
   try {
     s = new WebSocket(tunnelURL());
@@ -167,6 +182,7 @@ export function connect() {
   };
   s.onclose = s.onerror = () => {
     if (sock !== s) return;
+    originVerified=false;
     sock = null;
     ready = false;
     for (const fn of connHandlers) fn(false);
@@ -194,6 +210,7 @@ function tunnelCall<T>(path: string, method: string, body: unknown): Promise<T> 
 }
 
 export async function api<T = any>(path: string): Promise<T> {
+  await discover();
   if (ready && sock) {
     try {
       return await tunnelCall<T>(path, "GET", null);
@@ -216,6 +233,7 @@ export async function del<T = any>(path: string): Promise<T> {
 }
 
 async function request<T>(method: string, path: string, body: unknown): Promise<T> {
+  await discover();
   // Files use HTTP's bounded body reader instead of the small event socket.
   const hasFiles = body != null && typeof body === "object" && Array.isArray((body as { attachments?: unknown }).attachments) && (body as { attachments: unknown[] }).attachments.length > 0;
   if (ready && sock && !hasFiles) return tunnelCall<T>(path, method, body);

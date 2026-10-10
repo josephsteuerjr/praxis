@@ -30,6 +30,8 @@ import { lookCard } from "../look";
 import { deskTrialHTML, type UpdateState } from "./update-card";
 import { isMacPlatform, platformOf } from "../../platform";
 import { relayAuthCard } from "../relay-auth-card";
+import { collectConnection } from "../server-connection";
+import { paperDialog } from "../../paper-dialog";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -63,7 +65,7 @@ export interface Config {
   agent?: { name?: string };
   // `external` — внешний адрес канала (06.10): сервер с белым IP, под которым
   // этот компьютер виден из любой сети. QR по нему работает и вне этой Wi-Fi.
-  phone?: { enabled?: boolean; external?: string };
+  phone?: { enabled?: boolean; mode?: string; external?: string };
   update?: { url?: string };
   // 1.2: копии памяти по расписанию (common/backup.rs): раз в `every_days` дней (0 —
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
@@ -76,7 +78,7 @@ export interface Config {
   // заново, и ручка исчезала при первом же «Сохранить».
   relay?: { enabled?: boolean; port?: number; instructions?: string; [k: string]: unknown };
   images?: { enabled?: boolean; model?: string; quality?: string; size?: string; background?: string; [k: string]: unknown };
-  telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string; status_message?: boolean; proxy?: { enabled?: boolean; url?: string; key?: string }; history_initial_limit?: number };
+  telegram?: { bot_token?: string; owner_id?: number | string; mode?: string; api_id?: string | number; api_hash?: string; phone?: string; status_message?: boolean; allow_from?: "owner" | "listed" | "any"; allowed_ids?: Array<string | number>; proxy?: { enabled?: boolean; url?: string; key?: string }; history_initial_limit?: number };
   // ⚠ `mounts` и `mounts_denied` карточка монтирования ТОЖЕ пишет, а
   // `[k: string]` держит и то, чего экран не знает: блок обязан СЛИВАТЬСЯ при
   // сохранении, иначе список смонтированных папок исчезает при первом же клике.
@@ -307,7 +309,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   for (const box of built.cards) center.append(box);
 
-  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, String(c.phone?.external || ""), built.phoneBase, built.qrSvg, posix), GROUP.brain));
+  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(inGroup(transferCard(draft, posix), GROUP.app));
@@ -474,31 +476,6 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       trialBox.innerHTML = "";
     }
   };
-  trialBox.addEventListener("click", async (ev) => {
-    const btn = (ev.target as HTMLElement).closest<HTMLElement>("[data-update-verdict]");
-    if (!btn) return;
-    const note = trialBox.querySelector<HTMLElement>("#update-note");
-    btn.setAttribute("disabled", "");
-    try {
-      const r = await post<{ ok: boolean; note: string }>("/api/update/verdict", {
-        id: btn.getAttribute("data-id") || "",
-        key: btn.getAttribute("data-key") || "",
-        verdict: btn.getAttribute("data-update-verdict") || "",
-      });
-      if (note) {
-        note.className = r.ok ? "receipt ok" : "receipt err";
-        note.textContent = r.note;
-      }
-      if (r.ok) window.setTimeout(() => void drawTrial(), 4000);
-    } catch (e) {
-      if (note) {
-        note.className = "receipt err";
-        note.textContent = humanError(e).text;
-      }
-    } finally {
-      btn.removeAttribute("disabled");
-    }
-  });
   void drawTrial();
   about.append(
     trialBox,
@@ -527,17 +504,13 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         saveOut.textContent = refused;
         return;
       }
-      out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled });
-      // Местожительство харнесса (карточка «Перенос»): три скаляра. `remote`
-      // без адреса — это окно без харнесса, поэтому пустой адрес = `local`.
-      const remoteBase = String(draft.base || "").trim();
-      const remoteOn = draft.mode === "remote" && !!remoteBase;
-      out.mode = remoteOn ? "remote" : "local";
-      if (remoteBase) out.base = remoteBase;
-      else delete out.base;
-      const remoteKey = String(draft.key || "").trim();
-      if (remoteKey) out.key = remoteKey;
-      else delete out.key;
+      out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled, mode: draft.phone?.mode || "automatic" });
+      const connectionError = collectConnection(out, draft);
+      if (connectionError) {
+        saveOut.className = "receipt err";
+        saveOut.textContent = connectionError;
+        return;
+      }
       out.setup_complete = true;
       try {
         const relayNote = await writeConfig(out);
@@ -695,15 +668,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           restartBtn.hidden = true;
           return;
         }
-        out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled });
-        const remoteBase = String(draft.base || "").trim();
-        const remoteOn = draft.mode === "remote" && !!remoteBase;
-        out.mode = remoteOn ? "remote" : "local";
-        if (remoteBase) out.base = remoteBase;
-        else delete out.base;
-        const remoteKey = String(draft.key || "").trim();
-        if (remoteKey) out.key = remoteKey;
-        else delete out.key;
+        out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled, mode: draft.phone?.mode || "automatic" });
+        const connectionError = collectConnection(out, draft);
+        if (connectionError) {
+          saveOut.className = "receipt err";
+          saveOut.textContent = connectionError;
+          restartBtn.hidden = true;
+          return;
+        }
         out.setup_complete = true;
         const relayNote = await writeConfig(out, true);
         saveOut.className = "receipt ok";
@@ -988,6 +960,7 @@ function transferCard(draft: Config, posix = false): HTMLElement {
     : "runtime\\python.exe app\\localharness\\carry.py import --config helene.json --archive <архив>";
   const exportOut = el("span", "receipt");
   const exportBtn = button("Экспорт агента", "quiet", async () => {
+    exportBtn.disabled = true;
     exportOut.className = "receipt";
     exportOut.textContent = "Собираю архив…";
     try {
@@ -999,39 +972,37 @@ function transferCard(draft: Config, posix = false): HTMLElement {
     } catch (e) {
       exportOut.className = "receipt err";
       exportOut.textContent = humanError(e).text;
-    }
+    } finally { exportBtn.disabled = false; }
   });
   const exportRow = el("div", "actions");
   exportRow.append(exportBtn, exportOut);
-  box.append(
-    exportRow,
-    el(
-      "p",
-      "field-hint",
-      "Архив — вся папка данных агента (память, конституция, навыки, личный git, вход ChatGPT, сессия Telegram) и helene.json. " +
-        "Внутри ключ модели и токены — не для пересылки посторонним; паспорт helene-carry.json в архиве перечисляет их поимённо. " +
-        "Не едут: тело тулы computer, журналы, ключ окна, стыки смонтированных папок. " +
-        "На сервере подписка ChatGPT продолжает работать сама: реле едет в сборке и Linux-бинарём, и контейнер поднимает его рядом с агентом — адрес мозга из архива на той стороне верен. " +
-        `Обратный импорт на этом ПК — из консоли при закрытой программе: ${importCmd}; прежняя data/ останется рядом как data.before-<штамп>.`,
-    ),
-  );
+  const steps = el("ol", "field-hint");
+  steps.append(el("li", "", "Для переноса на сервер открой «Онбординг» → «Телефон, Telegram и сервер». Приложение проверит сервер, сохранит архив и подключит окно."),
+    el("li", "", "Кнопка ниже собирает отдельный архив памяти, навыков, настроек и входов. Она сама не переносит и не останавливает агента."),
+    el("li", "", "Ручные настройки ниже нужны, если адрес и ключ уже работающего сервера у тебя есть."));
+  box.append(button("Настроить подключения","primary",()=>dispatchEvent(new CustomEvent("frame-go",{detail:"learn"}))));
+  const details = el("details");
+  details.append(el("summary", "field-label", "Что переносится и как вернуться на этот ПК"),
+    el("p", "field-hint", "Архив содержит ключи модели, вход ChatGPT и сессию Telegram. Храни его у себя. Журналы, ключ окна, модели голоса и подключённые папки остаются на прежней машине."),
+    el("p", "field-hint", `Обратный импорт при закрытой программе: ${importCmd}. Прежняя папка данных останется рядом как data.before-<штамп>.`));
+  box.append(steps, exportRow, details);
 
   // --- окно к харнессу на сервере
   const remote = el("div");
   remote.style.marginTop = "12px";
-  const remoteToggle = toggle("Окно ходит к коде агента на сервере", draft.mode === "remote", (v) => {
+  const remoteToggle = toggle("Подключить окно к агенту на сервере", draft.mode === "remote", (v) => {
     draft.mode = v ? "remote" : "local";
     syncRemote();
   });
   const baseField = field("Адрес канала на сервере", String(draft.base || ""), (v) => (draft.base = v), {
     mono: true,
     placeholder: "https://helene.example.com",
-    hint: "Тот адрес, по которому Caddy или Tailscale отдаёт канал контейнера (server/docker-compose.yml слушает 127.0.0.1:8094 хоста).",
+    hint: "HTTPS-адрес уже работающего агента. Для нового сервера используй пошаговый перенос в знакомстве с приложением.",
   });
   const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
     type: "password",
     mono: true,
-    hint: "Строка ключа печатается при старте контейнера: docker logs helene | head. Тот же ключ — у телефона.",
+    hint: "Ключ, который выдала серверная установка. Он даёт этому окну доступ к агенту.",
   });
   const remoteNote = el("p", "field-hint");
   const syncRemote = () => {
@@ -1039,8 +1010,8 @@ function transferCard(draft: Config, posix = false): HTMLElement {
     baseField.hidden = !on;
     keyField.hidden = !on;
     remoteNote.textContent = on
-      ? "После сохранения и перезапуска оболочка своих детей не поднимает: агент живёт на сервере, окно и телефон ходят туда. Пустой адрес — это снова local."
-      : "Сейчас агент живёт на этой машине: канал и код агента поднимает окно. Перенос на сервер — экспорт выше, затем server/README-СЕРВЕР.md в сборке.";
+      ? "После сохранения перезапусти окно. Для подключения с проверкой связи используй «Настроить подключения» выше. Если откроешь местную копию, в ней будут данные на момент переноса; сервер продолжит работать."
+      : "Сейчас окно работает с агентом на этом компьютере. Экспорт создаёт копию и сам по себе ничего не переключает.";
   };
   remote.append(remoteToggle, baseField, keyField, remoteNote);
   syncRemote();
@@ -1058,186 +1029,130 @@ function transferCard(draft: Config, posix = false): HTMLElement {
  * «только с этой машины (403)», а если бы и получила пару — свела бы QR на
  * локальный адрес, куда телефону идти незачем.
  */
-function phoneCard(draft: Config, savedEnabled: boolean, savedExternal: string,
-                   remoteBase: string, qrSvg: (text: string) => Promise<string>, posix = false): HTMLElement {
+interface PhoneState { state: string; message: string; url?: string; telegram?: string; bot_url?: string }
+
+export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: string,
+                   remoteBase: string, qrSvg: (text: string) => Promise<string>, opts:{showToggle?:boolean}={}): HTMLElement {
   draft.phone = draft.phone || {};
+  draft.phone.mode = "automatic";
   const remote = !!remoteBase;
   const phone = el("div");
-  const phoneToggle = toggle("Разрешить подключение телефона по сети", !!draft.phone.enabled, (v) => {
-    draft.phone!.enabled = v;
-    syncPhone();
-  });
-  // Внешний адрес (06.10, слово владельца «ремоут не в одной локальной сети»):
-  // сервер с белым IP, который приводит соединения к этому компьютеру
-  // (туннель + Caddy). По нему QR живёт в любой сети, и он не требует открывать
-  // канал соседям: туннель выходит из машины сам, а соединения приходят по нему.
-  // Ревью 06.10 (P1): и кнопка, и ссылка живут по СОХРАНЁННОМУ адресу — гейт
-  // канала читает helene.json с диска, и QR по несохранённому черновику вёл
-  // телефон в 403 «чужой адрес» на первом же запросе.
-  const externalField = field("Внешний адрес (сервер с белым IP)", String(draft.phone.external || ""), (v) => {
-    draft.phone!.external = v.trim();
-    syncPhone();
-  }, {
-    mono: true,
-    placeholder: "https://helene.209.222.251.74.nip.io",
-    hint: "Адрес, под которым этот компьютер виден из любой сети: например, туннель с твоего сервера через Caddy. QR по нему работает и вне этой Wi-Fi, перезапуск не нужен. Пусто — телефон ходит только по этой сети.",
-  });
-  // Нормализация одна на кнопку и QR: http(s) — как есть, без схемы — https
-  // (внешний вход через белый IP — это всегда он), прочие схемы (ftp://…) —
-  // мимо: канал такой гейт не открывает, и ссылка была бы битой.
-  const normalizeExternal = (raw: string): string => {
-    const v = String(raw || "").trim();
-    if (!v || (v.includes("://") && !/^https?:\/\//i.test(v))) return "";
-    const withScheme = /^https?:\/\//i.test(v) ? v : "https://" + v.replace(/^\/+/, "");
-    return withScheme.replace(/\/+$/, "");
-  };
-  // Телефон в этой сети: LAN/Tailscale-адреса и правило брандмауэра честны
-  // только когда тумблер включён И сохранён — иначе канал слушает петлю, и QR
-  // вёл бы на адрес, где никто не отвечает (ревью 06.10).
-  const lanOn = () => !!draft.phone?.enabled && savedEnabled;
-  // Честно про шифрование: соединение идёт открытым текстом по http://, и в
-  // общей Wi-Fi (кафе, отель, коворкинг) ключ устройства и вся переписка с
-  // агентом видны соседям. Прежняя подсказка обещала «доступ только по ключу»
-  // и про отсутствие шифрования молчала.
-  const phoneHint = el("p", "field-hint", remote
-    ? `Телефон подключается к серверу: QR ведёт на ${remoteBase}. Слушает ли канал сеть и как он закрыт снаружи — ` +
-      "решает сам сервер (Caddy, Tailscale), поэтому тумблера здесь нет. Ключ телефона живёт в его браузере; " +
-      "отвязать устройство можно ниже."
-    : "Канал начнёт слушать сеть, а не только эту машину. Внимание: соединение НЕ шифруется (обычный http). В чужой или общей Wi-Fi — кафе, отель, коворкинг — ключ телефона и переписка с агентом идут открытым текстом, их видно соседям по сети. Дома в своей сети это приемлемо; в любой другой пользуйся Tailscale: поставь его на компьютер и телефон, войди в один аккаунт, и QR даст его адрес. Включение применяется перезапуском.");
-  const qrRow = el("div", "actions");
-  qrRow.style.marginTop = "12px";
-  const qrWhy = el("span", "receipt");
+  const hint = el("p", "field-hint", remote
+    ? "Телефон подключается к тому же каналу, что и это окно."
+    : "Агент остаётся на этом компьютере. Hélène сама открывает защищённый HTTPS-доступ из любой сети — сервер, Tailscale и настройка роутера не нужны. Компьютер должен быть включён и подключён к интернету.");
+  const receipt = el("p", "receipt");
+  receipt.setAttribute("aria-live", "polite");
+  const status: PhoneState = { state: remote ? "ready" : "waiting", message: "Проверяю подключение…", url: remoteBase };
+  const devicesBox = el("div", "devices");
   const qrOut = el("div", "qr-out");
   qrOut.hidden = true;
-  const devicesBox = el("div", "devices");
   const drawDevices = async () => {
-    let rows: Array<{ id: string; name: string; created: string }> = [];
     try {
-      rows = await api("/pair/devices");
-    } catch {
-      rows = [];
-    }
-    devicesBox.replaceChildren();
-    if (!rows.length) return;
-    devicesBox.append(el("p", "field-label", "Подключённые устройства"));
-    for (const d of rows) {
-      const row = el("div", "device-row");
-      row.append(el("span", "", `${d.name} · ${new Date(d.created).toLocaleDateString("ru-RU")}`));
-      row.append(button("Отвязать", "quiet", async () => {
-        await post("/pair/revoke", { id: d.id }).catch((e) => toast(humanError(e).text));
-        void drawDevices();
-      }));
-      devicesBox.append(row);
-    }
+      const rows = await api<Array<{id: string; name: string; created: string}>>("/pair/devices");
+      devicesBox.replaceChildren();
+      if (!rows.length) return;
+      devicesBox.append(el("p", "field-label", "Подключённые устройства"));
+      for (const device of rows) {
+        const row = el("div", "device-row");
+        row.append(el("span", "", `${device.name} · ${new Date(device.created).toLocaleDateString("ru-RU")}`));
+        row.append(button("Отвязать", "quiet", async () => {
+          await post("/pair/revoke", {id:device.id}).catch(e => toast(humanError(e).text));
+          void drawDevices();
+        }));
+        devicesBox.append(row);
+      }
+    } catch { /* state row below shows connection errors */ }
   };
+  let busy = false;
+  let qrDialog: HTMLDialogElement | null = null;
+  let qrExpires = 0;
+  const closeQR = () => { qrDialog?.close(); qrDialog = null; };
   const qrBtn = button("Показать QR", "quiet", async () => {
+    busy = true;
+    qrBtn.disabled = true;
+    qrOut.hidden = false;
+    qrOut.textContent = "Создаю код подключения…";
     try {
-      const pair = await post<{ path: string; expires_in: number; uses: number }>("/pair/new", {});
-      if (remote) {
-        // Адрес один и он известен: тот, по которому это окно и само ходит.
-        // Ни LAN, ни Tailscale этой машины к серверному каналу отношения не имеют.
-        const link = remoteBase.replace(/\/+$/, "") + pair.path;
-        const svg = await qrSvg(link);
-        qrOut.hidden = false;
-        qrOut.innerHTML = `<div class="qr-pair"><div class="qr">${svg}</div>
-          <div class="qr-text"><p><b>Телефон пойдёт на сервер.</b></p>
-            <p class="mono qr-url">${esc(link)}</p></div></div>` +
-          `<div class="qr-text">
-            <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится трижды.</p>
-            <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и трёхразовый.</p>
-          </div>`;
-        void drawDevices();
-        return;
+      const pair = await post<{path:string; url?:string; expires_in?:number; uses?:number}>("/pair/new", {});
+      const expiresAt = Date.now() + (pair.expires_in || 600) * 1000;
+      const base = remote ? (cfg.base || remoteBase) : pair.url;
+      if (!base) throw new Error("Защищённый адрес ещё не готов. Дождись подключения и повтори.");
+      const link = base.replace(/\/+$/, "") + pair.path;
+      const svg = await qrSvg(link);
+      if (!cardNode.isConnected) return;
+      if (Date.now() >= expiresAt || (remote && base !== (cfg.base || remoteBase)) || (!remote && (status.state !== "ready" ||
+          (status.url || "").replace(/\/+$/, "") !== base.replace(/\/+$/, "")))) {
+        throw new Error("Подключение изменилось во время создания кода. Покажи QR заново.");
       }
-      const port = new URL(cfg.base || "http://127.0.0.1:8094").port || "8094";
-      // Внешний адрес — первый блок QR: телефон берёт его в любой сети.
-      // Берём СОХРАНЁННЫЙ адрес: гейт канала пускает Host по helene.json
-      // на диске, и черновик здесь обещал бы то, чего канал ещё не умеет.
-      const external = normalizeExternal(savedExternal);
-      // Оба адреса, а не выбор за владельца: Tailscale мог быть запущен для
-      // других дел, а телефон в тайлнет не добавлен — тогда QR со 100.x.y.z
-      // ведёт туда, куда телефон не дойдёт, и локальный адрес не предлагался
-      // никогда. Только когда канал правда слушает сеть (тумблер включён и
-      // сохранён): иначе это красивые QR на адрес, где никто не отвечает.
-      const addrs: Array<{ host: string; note: string }> = [];
-      if (inTauri && lanOn()) {
-        const ts = await shell<string | null>("tailscale_ip").catch(() => null);
-        const lan = await shell<string | null>("lan_ip").catch(() => null);
-        if (lan) addrs.push({ host: lan + ":" + port, note: "В этой Wi-Fi: телефон должен быть в той же сети." });
-        if (ts) addrs.push({ host: ts + ":" + port, note: "Через Tailscale: телефон с Tailscale в том же аккаунте достучится из любой сети." });
-      }
-      if (!addrs.length && !external) addrs.push({ host: location.host, note: "" });
-      const blocks: string[] = [];
-      if (external) {
-        const link = external + pair.path;
-        // Белый фон модулей задан явно: карточка .qr и так белая, но так код
-        // остаётся читаемым камерой, даже если карточку когда-нибудь затемнят.
-        const svg = await qrSvg(link);
-        blocks.push(`<div class="qr-pair"><div class="qr">${svg}</div>
-          <div class="qr-text"><p><b>Из любой сети.</b> Через сервер с белым адресом.</p>
-            <p class="mono qr-url">${esc(link)}</p></div></div>`);
-      }
-      for (const a of addrs) {
-        const link = "http://" + a.host + pair.path;
-        // Белый фон модулей задан явно: карточка .qr и так белая, но так код
-        // остаётся читаемым камерой, даже если карточку когда-нибудь затемнят.
-        const svg = await qrSvg(link);
-        blocks.push(`<div class="qr-pair"><div class="qr">${svg}</div>
-          <div class="qr-text">${a.note ? `<p><b>${esc(a.note)}</b></p>` : ""}
-            <p class="mono qr-url">${esc(link)}</p></div></div>`);
-      }
-      qrOut.hidden = false;
-      qrOut.innerHTML = blocks.join("") +
-        `<div class="qr-text">
-          <p>Открой камеру телефона и наведи на код. Ссылка живёт десять минут и годится трижды.</p>
-          <p><b>iPhone:</b> страница откроется в Safari; нажми «Поделиться» → «На экран „Домой“». Второе открытие из значка допишет ключ, поэтому код и трёхразовый.</p>
-        </div>`;
-      // Правило брандмауэра — только для LAN-пути: внешний идёт туннелем с
-      // самой машины, и правила для него не нужно (а UAC-вопрос на порт,
-      // который не слушается, — это вопрос ни о чём).
-      if (inTauri && !posix && lanOn()) {
-        const fw = await shell<string>("firewall_allow", { port: Number(port) }).catch((e) => humanError(e).text);
-        toast(fw);
-      }
+      closeQR();
+      const modal = paperDialog("Подключить телефон", true);
+      qrDialog = modal.dialog;
+      qrExpires = expiresAt;
+      modal.body.innerHTML = `<div class="qr-pair"><div class="qr">${svg}</div><div class="qr-text">
+        <p><b>Из любой сети.</b> Открой камеру телефона и наведи на код.</p>
+        <p>Ссылка живёт ${Math.ceil((pair.expires_in || 600) / 60)} мин. и допускает подключений: ${pair.uses || 3}.</p>
+        <p class="mono qr-url">${esc(link)}</p></div></div>
+        <p class="field-hint">Для следующего входа открой кнопку в Telegram-боте или покажи свежий QR здесь. Автоматический HTTPS-адрес может измениться после перезапуска подключения.</p>`;
+      qrOut.textContent = "Код показан в отдельном окне. Если он устареет, создай новый.";
+      void drawDevices();
     } catch (e) {
-      qrOut.hidden = false;
-      qrOut.innerHTML = failHTML(e, { retry: false });
-      bindFail(qrOut);
-    }
+      const error = humanError(e);
+      qrOut.replaceChildren(el("p", "receipt err", "QR не создан: " + (error.detail || error.text)));
+    } finally { busy = false; sync(); }
   });
-  // Кнопка не смотрела ни на тумблер, ни на то, был ли перезапуск: труба всё
-  // ещё слушала 127.0.0.1, владелец получал красивый QR на адрес, где никто
-  // не отвечает, а телефон обвинял в этом Wi-Fi. Внешний адрес — исключение:
-  // туннель выходит из машины сам, и соседям сеть не открывается; но и он
-  // считается по СОХРАНЁННОМУ значению — гейт канала читает файл.
-  const syncPhone = () => {
-    if (remote) {
-      // Сервер уже слушает сеть — иначе это окно к нему не ходило бы.
-      qrBtn.disabled = false;
-      qrWhy.textContent = "";
-      return;
+  const retry = button("Повторить подключение", "quiet", async () => {
+    await post("/api/phone/retry", {}).catch(e => toast(humanError(e).text));
+    void refresh();
+  });
+  const botLink = el("a", "btn btn-quiet", "Открыть бота");
+  botLink.target = "_blank";
+  botLink.rel = "noopener noreferrer";
+  botLink.hidden = true;
+  function sync() {
+    const saved = remote || (savedEnabled && savedMode === "automatic");
+    const on = remote || !!draft.phone?.enabled;
+    receipt.textContent = !on ? "Подключение выключено. Нажми «Сохранить», чтобы применить." : !saved
+      ? "Нажми «Сохранить» — Hélène подготовит HTTPS-подключение сама." : status.message;
+    receipt.classList.toggle("err", status.state === "error" || status.state === "retry");
+    qrBtn.disabled = busy || !on || !saved || status.state !== "ready";
+    retry.hidden = remote || !saved || !on || status.state === "ready";
+    botLink.hidden = !status.bot_url || status.telegram !== "ready";
+    if (status.bot_url) botLink.href = status.bot_url;
+    if (!on || status.state !== "ready") qrOut.hidden = true;
+    if (!on || status.state !== "ready") closeQR();
+  }
+  async function refresh() {
+    if (remote || !savedEnabled || savedMode !== "automatic") { sync(); return; }
+    try {
+      const fresh = await api<PhoneState>("/api/phone");
+      if (status.url && status.url !== fresh.url) { qrOut.replaceChildren(); closeQR(); }
+      Object.assign(status, fresh);
+    } catch (e) {
+      const error = humanError(e);
+      Object.assign(status, {state:"error", url:"", message:error.detail || error.text});
     }
-    const on = !!draft.phone?.enabled;
-    const externalSaved = !!normalizeExternal(savedExternal);
-    const draftExternal = String(draft.phone?.external || "").trim();
-    const unsaved = !!draftExternal && draftExternal !== savedExternal.trim();
-    qrBtn.disabled = externalSaved ? false : (!on || !savedEnabled);
-    qrWhy.className = "receipt";
-    qrWhy.textContent = unsaved
-      ? "Адрес ещё не сохранён — нажми «Сохранить», и QR пойдёт по нему."
-      : externalSaved
-        ? ""
-        : !on
-          ? "Включи тумблер, сохрани и перезапусти — тогда канал начнёт слушать сеть."
-          : !savedEnabled
-            ? "Сохрани и перезапусти программу: пока канал слушает только эту машину, и QR вёл бы туда, где никто не отвечает."
-            : "Телефон из другой сети так не подключится: QR ведёт только в эту Wi-Fi или Tailscale. Попроси агента поставить внешний домен (сервер с белым IP, туннель) и впиши его в поле выше — QR пойдёт через него.";
-  };
-  qrRow.append(qrBtn, qrWhy);
-  syncPhone();
-  if (remote) phone.append(phoneHint, qrRow, qrOut, devicesBox);
-  else phone.append(phoneToggle, phoneHint, externalField, qrRow, qrOut, devicesBox);
+    sync();
+  }
+  if (!remote&&opts.showToggle!==false) phone.append(toggle("Подключать телефон и миниапп Telegram", !!draft.phone.enabled, v => {
+    draft.phone!.enabled = v;
+    sync();
+  }));
+  phone.append(hint, receipt);
+  const actions = el("div", "actions");
+  actions.append(qrBtn, botLink, retry);
+  phone.append(actions, qrOut, devicesBox);
+  void refresh();
   void drawDevices();
-  return card("Телефон", phone);
-
+  const cardNode = card("Телефон", phone);
+  const poll = () => {
+    if (!cardNode.isConnected) { closeQR(); return; }
+    if (remote && status.url !== (cfg.base || remoteBase)) {
+      status.url=cfg.base||remoteBase;closeQR();qrOut.replaceChildren();
+    }
+    if (qrDialog && Date.now() >= qrExpires) { closeQR(); qrOut.textContent = "Время кода истекло. Нажми «Показать QR», чтобы создать новый."; }
+    if (!remote) void refresh();
+    setTimeout(poll, 2000);
+  };
+  setTimeout(poll, 2000);
+  return cardNode;
 }

@@ -228,7 +228,7 @@ def separate(tree: Path, code: Path, config: Path, who: dict) -> str:
         seal_relay(relay, gid)
     fixed = 0
     for entry in tree.iterdir():
-        if entry.name in (KEEP_DIR, CHANNEL_DIR, "relay") or entry.name.endswith((".log", ".log.1")):
+        if entry.name in (KEEP_DIR, CHANNEL_DIR, "relay", ".owner-stop") or entry.name.endswith((".log", ".log.1")):
             continue
         fixed += _own(entry, agent, gid)
     fixed += _own(code, agent, gid)
@@ -308,7 +308,7 @@ class Child:
             extra = {"umask": self.umask}
         self.proc = subprocess.Popen(self.argv, env=self.env, cwd=str(self.cwd),
                                      stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                                     **extra)
+                                     start_new_session=True, **extra)
         out.close()
         self.since_utc = _utc()
         print(f"[serverboot] {self.name} поднят, pid {self.proc.pid}", flush=True)
@@ -316,11 +316,12 @@ class Child:
     def stop(self) -> None:
         if self.proc is None or self.proc.poll() is not None:
             return
-        self.proc.terminate()
+        os.killpg(self.proc.pid, signal.SIGTERM)
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            self.proc.kill()
+            os.killpg(self.proc.pid, signal.SIGKILL)
+            self.proc.wait()
 
 
 def child_env(base: dict, tree: Path, token: str) -> dict:
@@ -418,6 +419,8 @@ def main() -> int:
     base = config.parent
     tree = _tree(config, cfg)
     tree.mkdir(parents=True, exist_ok=True)
+    import emergency_stop
+    emergency_stop.prepare(tree)
     port = int(cfg.get("port") or 8094)
     app = base / str(cfg.get("app") or "app/deskapp.py")
     runner = base / str(cfg.get("runner") or "app/localharness/runner.py")
@@ -553,8 +556,9 @@ def main() -> int:
     signal.signal(signal.SIGINT, _stop)
     from deskd import relay_auth
     relay_auth.prepare(tree, who["desk"] if who else None, who["gid"] if who else None)
+    was_stopped = emergency_stop.stopped(tree)
     for child in children:
-        child.spawn()
+        if not was_stopped or child.key == "channel": child.spawn()
 
     def activate_auth(save):
         picked = next((child for child in children if child.key == "relay"), None)
@@ -569,8 +573,39 @@ def main() -> int:
             restart(picked)
         return picked.alive()
 
+    next_cycle = 0.0
     while not stopping:
-        time.sleep(3)
+        time.sleep(.5)
+        stopped_now = emergency_stop.consume(tree)
+        if stopped_now:
+            if not was_stopped:
+                print("[serverboot] аварийный стоп сохранён; гашу агентские процессы", flush=True)
+                for child in children:
+                    if child.key != "channel": child.stop(); child.proc = None
+                if Path("/.dockerenv").exists():
+                    # PID1 exit kills even detached descendants in this one
+                    # installation namespace. Docker restarts into the latch;
+                    # only the authenticated channel is brought back.
+                    for child in children: child.stop()
+                    return 5
+            was_stopped = True
+            if time.monotonic() < next_cycle: continue
+            next_cycle = time.monotonic() + 3
+            if control is not None:
+                request = control.take_request(tree)
+                if request: control.receipt(tree, request, False, "Аварийный стоп включён; перезапуск не снимает его")
+                control.beat(tree, "serverboot", started_utc,
+                    [{"id": child.key, "name": child.name, "alive": child.alive(),
+                      "pid": child.proc.pid if child.proc is not None else None,
+                      "halted": child.key != "channel"} for child in children])
+            channel = next((child for child in children if child.key == "channel"), None)
+            if channel is not None and not channel.alive(): channel.spawn()
+            continue
+        if was_stopped:
+            print("[serverboot] стоп снят владельцем; возвращаю надзор", flush=True)
+            was_stopped = False
+        if time.monotonic() < next_cycle: continue
+        next_cycle = time.monotonic() + 3
         now = time.monotonic()
         reader = tree / "memory/.control/desk_inbox/.reader.json"
         try:

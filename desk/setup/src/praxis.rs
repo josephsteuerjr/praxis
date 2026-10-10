@@ -33,7 +33,7 @@ pub fn install_praxis(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(P
         progress(Progress { step: n, total, label: label.to_string(), phase: phase.to_string(), frac, detail, cancellable });
     };
     let mut steps: Vec<Step> = Vec::new();
-    if let Some(note) = crate::tx::recover(&dir) {
+    if let Some(note) = crate::install::recover_previous_install(&dir)? {
         steps.push(Step { label: "Прерванная установка".into(), ok: true, note: Some(note) });
     }
     say("check", "Проверяю установщик", None, None, true, true, progress);

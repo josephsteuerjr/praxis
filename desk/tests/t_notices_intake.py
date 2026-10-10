@@ -78,7 +78,10 @@ class BotHook(unittest.TestCase):
         seen = []
         enqueued = []
         bot.on_incoming = lambda **kw: seen.append(kw)
-        bot._enqueue = lambda conversation: enqueued.append(conversation)
+        def enqueue(conversation, *, urgent=False):
+            self.assertEqual(len(seen), 1, 'incoming notice must precede queueing')
+            enqueued.append(conversation)
+        bot._enqueue = enqueue
         bot.last_incoming = {}
         bot._topic_names = {}
         bot._muted = set()

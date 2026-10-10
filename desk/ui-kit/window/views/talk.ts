@@ -8,8 +8,10 @@
 // событие хода — отсюда прыжки и «сообщение уходит вниз» (слово Егора 28.09). Плашки хода
 // и ошибок стоят ВНИЗУ, у поля ввода: наверху 250 сообщений их никто не видел.
 import { KeyedList } from "../../feed/keyed";
-import { api, mediaURL, post } from "../api";
+import { api, post } from "../api";
 import { artifactCaption, mediaDescriptor, paperMediaHTML } from "../../paper-media";
+import { deliveryWords, foldWords, type FoldState } from "../../memory-fold";
+import { replyPreview } from "../../reply-preview";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
 import * as panel from "../panel";
@@ -20,6 +22,7 @@ import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, WINDOW_ROOM, foreignHarness, isWind
 
 interface Msg {
   source_id?: string;
+  source_message_id?: string;
   timestamp?: string;
   outgoing?: boolean;
   text?: string;
@@ -33,6 +36,9 @@ interface Msg {
   sender_id?: string | number;
   topic_title?: string;
   reply_to_message_id?: number;
+  reply_to_sender_name?: string;
+  reply_to_text?: string;
+  reply_to_media?: string;
   media?: string;
   /** Вложение из дерева агента: путь ОТ ДЕРЕВА и вид (transport.archive). Голос
    *  агента приезжает так; строковый `media` остаётся подписью telegram-вложения. */
@@ -41,13 +47,15 @@ interface Msg {
   media_name?: string;
   media_size?: number;
   media_mime?: string;
+  media_original_path?: string;
+  media_error?: string;
   edited_at?: string;
 }
 
 /** Строка ленты: день или сообщение. `html` — и содержимое, и подпись «изменилось ли». */
 type Row =
   | { kind: "day"; key: string; label: string }
-  | { kind: "msg"; key: string; cls: string; at: string; html: string; own: string };
+  | { kind: "msg"; key: string; cls: string; at: string; html: string; own: string; messageId: string };
 
 /** Узлы страницы чата — создаются один раз на страницу (комната сменилась — страница новая). */
 interface Dom {
@@ -249,20 +257,12 @@ function stubNotice(): string {
 /**
  * Вложение строки ленты — проигрывателем или картинкой.
  *
- * ⚠ Адрес собирается ТЕМ ЖЕ способом, что и остальные запросы окна (`mediaURL`
- * из api.ts): ключ канала уезжает в запрос, иначе браузер получит 403 и покажет
- * сломанный проигрыватель вместо звука.
- *
- * `preload="none"` — намеренно: в ленте бывают десятки голосовых, и грузить их
- * все ради прокрутки незачем.
+ * Bytes use the authenticated artifact client; loading and playback are limited
+ * to figures near the viewport. Saving keeps the original Telegram file.
  */
 function mediaBlock(m: Msg): string {
   const rel = String(m.media_path || "").trim();
   if (!rel) return "";
-  const src = mediaURL(rel);
-  if (String(m.media_kind || "") === "audio") {
-    return `<div class="msg-media"><audio controls preload="none" src="${esc(src)}"></audio></div>`;
-  }
   return paperMediaHTML(mediaDescriptor(m)!);
 }
 
@@ -270,6 +270,7 @@ function mediaBlock(m: Msg): string {
 
 /** Строки ленты: дни и сообщения с устойчивыми ключами (время + кто + номер дубля). */
 function buildRows(rows: Msg[], peer: string): Row[] {
+  const originals = new Map(rows.filter(m => m.source_message_id).map(m => [String(m.source_message_id), m]));
   const windowish = isWindowRoom(peer);
   const out: Row[] = [];
   const seen = new Map<string, number>();
@@ -290,7 +291,7 @@ function buildRows(rows: Msg[], peer: string): Row[] {
     // Вложение из дерева агента: канал отдаёт его байтами (`/api/media`), и в
     // ленте оно перестаёт быть строкой с путём. Голос агента приезжает так.
     // Строковый `m.media` остаётся тем, чем был: подписью telegram-вложения.
-    const media = mediaBlock(m) || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "");
+    const media = mediaBlock(m) || (m.media ? ` <span class="muted">[${esc(m.media)}]</span>` : "") || (m.media_error ? `<p class="muted">${esc(m.media_error)}</p>` : '');
     const edited = m.edited_at ? " · ред." : "";
     // Имя в подписи — только у чужих людей в общих комнатах.
     const showName = !m.outgoing && !system && !windowish && name !== S.agentState?.owner;
@@ -305,6 +306,9 @@ function buildRows(rows: Msg[], peer: string): Row[] {
     // `kind`: узнаём по началу текста.
     const birth = system && (m.kind === "birth" || (m.text || "").startsWith("Это твой первый запуск"));
     const cls = own ? "own" : system ? "system" + (silence || birth ? " silence" : "") : m.outgoing ? "agent" : "";
+    const preview = replyPreview(m, originals);
+    const reply = preview ? `<button type="button" class="msg-reply-preview" data-reply-id="${esc(preview.id)}"
+      title="Перейти к исходному сообщению"><b>↳ ${esc(preview.author)}</b><span>${esc(preview.text)}</span></button>` : '';
     const head = m.outgoing
       ? `<span class="who-hand">${esc(S.agent)}</span><span>${fmtTime(m.timestamp)}${edited}</span>`
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
@@ -320,7 +324,8 @@ function buildRows(rows: Msg[], peer: string): Row[] {
       key: n ? `${base}#${n}` : base,
       cls,
       at: m.timestamp || "",
-      html: `<div class="msg-head">${head}</div><div class="msg-body">${body}${media}</div>`,
+      messageId: String(m.source_message_id || ""),
+      html: `<div class="msg-head">${head}</div>${reply}<div class="msg-body">${body}${media}</div>`,
       own: own ? (m.text || "").trim() : "",
     });
   }
@@ -335,6 +340,7 @@ function makeRow(r: Row): HTMLElement {
   } else {
     el.className = `msg ${r.cls}`;
     el.dataset.at = r.at;
+    el.dataset.messageId = r.messageId;
     el.innerHTML = r.html;
   }
   return el;
@@ -351,6 +357,17 @@ function pendingEl(p: Pending): HTMLElement {
 }
 
 function skeleton(page: HTMLElement, peer: string): Dom {
+  page.addEventListener("click", event => {
+    const link = (event.target as Element).closest<HTMLElement>("[data-reply-id]");
+    if (!link) return;
+    const target = Array.from(page.querySelectorAll<HTMLElement>(".msg[data-message-id]"))
+      .find(row => row.dataset.messageId === link.dataset.replyId);
+    if (target) { showMessage(target); return; }
+    link.title = "Исходное сообщение ещё не загружено. Открой более раннюю часть переписки.";
+    let feedback = link.parentElement?.querySelector<HTMLElement>(".reply-feedback");
+    if (!feedback) { feedback = document.createElement("p"); feedback.className = "receipt reply-feedback"; link.after(feedback); }
+    feedback.textContent = link.title;
+  });
   page.innerHTML = `<div class="center talk">
     <div class="talk-zoom">
       <div class="feed" role="log" aria-label="Переписка"></div>
@@ -367,11 +384,13 @@ function skeleton(page: HTMLElement, peer: string): Dom {
     feed: new KeyedList<Row>(page.querySelector<HTMLElement>(".feed")!, {
       key: (r) => r.key,
       create: makeRow,
-      same: (a, b) => (a.kind === "day" ? b.kind === "day" && a.label === b.label : b.kind === "msg" && a.html === b.html && a.cls === b.cls),
+      same: (a, b) => (a.kind === "day" ? b.kind === "day" && a.label === b.label : b.kind === "msg" && a.html === b.html && a.cls === b.cls && a.messageId === b.messageId),
       update(el, r) {
         if (r.kind === "day") { el.textContent = r.label; return; }
         el.className = `msg ${r.cls}`;
         el.innerHTML = r.html;
+        el.dataset.messageId = r.messageId;
+        el.dataset.at = r.at;
       },
     }),
     pending: new KeyedList<Pending>(page.querySelector<HTMLElement>(".pending-box")!, {
@@ -532,25 +551,12 @@ export async function render(container: HTMLElement): Promise<void> {
 
 // ---------------------------------------------------------------- свёртка по кнопке
 
-/** Ответ канала о памяти чата (deskd.control.fold_state, 27.09). */
-interface FoldState {
-  room: string;
-  hot: number | null;
-  keep: number;
-  offer_at: number;
-  hard_at: number;
-  offer: Record<string, unknown> | null;
-  pending: { id?: string; at?: string } | null;
-  receipt: { id?: string; state?: string; note?: string; folded?: number; at?: string } | null;
-}
-
 let foldTimer = 0;
 
 /**
  * Строка «память чата» у низа ленты (Егор 27.09: «компактирование… неплохо бы по нажатию»).
- * Свёртка — ЕЁ (`memory_life.fold_now`, та же, что у её руки): старое сверх горячего хвоста
- * уходит в сводку её словами, переписка остаётся. Строка видна, только когда есть что
- * свернуть, идёт свёртка или есть свежая расписка: пустое место в ленте не занимает.
+ * Число горячих сообщений видно и во время свёртки, и после неё.
+ * Объяснение следует политике загруженного ядра, архив — отдельное число.
  */
 async function paintFold(container: HTMLElement, room: string): Promise<void> {
   const box = container.querySelector<HTMLElement>("[data-fold-box]");
@@ -559,33 +565,34 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
   try {
     st = await api<FoldState>(`/api/memory-fold/${encodeURIComponent(room)}`);
   } catch {
-    return; // канал без этой ручки (старый сервер) — строки просто нет
+    if (box.isConnected && S.room === room) {
+      box.textContent = "Счётчик горячей памяти пока недоступен.";
+      delete box.dataset.html;
+      clearTimeout(foldTimer);
+      foldTimer = window.setTimeout(() => {
+        if (S.view === "talk" && S.room === room && box.isConnected) void paintFold(container, room);
+      }, 3000);
+    }
+    return;
   }
   if (!box.isConnected || S.room !== room) return;
-  const receiptAge = st.receipt?.at ? Date.now() - Date.parse(st.receipt.at) : Infinity;
-  const running = !!st.pending || st.receipt?.state === "running";
+  const words = foldWords(st);
   clearTimeout(foldTimer);
-  let html = "";
-  if (running) {
-    html = `<div class="notice"><span class="dot live"></span>
-      <span>Сворачиваю память чата — она пишет сводку своими словами. Переписка остаётся на месте.</span></div>`;
-    foldTimer = window.setTimeout(() => void paintFold(container, room), 3000);
-  } else if (st.receipt && receiptAge < 120_000) {
-    const again = st.receipt.state === "retry" || st.receipt.state === "failed";
-    html = `<div class="notice${st.receipt.state === "failed" ? " err" : ""}">
-      <span class="dot ${st.receipt.state === "failed" ? "failed" : "ok"}"></span>
-      <span>${esc(st.receipt.note || "")}</span>
-      ${again ? `<button class="notice-action" data-fold type="button">Свернуть ещё раз</button>` : ""}</div>`;
-  } else if (st.hot !== null && st.hot > st.keep + 10) {
-    const offered = st.offer ? " Ей уже предложено свернуть." : "";
-    html = `<div class="notice"><span class="dot"></span>
-      <span>В горячей памяти чата ${st.hot} сообщений. Она держит ${st.keep} последних, на ${st.offer_at}
-      предлагает себе свернуть, на ${st.hard_at} сворачивает сама.${offered}</span>
-      <button class="notice-action" data-fold type="button">Свернуть сейчас</button></div>`;
-  }
+  foldTimer = window.setTimeout(() => {
+    if (S.view === "talk" && S.room === room && box.isConnected) void paintFold(container, room);
+  }, 3000);
+  const delivery = deliveryWords(st);
+  const html = `${delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : ''}<div class="memory-fold"><div class="memory-fold-head"><strong>${esc(words.counter)}</strong>
+    ${words.canFold ? '<button class="notice-action" data-fold type="button">Свернуть сейчас</button>' : ''}</div>
+    <details><summary>Как работает память</summary><p>${esc(words.explanation)}</p></details>
+    ${words.note ? `<p class="receipt${words.state === "failed" ? " err" : ""}" data-fold-note>${esc(words.note)}</p>` : ''}</div>`;
   if (box.dataset.html === html) return;
   box.dataset.html = html;
-  scroll.preserve(() => { box.innerHTML = html; });
+  const expanded = box.querySelector("details")?.open;
+  scroll.preserve(() => {
+    box.innerHTML = html;
+    if (expanded) box.querySelector("details")!.open = true;
+  });
   const btn = box.querySelector<HTMLButtonElement>("[data-fold]");
   btn?.addEventListener("click", async () => {
     btn.disabled = true;
@@ -597,8 +604,9 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
     } catch (e) {
       btn.disabled = false;
       btn.textContent = "Свернуть сейчас";
-      const text = box.querySelector("span:not(.dot)");
-      if (text) text.textContent = humanError(e).text;
+      let text = box.querySelector<HTMLElement>("[data-fold-note]");
+      if (!text) { text = document.createElement("p"); text.className = "receipt err"; box.querySelector(".memory-fold")?.append(text); }
+      text.textContent = humanError(e).text;
     }
   });
 }
@@ -638,6 +646,11 @@ export function jumpTo(at: string): boolean {
     if (d < gap) { gap = d; best = el; }
   }
   if (!best || gap > 5 * 60_000) return false;
+  showMessage(best);
+  return true;
+}
+
+function showMessage(best: HTMLElement): void {
   const sc = scroll.view();
   if (sc) {
     const r = best.getBoundingClientRect();
@@ -646,5 +659,4 @@ export function jumpTo(at: string): boolean {
   } else best.scrollIntoView({ block: "center" });
   best.classList.add("flash");
   window.setTimeout(() => best?.classList.remove("flash"), 2400);
-  return true;
 }

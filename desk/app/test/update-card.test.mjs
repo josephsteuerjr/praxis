@@ -127,15 +127,12 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
       summary: "правок агента в коде: 2; перенесено 1, слито 0, не легло 1" } };
   const u = { updater: beat, receipt };
   const html = updateCardHTML(u, { inContainer: true, now: Date.parse("2026-09-27T10:12:00Z") });
-  assert.match(visible(html), /Обновлено до 1\.1\.2 — агент проверяет себя/);
-  assert.match(visible(html), /Делать ничего не нужно \(срок — через 18 мин\)/);
-  assert.match(html, /data-update-verdict="accept" data-id="aaaa1111" data-key="k3y">Всё хорошо</);
-  assert.match(html, /data-update-verdict="reject" data-id="aaaa1111" data-key="k3y">Вернуть прежнюю</);
+  assert.match(visible(html), /Ожидание проверки агентом отменено/);
+  assert.doesNotMatch(html, /data-update-verdict/);
   assert.match(html, /Не легло: tree\/agent\.py/);
   assert.match(html, /workspace\/update-1\.1\.2/);
-  assert.match(html, /память агента остаётся/);
   assert.doesNotMatch(html, /data-update-plan/);
-  assert.equal(updateActive(u), true);
+  assert.equal(updateActive(u), false);
 }
 
 // Итог: фраза для человека; слово на испытании и судьба правок — в подробностях.
@@ -194,10 +191,8 @@ assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { in
   const trial = { id: "d1", desktop: true, state: "trial", from_version: "1.2.4", to_version: "1.2.5",
     checks: [{ name: "runner", ok: true }], trial: { key: "kk", until_utc: "2026-09-29T10:30:00Z" } };
   const html = deskTrialHTML({ updater: { present: true }, receipt: trial }, { now });
-  assert.match(html, /data-update-verdict="accept" data-id="d1" data-key="kk">Всё хорошо</);
-  assert.match(html, /data-update-verdict="reject" data-id="d1" data-key="kk">Вернуть прежнюю</);
-  assert.match(html, /прежняя программа/);
-  assert.doesNotMatch(html, /код и образ/);
+  assert.match(html, /Ожидание проверки агентом отменено/);
+  assert.doesNotMatch(html, /data-update-verdict/);
   // расписка сервера — не здесь; итог — три дня, потом пусто
   assert.equal(deskTrialHTML({ receipt: { ...trial, desktop: false } }, { now }), "");
   const done = { ...trial, state: "done", summary: "обновление до 1.2.5 прошло", finished_utc: "2026-09-28T10:00:00Z" };

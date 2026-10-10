@@ -57,6 +57,14 @@ fn create_shortcut(
     description: &str,
     icon: Option<&std::path::Path>,
 ) -> Result<(), String> {
+    create_shortcut_with_args(lnk, exe, "", aumid, description, icon)
+}
+
+#[cfg(windows)]
+fn create_shortcut_with_args(
+    lnk: &std::path::Path, exe: &std::path::Path, arguments: &str,
+    aumid: Option<&str>, description: &str, icon: Option<&std::path::Path>,
+) -> Result<(), String> {
     if let Some(dir) = lnk.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("папка ярлыка {}: {e}", dir.display()))?;
     }
@@ -65,8 +73,9 @@ fn create_shortcut(
     let aumid = aumid.map(str::to_string);
     let description = description.to_string();
     let icon = icon.map(std::path::Path::to_path_buf);
+    let arguments = arguments.to_string();
     std::thread::spawn(move || unsafe {
-        shortcut_in_own_apartment(&lnk, &exe, aumid.as_deref(), &description, icon.as_deref())
+        shortcut_in_own_apartment(&lnk, &exe, &arguments, aumid.as_deref(), &description, icon.as_deref())
     })
     .join()
     .unwrap_or_else(|_| Err("создание ярлыка упало".into()))?;
@@ -77,6 +86,7 @@ fn create_shortcut(
 unsafe fn shortcut_in_own_apartment(
     lnk: &std::path::Path,
     exe: &std::path::Path,
+    arguments: &str,
     aumid: Option<&str>,
     description: &str,
     icon: Option<&std::path::Path>,
@@ -99,6 +109,7 @@ unsafe fn shortcut_in_own_apartment(
     let made = (|| -> windows::core::Result<()> {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(exe))?;
+        link.SetArguments(&HSTRING::from(arguments))?;
         if let Some(dir) = exe.parent() {
             link.SetWorkingDirectory(&HSTRING::from(dir))?;
         }

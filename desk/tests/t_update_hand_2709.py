@@ -70,7 +70,7 @@ class Hand(unittest.TestCase):
                 mock.patch.object(updates.Path, "exists", return_value=False):
             self.assertTrue(updates.install(desk, self.tree, {}))
         schema = desk.BASE_TOOLS[0]["input_schema"]["properties"]["action"]["enum"]
-        self.assertEqual(schema, ["status", "accept", "reject"])
+        self.assertEqual(schema, ["status"])
         self.assertIn("кнопкой в окне", desk.TOOL_IMPL[updates.TOOL_NAME](action="plan"))
         agent = fake_agent()
         self.hand(agent)
@@ -144,21 +144,11 @@ class Hand(unittest.TestCase):
         self.assertIn("Подтверждать нечего", hand(action="confirm", owner_words="да"))
         self.assertIn("action бывает", hand(action="обнови"))
 
-    def test_слово_агента_на_испытании(self):
+    def test_старое_слово_на_испытании_ничего_не_принимает(self):
         _, hand = self.hand()
-        self.assertIn("Испытания сейчас нет", hand(action="accept", report="всё живо"))
-        self.put(control.UPDATE_RECEIPT, {"id": "aaaa1111", "state": "trial", "from_version": "1.1.1",
-                                          "to_version": "1.1.2", "trial": {"key": "k3y",
-                                                                           "until_utc": "2026-09-27T12:00:00Z"}})
-        self.assertIn("Испытание до 2026-09-27T12:00:00Z", hand(action="status"))
-        self.assertIn("Нужен report", hand(action="accept"))
-        # гейта «ход владельца» нет: проверка себя — суждение самого агента
-        self.owner[0] = False
-        text = hand(action="reject", report="рука shell не отвечает")
-        self.assertIn("сломано", text)
-        row = json.loads(self.ctl(control.UPDATE_VERDICT).read_text("utf-8"))
-        self.assertEqual((row["verdict"], row["by"], row["words"], row["key"]),
-                         ("reject", "agent", "рука shell не отвечает", "k3y"))
+        for action in ("accept", "reject"):
+            self.assertIn("приёмки приложения больше нет", hand(action=action, report="some report"))
+        self.assertFalse(self.ctl(control.UPDATE_VERDICT).exists())
 
     def test_записка_испытания(self):
         receipt = {"id": "aaaa1111", "state": "trial", "from_version": "1.1.1", "to_version": "1.1.2",

@@ -1101,6 +1101,7 @@ fn config_json(s: &Setup, prev_relay_key: Option<String>, relay_port: u16) -> se
             "owner_id": s.telegram.owner_id.trim().parse::<i64>().unwrap_or(0),
         },
         "read_dotenv": false,
+        "phone": { "enabled": false, "mode": "automatic" },
         // Адрес обновлений: без него «Проверить обновления» в окне отказывает
         // всегда («адрес обновлений не задан»), а умолчания не было ни в одной
         // из трёх подсистем — тот же адрес, что кладёт шаблон поставки
@@ -1299,6 +1300,29 @@ fn merge_config(existing: Option<serde_json::Value>, fresh: serde_json::Value, s
         }
     }
     serde_json::Value::Object(out)
+}
+
+/// Explicit product-upgrade migration. Keep the owner's enabled choice and an
+/// exact rollback copy; do not infer automatic exposure while parsing config.
+fn migrate_phone(dir: &Path, cfg: &mut serde_json::Value) -> Result<(), String> {
+    if cfg.get("phone").and_then(|v| v.get("mode")).and_then(|v| v.as_str()) == Some("automatic") {
+        return Ok(());
+    }
+    let before = cfg.get("phone").cloned().unwrap_or(serde_json::json!({"enabled":false}));
+    let mut after = before.as_object().cloned().ok_or("Некорректные настройки телефона")?;
+    after.insert("mode".into(), "automatic".into());
+    after.remove("external");
+    let backup=dir.join("helene.before-phone-1.5.1.json");
+    if !backup.exists() && dir.join("helene.json").is_file() {
+        std::fs::copy(dir.join("helene.json"), &backup).map_err(|e| e.to_string())?;
+    }
+    cfg["phone"]=serde_json::Value::Object(after);
+    let receipt=serde_json::json!({"schema":"helene.phone-migration.v1", "author":"Hélène installer 1.5.1",
+        "before":before,"after":cfg["phone"],"rollback":backup.display().to_string(),
+        "reason":"Автоматическое HTTPS-подключение вместо ручного адреса телефона"});
+    let path=configured_tree(dir,cfg).join("memory").join(".state").join("phone-migration.json");
+    if let Some(parent)=path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+    write_atomic(&path, &(serde_json::to_string_pretty(&receipt).map_err(|e| e.to_string())?+"\n"))
 }
 
 /// helene.json так, как его сохранил редактор ВЛАДЕЛЬЦА: UTF-8, UTF-8 с меткой
@@ -1825,8 +1849,20 @@ fn shortcuts_at(exe: &Path, name: &str, icon: Option<&Path>, start: Option<PathB
     create_shortcut(&lnk, exe, Some(AUMID), name, icon).map_err(|e| format!("{whose}«Пуск»: {e}"))?;
     let mut note = format!("{whose}«Пуск» ok");
     let mut made = vec![lnk];
+    let panic_name = format!("{name} — аварийный стоп");
+    let panic_link = start.join(format!("{panic_name}.lnk"));
+    create_shortcut_with_args(&panic_link, exe, "--panic --notify", None,
+        "Остановить всех агентов Hélène и их процессы до явного возобновления", icon)
+        .map_err(|e| format!("аварийный ярлык «Пуска»: {e}"))?;
+    made.push(panic_link);
     match desktop {
         Some(dir) => {
+            let panic_link = dir.join(format!("{panic_name}.lnk"));
+            match create_shortcut_with_args(&panic_link, exe, "--panic --notify", None,
+                "Остановить всех агентов Hélène и их процессы до явного возобновления", icon) {
+                Ok(()) => made.push(panic_link),
+                Err(e) => note.push_str(&format!("; аварийный ярлык Рабочего стола: {e}")),
+            }
             let lnk = dir.join(format!("{name}.lnk"));
             match create_shortcut(&lnk, exe, None, name, icon) {
                 Ok(()) => {
@@ -3024,6 +3060,7 @@ fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Recei
         .filter(|k| k.starts_with("sk-frame-"))
         .map(|k| k.to_string());
     let mut merged = merge_config(existing.clone(), config_json(s, prev_relay_key, relay_port), s);
+    migrate_phone(&dir, &mut merged)?;
     // Окну — знать, что интерфейс обновлён, а прежний отложен рядом: ключ
     // `installed.static_prev` живёт, пока лежит папка `app/static.prev`.
     if let Some(installed) = merged.get_mut("installed").and_then(|v| v.as_object_mut()) {
@@ -3406,6 +3443,26 @@ struct Before {
     running: bool,
 }
 
+/// A failed older installer may already have launched its new service before
+/// finishing the transaction. Stop it before moving either program directory.
+#[cfg(windows)]
+pub(crate) fn recover_previous_install(dir: &Path) -> Result<Option<String>, String> {
+    let mut before = None;
+    let note = crate::tx::recover_with(dir, &mut || {
+        before = Some(Before {
+            service: service_state() != "absent",
+            running: procs_under(dir).map(|n| n > 0).unwrap_or(false),
+        });
+        stop_for_update(dir).map(|_| ())
+    })?;
+    Ok(match (note, before) {
+        (Some(note), Some(before)) => Some(match restore_after_abort(dir, &before) {
+            Some(restored) => format!("{note} ({restored})"), None => note,
+        }),
+        (note, _) => note,
+    })
+}
+
 /// Вернуть прежнюю версию в строй после отмены или отказа ПОСЛЕ остановки: служба
 /// (если стояла) ставится обратно, окно (если было открыто) открывается снова.
 #[cfg(windows)]
@@ -3449,17 +3506,6 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     use crate::payload::{Skip, Stop};
     use crate::tx::{Carry, StaticCarry, Tx};
     validate_setup(s)?;
-    // 06.10, 1.4.1: повторный запуск поверх ОТКРЫТОГО испытания запрещён. Второй процесс
-    // затирает состояние/слепок первого и ломает его сторожа (кейс Егора: клик обновления
-    // в 16:07 поверх испытания 1.4.0, начатого в 15:51 → «код отличается» и самооткат).
-    if let Some(open) = crate::trial::open_trial(&target_dir(s)?) {
-        return Err(format!(
-            "в этой установке уже идёт испытание обновления {} → {}. \
-             Дождись его конца (кнопка «Принять»/откат в окне) или закрой программу — \
-             сторож доведёт испытание сам. Повторный запуск сейчас сломает приёмку.",
-            open.from_version, open.to_version
-        ));
-    }
     let source = source().ok_or_else(|| {
         "в установщике нет поставки — файл скачался не целиком? Скачай Helene-<версия>-setup.exe заново".to_string()
     })?;
@@ -3489,8 +3535,12 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     }
 
     let mut steps: Vec<Step> = Vec::new();
+    if crate::update_backup::retire_legacy(&dir)? {
+        steps.push(Step { label: "Прежнее испытание закрыто".into(), ok: true,
+            note: Some("Запись и предыдущая программа сохранены. Проверки местным агентом больше нет.".into()) });
+    }
     // Прерванная прошлая установка — вернуть прежнюю ДО всего остального.
-    if let Some(note) = crate::tx::recover(&dir) {
+    if let Some(note) = recover_previous_install(&dir)? {
         steps.push(Step { label: "Прерванная установка".into(), ok: true, note: Some(note) });
     }
     let had_install = dir.join("helene.exe").exists() || dir.join("helene.json").exists();
@@ -3787,6 +3837,19 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         .unwrap_or_default();
     let voice_moves = voice_carry(&dir, manifest.voice.as_ref(), runtime_kept);
 
+    let retained_static = if matches!(plan, StaticPlan::Keep) {
+        match crate::update_backup::collect_static_hashes(&dir) {
+            Ok(proof) => Some(proof),
+            Err(e) => {
+                let trouble = tx.rollback();
+                let restored = if trouble.is_empty() { restore_after_abort(&dir, &before) } else { None };
+                return Err(format!("не удалось сохранить отпечатки твоего интерфейса: {e}{}{}",
+                    if trouble.is_empty() { String::new() } else { format!("; восстановление: {}", trouble.join("; ")) },
+                    restored.map(|n| format!(" ({n})")).unwrap_or_default()));
+            }
+        }
+    } else { None };
+
     // 6. Подмена — два переименования. Отмены здесь нет: это доли секунды.
     say("swap", "Меняю версии местами", None, None, false, true, progress);
     let carry = Carry {
@@ -3843,6 +3906,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         let mut local = s.clone();
         local.dir = dir.display().to_string();
         let mut merged = merge_config(existing.clone(), config_json(&local, prev_relay_key, relay_port), &local);
+        migrate_phone(&dir, &mut merged)?;
         if let Some(installed) = merged.get_mut("installed").and_then(|v| v.as_object_mut()) {
             installed.insert("version".into(), version.clone().into());
             installed.insert("scope".into(), scope.clone().into());
@@ -3910,9 +3974,9 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
     // `tree/` и `app/` менялись целиком, и то, что агент поправил в себе, пропадало. Прежняя
     // программа сейчас в `.old` — в ней код агента таким, каким он его оставил; переносчик —
     // из новой поставки (`server/updater/codecarry.py`, тот же, что у исполнителя на сервере).
-    let trial_ready = had_install && dir.join("app").join("localharness").join("runner.py").is_file();
+    let has_previous_code = had_install && dir.join("app").join("localharness").join("runner.py").is_file();
     let mut agent_code = serde_json::Value::Null;
-    if trial_ready {
+    if has_previous_code {
         say("carry", "Переношу правки агента в его коде", None, None, false, false, progress);
         let (step, report) = carry_agent_code(&dir, &tx.old, &old_version, &version);
         steps.push(step);
@@ -3930,6 +3994,17 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
             steps.push(step);
             if agent_code.is_null() { agent_code = report; }
         }
+    }
+
+    // Проверяем выпуск + ТОЧНЫЙ результат переноса (carried и merged) ДО запуска
+    // новой службы: при отказе файлы ещё свободны для отката прежней программы.
+    if let Err(e) = crate::update_backup::verify_code_manifest_with_carry(&dir, &manifest.code_sha256, &agent_code, retained_static.as_ref()) {
+        let trouble = tx.rollback();
+        let restored = if trouble.is_empty() { restore_after_abort(&dir, &before) } else { None };
+        return Err(format!("не удалось проверить сохранение правок агента: {e}. {}{}",
+            if trouble.is_empty() { "Прежняя версия возвращена на место".to_string() }
+            else { format!("Восстановление не завершилось: {}. Обе копии и журнал сохранены", trouble.join("; ")) },
+            restored.map(|n| format!(" ({n})")).unwrap_or_default()));
     }
 
     // 8. Ярлыки и запись в «Приложениях» — по режиму.
@@ -3984,74 +4059,21 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         "skipped".to_string()
     };
 
-    // 10. Готово. Первая установка — прежней нет. Обновление поверх (1.2.5): прежняя
-    // программа не удаляется, а ложится в `backups/program-<версия>` — на неё откатывает
-    // испытание: агент проверяет себя в новой версии делом, «сломано» или молчание — откат.
-    // Та же версия поверх (починка, смена решений) — правки перенесены выше, а испытывать
-    // нечего: «1.2.5 → 1.2.5» агенту на полчаса было бы странной запиской.
-    if trial_ready {
+    if had_install {
         let from = if old_version.is_empty() { "прежняя".to_string() } else { old_version.clone() };
         prune_kept_programs(&dir);
-        match tx.commit_keep(&crate::trial::kept_path(&dir, &from)) {
-            Ok(kept) => {
-                // Слепок кода снимается ПОСЛЕ переноса правок агента (шаг 7б): перенесённое —
-                // часть установки; сверка на приёмке ловит всё, что изменилось уже в испытании.
-                let checked = crate::trial::collect_code_hashes(&dir).unwrap_or_else(|_| manifest.code_sha256.clone());
-                crate::trial::begin(&dir, crate::trial::Begin {
-                    from_version: &old_version,
-                    to_version: &version,
-                    kept: Some(&kept),
-                    runtime_moved: runtime_kept,
-                    static_plan: match plan {
-                        StaticPlan::Keep => "keep",
-                        StaticPlan::Replace => "to_prev",
-                        StaticPlan::Fresh => "fresh",
-                    },
-                    new_top: manifest.top.clone(),
-                    code_sha256: checked,
-                    service: s.wants_service(),
-                    scope: &scope,
-                    agent_code,
-                    extensions: ext_summary.clone(),
-                });
-                steps.push(match crate::trial::spawn_watcher(&dir) {
-                    Ok(()) => Step {
-                        label: "Испытание".into(),
-                        ok: true,
-                        note: Some(format!(
-                            "агент проверит себя в новой версии делом; «сломано» или молчание {} мин — вернётся {} \
-                             (она сохранена в {})",
-                            crate::trial::TRIAL_MIN,
-                            from,
-                            kept.display()
-                        )),
-                    },
-                    Err(e) => Step { label: "Испытание".into(), ok: false, note: Some(format!("{e}; движок позовёт сторожа сам при старте")) },
-                });
-            }
+        match tx.commit_keep(&crate::update_backup::kept_path(&dir, &from)) {
+            Ok(kept) => steps.push(Step { label: "Предыдущая версия сохранена".into(), ok: true,
+                note: Some(format!("{}; обновление завершено, проверки местным агентом ждать не нужно",kept.display())) }),
             Err((e, cleanup)) => {
-                if let Ok(mut v) = CLEANUP.lock() {
-                    v.push(cleanup);
-                }
-                steps.push(Step {
-                    label: "Испытание".into(),
-                    ok: false,
-                    note: Some(format!("прежняя программа не сохранилась ({e}) — испытания и отката не будет")),
-                });
+                if let Ok(mut v) = CLEANUP.lock() { v.push(cleanup); }
+                steps.push(Step { label: "Предыдущая версия".into(), ok: false,
+                    note: Some(format!("не сохранилась ({e}); копия данных: {}",backup.as_deref().unwrap_or("не создана"))) });
             }
         }
     } else {
-        // Even a repair without a trial must not discard its preimage over an
-        // unverified installed layout. Agent carry remains an explicit mismatch.
-        let skip: Vec<String> = agent_code.get("carried")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
-            .unwrap_or_default();
-        crate::trial::verify_code_manifest_except(&dir, &manifest.code_sha256, &skip)?;
         let cleanup = tx.commit();
-        if let Ok(mut v) = CLEANUP.lock() {
-            v.push(cleanup);
-        }
+        if let Ok(mut v) = CLEANUP.lock() { v.push(cleanup); }
     }
     say("done", "Готово", Some(1.0), None, false, true, progress);
     Ok(Receipt {
@@ -4240,7 +4262,7 @@ fn prune_kept_programs(dir: &Path) {
     if let Ok(rd) = std::fs::read_dir(dir.join("backups")) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with(crate::trial::KEPT_PREFIX) && e.path().is_dir() {
+            if name.starts_with(crate::update_backup::KEPT_PREFIX) && e.path().is_dir() {
                 let _ = crate::tx::remove_tree(&e.path());
             }
         }
@@ -4979,6 +5001,23 @@ pub fn launch_installed(app: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn phone_upgrade_preserves_enabled_choice_and_exact_backup() {
+        let dir=std::env::temp_dir().join(format!("helene-phone-migration-{}",std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw=r#"{"tree":"data","phone":{"enabled":true,"external":"https://old.example/"},"model":{"key":"preserve"}}"#;
+        std::fs::write(dir.join("helene.json"),raw).unwrap();
+        let mut cfg:serde_json::Value=serde_json::from_str(raw).unwrap();
+        migrate_phone(&dir,&mut cfg).unwrap();
+        assert_eq!(cfg["phone"]["enabled"],true);
+        assert_eq!(cfg["phone"]["mode"],"automatic");
+        assert!(cfg["phone"].get("external").is_none());
+        assert_eq!(cfg["model"]["key"],"preserve");
+        assert_eq!(std::fs::read_to_string(dir.join("helene.before-phone-1.5.1.json")).unwrap(),raw);
+        migrate_phone(&dir,&mut cfg).unwrap();
+        assert!(dir.join("data/memory/.state/phone-migration.json").is_file());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
     use super::*;
 
     /// ⚠ «Блин, он мне ставить собрался, а не обновлять» (20.09.2026). Решения

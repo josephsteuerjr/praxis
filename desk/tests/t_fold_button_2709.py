@@ -58,6 +58,46 @@ class Channel(unittest.TestCase):
     def test_нет_состояния_нет_числа(self):
         self.assertIsNone(control.fold_state(self.tree, "window")["hot"])
 
+    def test_runtime_policy_overrides_defaults_and_legacy_has_honest_offer_mode(self):
+        folder = self.tree / 'memory/.state'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / 'fold-policy.json').write_text(json.dumps({'offer_mode': False, 'backstop_hours': 7,
+            'group': {'keep': 333, 'offer_at': 555, 'hard_at': 777, 'token_cap': 88888}}))
+        state = control.fold_state(self.tree, '-123')
+        self.assertEqual((state['keep'], state['offer_at'], state['hard_at']), (333, 555, 777))
+        self.assertEqual(state['policy_source'], 'runtime')
+        self.assertFalse(state['offer_mode'])
+        self.assertEqual(state['backstop_hours'], 7)
+        self.assertEqual(state['token_cap'], 88888)
+        legacy = control.fold_state(Path(self.tmp.name) / 'other', 'window')
+        self.assertTrue(legacy['offer_mode'])
+        self.assertEqual(legacy['backstop_hours'], 26)
+
+    def test_runner_publishes_loaded_core_policy(self):
+        from unittest import mock
+        import types
+        life = types.SimpleNamespace(fold_offer_enabled=lambda: True, FOLD_OFFER_BACKSTOP_HOURS=9,
+            hot_bounds=lambda place: (300, 600, 900, 70000) if place == '-1' else (100, 200, 400, 40000),
+            tape_chars_for=lambda place: 0 if place == '-1' else 5500)
+        with mock.patch.object(runner, '_life', life):
+            runner._publish_fold_policy(self.tree)
+        state = control.fold_state(self.tree, '-12')
+        self.assertEqual(state['keep'], 300)
+        self.assertEqual(state['backstop_hours'], 9)
+        self.assertEqual(state['policy_source'], 'runtime')
+
+    def test_old_sender_cannot_advertise_automatic_retry_after_restart(self):
+        state = self.tree / 'memory/.state'; state.mkdir(parents=True)
+        reader = self.tree / 'memory/.control/desk_inbox'; reader.mkdir(parents=True)
+        (state / 'telegram-delivery.json').write_text(json.dumps({'-12': {'state':'waiting','pid':123,'retry_at':time.time()+90}}))
+        path = reader / '.reader.json'
+        path.write_text(json.dumps({'pid':123,'at':time.time()}))
+        self.assertEqual(control.fold_state(self.tree,'-12')['delivery']['state'], 'waiting')
+        path.write_text(json.dumps({'pid':124,'at':time.time()}))
+        self.assertIsNone(control.fold_state(self.tree,'-12')['delivery'])
+        path.write_text(json.dumps({'pid':123,'at':time.time()-60}))
+        self.assertIsNone(control.fold_state(self.tree,'-12')['delivery'])
+
     def test_просьба_ложится_и_видна_своему_месту(self):
         said = control.fold_request(self.tree, "window")
         self.assertTrue(said["ok"])

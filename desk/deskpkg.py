@@ -103,8 +103,8 @@ PARTS: tuple[Part, ...] = (
          why="окно Praxis: сборка Vite (npm --prefix remote run build)"),
     Part("mobile/dist", "mobile", FLAVORS, dist=True,
          why="телефон: PWA на /m/"),
-    Part("miniapp/dist", "miniapp", (SERVER,), dist=True,
-         why="мини-апп Telegram: его отдаёт Caddy, и только с публичного адреса"),
+    Part("miniapp/dist", "miniapp", FLAVORS, dist=True,
+         why="мини-апп Telegram: локальный канал отдаёт его через HTTPS-туннель"),
     Part("server/desk-recipe", "recipe", (SERVER,),
          why="рецепт контейнера канала: образ на requirements-desk.txt пакета"),
     # Служба управления рядом с каналом: перезапуск контейнеров, их журналы и
@@ -122,7 +122,7 @@ PARTS: tuple[Part, ...] = (
 # (``installer/build_dist.TREE_DEPS``) — здесь только то, без чего не живут
 # канал и раннер.
 DEPS_CHANNEL = ["aiohttp"]                 # deskapp.py: web, AbstractAccessLogger
-DEPS_RUNNER = ["telethon==1.44.0"]         # localharness/mtproto*.py: свой аккаунт Telegram
+DEPS_RUNNER = ["telethon==1.44.0", "paramiko==5.0.0"] # Telegram account and GUI-owned SSH transfer
 
 
 def parts(flavor: str) -> tuple[Part, ...]:

@@ -39,6 +39,16 @@ pub fn skip_rel(rel: &str) -> bool {
     if SKIP_IN_DATA.iter().any(|s| s.eq_ignore_ascii_case(first)) {
         return true;
     }
+    // Состояние телефонного подключения принадлежит этому компьютеру, как
+    // в carry: tunnel binary, адрес/lease и runtime.lock пересоздаются при
+    // старте. Живой byte-range lock нельзя читать на Windows даже из мастера.
+    // Остальная .state (история, ретенция, настройки агента) остаётся в снимке.
+    if first.eq_ignore_ascii_case("memory")
+        && parts.get(1).is_some_and(|p| p.eq_ignore_ascii_case(".state"))
+        && parts.get(2).is_some_and(|p| p.eq_ignore_ascii_case("phone-access"))
+    {
+        return true;
+    }
     // Скачанные голосовые модели живут здесь, а не в data/voice. Другие
     // модели (в том числе созданные владельцем) остаются в снимке.
     if first.eq_ignore_ascii_case("models")

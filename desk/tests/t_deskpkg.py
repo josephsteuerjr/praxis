@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -34,10 +35,10 @@ class Composition(unittest.TestCase):
         macos = {p.dest for p in deskpkg.parts(deskpkg.MACOS)}
         # Общее ядро — канал, читалки и оба фронта: в этом и смысл одного пакета.
         self.assertLessEqual({"deskapp.py", "deskd", "static", "mobile"}, server & windows)
-        # Мини-апп открывает Telegram по публичному адресу — у настольных его нет.
+        # Mini App is shipped with the same local channel and automatic HTTPS.
         self.assertIn("miniapp", server)
-        self.assertNotIn("miniapp", windows)
-        self.assertNotIn("miniapp", macos)
+        self.assertIn("miniapp", windows)
+        self.assertIn("miniapp", macos)
         # Движок и ресурсы — настольные: на сервере ходы ведёт её собственный код.
         self.assertLessEqual({"localharness", "resources"}, windows)
         self.assertFalse({"localharness", "resources"} & server)
@@ -90,6 +91,13 @@ class Build(unittest.TestCase):
         # Манифест — не украшение: подмена файла видна сверкой.
         (self.tmp / "srv" / "deskapp.py").write_text("# подменён\n", encoding="utf-8")
         self.assertEqual(deskpkg.verify(self.tmp / "srv"), ["изменён: deskapp.py"])
+
+    def test_standalone_server_channel_imports_without_desktop_runner(self):
+        path=self.tmp/'standalone';deskpkg.build(path,deskpkg.SERVER,clean=True,log=lambda *_:None)
+        self.assertFalse((path/'localharness').exists())
+        code="import sys;sys.path.insert(0,sys.argv[1]);import deskapp;assert deskapp._PHONE_ACCESS is None;assert deskapp.connection_checks.check_telegram({})['ok'] is False"
+        result=subprocess.run([sys.executable,'-I','-c',code,str(path)],capture_output=True,text=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
 
     def test_digest_is_stable(self):
         one = deskpkg.build(self.tmp / "a", deskpkg.SERVER, clean=True, log=lambda *_: None)

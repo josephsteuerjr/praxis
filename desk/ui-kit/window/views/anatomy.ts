@@ -25,11 +25,11 @@ interface RetentionReport {
 
 const RETENTION_CLASS_RU: Record<string, string> = {
   project: "проект",
-  update_staging: "staging обновления",
-  spool_cache: "кэш спула",
+  update_staging: "файлы обновлений",
+  spool_cache: "временные копии вложений",
   models: "модели",
   run_artifacts: "артефакты ходов",
-  backups: "снимки-бэкапы",
+  backups: "резервные копии",
 };
 
 function fmtMB(bytes: number): string {
@@ -384,8 +384,8 @@ export async function render(container: HTMLElement): Promise<void> {
     ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в сборке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
     : "";
   const meta = tools.length
-    ? `<p class="muted">Транспорты: ${esc((a.transports || []).join(" + "))} · ${modeName}песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · мозг: <b>${esc(a.model?.model || "?")}</b> (${esc(a.model?.framework || "?")})
-       · тулов предложено: <b>${tools.length}</b> · снято ${esc(fmtTime(a.written_at))}. Живой список сборщика, не пересказ.</p>`
+    ? `<p class="muted">Модель: <b>${esc(a.model?.model || "?")}</b> · ${modeName}доступных инструментов: <b>${tools.length}</b> · снимок ${esc(fmtTime(a.written_at))}.</p>
+       <details class="fold"><summary>Подключения и права инструментов</summary><div class="fold-body">Транспорты: ${esc((a.transports || []).join(" + "))} · песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · провайдер модели: ${esc(a.model?.framework || "?")}.</div></details>`
     : '<p class="muted">Снимка ещё нет: движок пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
     ${meta}${materials}${modeBox}${fenceBox}

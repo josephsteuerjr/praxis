@@ -75,10 +75,14 @@ function paint() {
   if (state) {
     const cmd = engineCommand(state.owner);
     const stopped = !!state.owner.stopped || state.owner.enabled === false || state.owner.runner_alive === false;
-    const control = button(stopped ? 'Запустить движок' : 'Остановить движок', () => shell(cmd!.cmd, cmd!.args), false);
+    const control = button(stopped ? 'Запустить движок' : 'Аварийный стоп', () => shell(cmd!.cmd, cmd!.args), false);
     control.dataset.action = 'engine'; control.disabled ||= !cmd;
     if (!cmd) control.title = 'Управление движком на этой платформе недоступно';
     root.append(control);
+    if (state.owner.supported && !state.owner.stopped && stopped) {
+      const panic = button('Аварийный стоп всех агентов', () => shell('owner_control', { action: 'panic' }), false);
+      panic.dataset.action = 'panic'; root.append(panic);
+    }
   }
   if (error) { const msg = element('p', 'tray-error', error); msg.setAttribute('role', 'alert'); root.append(msg); }
   const footer = element('div', 'tray-footer');

@@ -1,7 +1,7 @@
 {
   "name": "frame-app",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.5.6",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5174 --strictPort",
@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "lottie-web": "^5.13.0",
     "motion": "^13.1.1",
     "qrcode": "^1.5.4"
   },

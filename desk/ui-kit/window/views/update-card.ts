@@ -85,14 +85,14 @@ export interface UpdateState {
   history?: Array<{ id?: string; state?: string; from_version?: string; to_version?: string; finished_utc?: string; note?: string }>;
 }
 
-const ACTIVE = ["checking", "awaiting", "confirmed", "running", "trial"];
+const ACTIVE = ["checking", "awaiting", "confirmed", "running"];
 
 const STATE_WORDS: Record<string, string> = {
   checking: "проверяю новую версию",
   awaiting: "ждёт согласия",
   confirmed: "начинается",
   running: "идёт обновление",
-  trial: "агент проверяет себя в новой версии",
+  trial: "запись прежнего испытания",
   refused: "не начато",
   declined: "отменено",
   expired: "истекло без ответа",
@@ -117,14 +117,6 @@ function esc(text: unknown): string {
 }
 
 /** Сколько ещё до срока — словами («через 24 ч», «через 18 мин»), не часами без даты. */
-function inTime(until: string | undefined, now: number): string {
-  const at = Date.parse(until || "");
-  if (!Number.isFinite(at)) return "";
-  const minutes = Math.round((at - now) / 60_000);
-  if (minutes >= 90) return `через ${Math.round(minutes / 60)} ч`;
-  return minutes >= 1 ? `через ${minutes} мин` : "вот-вот";
-}
-
 /** Сколько ещё просьба ждёт ответа — словами (истекает через сутки). */
 function expires(until: string | undefined, now: number): string {
   const at = Date.parse(until || "");
@@ -235,24 +227,8 @@ function awaitingHTML(r: UpdateReceipt, now: number): string {
     </div>${details("Подробнее", more)}</div>`;
 }
 
-function trialHTML(r: UpdateReceipt, now: number): string {
-  const trial = r.trial || {};
-  const left = inTime(trial.until_utc, now);
-  const what = r.desktop ? "прежняя программа" : "код и образ";
-  const more =
-    `<p>Механика прошла (${esc((r.checks || []).filter((c) => c.ok).map((c) => c.name).join(", "))}). Теперь агент
-      проверяет делом, думает ли, помнит ли, живы ли его руки и перенесённые правки, — и говорит «принимаю» или «сломано».
-      «Сломано» или молчание до срока — откат на ${esc(r.from_version || "прежнюю")}: ${what}; память агента остаётся.</p>` +
-    agentCodeHTML(r);
-  return `<div class="card" style="border-color:var(--accent)">
-    <h4>Обновлено до ${esc(r.to_version || "новой версии")} — агент проверяет себя</h4>
-    <p class="muted">Делать ничего не нужно${left ? ` (срок — ${esc(left)})` : ""}: если агент скажет, что что-то сломано,
-      или промолчит, вернётся прежняя версия ${esc(r.from_version || "")}.</p>
-    <div class="actions" style="margin-top:10px">
-      <button class="btn quiet" data-update-verdict="accept" data-id="${esc(r.id)}" data-key="${esc(trial.key || "")}">Всё хорошо</button>
-      <button class="btn quiet" data-update-verdict="reject" data-id="${esc(r.id)}" data-key="${esc(trial.key || "")}">Вернуть прежнюю</button>
-      <span class="receipt" id="update-note"></span>
-    </div>${details("Подробнее", more)}</div>`;
+function trialHTML(r: UpdateReceipt, _now: number): string {
+  return `<div class="card"><h4>Запись прежнего обновления</h4><p>Ожидание проверки агентом отменено. Новый установщик закроет старую запись автоматически; вручную удалять файлы не нужно.</p>${agentCodeHTML(r)}</div>`;
 }
 
 function runningHTML(r: UpdateReceipt): string {

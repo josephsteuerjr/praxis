@@ -149,6 +149,16 @@ class WindowTurn(unittest.TestCase):
         outcome = runner._turn_in_window("window-1", speaker="Егор")
         return outcome, self.desk.rows(), agent
 
+    def test_scheduled_trigger_is_bound_to_the_actual_returned_run(self):
+        rid = 'run-20261008T120000000000Z-abcdef12'
+        path = self.tree / 'memory/runs/2026-10' / rid
+        path.mkdir(parents=True)
+        (path / 'manifest.json').write_text(json.dumps({'context':{'kind':'chat_turn','origin_chat_id':runner.STREAM}}))
+        runner._agent = _StubAgent(self.tree, {'held':'unspoken','note':'done: Напоминание'}, _Envelope(rid, text='Напоминание'))
+        outcome = runner._turn_in_window('alarm-task-1000', speaker='Hélène', trigger_kind='wake')
+        self.assertEqual(outcome, 'spoken')
+        self.assertEqual(json.loads((path/'helene-trigger.json').read_text())['source_id'],'alarm-task-1000')
+
     def test_cancelled_turn_suppresses_boundary_word(self):
         outcome, rows, agent = self._turn(
             {"held": "unspoken", "note": "Это не должно уйти", "run_status": "cancelled"},

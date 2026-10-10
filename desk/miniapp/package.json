@@ -1,7 +1,7 @@
 {
   "name": "frame-miniapp",
   "private": true,
-  "version": "1.5.0",
+  "version": "1.5.6",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5176 --strictPort --host",
@@ -10,5 +10,8 @@
   "devDependencies": {
     "typescript": "^7.0.2",
     "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "lottie-web": "^5.13.0"
   }
 }

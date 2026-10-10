@@ -112,7 +112,11 @@ export function choice<V extends string>(
   let current = value;
   const buttons: HTMLButtonElement[] = [];
   const sync = () => {
-    for (const b of buttons) b.setAttribute("aria-checked", String(b.dataset.value === current));
+    for (const b of buttons) {
+      const selected = b.dataset.value === current;
+      b.setAttribute("aria-checked", String(selected));
+      b.tabIndex = selected ? 0 : -1;
+    }
   };
   for (const item of items) {
     const b = el("button", "choice-item");
@@ -127,6 +131,16 @@ export function choice<V extends string>(
       current = item.value;
       sync();
       onChange(item.value);
+    });
+    b.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+      const available = buttons.filter(v => v.getAttribute("aria-disabled") !== "true");
+      if (!available.length) return;
+      event.preventDefault();
+      const index = available.indexOf(b);
+      const next = event.key === "Home" ? available[0] : event.key === "End" ? available[available.length - 1]
+        : available[(index + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + available.length) % available.length];
+      next.click(); next.focus();
     });
     buttons.push(b);
     row.append(b);
@@ -266,8 +280,11 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     // clipboard есть, но отказал (нет фокуса, нет разрешения) — пробуем запасной путь
   }
+  const focus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+  const ta = document.createElement("textarea");
   try {
-    const ta = document.createElement("textarea");
     ta.value = text;
     ta.setAttribute("readonly", "");
     ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0";
@@ -275,10 +292,18 @@ export async function copyText(text: string): Promise<boolean> {
     ta.select();
     ta.setSelectionRange(0, text.length);
     const ok = document.execCommand("copy");
-    ta.remove();
     return ok;
   } catch {
     return false;
+  } finally {
+    ta.remove();
+    if (focus?.isConnected) focus.focus({ preventScroll: true });
+    if (selection) {
+      selection.removeAllRanges();
+      for (const range of ranges) {
+        if (range.startContainer.isConnected && range.endContainer.isConnected) selection.addRange(range);
+      }
+    }
   }
 }
 

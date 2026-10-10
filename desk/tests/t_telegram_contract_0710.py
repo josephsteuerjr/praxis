@@ -186,7 +186,12 @@ class AccountAdapter(unittest.IsolatedAsyncioTestCase):
         self.client._queue = queue.Queue()
         self.client._batch = []
         self.client._handler_installed = False
+        tmp=tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        self.client._media_root=Path(tmp.name)
+        self.client._media_thumbs={}
         self.client.client = mock.Mock()
+        async def download(message, *, file, **kw): Path(file).write_bytes(b'fixture image')
+        self.client.client.download_media=mock.AsyncMock(side_effect=download)
         tltypes = types.ModuleType('telethon.tl.types')
         tltypes.Channel = type('Channel', (), {})
         tltypes.MessageActionTopicCreate = type('MessageActionTopicCreate', (), {})
@@ -223,6 +228,7 @@ class AccountAdapter(unittest.IsolatedAsyncioTestCase):
         event = self.event(media=True)
         update = await self.client._to_update(event)
         self.assertIn('caption', botapi._placeholder(update['message']))
+        self.assertTrue(Path(update['message']['_media_local']).is_file())
         event.message.message = ''
         update = await self.client._to_update(event)
         self.assertEqual(botapi._placeholder(update['message']), '[фото]')

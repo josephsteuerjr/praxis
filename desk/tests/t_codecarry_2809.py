@@ -185,6 +185,28 @@ class DeskEntry(Base):
             self.assertEqual(zf.read("tree/llm.py").decode(), "MODEL = 'b'\n")
         self.assertTrue(cc.after_carry_path(self.new, "1.1.0").is_file())
 
+    @unittest.skipUnless(HAS_GIT, "git merge-file required")
+    def test_cli_proves_carried_and_merged_bytes_including_additions_and_deletions(self):
+        clean = self.tmp / "clean"
+        for rel, text in RELEASE_1.items():
+            put(clean, rel, text)
+        cc.write_pristine(clean, "1.0.0", cc.pristine_path(self.new, "1.0.0"))
+        out = self.run_desk("desk", "--old", str(self.old), "--new", str(self.new),
+                            "--from", "1.0.0", "--to", "1.1.0")
+        self.assertIn("tree/agent.py", out["merged"])
+        self.assertIn("tree/keep.py", out["carried"])
+        self.assertIn("tree/mine.py", out["carried"])
+        self.assertIn("tree/old.py", out["carried"])
+        proof = out["applied_code_sha256"]
+        self.assertEqual(set(proof), set(out["carried"] + out["merged"]))
+        self.assertIsNone(proof["tree/old.py"])
+        for rel, digest in proof.items():
+            if digest is not None:
+                self.assertEqual(digest, hashlib.sha256((self.new / rel).read_bytes()).hexdigest())
+        self.assertNotIn("tree/llm.py", proof, "conflicts keep release bytes and saved agent materials")
+        self.assertEqual(self.read("tree/agent.py"), "def hello():\n    return 100\n\n\ndef other():\n    return 22\n")
+        self.assertEqual(self.read("tree/llm.py"), "MODEL = 'b'\n")
+
     def test_reinstall_of_the_same_version_other_build_is_not_an_agent_edit(self):
         # 29.09, ПК Егора: 1.2.5 поверх 1.2.5 другой сборки. Чистую копию 1.2.5 перезаписывали
         # новой сборкой ДО сверки — база совпала с новой, и разница двух сборок стала «правками

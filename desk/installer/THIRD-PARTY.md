@@ -106,5 +106,15 @@ https://github.com/git-for-windows/git (тег `v2.55.0.windows.5`).
 
 ## Код агента
 
+Анимированные Telegram-стикеры воспроизводит lottie-web 5.13.0 (MIT),
+https://github.com/airbnb/lottie-web. Используется облегчённый проигрыватель без
+вычисления выражений; исходная лицензия включена в ресурсы поставки.
+
+Автоматический HTTPS-доступ телефона использует процессные и файловые примитивы
+Telegram-навыка Ouroboros (Copyright (c) 2026 Anton Razzhigaev, MIT), адаптированные
+для Hélène. Полный текст: `app/resources/OUROBOROS-LICENSE.txt`. cloudflared
+скачивается отдельно с проверкой SHA-256; лицензия Apache-2.0:
+https://github.com/cloudflare/cloudflared/blob/master/LICENSE.
+
 Дерево агента (`tree/`) — Apache-2.0. Полный текст лицензии — `tree/LICENSE`,
 уведомление об авторстве — `tree/NOTICE` (и `NOTICE` в корне поставки).

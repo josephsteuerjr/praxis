@@ -482,17 +482,23 @@ impl Drop for Tx {
 
 /// Прерванная прошлая установка: журнал есть — вернуть прежнюю версию. -> слово для
 /// экрана и журнала; None — возвращать нечего.
-pub fn recover(dir: &Path) -> Option<String> {
+pub fn recover_with(dir: &Path, stop: &mut dyn FnMut() -> Result<(), String>) -> Result<Option<String>, String> {
     let jp = journal_path(dir);
-    let raw = std::fs::read(&jp).ok()?;
+    let raw = match std::fs::read(&jp) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("не читается журнал прерванной установки: {e}")),
+    };
     let journal: Journal = match serde_json::from_slice(&raw) {
         Ok(j) => j,
-        Err(_) => {
-            // Журнал нечитаем — `.new` без него не трогаем вслепую, только сам журнал.
-            let _ = std::fs::remove_file(&jp);
-            return Some(format!("журнал прерванной установки {} не читался — убран", jp.display()));
+        Err(e) => {
+            // Не теряем единственную запись о переезде, даже если она повреждена.
+            return Err(format!("не читается журнал прерванной установки {}: {e}. Обе копии сохранены", jp.display()));
         }
     };
+    if journal.phase != Phase::Laying || !journal.moves.is_empty() {
+        stop().map_err(|e| format!("восстановление прежней версии остановилось: {e}. Обе копии и журнал сохранены"))?;
+    }
     let mut tx = Tx {
         dir: dir.to_path_buf(),
         new: new_path(dir),
@@ -503,14 +509,19 @@ pub fn recover(dir: &Path) -> Option<String> {
     };
     let phase = tx.journal.phase;
     let trouble = tx.rollback_inner();
-    Some(if trouble.is_empty() {
-        match phase {
+    if trouble.is_empty() {
+        Ok(Some(match phase {
             Phase::Laying => "прошлая установка прервалась на раскладке — её остатки убраны, прежняя версия цела".to_string(),
             _ => "прошлая установка прервалась посреди подмены — прежняя версия возвращена на место".to_string(),
-        }
+        }))
     } else {
-        format!("прошлая установка прервалась, и вернулось не всё: {}", trouble.join("; "))
-    })
+        Err(format!("прежняя версия вернулась не полностью: {}. Журнал восстановления сохранён", trouble.join("; ")))
+    }
+}
+
+#[cfg(test)]
+pub fn recover(dir: &Path) -> Option<String> {
+    recover_with(dir, &mut || Ok(())).expect("fixture recovery must succeed")
 }
 
 #[cfg(test)]
@@ -693,6 +704,68 @@ mod tests {
         std::mem::forget(tx);
         assert!(Tx::begin(&dir, "1.2.0").is_err(), "незаконченная транзакция не перезаписывается");
         assert!(recover(&dir).is_some());
+        let _ = remove_tree(&r);
+    }
+
+    #[test]
+    fn recovery_stop_failure_preserves_both_programs_and_journal() {
+        let r = root("recovery-stop-fail");
+        let dir = r.join("Helene");
+        old_install(&dir);
+        let mut tx = Tx::begin(&dir, "1.2.0").unwrap();
+        lay_new(&tx.new);
+        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::Keep, keep_runtime: true, extra: &[] };
+        tx.swap(&carry).unwrap();
+        std::mem::forget(tx);
+        let error = recover_with(&dir, &mut || Err("service still running".into())).unwrap_err();
+        assert!(error.contains("service still running"));
+        assert_eq!(read(&dir.join("helene.exe")), "new-exe");
+        assert_eq!(read(&old_path(&dir).join("helene.exe")), "old-exe");
+        assert!(journal_path(&dir).exists());
+        assert!(recover_with(&dir, &mut || Ok(())).unwrap().is_some());
+        assert_eq!(read(&dir.join("helene.exe")), "old-exe");
+        let _ = remove_tree(&r);
+    }
+
+    #[test]
+    fn unreadable_recovery_record_is_retained_without_touching_code() {
+        let r = root("recovery-bad-record");
+        let dir = r.join("Helene");
+        old_install(&dir);
+        let tx = Tx::begin(&dir, "1.2.0").unwrap();
+        std::mem::forget(tx);
+        let raw = "broken transaction record";
+        put(&journal_path(&dir), raw);
+        assert!(recover_with(&dir, &mut || panic!("must not stop on unreadable record")).is_err());
+        assert_eq!(read(&journal_path(&dir)), raw);
+        assert_eq!(read(&dir.join("helene.exe")), "old-exe");
+        assert!(new_path(&dir).exists());
+        let _ = remove_tree(&r);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recovery_closes_a_real_windows_file_lock_before_restoring_agent_code() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let r = root("recovery-live-lock");
+        let dir = r.join("Helene");
+        old_install(&dir);
+        put(&dir.join("app/deskapp.py"), "agent's previous code");
+        let mut tx = Tx::begin(&dir, "1.2.0").unwrap();
+        lay_new(&tx.new);
+        let carry = Carry { drop: &[], old_payload_top: &[], static_carry: StaticCarry::Keep, keep_runtime: true, extra: &[] };
+        tx.swap(&carry).unwrap();
+        std::mem::forget(tx);
+        let mut lock = Some(std::fs::OpenOptions::new().read(true).share_mode(0).open(dir.join("helene.exe")).unwrap());
+        assert!(std::fs::rename(&dir, new_path(&dir)).is_err(), "fixture must block Windows directory rename");
+        let mut stopped = false;
+        recover_with(&dir, &mut || {
+            assert_eq!(read(&old_path(&dir).join("app/deskapp.py")), "agent's previous code");
+            drop(lock.take()); stopped = true; Ok(())
+        }).unwrap();
+        assert!(stopped);
+        assert_eq!(read(&dir.join("app/deskapp.py")), "agent's previous code");
+        assert!(!old_path(&dir).exists() && !journal_path(&dir).exists());
         let _ = remove_tree(&r);
     }
 

@@ -631,6 +631,28 @@ def _plain_report(report: dict) -> dict:
     return {k: v for k, v in report.items() if k not in ("materials", "diff")}
 
 
+def applied_code_hashes(root: Path, report: dict) -> dict[str, str | None]:
+    """Exact result of carried AND merged edits; None records an agent deletion.
+
+    The installer compares these bytes instead of rejecting merges or ignoring
+    every subsequent change to a carried path. Conflicts retain release bytes.
+    """
+    proof = {}
+    for rel in sorted(set(report.get("carried", []) + report.get("merged", []))):
+        parts = rel.split("/")
+        if len(parts) < 2 or parts[0] not in CODE_DIRS or any(p in ("", ".", "..") for p in parts) or "\\" in rel:
+            raise ValueError("invalid carried code path")
+        target = root.joinpath(*parts)
+        if not target.exists() and not target.is_symlink():
+            proof[rel] = None
+        else:
+            blob = read_plain(target)
+            if blob is None:
+                raise ValueError(f"cannot read carried code: {rel}")
+            proof[rel] = hashlib.sha256(blob).hexdigest()
+    return proof
+
+
 def carry_install(old: Path, new: Path, *, data: Path, from_version: str, to_version: str,
                   work: Path, prints_path: Path | None = None) -> dict:
     """Правки агента в коде прежней программы (`old`) — на новую (`new`), на месте.
@@ -833,6 +855,7 @@ def desk_main(argv: list[str]) -> int:
             if fresh.exists():
                 os.replace(fresh, dest)
         remember_after_carry(new, args.to_version)
+        report["applied_code_sha256"] = applied_code_hashes(new, report)
         # Старые чистые копии — прочь: нужны нынешняя (база следующего обновления) и прежняя
         # (база, если откатят); остальное — вес без смысла.
         keep = {f"{args.to_version}.zip", f"{args.from_version}.zip",

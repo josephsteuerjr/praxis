@@ -1,6 +1,8 @@
 @import "./fonts.css";
 @import "./tokens.css";
+.chip.emergency-stop { color: var(--err, #a3332d); border-color: currentColor; font-weight: 600; }
 @import "./actions.css";
+@import "./window/styles/paper-tokens.css";
 
 .msg-media.artifact { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; overflow-wrap: anywhere; }
 
@@ -377,9 +379,8 @@ a {
 
 .composer-target {
   margin: 0 6px 6px;
-  font: 500 10.5px/1 var(--sans);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font: 500 12px/1.4 var(--sans);
+  overflow-wrap: anywhere;
   color: var(--muted);
 }
 
@@ -452,6 +453,7 @@ a {
 
 .composer textarea {
   flex: 1;
+  min-width: 0;
   min-height: 44px;
   max-height: 140px;
   padding: 11px 14px;
@@ -462,7 +464,12 @@ a {
   font: 16px/1.4 var(--sans);
   resize: none;
   outline: none;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
+
+.media-error { color: var(--ink-2); font: 13px/1.5 var(--sans); margin: 8px 0 0; }
+::selection { background: var(--accent-soft); color: var(--ink); }
 
 .composer textarea:focus {
   border-color: var(--line-strong);

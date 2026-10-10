@@ -13,10 +13,42 @@ import json
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 _BOUNDARY_LOCK = threading.RLock()
+_DELIVERY = threading.local()
+
+def active_delivery():
+    return getattr(_DELIVERY, 'current', None)
+
+def cancelled(state: dict) -> bool:
+    return state.get('status') == 'cancelled' or any(
+        isinstance(state.get(key), dict) and state[key].get('action') == 'cancel'
+        for key in ('requested_control', 'control'))
+
+def pending_interrupt(tree: Path, run_id: str, started: float) -> bool:
+    """Observe an owner request while delivery holds the boundary lock.
+
+    The consumer still owns durable cancellation. This check only prevents a
+    cooldown wait from blocking it until another network send.
+    """
+    if not run_id:
+        return False
+    for name in ('interrupt.json', 'interrupt.processing.json'):
+        try:
+            request = json.loads((Path(tree) / 'memory/.control' / name).read_text(encoding='utf-8'))
+            if not isinstance(request, dict):
+                continue
+            scope = str(request.get('scope') or '')
+            if scope == run_id:
+                return True
+            if scope == 'all' and _instant(request.get('at')).timestamp() >= started:
+                return True
+        except (OSError, ValueError, TypeError):
+            continue
+    return False
 
 
 @contextmanager
@@ -36,12 +68,14 @@ def delivery(runs, run_id: str):
         # `blocked` — живой ход на чекпойнте, и его плашку («ход приостановлен и ждёт…»)
         # владелец обязан увидеть; прежний набор делал эту ветку недостижимой. Ключ
         # просьбы у run_manager — `requested_control` (старый `control` оставлен на всякий).
-        cancelled = state.get("status") == "cancelled"
-        for key in ("requested_control", "control"):
-            request = state.get(key)
-            if isinstance(request, dict) and request.get("action") == "cancel":
-                cancelled = True
-        yield not cancelled
+        try: started = _instant(state.get('created_at') or state.get('started_at')).timestamp()
+        except (TypeError, ValueError): started = time.time()
+        previous = active_delivery()
+        _DELIVERY.current = (run_id, started)
+        try:
+            yield not cancelled(state)
+        finally:
+            _DELIVERY.current = previous
 
 
 def _instant(value: object) -> dt.datetime:

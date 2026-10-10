@@ -653,7 +653,13 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
     proxyFields.hidden = !v;
   });
   proxyToggle.style.marginTop = "14px";
-  tgBox.append(tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
+  const admission = String(draft.telegram.allow_from || "owner");
+  const admissionHint = el("p", "field-hint", admission === "any"
+    ? "Запускать ход обращением в Telegram могут все участники. Аварийный стоп /panic принимает только владельца."
+    : admission === "listed"
+      ? "Запускать ход обращением могут владелец и участники из telegram.allowed_ids. Остальные сообщения сохраняются как контекст."
+      : "Сейчас запускать ход обращением в Telegram может только владелец. Сообщения других участников сохраняются как контекст; даже имя агента само по себе не запускает ответ.");
+  tgBox.append(admissionHint, tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
     proxyToggle, proxyFields, el("p", "field-hint", "Сообщения и сессия остаются у агента. Сервер помогает Telegram подключиться без VPN. Сохрани настройки перед входом в аккаунт; новый маршрут применяется при перезапуске агента."));
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
@@ -809,8 +815,8 @@ export async function agentEdition({ draft, loaded, platform, freshness }: Editi
     // Телефон подключается к ЭТОЙ машине: харнесс здесь.
     phoneBase: "",
     qrSvg: (text: string) =>
-      QRCode.toString(text, { type: "svg", margin: 1, width: 240,
-                              color: { dark: "#262320", light: "#ffffff" } }),
+      QRCode.toString(text, { type: "svg", margin: 4, width: 240,
+                              color: { dark: "#262320", light: "#00000000" } }),
     // Хвост расписки: что осталось сделать по режиму (поставить или снять
     // службу) и не забыт ли ключ модели. Пустой ключ — самая частая причина
     // «всё зелёное, а агент молчит»: в снимок состояния он не попадает, и

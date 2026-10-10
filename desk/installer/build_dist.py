@@ -107,8 +107,7 @@ import relay_src  # noqa: E402 — происхождение исходника
 import core_src  # noqa: E402 — ядро, слой издания и расхождение между ними
 
 # Зависимости ДЕРЕВА: то, что импортирует ход (agent/llm/webtool).
-# Aiogram/paramiko/stt — другие тела, в продукт не едут; cryptography не нужна
-# (telegram_confirmation агентом не импортируется — проверено грепом 31.08).
+# Dependencies of the agent tree; desktop SSH transfer is declared by deskpkg.
 TREE_DEPS = [
     "anthropic", "openai", "httpx>=0.27,<1", "python-dotenv", "pillow",
     "pypdf", "trafilatura", "charset-normalizer",
@@ -127,7 +126,7 @@ TREE_DEPS = [
 # faster-whisper 1.2.1 передаёт metadata_errors в av.open; PyAV 19 убрал
 # этот аргумент. Под CPython 3.14 нет колёс av<15 из requirements ядра:
 # совместимые колёса 15–18 поддерживают прежний API.
-VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19"]
+VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19", "PyYAML"]
 
 # Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
 # telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
@@ -136,8 +135,8 @@ VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19"]
 DEPS = TREE_DEPS + VOICE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)
 
 # Дымовой тест рантайма: ровно то, что продукт импортирует на своём пути.
-SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL", "piper",
-                 "aiohttp", "pypdf", "trafilatura", "telethon", "faster_whisper")
+SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL", "piper", "yaml",
+                 "aiohttp", "pypdf", "trafilatura", "telethon", "paramiko", "faster_whisper")
 
 APP_DIST = DESK / "app" / "dist"     # UI окна — сборка Vite (npm --prefix app run build)
 MOBILE_DIST = DESK / "mobile" / "dist"   # PWA телефона (npm --prefix mobile run build)
@@ -507,7 +506,7 @@ def smoke_runtime(out: Path, imports: list[str] | tuple[str, ...] = SMOKE_IMPORT
 
 VOICE_IMPORTS = ("faster_whisper", "piper")
 # Чем ещё голос должен импортироваться из набора (дымовой тест): тяжёлые двоичные части.
-VOICE_SMOKE_EXTRA = ("ctranslate2", "onnxruntime", "av", "numpy")
+VOICE_SMOKE_EXTRA = ("ctranslate2", "onnxruntime", "av", "numpy", "yaml")
 VOICE_PTH = "helene-voice.pth"
 # Путь из runtime/Lib/site-packages к <установка>/voice/site-packages: `site` читает
 # .pth при старте любого процесса рантайма и добавляет строку, только если папка есть.
@@ -626,6 +625,18 @@ def split_voice(site: Path, stage: Path) -> dict:
     _prune_empty(site)
     (site / VOICE_PTH).write_text(VOICE_PTH_LINE + "\n", encoding="utf-8", newline="\n")
     return {"dists": {n: both[n]["version"] for n in sorted(voice)}, "tops": tops, "moved": moved}
+
+
+def bundle_voice(site: Path, stage: Path) -> dict:
+    """Ship the full voice dependency closure in the base Windows runtime.
+
+    A compatibility archive remains available to older split installations.
+    The base must work without that archive or an owner's old voice folder.
+    """
+    metadata = split_voice(site, stage)
+    shutil.copytree(stage, site, dirs_exist_ok=True)
+    (site / VOICE_PTH).unlink(missing_ok=True)
+    return metadata
 
 
 def smoke_voice(out: Path, stage: Path) -> None:
@@ -810,6 +821,9 @@ def _file_text(p: Path) -> str | None:
 RUNTIME_KNOWN_FALSE = {
     ("Lib/site-packages/rsa/key.py", "private key"),
     ("Lib/site-packages/rsa/pem.py", "private key"),
+    # cryptography's OpenSSH serializer declares the public PEM header format;
+    # these two _SK_START/_SK_END constants contain no private key material.
+    ("Lib/site-packages/cryptography/hazmat/primitives/serialization/ssh.py", "private key"),
 }
 # Рантайм сканируем по текстовым расширениям: 4778 файлов, ~20 секунд. Раньше он
 # был исключён дважды — и из очистки корня (ROOT_KEEP), и из скана, то есть
@@ -1068,7 +1082,8 @@ HELENE_JSON = """{
     "owner_id": 0
   },
   "phone": {
-    "enabled": false
+    "enabled": false,
+    "mode": "automatic"
   },
   "sandbox": {
     "enabled": true,
@@ -1734,18 +1749,18 @@ def main() -> None:
         # Набор — производное рантайма: пересобрали рантайм — прежний набор устарел.
         shutil.rmtree(voice_stage.parent, ignore_errors=True)
         build_runtime(out, cache)
-    print("  голосовой набор — отдельно от рантайма…")
-    voice_split = split_voice(out / "runtime" / "Lib" / "site-packages", voice_stage)
-    print(f"  голосу — {len(voice_split['dists'])} пакетов, передвинуто файлов: {voice_split['moved']}")
+    print("  голосовые библиотеки — в основной рантайм…")
+    voice_split = bundle_voice(out / "runtime" / "Lib" / "site-packages", voice_stage)
+    print(f"  голосу — {len(voice_split['dists'])} пакетов вместе с зависимостями")
     if args.skip_smokes:
         freeze = runtime_inventory(out)
         print("  смоуки рантайма и голоса пропущены по --skip-smokes; состав взят из METADATA")
     else:
-        print("  дымовой тест рантайма (без голоса)…")
-        freeze = smoke_runtime(out, [m for m in SMOKE_IMPORTS if m not in VOICE_IMPORTS])
+        print("  дымовой тест полного рантайма, включая голос и PyYAML…")
+        freeze = smoke_runtime(out)
         print(f"  импорты живы, пакетов: {len(freeze.splitlines())}")
-        smoke_voice(out, voice_stage)
-        print("  голос импортируется из набора")
+        smoke_voice(out, out / "runtime" / "Lib" / "site-packages")
+        print("  голос импортируется из основной поставки")
 
     # busybox лежит ПРЯМО РЯДОМ с python.exe, не в подпапке и не в PATH:
     # CreateProcess ищет команду в каталоге приложения и System32 РАНЬШЕ PATH,
@@ -1944,6 +1959,7 @@ def main() -> None:
                 "dirty": desk_dirty or tree_dirty},
         "declared_versions": declared,
         "python": PY_VERSION,
+        "voice_runtime": True,
         "tree_files": staged["tree_files"],
         # Отпечаток статики окна (тот же, что в app/static/.helene-static.json):
         # по нему установщик решает, менял ли выпуск интерфейс.
