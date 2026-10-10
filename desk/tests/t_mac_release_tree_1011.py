@@ -1,5 +1,5 @@
 """A frozen inventory fences legal-file count compatibility and CI pipe failures."""
-import hashlib, json, os, subprocess, sys, tempfile, unittest
+import hashlib, json, os, shutil, subprocess, sys, tempfile, unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'installer'))
 import build_mac
@@ -33,6 +33,26 @@ class Tree(unittest.TestCase):
         self.assertEqual(self.count(len(self.files)-2),len(self.files)-2)
     def test_inconsistent_count_is_refused_even_with_valid_inventory(self):
         with self.assertRaises(SystemExit):self.count(len(self.files)+1)
+
+class FinalGuard(unittest.TestCase):
+    def test_final_real_credential_scan_cannot_leave_import_bytecode_in_the_archive(self):
+        source=Path(__file__).resolve().parents[2]/'praxis/core/secrets.py'
+        with tempfile.TemporaryDirectory() as tmp:
+            out=Path(tmp)/'out';live=out/'tree';target=live/'core/secrets.py'
+            target.parent.mkdir(parents=True);shutil.copyfile(source,target)
+            original={'core/secrets.py'};authored=target.read_bytes()
+            previous=sys.dont_write_bytecode;sys.dont_write_bytecode=False
+            try:
+                # The same real import caused the late addition in the CI archive.
+                build_mac.bd.scan_for_secrets(out,live,scan_runtime=False)
+                self.assertTrue(list(live.rglob('*.pyc')))
+                scanned,removed=build_mac.final_secret_guard(out,live,original,scan_runtime=False)
+            finally:
+                sys.dont_write_bytecode=previous
+            self.assertGreater(scanned,0);self.assertGreater(removed,0)
+            self.assertEqual({p.relative_to(live).as_posix() for p in live.rglob('*') if p.is_file()},original)
+            self.assertFalse(list(live.rglob('__pycache__')))
+            self.assertEqual(target.read_bytes(),authored)
 
 @unittest.skipUnless(sys.platform.startswith('linux'),'Bash pipeline integration stays inside Linux')
 class Pipeline(unittest.TestCase):

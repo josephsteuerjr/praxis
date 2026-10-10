@@ -1114,6 +1114,13 @@ def clean_generated_agent_files(tree: Path, original: set[str]) -> int:
     return len(extra)
 
 
+def final_secret_guard(out: Path, live: Path, original: set[str], *, scan_runtime: bool) -> tuple[int, int]:
+    """The credential-floor import can create bytecode after the earlier cleanup."""
+    scanned = bd.scan_for_secrets(out, live, scan_runtime=scan_runtime)
+    removed = clean_generated_agent_files(live, original)
+    return scanned, removed
+
+
 def runtime_python(out: Path) -> Path:
     return out / "runtime" / "bin" / "python3"
 
@@ -1875,8 +1882,9 @@ def main() -> None:
         (lib + rel.split("site-packages/", 1)[1], label)
         for rel, label in bd.RUNTIME_KNOWN_FALSE if "site-packages/" in rel
     }
-    scanned = bd.scan_for_secrets(out, live, scan_runtime=not args.skip_runtime)
+    scanned, final_generated = final_secret_guard(out, live, original_agent_files, scan_runtime=not args.skip_runtime)
     print(f"  просканировано файлов: {scanned} — чисто")
+    print(f"  после секрет-гарда удалено generated-файлов: {final_generated}")
 
     total = sum(f.stat().st_size for f in out.rglob("*") if f.is_file() and not f.is_symlink())
     print(f"итого: {total / 1e6:.1f} МБ до сжатия")
