@@ -246,7 +246,8 @@ VOICE_PACKAGES = frozenset({"faster-whisper", "piper-tts", "ctranslate2", "onnxr
 # другой текст.
 FROM_RELEASE_DIRS = ("tree/", "server/")
 # Что Windows-сборка дописывает в tree/ ПОСЛЕ отбора (Apache §4): в счёте
-# `tree_files` её паспорта этих двух нет.
+# Старые паспорта не включают их в tree_files; новые входные деревья могут
+# уже нести их. Полный опубликованный inventory снимает эту неоднозначность.
 TREE_ADDED = ("tree/LICENSE", "tree/NOTICE")
 
 # Без чего архив — не архив. Проверяется по собранной папке перед zip: раньше
@@ -953,6 +954,28 @@ def release_asset_digest(tag: str, name: str) -> str:
     return digest[len("sha256:"):] if digest.startswith("sha256:") else ""
 
 
+def release_tree_count(out: Path, passport: dict, version: str, inventory: Path | None = None) -> int:
+    """Require the complete frozen payload before accepting an inclusive count."""
+    files = {p.relative_to(out / "tree").as_posix(): bd.sha256(p)
+             for p in (out / "tree").rglob("*") if p.is_file()}
+    legacy = len(files) - sum(1 for rel in TREE_ADDED if (out / rel).is_file())
+    declared = int(passport.get("tree_files") or -1)
+    try:
+        manifest = json.loads((inventory or ROOT / "HELENE-SOURCE.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        manifest = {}
+    if manifest.get("tree_inventory_scope") == "published_payload" and manifest.get("version") == version:
+        if manifest.get("frozen_tree_files") != files:
+            raise SystemExit("дерево Windows-архива не совпало с полным опубликованным inventory: имена или байты")
+        valid_counts = {len(files), legacy}
+    else:
+        valid_counts = {legacy}
+    if declared not in valid_counts:
+        raise SystemExit(f"в архиве {len(files)} файлов дерева ({legacy} без добавленных лицензий), "
+                         f"а его паспорт обещает {passport.get('tree_files')} — архив разошёлся сам с собой")
+    return declared
+
+
 def stage_from_release(out: Path, cache: Path, tag: str) -> dict:
     """Дерево (и server/) из Windows-архива выпуска — байт в байт то, что в проде."""
     version = version_from_tag(tag)
@@ -995,13 +1018,8 @@ def stage_from_release(out: Path, cache: Path, tag: str) -> dict:
                 shutil.copyfileobj(src, dst)
             counts[rel.split("/")[0]] += 1
     (out / "data").mkdir(exist_ok=True)
-    # Паспорт Windows считает файлы ОТБОРА (copy_tree); LICENSE и NOTICE в tree/
-    # сборка дописывает после счёта. Считаем так же, чтобы числа сходились.
-    tree_files = counts["tree"] - sum(1 for rel in TREE_ADDED if (out / rel).is_file())
+    tree_files = release_tree_count(out, passport, version)
     print(f"  tree/: {counts['tree']} файлов (отбор: {tree_files}), server/: {counts['server']}")
-    if tree_files != int(passport.get("tree_files") or -1):
-        raise SystemExit(f"в архиве {tree_files} файлов дерева, а его паспорт обещает "
-                         f"{passport.get('tree_files')} — архив разошёлся сам с собой")
     if not (out / "tree" / "core" / "secrets.py").is_file():
         raise SystemExit("в дереве из архива нет core/secrets.py — секрет-гарду нечем сканировать")
     git = passport.get("git") or {}

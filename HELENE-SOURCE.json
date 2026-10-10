@@ -305,5 +305,6 @@
     "serverd/serverdctl": "e06f517828afecaf6cfd4f28828a0575992b8d8d88eaf41b68a3f2d0402e9890",
     "tools/cache_saw_daily.py": "4bca4be868461e54e1aff106a6c54baea419fdd523c9020cf7b041665c647462"
   },
-  "note": "Public product snapshot preserves the accepted Windows tree; private history/state are excluded. Public Praxis mirror is unchanged."
+  "note": "Public product snapshot preserves the accepted Windows tree; private history/state are excluded. Public Praxis mirror is unchanged.",
+  "tree_inventory_scope": "published_payload"
 }

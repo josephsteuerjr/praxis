@@ -136,7 +136,9 @@ jobs:
             desk/miniapp/package-lock.json
 
       - name: Сборка (build_mac.py)
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p "$LOGS"
           python3 desk/installer/build_mac.py --from-release "$TREE_TAG" --tag "$TAG" --out "$BUILD" 2>&1 | tee "$LOGS/build.log"
 
