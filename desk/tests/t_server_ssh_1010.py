@@ -54,7 +54,7 @@ class Files(paramiko.SFTPServerInterface):
         super().__init__(server,*args,**kwargs);self.server=server
 
 
-@unittest.skipIf(os.name=='nt','SSH/process stand runs only in copied Linux')
+@unittest.skipUnless(sys.platform.startswith('linux'),'SSH/Linux-root process stand runs only in copied Linux')
 class SSH(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)

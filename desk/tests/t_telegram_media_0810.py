@@ -128,7 +128,7 @@ class Media(unittest.TestCase):
             self.assertIn('выключена',notes[0]);transcribe.assert_not_called()
         with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:Mock(max_turn_media=4)),_voice_state={'ready':True}),patch.dict(sys.modules,{'media_audio':types.SimpleNamespace(transcribe=transcribe)}):
             _,notes=runner._telegram_media_refs('-77',context)
-            self.assertIn('проверь картинки и стикеры',notes[0]);self.assertIn('Автор',notes[0]);transcribe.assert_called_once_with(audio)
+            self.assertIn('проверь картинки и стикеры',notes[0]);self.assertIn('Автор',notes[0]);transcribe.assert_called_once_with(audio.resolve())
             runner._telegram_media_refs('-77',context);transcribe.assert_called_once()
 
     def test_network_failure_preserves_file_identity_and_retry_cannot_replace_an_edit(self):
