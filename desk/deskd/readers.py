@@ -1710,8 +1710,28 @@ def safe_read_md(rel: str) -> dict:
         return {"error": "Файл не открылся.", "code": "io",
                 "detail": f"{type(exc).__name__}: {exc}"}
     if stat.st_size > _MD_CAP:
-        return {"error": f"Файл слишком большой, чтобы показать целиком "
-                         f"({stat.st_size} байт).", "code": "too_big"}
+        # Дневники за месяцы легко превышают кап (Егор 11.10: «не открываются
+        # многие файлы»). Отказ читался как поломка. Отдаём хвост: свежие записи
+        # дневника важнее шапки, а правка из окна для хвоста запрещена
+        # (`tail: true` — клиент прячет «Править», иначе сохранение стёрло бы голову).
+        tail_bytes = 200_000
+        try:
+            with path.open("rb") as fh:
+                fh.seek(max(0, stat.st_size - tail_bytes))
+                raw = fh.read(tail_bytes)
+            # Не резать посреди многобайтового символа UTF-8: до первого валидного старта.
+            cut = 0
+            if stat.st_size > tail_bytes:
+                while cut < len(raw) and 0x80 <= raw[cut] < 0xC0:
+                    cut += 1
+                raw = raw[cut:]
+            text = raw.decode("utf-8", errors="replace")
+            return {"path": clean, "text": text, "tail": True,
+                    "tail_note": f"Показан конец файла ({len(text)} знаков); начало — {stat.st_size - len(raw)} байт раньше.",
+                    "mtime_ns": str(stat.st_mtime_ns)}
+        except OSError as exc:
+            return {"error": "Файл не открылся.", "code": "io",
+                    "detail": f"{type(exc).__name__}: {exc}"}
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
@@ -2308,6 +2328,13 @@ def safe_write_md(rel: str, text: str, mtime_ns=None) -> dict:
             return {"error": "Файл изменился с тех пор, как окно его открыло — "
                              "перечитай и перенеси правку заново.",
                     "code": "conflict", "mtime_ns": str(stat.st_mtime_ns)}
+    # Хвост-чтение не даёт отпечатка для правки: окно могло видеть только конец
+    # сверхкрупного файла (tail-режим safe_read_md) — такая запись стёрла бы
+    # начало. Новое окно кнопку прячет; это защита сервера от старой сборки UI.
+    if stat is not None and stat.st_size > _MD_CAP:
+        return {"error": "Файл показывался только хвостом: сохранение из окна "
+                         "стерло бы его начало. Открой полный файл для правки.",
+                "code": "tail_readonly", "mtime_ns": str(stat.st_mtime_ns) if stat else ""}
     body = str(text or "").replace("\r\n", "\n")
     if not body.endswith("\n"):
         body += "\n"

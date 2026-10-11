@@ -234,8 +234,9 @@ export function toast(text: string) {
 // ------------------------------------------------------------------ отказ на месте
 
 /** Экран/блок отказа: фраза, «Повторить» и складка с сырым текстом. */
-export function failHTML(e: unknown, opts: { retry?: boolean } = {}): string {
+export function failHTML(e: unknown, opts: { retry?: boolean; message?: string } = {}): string {
   const h = humanError(e);
+  if (opts.message) h.text = opts.message;
   const retry = opts.retry === false ? "" : '<button class="btn btn-quiet" data-fail-retry type="button">Повторить</button>';
   const detail = h.detail
     ? `<details class="fail-detail"><summary>Подробности</summary><pre class="mono">${esc(h.detail)}</pre>` +

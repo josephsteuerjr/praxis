@@ -53,7 +53,7 @@ export interface ScrollerOptions {
 
 /** С управления не тянем: там клик и своё поведение. */
 export const NO_GRAB =
-  "a,button,input,textarea,select,option,summary,audio,video,label,img,canvas,iframe,[contenteditable],[draggable=true],[data-nograb],pre,code";
+  "a,button,[role=button],[role=link],input,textarea,select,option,summary,audio,video,label,img,canvas,iframe,[contenteditable],[draggable=true],[data-nograb],pre,code";
 
 /**
  * Под указателем — сами буквы текста (а не поле между строками и абзацами)?

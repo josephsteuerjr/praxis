@@ -28,7 +28,7 @@ export async function render(container: HTMLElement): Promise<void> {
   container.innerHTML = `<div class="split wide">
     <div class="list">${streams
       .map(
-        (s) => `<div class="item" role="button" aria-current="${s.stream === S.stream}" data-stream="${esc(s.stream)}">
+        (s) => `<div class="item" role="button" tabindex="0" aria-current="${s.stream === S.stream}" data-stream="${esc(s.stream)}">
           <span title="${esc(s.stream)}">${esc(streamTitle(s.stream))}</span><span class="n">${s.captures}</span></div>`,
       )
       .join("")}
@@ -37,6 +37,9 @@ export async function render(container: HTMLElement): Promise<void> {
     <div class="reading" id="frame-main"><div class="empty">…</div></div>
   </div>`;
   for (const el of container.querySelectorAll<HTMLElement>(".item[data-stream]")) {
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); }
+    });
     el.addEventListener("click", () => {
       S.stream = el.dataset.stream!;
       safeRender(container, () => render(container));
@@ -54,10 +57,17 @@ async function renderStream(container: HTMLElement) {
     main.innerHTML = '<div class="empty">захватов нет</div>';
     return;
   }
-  const opts = captures.map((c) => `<option value="${esc(c)}">${esc(c.replace(".md", ""))}</option>`).join("");
+  // Имя захвата — таймстамп: показываем его человеком-читаемо, как в doView.
+  const fmtCapture = (c: string) => {
+    const raw = c.split("-")[0];
+    return raw.length >= 13 ? `${raw.slice(6, 8)}.${raw.slice(4, 6)} ${raw.slice(9, 11)}:${raw.slice(11, 13)}${raw.length >= 15 ? ':' + raw.slice(13, 15) : ''}` : c.replace(".md", "");
+  };
+  const opts = captures.map((c) => `<option value="${esc(c)}">${esc(fmtCapture(c))}</option>`).join("");
   main.innerHTML = `<div class="tools-row">
+      <label class="muted" for="cap-new">момент</label>
       <select id="cap-new" class="field-input">${opts}</select>
       <button class="btn btn-primary" id="do-view" type="button">Читать кадр</button>
+      <label class="muted" for="cap-old">сравнить с</label>
       <select id="cap-old" class="field-input">${opts}</select>
       <button class="btn btn-quiet" id="do-diff" type="button">Дифф: где порвался префикс</button>
       <button class="btn btn-quiet" id="do-metrics" type="button">Метрики</button>
@@ -80,7 +90,7 @@ async function doView(main: HTMLElement) {
   const name = q<HTMLSelectElement>("#cap-new", main).value;
   const c = await api<{ text?: string }>(`/api/shadow/${encodeURIComponent(S.stream)}/capture?name=${encodeURIComponent(name)}`);
   const raw = (name || "").split("-")[0];
-  const stamp = raw.length >= 13 ? `${raw.slice(6, 8)}.${raw.slice(4, 6)} ${raw.slice(9, 11)}:${raw.slice(11, 13)}` : name;
+  const stamp = raw.length >= 13 ? `${raw.slice(6, 8)}.${raw.slice(4, 6)} ${raw.slice(9, 11)}:${raw.slice(11, 13)}${raw.length >= 15 ? ':' + raw.slice(13, 15) : ''}` : name;
   out.innerHTML = `<p class="muted">Захват <b class="mono">${esc(stamp)}</b> · поток <span class="mono">${esc(S.stream)}</span> ·
       ${fmtN((c.text || "").length)} знаков. Это текст кадра целиком, как он уезжает модели.</p>
     <div class="card md">${md(c.text || "")}</div>`;

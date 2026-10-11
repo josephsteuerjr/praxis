@@ -370,8 +370,11 @@ export async function render(container: HTMLElement): Promise<void> {
   const handFence = new Map((a.sandbox?.hands || []).map((h) => [h.name, h]));
   const fenceBox = fenceHTML(a.sandbox?.hands, !!a.sandbox?.enabled);
   const outsideCount = (a.sandbox?.hands || []).filter((h) => h.fence === "outside").length;
+  // Свёртка (Егор 11.10: «раздел сложно воспринимается»): вступление и разрезы
+  // по умолчанию закрыты — разворачиваются по клику; развернутыми остаются
+  // мето-инфо, надзор и расход. Руки — сотни строк — свёрнуты с поиском внутри.
   const intro = INTRO.map(
-    ([h, t]) => `<details class="fold" open><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
+    ([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`,
   ).join("");
   // На macOS оболочка — бандл, тело и мост зовутся без `.exe`, а у слоя тела
   // свой текст: под службой его поднимает окно, а не код агента (`layerOnMac`).
@@ -397,9 +400,9 @@ export async function render(container: HTMLElement): Promise<void> {
     <p class="muted">Не пример из документации, а последний настоящий ход этого агента, шаг за шагом, с пояснением каждого шага.</p>
     <details class="fold" id="lesson-box"><summary><b>Разобрать последний ход</b></summary><div class="fold-body ev-steps" id="lesson-steps"></div></details>
     <h3 class="section-title">Из чего это собрано</h3>${layers}
-    ${tools.length ? `<h3 class="section-title">Руки <span class="muted">${tools.length}</span></h3>
+    ${tools.length ? `<details class="fold" id="hands-box"><summary><h3 class="section-title" style="display:inline">Руки <span class="muted">${tools.length}</span></h3></summary><div class="fold-body">
       <input id="tool-filter" class="field-input" placeholder="поиск по тулам…" style="width:100%;margin-bottom:10px">
-      <div id="tool-list"></div>` : ""}
+      <div id="tool-list"></div></div></details>` : ""}
     ${a.skills_index ? `<h3 class="section-title">Навыки</h3><div class="card md">${md(a.skills_index)}</div>` : '<p class="muted" style="margin-top:18px">Навыков пока нет: агент напишет их сам, когда чему-то научится.</p>'}
     ${Object.keys(a.knobs || {}).length ? `<h3 class="section-title">Ручки среды</h3><table class="grid">${Object.entries(a.knobs!).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(String(v))}</td></tr>`).join("")}</table>` : ""}
   </div>`;

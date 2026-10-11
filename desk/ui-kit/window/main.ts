@@ -1208,6 +1208,9 @@ export function start(opts: WindowOptions): void {
       if (busy || wasBusy) {
         panel.tick(busy);
       }
+      // Ход закончился при молчаливом WS: HTTP-поллинг видит busy→idle —
+      // дёргаем ленту сами, иначе ответ ждёт ручного refresh (11.10).
+      if (wasBusy && !busy) talk.onRunEvent("");
       now.tick();
     } catch {
       if (identity !== cfg.base + "\n" + cfg.key) return;
@@ -1487,6 +1490,13 @@ export function start(opts: WindowOptions): void {
       talk.onRunEvent(String(ev.run_id ?? ""));
       void refreshState();
     }
+    // Сервер просит перечитать состояние целиком (переполнение очереди сторожа).
+    // Раньше событие не обрабатывалось вовсе — лента ждала ручного refresh.
+    if (ev.t === "lost") {
+      void loadRooms();
+      talk.onRunEvent("");
+      void refreshState();
+    }
     // Дебаунс под штормом откладываний: журнал — экран ровно для этого случая.
     if (ev.t === "skips" && S.view === "journal") {
       clearTimeout(skipsTimer);
@@ -1533,12 +1543,6 @@ export function start(opts: WindowOptions): void {
   addEventListener("frame-room", () => { syncComposer(); paintActivity(); });
   addEventListener("frame-go", (e) => void show((e as CustomEvent<View>).detail));
   addEventListener("frame-restart", () => void restartHarness());
-  // Пока адрес сервера не вписан, связываться не с кем: канал не открываем и
-  // состояние не спрашиваем — окно показывает карточку подключения (askForServer).
-  if (!cfg.needs_remote) {
-    connect();
-    void refreshState();
-  }
   addEventListener("frame-open-room", (e) => {
     const d = (e as CustomEvent<{ key: string; name: string }>).detail;
     const room = S.rooms.find((r) => r.key === d.key) ?? { key: d.key, name: d.name, kind: isWindowRoom(d.key) ? "window" : "telegram", live: false, count: 0, mtime: 0 } as Room;

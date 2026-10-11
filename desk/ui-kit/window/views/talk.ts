@@ -582,6 +582,16 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
     if (S.view === "talk" && S.room === room && box.isConnected) void paintFold(container, room);
   }, 3000);
   const delivery = deliveryWords(st);
+  // Тихий режим (Егор 11.10): нечего сказать — постоянной строки
+  // «горячая память: N сообщений» нет. Блок вернётся, когда появится
+  // предложение свёртки, идущий проход, записка или событие доставки.
+  if (!words.canFold && words.state === "idle" && !words.note && !delivery) {
+    if (box.dataset.html !== "") {
+      box.dataset.html = "";
+      scroll.preserve(() => { box.innerHTML = ""; });
+    }
+    return; // таймер опроса уже перепланирован выше
+  }
   const html = `${delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : ''}<div class="memory-fold"><div class="memory-fold-head"><strong>${esc(words.counter)}</strong>
     ${words.canFold ? '<button class="notice-action" data-fold type="button">Свернуть сейчас</button>' : ''}</div>
     <details><summary>Как работает память</summary><p>${esc(words.explanation)}</p></details>

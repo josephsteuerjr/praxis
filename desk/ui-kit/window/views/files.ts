@@ -16,7 +16,12 @@ interface Group {
 /** Ответ GET /api/md. `mtime_ns` — отпечаток прочитанного, `readonly` — приговор трубы. */
 interface Doc {
   error?: string;
+  code?: string;
   text?: string;
+  // Хвост сверхкрупного файла: правка из окна запрещена (иначе сохранение
+  // стёрло бы начало файла — окно видело только конец).
+  tail?: boolean;
+  tail_note?: string;
   // СТРОКА, а не число: st_mtime_ns ~1.79e18 больше Number.MAX_SAFE_INTEGER, и
   // JSON.parse округляет его до ближайшего double (…380500 → …380400). Число,
   // отправленное обратно, не совпало бы само с собой — сверка на трубе давала
@@ -191,7 +196,7 @@ export async function render(container: HTMLElement): Promise<void> {
         total > shown ? `<p class="field-hint" style="margin:4px 2px 8px">Показаны ${shown} самых свежих из ${total}.</p>` : ""
       }${g.files
         .map(
-          (f) => `<div class="item" role="button" aria-current="${f.path === S.mdSel}" data-path="${esc(f.path)}">
+          (f) => `<div class="item" role="button" tabindex="0" aria-current="${f.path === S.mdSel}" data-path="${esc(f.path)}">
           <span>${esc(f.name)}${f.readonly ? ' <span class="badge">только чтение</span>' : ""}</span><span class="n">${fmtAge(f.mtime)}</span></div>`,
         )
         .join("")}</div>
@@ -203,6 +208,9 @@ export async function render(container: HTMLElement): Promise<void> {
     <div class="reading" id="md-main"><div class="empty">Выбери файл слева</div></div>
   </div>`;
   for (const el of container.querySelectorAll<HTMLElement>(".item[data-path]")) {
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); }
+    });
     // Раньше здесь стоял голый `void open(...)`: при обрыве трубы api() бросал,
     // ловца не было, и правая половина навсегда оставалась в «читаю…».
     el.addEventListener("click", () => {
@@ -233,7 +241,15 @@ async function open(container: HTMLElement, path: string) {
   if (doc.error) {
     // Труба отдаёт сырое `FileNotFoundError: [WinError 2] … 'C:\…'`; владельцу
     // нужно слово, а не имя класса исключения. Сырое — в складку.
-    main.innerHTML = failHTML(doc.error, { retry: false });
+    const messages: Record<string, string> = {
+      not_found: "Этого файла больше нет — агент его убрал.",
+      denied: "Нет доступа к файлу.",
+      io: "Файл не открылся.",
+      outside: "Этот файл окно не показывает.",
+      not_markdown: "Окно показывает только маркдауны агента.",
+      too_big: "Файл слишком большой для этого окна.",
+    };
+    main.innerHTML = failHTML(doc.error, { retry: false, message: messages[doc.code || ""] });
     bindFail(main);
     return;
   }
@@ -245,11 +261,12 @@ async function open(container: HTMLElement, path: string) {
   const seenMtime = exactStamp(doc.mtime_ns);
   // «Править» на файле, который труба править не даст, — обещание, за которое
   // владелец платит потерянным текстом: отказ приходил только по «Сохранить».
-  const readonly = !!doc.readonly;
+  const readonly = !!doc.readonly || !!doc.tail;
   const prev = prevVersion(path);
   main.innerHTML = `<div class="tools-row"><span class="muted mono">${esc(path)}</span>
       ${readonly ? "" : '<button class="btn btn-quiet" id="md-edit" type="button">Править</button>'}</div>
-    ${readonly ? '<p class="field-hint">Этот файл подписан агентом: ручная правка снаружи его обнуляет, поэтому окно его только показывает.</p>' : ""}
+    ${doc.readonly ? '<p class="field-hint">Этот файл подписан агентом: ручная правка снаружи его обнуляет, поэтому окно его только показывает.</p>' : ""}
+    ${doc.tail_note ? `<p class="field-hint">${esc(doc.tail_note)}</p>` : ""}
     ${
       prev
         ? `<div class="notice" id="md-revised">

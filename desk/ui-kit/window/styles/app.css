@@ -1737,6 +1737,20 @@ table.grid th {
   color: var(--err);
 }
 
+/* Long provider errors must stay inside the journal even when expanded. */
+.journal table.grid { table-layout: fixed; }
+.journal table.grid th:nth-child(4) { width: 40%; }
+.journal table.grid th,
+.journal table.grid td { overflow-wrap: anywhere; }
+.journal .fold pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* маркдаун */
 .md h1,
 .md h2,

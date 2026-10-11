@@ -49,6 +49,82 @@
 
 ## Написаны мной
 
+- [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) — Классификатор архитектурного жаргона AbstractDL
+- [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) — Живые MTProto-руки модерации AbstractDL
+- [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) — Не повторять автономную проверку по старой подсказке
+- [anti-repeat-before-speaking](anti-repeat-before-speaking.md) — Не повторять себя вслепую
+- [artifact-revision-diff-check](artifact-revision-diff-check.md) — Сверка перед выдачей составленного артефакта
+- [auto_join_owner_rooms](auto_join_owner_rooms.md) — Самостоятельный join и leave комнат
+- [before_sending](before_sending.md) — Взглянуть на реплику до отправки
+- [check-by-factual-name](check-by-factual-name.md) — Проверять процессы и файлы по фактическому имени из собственного следа
+- [closing-a-topic-kills-its-machines](closing-a-topic-kills-its-machines.md) — Тему закрыли — проверь, не жива ли её механика
+- [code_proposals](code_proposals.md) — Code proposals (self-modification loop)
+- [coding_hands](coding_hands.md) — Coding Forge — как я делаю инженерную работу
+- [complexity-and-appetite](complexity-and-appetite.md) — Протокол сложности и расхода
+- [complexity-routing-terra-sol](complexity-routing-terra-sol.md) — Уровни сложности и модели
+- [consolidate_context](consolidate_context.md) — Consolidation and memory layers
+- [cross-namespace-worktree-prune](cross-namespace-worktree-prune.md) — Не запускать `git worktree prune` из другой namespace
+- [cross-project-transfer-attribution](cross-project-transfer-attribution.md) — Перенос между проектами: не стирать происхождение
+- [crossover-h-gate-check](crossover-h-gate-check.md) — Быстрая проверка гейта H >= 8.00 (crossover body-02)
+- [deferred-messages-time-discipline](deferred-messages-time-discipline.md) — Отложенные сообщения и времена суток
+- [durable-run-leak-layers](durable-run-leak-layers.md) — Durable-run утечки: принятый task_control не стал terminal
+- [email](email.md) — Email — мой почтовый capability
+- [evidence-led-maintenance-habits](evidence-led-maintenance-habits.md) — Полезные привычки без саморемонтной петли
+- [expect-before-action](expect-before-action.md) — Обязательное поле ожидания (preregistered expectations)
+- [file_compass](file_compass.md) — File Compass — куда класть и где искать
+- [followup-thread-hygiene](followup-thread-hygiene.md) — След-нити и закрытые темы (follow-up hygiene)
+- [forge-worker-liveness](forge-worker-liveness.md) — Живость воркера coding_agent: события и сокет, не supervisor.log
+- [forum-reply-where-not-what](forum-reply-where-not-what.md) — Ответ в форуме: попасть в КУДА, а не только в ЧТО
+- [forum-topic-address-check](forum-topic-address-check.md) — Мерка адреса в форум-группах (топики)
+- [fresh-social-intent-reassessment](fresh-social-intent-reassessment.md) — Свежая проверка отложенных социальных действий
+- [grounding_in_empty_context](grounding_in_empty_context.md) — Grounding — знать происхождение, не запрещать мысль
+- [group-name-is-a-doorbell](group-name-is-a-doorbell.md) — Когда в группе звучит моё имя
+- [group_chat_first_entry](group_chat_first_entry.md) — Новая группа — вход и ориентация
+- [gui-check-without-graphics](gui-check-without-graphics.md) — GUI-проверка без физического дисплея
+- [holding_ground](holding_ground.md) — Holding Ground — моё авторство
+- [incoming-voice-messages-transcribe](incoming-voice-messages-transcribe.md) — Входящие голосовые в личке Егора
+- [journal-live-flow](journal-live-flow.md) — Живая запись происходящего
+- [large-task-preflight](large-task-preflight.md) — Предполётный прогон большой задачи
+- [linked_memory](linked_memory.md) — Linked memory (graph)
+- [long-c-runs-stdbuf](long-c-runs-stdbuf.md) — Длинные C-прогоны: stdbuf перед nohup
+- [md-file-bom-telegram](md-file-bom-telegram.md) — Отправка .md-файлов в Telegram с BOM
+- [merge-gates-gnome-review](merge-gates-gnome-review.md) — Ревью гномами как обязательный пункт мёржа
+- [mode_ratchet](mode_ratchet.md) — Room Mode — моя обратимая ручка
+- [model-selection](model-selection.md) — Выбор модели
+- [no_performance_layer](no_performance_layer.md) — Authored Voice — без постредактора
+- [notice-is-news-not-order](notice-is-news-not-order.md) — Уведомление — новость, а не приказ
+- [praxis-relay-ouroboros-onboarding](praxis-relay-ouroboros-onboarding.md) — Praxis Relay → Ouroboros через ChatGPT-подписку
+- [praxis-translation-check](praxis-translation-check.md) — praxis-translation-check
+- [praxis-translation-md](praxis-translation-md.md) — praxis-translation-md — словарная проверка без кода
+- [private_disclosure](private_disclosure.md) — Data Authority — память не равна адресу доставки
+- [productive_struggle_tutoring](productive_struggle_tutoring.md) — Репетитор: удерживать продуктивное затруднение
+- [proposal-gate-attribution](proposal-gate-attribution.md) — Proposal-гейт: не верить красному без атрибуции
+- [quote-insertion-check](quote-insertion-check.md) — Вставленные чужие реплики внутри сообщения
+- [radiation-emergency-practical-response](radiation-emergency-practical-response.md) — Ядерная/радиационная тревога: сначала полезное действие
+- [raw-mtproto-verify-people](raw-mtproto-verify-people.md) — Raw-MTProto рука через registry (telegram_account)
+- [reply-freshness-check](reply-freshness-check.md) — Навык: свежесть ответа (дубль-детектор до отправки)
+- [reply-hand](reply-hand.md) — Моя речь и факт доставки
+- [reply-timeout-on-reconnect](reply-timeout-on-reconnect.md) — Признак
+- [reply-to-the-right-thread](reply-to-the-right-thread.md) — Ответ в нужную ветку: адрес проверяется отдельно от текста
+- [same-numbers-are-copies](same-numbers-are-copies.md) — Одинаковые числа — признак копии
+- [search-relevant-chat-history](search-relevant-chat-history.md) — Искать историю в соответствующем чате
+- [self_disclosure](self_disclosure.md) — Self-Disclosure — моё решение, точные источники
+- [sleep](sleep.md) — Sleep and memory maintenance
+- [source_transparency](source_transparency.md) — Source Transparency
+- [stochastic-ensemble-audit](stochastic-ensemble-audit.md) — Проверка стохастического ансамбля и OAT
+- [stranger-first-search](stranger-first-search.md) — Входящий от незнакомца: сначала поиск, потом ответ
+- [suite-count-calibration](suite-count-calibration.md) — Калибровка итогов suite по раннеру и его области сбора
+- [tasking](tasking.md) — Tasks, goals and initiative
+- [telegram-channel-comments-addressing](telegram-channel-comments-addressing.md) — Ответы в комментариях каналов
+- [test-runner-env-hygiene](test-runner-env-hygiene.md) — Правильный раннер тестов и живой .env
+- [thread_discipline](thread_discipline.md) — Threads — карта незаконченного
+- [time-attribution](time-attribution.md) — Атрибуция времени
+- [timestamp-before-relative-time](timestamp-before-relative-time.md) — Правило: метка времени — до слова
+- [tool_result_before_claim](tool_result_before_claim.md) — tool_result_before_claim
+- [trusted_room_participation](trusted_room_participation.md) — Rooms — моё участие
+- [unknown_private_admission](unknown_private_admission.md) — Unknown Private Conversation
+- [web_search_reader](web_search_reader.md) — Web Search
+- [working_with_hands](working_with_hands.md) — Working With Hands — навигация в своём доме
 Сюда рука `write_skill` дописывает строку про каждый новый навык — в конец файла,
 одной строкой вида `- [имя](имя.md)`. Описание она не придумывает: если хочу, чтобы
 у навыка было назначение, дописываю после ссылки тире и одну фразу.

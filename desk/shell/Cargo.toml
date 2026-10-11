@@ -1,8 +1,8 @@
 [package]
 name = "helene"
-version = "1.5.7"
+version = "1.5.8"
 edition = "2021"
-description = "Frame — нативная оболочка основной программы: окно + WebView2, трей, уведомления, один экземпляр. Говорит с харнессом агента по frame.desk.v1: локально (дети окна) или удалённо."
+description = "Frame вЂ” РЅР°С‚РёРІРЅР°СЏ РѕР±РѕР»РѕС‡РєР° РѕСЃРЅРѕРІРЅРѕР№ РїСЂРѕРіСЂР°РјРјС‹: РѕРєРЅРѕ + WebView2, С‚СЂРµР№, СѓРІРµРґРѕРјР»РµРЅРёСЏ, РѕРґРёРЅ СЌРєР·РµРјРїР»СЏСЂ. Р“РѕРІРѕСЂРёС‚ СЃ С…Р°СЂРЅРµСЃСЃРѕРј Р°РіРµРЅС‚Р° РїРѕ frame.desk.v1: Р»РѕРєР°Р»СЊРЅРѕ (РґРµС‚Рё РѕРєРЅР°) РёР»Рё СѓРґР°Р»С‘РЅРЅРѕ."
 
 [[bin]]
 name = "helene"
@@ -26,29 +26,29 @@ base64 = "0.22"
 url = "2"
 serde = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net"], optional = true }
-# native-certs: без него ureq носит с собой webpki-roots и не знает корней
-# Windows — на машине с антивирусом, разбирающим TLS, «Проверить ключ» и
-# «Проверить обновления» врали «Нет связи» там, где браузер работает.
-# proxy-from-env/socks-proxy: за корпоративным прокси то же самое.
+# native-certs: Р±РµР· РЅРµРіРѕ ureq РЅРѕСЃРёС‚ СЃ СЃРѕР±РѕР№ webpki-roots Рё РЅРµ Р·РЅР°РµС‚ РєРѕСЂРЅРµР№
+# Windows вЂ” РЅР° РјР°С€РёРЅРµ СЃ Р°РЅС‚РёРІРёСЂСѓСЃРѕРј, СЂР°Р·Р±РёСЂР°СЋС‰РёРј TLS, В«РџСЂРѕРІРµСЂРёС‚СЊ РєР»СЋС‡В» Рё
+# В«РџСЂРѕРІРµСЂРёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёСЏВ» РІСЂР°Р»Рё В«РќРµС‚ СЃРІСЏР·РёВ» С‚Р°Рј, РіРґРµ Р±СЂР°СѓР·РµСЂ СЂР°Р±РѕС‚Р°РµС‚.
+# proxy-from-env/socks-proxy: Р·Р° РєРѕСЂРїРѕСЂР°С‚РёРІРЅС‹Рј РїСЂРѕРєСЃРё С‚Рѕ Р¶Рµ СЃР°РјРѕРµ.
 ureq = { version = "2", features = ["tls", "native-certs", "proxy-from-env", "socks-proxy"] }
-# sha256 скачанного архива обновления (update_download): подписи кода у
-# поставки нет, сумма из релиза — единственная проверка, что файл тот.
+# sha256 СЃРєР°С‡Р°РЅРЅРѕРіРѕ Р°СЂС…РёРІР° РѕР±РЅРѕРІР»РµРЅРёСЏ (update_download): РїРѕРґРїРёСЃРё РєРѕРґР° Сѓ
+# РїРѕСЃС‚Р°РІРєРё РЅРµС‚, СЃСѓРјРјР° РёР· СЂРµР»РёР·Р° вЂ” РµРґРёРЅСЃС‚РІРµРЅРЅР°СЏ РїСЂРѕРІРµСЂРєР°, С‡С‚Рѕ С„Р°Р№Р» С‚РѕС‚.
 sha2 = "0.10"
-# 1.2: копии памяти по расписанию (common/backup.rs) — zip, открывается Проводником.
+# 1.2: РєРѕРїРёРё РїР°РјСЏС‚Рё РїРѕ СЂР°СЃРїРёСЃР°РЅРёСЋ (common/backup.rs) вЂ” zip, РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РџСЂРѕРІРѕРґРЅРёРєРѕРј.
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
-# libc — ради двух вещей, которых нет в std: `localtime_r` (штамп времени в
-# helene.log и broker.log обязан быть местным, как у Windows-ветки с
-# GetLocalTime; std умеет только UTC) и `killpg` (job-объекта на POSIX нет,
-# детей останавливаем группой процессов, см. `stop_child`).
+# libc вЂ” СЂР°РґРё РґРІСѓС… РІРµС‰РµР№, РєРѕС‚РѕСЂС‹С… РЅРµС‚ РІ std: `localtime_r` (С€С‚Р°РјРї РІСЂРµРјРµРЅРё РІ
+# helene.log Рё broker.log РѕР±СЏР·Р°РЅ Р±С‹С‚СЊ РјРµСЃС‚РЅС‹Рј, РєР°Рє Сѓ Windows-РІРµС‚РєРё СЃ
+# GetLocalTime; std СѓРјРµРµС‚ С‚РѕР»СЊРєРѕ UTC) Рё `killpg` (job-РѕР±СЉРµРєС‚Р° РЅР° POSIX РЅРµС‚,
+# РґРµС‚РµР№ РѕСЃС‚Р°РЅР°РІР»РёРІР°РµРј РіСЂСѓРїРїРѕР№ РїСЂРѕС†РµСЃСЃРѕРІ, СЃРј. `stop_child`).
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Уведомления macOS (Центр уведомлений) — то, что на Windows делает
-# tauri-winrt-notification. Напрямую `notify-rust`, а не tauri-plugin-notification:
-# у плагина `show()` отвечает `Ok(())` всегда (внутри `let _ = spawn(…)`), и отказ
-# Центра уведомлений терялся бы без строки в журнале — см. `toast`.
+# РЈРІРµРґРѕРјР»РµРЅРёСЏ macOS (Р¦РµРЅС‚СЂ СѓРІРµРґРѕРјР»РµРЅРёР№) вЂ” С‚Рѕ, С‡С‚Рѕ РЅР° Windows РґРµР»Р°РµС‚
+# tauri-winrt-notification. РќР°РїСЂСЏРјСѓСЋ `notify-rust`, Р° РЅРµ tauri-plugin-notification:
+# Сѓ РїР»Р°РіРёРЅР° `show()` РѕС‚РІРµС‡Р°РµС‚ `Ok(())` РІСЃРµРіРґР° (РІРЅСѓС‚СЂРё `let _ = spawn(вЂ¦)`), Рё РѕС‚РєР°Р·
+# Р¦РµРЅС‚СЂР° СѓРІРµРґРѕРјР»РµРЅРёР№ С‚РµСЂСЏР»СЃСЏ Р±С‹ Р±РµР· СЃС‚СЂРѕРєРё РІ Р¶СѓСЂРЅР°Р»Рµ вЂ” СЃРј. `toast`.
 notify-rust = "4"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSWindow", "NSResponder", "block2"] }
@@ -66,11 +66,11 @@ webkit2gtk = { version = "2", features = ["v2_40"], optional = true }
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 tauri-winrt-notification = "0.7"
-# Win32_System_SystemInformation — только ради GetLocalTime: журнал брокера
-# (broker.log) пишут ДВЕ стороны, служба и окно, и время в нём обязано быть
-# одним. У службы это тоже местное время (svc::now_stamp), а std умеет только UTC.
+# Win32_System_SystemInformation вЂ” С‚РѕР»СЊРєРѕ СЂР°РґРё GetLocalTime: Р¶СѓСЂРЅР°Р» Р±СЂРѕРєРµСЂР°
+# (broker.log) РїРёС€СѓС‚ Р”Р’Р• СЃС‚РѕСЂРѕРЅС‹, СЃР»СѓР¶Р±Р° Рё РѕРєРЅРѕ, Рё РІСЂРµРјСЏ РІ РЅС‘Рј РѕР±СЏР·Р°РЅРѕ Р±С‹С‚СЊ
+# РѕРґРЅРёРј. РЈ СЃР»СѓР¶Р±С‹ СЌС‚Рѕ С‚РѕР¶Рµ РјРµСЃС‚РЅРѕРµ РІСЂРµРјСЏ (svc::now_stamp), Р° std СѓРјРµРµС‚ С‚РѕР»СЊРєРѕ UTC.
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Security", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Com", "Win32_UI_Shell", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_Devices_HumanInterfaceDevice", "Win32_UI_Input", "Win32_System_LibraryLoader"] }
-# 1.2.3: ярлыки .lnk с AUMID — прямо через COM (common/shortcut_win.rs), без PowerShell и csc.
+# 1.2.3: СЏСЂР»С‹РєРё .lnk СЃ AUMID вЂ” РїСЂСЏРјРѕ С‡РµСЂРµР· COM (common/shortcut_win.rs), Р±РµР· PowerShell Рё csc.
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
 
 [profile.release]
@@ -78,8 +78,8 @@ opt-level = "z"
 lto = true
 strip = true
 
-# Без этой фичи Tauri считает сборку «dev» и грузит devUrl (localhost) вместо
-# вшитой страницы. `tauri build` включает её сам; при `cargo build` — руками:
+# Р‘РµР· СЌС‚РѕР№ С„РёС‡Рё Tauri СЃС‡РёС‚Р°РµС‚ СЃР±РѕСЂРєСѓ В«devВ» Рё РіСЂСѓР·РёС‚ devUrl (localhost) РІРјРµСЃС‚Рѕ
+# РІС€РёС‚РѕР№ СЃС‚СЂР°РЅРёС†С‹. `tauri build` РІРєР»СЋС‡Р°РµС‚ РµС‘ СЃР°Рј; РїСЂРё `cargo build` вЂ” СЂСѓРєР°РјРё:
 # cargo build --release --features custom-protocol
 [features]
 default = ["desktop"]
