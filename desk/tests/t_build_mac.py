@@ -308,6 +308,22 @@ class Wheels(unittest.TestCase):
 
 
 class Stands(unittest.TestCase):
+    def test_clean_app_build_has_the_imported_server_screen_dependencies(self):
+        from unittest.mock import patch
+        installed, built = set(), set()
+        def run(command, *, cwd, **kwargs):
+            frontend = cwd.relative_to(DESK).as_posix()
+            if command[1] == 'ci':
+                installed.add(frontend)
+            else:
+                if frontend == 'app':
+                    self.assertIn('remote', installed,
+                                  'app imports settings-server, whose qrcode must exist on a clean runner')
+                built.add(frontend)
+        with patch.object(build_mac, 'run', side_effect=run):
+            build_mac.build_fronts()
+        self.assertEqual(built, set(build_mac.FRONTS))
+
     def test_all_five_fronts_are_built(self):
         # Стенд пакета desk собирает пакет каждого вида, серверному нужны
         # remote/dist и miniapp/dist — фронты строятся все, не три «для архива».

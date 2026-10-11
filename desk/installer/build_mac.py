@@ -1280,9 +1280,13 @@ FRONTS = ("app", "mobile", "setup/ui", "remote", "miniapp")
 
 
 def build_fronts() -> None:
+    # Shared screens import sibling sources. Their dependencies must exist even
+    # when the sibling bundle has not been built yet (app -> remote -> qrcode).
     for rel in FRONTS:
-        print(f"  {rel}:")
+        print(f"  зависимости {rel}:")
         run(["npm", "ci", "--no-audit", "--no-fund"], cwd=DESK / rel, timeout=1800)
+    for rel in FRONTS:
+        print(f"  сборка {rel}:")
         run(["npm", "run", "build"], cwd=DESK / rel, timeout=1800)
 
 
