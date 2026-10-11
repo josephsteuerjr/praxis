@@ -16,6 +16,19 @@ import modes
 @unittest.skipUnless(sys.platform.startswith("linux"),
                      "живой стенд брокера Linux — прогоняет линукс-гейт в Docker")
 class LinuxBroker(unittest.TestCase):
+    def test_server_uses_host_socket_and_never_promises_a_polkit_window(self):
+        with tempfile.TemporaryDirectory() as root, patch.dict(os.environ, {
+                'HELENE_SUPERVISOR': 'serverboot', 'HELENE_HOST_BROKER_SOCKET': '/run/helene-host/broker.sock'}):
+            hand = broker.Broker(Path(root), {'service': {'session0': True}})
+            with patch.object(broker, 'call_linux', return_value={'ok': True, 'out': '0', 'note': 'root на хосте VPS'}) as call:
+                receipt = hand.ask('exec', '/usr/bin/id', ['-u'], 'diagnostic', 5, 5)
+            self.assertEqual(call.call_args.kwargs, {'socket_path': '/run/helene-host/broker.sock'})
+            self.assertIn('хосте VPS', receipt)
+            self.assertIn('хосте VPS', broker.tool_schema(mac=False, linux=True)['description'])
+            hand = broker.Broker(Path(root), {'service': {'session0': False}})
+            with patch.object(hand, 'desk', side_effect=AssertionError('server cannot wait for native window')):
+                self.assertIn('не включён', hand.ask('ping', '', [], 'diagnostic', 5, 5))
+
     @unittest.skipUnless(os.environ.get("HELENE_TREE_SRC"), "requires actual packaged agent tree")
     def test_actual_agent_frame_offers_the_full_schema_with_pointers_on(self):
         sys.path.insert(0, os.environ["HELENE_TREE_SRC"])

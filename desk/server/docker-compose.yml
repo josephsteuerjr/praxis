@@ -26,6 +26,7 @@ services:
       # Host-заголовки, которые канал пускает сверх localhost/IP/*.ts.net —
       # имя, по которому окно и телефон приходят через Caddy.
       - HELENE_HOSTS=${HELENE_HOSTS:-}
+      - HELENE_HOST_BROKER_SOCKET=/run/helene-host/broker.sock
       # STT — та же коробка, что у Праксис (тома и модель ниже). Пусто в
       # HELENE_MODELS — модели нет, голосовые не расшифровываются, дерево
       # говорит об этом само.
@@ -42,6 +43,8 @@ services:
     volumes:
       - ../data:/opt/helene/data
       - ../helene.json:/opt/helene/helene.json
+      # Empty by default. Host owner provisions this separately; no root grant on update.
+      - ${HELENE_HOST_BROKER_DIR:-../.host-access}:/run/helene-host:ro
       # Код агента — с диска сервера, а не из образа (27.09). Агент правит себя
       # (`tree/`, `app/` — навык my-own-code), и правка, жившая в слое контейнера,
       # молча пропадала при любой пересборке, а сам агент продолжал думать, что она

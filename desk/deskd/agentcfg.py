@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
 from . import readers
 
 SCHEMA = "helene.agentcfg.v1"
+_WRITE_LOCK = threading.RLock()
 
 #: Что окно вправе править. Ключ верхнего уровня → человеческое имя для расписки.
 #: Всё, чего здесь нет, — про раскладку установки и правится там, где её клали.
@@ -51,11 +53,30 @@ EDITABLE: dict[str, str] = {
 #: так открывает анатомию с ключом модели, — а чтобы экран не показывал ручек,
 #: которых он всё равно не сохранит.
 HIDDEN: tuple[str, ...] = ("service", "relay", "update", "python", "app", "runner",
-                           "code", "tree", "port", "mode", "setup_complete")
+                           "code", "tree", "port", "mode", "setup_complete", "agent_mode", "sandbox")
 
 
-def _read(path: Path) -> dict:
-    raw = path.read_bytes()
+def server_access(cfg: dict) -> dict | None:
+    """Stored server controls; presence of a socket is not a successful root call."""
+    if os.environ.get("HELENE_SUPERVISOR") != "serverboot":
+        return None
+    from localharness import modes
+    picture = modes.resolve(cfg, installed=False)
+    socket_path = (os.environ.get("HELENE_HOST_BROKER_SOCKET") or "").strip()
+    return {"agent_mode": picture["name"], "sandbox_enabled": picture["sandbox"],
+            "session0": modes.session0(cfg), "scope": "host",
+            "socket_present": bool(socket_path and Path(socket_path).exists())}
+
+
+def _read_snapshot(path: Path) -> tuple[dict, str]:
+    with path.open('rb') as source:
+        before = os.fstat(source.fileno())
+        raw = source.read()
+        after = os.fstat(source.fileno())
+    live = path.stat()
+    if (before.st_mtime_ns != after.st_mtime_ns or before.st_size != after.st_size
+            or (live.st_ino, live.st_mtime_ns) != (after.st_ino, after.st_mtime_ns)):
+        raise ValueError('файл изменился во время чтения — перечитай настройки')
     for encoding in ("utf-8-sig", "utf-16", "cp1251"):
         try:
             text = raw.decode(encoding)
@@ -64,7 +85,7 @@ def _read(path: Path) -> dict:
         got = json.loads(text)
         if not isinstance(got, dict):
             raise ValueError("верхний уровень должен быть объектом {…}")
-        return got
+        return got, str(after.st_mtime_ns)
     raise ValueError("файл не читается ни как UTF-8, ни как UTF-16, ни как CP1251")
 
 
@@ -85,7 +106,7 @@ def state() -> dict:
                        "и править отсюда нечего",
                 "path": "", "config": {}, "editable": list(EDITABLE), "mtime_ns": ""}
     try:
-        cfg = _read(path)
+        cfg, seen = _read_snapshot(path)
     except (OSError, ValueError) as exc:
         return {"schema": SCHEMA, "ok": False,
                 "why": f"{path} не разобрался: {exc}",
@@ -99,7 +120,8 @@ def state() -> dict:
         "path": str(path),
         "config": shown,
         "editable": list(EDITABLE),
-        "mtime_ns": mtime_ns(path),
+        "access": server_access(cfg),
+        "mtime_ns": seen,
         # Что применится только перезапуском — а это ВСЁ здесь: дерево читает
         # конфиг на старте. Окно говорит это словами и даёт кнопку рядом.
         "restart_needed": True,
@@ -107,6 +129,13 @@ def state() -> dict:
 
 
 def save(patch: Any, seen: str | None = None) -> dict:
+    # HTTP handlers run in different threads. Only one writer may check freshness
+    # and commit; a second request with the old receipt must get a conflict.
+    with _WRITE_LOCK:
+        return _save(patch, seen)
+
+
+def _save(patch: Any, seen: str | None = None) -> dict:
     """Записать разрешённые блоки. Возвращает расписку, а не «ок».
 
     `patch` — объект с ключами верхнего уровня. Каждый разрешённый блок
@@ -121,20 +150,38 @@ def save(patch: Any, seen: str | None = None) -> dict:
     if not isinstance(patch, dict):
         return {"ok": False, "code": "bad_body", "error": "ожидался объект настроек"}
     try:
-        current = _read(path)
+        current, now = _read_snapshot(path)
     except (OSError, ValueError) as exc:
         return {"ok": False, "code": "unreadable", "error": f"{path} не разобрался: {exc}"}
 
-    now = mtime_ns(path)
     if seen and now and str(seen) != now:
         return {"ok": False, "code": "conflict", "mtime_ns": now,
                 "error": "Настройки на сервере изменились с тех пор, как окно их "
                          "открыло — перечитай и перенеси правку заново."}
 
+    access = patch.get("access")
+    if "access" in patch:
+        if server_access(current) is None:
+            return {"ok": False, "code": "unsupported_access", "error": "Эта установка не серверный Docker агент"}
+        if (not isinstance(access, dict) or not access or set(access) - {"agent_mode", "session0"}
+                or ("agent_mode" in access and (not isinstance(access["agent_mode"], str)
+                                                or access["agent_mode"] not in {"sandbox", "interactive"}))
+                or ("session0" in access and not isinstance(access["session0"], bool))):
+            return {"ok": False, "code": "bad_access", "error": "Режим: sandbox или interactive; запрос root: true или false"}
+        from localharness import modes
+        if "agent_mode" in access:
+            current["agent_mode"] = access["agent_mode"]
+        if "session0" in access:
+            service = current.get("service")
+            current["service"] = {**(service if isinstance(service, dict) else {}),
+                                  "session0": access["session0"]}
+        modes.apply(current, installed=False)
     took: list[str] = []
     dropped: list[str] = []
     for key, value in patch.items():
-        if key in EDITABLE:
+        if key == "access":
+            took.append(key)
+        elif key in EDITABLE:
             current[key] = value
             took.append(key)
         else:
@@ -172,6 +219,7 @@ def save(patch: Any, seen: str | None = None) -> dict:
         "saved": took,
         "dropped": dropped,
         "mtime_ns": mtime_ns(path),
+        "access": server_access(current),
         "note": "записано в файл агента; дерево читает его на старте — "
                 "перезапусти агента, иначе правка полежит без дела",
     }

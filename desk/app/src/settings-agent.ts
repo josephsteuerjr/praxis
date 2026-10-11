@@ -29,6 +29,7 @@ import { extensionsCard } from "./extensionscard";
 import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
 import { GROUP, inGroup } from "../../ui-kit/window/views/settings-frame";
+import { serverEdition } from "../../remote/src/settings-server";
 
 type Provider = "api" | "anthropic" | "chatgpt" | "local";
 
@@ -59,7 +60,10 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
 }
 
 /** Карточки местного агента и его часть записи в конфиг. */
-export async function agentEdition({ draft, loaded, platform, freshness }: EditionContext): Promise<Edition> {
+export async function agentEdition(context: EditionContext): Promise<Edition> {
+  // The connected server owns the agent settings; the local Windows config owns this window.
+  if (context.saved.mode === "remote") return serverEdition(context);
+  const { draft, loaded, platform, freshness } = context;
   // Агент живёт на macOS: службы Windows и тела тула `computer` там нет по
   // построению. Карточки про них не рисуются — не «недоступно», а нет
   // (решение владельца). Двойная страховка: движок на не-Windows и сам не

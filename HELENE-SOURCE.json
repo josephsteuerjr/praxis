@@ -1,11 +1,11 @@
 {
-  "version": "1.5.6",
-  "frozen_tree": "ea703f1af457eb7272c5ab1d4d559f1b865185b7",
-  "accepted_tree_baseline": "4da19b4c3c5e8bf915547d27975de7d7ea5e3195",
-  "accepted_oro_fix": "e087938",
-  "edition_source": "b8d91e46cf800c98c0f2d8c4d4165190248c6127",
-  "source_public_parent": "0a2c41ee04d8095b2e75237bdd4891b37b84fbee",
-  "windows_archive_sha256": "d40a0d16bf564ef93c3fb7cc1d8a4611794429db7ed0158571bbe26287584313",
+  "version": "1.5.7",
+  "tree_inventory_scope": "published_payload",
+  "frozen_tree": "8195b349462d4b01b8ce178853fc93f66a1ee3fd",
+  "accepted_tree_baseline": "ea703f1af457eb7272c5ab1d4d559f1b865185b7",
+  "edition_source": "a9f823b4d8dc4f37d7d18c41b19eb55d0c1f445f",
+  "source_public_parent": "e08a9857e14c1455b3bf687dde40299467572ad9",
+  "windows_archive_sha256": "d6c6fe48fedf5020a57ef6cba3e46fa10141a0da8f374a2ac88964e7a885edb0",
   "frozen_tree_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".gitattributes": "066ea1b66070539e6165ef10d0cb566f703ccfb03e2b571f8fe876942a9540c2",
@@ -161,7 +161,7 @@
     "webtool.py": "9f9c322c539b7493136d77eb6b17134b24fc6f457aa1c2b4cd7f1a270800933d",
     "workshop.py": "31ca8292debebc27b1949e60a21754168ae2ae978ee8bf38a6c48066ae49fb36",
     "work_engine.py": "5e22b6febb984c68eda18ea178a9d3ba6dbe0579c427474e62138805624cd48a",
-    "work_loop.py": "1aa2a31cab3560a15ceffa449d14ccfe45c3674fa32977d5e272879f8ed4bc94",
+    "work_loop.py": "9d0165c0b2e29bb093128f18c27132d9b598e5c5e2cc148af5d48860beb6f0e1",
     "work_source.py": "840f8df6beb998ae281ca702a5f6958d65ab90e0ec107300c383109eb0bf7d18",
     "work_store.py": "f389bbc745ed58eb2fc54e96e62230034f9fdede35daa9787c947e882689e1c5",
     "_netwatch.py": "719425d6f985d0ad5992cef3cfa05066eb2a432d058d2e204964329367e61497",
@@ -305,6 +305,6 @@
     "serverd/serverdctl": "e06f517828afecaf6cfd4f28828a0575992b8d8d88eaf41b68a3f2d0402e9890",
     "tools/cache_saw_daily.py": "4bca4be868461e54e1aff106a6c54baea419fdd523c9020cf7b041665c647462"
   },
-  "note": "Public product snapshot preserves the accepted Windows tree; private history/state are excluded. Public Praxis mirror is unchanged.",
-  "tree_inventory_scope": "published_payload"
+  "full_core_gate": "red_inherited_baseline_failures",
+  "note": "Reviewed product snapshot; private history and state excluded."
 }

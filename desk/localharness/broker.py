@@ -125,11 +125,11 @@ def executor() -> str:
     return "служба" if os.name == "nt" else "оболочка"
 
 
-def call_linux(payload: dict, wait_sec: float) -> dict:
+def call_linux(payload: dict, wait_sec: float, *, socket_path: str | None = None) -> dict:
     """One bounded JSON-line exchange with the root service; no polkit fallback."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
         peer.settimeout(wait_sec)
-        peer.connect(LINUX_SOCKET)
+        peer.connect(socket_path or LINUX_SOCKET)
         peer.sendall(json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n")
         with peer.makefile("rb") as response:
             line = response.readline(1024 * 1024)
@@ -575,6 +575,9 @@ class Broker:
             import modes
             if modes.session0(self.cfg):
                 return self.tell_linux(op, cmd, args, why, timeout_sec)
+            if os.environ.get("HELENE_SUPERVISOR") == "serverboot":
+                return ("брокер сервера: доступ root к хосту VPS не включён в настройках этого агента. "
+                        "Разрешение выдаёт владелец на сервере; режим «Интерактивный» меняет обычные руки.")
         if DIRECT:
             return self.tell_service(op, cmd, args, why, timeout_sec)
         listening, words = self.desk()
@@ -605,8 +608,12 @@ class Broker:
     def tell_linux(self, op: str, cmd: str, args: list, why: str, timeout_sec: int) -> str:
         ask_id = _new_id()
         try:
-            reply = call_linux({"op": op, "argv": [cmd, *args] if op != "ping" else [],
-                                "why": why, "timeout_sec": timeout_sec}, timeout_sec + PIPE_SLACK)
+            host_socket = (os.environ.get("HELENE_HOST_BROKER_SOCKET") or "").strip() \
+                if os.environ.get("HELENE_SUPERVISOR") == "serverboot" else ""
+            payload = {"op": op, "argv": [cmd, *args] if op != "ping" else [],
+                       "why": why, "timeout_sec": timeout_sec}
+            reply = (call_linux(payload, timeout_sec + PIPE_SLACK, socket_path=host_socket)
+                     if host_socket else call_linux(payload, timeout_sec + PIPE_SLACK))
             row = {"id": ask_id, "decision": "done" if reply.get("ok") else "refused",
                    "note": reply.get("error") or reply.get("note") or "",
                    "out": reply.get("out") or "", "err": reply.get("err") or "",
@@ -614,8 +621,11 @@ class Broker:
             if op != "ping" and reply.get("ok"):
                 row["code"] = reply.get("code")
         except (OSError, ValueError) as exc:
-            row = {"id": ask_id, "decision": "failed",
-                   "note": f"{exc}. Включи брокер через выбор нулевой сессии в настройках"}
+            note = ("Владелец сервера должен подготовить host-access и подключить его сокет; "
+                    "смена режима сама не создаёт root-брокер"
+                    if os.environ.get("HELENE_SUPERVISOR") == "serverboot"
+                    else "Включи брокер через выбор нулевой сессии в настройках")
+            row = {"id": ask_id, "decision": "failed", "note": f"{exc}. {note}"}
         _remember(row)
         return "брокер: " + describe_answer(row)
 
@@ -671,6 +681,11 @@ class Broker:
 
     def listing(self) -> str:
         if LINUX and POSIX_PATHS:
+            if os.environ.get("HELENE_SUPERVISOR") == "serverboot":
+                import modes
+                return "\n".join(["Root на хосте VPS: " + ("запрошен в конфиге; разрешение и связь проверяет ping"
+                    if modes.session0(self.cfg) else "не запрошен в конфиге"),
+                    *[describe_answer(r) for r in RECENT]])
             import modes
             if modes.session0(self.cfg):
                 return "\n".join(["Нулевая сессия: root-брокер выполняет exec без polkit и пароля. "
@@ -767,6 +782,15 @@ def tool_schema(*, mac: bool | None = None, linux: bool | None = None) -> dict:
             "для каждого exec система спрашивает пароль администратора через polkit; "
             "отмена — отказ. action=list — квитанции или ждущие просьбы. "
             "Квитанция содержит код возврата, stdout, stderr и длительность.")
+        if os.environ.get("HELENE_SUPERVISOR") == "serverboot":
+            description = (
+                "Root на хосте VPS через отдельный брокер, если владелец выдал разрешение и "
+                "service.session0=true. Режим interactive сам root не выдаёт. action=ask, op=ping "
+                "проверяет связь; op=exec, cmd — абсолютный путь, args — массив строк, why — зачем. "
+                "Квитанция называет область host; /usr/bin/id -u отдельно проверяет фактический UID. "
+                "Окно/polkit на сервере не используются. action=list — квитанции. "
+                "Panic и отзыв разрешения прекращают команды. При потере квитанции сверяй эффект "
+                "и журнал владельца: произвольный exec нельзя автоматически повторять.")
         cmd_words = "программа абсолютным путём"
     elif mac:
         description = (
@@ -900,6 +924,8 @@ def install(agent_mod, tree: Path, cfg: dict | None = None) -> None:
     if LINUX and POSIX_PATHS:
         STATE.update({"hand": True, "desk": "", "asks": 0, "answers": 0,
                       "note": "Linux: нулевая сессия — root-сокет без пароля; интерактивный exec — пароль через окно"})
+        if os.environ.get("HELENE_SUPERVISOR") == "serverboot":
+            STATE['note'] = "Root хоста VPS — отдельное разрешение владельца и подключённый host-брокер; доступ проверяет ping/exec"
         log.info("брокер: схема broker_request добавлена; Linux root-сокет и интерактивный polkit")
         return
     if DIRECT:

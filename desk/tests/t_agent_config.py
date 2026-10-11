@@ -12,10 +12,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -137,6 +139,15 @@ class WhatTheWindowMayChange(Ground):
 
 
 class Freshness(Ground):
+    def test_parallel_saves_with_the_same_receipt_do_not_overwrite_each_other(self):
+        import concurrent.futures
+        seen = agentcfg.state()['mtime_ns']
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as workers:
+            replies = list(workers.map(lambda name: agentcfg.save({'agent': {'name': name}}, seen),
+                                       ['first', 'second']))
+        self.assertEqual(sum(r['ok'] for r in replies), 1)
+        self.assertEqual(next(r['code'] for r in replies if not r['ok']), 'conflict')
+
     def test_чужая_правка_не_затирается_молча(self):
         seen = agentcfg.state()["mtime_ns"]
         # Кто-то (сам агент рукой switch_brain) записал конфиг после того, как
@@ -166,6 +177,55 @@ class ChannelDoor(unittest.TestCase):
         self.assertIn("/api/agent-config", paths)
         self.assertNotIn("/api/agent-config", deskapp._DEVICE_PATHS,
                          "телефон правит слово агенту, а не его мозг и бот-токен")
+
+
+class ServerAccess(Ground):
+    def setUp(self):
+        super().setUp()
+        self.env = patch.dict(os.environ, {"HELENE_SUPERVISOR": "serverboot", "HELENE_HOST_BROKER_SOCKET": ""})
+        self.env.start(); self.addCleanup(self.env.stop)
+
+    def test_mode_and_fence_are_saved_together_and_reload_preserves_choice(self):
+        got = agentcfg.save({"access": {"agent_mode": "sandbox"}}, agentcfg.state()['mtime_ns'])
+        self.assertTrue(got['ok'], got)
+        self.assertEqual(self.read()['agent_mode'], 'sandbox')
+        self.assertTrue(self.read()['sandbox']['enabled'])
+        got = agentcfg.save({"access": {"agent_mode": "interactive"}}, agentcfg.state()['mtime_ns'])
+        self.assertTrue(got['ok'], got)
+        self.assertEqual(agentcfg.state()['access']['agent_mode'], 'interactive')
+        self.assertFalse(self.read()['sandbox']['enabled'])
+        self.assertEqual(self.read()['model'], FULL['model'])
+
+    def test_root_request_is_separate_from_mode_and_does_not_assert_host_grant(self):
+        got = agentcfg.save({"access": {"agent_mode": "sandbox", "session0": True}})
+        self.assertTrue(got['ok'], got)
+        self.assertTrue(self.read()['sandbox']['enabled'])
+        self.assertTrue(self.read()['service']['session0'])
+        self.assertFalse(got['access']['socket_present'])
+        self.assertNotIn('enabled', got['access'])  # no false claim of owner privilege grant
+
+    def test_invalid_access_does_not_write_any_part_of_the_patch(self):
+        before = self.path.read_bytes()
+        for access in [{'agent_mode': 'root'}, {'session0': 'true'}, {'session0': 1},
+                       {'session0': True, 'runner': 'other'}, {'agent_mode': []}, None]:
+            got = agentcfg.save({'access': access, 'model': {'key': 'changed'}})
+            self.assertFalse(got['ok'], got)
+            self.assertEqual(self.path.read_bytes(), before)
+
+    def test_access_does_not_allow_native_service_or_executor_changes(self):
+        got = agentcfg.save({'access': {'session0': True}, 'service': {'program': '/other'},
+                             'runner': '/other'})
+        self.assertTrue(got['ok'], got)
+        self.assertEqual(set(got['dropped']), {'service', 'runner'})
+        self.assertEqual(self.read()['runner'], FULL['runner'])
+
+    def test_bind_mount_fallback_preserves_inode_and_both_mode_fields(self):
+        inode = self.path.stat().st_ino
+        with patch.object(agentcfg.os, 'replace', side_effect=OSError('mount busy')):
+            got = agentcfg.save({'access': {'agent_mode': 'sandbox'}})
+        self.assertTrue(got['ok'], got)
+        self.assertEqual(self.path.stat().st_ino, inode)
+        self.assertTrue(agentcfg.state()['access']['sandbox_enabled'])
 
 
 if __name__ == "__main__":
