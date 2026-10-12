@@ -3416,6 +3416,10 @@ fn voice_carry(dir: &Path, voice: Option<&crate::payload::VoiceInfo>, runtime_ke
 
 /// Метка установки (`helene-install.json`).
 fn write_marker(dir: &Path, scope: &str, version: &str) -> Result<(), String> {
+    write_marker_with_previous(dir, scope, version, "")
+}
+
+fn write_marker_with_previous(dir: &Path, scope: &str, version: &str, previous: &str) -> Result<(), String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -3424,6 +3428,7 @@ fn write_marker(dir: &Path, scope: &str, version: &str) -> Result<(), String> {
         "product": PRODUCT,
         "scope": scope,
         "version": version,
+        "previous_version": previous,
         "installed_utc": now,
         "by": format!("helene-setup {VERSION}"),
     });
@@ -3954,7 +3959,7 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                 },
             });
         }
-        write_marker(&dir, &scope, &version)?;
+        write_marker_with_previous(&dir, &scope, &version, &old_version)?;
         Ok(out)
     })();
     match configured {

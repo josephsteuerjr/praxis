@@ -24,10 +24,12 @@ def observe(tree: Path, program: Path, config: dict):
     state=Path(tree)/'memory/.state'
     scope=hashlib.sha256(str(program.resolve()).encode()).hexdigest()
     previous=read(state/'package-version.json')
+    installed=read(program/'helene-install.json')
     if previous and previous.get('scope')!=scope:
         old=''  # a carried home is not an upgrade of its former machine
     else:
-        old=str(previous.get('version') or (config.get('installed') or {}).get('version') or '').strip()
+        installed_previous = installed.get('previous_version') if installed.get('version') == current else ''
+        old=str(previous.get('version') or installed_previous or (config.get('installed') or {}).get('version') or '').strip()
     # Older Linux homes did not record installed.version. An established agent
     # still needs the first package inspection, without inventing its former version.
     established_linux = not previous and not old and passport.get('platform') == 'linux' and (state/'born.json').is_file()

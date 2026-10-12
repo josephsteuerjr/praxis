@@ -176,12 +176,20 @@ def fold_state(tree: Path, room: str) -> dict:
     receipt = _read(_state_dir(tree) / FOLD_RECEIPT)
     policy = _read(_state_dir(tree) / "fold-policy.json")
     bounds = policy.get("group" if room.startswith("-") else "chat") or {}
+    owner = policy.get("owner") or {}
+    from . import rooms
+    owner_place = bool(owner) and (room in owner.get("places", ()) or rooms.is_room(room))
+    if owner_place:
+        bounds = owner
     delivery = _read(_state_dir(tree) / "telegram-delivery.json").get(room.split('__topic__', 1)[0])
     reader = _read(Path(tree) / 'memory/.control/desk_inbox/.reader.json')
     if delivery and (delivery.get('pid') != reader.get('pid')
                      or time.time() - float(reader.get('at') or 0) > 30):
         delivery = None  # a dead/replaced sender cannot promise an automatic repeat
     return {"room": room, "hot": hot, "keep": bounds.get("keep", keep),
+            "chars": sum(len(str(r.get("line") or "")) for r in life.get("hot", []) if isinstance(r, dict)),
+            "tokens": sum(int(r.get("tokens") or 0) for r in life.get("hot", []) if isinstance(r, dict)),
+            "owner_context": owner_place,
             "offer_at": bounds.get("offer_at", offer_at), "hard_at": bounds.get("hard_at", hard_at),
             "token_cap": bounds.get("token_cap"), "tape_chars": bounds.get("tape_chars"),
             "offer_mode": policy.get("offer_mode", True),

@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import pathlib
+import json
 import re
 import subprocess
 import sys
@@ -85,10 +86,30 @@ def texts(rev: str | None) -> dict[str, str]:
     return out
 
 
+def without_inventory_digests(rel: str, text: str) -> str:
+    """A digit run inside a typed source digest is not a Telegram identity.
+
+    Exemption is limited to this product's explicit payload-inventory fields.
+    Owner/contact fields, untyped JSON and prose remain fully scanned.
+    """
+    if rel != 'HELENE-SOURCE.json': return text
+    try: value = json.loads(text)
+    except ValueError: return text
+    if not isinstance(value, dict) or value.get('tree_inventory_scope') != 'published_payload': return text
+    digests = [value.get(key) for key in ('frozen_tree','accepted_tree_baseline','source_public_parent')]
+    inventory = value.get('frozen_tree_files')
+    if isinstance(inventory, dict): digests.extend(inventory.values())
+    for digest in digests:
+        if isinstance(digest, str) and re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', digest):
+            text = text.replace('"' + digest + '"', '"<source-digest>"')
+    return text
+
+
 def found(pool: dict[str, str]) -> dict[str, dict[str, set[str]]]:
     hits: dict[str, dict[str, set[str]]] = {}
     for kind, rx in PATTERNS.items():
         for rel, text in pool.items():
+            if kind == "telegram id (9–10 цифр)": text = without_inventory_digests(rel, text)
             for match in rx.finditer(text):
                 value = match.group(1) if match.groups() else match.group(0)
                 if value in HIS_OWN or value in NOISE:

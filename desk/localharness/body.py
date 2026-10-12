@@ -822,7 +822,8 @@ def _settings() -> tuple[str, str, str]:
             str(_TOKENS.get("device") or DEFAULT_DEVICE))
 
 
-def call(capability: str, args: dict | None = None, *, timeout: float = 30.0) -> dict:
+def call(capability: str, args: dict | None = None, *, timeout: float = 30.0,
+         request_id: str = "", operation_id: str = "") -> dict:
     """Вызов через клиент дерева, если он уже загружен; иначе — своим urllib.
 
     Сторож зовёт это до и без импорта `agent` (тесты, ранний старт), поэтому
@@ -833,10 +834,11 @@ def call(capability: str, args: dict | None = None, *, timeout: float = 30.0) ->
     mod = sys.modules.get("body_client")
     if mod is not None and getattr(mod, "_helene_settings", False):
         try:
-            return mod.call(capability, args or {}, execution="interactive", timeout=timeout)
+            ids = {k: v for k, v in (("request_id", request_id), ("operation_id", operation_id)) if v}
+            return mod.call(capability, args or {}, execution="interactive", timeout=timeout, **ids)
         except Exception as exc:
             return {"ok": False, "code": "client", "error": str(exc)}
-    return _raw_call(capability, args or {}, timeout=timeout)
+    return _raw_call(capability, args or {}, timeout=timeout, request_id=request_id, operation_id=operation_id)
 
 
 #: Открыватель БЕЗ прокси: мост — сосед по этой же машине (127.0.0.1), и
@@ -877,13 +879,13 @@ def _raw_request(method: str, path: str, payload: dict | None, timeout: float) -
         return {"ok": False, "code": "transport", "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _raw_call(capability: str, args: dict, *, timeout: float) -> dict:
+def _raw_call(capability: str, args: dict, *, timeout: float, request_id: str = "", operation_id: str = "") -> dict:
     import urllib.parse
     _url, _token, device = _settings()
-    rid = secrets.token_hex(16)
+    rid = request_id or secrets.token_hex(16)
     started = _raw_request(
         "POST", f"/v1/controller/{urllib.parse.quote(device, safe='')}/invoke",
-        {"request_id": rid, "operation_id": f"op-{rid}", "execution": "interactive",
+        {"request_id": rid, "operation_id": operation_id or f"op-{rid}", "execution": "interactive",
          "capability": capability, "args": args}, timeout=min(timeout, 10.0))
     if not started.get("ok"):
         return started
@@ -1236,8 +1238,14 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     if not callable(original) or getattr(original, "_helene_body", False):
         return
     action_scopes = dict(getattr(agent_mod, "_COMPUTER_ACTION_SCOPES", {}) or {})
+    import inspect
+    original_signature = inspect.signature(original)
 
     def computer(*args, **kwargs):
+        try:
+            original_signature.bind(*args, **kwargs)
+        except TypeError as error:
+            return f"computer: неверные аргументы ({error}). Действие не выполнено. Используй поля схемы computer; для UIA — action=read_window/find_elements/act_element, для ввода — events."
         action = str(kwargs.get("action") or (args[0] if args else "") or "").strip().lower()
         live.refresh()
         if not live.enabled:
@@ -1287,9 +1295,12 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         return out
 
     computer._helene_body = True
+    computer.__wrapped__ = original
     computer.__name__ = getattr(original, "__name__", "computer")
     computer.__doc__ = getattr(original, "__doc__", "")
     impl["computer"] = computer
+    import computer_steps
+    computer_steps.install(agent_mod, call, device_id=lambda: _settings()[2])
     if sys.platform == "darwin":
         describe_for_mac(agent_mod)
         speak_mac(agent_mod)

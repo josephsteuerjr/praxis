@@ -44,7 +44,9 @@ class Package(unittest.TestCase):
         self.assertEqual(len(notes),1);self.assertEqual(len(turns),1)
         self.assertIn('с 1.5.0 до 1.5.1',notes[0]);self.assertIn('Осмотри',notes[0]);self.assertIn('автоматического испытания и отката здесь нет',notes[0])
         self.assertEqual(turns[0][1]['speaker'],updates.SYSTEM_SPEAKER)
-        self.assertIsNone(notice.pending(self.tree))
+        # Speech confirms the turn, not the actual inspection. Keep its request
+        # until the agent saves evidence through update_inspection(report).
+        self.assertIsNotNone(notice.pending(self.tree))
     def test_brain_not_configured_keeps_the_request_for_later(self):
         notice.observe(self.tree,self.program,{'installed':{'version':'1.5.0'}})
         desk=types.SimpleNamespace(archive=lambda *a,**kw:None,life=lambda *a,**kw:None)

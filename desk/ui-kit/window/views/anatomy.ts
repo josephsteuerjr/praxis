@@ -7,6 +7,9 @@ import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
 import { isMacPlatform } from "../../platform";
 import { mountSupervisor } from "./supervisor";
+import type { AgentState } from "../state";
+import type { FoldState } from "../../memory-fold";
+import { inspectionHTML } from "./inspection-status";
 
 /** Запись леджера ретенции (GET /api/retention). */
 interface RetentionEntry {
@@ -358,9 +361,19 @@ function spendCutsHTML(s: Spend | null): string {
 }
 
 export async function render(container: HTMLElement): Promise<void> {
-  const [aR, pR, mR, cR, sR, retR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7"), api<RetentionReport>("/api/retention")]);
+  const [aR, pR, mR, cR, sR, retR, stateR, memoryR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7"), api<RetentionReport>("/api/retention"), api<AgentState>("/api/state"), api<FoldState>("/api/memory-fold/window")]);
   if (aR.status === "rejected") throw aR.reason;
   const a = aR.value;
+  const current = stateR.status === "fulfilled" ? stateR.value : null;
+  const memory = memoryR.status === "fulfilled" ? memoryR.value : null;
+  const computer = a.computer;
+  const computerStatus = !computer ? "Снимка пока нет" : !computer.enabled ? "Выключен владельцем" : !computer.available ? "Драйвер не найден" : computer.connected === true ? "Готов к работе" : computer.connected === false ? "Драйвер не отвечает" : "Связь ещё не проверена";
+  const overview = `<div class="system-overview">
+    <div><span>Агент</span><strong>${esc(current?.phrase || "Состояние не прочиталось")}</strong><small>${esc(a.agent_name || "")}</small></div>
+    <div><span>Модель</span><strong>${esc(a.model?.model || "Не определена")}</strong><small>${esc(a.model?.framework || "")}</small></div>
+    <div><span>Компьютер</span><strong>${esc(computerStatus)}</strong><small>${esc(computer?.scopes?.join(", ") || "")}</small></div>
+    <div><span>Контекст владельца</span><strong>${memory?.hot == null ? "Состояние не прочиталось" : `${fmtN(memory.hot)} свежих сообщений`}</strong><small>${memory?.tape_chars ? `до ${fmtN(memory.tape_chars)} знаков разговора` : "Предел задаётся в настройках"}</small></div>
+  </div>${inspectionHTML(current?.update_inspection)}`;
   const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
   const materials = materialsHTML(retR.status === "fulfilled" ? retR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
@@ -391,6 +404,8 @@ export async function render(container: HTMLElement): Promise<void> {
        <details class="fold"><summary>Подключения и права инструментов</summary><div class="fold-body">Транспорты: ${esc((a.transports || []).join(" + "))} · песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · провайдер модели: ${esc(a.model?.framework || "?")}.</div></details>`
     : '<p class="muted">Снимка ещё нет: движок пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
+    <p class="page-intro">Состояние агента сейчас: связь, память и доступ к компьютеру. Ниже — расход, собственные навыки и детали устройства.</p>
+    ${overview}
     ${meta}${materials}${modeBox}${fenceBox}
     <div id="supervisor-box"></div>
     ${spend}

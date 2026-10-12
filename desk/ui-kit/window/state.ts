@@ -35,6 +35,8 @@ export interface AgentState {
    * нет, и окно в браузере знало только имя продукта.
    */
   desk?: { version: string; flavor: string; digest: string; built_utc: string; skipped?: string[] };
+  update_inspection?: { id?: string; state?: string; version?: string; summary?: string;
+    goals?: Array<{ id: string; title: string }>; checks?: Array<{ id: string; status: string; evidence: string }> };
 }
 
 /**

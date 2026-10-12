@@ -2,6 +2,7 @@
 export interface FoldState {
   room: string; hot: number | null; keep: number; offer_at: number; hard_at: number;
   token_cap?: number; tape_chars?: number; offer_mode?: boolean; backstop_hours?: number;
+  chars?: number; tokens?: number; owner_context?: boolean;
   policy_source?: string;
   delivery?: { state: string; retry_at: number; retries: number; at: number } | null;
   offer: Record<string, unknown> | null;

@@ -16,7 +16,7 @@ WINDOWS = os.name == 'nt'
 
 def installation(config_path: Path) -> Path:
     for root in (config_path.parent, *config_path.parents):
-        if (root / 'helene-svc.exe').is_file():
+        if (root / 'helene.json').is_file() and any((root / name).is_file() for name in ('helene.exe', 'helene-svc.exe')):
             return root
     raise RuntimeError('Не найден нативный стоп-кран рядом с установкой Hélène.')
 
@@ -59,6 +59,12 @@ def request(config_path: Path, *, via: str, reason: str = '') -> dict:
         import broker
         root = installation(Path(config_path))
         cfg = json.loads((root / 'helene.json').read_text(encoding='utf-8-sig'))
+        owner_stop.latch_client(via, reason)
+        installed = (cfg.get('installed') or {}).get('service') is True
+        if not installed:
+            if not owner_stop.stopped(): raise RuntimeError('Стоп-флаг клиента не подтверждён.')
+            return {'ok': True, 'latched': True, 'scope': 'client',
+                'note': 'Аварийный стоп клиента сохранён. Надзор завершает его процессы; запуск — только явной командой владельца.'}
         tree = Path(cfg.get('tree') or 'data')
         if not tree.is_absolute():
             tree = root / tree
@@ -77,6 +83,8 @@ def request(config_path: Path, *, via: str, reason: str = '') -> dict:
                                   capture_output=True, timeout=10, creationflags=0x08000000)
             if done.returncode:
                 raise RuntimeError('Служба не приняла стоп. Используй ярлык «Hélène — аварийный стоп» или helene.exe --panic.')
+        if not owner_stop.present(owner_stop.seed_file()):
+            raise RuntimeError('Стоп клиента сохранён, но служба не подтвердила остановку своих процессов.')
     if not owner_stop.stopped():
         raise RuntimeError('Стоп-флаг ещё не подтверждён; прекращение работы не объявлено.')
     return {'ok': True, 'latched': True,

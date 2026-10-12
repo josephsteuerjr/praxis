@@ -1,42 +1,56 @@
-// Журнал: ошибки вызовов модели и пропуски восприятия — последние события,
-// длинные ошибки свёрнуты; полный хвост — в «подробнее». Пустые таблицы — норма.
+// Readable events with exact diagnostics available on demand.
 import { api } from "../api";
 import { esc, fmtTs } from "../lib";
+import type { AgentState } from "../state";
+import { inspectionHTML } from "./inspection-status";
 
 interface Errors {
   llm?: Array<{ ts?: number; model?: string; role?: string; err?: string; retries?: number }>;
   skips?: Array<{ ts?: number; stage?: string; class?: string; detail?: string; chat?: string }>;
 }
-
+interface Event { ts: number; kind: string; title: string; description: string; detail: string; context: string }
 const TAIL = 50;
-const shortErr = (s: string) => (s.length > 120 ? s.slice(0, 117) + "…" : s);
-const detailHTML = (s: string) => s.length > 120
-  ? `${esc(shortErr(s))} <details class="fold"><summary>подробнее</summary><pre class="mono">${esc(s)}</pre></details>`
-  : esc(s);
+const short = (s: string) => s.length > 180 ? s.slice(0, 177) + "…" : s;
+
+function modelDescription(error: string) {
+  if (/429|rate.?limit|quota|лимит/i.test(error)) return "Провайдер ограничил запросы. Подробный ответ покажет, требуется ли ожидание или смена модели.";
+  if (/401|403|unauthori|forbidden/i.test(error)) return "Провайдер отказал в доступе. Проверь подключение и ключ выбранной модели.";
+  if (/timeout|timed out|таймаут/i.test(error)) return "Ответ не получен в отведённое время. Это не доказывает, что модель или агент остановлены.";
+  if (/connection|network|resolve|сет|подключ/i.test(error)) return "Связь с провайдером не состоялась. Проверь сеть и адрес подключения.";
+  return short(error) || "Причина в журнале вызова не записана.";
+}
+
+export function journalEvents(data: Errors): Event[] {
+  return [
+    ...(data.llm || []).map((r) => ({ ts: r.ts || 0, kind: "model", title: r.role === "evaluator" ? "Не прошёл вызов проверки или свёртки" : "Не прошёл вызов модели",
+      description: modelDescription(r.err || ""), detail: r.err || "", context: [r.model, r.retries ? `повторов: ${r.retries}` : ""].filter(Boolean).join(" · ") })),
+    ...(data.skips || []).map((r) => ({ ts: r.ts || 0, kind: "perception", title: r.class === "duplicate" ? "Повторное событие уже учтено" : "Событие восприятия пропущено", description: short(r.detail || r.class || "Причина не записана"),
+      detail: r.detail || "", context: [r.stage, r.class, r.chat ? `чат ${r.chat}` : ""].filter(Boolean).join(" · ") })),
+  ].sort((a, b) => b.ts - a.ts);
+}
 
 export async function render(container: HTMLElement): Promise<void> {
-  const e = await api<Errors>("/api/errors");
-  const llmAll = (e.llm || []).slice().reverse();
-  const llm = llmAll.slice(0, TAIL).map(
-      (r) => `<tr>
-      <td class="mono">${fmtTs(r.ts)}</td><td>${esc(r.model || "")}</td>
-      <td title="${esc(r.role || "")}">${esc(({voice:"Ответ агента", evaluator:"Проверка и свёртка"} as Record<string,string>)[r.role || ""] || r.role || "")}</td><td class="err-msg">${detailHTML(r.err || "")}</td>
-      <td class="mono">${r.retries || 0}</td></tr>`,
-    )
-    .join("");
-  const skipsAll = (e.skips || []).slice().reverse();
-  const skips = skipsAll.slice(0, TAIL).map(
-      (r) => `<tr>
-      <td class="mono">${fmtTs(r.ts)}</td><td>${esc(r.stage || "")}</td>
-      <td>${esc(r.class || "")}</td><td class="muted">${detailHTML(r.detail || "")}</td>
-      <td class="mono">${esc(r.chat || "")}</td></tr>`,
-    )
-    .join("");
+  const [eR, sR] = await Promise.allSettled([api<Errors>("/api/errors"), api<AgentState>("/api/state")]);
+  if (eR.status !== "fulfilled") throw eR.reason;
+  const e = eR.value;
+  const events = journalEvents(e);
   container.innerHTML = `<div class="center journal">
-    <p class="muted">Здесь сбои вызовов модели и пропуски восприятия. Пустые таблицы — норма; показаны последние ${TAIL}.</p>
-    <h3 class="section-title">Ошибки вызовов модели <span class="muted">${llmAll.length}</span></h3>
-    ${llm ? `<table class="grid"><tr><th>когда</th><th>модель</th><th>назначение</th><th>ошибка</th><th>повторы</th></tr>${llm}</table>${llmAll.length > TAIL ? `<p class="muted">+${llmAll.length - TAIL} старых — не показано</p>` : ""}` : '<div class="card muted">Ошибок модели не было.</div>'}
-    <h3 class="section-title">Пропуски восприятия <span class="muted">${skipsAll.length}</span></h3>
-    ${skips ? `<table class="grid"><tr><th>когда</th><th>стадия</th><th>класс</th><th>деталь</th><th>чат</th></tr>${skips}</table>${skipsAll.length > TAIL ? `<p class="muted">+${skipsAll.length - TAIL} старых — не показано</p>` : ""}` : '<div class="card muted">Пропусков не было.</div>'}
-  </div>`;
+    <p class="page-intro">Здесь видно, что помешало работе агента: сбои модели и пропущенные события. Запись об ошибке остаётся в истории после восстановления связи.</p>
+    ${inspectionHTML(sR.status === "fulfilled" ? sR.value.update_inspection : undefined)}
+    <div class="journal-controls" role="group" aria-label="Фильтр событий">
+      <button class="context-link" type="button" data-journal-kind="all" aria-pressed="true">Все · ${events.length}</button>
+      <button class="context-link" type="button" data-journal-kind="model" aria-pressed="false">Модель · ${(e.llm || []).length}</button>
+      <button class="context-link" type="button" data-journal-kind="perception" aria-pressed="false">Восприятие · ${(e.skips || []).length}</button>
+    </div><div data-journal-events></div></div>`;
+  const box = container.querySelector<HTMLElement>("[data-journal-events]")!;
+  const paint = (kind: string) => {
+    const selected = events.filter((r) => kind === "all" || r.kind === kind);
+    box.innerHTML = selected.length ? `<ol class="journal-events">${selected.slice(0, TAIL).map((r) => `<li class="journal-event">
+      <time>${fmtTs(r.ts)}</time><div><h3>${esc(r.title)}</h3><p>${esc(r.description)}</p><small class="muted">${esc(r.context)}</small>
+      <details class="fold"><summary>Полная запись</summary><pre class="mono">${esc(r.detail || r.description)}</pre></details></div></li>`).join("")}</ol>
+      ${selected.length > TAIL ? `<p class="muted">Ещё ${selected.length - TAIL} старых событий остаются в архиве.</p>` : ''}` : '<div class="journal-empty">Здесь пока нет событий.<p class="muted">Текущую связь и доступ к компьютеру можно посмотреть в «Системе».</p></div>';
+    container.querySelectorAll<HTMLButtonElement>("[data-journal-kind]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.journalKind === kind)));
+  };
+  container.querySelectorAll<HTMLButtonElement>("[data-journal-kind]").forEach((b) => b.addEventListener("click", () => paint(b.dataset.journalKind || "all")));
+  paint("all");
 }

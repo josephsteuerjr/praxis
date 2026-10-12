@@ -1,9 +1,9 @@
 {
-  "version": "1.5.9",
+  "version": "1.6.0",
   "tree_inventory_scope": "published_payload",
-  "frozen_tree": "8195b349462d4b01b8ce178853fc93f66a1ee3fd",
+  "frozen_tree": "94b17f606a78582c2e7cd5259b0fb27288324dd0",
   "accepted_tree_baseline": "ea703f1af457eb7272c5ab1d4d559f1b865185b7",
-  "source_public_parent": "4489454910b45b7b4bf98cb522b4d46398d688cf",
+  "source_public_parent": "5fe695a0ac73f7fb8091879773cdcfd47dd80563",
   "frozen_tree_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".gitattributes": "066ea1b66070539e6165ef10d0cb566f703ccfb03e2b571f8fe876942a9540c2",
@@ -189,7 +189,7 @@
     "body/crates/praxis-body/src/runtime.rs": "34003f1d5beabb321e2e9ffffd7759166887bf82122378f42403693da7c2b645",
     "body/crates/praxis-body/src/system_router.rs": "c5831ae15c1aa52c03bcf955a3ea21a5dd07903b0dff5d2959b3c1ab24c9f358",
     "body/crates/praxis-body/src/transport.rs": "640ca5fd95077101f4a8209a4fddbb4040b24c6f84c7bb5d3ff79556fb71989c",
-    "body/crates/praxis-body/src/uia.rs": "3e04ba0cbb6e370919fa2256ab588017658f615c75dbe2f2b1451721d88c203a",
+    "body/crates/praxis-body/src/uia.rs": "46612da6d2a6b87c867062096a5f8d4240ccc4a9f89e941298bc3b697bb61160",
     "body/crates/praxis-bridge/Cargo.toml": "54647dc9394e4597436a76c605deb74bdfb2a9302646c865ce63b03a66330193",
     "body/crates/praxis-bridge/src/artifacts.rs": "16dfde8a15c39a50579badae09186639adc87303ffcad9b6642906b1a3cd8e22",
     "body/crates/praxis-bridge/src/main.rs": "4dac9fa359cc56caa7efaf9928135573e4fb5276f231fd9e6c7faef66ea94a6f",
@@ -304,5 +304,5 @@
     "tools/cache_saw_daily.py": "4bca4be868461e54e1aff106a6c54baea419fdd523c9020cf7b041665c647462"
   },
   "full_core_gate": "red_inherited_baseline_failures",
-  "note": "Windows UI fixes and intentionally added skills reviewed from Ouroboros; agent tree preserved."
+  "note": "Hélène1.6.0 candidate: owner-context/runtime/UI/inspection improvements; kernel unchanged, body UIA performance updated. Separate platform and adversarial reviews pending."
 }

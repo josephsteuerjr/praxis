@@ -2226,6 +2226,7 @@ def _state_impl() -> dict:
         # единственный источник версии (оболочки там нет), а выкладка по нему
         # сверяет, что канал встал именно с тем пакетом, который положен.
         "desk": desk_build(),
+        "update_inspection": _load_json(st / "update-inspection.json"),
     }
 
 

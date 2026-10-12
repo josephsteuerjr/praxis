@@ -237,6 +237,8 @@ def install(agent_mod, tree: Path, cfg: dict | None = None, *,
                                    ("обновить себя на сервере: план исполнителю, «да» — у владельца, "
                                     "после подъёма — известие о новой версии"))
     STATE.update(hand=True, note="рука update_request выдана" + (" (ПК: состояние)" if desktop else ""))
+    import update_inspection
+    update_inspection.install(agent_mod, tree)
     log.info("обновление: рука update_request выдана (%s)",
              "ПК — обновление без испытания" if desktop else "исполнитель — server/updater")
     return True

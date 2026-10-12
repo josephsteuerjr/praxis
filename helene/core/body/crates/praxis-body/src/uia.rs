@@ -99,6 +99,11 @@ fn act_property<T, E>(required: bool, read: std::result::Result<T, E>) -> std::r
     }
 }
 
+#[cfg(any(windows, test))]
+fn selected_read<T>(cached: bool, cached_read: impl FnOnce() -> T, live_read: impl FnOnce() -> T) -> T {
+    if cached { cached_read() } else { live_read() }
+}
+
 // ─── пределы ────────────────────────────────────────────────────────────────────────────
 //
 // Закон проекта: ни одного молчаливого предела. Всё, что ниже, приезжает в ответе в поле
@@ -1472,10 +1477,10 @@ mod platform {
         AutomationElementMode_Full, CUIAutomation, ExpandCollapseState_Collapsed,
         ExpandCollapseState_Expanded, ExpandCollapseState_LeafNode,
         ExpandCollapseState_PartiallyExpanded, IUIAutomation, IUIAutomationCacheRequest,
-        IUIAutomationElement, IUIAutomationExpandCollapsePattern, IUIAutomationTreeWalker,
+        IUIAutomationElement, IUIAutomationElementArray, IUIAutomationExpandCollapsePattern, IUIAutomationTreeWalker,
         IUIAutomationSelectionItemPattern, IUIAutomationTextPattern, IUIAutomationTogglePattern,
         IUIAutomationValuePattern,
-        ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, TreeScope_Element,
+        ToggleState_Indeterminate, ToggleState_Off, ToggleState_On, TreeScope_Element, TreeScope_Children,
         UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ClassNamePropertyId,
         UIA_ControlTypePropertyId, UIA_ExpandCollapsePatternId, UIA_HasKeyboardFocusPropertyId,
         UIA_IsEnabledPropertyId, UIA_IsOffscreenPropertyId, UIA_LocalizedControlTypePropertyId,
@@ -1498,7 +1503,7 @@ mod platform {
     use super::{
         Node, Plan, Rect, Rendered, WINDOW_READ_UIA_DETAIL, WINDOW_READ_WIN32_DETAIL,
         WIN32_TEXT_TIMEOUT_MS, WORKER_GRACE_MS, Walk, WindowInfo, clip_utf16, render, role_name,
-        win32_role,
+        win32_role, selected_read,
     };
 
     /// Живые потоки UIA. Растёт только тогда, когда предыдущее чтение не ответило в срок и
@@ -2328,31 +2333,21 @@ mod platform {
     fn describe_with(element: &IUIAutomationElement, role: &str, cached: bool) -> Value {
         let mut object = serde_json::Map::new();
         object.insert("role".into(), serde_json::json!(role));
-        let read = |cached_one: Option<windows::core::BSTR>,
-                    live_one: Option<windows::core::BSTR>| {
-            bstr(if cached { cached_one } else { live_one })
-        };
         for (key, value) in [
             (
                 "name",
-                read(
-                    unsafe { element.CachedName() }.ok(),
-                    unsafe { element.CurrentName() }.ok(),
-                ),
+                bstr(selected_read(cached, || unsafe { element.CachedName() }.ok(),
+                    || unsafe { element.CurrentName() }.ok())),
             ),
             (
                 "automation_id",
-                read(
-                    unsafe { element.CachedAutomationId() }.ok(),
-                    unsafe { element.CurrentAutomationId() }.ok(),
-                ),
+                bstr(selected_read(cached, || unsafe { element.CachedAutomationId() }.ok(),
+                    || unsafe { element.CurrentAutomationId() }.ok())),
             ),
             (
                 "class",
-                read(
-                    unsafe { element.CachedClassName() }.ok(),
-                    unsafe { element.CurrentClassName() }.ok(),
-                ),
+                bstr(selected_read(cached, || unsafe { element.CachedClassName() }.ok(),
+                    || unsafe { element.CurrentClassName() }.ok())),
             ),
             (
                 "value",
@@ -2407,6 +2402,14 @@ mod platform {
         }
     }
 
+    fn cached_children(element: &IUIAutomationElement) -> Result<Option<IUIAutomationElementArray>> {
+        use windows::core::Interface;
+        let mut raw = std::ptr::null_mut();
+        let status = unsafe { (element.vtable().GetCachedChildren)(element.as_raw(), &mut raw) };
+        let output = if raw.is_null() { None } else { Some(unsafe { IUIAutomationElementArray::from_raw(raw) }) };
+        super::act_provider_output(status.ok(), output).context("cached UIA children could not be read")
+    }
+
     fn uia_walk(handle: u64, plan: &Plan) -> Result<Walk> {
         let started = Instant::now();
         let deadline = started + Duration::from_millis(plan.limits.timeout_ms);
@@ -2418,7 +2421,7 @@ mod platform {
         let cache = unsafe { automation.CreateCacheRequest() }.context("CreateCacheRequest")?;
         let view = unsafe { automation.ControlViewCondition() }.context("ControlViewCondition")?;
         unsafe {
-            cache.SetTreeScope(TreeScope_Element)?;
+            cache.SetTreeScope(windows::Win32::UI::Accessibility::TreeScope(TreeScope_Element.0 | TreeScope_Children.0))?;
             cache.SetTreeFilter(&view)?;
             // Full, а не None: по этим же элементам мы продолжаем шагать ходоком, а элемент
             // без полной ссылки умеет только отдать своё содержимое и никуда не ведёт.
@@ -2434,7 +2437,6 @@ mod platform {
             .context("ElementFromHandle")?;
         // Ходок по control view: это то дерево, которое видит человек. Сырое (raw) дерево
         // вдвое-втрое толще и состоит наполовину из невидимых обёрток.
-        let walker = unsafe { automation.ControlViewWalker() }.context("ControlViewWalker")?;
 
         let mut walk = Walk::default();
         let mut queue: VecDeque<(IUIAutomationElement, u64, Option<usize>)> = VecDeque::new();
@@ -2450,6 +2452,21 @@ mod platform {
                 break;
             }
             let (element, depth, parent) = queue.pop_front().expect("queue is not empty");
+            // Cache each node with its immediate children in one provider request.
+            // Keep a previously captured node if its provider refuses the refresh.
+            let element = if depth == 0 || depth >= plan.limits.max_depth { element } else {
+                match unsafe { element.BuildUpdatedCache(&cache) } {
+                    Ok(fresh) => fresh,
+                    Err(_) => {
+                        let mut node = node_from(&element, depth, parent, plan);
+                        node.children_unread = Some("provider_refused");
+                        walk.subtrees_unread += 1;
+                        walk.mark("provider_refused");
+                        walk.nodes.push(node);
+                        continue;
+                    }
+                }
+            };
             let mut node = node_from(&element, depth, parent, plan);
             if plan.visible_only && node.offscreen == Some(true) {
                 walk.skipped_offscreen += 1;
@@ -2463,51 +2480,42 @@ mod platform {
                 walk.subtrees_unread += 1;
                 walk.mark("max_depth");
             } else {
-                // ⚠ Отказ провайдера — не «детей нет». Здесь стоял `.ok()`, который
-                // схлопывал оба ответа в `None`: цикл не входил ни разу, расписка
-                // объявляла окно дочитанным, и поддерево исчезало МОЛЧА. Ровно тот
-                // класс, что она нашла и закрыла в обходе действия (`act_walk`), —
-                // в обходе чтения он оставался. А рука обещает владельцу, что
-                // расписка называет каждый предел и всё, что осталось непрочитанным:
-                // отказ обхода — такой же предел, как `max_depth` и `timeout`.
-                let mut child = match act_walk(&walker, &element, &cache, false) {
-                    Ok(next) => next,
+                let children = cached_children(&element);
+                let count = match children.as_ref() {
+                    Ok(Some(array)) => unsafe { array.Length() }.map(|n| n.max(0) as u64),
+                    Ok(None) => Ok(0),
+                    Err(_) => Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_FAIL)),
+                };
+                match count {
                     Err(_) => {
                         node.children_unread = Some("provider_refused");
                         walk.subtrees_unread += 1;
                         walk.mark("provider_refused");
-                        None
                     }
-                };
-                let mut seen = 0u64;
-                while let Some(current) = child {
-                    if seen >= plan.limits.max_children_per_node {
-                        node.children_unread = Some("max_children_per_node");
-                        walk.subtrees_unread += 1;
-                        walk.mark("max_children_per_node");
-                        break;
-                    }
-                    if Instant::now() >= deadline {
-                        node.children_unread = Some("timeout");
-                        walk.subtrees_unread += 1;
-                        walk.mark("timeout");
-                        break;
-                    }
-                    // Тот же отказ на соседе обрывает список детей ЭТОГО узла — и это
-                    // тоже предел, а не конец списка. Уже полученный `current` в
-                    // очередь кладём: он прочитан честно.
-                    let next = match act_walk(&walker, &current, &cache, true) {
-                        Ok(next) => next,
-                        Err(_) => {
-                            node.children_unread = Some("provider_refused");
+                    Ok(count) => for seen in 0..count {
+                        if seen >= plan.limits.max_children_per_node {
+                            node.children_unread = Some("max_children_per_node");
                             walk.subtrees_unread += 1;
-                            walk.mark("provider_refused");
-                            None
+                            walk.mark("max_children_per_node");
+                            break;
                         }
-                    };
-                    queue.push_back((current, depth + 1, Some(index)));
-                    child = next;
-                    seen += 1;
+                        if Instant::now() >= deadline {
+                            node.children_unread = Some("timeout");
+                            walk.subtrees_unread += 1;
+                            walk.mark("timeout");
+                            break;
+                        }
+                        let current = unsafe { children.as_ref().ok().and_then(|x| x.as_ref()).expect("nonempty cached children").GetElement(seen as i32) };
+                        match current {
+                            Ok(current) => queue.push_back((current, depth + 1, Some(index))),
+                            Err(_) => {
+                                node.children_unread = Some("provider_refused");
+                                walk.subtrees_unread += 1;
+                                walk.mark("provider_refused");
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             walk.nodes.push(node);
@@ -2838,6 +2846,14 @@ const COORDINATES_NOTE: &str = if cfg!(target_os = "macos") {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_description_never_calls_live_provider_and_live_description_never_reads_cache() {
+        let actual = selected_read(true, || "cached", || panic!("live provider must not be touched"));
+        assert_eq!(actual, "cached");
+        let actual = selected_read(false, || panic!("old cache must not be touched"), || "live");
+        assert_eq!(actual, "live");
+    }
 
     #[test]
     fn action_provider_failure_is_not_successful_null() {

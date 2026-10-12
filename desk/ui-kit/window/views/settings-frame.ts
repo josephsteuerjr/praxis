@@ -32,6 +32,8 @@ import { isMacPlatform, platformOf } from "../../platform";
 import { relayAuthCard } from "../relay-auth-card";
 import { collectConnection } from "../server-connection";
 import { paperDialog } from "../../paper-dialog";
+import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
+import { showMemoryLines } from "../../memory-line";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -40,6 +42,7 @@ export const RESTART_BLOCKS: Array<[string, string]> = [
   ["voice", "голос"],
   ["agents", "агенты"],
   ["sandbox", "ограда"],
+  ["owner_context", "контекст владельца"],
 ];
 
 /** Какие из RESTART_BLOCKS изменились между сохранённым и новым конфигом (стабильный JSON). */
@@ -97,6 +100,7 @@ export interface Config {
   voice?: { enabled?: boolean; model?: string; language?: string; threads?: number;
             keep_loaded?: boolean; compute_type?: string; beam_size?: number; [k: string]: unknown };
   installed?: { service?: boolean; [k: string]: unknown };
+  owner_context?: { messages?: number; characters?: number; tokens?: number; [k: string]: unknown };
   // Местожительство харнесса: `local` — дети окна; `remote` — окно ходит в
   // трубу на сервере по `base` и `key`. Это НЕ режим агента — тот в `agent_mode`.
   mode?: string;
@@ -241,6 +245,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
     // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
     center.append(lookCard());
+    center.append(button("Показать скрытые строки памяти в чатах", "quiet", () => {
+      showMemoryLines(); toast("Строки памяти снова видны в чатах");
+    }));
     mountSettings(container, center);
     return;
   }
@@ -306,6 +313,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // переписывает никто, кроме установщика, — а в ней старые имена остаются
   // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
   center.append(inGroup(card("Имена", names, built.namesHint), GROUP.agent));
+  center.append(inGroup(ownerContextCard(draft), GROUP.agent));
 
   for (const box of built.cards) center.append(box);
 
@@ -595,6 +603,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   };
   class StaleConfig extends Error {}
   const writeConfig = async (out: Config, force = false): Promise<string> => {
+    validateOwnerContext(out);
     const revision = container.dataset.settingsRevision;
     const args: Record<string, unknown> = { config: JSON.stringify(out) };
     if (seenMtime && !force) args.mtimeNs = seenMtime;

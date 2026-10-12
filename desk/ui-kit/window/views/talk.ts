@@ -10,7 +10,8 @@
 import { KeyedList } from "../../feed/keyed";
 import { api, post } from "../api";
 import { artifactCaption, mediaDescriptor, paperMediaHTML } from "../../paper-media";
-import { deliveryWords, foldWords, type FoldState } from "../../memory-fold";
+import { deliveryWords, type FoldState } from "../../memory-fold";
+import { hideMemoryLine, memoryLineHidden, memoryLineWords } from "../../memory-line";
 import { replyPreview } from "../../reply-preview";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
@@ -566,7 +567,7 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
     st = await api<FoldState>(`/api/memory-fold/${encodeURIComponent(room)}`);
   } catch {
     if (box.isConnected && S.room === room) {
-      box.textContent = "Счётчик горячей памяти пока недоступен.";
+      box.textContent = memoryLineHidden(room) ? "" : "Память пока недоступна.";
       delete box.dataset.html;
       clearTimeout(foldTimer);
       foldTimer = window.setTimeout(() => {
@@ -576,33 +577,27 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
     return;
   }
   if (!box.isConnected || S.room !== room) return;
-  const words = foldWords(st);
   clearTimeout(foldTimer);
   foldTimer = window.setTimeout(() => {
     if (S.view === "talk" && S.room === room && box.isConnected) void paintFold(container, room);
   }, 3000);
   const delivery = deliveryWords(st);
-  // Тихий режим (Егор 11.10): нечего сказать — постоянной строки
-  // «горячая память: N сообщений» нет. Блок вернётся, когда появится
-  // предложение свёртки, идущий проход, записка или событие доставки.
-  if (!words.canFold && words.state === "idle" && !words.note && !delivery) {
-    if (box.dataset.html !== "") {
-      box.dataset.html = "";
-      scroll.preserve(() => { box.innerHTML = ""; });
-    }
-    return; // таймер опроса уже перепланирован выше
-  }
-  const html = `${delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : ''}<div class="memory-fold"><div class="memory-fold-head"><strong>${esc(words.counter)}</strong>
-    ${words.canFold ? '<button class="notice-action" data-fold type="button">Свернуть сейчас</button>' : ''}</div>
-    <details><summary>Как работает память</summary><p>${esc(words.explanation)}</p></details>
-    ${words.note ? `<p class="receipt${words.state === "failed" ? " err" : ""}" data-fold-note>${esc(words.note)}</p>` : ''}</div>`;
+  const line = memoryLineWords(st);
+  const html = `${delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : ''}${memoryLineHidden(room) ? '' : `<div class="context-line"${line.state === "failed" ? ' role="status"' : ''}>
+    <span title="${esc(line.note || 'Свежие сообщения, ещё не вошедшие в сводку. Переписка сохранена в архиве.')}" data-context-status>${esc(line.text)}</span>
+    ${line.canFold ? '<button class="context-link" data-fold type="button">Свернуть</button>' : ''}
+    <button class="context-link" data-context-settings type="button">Настроить</button>
+    <button class="context-hide" data-context-hide type="button" aria-label="Скрыть строку памяти этого чата" title="Скрыть">×</button>
+  </div>`}`;
   if (box.dataset.html === html) return;
   box.dataset.html = html;
-  const expanded = box.querySelector("details")?.open;
   scroll.preserve(() => {
     box.innerHTML = html;
-    if (expanded) box.querySelector("details")!.open = true;
   });
+  box.querySelector("[data-context-hide]")?.addEventListener("click", () => {
+    hideMemoryLine(room); void paintFold(container, room);
+  });
+  box.querySelector("[data-context-settings]")?.addEventListener("click", () => dispatchEvent(new CustomEvent("frame-go", { detail: "settings" })));
   const btn = box.querySelector<HTMLButtonElement>("[data-fold]");
   btn?.addEventListener("click", async () => {
     btn.disabled = true;
@@ -613,9 +608,9 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
       void paintFold(container, room);
     } catch (e) {
       btn.disabled = false;
-      btn.textContent = "Свернуть сейчас";
+      btn.textContent = "Свернуть";
       let text = box.querySelector<HTMLElement>("[data-fold-note]");
-      if (!text) { text = document.createElement("p"); text.className = "receipt err"; box.querySelector(".memory-fold")?.append(text); }
+      if (!text) { text = document.createElement("p"); text.className = "receipt err"; box.append(text); }
       text.textContent = humanError(e).text;
     }
   });

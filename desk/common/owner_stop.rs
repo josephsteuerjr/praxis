@@ -80,12 +80,69 @@ fn owner_stop_file() -> Option<std::path::PathBuf> {
     owner_stop_dir().map(|d| d.join(OWNER_STOP_NAME))
 }
 
+/// A client without an elevated service owns a separate durable latch. All
+/// launchers in that user's session read it, including after an app update.
+#[allow(dead_code)]
+#[cfg(windows)]
+fn client_stop_file() -> Option<std::path::PathBuf> {
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_LocalAppData, SHGetKnownFolderPath};
+    let mut raw: windows_sys::core::PWSTR = std::ptr::null_mut();
+    let hr = unsafe { SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, std::ptr::null_mut(), &mut raw) };
+    let path = if hr >= 0 && !raw.is_null() {
+        let mut n = 0;
+        while unsafe { *raw.add(n) } != 0 { n += 1; }
+        Some(std::path::PathBuf::from(String::from_utf16_lossy(unsafe {
+            std::slice::from_raw_parts(raw, n)
+        })).join("Helene").join("owner-stop.json"))
+    } else { None };
+    if !raw.is_null() { unsafe { CoTaskMemFree(raw.cast()) }; }
+    path
+}
+
+#[allow(dead_code)]
+fn write_stop_marker(path: &std::path::Path, via: &str) -> Result<(), String> {
+    use std::io::Write;
+    std::fs::create_dir_all(path.parent().ok_or("no stop directory")?).map_err(|e| e.to_string())?;
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => {
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?.as_secs();
+            let value = serde_json::json!({"at": at, "via": via,
+                "by": if via == "agent" { "agent" } else { "owner" }});
+            file.write_all(&serde_json::to_vec(&value).map_err(|e| e.to_string())?)
+                .and_then(|_| file.sync_all()).map_err(|e| e.to_string())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+#[allow(dead_code)]
+#[cfg(windows)]
+fn request_client_stop(via: &str) -> Result<(), String> {
+    write_stop_marker(&client_stop_file().ok_or("no user state directory")?, via)
+}
+
+#[allow(dead_code)]
+#[cfg(windows)]
+fn resume_client_stop() -> Result<(), String> {
+    let path = client_stop_file().ok_or("no user state directory")?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Записка стоп-крана, если агент остановлен владельцем. Файл есть, но не читается или
 /// битый — это всё равно «остановлен»: сомнение здесь решается в сторону стопа.
 #[allow(dead_code)]
 fn owner_stop_note() -> Option<serde_json::Value> {
-    let path = owner_stop_file()?;
-    match std::fs::read(&path) {
+    let mut paths: Vec<std::path::PathBuf> = owner_stop_file().into_iter().collect();
+    #[cfg(windows)]
+    paths.extend(client_stop_file());
+    paths.into_iter().find_map(|path| match std::fs::read(&path) {
         Ok(bytes) => Some(
             serde_json::from_slice::<serde_json::Value>(&bytes)
                 .ok()
@@ -95,7 +152,7 @@ fn owner_stop_note() -> Option<serde_json::Value> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         // Нет прав прочитать — файл есть. Остановлен.
         Err(_) => Some(serde_json::json!({"broken": true})),
-    }
+    })
 }
 
 #[allow(dead_code)]
@@ -140,7 +197,6 @@ fn owner_stop_said(note: &serde_json::Value) -> String {
 /// This command requires the owner/admin context; it is not an agent security boundary.
 #[allow(dead_code)]
 fn request_owner_stop(via: &str) -> Result<(), String> {
-    use std::io::Write;
     let dir = owner_stop_dir().ok_or("owner stop is not supported on this platform")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     #[cfg(windows)]
@@ -151,17 +207,7 @@ fn request_owner_stop(via: &str) -> Result<(), String> {
             .creation_flags(0x08000000).output().map_err(|e| e.to_string())?;
         if !result.status.success() { return Err("cannot protect owner-stop directory; use an elevated owner command".into()); }
     }
-    let path = dir.join(OWNER_STOP_NAME);
-    match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
-        Ok(mut f) => {
-            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| e.to_string())?.as_secs();
-            let bytes = serde_json::to_vec(&serde_json::json!({"at": at, "via": via, "by": if via == "agent" { "agent" } else { "owner" }})).map_err(|e| e.to_string())?;
-            f.write_all(&bytes).and_then(|_| f.sync_all()).map_err(|e| e.to_string())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(e) => Err(e.to_string()),
-    }
+    write_stop_marker(&dir.join(OWNER_STOP_NAME), via)
 }
 
 #[allow(dead_code)]
@@ -171,6 +217,25 @@ fn resume_owner_stop() -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("cannot clear owner stop; use an elevated owner command: {e}")),
+    }?;
+    #[cfg(windows)]
+    resume_client_stop()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod client_stop_tests {
+    use super::*;
+    #[test]
+    fn stop_marker_is_durable_and_repeated_panic_preserves_it() {
+        let path = std::env::temp_dir().join(format!("helene-stop-test-{}-{}.json", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        write_stop_marker(&path, "window").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        write_stop_marker(&path, "telegram").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&before).unwrap()["via"], "window");
+        std::fs::remove_file(path).unwrap();
     }
 }
 

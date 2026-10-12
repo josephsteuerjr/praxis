@@ -3139,16 +3139,19 @@ fn engine_restart() -> Result<String, String> {
     Ok("Перезапуск запрошен; жду готовности движка".into())
 }
 
-/// Стоп-кран владельца. Windows просит согласие UAC и кладёт флаг службой; Linux
-/// пишет флаг сам (движок там всегда от имени владельца — прав не нужно), а детей
-/// гасит и поднимает надзор `watch_children` своими полусекундными тиками.
+/// Native work runs outside the UI thread, including a service or UAC wait.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn owner_control(action: String) -> Result<String, String> {
+async fn owner_control(action: String) -> Result<String, String> {
+    shell_adapter::async_runtime::spawn_blocking(move || owner_control_blocking(action))
+        .await.map_err(|e| e.to_string())?
+}
+
+fn owner_control_blocking(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
     if action=="resume" && SERVER_TRANSFER_BUSY.load(std::sync::atomic::Ordering::SeqCst) {
         return Err("Перенос на сервер ещё идёт. Дождись его результата, чтобы не запустить второго агента.".into());
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         return match action.as_str() {
             "panic" => {
@@ -3156,11 +3159,13 @@ fn owner_control(action: String) -> Result<String, String> {
                 Ok("Остановка записана. Движок и канал погаснут в ближайшую секунду; надзор не поднимет их, пока не нажмёшь «Возобновить».".into())
             }
             _ => {
+                #[cfg(target_os = "linux")]
                 if service_owns_harness() && linux_svc_state(&linux_owner_name()) == "stopped" {
                     // Keep the stop marker if systemd could not be started.
                     linux_service_op("start")?;
                 }
                 resume_owner_stop()?;
+                #[cfg(target_os = "linux")]
                 OWNER_RESUME_LIFT.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok("Стоп снят. Надзор поднимет агента в ближайшие секунды.".into())
             }
@@ -3169,6 +3174,13 @@ fn owner_control(action: String) -> Result<String, String> {
     #[cfg(windows)]
     {
         if action == "panic" {
+            // Stop this session first. A missing/stalled service cannot prevent
+            // an unprivileged client from stopping its own process tree.
+            request_client_stop("window")?;
+            if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() { job.terminate(); }
+            if !service_owns_harness() {
+                return Ok("Аварийный стоп сохранён. Клиент завершает агентские процессы; возобновление — только твоей командой.".into());
+            }
             let config = install_root().join("helene.json");
             if let Ok(raw) = std::fs::read(&config) {
                 if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
@@ -3176,13 +3188,18 @@ fn owner_control(action: String) -> Result<String, String> {
                     let tree = if raw_tree.is_absolute() { raw_tree } else { install_root().join(raw_tree) };
                     if let Some(token) = broker_token_read(&tree) {
                         let ask = BrokerAsk::new(&token, BrokerOp::Panic, "", &["window".into()], "Аварийная остановка Hélène");
-                        if broker_call_deadline(&broker_pipe_name(&install_root()), &ask, Duration::from_secs(6))
-                            .is_ok_and(|r| r.ok) && owner_stopped() {
+                        if broker_call_deadline(&broker_pipe_name(&install_root()), &ask, Duration::from_secs(2))
+                            .is_ok_and(|r| r.ok) && owner_stop_file().is_some_and(|p| p.exists()) {
                             return Ok("Аварийный стоп включён; надзор завершает все агентские процессы".into());
                         }
                     }
                 }
             }
+            return Err("Клиент остановлен, запрет запуска сохранён. Служба не подтвердила остановку своих процессов; проверь её отдельно.".into());
+        }
+        resume_client_stop()?;
+        if !service_owns_harness() && !owner_stopped() {
+            return Ok("Стоп снят твоей командой; клиент запускает агента.".into());
         }
         let exe = install_root().join("helene-svc.exe");
         let file = exe.to_string_lossy().replace('\'', "''");
@@ -3204,7 +3221,7 @@ fn owner_control(action: String) -> Result<String, String> {
         if owner_stopped() != (action == "panic") { return Err("Флаг не подтвердил команду".into()); }
         Ok(if action == "panic" { "Остановка записана; надзор завершает своё дерево" } else { "Остановка снята явным действием; надзор может запустить агента" }.into())
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     { Err("Нативный стоп-кран этого выпуска реализован на Windows и Linux".into()) }
 }
 
@@ -6307,7 +6324,7 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
 fn bootstrap() -> Option<Boot> {
     if std::env::args().any(|a| a == "--panic") {
         let notify = std::env::args().any(|a| a == "--notify");
-        match owner_control("panic".into()) {
+        match owner_control_blocking("panic".into()) {
             Ok(note) => { if notify { message_box_info("Hélène · аварийный стоп", &note); } }
             Err(e) => {
                 eprintln!("{e}");
@@ -6533,7 +6550,8 @@ fn main() {
         // окна, а поднимает и фокусирует уже живое.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if argv.iter().any(|a| a == "--panic") {
-                let _ = owner_control("panic".into());
+                // Single-instance callbacks run on the UI thread too.
+                std::thread::spawn(|| { let _ = owner_control_blocking("panic".into()); });
             }
             show_main(app);
         }));
@@ -8795,7 +8813,8 @@ async fn logs_bundle() -> Result<String, String> {
 ///
 /// Формы: `key=…`, `token=…`, `Bearer …`, `sk-…`, `dk-…` (регистр не важен).
 fn mask_secrets(text: &str) -> String {
-    const MARKS: [&str; 3] = ["key=", "token=", "bearer "];
+    const MARKS: [&str; 10] = ["key=", "token=", "bearer ", "tok=", "k=",
+        "\"key\":", "\"token\":", "\"bot_token\":", "\"api_key\":", "X-Telegram-Bot-Token:"];
     const PREFIXES: [&str; 2] = ["sk-", "dk-"];
     const HIDDEN: &[u8] = "<скрыто>".as_bytes();
     // Символы, из которых состоит сам секрет: на первом чужом байте (пробел,
@@ -8808,14 +8827,30 @@ fn mask_secrets(text: &str) -> String {
     let mut i = 0usize;
     while i < src.len() {
         let rest = &src[i..];
+        // Bot tokens can appear in URL paths, JSON, or arbitrary shell variables.
+        if src[i].is_ascii_digit() && (i == 0 || !src[i - 1].is_ascii_digit()) {
+            let mut end_id = i;
+            while end_id < src.len() && src[end_id].is_ascii_digit() { end_id += 1; }
+            if end_id - i >= 6 && src.get(end_id) == Some(&b':') {
+                let mut end_token = end_id + 1;
+                while end_token < src.len() && (src[end_token].is_ascii_alphanumeric()
+                    || matches!(src[end_token], b'_' | b'-')) { end_token += 1; }
+                if end_token - end_id > 20 {
+                    out.extend_from_slice(HIDDEN); i = end_token; continue;
+                }
+            }
+        }
         // key= / token= / Bearer — прячем значение, сам маркер оставляем.
         if let Some(len) = MARKS
             .iter()
-            .find(|m| rest.len() >= m.len() && rest[..m.len()].eq_ignore_ascii_case(m.as_bytes()))
+            .find(|m| (i == 0 || !body_byte(src[i - 1])) && rest.len() >= m.len() && rest[..m.len()].eq_ignore_ascii_case(m.as_bytes()))
             .map(|m| m.len())
         {
             out.extend_from_slice(&rest[..len]);
             i += len;
+            while i < src.len() && (src[i].is_ascii_whitespace() || matches!(src[i], b'\"' | b'\'')) {
+                out.push(src[i]); i += 1;
+            }
             let mut j = i;
             while j < src.len() && body_byte(src[j]) {
                 j += 1;
@@ -8909,6 +8944,14 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
     for name in ["deskapp.log", "runner.log", "service.log", "desk.log"] {
         sources.push(tree.join(name));
     }
+    for name in ["body.log", "bridge.log"] { sources.push(tree.join("body").join(name)); }
+    // Only named diagnostic receipts: never include owner config, sessions,
+    // chat transcripts or the raw memory tree in a support archive.
+    for name in ["body.json", "born.json", "package-version.json", "package-update.json",
+        "package-update-reported.json", "update-inspection.json"] {
+        sources.push(tree.join("memory/.state").join(name));
+    }
+    sources.push(base.join("helene-build.json"));
     if let Ok(rd) = std::fs::read_dir(tree.join("relay").join("logs")) {
         sources.extend(rd.flatten().map(|e| e.path()).filter(|p| p.is_file()));
     }
@@ -10037,6 +10080,17 @@ mod tests {
         let plain = mask_secrets("задача task-17, приставка sk-1 и слово monkey= пустое");
         assert!(plain.contains("task-17"), "{plain}");
         assert!(plain.contains("sk-1"), "{plain}");
+    }
+
+    #[test]
+    fn support_archive_masks_bot_urls_headers_json_and_shell_variables() {
+        let bot = "123456789:synthetic_token_1234567890ABCDE";
+        let secret = "synthetic_proxy_secret_ABCDEFGHIJ";
+        let text = format!("/bot{bot}/getMe\nX-Telegram-Bot-Token: {bot}\nTOK=\"{bot}\"; K=\"{secret}\"; {{\"key\": \"{secret}\"}}");
+        let result = mask_secrets(&text);
+        assert!(!result.contains(bot), "{result}");
+        assert!(!result.contains(secret), "{result}");
+        assert!(result.contains("getMe"));
     }
 
     // Несколько агентов в одной установке (11.09): планы подъёма и адрес окна.
