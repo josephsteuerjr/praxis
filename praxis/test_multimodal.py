@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import types
 import unittest
 import wave
 from pathlib import Path
+from unittest.mock import patch
 
 import agent
 import media
@@ -180,8 +182,10 @@ class TestRunnerMultimodal(unittest.TestCase):
         runner.client = Client()
         ctx = agent.ChannelContext(chat_id="777", is_dm=True, owner=True)
         try:
-            ok = asyncio.run(runner._attempt_queued_media(
-                "entity", item, ctx=ctx, reply_to=9))
+            threshold = json.loads(self.spool._record_path(item.queue_id).read_text())["not_before"]
+            with patch.object(media.time, "time", return_value=threshold):
+                ok = asyncio.run(runner._attempt_queued_media(
+                    "entity", item, ctx=ctx, reply_to=9))
         finally:
             runner.client = old_client
             runner._buf.pop("777", None)

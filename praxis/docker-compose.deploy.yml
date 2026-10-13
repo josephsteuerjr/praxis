@@ -8,6 +8,7 @@ services:
     # pressure against a Praxis-specific boundary.
     env_file: .env
     environment:
+      - PRAXIS_PROVIDER_EVENT_FEEDBACK=1
       - PYTHONUNBUFFERED=1
       - PRAXIS_EMBEDDINGS=0
       - PRAXIS_SEMANTIC_RERANK=1

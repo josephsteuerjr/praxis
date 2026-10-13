@@ -179,6 +179,7 @@ class DirectOutboxReplayTests(unittest.IsolatedAsyncioTestCase):
             call_id="call-file",
             purpose="tool:send_file",
         )
+        self.clock.value += telegram_outbox.ATTACHMENT_ZEN_PAUSE_SECONDS
         send = AsyncMock(return_value=(
             types.SimpleNamespace(id=93), entry["random_id"],
         ))

@@ -4,9 +4,9 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
 use std::env;
-use std::fs::File;
 use std::fs;
 use std::fs::remove_file;
+use std::fs::File;
 use std::io::Read;
 use std::io::Write;
 use std::io::{self};
@@ -22,8 +22,8 @@ use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 
-pub use crate::login::token_data::TokenData;
 use crate::login::token_data::parse_id_token;
+pub use crate::login::token_data::TokenData;
 
 const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
 
@@ -40,6 +40,9 @@ pub enum AuthMode {
 pub struct CodexAuth {
     pub mode: AuthMode,
 
+    // Retained for the legacy API-key client API (`get_token`), which is not
+    // used by the subscription-only relay binary.
+    #[allow(dead_code)]
     api_key: Option<String>,
     auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
     auth_file: PathBuf,
@@ -121,6 +124,7 @@ impl CodexAuth {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn get_token(&self) -> Result<String, std::io::Error> {
         match self.mode {
             AuthMode::ApiKey => Ok(self.api_key.clone().unwrap_or_default()),
@@ -132,11 +136,13 @@ impl CodexAuth {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_account_id(&self) -> Option<String> {
         self.get_current_token_data()
             .and_then(|t| t.account_id.clone())
     }
 
+    #[allow(dead_code)]
     pub fn get_plan_type(&self) -> Option<String> {
         self.get_current_token_data()
             .and_then(|t| t.id_token.chatgpt_plan_type.as_ref().map(|p| p.as_string()))
@@ -147,11 +153,13 @@ impl CodexAuth {
         self.auth_dot_json.lock().unwrap().clone()
     }
 
+    #[allow(dead_code)]
     fn get_current_token_data(&self) -> Option<TokenData> {
         self.get_current_auth_json().and_then(|t| t.tokens.clone())
     }
 
     /// Consider this private to integration tests.
+    #[allow(dead_code)]
     pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
         let auth_dot_json = AuthDotJson {
             openai_api_key: None,
@@ -252,6 +260,7 @@ pub fn get_auth_file(codex_home: &Path) -> PathBuf {
 
 /// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
 /// if a file was removed, `Ok(false)` if no auth file was present.
+#[allow(dead_code)]
 pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
     let auth_file = get_auth_file(codex_home);
     match remove_file(&auth_file) {
@@ -264,6 +273,7 @@ pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
 /// Represents a running login subprocess. The child can be killed by holding
 /// the mutex and calling `kill()`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SpawnedLogin {
     pub child: Arc<Mutex<Child>>,
     pub stdout: Arc<Mutex<Vec<u8>>>,
@@ -275,6 +285,7 @@ impl SpawnedLogin {
     ///
     /// The Python helper prints the URL to stderr; we capture it and extract
     /// the last whitespace-separated token that starts with "http".
+    #[allow(dead_code)]
     pub fn get_login_url(&self) -> Option<String> {
         self.stderr
             .lock()
@@ -283,14 +294,14 @@ impl SpawnedLogin {
             .and_then(|output| {
                 output
                     .split_whitespace()
-                    .filter(|part| part.starts_with("http"))
-                    .next_back()
+                    .rfind(|part| part.starts_with("http"))
                     .map(|s| s.to_string())
             })
     }
 }
 
 // Helpers for streaming child output into shared buffers
+#[allow(dead_code)]
 struct AppendWriter {
     buf: Arc<Mutex<Vec<u8>>>,
 }
@@ -308,16 +319,72 @@ impl Write for AppendWriter {
     }
 }
 
+#[allow(dead_code)]
 fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
     std::thread::spawn(move || {
         let _ = io::copy(&mut reader, &mut AppendWriter { buf });
     });
 }
 
+/// RELAY_LOCAL=1 (Hélène and other embedding hosts): the credentials belong to THIS
+/// installation and live in ./local_auth of the working directory, never in ~/.codex.
+/// The host looks for ./local_auth/auth.json and would otherwise wait forever for a
+/// login that actually succeeded elsewhere.
+pub fn relay_local() -> bool {
+    relay_local_from(env::var("RELAY_LOCAL").ok().as_deref())
+}
+
+fn relay_local_from(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some(v) if !v.is_empty() && v != "0")
+}
+
+/// The interpreter that runs the login callback server: RELAY_PYTHON when the host
+/// ships its own Python (Hélène's runtime), otherwise `python3` from PATH. On a Mac
+/// without the Xcode command line tools `python3` is a stub that opens an install
+/// dialog, so a host that has an interpreter must name it.
+pub fn python_interpreter() -> std::ffi::OsString {
+    interpreter_from(env::var_os("RELAY_PYTHON"))
+}
+
+fn interpreter_from(configured: Option<std::ffi::OsString>) -> std::ffi::OsString {
+    if let Some(path) = configured {
+        if !path.is_empty() && Path::new(&path).exists() {
+            return path;
+        }
+    }
+    std::ffi::OsString::from("python3")
+}
+
+#[cfg(test)]
+mod host_env_tests {
+    use super::*;
+
+    #[test]
+    fn relay_local_is_a_flag_not_a_presence() {
+        assert!(relay_local_from(Some("1")));
+        assert!(relay_local_from(Some(" true ")));
+        assert!(!relay_local_from(Some("0")));
+        assert!(!relay_local_from(Some("")));
+        assert!(!relay_local_from(None));
+    }
+
+    #[test]
+    fn interpreter_falls_back_to_python3_when_the_named_one_is_missing() {
+        assert_eq!(interpreter_from(None), std::ffi::OsString::from("python3"));
+        assert_eq!(
+            interpreter_from(Some(std::ffi::OsString::from("/no/such/python"))),
+            std::ffi::OsString::from("python3")
+        );
+        let own = std::env::current_exe().unwrap();
+        assert_eq!(interpreter_from(Some(own.clone().into_os_string())), own.into_os_string());
+    }
+}
+
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
+#[allow(dead_code)]
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
     let script_path = write_login_script_to_disk()?;
-    let mut cmd = std::process::Command::new("python3");
+    let mut cmd = std::process::Command::new(python_interpreter());
     cmd.arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
@@ -355,7 +422,7 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
 /// current process's stdout/stderr.
 pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
     let script_path = write_login_script_to_disk()?;
-    let child = Command::new("python3")
+    let child = Command::new(python_interpreter())
         .arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
@@ -394,13 +461,14 @@ fn write_login_script_to_disk() -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
+#[allow(dead_code)]
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         openai_api_key: Some(api_key.to_string()),
         tokens: None,
         last_refresh: None,
     };
-    write_auth_json(&get_auth_file(codex_home), &auth_dot_json)
+    write_auth_json(&get_auth_file(codex_home), &auth_dot_json, None)
 }
 
 /// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
@@ -414,8 +482,30 @@ pub fn try_read_auth_json(auth_file: &Path) -> std::io::Result<AuthDotJson> {
     Ok(auth_dot_json)
 }
 
-fn write_auth_json(auth_file: &Path, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
-    let json_data = serde_json::to_string_pretty(auth_dot_json)?;
+/// ⚠ ЗАЧЕМ ЗДЕСЬ ОТДЕЛЬНЫЙ АРГУМЕНТ `id_token_jwt`.
+///
+/// `TokenData::id_token` в памяти — это РАЗОБРАННЫЕ поля (почта, план), а на диске у
+/// апстрима там лежит сам JWT.  Прямая сериализация структуры записывала объект, который
+/// наш же читатель не принимал: 13.08.2026 слот `primary` после рефреша перестал грузиться,
+/// и компаньон онемел.  Сырой токен теряется при разборе, поэтому его приходится нести
+/// сюда отдельно.
+///
+/// Если токены есть, а JWT не дали — пишем не «как получится», а ОТКАЗЫВАЕМСЯ.  Молчаливая
+/// запись неполного файла и есть та поломка, которую этот патч закрывает; пусть новое место
+/// вызова падает громко, а не портит auth.json.
+fn write_auth_json(
+    auth_file: &Path,
+    auth_dot_json: &AuthDotJson,
+    id_token_jwt: Option<&str>,
+) -> std::io::Result<()> {
+    let mut value = serde_json::to_value(auth_dot_json)?;
+    if auth_dot_json.tokens.is_some() {
+        let jwt = id_token_jwt.ok_or_else(|| {
+            std::io::Error::other("refusing to write token data without the raw id_token")
+        })?;
+        value["tokens"]["id_token"] = serde_json::Value::String(jwt.to_owned());
+    }
+    let json_data = serde_json::to_string_pretty(&value)?;
     let parent = auth_file
         .parent()
         .ok_or_else(|| std::io::Error::other("auth file has no parent directory"))?;
@@ -451,7 +541,7 @@ async fn update_tokens(
         tokens.refresh_token = refresh_token.to_string();
     }
     auth_dot_json.last_refresh = Some(Utc::now());
-    write_auth_json(auth_file, &auth_dot_json)?;
+    write_auth_json(auth_file, &auth_dot_json, Some(&id_token))?;
     Ok(auth_dot_json)
 }
 
@@ -754,6 +844,81 @@ mod tests {
         assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
 
         assert!(auth.get_token_data().await.is_err());
+    }
+
+    /// ЖИВОЙ СЛУЧАЙ 13.08.2026 — то, ради чего написан весь этот патч.
+    ///
+    /// Рефреш записывал `tokens.id_token` объектом, читатель требовал строку: файл ломался
+    /// о собственную запись, и первая же аренда слота (`lease_slot` перечитывает auth.json
+    /// каждый раз) находила труп. Здесь охраняется КРУГ: то, что мы записали, обязано
+    /// читаться нами же — и на диске обязан лежать сам токен, а не его разбор.
+    #[test]
+    fn what_the_refresh_writes_is_what_the_reader_accepts() {
+        let dir = tempdir().unwrap();
+        let auth_file = dir.path().join("auth.json");
+        write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            dir.path(),
+        )
+        .expect("failed to write auth file");
+
+        // Ровно то, что делает update_tokens: разобрать JWT в структуру и записать файл.
+        let jwt = {
+            let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+            let payload = json!({
+                "email": "second@example.com",
+                "https://api.openai.com/auth": {"chatgpt_plan_type": "plus"},
+            });
+            format!(
+                "{}.{}.{}",
+                b64(b"{}"),
+                b64(&serde_json::to_vec(&payload).unwrap()),
+                b64(b"sig")
+            )
+        };
+        let mut auth_dot_json = try_read_auth_json(&auth_file).expect("исходный файл читается");
+        let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
+        tokens.id_token = parse_id_token(&jwt).expect("jwt разбирается");
+        tokens.access_token = "fresh-access".to_string();
+        write_auth_json(&auth_file, &auth_dot_json, Some(&jwt)).expect("запись обязана пройти");
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&auth_file).unwrap()).unwrap();
+        assert_eq!(
+            raw["tokens"]["id_token"].as_str(),
+            Some(jwt.as_str()),
+            "на диске снова оказался разбор вместо самого токена"
+        );
+
+        let back = try_read_auth_json(&auth_file).expect("свой же файл обязан читаться");
+        let tokens = back.tokens.expect("токены на месте");
+        assert_eq!(tokens.id_token.email.as_deref(), Some("second@example.com"));
+        assert_eq!(
+            tokens.id_token.chatgpt_plan_type,
+            Some(PlanType::Known(KnownPlan::Plus))
+        );
+        assert_eq!(tokens.access_token, "fresh-access");
+    }
+
+    /// Токены есть, сырого токена не дали — молчаливо писать неполный файл НЕЛЬЗЯ.
+    /// Новое место вызова обязано падать громко, а не повторять поломку 13.08.
+    #[test]
+    fn writing_tokens_without_the_raw_jwt_is_refused() {
+        let dir = tempdir().unwrap();
+        let auth_file = dir.path().join("auth.json");
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: None,
+            tokens: Some(TokenData::default()),
+            last_refresh: None,
+        };
+        assert!(write_auth_json(&auth_file, &auth_dot_json, None).is_err());
+        assert!(
+            !auth_file.exists(),
+            "отказ не должен оставлять огрызок файла"
+        );
     }
 
     #[test]

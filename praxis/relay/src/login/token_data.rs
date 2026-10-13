@@ -29,7 +29,10 @@ impl TokenData {
 }
 
 /// Flat subset of useful claims in id_token from auth.json.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+///
+/// ⚠ `Deserialize` здесь не для красоты симметрии — см. `deserialize_id_token` ниже:
+/// без него испорченный прежней записью файл не читается вовсе.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct IdTokenInfo {
     pub email: Option<String>,
     /// The ChatGPT subscription plan type
@@ -39,6 +42,7 @@ pub struct IdTokenInfo {
 }
 
 impl IdTokenInfo {
+    #[allow(dead_code)]
     pub fn get_chatgpt_plan_type(&self) -> Option<String> {
         self.chatgpt_plan_type.as_ref().map(|t| match t {
             PlanType::Known(plan) => format!("{plan:?}"),
@@ -68,6 +72,7 @@ impl PlanType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn as_string(&self) -> String {
         match self {
             Self::Known(known) => format!("{known:?}").to_lowercase(),
@@ -170,12 +175,35 @@ pub(crate) fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoE
     })
 }
 
+/// Читаем `id_token` в ОБЕИХ формах — и вот почему.
+///
+/// ⚠ ЖИВОЙ СЛУЧАЙ 13.08.2026.  `update_tokens` клал сюда РАЗОБРАННУЮ структуру
+/// (`{"email":…,"chatgpt_plan_type":…}`), а этот читатель требовал строку.  То есть рефреш
+/// записывал файл в форме, которую сам же не умеет прочесть.  `lease_slot` перечитывает
+/// auth.json на КАЖДУЮ аренду, поэтому порча всплывает первым же следующим запросом: слот
+/// `primary` умер, компаньон онемел на полтора часа.
+///
+/// Запись починена ниже по течению (`write_auth_json` кладёт сырой JWT).  Но файлы, уже
+/// испорченные прежней записью, лежат на диске: если читать только строку, починка записи
+/// не воскрешает то, что она сломала.  Поэтому объект принимается тоже — как след, а не
+/// как равноправная форма.
 fn deserialize_id_token<'de, D>(deserializer: D) -> Result<IdTokenInfo, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    parse_id_token(&s).map_err(serde::de::Error::custom)
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredIdToken {
+        /// Единственная форма, которую пишет апстрим — и теперь снова пишем мы.
+        Jwt(String),
+        /// След прежней порчи: разобранные поля вместо самого токена.
+        Parsed(IdTokenInfo),
+    }
+
+    match StoredIdToken::deserialize(deserializer)? {
+        StoredIdToken::Jwt(jwt) => parse_id_token(&jwt).map_err(serde::de::Error::custom),
+        StoredIdToken::Parsed(info) => Ok(info),
+    }
 }
 
 #[cfg(test)]
@@ -230,7 +258,12 @@ mod tests {
         };
         #[expect(clippy::unwrap_used)]
         let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
-        format!("{}.{}.{}", b64url_no_pad(b"{}"), payload_b64, b64url_no_pad(b"sig"))
+        format!(
+            "{}.{}.{}",
+            b64url_no_pad(b"{}"),
+            payload_b64,
+            b64url_no_pad(b"sig")
+        )
     }
 
     fn token_with(access: String) -> TokenData {
@@ -252,7 +285,10 @@ mod tests {
         let expires = 1_786_354_483_i64; // 2026-08-10T09:34:43Z
         let token = token_with(jwt_with_exp(Some(expires)));
 
-        assert!(!token.access_token_expiring(issued, 3600), "свежий токен не трогаем");
+        assert!(
+            !token.access_token_expiring(issued, 3600),
+            "свежий токен не трогаем"
+        );
         assert!(
             !token.access_token_expiring(expires - 7200, 3600),
             "за два часа до срока запаса ещё хватает"
@@ -265,6 +301,74 @@ mod tests {
             token.access_token_expiring(expires + 1, 3600),
             "истёкший токен обязан читаться как истёкший"
         );
+    }
+
+    /// ЖИВОЙ СЛУЧАЙ 13.08.2026: слот `primary` после рефреша перестал читаться.
+    ///
+    /// Файл на диске выглядел так, как его записал наш же `update_tokens`, — с объектом
+    /// вместо токена. Читатель требовал строку, `AccountRouter::load` падал, компаньон
+    /// молчал полтора часа. Здесь охраняется именно то, что мы умеем поднять свой же
+    /// испорченный файл, а не только правильный.
+    #[test]
+    #[expect(clippy::expect_used)]
+    fn a_file_broken_by_our_own_refresh_still_loads() {
+        let broken = serde_json::json!({
+            "id_token": {"email": "user@example.com", "chatgpt_plan_type": "pro"},
+            "access_token": "a",
+            "refresh_token": "r",
+            "account_id": "acct",
+        });
+        let tokens: TokenData =
+            serde_json::from_value(broken).expect("испорченный файл обязан читаться");
+        assert_eq!(tokens.id_token.email.as_deref(), Some("user@example.com"));
+        assert_eq!(
+            tokens.id_token.chatgpt_plan_type,
+            Some(PlanType::Known(KnownPlan::Pro)),
+            "план потерян — реле решит, что это метрированный аккаунт, и уйдёт в API-ключ"
+        );
+    }
+
+    /// Правильная форма — по-прежнему сам JWT, и он по-прежнему разбирается.
+    #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn the_upstream_shape_is_still_the_shape_we_read() {
+        let jwt = {
+            fn b64(bytes: &[u8]) -> String {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+            }
+            let payload = serde_json::json!({
+                "email": "user@example.com",
+                "https://api.openai.com/auth": {"chatgpt_plan_type": "pro"},
+            });
+            format!(
+                "{}.{}.{}",
+                b64(b"{}"),
+                b64(&serde_json::to_vec(&payload).unwrap()),
+                b64(b"sig")
+            )
+        };
+        let value = serde_json::json!({
+            "id_token": jwt,
+            "access_token": "a",
+            "refresh_token": "r",
+            "account_id": "acct",
+        });
+        let tokens: TokenData =
+            serde_json::from_value(value).expect("нормальный файл обязан читаться");
+        assert_eq!(tokens.id_token.email.as_deref(), Some("user@example.com"));
+    }
+
+    /// А вот мусор обязан оставаться мусором: строка, не похожая на JWT, — это ошибка,
+    /// а не молчаливый пустой `IdTokenInfo`. Иначе реле поедет без плана и без почты.
+    #[test]
+    fn a_string_that_is_not_a_jwt_is_still_an_error() {
+        let value = serde_json::json!({
+            "id_token": "not-a-jwt",
+            "access_token": "a",
+            "refresh_token": "r",
+            "account_id": "acct",
+        });
+        assert!(serde_json::from_value::<TokenData>(value).is_err());
     }
 
     #[test]

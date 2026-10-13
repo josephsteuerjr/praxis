@@ -3,24 +3,133 @@ use futures_util::StreamExt;
 use reqwest::{Client, RequestBuilder};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::sync::mpsc;
+use tracing::warn;
 use url::Url;
 
-use crate::core::account_router::AccountRouter;
+#[cfg(test)]
+use crate::core::account_router::TestCommitGate;
+use crate::core::account_router::{AccountRouter, DownstreamCancellation};
 use crate::core::config::Config;
 use crate::core::models::{
     ChatRequest, ImageUrlContent, Message, MessageContent, MessageContentPart, RelayTerminal,
-    ResponseChoice, ResponseDelta, ResponseEvent, Tool,
+    RelayTerminalAttempt, ResponseChoice, ResponseDelta, ResponseEvent, Tool,
 };
 
-const MAX_VISIBLE_CITATIONS: usize = 12;
 const MAX_UPSTREAM_ERROR_CHARS: usize = 500;
 const CHATGPT_CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
-const CODEX_CLI_VERSION: &str = "0.144.0";
-const CODEX_ORIGINATOR: &str = "codex_cli_rs";
-const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.0";
+/// The Codex CLI version this relay presents upstream unless `RELAY_CODEX_VERSION`
+/// says otherwise.
+///
+/// The backend gates its model catalog on the client version it sees: 5.6 became
+/// visible at 0.144.0, gpt-6-astra carries `minimal_client_version: 0.153.0`.
+/// The default tracks the newest released Codex CLI at the time of writing
+/// (0.153.3, 2026-09-04) so the catalog lists everything the subscription can
+/// use; when the next model hides behind a newer client, the fix is one line of
+/// environment, not a rebuild.
+const CODEX_CLI_VERSION_DEFAULT: &str = "0.153.3";
+pub const CODEX_ORIGINATOR: &str = "codex_cli_rs";
+pub const RELAY_CODEX_VERSION_ENV: &str = "RELAY_CODEX_VERSION";
+static CODEX_CLI_VERSION_CELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static CODEX_USER_AGENT_CELL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// `RELAY_CODEX_VERSION` when set and non-blank, else the built-in default.
+/// Read once per process: the value rides in every upstream header.
+pub fn codex_cli_version() -> &'static str {
+    CODEX_CLI_VERSION_CELL.get_or_init(|| {
+        std::env::var(RELAY_CODEX_VERSION_ENV)
+            .ok()
+            .map(|raw| raw.trim().to_string())
+            .filter(|raw| !raw.is_empty())
+            .unwrap_or_else(|| CODEX_CLI_VERSION_DEFAULT.to_string())
+    })
+}
+
+/// Where the newest released Codex CLI announces itself: the npm package of the CLI.
+const CODEX_LATEST_URL: &str = "https://registry.npmjs.org/@openai/codex/latest";
+
+/// Settle the presented version once, before the server takes traffic.
+///
+/// 28.09.2026 (Hélène 1.2.4): the built-in default had gone stale -- the relay
+/// presented 0.153.3 while 0.157.1 was out, and the backend, which gates its
+/// catalog on the client version, simply left newer models off the list. The
+/// owner saw "the relay hardcodes the models". Now: `RELAY_CODEX_VERSION` still
+/// wins when set; otherwise the newest released CLI from npm is presented when it
+/// is newer than the built-in; no answer in five seconds -- the built-in, as before.
+pub async fn resolve_codex_cli_version(client: &Client) {
+    let pinned = std::env::var(RELAY_CODEX_VERSION_ENV)
+        .ok()
+        .is_some_and(|raw| !raw.trim().is_empty());
+    if pinned || CODEX_CLI_VERSION_CELL.get().is_some() {
+        return;
+    }
+    let latest = fetch_latest_codex_version(client).await;
+    let chosen = match latest.as_deref() {
+        Some(found) if version_is_newer(found, CODEX_CLI_VERSION_DEFAULT) => found.to_string(),
+        _ => CODEX_CLI_VERSION_DEFAULT.to_string(),
+    };
+    tracing::info!(
+        "codex client version: {} (newest released: {}, built-in {})",
+        chosen,
+        latest.as_deref().unwrap_or("unknown"),
+        CODEX_CLI_VERSION_DEFAULT
+    );
+    let _ = CODEX_CLI_VERSION_CELL.set(chosen);
+}
+
+async fn fetch_latest_codex_version(client: &Client) -> Option<String> {
+    let response = client
+        .get(CODEX_LATEST_URL)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body: Value = response.json().await.ok()?;
+    let version = body.get("version")?.as_str()?.trim().to_string();
+    parse_version(&version).map(|_| version)
+}
+
+/// `major.minor.patch`, digits only -- anything else is not a version we present.
+fn parse_version(raw: &str) -> Option<(u64, u64, u64)> {
+    let mut parts = raw.split('.');
+    let triple = (
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    );
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(triple)
+}
+
+fn version_is_newer(candidate: &str, than: &str) -> bool {
+    match (parse_version(candidate), parse_version(than)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+/// The full `User-Agent` value, derived from the version above so the two can
+/// never disagree -- they used to be two independent literals in two files.
+pub fn codex_user_agent() -> &'static str {
+    CODEX_USER_AGENT_CELL.get_or_init(|| format!("{}/{}", CODEX_ORIGINATOR, codex_cli_version()))
+}
+
 // Efforts the Responses API can accept; anything else is dropped rather than sent.
-const REASONING_EFFORTS: &[&str] = &["none", "minimal", "low", "medium", "high", "xhigh"];
+// `max` and `ultra` are the levels the catalog lists for the 5.6 family and
+// gpt-6-astra beyond xhigh; which model takes which is the backend's call.
+// The order is the ladder `core::catalog::clamp_effort` walks when a model
+// refuses a level (astra takes nothing below `low`).
+pub(crate) const REASONING_EFFORTS: &[&str] = &[
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ТЕРМИНАЛЫ: чем именно кончился ход — машинным именем, а не английской прозой.
@@ -54,6 +163,7 @@ pub const TERMINAL_QUOTA: &str = "subscription_window_exhausted";
 pub const TERMINAL_NEEDS_LOGIN: &str = "subscription_needs_login";
 pub const TERMINAL_TORN: &str = "upstream_torn";
 pub const TERMINAL_UPSTREAM_ERROR: &str = "upstream_error";
+pub const TERMINAL_ACCOUNTS_UNAVAILABLE: &str = "subscriptions_unavailable";
 
 /// RELAY_TYPED_TERMINAL: `off` (дефолт) | `field` | `finish_reason`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,19 +179,18 @@ pub enum TerminalNaming {
 /// Неизвестное значение = сегодняшнее поведение. Опечатка в docker-compose не имеет
 /// права включить то, к чему клиент не готов.
 pub fn terminal_naming_from_env(raw: Option<&str>) -> TerminalNaming {
-    match raw
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("field") | Some("1") | Some("on") | Some("true") | Some("yes") => TerminalNaming::Field,
+    match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("field") | Some("1") | Some("on") | Some("true") | Some("yes") => {
+            TerminalNaming::Field
+        }
         Some("finish_reason") | Some("finish-reason") | Some("2") => TerminalNaming::FinishReason,
         _ => TerminalNaming::Off,
     }
 }
 
 const NAMING_UNREAD: u8 = 0;
-static TERMINAL_NAMING: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(NAMING_UNREAD);
+static TERMINAL_NAMING: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(NAMING_UNREAD);
 
 fn naming_code(value: TerminalNaming) -> u8 {
     match value {
@@ -116,6 +225,11 @@ fn force_terminal_naming(value: TerminalNaming) {
     TERMINAL_NAMING.store(naming_code(value), std::sync::atomic::Ordering::Relaxed);
 }
 
+#[cfg(test)]
+pub(crate) fn force_test_terminal_field() {
+    force_terminal_naming(TerminalNaming::Field);
+}
+
 /// Адрес апстрима. В релизной сборке это КОНСТАНТА — подменить её нечем.
 ///
 /// Шов существует только в тестовой сборке. Без него ни один тест не может пройти ТЕМ
@@ -124,6 +238,23 @@ fn force_terminal_naming(value: TerminalNaming) {
 /// зелёных тестов не поймали дефект ровно потому, что звали функцию мимо пути.
 #[cfg(test)]
 static TEST_UPSTREAM_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+static TEST_LEVER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_lever_guard() -> std::sync::MutexGuard<'static, ()> {
+    TEST_LEVER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_upstream_url(url: Option<String>) {
+    let mut guard = TEST_UPSTREAM_URL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *guard = url;
+}
 
 fn responses_url() -> String {
     #[cfg(test)]
@@ -144,6 +275,7 @@ pub struct Terminal {
     slot: Option<String>,
     resets_at: Option<i64>,
     resets_in_seconds: Option<i64>,
+    attempts: Option<Vec<RelayTerminalAttempt>>,
 }
 
 impl Terminal {
@@ -154,6 +286,7 @@ impl Terminal {
             slot: None,
             resets_at: None,
             resets_in_seconds: None,
+            attempts: None,
         }
     }
 
@@ -167,12 +300,27 @@ impl Terminal {
         self.resets_in_seconds = within;
         self
     }
+
+    fn with_attempts(mut self, attempts: Vec<RelayTerminalAttempt>) -> Self {
+        self.attempts = Some(attempts);
+        self
+    }
 }
 
 /// Единственное место, где рождается терминальный чанк. Раньше их было три копии, и
 /// каждая независимо решала, что написать в `content` и в `finish_reason`.
-fn terminal_event(model: &str, terminal: Terminal) -> ResponseEvent {
-    let naming = terminal_naming();
+fn terminal_event_with_options(
+    model: &str,
+    terminal: Terminal,
+    force_structured: bool,
+    diagnostic_content: bool,
+) -> ResponseEvent {
+    let configured_naming = terminal_naming();
+    let naming = if force_structured && configured_naming == TerminalNaming::Off {
+        TerminalNaming::Field
+    } else {
+        configured_naming
+    };
     let finish_reason = match naming {
         TerminalNaming::FinishReason => terminal.code.to_string(),
         _ => "error".to_string(),
@@ -185,6 +333,7 @@ fn terminal_event(model: &str, terminal: Terminal) -> ResponseEvent {
             slot: terminal.slot.clone(),
             resets_at: terminal.resets_at,
             resets_in_seconds: terminal.resets_in_seconds,
+            attempts: terminal.attempts.clone(),
         }),
     };
     println!(
@@ -207,13 +356,28 @@ fn terminal_event(model: &str, terminal: Terminal) -> ResponseEvent {
             index: 0,
             delta: ResponseDelta {
                 role: Some("assistant".to_string()),
-                content: Some(terminal.message),
+                // A transport diagnosis is metadata, not model output. In
+                // particular, appending it after a partial answer would make an
+                // English relay error look like the model's next sentence.
+                content: diagnostic_content.then_some(terminal.message),
                 tool_calls: None,
             },
             finish_reason: Some(finish_reason),
         }],
         relay_terminal,
+        relay_provider_observation: None,
     }
+}
+
+fn terminal_event(model: &str, terminal: Terminal) -> ResponseEvent {
+    terminal_event_with_options(model, terminal, false, true)
+}
+
+/// A torn upstream stream is always machine-visible and never injected into the
+/// assistant's text. This is deliberately independent of RELAY_TYPED_TERMINAL:
+/// silently accepting a truncated 200 response is not a compatibility mode.
+fn stream_torn_event(model: &str, terminal: Terminal) -> ResponseEvent {
+    terminal_event_with_options(model, terminal, true, false)
 }
 
 /// Час открытия окна — ТОЛЬКО словами вендора. Ничего не досчитываем и не выдумываем:
@@ -312,10 +476,11 @@ fn decode_stream_chunk(bytes: &[u8], carry: &mut Vec<u8>) -> String {
 // The client's real system prompt travels in the input as a <system> user message;
 // this stub only anchors that contract.  Used when RELAY_INSTRUCTIONS=minimal, with
 // an automatic per-request retry on the full prompt if upstream rejects it.
-const MINIMAL_INSTRUCTIONS: &str = "You are an assistant served through a local relay. \
-The conversation's authoritative instructions arrive inside the input as user messages \
-wrapped in <system> tags; follow them faithfully. Use the provided tools when they help. \
-Reply in the language of the conversation.";
+pub const MINIMAL_INSTRUCTIONS: &str = "I am the language model at the heart of an agent. \
+Messages wrapped in <system> tags inside the input carry the identity and working \
+instructions I am running as here - I inhabit them rather than treat them as quoted \
+text. When none arrive, I am simply myself. I use the provided tools when they help, \
+and I answer in the language of the conversation.";
 
 /// Stable per-conversation affinity id: hash of model + first message.  Within one
 /// tool loop the first (system) message is byte-stable, so every iteration of a
@@ -336,10 +501,7 @@ fn conversation_affinity(request: &ChatRequest) -> String {
         head.hash(&mut hasher);
         *half = hasher.finish();
     }
-    let bytes: Vec<u8> = halves
-        .iter()
-        .flat_map(|half| half.to_be_bytes())
-        .collect();
+    let bytes: Vec<u8> = halves.iter().flat_map(|half| half.to_be_bytes()).collect();
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -538,8 +700,84 @@ fn build_codex_request(
         .header("OpenAI-Beta", "responses=experimental")
         .header("session_id", session_id)
         .header("originator", CODEX_ORIGINATOR)
-        .header(reqwest::header::USER_AGENT, CODEX_USER_AGENT)
+        .header(reqwest::header::USER_AGENT, codex_user_agent())
         .json(payload)
+}
+
+#[cfg(test)]
+static TEST_SEND_GATE: std::sync::Mutex<Option<std::sync::Arc<TestSendGate>>> =
+    std::sync::Mutex::new(None);
+#[cfg(test)]
+static TEST_SEND_FAILURES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+struct TestSendGate {
+    reached: tokio::sync::Semaphore,
+    release: tokio::sync::Semaphore,
+}
+
+#[cfg(test)]
+impl TestSendGate {
+    fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            reached: tokio::sync::Semaphore::new(0),
+            release: tokio::sync::Semaphore::new(0),
+        })
+    }
+
+    async fn wait_reached(&self) {
+        self.reached.acquire().await.unwrap().forget();
+    }
+
+    fn release(&self) {
+        self.release.add_permits(1);
+    }
+}
+
+#[cfg(test)]
+async fn stop_at_send_gate() {
+    let gate = TEST_SEND_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take();
+    if let Some(gate) = gate {
+        gate.reached.add_permits(1);
+        gate.release.acquire().await.unwrap().forget();
+    }
+}
+
+#[cfg(not(test))]
+async fn stop_at_send_gate() {}
+
+pub struct CompletionReceiver {
+    inner: mpsc::Receiver<Result<ResponseEvent>>,
+    cancellation: DownstreamCancellation,
+}
+
+impl CompletionReceiver {
+    #[cfg(test)]
+    pub async fn recv(&mut self) -> Option<Result<ResponseEvent>> {
+        self.inner.recv().await
+    }
+}
+
+impl futures::Stream for CompletionReceiver {
+    type Item = Result<ResponseEvent>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_recv(cx)
+    }
+}
+
+impl Drop for CompletionReceiver {
+    fn drop(&mut self) {
+        // Close the channel before the cancellation write lock can wait behind an
+        // already-linearized account-state commit. This makes downstream loss
+        // immediately visible to the producer, so it cannot replay on standby
+        // while Drop is serialized behind that commit.
+        self.inner.close();
+        self.cancellation.cancel();
+    }
 }
 
 pub async fn stream_chat_completions(
@@ -547,8 +785,10 @@ pub async fn stream_chat_completions(
     account_router: AccountRouter,
     request: ChatRequest,
     client: Client,
-) -> Result<mpsc::Receiver<Result<ResponseEvent>>> {
+) -> Result<CompletionReceiver> {
     let (tx, rx) = mpsc::channel(100);
+    let cancellation = DownstreamCancellation::default();
+    let receiver_cancellation = cancellation.clone();
     let config = config.clone();
 
     tokio::spawn(async move {
@@ -571,10 +811,14 @@ pub async fn stream_chat_completions(
             full_instructions.push_str(user_instructions);
             full_instructions.push_str("\n\n</user_instructions>");
         }
-        let instructions = if minimal {
-            MINIMAL_INSTRUCTIONS.to_string()
-        } else {
-            full_instructions.clone()
+        // An operator's own text outranks both built-ins.  The `instructions` field
+        // rides above everything else in the prompt and is the one part of it an
+        // agent's own system prompt cannot reach, so whoever runs the relay should be
+        // able to say what stands there -- RELAY_INSTRUCTIONS_FILE.
+        let instructions = match crate::core::config::custom_instructions() {
+            Some(text) => text,
+            None if minimal => MINIMAL_INSTRUCTIONS.to_string(),
+            None => full_instructions.clone(),
         };
 
         println!("🔍 DEBUG - Processing {} messages", request.messages.len());
@@ -619,7 +863,15 @@ pub async fn stream_chat_completions(
         // Token and account id come from one immutable account snapshot.  The
         // old pair of independent auth reads could mix identities during a
         // refresh or account change.
-        let mut account = match account_router.lease_active().await {
+        // R2 (17.08.2026): lease_any, не lease_active — отказ аренды активного слота
+        // паркует его и уводит запрос в резерв, а не хоронит ход. 13.08 ровно здесь
+        // каждый запрос умирал об один и тот же нечитаемый файл при здоровом втором.
+        let lease_result = tokio::select! {
+            biased;
+            _ = tx.closed() => return,
+            result = account_router.lease_any_for_downstream(&cancellation) => result,
+        };
+        let mut account = match lease_result {
             Ok(account) => account,
             Err(error) => {
                 let _ = tx
@@ -636,7 +888,8 @@ pub async fn stream_chat_completions(
         // Try the exact URL that working codex uses: base + codex + responses
         println!(
             "🌐 Making request to ChatGPT Responses API: {} (client {})",
-            CHATGPT_CODEX_RESPONSES_URL, CODEX_CLI_VERSION
+            CHATGPT_CODEX_RESPONSES_URL,
+            codex_cli_version()
         );
 
         // CRITICAL: Use exact headers for ChatGPT Plus plan.  The session id is the
@@ -647,335 +900,553 @@ pub async fn stream_chat_completions(
 
         let mut retried = false;
         let mut account_failover_done = false;
-        let response = loop {
-            match build_codex_request(
-                &client,
-                &account.access_token,
-                &account.account_id,
-                &session_id,
-                &payload,
-            )
-            .send()
-            .await
-            {
-                Ok(resp) => {
-                    println!("✅ Got response with status: {}", resp.status());
+        let mut account_attempts: Vec<RelayTerminalAttempt> = Vec::new();
+        let mut stream_retry_done = false;
+        'upstream_attempt: loop {
+            // Receiver cancellation is authoritative: do not start/replay an
+            // upstream request and, critically, do not mutate account routing
+            // after the client has gone away.
+            if tx.is_closed() {
+                return;
+            }
+            let response = loop {
+                let request_future = build_codex_request(
+                    &client,
+                    &account.access_token,
+                    &account.account_id,
+                    &session_id,
+                    &payload,
+                )
+                .send();
+                let send_result = tokio::select! {
+                    biased;
+                    _ = tx.closed() => return,
+                    result = request_future => result,
+                };
+                match send_result {
+                    Ok(resp) => {
+                        println!("✅ Got response with status: {}", resp.status());
 
-                    if resp.status().is_success() {
-                        break resp;
-                    }
-                    // Keep the raw body in memory only long enough to derive a
-                    // bounded client-safe summary. Never log or return the
-                    // complete upstream JSON.
-                    let status = resp.status();
-                    let response_body = resp
-                        .text()
-                        .await
+                        if resp.status().is_success() {
+                            break resp;
+                        }
+                        // Keep the raw body in memory only long enough to derive a
+                        // bounded client-safe summary. Never log or return the
+                        // complete upstream JSON.
+                        let status = resp.status();
+                        let response_body = tokio::select! {
+                            biased;
+                            _ = tx.closed() => return,
+                            body = resp.text() => body,
+                        }
                         .unwrap_or_else(|_| "Failed to read response body".to_string());
-                    println!("❌ Failed with status: {}", status);
-                    println!("🔍 DEBUG - Upstream error body redacted from logs");
+                        println!("❌ Failed with status: {}", status);
+                        println!("🔍 DEBUG - Upstream error body redacted from logs");
 
-                    // A subscription exhaustion response arrives before a
-                    // successful SSE stream begins, so replaying the same
-                    // request on the standby cannot duplicate text or tools.
-                    // Generic 429s are intentionally excluded: only the
-                    // explicit quota code may move the whole relay.
-                    if subscription_quota_error(status, &response_body)
-                        && !account_failover_done
-                    {
-                        match account_router.switch_after_quota(&account).await {
-                            Ok(standby) => {
-                                println!(
-                                    "Subscription exhausted; retrying on active slot {}",
-                                    standby.slot
-                                );
-                                account = standby;
-                                account_failover_done = true;
-                                continue;
-                            }
-                            Err(error) => {
-                                println!("Subscription failover unavailable: {}", error);
+                        // Cancellation may race with receipt/body collection. Recheck
+                        // before either failover branch, since those persist router state.
+                        if tx.is_closed() {
+                            return;
+                        }
+
+                        if let Some(attempt) =
+                            account_failure_attempt(&account.slot, status, &response_body)
+                        {
+                            account_attempts.push(attempt);
+                        }
+
+                        // A subscription exhaustion response arrives before a
+                        // successful SSE stream begins, so replaying the same
+                        // request on the standby cannot duplicate text or tools.
+                        // Generic 429s are intentionally excluded: only the
+                        // explicit quota code may move the whole relay.
+                        if subscription_quota_error(status, &response_body)
+                            && !account_failover_done
+                        {
+                            let switch_result = tokio::select! {
+                                biased;
+                                _ = tx.closed() => return,
+                                result = account_router
+                                    .switch_after_quota_for_downstream(&account, &cancellation) => result,
+                            };
+                            match switch_result {
+                                Ok(standby) => {
+                                    println!(
+                                        "Subscription exhausted; retrying on active slot {}",
+                                        standby.slot
+                                    );
+                                    account = standby;
+                                    account_failover_done = true;
+                                    continue;
+                                }
+                                Err(error) => {
+                                    println!("Subscription failover unavailable: {}", error);
+                                }
                             }
                         }
-                    }
 
-                    // ⚠ ВТОРАЯ ПРИЧИНА УЙТИ НА ЗАПАСНУЮ ПОДПИСКУ, И ЕЁ ЗДЕСЬ НЕ БЫЛО.
-                    // Переключение умело только «кончилась квота». Протухший токен даёт
-                    // 401, и реле продолжало долбиться в мёртвый слот: 10.08.2026 оно
-                    // отвечало 401 на каждый вызов, пока живой слот стоял рядом
-                    // нетронутым. У клиента фолбэка нет вовсе, поэтому один мёртвый слот
-                    // означал полную немоту. Пробуем ровно один раз, как и с квотой:
-                    // 401 приходит ДО начала SSE, повтор не может задвоить текст.
-                    if subscription_auth_error(status) && !account_failover_done {
-                        match account_router.switch_after_quota(&account).await {
-                            Ok(standby) => {
-                                println!(
-                                    "Subscription auth failed ({}); retrying on active slot {}",
-                                    status, standby.slot
-                                );
-                                account = standby;
-                                account_failover_done = true;
-                                continue;
-                            }
-                            Err(error) => {
-                                println!(
-                                    "Subscription auth failover unavailable: {}; the active \
+                        // ⚠ ВТОРАЯ ПРИЧИНА УЙТИ НА ЗАПАСНУЮ ПОДПИСКУ, И ЕЁ ЗДЕСЬ НЕ БЫЛО.
+                        // Переключение умело только «кончилась квота». Протухший токен даёт
+                        // 401, и реле продолжало долбиться в мёртвый слот: 10.08.2026 оно
+                        // отвечало 401 на каждый вызов, пока живой слот стоял рядом
+                        // нетронутым. У клиента фолбэка нет вовсе, поэтому один мёртвый слот
+                        // означал полную немоту. Пробуем ровно один раз, как и с квотой:
+                        // 401 приходит ДО начала SSE, повтор не может задвоить текст.
+                        if subscription_auth_error(status) && !account_failover_done {
+                            let switch_result = tokio::select! {
+                                biased;
+                                _ = tx.closed() => return,
+                                result = account_router
+                                    .switch_after_quota_for_downstream(&account, &cancellation) => result,
+                            };
+                            match switch_result {
+                                Ok(standby) => {
+                                    println!(
+                                        "Subscription auth failed ({}); retrying on active slot {}",
+                                        status, standby.slot
+                                    );
+                                    account = standby;
+                                    account_failover_done = true;
+                                    continue;
+                                }
+                                Err(error) => {
+                                    println!(
+                                        "Subscription auth failover unavailable: {}; the active \
                                      slot needs a fresh login",
-                                    error
-                                );
+                                        error
+                                    );
+                                }
                             }
                         }
-                    }
 
-                    // Optional knobs (reasoning, prompt_cache_key, minimal instructions)
-                    // may be rejected by an upstream quirk; retry once in the maximally
-                    // conservative shape so the worst case equals the pre-knob relay.
-                    if matches!(status.as_u16(), 400 | 404 | 422) && !retried {
-                        retried = true;
-                        if let Some(object) = payload.as_object_mut() {
-                            object.remove("reasoning");
-                            object.remove("prompt_cache_key");
-                            if minimal {
-                                object.insert(
-                                    "instructions".to_string(),
-                                    serde_json::json!(full_instructions.clone()),
-                                );
+                        // Optional knobs (reasoning, prompt_cache_key, minimal instructions)
+                        // may be rejected by an upstream quirk; retry once in the maximally
+                        // conservative shape so the worst case equals the pre-knob relay.
+                        if matches!(status.as_u16(), 400 | 404 | 422) && !retried {
+                            retried = true;
+                            if let Some(object) = payload.as_object_mut() {
+                                object.remove("reasoning");
+                                object.remove("prompt_cache_key");
+                                if minimal {
+                                    object.insert(
+                                        "instructions".to_string(),
+                                        serde_json::json!(full_instructions.clone()),
+                                    );
+                                }
                             }
-                        }
-                        println!(
+                            println!(
                             "⚠️  Upstream {} — retrying once in conservative shape (no knobs, full instructions)",
                             status
                         );
-                        continue;
-                    }
+                            continue;
+                        }
 
-                    // Send properly formatted error response as SSE
-                    // Transform specific error messages for better user experience
-                    //
-                    // ⚠ Сюда втекают ТРИ разные болезни, и до 11.08.2026 все три уезжали
-                    // клиенту одним и тем же `finish_reason:"error"`. Теперь у каждой своё
-                    // машинное имя: «жди часа сброса», «нужен логин», «апстрим ответил
-                    // ошибкой». Текст `content` остаётся прежним — на нём стоит поведение
-                    // живого клиента, и менять его до шага в питоне нельзя.
-                    let terminal = if subscription_quota_error(status, &response_body) {
-                        let (resets_at, resets_in) = quota_reset_from_body(&response_body);
-                        Terminal::new(
+                        // Send properly formatted error response as SSE
+                        // Transform specific error messages for better user experience
+                        //
+                        // ⚠ Сюда втекают ТРИ разные болезни, и до 11.08.2026 все три уезжали
+                        // клиенту одним и тем же `finish_reason:"error"`. Теперь у каждой своё
+                        // машинное имя: «жди часа сброса», «нужен логин», «апстрим ответил
+                        // ошибкой». Текст `content` остаётся прежним — на нём стоит поведение
+                        // живого клиента, и менять его до шага в питоне нельзя.
+                        let mixed_account_failure = account_attempts.len() > 1
+                            && account_attempts
+                                .iter()
+                                .map(|attempt| attempt.code.as_str())
+                                .collect::<HashSet<_>>()
+                                .len()
+                                > 1;
+                        let terminal = if mixed_account_failure {
+                            Terminal::new(
+                                TERMINAL_ACCOUNTS_UNAVAILABLE,
+                                mixed_account_failure_message(&account_attempts),
+                            )
+                            .on_slot(&account.slot)
+                            .with_attempts(account_attempts.clone())
+                        } else if subscription_quota_error(status, &response_body) {
+                            let (resets_at, resets_in) = quota_reset_from_body(&response_body);
+                            Terminal::new(
                             TERMINAL_QUOTA,
                             "Both OpenAI subscriptions are currently unavailable because of usage limits."
                                 .to_string(),
                         )
                         .on_slot(&account.slot)
                         .resets(resets_at, resets_in)
-                    } else if subscription_auth_error(status) {
-                        // Дойти сюда с 401 можно только после того, как запасной слот тоже
-                        // отказал: иначе выше уже случилось переключение. Значит нужен
-                        // логин, и сказать об этом надо прямым текстом, а не «ошибкой 401».
-                        Terminal::new(
+                        } else if subscription_auth_error(status) {
+                            // Дойти сюда с 401 можно только после того, как запасной слот тоже
+                            // отказал: иначе выше уже случилось переключение. Значит нужен
+                            // логин, и сказать об этом надо прямым текстом, а не «ошибкой 401».
+                            Terminal::new(
                             TERMINAL_NEEDS_LOGIN,
                             "Both OpenAI subscriptions rejected the credentials (401). Sign in again \
                          to refresh the tokens."
                                 .to_string(),
                         )
                         .on_slot(&account.slot)
-                    } else {
-                        Terminal::new(
-                            TERMINAL_UPSTREAM_ERROR,
-                            upstream_error_message(status, &response_body),
-                        )
-                        .on_slot(&account.slot)
-                    };
+                        } else {
+                            Terminal::new(
+                                TERMINAL_UPSTREAM_ERROR,
+                                upstream_error_message(status, &response_body),
+                            )
+                            .on_slot(&account.slot)
+                        };
 
-                    let _ = tx.send(Ok(terminal_event(&request.model, terminal))).await;
-                    return;
-                }
-                Err(e) => {
-                    println!("❌ Request failed: {}", e);
-                    // ⚠ ЭТО ТОТ ЖЕ ОБРЫВ, ПОЙМАННЫЙ СЛОЕМ РАНЬШЕ. Найдено стендом
-                    // 11.08.2026: когда апстрим рвёт соединение, ошибка выходит либо
-                    // здесь (`send()` не успел дочитать заголовки), либо ниже из
-                    // `bytes_stream()` — решает гонка миллисекунд, событие одно.
-                    // Старый путь отдавал её как `Err`, а он превращается в SSE-строку
-                    // `{"error":...}` без `choices`: openai-SDK поднимает APIError, а не
-                    // EmptyResponseError, — то есть обрыв терял и повтор, и имя.
-                    // Под выключенным рычагом всё остаётся как было.
-                    if terminal_naming() != TerminalNaming::Off {
+                        let _ = tx.send(Ok(terminal_event(&request.model, terminal))).await;
+                        return;
+                    }
+                    Err(e) => {
+                        println!("❌ Request failed: {}", e);
+                        // send() failed before a successful response head, so no SSE
+                        // event can have reached downstream. It is safe to replay once.
+                        if !stream_retry_done {
+                            stream_retry_done = true;
+                            warn!(slot = %account.slot, error = %e,
+                              "retrying upstream request after pre-stream transport failure");
+                            continue 'upstream_attempt;
+                        }
                         let _ = tx
-                            .send(Ok(terminal_event(
+                            .send(Ok(stream_torn_event(
                                 &request.model,
-                                Terminal::new(TERMINAL_TORN, format!("Request failed: {}", e))
+                                Terminal::new(TERMINAL_TORN, format!("Request failed: {e}"))
                                     .on_slot(&account.slot),
                             )))
                             .await;
                         return;
                     }
-                    let _ = tx
-                        .send(Err(anyhow::anyhow!("Request failed: {}", e)))
-                        .await;
-                    return;
-                }
-            }
-        };
-
-        // Handle streaming response with proper SSE buffering
-        let mut stream = response.bytes_stream();
-        let mut buffer = String::new();
-        // Holds a character split across a chunk boundary (see decode_stream_chunk).
-        let mut utf8_carry: Vec<u8> = Vec::new();
-
-        // Deduplication: Track last sent content
-        let mut last_sent_content: Option<String> = None;
-        let mut tool_call_index: usize = 0;
-
-        while let Some(chunk) = stream.next().await {
-            let chunk = match chunk {
-                Ok(chunk) => chunk,
-                Err(e) => {
-                    // ⚠ ЭТО ОБРЫВ, А НЕ ОТКАЗ ПОДПИСКИ. Апстрим отдал 200 OK, начал стрим
-                    // и порвал его на середине (0,3% ходов, кластерами). До 11.08.2026 он
-                    // уезжал тем же `finish_reason:"error"`, что и исчерпанное окно, —
-                    // и клиент лечил их одинаково: повтором в закрытую дверь.
-                    // Здесь повтор как раз уместен, и код это говорит вслух.
-                    let _ = tx
-                        .send(Ok(terminal_event(
-                            &request.model,
-                            Terminal::new(TERMINAL_TORN, format!("Stream error: {}", e))
-                                .on_slot(&account.slot),
-                        )))
-                        .await;
-                    break;
                 }
             };
 
-            let chunk_str = decode_stream_chunk(&chunk, &mut utf8_carry);
+            // Handle streaming response with proper SSE buffering
+            let mut stream = response.bytes_stream();
+            let mut buffer = String::new();
+            // Holds a character split across a chunk boundary (see decode_stream_chunk).
+            let mut utf8_carry: Vec<u8> = Vec::new();
 
-            // Add chunk to buffer
-            buffer.push_str(&chunk_str);
+            // Deduplication is per upstream attempt. No useful event from a failed,
+            // pre-output attempt was sent, so its local state must not affect replay.
+            let mut last_sent_content: Option<String> = None;
+            let mut tool_call_index: usize = 0;
 
-            // Process complete lines from buffer
-            while let Some(line_end) = buffer.find('\n') {
-                let line = buffer[..line_end].trim_end_matches('\r').to_string();
-                buffer = buffer[line_end + 1..].to_string();
+            // Completion is a protocol fact, not an accounting fact. A valid
+            // response.completed may omit usage (or report zero tokens), while a
+            // usage-shaped object in some other event must not bless a torn stream.
+            let mut saw_completed = false;
+            let mut meaningful_event_sent = false;
+            let mut stream_failure: Option<String> = None;
+            let mut events_seen: u64 = 0;
+            let mut text_chars_sent: usize = 0;
+            let mut last_event_type = String::new();
 
-                // Skip empty lines (SSE format requirement)
-                if line.is_empty() {
-                    continue;
-                }
-
-                // Process SSE data lines
-                if line.starts_with("data: ") {
-                    let json_str = line[6..].trim(); // Remove "data: " prefix
-
-                    // Skip "[DONE]" marker
-                    if json_str == "[DONE]" {
-                        println!("🏁 Received [DONE] marker, ending stream");
-                        return;
+            'read_stream: loop {
+                let next_chunk = tokio::select! {
+                    biased;
+                    _ = tx.closed() => return,
+                    chunk = stream.next() => chunk,
+                };
+                let Some(chunk) = next_chunk else { break };
+                let chunk = match chunk {
+                    Ok(chunk) => chunk,
+                    Err(e) => {
+                        // ⚠ ЭТО ОБРЫВ, А НЕ ОТКАЗ ПОДПИСКИ. Апстрим отдал 200 OK, начал стрим
+                        // и порвал его на середине (0,3% ходов, кластерами). До 11.08.2026 он
+                        // уезжал тем же `finish_reason:"error"`, что и исчерпанное окно, —
+                        // и клиент лечил их одинаково: повтором в закрытую дверь.
+                        // Здесь повтор как раз уместен, и код это говорит вслух.
+                        warn!(slot = %account.slot, error = %e, events = events_seen,
+                          last_event = %last_event_type, sent_chars = text_chars_sent,
+                          "обрыв байтового стрима апстрима посреди ответа");
+                        stream_failure = Some(format!("byte stream error: {e}"));
+                        break;
                     }
+                };
 
-                    // Skip empty data lines
-                    if json_str.is_empty() {
+                let chunk_str = decode_stream_chunk(&chunk, &mut utf8_carry);
+
+                // Add chunk to buffer
+                buffer.push_str(&chunk_str);
+
+                // Process complete lines from buffer
+                while let Some(line_end) = buffer.find('\n') {
+                    let line = buffer[..line_end].trim_end_matches('\r').to_string();
+                    buffer = buffer[line_end + 1..].to_string();
+
+                    // Skip empty lines (SSE format requirement)
+                    if line.is_empty() {
                         continue;
                     }
 
-                    match serde_json::from_str::<Value>(json_str) {
-                        Ok(event_json) => {
-                            println!("📡 SSE event type: {}", safe_event_type(&event_json));
-                            // Convert to our ResponseEvent format
-                            if let Some(response_event) = parse_sse_event(&event_json, tool_call_index) {
-                                if response_event
-                                    .choices
-                                    .get(0)
-                                    .and_then(|choice| choice.delta.tool_calls.as_ref())
-                                    .is_some()
+                    // Process SSE data lines
+                    if let Some(data) = line.strip_prefix("data: ") {
+                        let json_str = data.trim();
+
+                        // Skip "[DONE]" marker
+                        if json_str == "[DONE]" {
+                            println!("🏁 Received [DONE] marker, ending stream");
+                            if !saw_completed {
+                                stream_failure =
+                                    Some("[DONE] before response.completed".to_string());
+                            }
+                            break 'read_stream;
+                        }
+
+                        // Skip empty data lines
+                        if json_str.is_empty() {
+                            continue;
+                        }
+
+                        match serde_json::from_str::<Value>(json_str) {
+                            Ok(event_json) => {
+                                println!("📡 SSE event type: {}", safe_event_type(&event_json));
+                                events_seen += 1;
+                                last_event_type = safe_event_type(&event_json).to_string();
+                                let completed_this_event = last_event_type == "response.completed";
+                                // response.completed is the final protocol fact. Once it
+                                // has been parsed, later transport noise, [DONE], or a
+                                // vendor tail cannot revoke successful completion.
+                                if completed_this_event {
+                                    saw_completed = true;
+                                } else if saw_completed {
+                                    warn!(slot = %account.slot,
+                                      kind = %last_event_type,
+                                      "ignoring upstream event after response.completed");
+                                    break 'read_stream;
+                                }
+                                let failed_event = matches!(
+                                    event_json.get("type").and_then(Value::as_str),
+                                    Some("response.failed" | "response.error" | "error")
+                                );
+                                if failed_event {
+                                    saw_completed = false;
+                                    warn!(slot = %account.slot,
+                                      kind = %safe_event_type(&event_json),
+                                      lever = ?terminal_naming(), events = events_seen,
+                                      sent_chars = text_chars_sent,
+                                      "апстрим прислал событие отказа внутри стрима");
+                                    stream_failure = Some(upstream_failure_detail(&event_json));
+                                    break 'read_stream;
+                                }
+                                // Convert to our ResponseEvent format
+                                if let Some(response_event) =
+                                    parse_sse_event(&event_json, tool_call_index)
                                 {
-                                    tool_call_index += 1;
-                                }
-                                // Deduplication logic
-                                let mut should_send = true;
-                                // Try to extract content from the event
-                                let content = response_event
-                                    .choices
-                                    .get(0)
-                                    .and_then(|choice| choice.delta.content.as_ref())
-                                    .map(|s| s.trim().to_string());
-                                // Only deduplicate non-empty content messages
-                                if let Some(ref new_content) = content {
-                                    if let Some(ref last_content) = last_sent_content {
-                                        if !new_content.is_empty() && new_content == last_content {
-                                            should_send = false;
-                                        }
+                                    if response_event
+                                        .choices
+                                        .first()
+                                        .and_then(|choice| choice.delta.tool_calls.as_ref())
+                                        .is_some()
+                                    {
+                                        tool_call_index += 1;
                                     }
-                                }
-                                if !should_send && response_event.usage.is_some() {
-                                    // The duplicate full text is suppressed, but the usage
-                                    // riding on response.completed must still reach the
-                                    // client — as a bare usage chunk (OpenAI include_usage
-                                    // shape), or the cost meter stays blind.
-                                    let usage_only = ResponseEvent {
-                                        choices: vec![],
-                                        ..response_event.clone()
-                                    };
-                                    if tx.send(Ok(usage_only)).await.is_err() {
-                                        return;
-                                    }
-                                }
-                                if should_send {
-                                    // Update last sent content if this is a non-empty message
+                                    // Deduplication logic
+                                    let mut should_send = true;
+                                    // Try to extract content from the event
+                                    let content = response_event
+                                        .choices
+                                        .first()
+                                        .and_then(|choice| choice.delta.content.as_ref())
+                                        .map(|s| s.trim().to_string());
+                                    // Only deduplicate non-empty content messages
                                     if let Some(ref new_content) = content {
-                                        if !new_content.is_empty() {
-                                            last_sent_content = Some(new_content.clone());
+                                        if let Some(ref last_content) = last_sent_content {
+                                            if !new_content.is_empty()
+                                                && new_content == last_content
+                                            {
+                                                should_send = false;
+                                            }
                                         }
                                     }
-                                    if tx.send(Ok(response_event)).await.is_err() {
-                                        // Channel closed, stop processing
-                                        return;
+                                    if !should_send && (response_event.usage.is_some()
+                                        || response_event.relay_provider_observation.is_some()) {
+                                        // The duplicate full text is suppressed, but the usage
+                                        // riding on response.completed must still reach the
+                                        // client — as a bare usage chunk (OpenAI include_usage
+                                        // shape), or the cost meter stays blind.
+                                        let usage_only = ResponseEvent {
+                                            choices: vec![],
+                                            ..response_event.clone()
+                                        };
+                                        if tx.send(Ok(usage_only)).await.is_err() {
+                                            return;
+                                        }
+                                        meaningful_event_sent = true;
                                     }
+                                    if should_send {
+                                        let response_is_useful = response_event.usage.is_some()
+                                            || response_event.choices.iter().any(|choice| {
+                                                choice.finish_reason.is_some()
+                                                    || choice
+                                                        .delta
+                                                        .content
+                                                        .as_deref()
+                                                        .is_some_and(|text| !text.trim().is_empty())
+                                                    || choice.delta.tool_calls.is_some()
+                                            });
+                                        // Update last sent content if this is a non-empty message
+                                        if let Some(ref new_content) = content {
+                                            if !new_content.is_empty() {
+                                                text_chars_sent += new_content.chars().count();
+                                                last_sent_content = Some(new_content.clone());
+                                            }
+                                        }
+                                        stop_at_send_gate().await;
+                                        if tx.send(Ok(response_event)).await.is_err() {
+                                            #[cfg(test)]
+                                            TEST_SEND_FAILURES
+                                                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                            // Channel closed, stop processing
+                                            return;
+                                        }
+                                        meaningful_event_sent |= response_is_useful;
+                                    }
+                                }
+                                if completed_this_event {
+                                    break 'read_stream;
                                 }
                             }
-                        }
-                        Err(e) => {
-                            println!("⚠️  JSON parse error in upstream SSE event: {}", e);
-                            // Send a structured error response for malformed JSON
-                            //
-                            // Битый JSON в середине стрима — тоже РАЗРЫВ разговора, а не
-                            // отказ подписки: лечится повтором, а не ожиданием часа сброса.
-                            let _ = tx
-                                .send(Ok(terminal_event(
-                                    &request.model,
-                                    Terminal::new(
-                                        TERMINAL_TORN,
-                                        format!("JSON parse error: {}", e),
-                                    )
-                                    .on_slot(&account.slot),
-                                )))
-                                .await;
-                            continue;
+                            Err(e) => {
+                                println!("⚠️  JSON parse error in upstream SSE event: {}", e);
+                                // Send a structured error response for malformed JSON
+                                //
+                                // Битый JSON в середине стрима — тоже РАЗРЫВ разговора, а не
+                                // отказ подписки: лечится повтором, а не ожиданием часа сброса.
+                                warn!(slot = %account.slot, error = %e, events = events_seen,
+                                  last_event = %last_event_type,
+                                  "битый JSON в SSE апстрима");
+                                stream_failure = Some(format!("malformed SSE JSON: {e}"));
+                                break 'read_stream;
+                            }
                         }
                     }
                 }
             }
+
+            if saw_completed {
+                // Do not wait for EOF or [DONE]. Holding bytes_stream alive after
+                // the final envelope made completed requests hang indefinitely.
+                break 'upstream_attempt;
+            }
+
+            if !buffer.is_empty() || !utf8_carry.is_empty() {
+                let pending_bytes = buffer.len() + utf8_carry.len();
+                stream_failure.get_or_insert_with(|| {
+                    format!("incomplete SSE/UTF-8 tail ({pending_bytes} buffered bytes)")
+                });
+            }
+            if !saw_completed {
+                stream_failure.get_or_insert_with(|| {
+                    format!("EOF before response.completed (last event: {last_event_type})")
+                });
+            }
+
+            if let Some(reason) = stream_failure {
+                warn!(slot = %account.slot, events = events_seen,
+                  last_event = %last_event_type, sent_chars = text_chars_sent,
+                  meaningful_event_sent, reason = %reason,
+                  "upstream SSE ended incompletely");
+                if !meaningful_event_sent && !stream_retry_done {
+                    stream_retry_done = true;
+                    warn!(slot = %account.slot,
+                      "retrying incomplete upstream stream before downstream output");
+                    continue 'upstream_attempt;
+                }
+                let _ = tx
+                    .send(Ok(stream_torn_event(
+                        &request.model,
+                        Terminal::new(TERMINAL_TORN, reason).on_slot(&account.slot),
+                    )))
+                    .await;
+            }
+            break 'upstream_attempt;
         }
     });
 
-    Ok(rx)
+    Ok(CompletionReceiver {
+        inner: rx,
+        cancellation: receiver_cancellation,
+    })
+}
+
+fn hosted_provider_observation(event: &Value) -> Option<Value> {
+    fn opaque(value: Option<&Value>) -> Option<&str> {
+        value.and_then(Value::as_str).filter(|id| !id.is_empty() && id.len() <= 200
+            && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'))
+    }
+    fn item_receipt(item: &Value) -> Option<Value> {
+        if item.get("type").and_then(Value::as_str) != Some("web_search_call") { return None; }
+        let id = opaque(item.get("id"))?;
+        let status = item.get("status").and_then(Value::as_str)?;
+        if !matches!(status, "in_progress" | "searching" | "completed" | "failed" | "incomplete") { return None; }
+        let mut receipt = json!({"item_id": id, "tool_type": "web_search", "status": status});
+        if let Some(action) = item.get("action").and_then(|action| action.get("type")).and_then(Value::as_str) {
+            if matches!(action, "search" | "open_page" | "find_in_page") { receipt["action_type"] = json!(action); }
+        }
+        Some(receipt)
+    }
+    let kind = event.get("type").and_then(Value::as_str)?;
+    let complete = kind == "response.completed";
+    let mut items = Vec::new();
+    let mut invalid = false;
+    if complete {
+        if let Some(output) = event.get("response").and_then(|r| r.get("output")).and_then(Value::as_array) {
+            for item in output {
+                if item.get("type").and_then(Value::as_str) == Some("web_search_call") {
+                    if let Some(receipt) = item_receipt(item) { items.push(receipt); }
+                    else { invalid = true; }
+                }
+            }
+        }
+    } else if matches!(kind, "response.output_item.added" | "response.output_item.done") {
+        let item = event.get("item")?;
+        if item.get("type").and_then(Value::as_str) != Some("web_search_call") { return None; }
+        if let Some(receipt) = item_receipt(item) { items.push(receipt); }
+        else { invalid = true; }
+    } else {
+        let status = kind.strip_prefix("response.web_search_call.")?;
+        if let Some(id) = opaque(event.get("item_id")) {
+            if matches!(status, "in_progress" | "searching" | "completed" | "failed" | "incomplete") {
+                items.push(json!({"item_id": id, "tool_type": "web_search", "status": status}));
+            } else { invalid = true; }
+        } else { invalid = true; }
+    }
+    let truncated = items.len() > 256;
+    items.truncate(256);
+    let response_id = opaque(event.get("response").and_then(|r| r.get("id")).or_else(|| event.get("response_id")));
+    Some(json!({"schema": "relay.provider-observation.v1",
+        "coverage": if complete && !truncated && !invalid { "complete" } else { "partial" },
+        "response_id": response_id, "events": items, "truncated": truncated, "invalid_events": invalid}))
 }
 
 fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEvent> {
     let event_type = event.get("type").and_then(Value::as_str);
-    if event_type.is_some_and(|event_type| event_type.starts_with("response.web_search_call.")) {
-        return None;
+    let provider_observation = hosted_provider_observation(event);
+    if event_type.is_some_and(|kind| kind.starts_with("response.web_search_call."))
+        || (matches!(event_type, Some("response.output_item.added" | "response.output_item.done"))
+            && event.get("item").and_then(|item| item.get("type")).and_then(Value::as_str)
+                == Some("web_search_call"))
+    {
+        return provider_observation.map(|receipt| ResponseEvent {
+            id: format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+            object: "chat.completion.chunk".to_string(), created: 0,
+            model: String::new(), choices: vec![], usage: None, relay_terminal: None,
+            relay_provider_observation: Some(receipt),
+        });
     }
 
-    // Hosted search is completed by OpenAI. It is observability, not a client
-    // function call, so never translate it into a tool_call for Praxis.
+    // Слово модели берётся из ГОТОВОГО элемента сообщения (response.output_item.done
+    // ниже): только там текст лежит вместе с аннотациями url_citation, по которым
+    // восстанавливаются ссылки. Черновые формы того же текста — дельты, output_text.done,
+    // content_part.* — молчат: иначе клиент получал бы фразу дважды (до 09.09 текст
+    // уезжал именно из output_text.done, где аннотаций нет, и ссылки терялись).
     if matches!(
         event_type,
-        Some("response.output_item.added" | "response.output_item.done")
-    ) && event
-        .get("item")
-        .and_then(|item| item.get("type"))
-        .and_then(Value::as_str)
-        == Some("web_search_call")
-    {
+        Some(
+            "response.output_text.delta"
+                | "response.output_text.done"
+                | "response.output_text.annotation.added"
+                | "response.content_part.added"
+                | "response.content_part.done"
+        )
+    ) {
         return None;
     }
 
@@ -1052,10 +1523,46 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                         finish_reason: Some("tool_calls".to_string()),
                     }],
                     relay_terminal: None,
+                    relay_provider_observation: None,
                 });
             }
         }
-        // A non-function item (e.g. the assistant message) carries its text in response.completed.
+        // Готовое сообщение: текст частей вместе с аннотациями. С 09.09 это ЕДИНСТВЕННЫЙ
+        // источник слова модели в стриме — response.completed у бэкенда Codex приходит с
+        // пустым output[] (проверено пробой 09.09), а output_text.done несёт текст без
+        // аннотаций, и восстановить ссылки из него нельзя.
+        if let Some(item) = event.get("item") {
+            if item.get("type").and_then(Value::as_str) == Some("message") {
+                let text = message_item_text(item)?;
+                let model = event
+                    .get("response")
+                    .and_then(|response| response.get("model"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("gpt-4")
+                    .to_string();
+                return Some(ResponseEvent {
+                    id: format!("chatcmpl-{}", &uuid::Uuid::new_v4().to_string()[..8]),
+                    object: "chat.completion.chunk".to_string(),
+                    created: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64,
+                    model,
+                    usage: None,
+                    choices: vec![ResponseChoice {
+                        index: 0,
+                        delta: ResponseDelta {
+                            role: Some("assistant".to_string()),
+                            content: Some(text),
+                            tool_calls: None,
+                        },
+                        finish_reason: None,
+                    }],
+                    relay_terminal: None,
+                    relay_provider_observation: None,
+                });
+            }
+        }
         return None;
     }
 
@@ -1075,6 +1582,7 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
     // Create OpenAI-compatible response
     Some(ResponseEvent {
         relay_terminal: None,
+        relay_provider_observation: provider_observation,
         usage: extract_completed_usage(event),
         id: event
             .get("id")
@@ -1134,8 +1642,14 @@ fn extract_completed_usage(event: &Value) -> Option<crate::core::models::Usage> 
         return None;
     }
     let usage = event.get("response")?.get("usage")?;
-    let prompt = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0) as u32;
-    let completion = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let prompt = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
+    let completion = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0) as u32;
     if prompt == 0 && completion == 0 {
         return None;
     }
@@ -1283,48 +1797,236 @@ fn extract_responses_message(response: &Value) -> Option<String> {
         if item.get("type").and_then(Value::as_str) != Some("message") {
             continue;
         }
-
-        let parts = item.get("content").and_then(Value::as_array)?;
-        let mut text_parts = Vec::new();
-        let mut citations = Vec::new();
-        let mut seen_urls = HashSet::new();
-
-        for part in parts {
-            if let Some(text) = part.get("text").and_then(Value::as_str) {
-                text_parts.push(text);
-            }
-            let Some(annotations) = part.get("annotations").and_then(Value::as_array) else {
-                continue;
-            };
-            for annotation in annotations {
-                let Some((url, title)) = visible_url_citation(annotation) else {
-                    continue;
-                };
-                if citations.len() < MAX_VISIBLE_CITATIONS && seen_urls.insert(url.clone()) {
-                    citations.push((url, title));
-                }
-            }
+        // Тот же сборщик, что и у response.output_item.done: если бэкенд когда-нибудь снова
+        // положит сообщение в response.completed, текст совпадёт байт в байт и дедуп стрима
+        // погасит повтор, а не отдаст клиенту вторую копию.
+        if let Some(text) = message_item_text(item) {
+            return Some(text);
         }
-
-        if text_parts.is_empty() {
-            continue;
-        }
-        let mut text = text_parts.join("\n");
-        if !citations.is_empty() {
-            text.push_str("\n\nИсточники:");
-            for (url, title) in citations {
-                text.push_str("\n- ");
-                if let Some(title) = title {
-                    text.push_str(&title);
-                    text.push_str(" — ");
-                }
-                text.push_str(&url);
-            }
-        }
-        return Some(text);
     }
 
     None
+}
+
+/// Текст готового элемента сообщения Responses API: части `output_text`, каждая — со
+/// своими аннотациями. Части склеиваются переводом строки; пусто — None.
+fn message_item_text(item: &Value) -> Option<String> {
+    let parts = item.get("content").and_then(Value::as_array)?;
+    let mut texts: Vec<String> = Vec::new();
+    for part in parts {
+        let Some(text) = part.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        let annotations = part
+            .get("annotations")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        texts.push(clean_model_text(text, annotations));
+    }
+    if texts.is_empty() {
+        return None;
+    }
+    let text = texts.join("\n");
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(text)
+}
+
+/// Слово модели — в виде, который переживёт Telegram и Пульт.
+///
+/// Что приходит от бэкенда (проба 09.09, три запроса с web_search):
+///  * ссылки, которые бэкенд смог сопоставить со своим поиском, уже стоят в тексте как
+///    `([host](https://…?utm_source=openai))`, и на этот диапазон указывает аннотация
+///    `url_citation` со `start_index`/`end_index` (в кодовых точках);
+///  * ссылки на поиск из ПРЕДЫДУЩЕГО запроса (у агента каждая итерация — новый запрос)
+///    бэкенд сопоставить не может и оставляет сырой маркер `\u{E200}cite\u{E202}turn1search3\u{E201}`
+///    в символах частной области — в Telegram это мусор, восстановить адрес нельзя ни здесь,
+///    ни у клиента: данных нет ни в одном событии стрима.
+///
+/// Что делаем: диапазон аннотации без готовой ссылки оборачиваем в `[текст](url)`; из всех
+/// адресов снимаем `utm_source=openai|chatgpt.com`; скобки ВНУТРИ адреса ссылки кодируем
+/// `%28`/`%29` — markdown-парсер Telethon и Пульта обрывает адрес на первой `)`; сырые
+/// маркеры цитат снимаем вместе с оставшимся после них двойным пробелом.
+fn clean_model_text(text: &str, annotations: &[Value]) -> String {
+    let mut chars: Vec<char> = text.chars().collect();
+    let mut spans: Vec<(usize, usize, String)> = annotations
+        .iter()
+        .filter_map(|annotation| {
+            let (url, _title) = visible_url_citation(annotation)?;
+            let citation = citation_body(annotation)?;
+            let start = citation.get("start_index").and_then(Value::as_u64)? as usize;
+            let end = citation.get("end_index").and_then(Value::as_u64)? as usize;
+            (start < end && end <= chars.len()).then_some((start, end, url))
+        })
+        .collect();
+    // С конца — чтобы замены не сдвигали индексы ещё не обработанных диапазонов;
+    // пересекающийся с уже применённым диапазон пропускаем.
+    spans.sort_by_key(|a| std::cmp::Reverse(a.0));
+    let mut floor = usize::MAX;
+    for (start, end, url) in spans {
+        if end > floor {
+            continue;
+        }
+        let span: String = chars[start..end].iter().collect();
+        if span.contains("](") {
+            // Готовая markdown-ссылка бэкенда: адрес почистит общий проход ниже.
+            floor = start;
+            continue;
+        }
+        let label = span
+            .trim()
+            .trim_matches(|c| c == '(' || c == ')' || c == '[' || c == ']')
+            .trim();
+        let label = if label.is_empty() {
+            Url::parse(&url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+                .unwrap_or_else(|| "источник".to_string())
+        } else {
+            label.replace('[', "(").replace(']', ")")
+        };
+        let replacement = format!("[{label}]({url})");
+        chars.splice(start..end, replacement.chars());
+        floor = start;
+    }
+    let joined: String = chars.into_iter().collect();
+    let (stripped, had_markers) = strip_cite_markers(&joined);
+    let cleaned = encode_link_parens(&strip_utm(&stripped));
+    if had_markers {
+        tidy_after_markers(&cleaned)
+    } else {
+        cleaned
+    }
+}
+
+/// Тело аннотации: `{"type":"url_citation", url, …}` или вложенное `{"url_citation": {…}}`.
+fn citation_body(annotation: &Value) -> Option<&Value> {
+    if annotation.get("type").and_then(Value::as_str) == Some("url_citation") {
+        Some(annotation.get("url_citation").unwrap_or(annotation))
+    } else {
+        annotation.get("url_citation")
+    }
+}
+
+/// Сырые маркеры цитат бэкенда: `\u{E200}…\u{E201}` целиком, затем одиночные символы
+/// U+E200..=U+E2FF. Возвращает текст и признак «что-то снято».
+fn strip_cite_markers(text: &str) -> (String, bool) {
+    const OPEN: char = '\u{E200}';
+    const CLOSE: char = '\u{E201}';
+    let is_marker = |c: char| ('\u{E200}'..='\u{E2FF}').contains(&c);
+    if !text.chars().any(is_marker) {
+        return (text.to_string(), false);
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == OPEN {
+            // Закрывающий маркер не дальше 200 знаков: незакрытый блок не должен съесть ответ.
+            let close = chars[i + 1..]
+                .iter()
+                .take(200)
+                .position(|&x| x == CLOSE)
+                .map(|offset| i + 1 + offset);
+            if let Some(close) = close {
+                i = close + 1;
+                continue;
+            }
+        }
+        if !is_marker(c) {
+            out.push(c);
+        }
+        i += 1;
+    }
+    (out, true)
+}
+
+/// После снятого маркера остаются « .», « ,» и двойные пробелы перед переводом строки.
+fn tidy_after_markers(text: &str) -> String {
+    let mut out = text.replace("  ", " ");
+    while out.contains("  ") {
+        out = out.replace("  ", " ");
+    }
+    out = out
+        .replace(" .", ".")
+        .replace(" ,", ",")
+        .replace(" \n", "\n")
+        .replace("\n ", "\n");
+    out.trim_end().to_string()
+}
+
+/// `?utm_source=openai` / `&utm_source=chatgpt.com` из любого адреса в тексте.
+fn strip_utm(text: &str) -> String {
+    const TAGS: [&str; 2] = ["utm_source=openai", "utm_source=chatgpt.com"];
+    let mut out = text.to_string();
+    for tag in TAGS {
+        let mut from = 0usize;
+        while let Some(rel) = out[from..].find(tag) {
+            let pos = from + rel;
+            let after_pos = pos + tag.len();
+            let before = out[..pos].chars().next_back();
+            let after = out[after_pos..].chars().next();
+            match before {
+                // `?utm…&x=1` → `?x=1`: параметр снимаем, `?` оставляем.
+                Some('?') if after == Some('&') => {
+                    out.replace_range(pos..after_pos + 1, "");
+                    from = pos;
+                }
+                Some('?') | Some('&') => {
+                    out.replace_range(pos - 1..after_pos, "");
+                    from = pos - 1;
+                }
+                // Не параметр адреса (упомянут словами) — не трогаем.
+                _ => from = after_pos,
+            }
+        }
+    }
+    out
+}
+
+/// Скобки внутри адреса markdown-ссылки `[t](…)` → `%28`/`%29`. Конец адреса — парная `)`
+/// или пробел. Вложенность считается, поэтому `…/Ключ_(значения)` кодируется, а закрывающая
+/// скобка ссылки остаётся.
+fn encode_link_parens(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ']' && i + 1 < chars.len() && chars[i + 1] == '(' {
+            out.push(']');
+            out.push('(');
+            i += 2;
+            let mut depth = 1usize;
+            while i < chars.len() {
+                let c = chars[i];
+                if c.is_whitespace() {
+                    break;
+                }
+                if c == '(' {
+                    depth += 1;
+                    out.push_str("%28");
+                } else if c == ')' {
+                    depth -= 1;
+                    if depth == 0 {
+                        out.push(')');
+                        i += 1;
+                        break;
+                    }
+                    out.push_str("%29");
+                } else {
+                    out.push(c);
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 fn visible_url_citation(annotation: &Value) -> Option<(String, Option<String>)> {
@@ -1395,6 +2097,46 @@ fn subscription_auth_error(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::UNAUTHORIZED
 }
 
+fn account_failure_attempt(
+    slot: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> Option<RelayTerminalAttempt> {
+    let (code, resets_at, resets_in_seconds) = if subscription_quota_error(status, body) {
+        let (at, within) = quota_reset_from_body(body);
+        (TERMINAL_QUOTA, at, within)
+    } else if subscription_auth_error(status) {
+        (TERMINAL_NEEDS_LOGIN, None, None)
+    } else {
+        return None;
+    };
+    Some(RelayTerminalAttempt {
+        slot: slot.to_string(),
+        code: code.to_string(),
+        status: status.as_u16(),
+        resets_at,
+        resets_in_seconds,
+    })
+}
+
+fn mixed_account_failure_message(attempts: &[RelayTerminalAttempt]) -> String {
+    let quota_slots = attempts
+        .iter()
+        .filter(|attempt| attempt.code == TERMINAL_QUOTA)
+        .map(|attempt| attempt.slot.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let login_slots = attempts
+        .iter()
+        .filter(|attempt| attempt.code == TERMINAL_NEEDS_LOGIN)
+        .map(|attempt| attempt.slot.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "OpenAI subscriptions are unavailable for different reasons: usage limit on {quota_slots}; credentials need login on {login_slots}. Sign in the credential-rejected slot or wait for the quota reset."
+    )
+}
+
 fn subscription_quota_error(status: reqwest::StatusCode, body: &str) -> bool {
     if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
         return false;
@@ -1445,18 +2187,12 @@ mod tests {
     //  теряет поле.
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Рычаг и адрес апстрима — глобальные на процесс, поэтому такие тесты идут по одному.
-    static LEVER: StdMutex<()> = StdMutex::new(());
-
     fn lever_guard() -> std::sync::MutexGuard<'static, ()> {
-        LEVER.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        test_lever_guard()
     }
 
     fn set_upstream_url(url: Option<String>) {
-        let mut guard = TEST_UPSTREAM_URL
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = url;
+        set_test_upstream_url(url);
     }
 
     fn write_account(root: &std::path::Path, slot: &str, account_id: &str) {
@@ -1489,29 +2225,96 @@ mod tests {
     /// Чем апстрим отвечает: отказом со статусом, порванным байтовым стримом,
     /// битым JSON внутри SSE или событием `response.failed` поверх 200 OK.
     ///
-    /// ⚠ Обрыв соединения даёт ДВА разных исхода в зависимости от гонки миллисекунд:
-    /// если заголовки успели дойти — ошибка приходит из `bytes_stream()`
-    /// (`TornAfterText`), если нет — падает сам `send()` (`TornAtConnect`).
-    /// Стенд ловит оба, потому что событие одно и то же.
+    /// The two transport stages are deliberately distinct: `TornAfterText`
+    /// fails in `bytes_stream()` after a 200 head, while
+    /// `PreResponseHeadFailure` closes raw TCP before any HTTP response bytes so
+    /// `send().await` itself fails.
     #[derive(Clone)]
     enum Upstream {
         Status(u16, String),
         TornAfterText,
-        TornAtConnect,
+        PreResponseHeadFailure,
         BadJson,
         FailedEvent,
+        CompletedThenHang,
+        CompletedThenError,
+        CompletedThenTail,
+        FinishReasonThenError,
+        MixedAccounts {
+            first: u16,
+            second: u16,
+            accounts_seen: Arc<StdMutex<Vec<String>>>,
+        },
+        /// Response head is immediate; its quota JSON body is gated.
+        GatedQuotaBody {
+            body_started: Arc<tokio::sync::Semaphore>,
+            release_body: Arc<tokio::sync::Semaphore>,
+            body_dropped: Arc<tokio::sync::Semaphore>,
+        },
+        /// One SSE event is emitted, then the upstream body remains pending.
+        EventThenPending {
+            event_sent: Arc<tokio::sync::Semaphore>,
+            body_dropped: Arc<tokio::sync::Semaphore>,
+        },
+        /// Primary returns a quota response whose account-state commit is gated;
+        /// the standby would complete if replay were incorrectly allowed after drop.
+        QuotaThenStandbyCompleted,
+        /// First request: established 200 stream, heartbeat, bytes_stream error.
+        /// Second request: a complete response with no usage object.
+        ErrorBeforeFirstEventThenCompleted,
+        /// A useful text delta followed by a bytes_stream error.
+        TextThenError,
+        /// A valid response.completed without usage.
+        CompletedWithoutUsage,
+        /// First request closes cleanly before completed; second completes.
+        CleanEofThenCompleted,
+        /// First request leaves an unterminated SSE line; second completes.
+        SseTailThenCompleted,
+        /// First request leaves an incomplete UTF-8 sequence; second completes.
+        Utf8TailThenCompleted,
     }
 
     async fn spawn_upstream(mode: Upstream) -> (String, Arc<AtomicUsize>) {
         use axum::body::Body;
         use axum::response::Response;
         let hits = Arc::new(AtomicUsize::new(0));
+
+        // A real pre-response-head failure: accept TCP and close it without
+        // writing a single HTTP byte. reqwest::send().await, not bytes_stream(),
+        // must fail on both the original request and its one safe replay.
+        if matches!(mode, Upstream::PreResponseHeadFailure) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let counter = hits.clone();
+            tokio::spawn(async move {
+                for _ in 0..2 {
+                    let Ok((socket, _)) = listener.accept().await else {
+                        break;
+                    };
+                    counter.fetch_add(1, AtomicOrdering::SeqCst);
+                    drop(socket);
+                }
+            });
+            return (format!("http://{addr}/responses"), hits);
+        }
+
         let counter = hits.clone();
-        let app = axum::Router::new().fallback(axum::routing::any(move || {
+        let app = axum::Router::new().fallback(axum::routing::any(
+            move |headers: axum::http::HeaderMap| {
             let mode = mode.clone();
             let counter = counter.clone();
             async move {
-                counter.fetch_add(1, AtomicOrdering::SeqCst);
+                let hit = counter.fetch_add(1, AtomicOrdering::SeqCst);
+                let completed = || {
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(
+                            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n\
+                             data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-sol\"}}\n\n",
+                        ))
+                        .unwrap()
+                };
                 match mode {
                     Upstream::Status(code, body) => Response::builder()
                         .status(code)
@@ -1519,14 +2322,15 @@ mod tests {
                         .body(Body::from(body))
                         .unwrap(),
                     Upstream::TornAfterText => {
+                        // Готовый message item, затем обрыв: draft deltas are withheld
+                        // by the current text contract, so they cannot prove tx.send.
                         // Сначала кусок настоящего текста, затем обрыв: это тот самый
                         // случай, где ответ уже начался, а канал умер на середине.
-                        // Пауза между ними обязательна — без неё hyper успевает
-                        // оборвать соединение раньше, чем отдаст заголовки, и ошибка
-                        // выходит не там (см. TornAtConnect).
+                        // Pausing makes the response head and first delta observable
+                        // before the injected body failure.
                         let chunks = async_stream::stream! {
                             yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
-                                b"data: {\"type\":\"response.output_text.delta\",\"delta\":{\"text\":\"\xd1\x87\xd0\xb0\"}}\n\n",
+                                b"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"\xd1\x87\xd0\xb0\"}]}}\n\n",
                             ));
                             tokio::time::sleep(std::time::Duration::from_millis(80)).await;
                             yield Err(std::io::Error::other("upstream tore the byte stream"));
@@ -1537,19 +2341,7 @@ mod tests {
                             .body(Body::from_stream(chunks))
                             .unwrap()
                     }
-                    Upstream::TornAtConnect => {
-                        let chunks = futures_util::stream::iter(vec![Err::<
-                            bytes::Bytes,
-                            std::io::Error,
-                        >(
-                            std::io::Error::other("upstream closed before the head"),
-                        )]);
-                        Response::builder()
-                            .status(200)
-                            .header("content-type", "text/event-stream")
-                            .body(Body::from_stream(chunks))
-                            .unwrap()
-                    }
+                    Upstream::PreResponseHeadFailure => unreachable!("handled before axum"),
                     Upstream::BadJson => Response::builder()
                         .status(200)
                         .header("content-type", "text/event-stream")
@@ -1562,6 +2354,165 @@ mod tests {
                             "data: {\"type\":\"response.failed\",\"response\":{\"model\":\"gpt-5.6-sol\",\
                              \"error\":{\"message\":\"internal stream failure\"}}}\n\n",
                         ))
+                        .unwrap(),
+                    Upstream::CompletedWithoutUsage => completed(),
+                    Upstream::CompletedThenHang => {
+                        let chunks = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-sol\"}}\n\n",
+                            ));
+                            std::future::pending::<()>().await;
+                        };
+                        Response::builder().status(200).header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks)).unwrap()
+                    }
+                    Upstream::CompletedThenError => {
+                        let chunks = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-sol\"}}\n\n",
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                            yield Err(std::io::Error::other("error after completion"));
+                        };
+                        Response::builder().status(200).header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks)).unwrap()
+                    }
+                    Upstream::CompletedThenTail => Response::builder()
+                        .status(200).header("content-type", "text/event-stream")
+                        .body(Body::from(
+                            "data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-sol\"}}\n\nunterminated tail",
+                        )).unwrap(),
+                    Upstream::FinishReasonThenError => {
+                        let chunks = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                b"data: {\"type\":\"response.in_progress\",\"finish_reason\":\"stop\"}\n\n",
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                            yield Err(std::io::Error::other("error after visible finish"));
+                        };
+                        Response::builder().status(200).header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks)).unwrap()
+                    }
+                    Upstream::MixedAccounts {
+                        first,
+                        second,
+                        accounts_seen,
+                    } => {
+                        accounts_seen
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(
+                                headers
+                                    .get("chatgpt-account-id")
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or("<missing>")
+                                    .to_string(),
+                            );
+                        let code = if hit == 0 { first } else { second };
+                        let body = if code == 429 {
+                            r#"{"error":{"code":"usage_limit_reached","resets_in_seconds":60}}"#
+                        } else {
+                            r#"{"error":{"message":"expired"}}"#
+                        };
+                        Response::builder().status(code).header("content-type", "application/json")
+                            .body(Body::from(body)).unwrap()
+                    }
+                    Upstream::GatedQuotaBody {
+                        body_started,
+                        release_body,
+                        body_dropped,
+                    } => {
+                        struct Dropped(Arc<tokio::sync::Semaphore>);
+                        impl Drop for Dropped {
+                            fn drop(&mut self) {
+                                self.0.add_permits(1);
+                            }
+                        }
+                        let chunks = async_stream::stream! {
+                            let _dropped = Dropped(body_dropped);
+                            body_started.add_permits(1);
+                            release_body.acquire().await.unwrap().forget();
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                br#"{"error":{"code":"usage_limit_reached"}}"#,
+                            ));
+                        };
+                        Response::builder().status(429).header("content-type", "application/json")
+                            .body(Body::from_stream(chunks)).unwrap()
+                    }
+                    Upstream::EventThenPending {
+                        event_sent,
+                        body_dropped,
+                    } => {
+                        struct Dropped(Arc<tokio::sync::Semaphore>);
+                        impl Drop for Dropped {
+                            fn drop(&mut self) {
+                                self.0.add_permits(1);
+                            }
+                        }
+                        let chunks = async_stream::stream! {
+                            let _dropped = Dropped(body_dropped);
+                            event_sent.add_permits(1);
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                b"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"visible\"}]}}\n\n",
+                            ));
+                            std::future::pending::<()>().await;
+                        };
+                        Response::builder().status(200).header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks)).unwrap()
+                    }
+                    Upstream::QuotaThenStandbyCompleted if hit > 0 => completed(),
+                    Upstream::QuotaThenStandbyCompleted => Response::builder()
+                        .status(429)
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            r#"{"error":{"code":"usage_limit_reached","resets_in_seconds":60}}"#,
+                        ))
+                        .unwrap(),
+                    Upstream::ErrorBeforeFirstEventThenCompleted if hit > 0 => completed(),
+                    Upstream::ErrorBeforeFirstEventThenCompleted => {
+                        let chunks = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(b": keepalive\n\n"));
+                            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                            yield Err(std::io::Error::other("injected before first event"));
+                        };
+                        Response::builder()
+                            .status(200)
+                            .header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks))
+                            .unwrap()
+                    }
+                    Upstream::TextThenError => {
+                        let chunks = async_stream::stream! {
+                            yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+                                b"data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"partial\"}]}}\n\n",
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                            yield Err(std::io::Error::other("injected after partial output"));
+                        };
+                        Response::builder()
+                            .status(200)
+                            .header("content-type", "text/event-stream")
+                            .body(Body::from_stream(chunks))
+                            .unwrap()
+                    }
+                    Upstream::CleanEofThenCompleted
+                    | Upstream::SseTailThenCompleted
+                    | Upstream::Utf8TailThenCompleted
+                        if hit > 0 => completed(),
+                    Upstream::CleanEofThenCompleted => Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::empty())
+                        .unwrap(),
+                    Upstream::SseTailThenCompleted => Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from("data: {\"type\":\"response.in_progress\"}"))
+                        .unwrap(),
+                    Upstream::Utf8TailThenCompleted => Response::builder()
+                        .status(200)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(vec![0xd1]))
                         .unwrap(),
                 }
             }
@@ -1578,11 +2529,18 @@ mod tests {
     /// Возвращает ровно те чанки, которые уедут клиенту, — и строкой, и разобранными.
     /// Строка нужна отдельно: `serde_json::Value` сортирует ключи, а порядок полей на
     /// проводе — часть обещания «выключенный рычаг = сегодняшний чанк».
-    async fn run_turn(mode: Upstream, naming: TerminalNaming) -> Vec<(String, Value)> {
+    async fn run_turn_with_account_count(
+        mode: Upstream,
+        naming: TerminalNaming,
+        account_count: usize,
+    ) -> (Vec<(String, Value)>, usize, AccountRouter) {
         let root = tempdir().unwrap();
         write_account(root.path(), "primary", "acct-primary");
+        if account_count > 1 {
+            write_account(root.path(), "secondary", "acct-secondary");
+        }
         let router = AccountRouter::load(root.path()).await.unwrap();
-        let (url, _hits) = spawn_upstream(mode).await;
+        let (url, hits) = spawn_upstream(mode).await;
         set_upstream_url(Some(url));
         force_terminal_naming(naming);
 
@@ -1601,7 +2559,7 @@ mod tests {
         }))
         .unwrap();
 
-        let mut rx = stream_chat_completions(&config, router, request, Client::new())
+        let mut rx = stream_chat_completions(&config, router.clone(), request, Client::new())
             .await
             .unwrap();
         let mut wire = Vec::new();
@@ -1621,7 +2579,19 @@ mod tests {
             }
         }
         set_upstream_url(None);
-        wire
+        (wire, hits.load(AtomicOrdering::SeqCst), router)
+    }
+
+    async fn run_turn_with_hits(
+        mode: Upstream,
+        naming: TerminalNaming,
+    ) -> (Vec<(String, Value)>, usize) {
+        let (wire, hits, _) = run_turn_with_account_count(mode, naming, 1).await;
+        (wire, hits)
+    }
+
+    async fn run_turn(mode: Upstream, naming: TerminalNaming) -> Vec<(String, Value)> {
+        run_turn_with_hits(mode, naming).await.0
     }
 
     fn last(wire: &[(String, Value)]) -> &Value {
@@ -1632,8 +2602,404 @@ mod tests {
         &wire.last().expect("реле обязано сказать хоть что-то").0
     }
 
+    fn torn_events(wire: &[(String, Value)]) -> Vec<&Value> {
+        wire.iter()
+            .map(|(_, event)| event)
+            .filter(|event| event["relay_terminal"]["code"] == TERMINAL_TORN)
+            .collect()
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn completed_is_final_even_when_transport_hangs_errors_or_has_tail() {
+        let _guard = lever_guard();
+        for mode in [
+            Upstream::CompletedThenHang,
+            Upstream::CompletedThenError,
+            Upstream::CompletedThenTail,
+        ] {
+            let (wire, hits) = tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                run_turn_with_hits(mode, TerminalNaming::Field),
+            )
+            .await
+            .expect("response.completed must close downstream promptly");
+            assert_eq!(hits, 1);
+            assert_eq!(
+                wire.len(),
+                1,
+                "only the successfully forwarded response.completed envelope is visible"
+            );
+            assert!(wire[0].1.get("relay_terminal").is_none());
+            assert!(torn_events(&wire).is_empty());
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn finish_reason_only_is_visible_and_forbids_replay() {
+        let _guard = lever_guard();
+        let (wire, hits) =
+            run_turn_with_hits(Upstream::FinishReasonThenError, TerminalNaming::Field).await;
+        assert_eq!(hits, 1);
+        let finish_events = wire
+            .iter()
+            .filter(|(_, event)| event["choices"][0]["finish_reason"] == "stop")
+            .count();
+        assert_eq!(finish_events, 1, "finish event must not be replayed");
+        assert_eq!(wire[0].1["choices"][0]["finish_reason"], "stop");
+        assert_eq!(torn_events(&wire).len(), 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn mixed_account_failures_preserve_both_facts_in_either_order() {
+        let _guard = lever_guard();
+        for (first, second) in [(401, 429), (429, 401)] {
+            let accounts_seen = Arc::new(StdMutex::new(Vec::new()));
+            let (wire, hits, router) = run_turn_with_account_count(
+                Upstream::MixedAccounts {
+                    first,
+                    second,
+                    accounts_seen: accounts_seen.clone(),
+                },
+                TerminalNaming::Field,
+                2,
+            )
+            .await;
+            assert_eq!(hits, 2, "actual account failover must occur");
+            assert_eq!(
+                *accounts_seen
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+                ["acct-primary", "acct-secondary"],
+                "the replay must use standby credentials"
+            );
+            assert_eq!(router.active_slot().await, "secondary");
+            let slots = router.describe().await;
+            assert!(slots
+                .iter()
+                .find(|slot| slot.slot == "primary")
+                .is_some_and(|slot| slot.cooldown_seconds_left > 0));
+            let terminal = last(&wire);
+            assert_eq!(
+                terminal["relay_terminal"]["code"],
+                TERMINAL_ACCOUNTS_UNAVAILABLE
+            );
+            let attempts = terminal["relay_terminal"]["attempts"].as_array().unwrap();
+            assert_eq!(attempts.len(), 2);
+            assert_eq!(attempts[0]["slot"], "primary");
+            assert_eq!(attempts[1]["slot"], "secondary");
+            assert_eq!(attempts[0]["status"], first);
+            assert_eq!(attempts[1]["status"], second);
+            let expected_codes = if first == 401 {
+                [TERMINAL_NEEDS_LOGIN, TERMINAL_QUOTA]
+            } else {
+                [TERMINAL_QUOTA, TERMINAL_NEEDS_LOGIN]
+            };
+            assert_eq!(attempts[0]["code"], expected_codes[0]);
+            assert_eq!(attempts[1]["code"], expected_codes[1]);
+            let quota = attempts
+                .iter()
+                .find(|attempt| attempt["code"] == TERMINAL_QUOTA)
+                .unwrap();
+            assert_eq!(quota["resets_in_seconds"], 60);
+            assert!(terminal["relay_terminal"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("different reasons"));
+        }
+    }
+
+    fn test_turn(root: &std::path::Path) -> (Config, ChatRequest) {
+        let config = Config {
+            codex_home: root.to_path_buf(),
+            chatgpt_base_url: String::new(),
+            model: "gpt-5.6-sol".to_string(),
+            user_instructions: None,
+            reasoning_effort: None,
+            instructions_mode: Some("minimal".to_string()),
+            parallel_tool_calls: false,
+        };
+        let request = serde_json::from_value(json!({
+            "model": "gpt-5.6-sol", "messages": [{"role":"user", "content":"x"}]
+        }))
+        .unwrap();
+        (config, request)
+    }
+
+    async fn assert_router_unchanged(router: &AccountRouter, expected_active: &str) {
+        assert_eq!(router.active_slot().await, expected_active);
+        assert!(router
+            .describe()
+            .await
+            .iter()
+            .all(|slot| slot.cooldown_seconds_left == 0));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cancellation_wins_while_initial_account_lease_is_awaited() {
+        let _guard = lever_guard();
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        // Corrupt the active profile only after load. If cancellation did not
+        // cancel lease_any(), releasing the gate would make it park primary,
+        // lease secondary, and persist both an active switch and a cooldown.
+        std::fs::write(
+            root.path().join("accounts/primary/auth.json"),
+            b"not valid json",
+        )
+        .unwrap();
+        let gate = crate::core::account_router::TestGate::new();
+        router.gate_next_lease(gate.clone());
+        let (config, request) = test_turn(root.path());
+
+        let rx = stream_chat_completions(&config, router.clone(), request, Client::new())
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), gate.wait_reached())
+            .await
+            .expect("producer must reach initial lease boundary");
+        drop(rx);
+        gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if Arc::strong_count(&gate) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled initial lease future must be dropped");
+        assert_router_unchanged(&router, "primary").await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn cancellation_drops_error_body_without_failover_or_cooldown() {
+        let _guard = lever_guard();
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let body_started = Arc::new(tokio::sync::Semaphore::new(0));
+        let release_body = Arc::new(tokio::sync::Semaphore::new(0));
+        let body_dropped = Arc::new(tokio::sync::Semaphore::new(0));
+        let (url, hits) = spawn_upstream(Upstream::GatedQuotaBody {
+            body_started: body_started.clone(),
+            release_body: release_body.clone(),
+            body_dropped: body_dropped.clone(),
+        })
+        .await;
+        set_upstream_url(Some(url));
+        let (config, request) = test_turn(root.path());
+        let rx = stream_chat_completions(&config, router.clone(), request, Client::new())
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), body_started.acquire())
+            .await
+            .expect("producer must reach post-head error-body read")
+            .unwrap()
+            .forget();
+        drop(rx);
+        release_body.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), body_dropped.acquire())
+            .await
+            .expect("cancellation must drop upstream error body")
+            .unwrap()
+            .forget();
+        set_upstream_url(None);
+        assert_eq!(hits.load(AtomicOrdering::SeqCst), 1);
+        assert_router_unchanged(&router, "primary").await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn actual_tx_send_failure_cancels_upstream_and_forbids_replay_or_state_change() {
+        let _guard = lever_guard();
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let body_dropped = Arc::new(tokio::sync::Semaphore::new(0));
+        let (url, hits) = spawn_upstream(Upstream::EventThenPending {
+            event_sent: Arc::new(tokio::sync::Semaphore::new(0)),
+            body_dropped: body_dropped.clone(),
+        })
+        .await;
+        set_upstream_url(Some(url));
+        let failures_before = TEST_SEND_FAILURES.load(AtomicOrdering::SeqCst);
+        let send_gate = TestSendGate::new();
+        *TEST_SEND_GATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(send_gate.clone());
+        let (config, request) = test_turn(root.path());
+        let rx = stream_chat_completions(&config, router.clone(), request, Client::new())
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), send_gate.wait_reached())
+            .await
+            .expect("producer must reach the production tx.send boundary");
+        drop(rx);
+        send_gate.release();
+        tokio::time::timeout(std::time::Duration::from_secs(1), body_dropped.acquire())
+            .await
+            .expect("tx.send(...).await Err branch must drop the upstream body")
+            .unwrap()
+            .forget();
+        set_upstream_url(None);
+        assert_eq!(hits.load(AtomicOrdering::SeqCst), 1);
+        assert_eq!(
+            TEST_SEND_FAILURES.load(AtomicOrdering::SeqCst),
+            failures_before + 1,
+            "the observed shutdown must be caused by tx.send(...).await.is_err()",
+        );
+        assert_router_unchanged(&router, "primary").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::await_holding_lock)]
+    async fn receiver_drop_during_account_commit_never_replays_to_standby() {
+        let _guard = lever_guard();
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        let (commit_gate, commit_reached, release_commit) = TestCommitGate::new();
+        router.gate_next_commit(commit_gate);
+        let (url, hits) = spawn_upstream(Upstream::QuotaThenStandbyCompleted).await;
+        set_upstream_url(Some(url));
+        let (config, request) = test_turn(root.path());
+        let rx = stream_chat_completions(&config, router.clone(), request, Client::new())
+            .await
+            .unwrap();
+
+        tokio::task::spawn_blocking(move || {
+            commit_reached
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .expect("producer must hold the account-state commit permit");
+        })
+        .await
+        .unwrap();
+
+        let (drop_started_tx, drop_started_rx) = std::sync::mpsc::channel();
+        let drop_thread = std::thread::spawn(move || {
+            drop_started_tx.send(()).unwrap();
+            drop(rx);
+        });
+        drop_started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("receiver drop thread must start");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        release_commit.send(()).unwrap();
+        tokio::task::spawn_blocking(move || drop_thread.join().unwrap())
+            .await
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if router.active_slot().await == "secondary" {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the earlier commit must be allowed to finish");
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        set_upstream_url(None);
+        assert_eq!(
+            hits.load(AtomicOrdering::SeqCst),
+            1,
+            "receiver drop may lose to an in-flight commit, but must close the channel before standby replay",
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn retries_bytes_stream_error_only_before_first_downstream_event() {
+        let _guard = lever_guard();
+        let (wire, hits) = run_turn_with_hits(
+            Upstream::ErrorBeforeFirstEventThenCompleted,
+            TerminalNaming::Off,
+        )
+        .await;
+
+        assert_eq!(hits, 2, "pre-output transport failure gets one replay");
+        assert!(
+            torn_events(&wire).is_empty(),
+            "successful replay has no terminal"
+        );
+        let content: Vec<_> = wire
+            .iter()
+            .filter_map(|(_, event)| event["choices"][0]["delta"]["content"].as_str())
+            .collect();
+        assert_eq!(content, ["ok"], "failed attempt cannot duplicate output");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn partial_output_is_never_replayed_and_error_is_not_delta_content() {
+        let _guard = lever_guard();
+        let (wire, hits) = run_turn_with_hits(Upstream::TextThenError, TerminalNaming::Off).await;
+
+        assert_eq!(
+            hits, 1,
+            "replay after partial output could duplicate text/tools"
+        );
+        let content: Vec<_> = wire
+            .iter()
+            .filter_map(|(_, event)| event["choices"][0]["delta"]["content"].as_str())
+            .collect();
+        assert_eq!(content, ["partial"]);
+        let terminal = torn_events(&wire);
+        assert_eq!(terminal.len(), 1);
+        assert_eq!(terminal[0]["choices"][0]["finish_reason"], "error");
+        assert!(terminal[0]["choices"][0]["delta"].get("content").is_some());
+        assert!(terminal[0]["choices"][0]["delta"]["content"].is_null());
+        assert!(terminal[0]["relay_terminal"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("byte stream error")));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn completion_is_not_inferred_from_usage_and_does_not_require_usage() {
+        let _guard = lever_guard();
+        let (wire, hits) =
+            run_turn_with_hits(Upstream::CompletedWithoutUsage, TerminalNaming::Off).await;
+        assert_eq!(hits, 1);
+        assert!(torn_events(&wire).is_empty());
+        assert!(wire.iter().all(|(_, event)| event.get("usage").is_none()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn clean_eof_and_nonempty_sse_or_utf8_tail_are_retried() {
+        let _guard = lever_guard();
+        for mode in [
+            Upstream::CleanEofThenCompleted,
+            Upstream::SseTailThenCompleted,
+            Upstream::Utf8TailThenCompleted,
+        ] {
+            let (wire, hits) = run_turn_with_hits(mode, TerminalNaming::Field).await;
+            assert_eq!(hits, 2);
+            assert!(torn_events(&wire).is_empty());
+            assert_eq!(
+                wire.iter()
+                    .filter_map(|(_, event)| event["choices"][0]["delta"]["content"].as_str())
+                    .collect::<Vec<_>>(),
+                ["ok"]
+            );
+        }
+    }
+
     /// Три смерти получают три разных имени — и ни одна не притворяется ответом.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn the_three_deaths_get_three_different_names() {
         let _guard = lever_guard();
 
@@ -1675,7 +3041,12 @@ mod tests {
         let torn = run_turn(Upstream::TornAfterText, TerminalNaming::Field).await;
         assert_eq!(last(&torn)["relay_terminal"]["code"], TERMINAL_TORN);
 
-        let torn_early = run_turn(Upstream::TornAtConnect, TerminalNaming::Field).await;
+        let (torn_early, pre_head_hits) =
+            run_turn_with_hits(Upstream::PreResponseHeadFailure, TerminalNaming::Field).await;
+        assert_eq!(
+            pre_head_hits, 2,
+            "pre-response-head send failure gets exactly one safe replay"
+        );
         assert_eq!(
             last(&torn_early)["relay_terminal"]["code"],
             TERMINAL_TORN,
@@ -1696,6 +3067,7 @@ mod tests {
     /// репликой, а оборванный посреди слова ход — «законченным» коротким ответом.
     /// При зарубке `field` обе двери обязаны остаться закрытыми.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn a_named_terminal_never_starts_looking_like_an_answer() {
         let _guard = lever_guard();
 
@@ -1725,6 +3097,7 @@ mod tests {
 
     /// Выключенный рычаг = сегодняшний чанк. Не «примерно», а по составу полей и тексту.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn the_lever_off_reproduces_todays_chunk() {
         let _guard = lever_guard();
         let wire = run_turn(
@@ -1765,27 +3138,15 @@ mod tests {
         );
         assert!(event["id"].as_str().unwrap().starts_with("error-"));
 
-        // И событие обрыва остаётся невидимым ровно как вчера — то есть болезнь,
-        // которую мы лечим, под выключенным рычагом воспроизводится один в один.
-        let failed = run_turn(Upstream::FailedEvent, TerminalNaming::Off).await;
-        assert!(
-            failed
-                .iter()
-                .all(|(_, chunk)| chunk["choices"].as_array().is_none_or(|c| c.is_empty())),
-            "под выключенным рычагом response.failed не порождает чанков: {failed:?}"
-        );
-
-        // И обрыв соединения по-прежнему уезжает `Err`-строкой, а не чанком.
-        let torn = run_turn(Upstream::TornAtConnect, TerminalNaming::Off).await;
-        assert!(
-            last(&torn).get("transport_error").is_some(),
-            "выключенный рычаг обязан сохранять прежний путь обрыва: {torn:?}"
-        );
+        // Non-stream HTTP terminals still preserve the legacy lever behavior.
+        // Stream truncation is intentionally excluded: accepting it silently was
+        // the defect fixed by the focused retry/structured-terminal path above.
     }
 
     /// Третья зарубка переписывает и `finish_reason` — её включают только после того,
     /// как клиент научился читать класс.
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn the_third_notch_renames_finish_reason_too() {
         let _guard = lever_guard();
         let wire = run_turn(
@@ -1814,7 +3175,10 @@ mod tests {
             terminal_naming_from_env(Some("галактика")),
             TerminalNaming::Off
         );
-        assert_eq!(terminal_naming_from_env(Some(" Field ")), TerminalNaming::Field);
+        assert_eq!(
+            terminal_naming_from_env(Some(" Field ")),
+            TerminalNaming::Field
+        );
         assert_eq!(terminal_naming_from_env(Some("1")), TerminalNaming::Field);
         assert_eq!(
             terminal_naming_from_env(Some("finish_reason")),
@@ -1836,7 +3200,10 @@ mod tests {
         // на выдуманном часе она построит план хода.
         assert_eq!(quota_reset_from_body("{}"), (None, None));
         assert_eq!(quota_reset_from_body("not json at all"), (None, None));
-        assert_eq!(quota_reset_from_body(r#"{"error":{"resets_at":0}}"#), (None, None));
+        assert_eq!(
+            quota_reset_from_body(r#"{"error":{"resets_at":0}}"#),
+            (None, None)
+        );
     }
 
     #[test]
@@ -1864,7 +3231,11 @@ mod tests {
         let mut carry = Vec::new();
         let mut out = String::new();
         out.push_str(&decode_stream_chunk(&bytes[..cut], &mut carry));
-        assert_eq!(carry.len(), 1, "half a character must be held back, not emitted");
+        assert_eq!(
+            carry.len(),
+            1,
+            "half a character must be held back, not emitted"
+        );
         out.push_str(&decode_stream_chunk(&bytes[cut..], &mut carry));
         assert_eq!(out, text);
         assert!(carry.is_empty());
@@ -2125,14 +3496,19 @@ mod tests {
         }))
         .unwrap();
         // Same first message => same affinity across tool-loop iterations.
-        assert_eq!(conversation_affinity(&request), conversation_affinity(&longer));
+        assert_eq!(
+            conversation_affinity(&request),
+            conversation_affinity(&longer)
+        );
         let id = conversation_affinity(&request);
         assert_eq!(id.len(), 36);
         assert_eq!(id.matches('-').count(), 4);
         // Different conversation (different system prompt) => different affinity.
-        longer.messages[0].content =
-            Some(MessageContent::Text("another persona".to_string()));
-        assert_ne!(conversation_affinity(&request), conversation_affinity(&longer));
+        longer.messages[0].content = Some(MessageContent::Text("another persona".to_string()));
+        assert_ne!(
+            conversation_affinity(&request),
+            conversation_affinity(&longer)
+        );
     }
 
     #[test]
@@ -2152,7 +3528,9 @@ mod tests {
         assert_eq!(chunk.usage.as_ref().map(|u| u.completion_tokens), Some(340));
         assert!(extract_completed_usage(&json!({"type": "response.output_text.delta"})).is_none());
         assert!(extract_completed_usage(
-            &json!({"type": "response.completed", "response": {"usage": {}}})).is_none());
+            &json!({"type": "response.completed", "response": {"usage": {}}})
+        )
+        .is_none());
         // Без детали кэша поле остаётся ОТСУТСТВУЮЩИМ, а не нулевым.
         assert!(usage.prompt_tokens_details.is_none());
     }
@@ -2171,7 +3549,10 @@ mod tests {
         });
         let usage = extract_completed_usage(&upstream).expect("usage forwarded");
         assert_eq!(
-            usage.prompt_tokens_details.as_ref().map(|d| d.cached_tokens),
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .map(|d| d.cached_tokens),
             Some(18800)
         );
         // Chat-совместимое имя того же поля читается тоже.
@@ -2191,17 +3572,22 @@ mod tests {
         // И доезжает до клиента в SSE-чанке, а не только внутри реле.
         let chunk = parse_sse_event(&upstream, 0).expect("completed event parsed");
         assert_eq!(
-            chunk.usage.and_then(|u| u.prompt_tokens_details).map(|d| d.cached_tokens),
+            chunk
+                .usage
+                .and_then(|u| u.prompt_tokens_details)
+                .map(|d| d.cached_tokens),
             Some(18800)
         );
     }
 
     #[test]
     fn parallel_function_calls_get_distinct_indexes() {
-        let mk = |call: &str| json!({
+        let mk = |call: &str| {
+            json!({
             "type": "response.output_item.done",
             "item": {"type": "function_call", "name": "t", "arguments": "{}", "call_id": call}
-        });
+            })
+        };
         let first = parse_sse_event(&mk("call-a"), 0).unwrap();
         let second = parse_sse_event(&mk("call-b"), 1).unwrap();
         let idx = |ev: &ResponseEvent| {
@@ -2226,13 +3612,21 @@ mod tests {
         }))
         .unwrap();
         let parallel = build_responses_payload(
-            &request, "i".to_string(), build_responses_input(&request.messages),
-            None, None, true,
+            &request,
+            "i".to_string(),
+            build_responses_input(&request.messages),
+            None,
+            None,
+            true,
         );
         assert_eq!(parallel["parallel_tool_calls"], true);
         let serial = build_responses_payload(
-            &request, "i".to_string(), build_responses_input(&request.messages),
-            None, None, false,
+            &request,
+            "i".to_string(),
+            build_responses_input(&request.messages),
+            None,
+            None,
+            false,
         );
         assert_eq!(serial["parallel_tool_calls"], false);
         assert!(MINIMAL_INSTRUCTIONS.len() < 600);
@@ -2240,6 +3634,12 @@ mod tests {
 
     #[test]
     fn codex_request_has_version_gated_user_agent() {
+        // ⚠ Замок обязателен: этот тест ЧИТАЕТ глобальный адрес апстрима, который соседние
+        // тесты подменяют на свой поднятый сервер. Без него он зелен только по расписанию —
+        // 16.08.2026 достаточно оказалось добавить пять тестов в другом модуле, чтобы он
+        // упал с `http://127.0.0.1:40503/responses` вместо адреса апстрима.
+        let _guard = lever_guard();
+
         let request = build_codex_request(
             &Client::new(),
             "test-access-token",
@@ -2250,12 +3650,18 @@ mod tests {
         .build()
         .unwrap();
 
-        assert_eq!(CODEX_USER_AGENT, "codex_cli_rs/0.144.0");
-        assert_eq!(CODEX_CLI_VERSION, "0.144.0");
+        // The default is pinned: it is the version at which the catalog lists
+        // gpt-6-astra, and it changes only on purpose. The header is derived from
+        // the version, never a second literal.
+        assert_eq!(CODEX_CLI_VERSION_DEFAULT, "0.153.3");
+        assert_eq!(
+            codex_user_agent(),
+            format!("codex_cli_rs/{}", codex_cli_version()).as_str()
+        );
         assert_eq!(request.url().as_str(), CHATGPT_CODEX_RESPONSES_URL);
         assert_eq!(
             request.headers().get(reqwest::header::USER_AGENT).unwrap(),
-            CODEX_USER_AGENT
+            codex_user_agent()
         );
         assert_eq!(
             request.headers().get("originator").unwrap(),
@@ -2276,12 +3682,13 @@ mod tests {
                 "item": {"type": "web_search_call", "id": "ws_1"}
             }),
         ] {
-            assert!(parse_sse_event(&event, 0).is_none());
+            let observed = parse_sse_event(&event, 0);
+            assert!(observed.as_ref().is_none_or(|chunk| chunk.choices.is_empty()));
         }
     }
 
     #[test]
-    fn completed_search_response_emits_citations_and_actual_model() {
+    fn completed_message_uses_actual_model_and_clean_text() {
         let event = json!({
             "type": "response.completed",
             "response": {
@@ -2293,6 +3700,7 @@ mod tests {
                         "content": [{
                             "type": "output_text",
                             "text": "Current answer",
+                            // Аннотация без индексов: вшивать некуда, текст не трогаем.
                             "annotations": [{
                                 "type": "url_citation",
                                 "url": "https://example.com/source",
@@ -2308,67 +3716,108 @@ mod tests {
         assert_eq!(translated.model, "gpt-5.6-terra");
         let delta = &translated.choices[0].delta;
         assert_eq!(delta.tool_calls, None);
+        assert_eq!(delta.content.as_deref(), Some("Current answer"));
+    }
+
+    #[test]
+    fn message_item_done_carries_clean_text_and_links() {
+        // Форма бэкенда 09.09: ссылка уже в тексте с utm-хвостом, аннотация указывает на
+        // её диапазон (в кодовых точках); маркер ссылки на прошлый запрос — сырой.
+        let head = "Титаны вышли 31 декабря. ";
+        let link = "([arxiv.org](https://arxiv.org/abs/2501.00663?utm_source=openai))";
+        let tail = "\n\nМаркер \u{E200}cite\u{E202}turn1search3\u{E201} снят.";
+        let text = format!("{head}{link}{tail}");
+        let start = head.chars().count();
+        let end = start + link.chars().count();
+        let event = json!({
+            "type": "response.output_item.done",
+            "response": {"model": "gpt-5.6-sol"},
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": [{
+                        "type": "url_citation",
+                        "start_index": start,
+                        "end_index": end,
+                        "title": "Titans: Learning to Memorize at Test Time",
+                        "url": "https://arxiv.org/abs/2501.00663?utm_source=openai"
+                    }]
+                }]
+            }
+        });
+
+        let translated = parse_sse_event(&event, 0).unwrap();
+        assert_eq!(translated.model, "gpt-5.6-sol");
         assert_eq!(
-            delta.content.as_deref(),
-            Some("Current answer\n\nИсточники:\n- Primary source — https://example.com/source")
+            translated.choices[0].delta.content.as_deref(),
+            Some("Титаны вышли 31 декабря. ([arxiv.org](https://arxiv.org/abs/2501.00663))\n\nМаркер снят.")
+        );
+        assert_eq!(translated.choices[0].finish_reason, None);
+    }
+
+    #[test]
+    fn draft_text_events_stay_silent() {
+        for event in [
+            json!({"type": "response.output_text.delta", "delta": "Тит"}),
+            json!({"type": "response.output_text.done", "text": "Титаны вышли."}),
+            json!({"type": "response.content_part.done", "part": {"type": "output_text", "text": "Титаны вышли."}}),
+            json!({"type": "response.output_text.annotation.added", "annotation": {"type": "url_citation", "url": "https://a.b/"}}),
+            json!({"type": "response.output_item.done", "item": {"type": "reasoning", "summary": []}}),
+        ] {
+            assert!(parse_sse_event(&event, 0).is_none(), "{event}");
+        }
+    }
+
+    #[test]
+    fn annotation_span_without_link_gets_wrapped() {
+        let text = "По данным ABS население 452 670.";
+        let start = "По данным ".chars().count();
+        let end = start + "ABS".chars().count();
+        let annotations = vec![json!({
+            "type": "url_citation",
+            "start_index": start,
+            "end_index": end,
+            "url": "https://www.abs.gov.au/census/2021"
+        })];
+        assert_eq!(
+            clean_model_text(text, &annotations),
+            "По данным [ABS](https://www.abs.gov.au/census/2021) население 452 670."
         );
     }
 
     #[test]
-    fn response_citations_are_visible_deduplicated_and_capped() {
-        let mut annotations = vec![json!({
-            "type": "url_citation",
-            "url": "ftp://unsafe.example/ignored",
-            "title": "unsafe"
-        })];
-        for index in 0..14 {
-            let citation = json!({
-                "url": format!("https://source.example/{index}"),
-                "title": if index == 0 { "Source\n 0" } else { "Source" }
-            });
-            if index == 1 {
-                annotations.push(json!({
-                    "type": "url_citation",
-                    "url_citation": citation
-                }));
-                annotations.push(json!({
-                    "type": "url_citation",
-                    "url": "https://source.example/1",
-                    "title": "duplicate"
-                }));
-            } else {
-                annotations.push(json!({
-                    "type": "url_citation",
-                    "url": citation["url"],
-                    "title": citation["title"]
-                }));
-            }
-        }
-        let response = json!({
-            "output": [{
-                "type": "message",
-                "content": [{
-                    "type": "output_text",
-                    "text": "Answer already mentions https://source.example/0",
-                    "annotations": annotations
-                }]
-            }]
-        });
-
-        let text = extract_responses_message(&response).unwrap();
-        let source_lines: Vec<_> = text.lines().filter(|line| line.starts_with("- ")).collect();
-        assert_eq!(source_lines.len(), MAX_VISIBLE_CITATIONS);
+    fn link_parens_and_utm_are_normalised() {
+        let text = "см. [Ключ](https://ru.wikipedia.org/wiki/Ключ_(значения)?utm_source=openai&x=1) и https://a.b/c?utm_source=chatgpt.com — всё.";
         assert_eq!(
-            source_lines
-                .iter()
-                .filter(|line| line.ends_with("source.example/1"))
-                .count(),
-            1
+            clean_model_text(text, &[]),
+            "см. [Ключ](https://ru.wikipedia.org/wiki/Ключ_%28значения%29?x=1) и https://a.b/c — всё."
         );
-        assert!(text.contains("Source 0 — https://source.example/0"));
-        assert!(text.contains("https://source.example/11"));
-        assert!(!text.contains("https://source.example/12"));
-        assert!(!text.contains("ftp://unsafe.example"));
+        // Слова про utm в обычном тексте — не адрес, не трогаем.
+        assert_eq!(strip_utm("метка utm_source=openai — это хвост"), "метка utm_source=openai — это хвост");
+    }
+
+    #[test]
+    fn unsafe_or_missing_urls_leave_text_alone() {
+        let text = "Источник: ftp-архив.";
+        let annotations = vec![
+            json!({"type": "url_citation", "start_index": 10, "end_index": 20, "url": "ftp://unsafe.example/x"}),
+            json!({"type": "url_citation", "start_index": 10, "end_index": 999, "url": "https://ok.example/x"}),
+            json!({"type": "url_citation", "url": "https://ok.example/y"}),
+        ];
+        assert_eq!(clean_model_text(text, &annotations), text);
+    }
+
+    #[test]
+    fn unclosed_marker_is_dropped_without_eating_the_answer() {
+        let (text, had) = strip_cite_markers("Ответ \u{E200}cite\u{E202}turn0search1 остался целым.");
+        assert!(had);
+        assert_eq!(text, "Ответ citeturn0search1 остался целым.");
+        let (clean, had) = strip_cite_markers("Без маркеров.");
+        assert!(!had);
+        assert_eq!(clean, "Без маркеров.");
     }
 
     #[test]
@@ -2431,4 +3880,66 @@ mod tests {
         assert!(subscription_auth_error(status));
         assert!(!subscription_quota_error(status, "{}"));
     }
+}
+
+#[cfg(test)]
+mod codex_version_tests {
+    use super::{parse_version, version_is_newer, CODEX_CLI_VERSION_DEFAULT};
+
+    #[test]
+    fn only_plain_triples_are_versions() {
+        assert_eq!(parse_version("0.157.1"), Some((0, 157, 1)));
+        assert_eq!(parse_version("0.157"), None);
+        assert_eq!(parse_version("0.157.1-alpha"), None);
+        assert_eq!(parse_version("1.2.3.4"), None);
+    }
+
+    #[test]
+    fn newer_means_newer_by_numbers_not_by_text() {
+        assert!(version_is_newer("0.157.1", CODEX_CLI_VERSION_DEFAULT));
+        assert!(version_is_newer("0.153.10", "0.153.3"));
+        assert!(!version_is_newer("0.153.3", "0.153.3"));
+        assert!(!version_is_newer("0.99.0", "0.153.3"));
+        assert!(!version_is_newer("garbage", "0.153.3"));
+    }
+}
+
+#[cfg(test)]
+mod provider_observation_tests {
+    use super::*;
+
+    #[test]
+    fn provider_observation_keeps_hosted_action_without_payload_or_function_call() {
+        let event = json!({"type":"response.output_item.done","response_id":"resp_1",
+            "item":{"id":"ws_1","type":"web_search_call","status":"completed",
+                "action":{"type":"open_page","url":"https://example.com/private?key=secret"},
+                "secret":"do not leak"}});
+        let chunk = parse_sse_event(&event,0).unwrap();
+        assert!(chunk.choices.is_empty());
+        let receipt=chunk.relay_provider_observation.unwrap();
+        assert_eq!(receipt["events"][0]["action_type"],"open_page");
+        assert_eq!(receipt["response_id"],"resp_1");
+        let serialized=receipt.to_string();
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("url"));
+    }
+    #[test]
+    fn provider_observation_completed_empty_is_known_not_unknown() {
+        let chunk=parse_sse_event(&json!({"type":"response.completed",
+            "response":{"id":"resp_1","output":[]}}),0).unwrap();
+        let receipt=chunk.relay_provider_observation.unwrap();
+        assert_eq!(receipt["coverage"],"complete");
+        assert_eq!(receipt["events"],json!([]));
+    }
+    #[test]
+    fn provider_observation_completed_backfills_and_truncation_is_visible() {
+        let items: Vec<Value>=(0..257).map(|i|json!({"type":"web_search_call",
+            "id":format!("ws_{i}"),"status":"completed","action":{"type":"search"}})).collect();
+        let receipt=hosted_provider_observation(&json!({"type":"response.completed",
+            "response":{"output":items}})).unwrap();
+        assert_eq!(receipt["events"].as_array().unwrap().len(),256);
+        assert_eq!(receipt["coverage"],"partial");
+        assert_eq!(receipt["truncated"],true);
+    }
+
 }

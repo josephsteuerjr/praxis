@@ -280,6 +280,32 @@ def split_priority(text: str) -> tuple[bool, str]:
     return False, value
 
 
+def _norm_speech(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", "", (s or "").lower(), flags=re.UNICODE)).strip()
+
+
+_SPEECH_STOP = frozenset(
+    "и в во не что он на я с со как а то все она так его но да ты к у же вы за бы по "
+    "только ее мне было вот от меня ещё еще нет о из ему теперь когда даже ну ли если "
+    "уже или ни быть был него до вас нибудь опять уж вам сказал себя чем при об это "
+    "привет ром рома es".split())
+
+
+def _said_same(prev: str, said: str, threshold: float = 0.35) -> bool:
+    """Та же реплика ПО СУТИ, а не по форме (08.10). Три письма Роме 07.10 были
+    перефразами: «Рома, привет…» / «Это Praxis, ассистент…» / «Ром, привет — это
+    Праксис…» — точное сравнение пропустило все три. difflib на них дал <0.5:
+    приветствие и подпись замывают общий смысловой хвост. Поэтому сравниваю
+    пересечение ЗНАЧИМЫХ слов (Jaccard, стоп-слова сняты): дубли 07.10 дали
+    0.42–0.45, чужая реплика — 0.0. Порог 0.35; sent_excerpt обрезан — не беда,
+    значимые слова совпадают и в обрезке."""
+    a = {w for w in _norm_speech(prev).split() if w not in _SPEECH_STOP and len(w) > 2}
+    b = {w for w in _norm_speech(said).split() if w not in _SPEECH_STOP and len(w) > 2}
+    if not a or not b:
+        return False
+    return len(a & b) / len(a | b) >= threshold
+
+
 def _dedup_window_sec() -> float:
     """Окно повтора отправки (07.10): повторная реплика тому же адресату с тем же
     текстом внутри окна — не новая нить, а дубль. Рычаг `PRAXIS_FOLLOWUP_DEDUP_SEC`
@@ -318,7 +344,8 @@ class FollowUpLedger:
                     continue
                 if item.get("status") != "pending":
                     continue
-                if str(item.get("sent_excerpt") or item.get("sent_text") or "").strip() != said:
+                prev = str(item.get("sent_excerpt") or item.get("sent_text") or "").strip()
+                if not _said_same(prev, said):
                     continue
                 sent_at = float(item.get("sent_at") or 0)
                 if 0 < sent_at and (current - sent_at) <= window:

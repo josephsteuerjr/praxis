@@ -136,6 +136,7 @@ class TheIntentRemembersWhatKindItWas(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(entry["payload"]["media_kind"], "audio")
         self.assertTrue(entry["payload"]["voice_note"])
 
+        runner._direct_outbox().clock = lambda: entry["not_before"]
         sent: list = []
 
         async def _send(entity, item, **kwargs):

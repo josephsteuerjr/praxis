@@ -13,7 +13,37 @@
 >
 > Проверять расхождение: `git -C /opt/praxis rev-parse --short HEAD` против шапки ниже.
 
-## Live update 2026-10-06: Codex image generation
+## Live update 2026-10-13: hosted web action receipts
+
+- Tested implementation `4e93f7acd72ea592f6ce6e7a37e16b5049b22fdd` deployed fast-forward
+  from `423639b2`. Exact full Linux gate: 6310 tests, 6 skips, twice; narrow receipt/continuation10PASS.
+- Running relay source `cb6b639ab6c423f3dd260d7d857d93ed7fbc79a5` preserves released image/auth/terminal
+  routes from a262932. Rust112PASS and Clippy warnings denied. Release binary SHA-256
+  `e52379e5ec9e9c824375ed97c5a9780dbad623a858dbd6a96812741ffff82dc5`, image `relay:provider-observation-cb6b639ab6c4`; startup and images route verified.
+- Explicit `PRAXIS_PROVIDER_EVENT_FEEDBACK=1` only in the praxis Compose environment.
+  Metadata persists with model-output and enters subsequent tool/text continuations; missing coverage
+  remains unknown. No query, URL, page content, reasoning, style rewrite or semantic veto is added.
+- Live voice/OpenAI/gpt-6.1-sol diagnostic `run-20261012T220001169089Z-c660e75b` is done: completed
+  `ws_0048cf96446096c9016acd5866a9ec87d199318e27aa83b6c3` was saved and supplied in the next model-input0005;
+  the model exactly reported the sameID. Two real model phases, one read-only diagnostic function,
+  no external diagnostic delivery. First successful wire probe retained a failed recorder receipt;
+  recorder was corrected and this final repeat completed normally.
+- Migration author `deploy:4e93f7a...`, explicitbefore/after/reason/undo and canonical life event;
+  one visible migration receipt supplied in the first diagnostic. Undo: change the praxis environment
+  entry to `PRAXIS_PROVIDER_EVENT_FEEDBACK=0`, then recreate only praxis.
+- Rollback tag `rollback-provider-observation-pre-20261012T213428Z`; archive directory
+  `/root/praxis-provider-observation-rollbacks/20261012T213428Z`. Memory archive was copied while live and had one changing file;
+  it is a reconciled-restore resource, not an atomic runtime snapshot. New private immutable core/relay
+  refs created; old refs and bare master not moved. .env, soul, device authority, mailbot/serverapp preserved.
+- Only relay/praxis recreated. An invalid initial YAML flag was corrected before replacement;
+  delayed Docker old-container removal caused several minutes downtime. Prepared replacement was
+  started only after old stopped and assigned the canonical name. Root broker/audit and model/image/
+  serverapp HTTP checks passed. Other services and Docker daemon were not restarted.
+- This following documentation commit changes STATUS/CODEMAP only; runtime implementation bytes
+  remain exactly those of the tested core commit above. Production visibility is accepted by the
+  diagnostic; disappearance of the original self-correction behavior has not been established.
+
+## Historical update 2026-10-06: Codex image generation
 
 - Tested core `e2a4a50e1d52422f763311708abd53abaae2a57c` deployed fast-forward from
   `2514439b`. Full Linux gate: 6190 tests, 6 skips, twice on this exact commit.

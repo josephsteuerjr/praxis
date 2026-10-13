@@ -128,6 +128,10 @@ The current Praxis mirror also includes confidence-aware memory hooks, open ques
 Forge task contracts and the literal durable-frame reader. Frame records may be scrubbed
 for secrets: they certify the retained representation, not byte identity with provider traffic.
 
+The production runtime also records provider-hosted action receipts and can supply
+their IDs, status and coverage to the following model input. These are observations
+about execution; they do not independently verify the content of a returned page.
+
 ## Engineering work that survives a chat turn
 
 Forge gives work an explicit goal, source directory and durable record. It supports

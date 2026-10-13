@@ -1,0 +1,11 @@
+{
+  "repo": "https://github.com/josephsteuerjr/praxis-relay",
+  "source": "/opt/relay/releases/cb6b639ab6c423f3dd260d7d857d93ed7fbc79a5",
+  "commit": "cb6b639ab6c423f3dd260d7d857d93ed7fbc79a5",
+  "taken_at": "2026-10-13T08:38:53.061166+00:00",
+  "files": 29,
+  "digest": "659014039ea7e7bd4d1cf71814cca830ace7f9e0d677548bb956d3fff182102d",
+  "running_image": "relay:provider-observation-cb6b639ab6c4",
+  "private_history_published": false,
+  "source_only": true
+}

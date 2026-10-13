@@ -17,6 +17,7 @@ formation и узкая data-authority проверка вне owner-DM). Вто
 from __future__ import annotations
 
 import praxis_time
+import outgoing_spelling
 import contextlib
 import copy
 import difflib
@@ -72,6 +73,7 @@ import hostview
 import identity
 import immune
 import llm
+import provider_observation
 import mailer
 import mailroom
 import media
@@ -3920,7 +3922,7 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
     return f"Не отправилось: {reason}"
 
 
-def tool_reply(text: str, reply_to: str = "") -> str:
+def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None = None) -> str:
     """Ответить собеседнику ЭТОГО хода. Моя реплика уходит только так.
 
     ⚑ ЭТА РУКА — И ЕСТЬ МОЯ РЕЧЬ В РАЗГОВОРЕ, а не дополнение к ней.
@@ -3963,6 +3965,9 @@ def tool_reply(text: str, reply_to: str = "") -> str:
     fn = _TELETHON.get("reply")
     if not fn:
         return "Telegram-отправка сейчас недоступна."
+    review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
+    if review:
+        return review
     # ⚠ ГАРД ЗДЕСЬ, А НЕ НА ГРАНИЦЕ ХОДА, И БЕЗ `turn`.
     # Проверка исходящего (кред-пол, советник приватности, режимная директива) обязана
     # ехать вместе с текстом, а текст теперь едет отсюда. Запись прожитого хода при этом
@@ -4030,7 +4035,7 @@ def tool_reply(text: str, reply_to: str = "") -> str:
         tool_journal(f"[ответ] {_clip_reason(receipt, 300)}", salience=2)
     except Exception:
         log.debug("журнал ответа не записался", exc_info=True)
-    return out
+    return outgoing_spelling.receipt(out, spelling_note)
 
 
 def tool_end_turn(outcome: str = "", note: str = "") -> str:
@@ -4067,7 +4072,7 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
             + (f" Заметка: {text[:200]}" if text else ""))
 
 
-def tool_send_message(to: str, text: str) -> str:
+def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = None) -> str:
     """Написать кому-то в Telegram (owner). to — id/@username/имя."""
     # ⚠ Здесь кред-пола не было ВООБЩЕ. Он стоял на голосе (`_guard_outbound`), на
     # `narrate` и на файлах — а этот выход остался открытым. Именно сюда съезжается вся
@@ -4078,6 +4083,9 @@ def tool_send_message(to: str, text: str) -> str:
     # 03.10: утечка «训练ный» в Ouroboros 18:38 — этот выход никогда не чистился:
     # гард снимает артефакты генерации на голосе (_guard_outbound), а прямая рука
     # отправляла сырой текст модели. Чистим здесь, тем же чистильщиком.
+    review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
+    if review:
+        return review
     text, _cjk_note = _strip_generation_artifacts(str(text or ""), "")
     if not text.strip():
         return "После чистки не осталось текста — не отправляю пустоту."
@@ -4115,7 +4123,7 @@ def tool_send_message(to: str, text: str) -> str:
         tool_journal(f"[отправка] {_clip_reason(out, 300)}", salience=2)
     except Exception:
         log.debug("журнал отправки не записался", exc_info=True)
-    return out
+    return outgoing_spelling.receipt(out, spelling_note)
 
 
 def tool_narrate(text: str, task_id: str = "") -> str:
@@ -6636,16 +6644,17 @@ BASE_TOOLS = [
     {
         "name": "reply",
         "description": (
-            "Ответить собеседнику этого разговора. Твоя реплика уходит человеку ТОЛЬКО так. "
-            "Обычный текст, который ты пишешь, — заметка себе: он никуда не отправляется и "
-            "закрывает ход. Значит: позвала эту руку — сообщение ушло, и ход продолжается, "
-            "можно проверить сделанное и ответить ещё раз; написала текст и не позвала — ты "
-            "промолчала, и это законный исход. reply_to — id сообщения, на которое отвечаешь."
+            "Ответить собеседнику этого разговора: только эта рука отправляет реплику. "
+            "Обычный текст остаётся заметкой себе и закрывает ход; reply оставляет ход открытым. "
+            "reply_to — id сообщения. "
+            + "При орфографических замечаниях вернётся not_sent/review_required. "
+            + outgoing_spelling.ADVICE_RU
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "text": {"type": "string", "description": "что сказать собеседнику"},
+                "spelling_confirm_text": {"type": "string", "description": outgoing_spelling.CONFIRM_RU},
                 "reply_to": {"type": "string",
                              "description": "id сообщения, на которое отвечаешь (необязательно)"},
             },
@@ -7424,8 +7433,9 @@ FORGET_CONNECTION_TOOL = {
 
 SEND_MESSAGE_TOOL = {
     "name": "send_message",
-    "description": "Send a Telegram message on your own initiative or an owner request. to: id / @username / name; text: the message.",
-    "input_schema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"}},
+    "description": "Send a Telegram message on your own initiative or an owner request. to: id / @username / name; text: the message. Spelling findings return not_sent/review_required. " + outgoing_spelling.ADVICE_EN,
+    "input_schema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"},
+        "spelling_confirm_text": {"type": "string", "description": outgoing_spelling.CONFIRM_EN}},
                      "required": ["to", "text"]},
 }
 
@@ -12517,6 +12527,8 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
                     "model": _scrub_critical_text(
                         getattr(response, "model", ""), response_secrets),
                     "vision": bool(getattr(response, "vision", False)),
+                    "provider_observation": _scrub_critical_value(
+                        dict(getattr(response, "provider_observation", None) or {}), response_secrets),
                     "usage": _scrub_critical_value(
                         dict(getattr(response, "usage", None) or {}), response_secrets),
                 }, ensure_ascii=False, indent=2, default=str),
@@ -14010,6 +14022,8 @@ def run_delivery_superseded(run_id: str, *, reason: str = "") -> bool:
     or ``resume`` ever replays the persisted text_plan — the mechanical «автоотбойник»
     can never fire.  Idempotent and media-safe: the caller guarantees nothing was sent
     and no media was staged at this pre-send seam, so there is nothing to reconcile.
+    Media-bearing durable delivery intents refuse supersession; explicit run
+    cancellation remains a separate authority path.
 
     Returns True iff the run is TERMINAL on exit.  The caller keys its "do not replay /
     successor owns the re-author" decision on this bool, so a swallowed terminalisation
@@ -14021,6 +14035,10 @@ def run_delivery_superseded(run_id: str, *, reason: str = "") -> bool:
         status = str(_runs().manifest(run_id).get("status") or "")
         if status in run_manager.TERMINAL_STATUSES:
             return True  # already abandoned/finished — idempotent
+        # A newer chat trigger may replace a text-only draft, but it is not
+        # explicit cancellation of the attachments she already authorized.
+        if _delivery_evidence(run_id).get("expected_media_count", 0):
+            return False
         # Контракт C2: отмена не оставляет следа речи. Проекция стоит ПОСЛЕ проверки
         # статуса — иначе она штамповала бы ход даже для рана, который эта функция
         # трогать не собиралась.
@@ -15295,6 +15313,8 @@ class _AgentResumeRuntime:
             if isinstance(saved_keat, dict) and "keat_economy_legacy_messages" not in model_input
             else keat_live.bind_turn(None, messages))
         with self.bind(), resume_scope:
+            tool_results.extend(_provider_action_feedback(
+                dict(model_output.get("provider_observation") or {})))
             _append_captured_messages(messages, [
                 {"role": "assistant", "content": assistant_blocks},
                 {"role": "user", "content": tool_results},
@@ -16955,6 +16975,13 @@ def _current_run_kind() -> str:
     return str(getattr(current, "kind", "") or "")
 
 
+def _provider_action_feedback(observation: dict) -> list[dict]:
+    # New context lever is explicit and OFF by default. Metadata is still saved.
+    if os.getenv("PRAXIS_PROVIDER_EVENT_FEEDBACK", "0").lower() not in ("1", "true", "yes", "on"):
+        return []
+    return provider_observation.feedback(observation)
+
+
 def _append_captured_messages(messages: list[dict], additions: list[dict]) -> None:
     """Capture newly created loop roles, never reconstruct them at selection."""
     try:
@@ -17009,7 +17036,8 @@ def _work_loop_continue(reply: str, resp, messages: list[dict],
               if isinstance(b, dict) and b.get("type") == "text"]
     _append_captured_messages(messages, [
         {"role": "assistant", "content": blocks or [{"type": "text", "text": reply}]},
-        {"role": "user", "content": [{"type": "text", "text": note}]},
+        {"role": "user", "content": [{"type": "text", "text": note}]
+         + _provider_action_feedback(dict(getattr(resp, "provider_observation", None) or {}))},
     ])
     if tool_trace is not None:
         # ⚠ Печаталось `work_loop.budget()` (8) и в ЧАТ-ходе тоже, где бюджет 2. Её
@@ -17302,6 +17330,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             notice_text = ""
         if notice_text:
             tool_results.append({"type": "text", "text": notice_text})
+        tool_results.extend(_provider_action_feedback(
+            dict(getattr(resp, "provider_observation", None) or {})))
         _append_captured_messages(messages, [
             {"role": "assistant", "content": assistant_blocks},
             {"role": "user", "content": tool_results},
@@ -18660,9 +18690,11 @@ def _prepare_outbound_guard(
     images: list[dict] = []
     spool = _media_spool()
     for index, item in enumerate(items, 1):
+        rejection_reason = "validation_failed"
         try:
             spool.validate_outbound(
                 item, expected_scope=ctx.scope, expected_chat_id=ctx.chat_id)
+            rejection_reason = "preparation_failed"
             caption = item.caption.strip()
             if item.kind == "photo":
                 images.append({"type": "image", "path": str(item.path),
@@ -18673,11 +18705,14 @@ def _prepare_outbound_guard(
             elif item.kind == "audio":
                 transcript = guard_notes.get(item.queue_id, "").strip()
                 if not transcript:
+                    rejection_reason = "audio_transcription_failed"
                     transcript = media_audio.transcribe(item.path).strip()
                     if not transcript:
+                        rejection_reason = "audio_empty_transcript"
                         raise media_audio.AudioProcessingError("outbound audio has no transcript")
                     transcript = f"Локальная расшифровка отправляемого аудио: {transcript}"
                 if len(transcript) > _OUTBOUND_AUDIO_GUARD_CHARS:
+                    rejection_reason = "audio_transcript_too_long"
                     raise media_audio.AudioProcessingError(
                         "outbound audio transcript is too long to guard")
                 descriptions.append(
@@ -18706,13 +18741,25 @@ def _prepare_outbound_guard(
             kept.append(item)
         except Exception:
             rejected.append(item)
-            log.warning("исходящее медиа не подготовлено к guard [%s]", ctx.chat_id,
-                        exc_info=True)
+            # Do not log exception text/tracebacks: backend errors may contain
+            # private paths or transcripts. Queue identity and a fixed reason
+            # suffice to distinguish preparation rejection from queue loss.
+            # Validation itself may reject a queue ID containing private payload.
+            diagnostic_queue_id = (item.queue_id if media._QUEUE_ID.fullmatch(item.queue_id)
+                                   else "[redacted-invalid-queue-id]")
+            log.warning("outbound media preparation rejected queue_id=%s reason=%s",
+                        diagnostic_queue_id, rejection_reason)
+            _run_event("outbound_media_preparation_rejected",
+                       queue_id=diagnostic_queue_id, reason=rejection_reason)
     if rejected and drop_rejected:
         _drop_outbound(rejected)
     guard_context = "\n".join(descriptions)
     if len(guard_context) > _OUTBOUND_AUDIO_GUARD_CHARS:
-        log.warning("исходящий media guard превысил текстовый лимит [%s]", ctx.chat_id)
+        for item in kept:
+            log.warning("outbound media preparation rejected queue_id=%s reason=%s",
+                        item.queue_id, "guard_context_too_long")
+            _run_event("outbound_media_preparation_rejected",
+                       queue_id=item.queue_id, reason="guard_context_too_long")
         if drop_rejected:
             _drop_outbound(kept)
         return [], "", (), ""

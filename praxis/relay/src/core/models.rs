@@ -4,22 +4,32 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-/// Single source of truth for the model slugs this relay advertises and accepts.
+/// The static safety net: what the relay serves when the backend's own model
+/// catalog cannot be read (see `core::catalog`).
 ///
-/// Both `/v1/models` (via [`supported_model_list`]) and `/v1/chat/completions`
-/// (via [`is_supported_model`]) derive from this one list, so the advertised set
-/// can never drift from the accepted set. Add a model here and both endpoints
-/// follow — no more editing three unrelated places (the drift bug this pass fixes).
-// Codex backend 0.144.0 exposes 5.6 as three explicit, User-Agent-gated
-// variants. Keep the generic `gpt-5.6` alias out: the isolated canary rejects
-// it even when these three identifiers succeed.
-pub const SUPPORTED_MODELS: &[&str] = &[
+/// This is no longer the source of truth. `/v1/models` and the request
+/// validator both read the live catalog (`GET backend-api/codex/models`), which
+/// is why a model released tomorrow needs no edit here. The list still matters
+/// for the first request after a cold start with the backend unreachable, so
+/// keep it honest: real slugs the backend serves today, nothing speculative.
+// Codex backend exposes 5.6 as three explicit variants. Keep the generic
+// `gpt-5.6` alias out: the isolated canary rejects it even when these three
+// identifiers succeed -- and the bare `gpt-6` alias stays out by the same
+// reasoning. `gpt-6-astra` (2026-09-03) is served with a client version >=
+// 0.153.0 and is the identifier OpenAI published.
+pub const FALLBACK_MODELS: &[&str] = &[
+    "gpt-6-astra",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.4",
     "gpt-5.4-mini",
+    // GPT-5.3-Codex-Spark: Cerebras-served, >1000 tok/s, 128k, text-only.
+    // Its quota is a SEPARATE bucket in additional_rate_limits, so it survives
+    // the main allowance running out.  Sibling gpt-5.3-codex listed alongside;
+    // an unavailable slug fails loudly upstream rather than silently here.
+    "gpt-5.3-codex-spark",
 ];
 
 /// The largest JSON body accepted by the Chat Completions endpoint.
@@ -36,31 +46,15 @@ pub const MAX_REMOTE_IMAGE_URL_BYTES: usize = 16 * 1024;
 pub const MAX_DATA_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_WEB_SEARCH_USES: u32 = 10;
 
-/// True if `model` is exactly one of the models this relay supports.
+/// True if `model` is exactly one of the static fallback models.
 ///
-/// Replaces the old `starts_with("gpt-5")` prefix check, which both let bogus
-/// slugs like `"gpt-5-nope"` through (failing later with a confusing error) and
-/// would reject any future model not literally prefixed `gpt-5`.
-pub fn is_supported_model(model: &str) -> bool {
-    SUPPORTED_MODELS.contains(&model)
-}
-
-/// Build the `/v1/models` payload from [`SUPPORTED_MODELS`] so the advertised
-/// list is generated from the same constant the request validator checks against.
-pub fn supported_model_list() -> ModelList {
-    let created = chrono::Utc::now().timestamp();
-    ModelList {
-        object: "list".to_string(),
-        data: SUPPORTED_MODELS
-            .iter()
-            .map(|id| Model {
-                id: (*id).to_string(),
-                object: "model".to_string(),
-                created,
-                owned_by: "chatgpt".to_string(),
-            })
-            .collect(),
-    }
+/// Exact match, not a prefix: the old `starts_with("gpt-5")` check both let
+/// bogus slugs like `"gpt-5-nope"` through (failing later with a confusing
+/// error) and would have rejected every future model not prefixed `gpt-5`.
+/// Live validation goes through `core::catalog`; this is what it degrades to.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn is_fallback_model(model: &str) -> bool {
+    FALLBACK_MODELS.contains(&model)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,7 +294,7 @@ impl fmt::Display for RequestValidationError {
 
 impl std::error::Error for RequestValidationError {}
 
-fn validate_image_url(image_url: &str) -> Result<(), String> {
+pub(super) fn validate_image_url(image_url: &str) -> Result<(), String> {
     if image_url.starts_with("data:") {
         return validate_data_image_url(image_url, MAX_DATA_IMAGE_BYTES);
     }
@@ -426,6 +420,7 @@ pub enum WebSearchContextSize {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ChatResponse {
     pub id: String,
     pub object: String,
@@ -436,6 +431,7 @@ pub struct ChatResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Choice {
     pub index: u32,
     pub message: Message,
@@ -470,6 +466,29 @@ pub struct Model {
     pub object: String,
     pub created: i64,
     pub owned_by: String,
+    // Everything below comes from the backend's catalog and is omitted when
+    // unknown, so the four OpenAI fields above are all a bare entry carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    /// llama.cpp spelling of `context_window`, read by local-model client lanes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_window: Option<u64>,
+    /// `{"n_ctx_train": ...}`: the llama-cpp-python field the same lanes read first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+    /// The slug the backend suggests instead, when it marks this one superseded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,6 +521,22 @@ pub struct RelayTerminal {
     pub resets_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_in_seconds: Option<i64>,
+    /// Per-account facts when failover was attempted. This prevents a mixed
+    /// quota/auth failure from being flattened into the misleading claim that
+    /// both subscriptions failed for the same reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<Vec<RelayTerminalAttempt>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RelayTerminalAttempt {
+    pub slot: String,
+    pub code: String,
+    pub status: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_in_seconds: Option<i64>,
 }
 
 // Response events for streaming
@@ -520,6 +555,9 @@ pub struct ResponseEvent {
     // совпадают с сегодняшними ровно, и выключенный рычаг ничего не меняет на проводе.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub relay_terminal: Option<RelayTerminal>,
+    // Hosted actions are provenance only; they must never become client tool calls.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub relay_provider_observation: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -561,12 +599,16 @@ mod tests {
     }
 
     #[test]
-    fn valid_models_are_accepted() {
-        // Every advertised model must pass the request validator.
-        for m in SUPPORTED_MODELS {
-            assert!(is_supported_model(m), "{m} should be supported");
+    fn fallback_models_are_accepted_by_the_fallback_check() {
+        for m in FALLBACK_MODELS {
+            assert!(is_fallback_model(m), "{m} should be supported");
         }
-        assert!(!is_supported_model("gpt-5.6"));
+        // The identifier OpenAI published; a rename upstream must fail here first.
+        assert!(is_fallback_model("gpt-6-astra"));
+        // The bare aliases stay rejected: the backend rejects them, and letting
+        // them in only moves the failure somewhere more confusing.
+        assert!(!is_fallback_model("gpt-5.6"));
+        assert!(!is_fallback_model("gpt-6"));
     }
 
     #[test]
@@ -581,22 +623,45 @@ mod tests {
             "",
             "GPT-5.4",
         ] {
-            assert!(!is_supported_model(m), "{m:?} should NOT be supported");
+            assert!(!is_fallback_model(m), "{m:?} should NOT be supported");
         }
     }
 
     #[test]
-    fn models_endpoint_matches_supported_list() {
-        // /v1/models must return exactly SUPPORTED_MODELS, in order — the
-        // guard against the advertised list drifting from the accepted list.
-        let list = supported_model_list();
-        assert_eq!(list.object, "list");
-        let ids: Vec<&str> = list.data.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, SUPPORTED_MODELS.to_vec());
-        for m in &list.data {
-            assert_eq!(m.object, "model");
-            assert_eq!(m.owned_by, "chatgpt");
-        }
+    fn a_bare_model_entry_serializes_to_the_four_openai_fields() {
+        let bare = Model {
+            id: "gpt-6-astra".to_string(),
+            object: "model".to_string(),
+            created: 1,
+            owned_by: "chatgpt".to_string(),
+            display_name: None,
+            context_window: None,
+            context_length: None,
+            max_context_window: None,
+            meta: None,
+            input_modalities: Vec::new(),
+            reasoning_efforts: Vec::new(),
+            default_reasoning_effort: None,
+            upgrade: None,
+        };
+        let value = serde_json::to_value(&bare).unwrap();
+        // serde_json sorts object keys, so compare the set, not the order.
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["created", "id", "object", "owned_by"]);
+        // And the old four-field document still deserializes.
+        let list: ModelList = serde_json::from_value(json!({
+            "object": "list",
+            "data": [{"id": "gpt-5.5", "object": "model", "created": 1, "owned_by": "chatgpt"}]
+        }))
+        .unwrap();
+        assert_eq!(list.data[0].id, "gpt-5.5");
+        assert!(list.data[0].input_modalities.is_empty());
     }
 
     #[test]

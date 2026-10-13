@@ -18,7 +18,6 @@ use tracing::warn;
 use crate::core::account_router::{AccountLease, AccountRouter};
 
 const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-const CODEX_USER_AGENT: &str = "codex_cli_rs/0.144.0";
 const CACHE_TTL: Duration = Duration::from_secs(60);
 const MAX_USAGE_BODY_BYTES: usize = 1024 * 1024;
 
@@ -34,7 +33,9 @@ struct CachedLimits {
 
 impl LimitsCache {
     pub async fn get(&self, router: &AccountRouter) -> Result<Value> {
-        let active = router.lease_active().await?;
+        // lease_any: сломанный активный слот не должен ослеплять и опрос лимитов —
+        // он паркуется, и лимиты честно показываются с живого резерва.
+        let active = router.lease_any().await?;
         let mut value = self.get_for_account(&active).await?;
         let mut serving = active;
 
@@ -89,7 +90,10 @@ async fn fetch_usage(account: &AccountLease) -> Result<Value> {
         .get(CHATGPT_USAGE_URL)
         .bearer_auth(&account.access_token)
         .header("ChatGPT-Account-ID", &account.account_id)
-        .header(reqwest::header::USER_AGENT, CODEX_USER_AGENT)
+        .header(
+            reqwest::header::USER_AGENT,
+            crate::core::chat_completions::codex_user_agent(),
+        )
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await

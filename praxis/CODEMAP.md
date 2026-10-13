@@ -11,6 +11,7 @@
 | `agent.py` | Persona/context assembly, модельный tool loop, tool registry, outbound guard, durable run/delivery integration. |
 | `mtproto_runner.py` | Живой Telethon client: update routing, buffers, forum topics, media, delivery/outbox replay, membership/account hooks и единые серверные часы. |
 | `llm.py` | Конфигурация ролей моделей, Anthropic/OpenAI protocol adapters, fallback, usage и hosted tools. |
+| `provider_observation.py` | Hosted provider web action metadata: enum/opaque ID whitelist, deduplication, unknown/partial/complete coverage and explicit runtime feedback; never executable function calls. |
 | `bootguard.py` | Preflight, supervision, healthy-commit marker и rollback раннего сломанного self-edit. |
 | `reflex.py` | Детерминированный pre-model фильтр очевидного шума. |
 | `perception.py` | Живые настройки debounce/cooldown/wake и журнал причин, почему голос не был вызван. |

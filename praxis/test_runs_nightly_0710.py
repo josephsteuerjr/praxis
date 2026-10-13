@@ -393,3 +393,24 @@ class DigestEvents(_Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PublishToBundle(_Sandbox):
+    """Сквозной publish → pending → _source_bundle (гном 01031e31: events терялись)."""
+
+    def test_publish_pending_bundle_carries_events(self):
+        _task("code-pb1", status="done", priority="normal")
+        _agent("code-pb1", "wk-1", status="succeeded")
+        digest = runs_nightly.digest_task(forge.get("code-pb1"))
+        import formation
+        with mock.patch.object(formation.life, "STATE_DIR",
+                               self.tmp / "memory" / ".state" / "life"):
+            published = runs_nightly.publish_for_formation([digest])
+            self.assertEqual(published, 1)
+            with mock.patch.object(formation, "_frontier_metas", return_value=[]):
+                pending = formation.pending_compacts()
+        self.assertTrue([m for m in pending if m.get("kind") == "run_digest"])
+        text, allowed = formation._source_bundle(
+            [m for m in pending if m.get("kind") == "run_digest"])
+        self.assertTrue(text, "бандл непуст — events дошли до формирования")
+        self.assertTrue(allowed, "evidence-ID дайджеста цитируемы")

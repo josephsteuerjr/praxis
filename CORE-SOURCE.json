@@ -1,27 +1,24 @@
 {
   "mirror": "praxis",
-  "source": "/opt/praxis; source-only sanitized snapshot (delta over 4f86cc9f)",
-  "head": "faa6dacb7639c948e4a1173fc32c5415bac50055",
+  "source": "/opt/praxis; allowlisted tracked source-only snapshot",
+  "head": "f0f6192f6a7ed1657a5bb127916a9754eb10bf9e",
   "dirty": false,
-  "taken_at": "2026-10-07T17:04:07+00:00",
-  "files": 625,
-  "digest": "e8d94b0e34246c392194401b43387d57308ba2ccf4df8ad092fb541f8170e0aa",
+  "taken_at": "2026-10-13T08:38:53.061166+00:00",
+  "files": 635,
+  "digest": "a038e6c831881ec06812a2ae6edf74aa3ca15966600119e5bb9428f1034aa3c0",
+  "by": "installer/core_src.py --export-core",
   "private_history_published": false,
   "excluded_runtime": true,
+  "allowlisted_source_files": 637,
   "sanitization": {
     "comment_docstring_only_files": [
       "agent.py",
       "test_sanitize_scripts.py"
     ],
     "behavior_preserved": true,
-    "delta_basis": "4f86cc9fb44b0a7da1cfaf77b048f1475c9d6501",
-    "delta_files": [
-      "addressed_threads.py",
-      "agent.py",
-      "frame_layout.py",
-      "mtproto_runner.py",
-      "test_addressed_threads.py",
-      "test_outbox_settled_1309.py"
-    ]
+    "excluded_private_task_helpers": {
+      "extract_enoch.py": "One-off extraction script embeds a private inbox path and third-party identity; not imported by runtime"
+    },
+    "runtime_soul_memory_history_excluded": true
   }
 }

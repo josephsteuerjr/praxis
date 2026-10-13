@@ -147,7 +147,8 @@ def _pending_run_digests(done: set[str]) -> list[dict]:
             continue
         out.append({"id": str(meta.get("id") or ""), "kind": "run_digest",
                     "created_at": meta.get("created_at"),
-                    "task_id": meta.get("task_id"), "text": meta.get("text")})
+                    "task_id": meta.get("task_id"), "text": meta.get("text"),
+                    "events": meta.get("events") or []})
     return out
 
 

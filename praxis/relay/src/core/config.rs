@@ -1,5 +1,45 @@
-use std::path::PathBuf;
 use dirs::home_dir;
+use std::path::{Path, PathBuf};
+
+pub const RELAY_INSTRUCTIONS_FILE_ENV_VAR: &str = "RELAY_INSTRUCTIONS_FILE";
+pub const DEFAULT_INSTRUCTIONS_FILE: &str = "instructions.txt";
+
+/// Where the operator's own instructions text lives.
+///
+/// `RELAY_INSTRUCTIONS_FILE` wins when set; otherwise `instructions.txt` sits next
+/// to the executable, beside the auth directory the relay already keeps there.
+pub fn instructions_file_path() -> PathBuf {
+    if let Some(value) = std::env::var_os(RELAY_INSTRUCTIONS_FILE_ENV_VAR) {
+        let path = PathBuf::from(value);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(DEFAULT_INSTRUCTIONS_FILE)))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_INSTRUCTIONS_FILE))
+}
+
+/// The operator's instructions, if they wrote any.
+///
+/// Read per request rather than at startup, so an edit lands on the next call with
+/// no restart.  Missing, unreadable, or blank is not an error: it means "no
+/// override", and the built-in text answers instead -- a wrong path degrades to
+/// today's behavior rather than to an empty instructions field upstream.
+pub fn custom_instructions() -> Option<String> {
+    read_instructions(&instructions_file_path())
+}
+
+fn read_instructions(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -25,7 +65,10 @@ impl Config {
         // Check if auth.json exists in ./local_auth directory (fallback)
         let local_auth_dir = std::env::current_dir()?.join("local_auth");
         let local_auth_file = local_auth_dir.join("auth.json");
-        let primary_profile = local_auth_dir.join("accounts").join("primary").join("auth.json");
+        let primary_profile = local_auth_dir
+            .join("accounts")
+            .join("primary")
+            .join("auth.json");
         if local_auth_file.exists() || primary_profile.exists() {
             return Ok(Config {
                 codex_home: local_auth_dir,
@@ -71,7 +114,9 @@ impl Config {
     }
 
     fn load_instructions_mode() -> Option<String> {
-        std::env::var("RELAY_INSTRUCTIONS").ok().map(|v| v.trim().to_lowercase())
+        std::env::var("RELAY_INSTRUCTIONS")
+            .ok()
+            .map(|v| v.trim().to_lowercase())
     }
 
     /// RELAY_PARALLEL_TOOL_CALLS: unset/"true" lets the model batch several tool calls
@@ -79,7 +124,10 @@ impl Config {
     /// restores the old one-tool-per-round-trip behavior.
     fn load_parallel_tool_calls() -> bool {
         !matches!(
-            std::env::var("RELAY_PARALLEL_TOOL_CALLS").ok().as_deref().map(str::trim),
+            std::env::var("RELAY_PARALLEL_TOOL_CALLS")
+                .ok()
+                .as_deref()
+                .map(str::trim),
             Some("false") | Some("0") | Some("off")
         )
     }
@@ -103,10 +151,7 @@ impl Config {
     }
 
     fn load_instructions(codex_dir: Option<&std::path::Path>) -> Option<String> {
-        let mut p = match codex_dir {
-            Some(p) => p.to_path_buf(),
-            None => return None,
-        };
+        let mut p = codex_dir?.to_path_buf();
 
         p.push("AGENTS.md");
         std::fs::read_to_string(&p).ok().and_then(|s| {
@@ -128,14 +173,14 @@ fn find_codex_home() -> PathBuf {
         if codex_home.exists() {
             return codex_home;
         }
-        
+
         // Then check for .opencode directory (Opencode integration default)
         let opencode_home = home.join(".opencode");
         if opencode_home.exists() {
             return opencode_home;
         }
     }
-    
+
     // Fallback to current directory
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }

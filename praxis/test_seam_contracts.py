@@ -171,6 +171,10 @@ class TestC2C3Compensation(SeamBase):
             def manifest(self_inner, run_id):
                 return {"status": status}
 
+            def iter_events(self_inner, run_id):
+                # No durable media intent: this is the text-only supersession seam.
+                return iter(())
+
             def __getattr__(self_inner, _name):
                 return lambda *a, **kw: None
         orig = agent._runs

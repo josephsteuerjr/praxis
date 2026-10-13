@@ -161,6 +161,7 @@ class CancelDoesNotDeliver(_RunScaffold):
         # Обратная сторона: без просьбы об отмене намерение живого прогона уходит как раньше.
         context = self._create_run("alive")
         entry = self._pending_file_entry(context.run_id, "call-alive")
+        runner._direct_outbox().clock = lambda: entry["not_before"]
         sent = mock.AsyncMock(return_value=(
             mock.Mock(id=555), entry["random_id"]))
         with (

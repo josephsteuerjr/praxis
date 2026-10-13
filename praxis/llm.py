@@ -34,6 +34,7 @@ import contextvars as _cv
 import time as _time
 import tool_offerings
 from dataclasses import dataclass, field
+import provider_observation
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -374,6 +375,7 @@ class LLMResponse:
     # Local routing fact, not provider-reported usage: this logical call selected a
     # sighted replacement because the input contained pixels.
     vision: bool = False
+    provider_observation: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -2159,8 +2161,10 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
     tools_acc: dict[int, dict] = {}
     finish = "stop"
     u_in = u_out = u_cached = 0
+    observations = provider_observation.Collector()
     try:
         for chunk in stream:
+            observations.merge(provider_observation.packet_of(chunk))
             # 25.09: терминал реле — ДО choices и content. Диагностика лимита подписки
             # приходила текстом в content и читалась как ответ модели (см.
             # RelayTerminalError); типизированный код становится типизированной ошибкой,
@@ -2204,16 +2208,19 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
         # ЕДИНСТВЕННОМУ семантическому сторожу. Он сам различит: до первого содержимого
         # это EmptyResponseError (same-channel retry допустим), после текста/фрагмента руки
         # — TornStreamError с partial (повтор поверх уже начатого ответа запрещён).
-        partial = _openai_stream_result(parts, tools_acc, "error", u_in, u_out, u_cached, model)
+        partial = _openai_stream_result(parts, tools_acc, "error", u_in, u_out, u_cached, model,
+                                        observation=observations.receipt())
         try:
             return _guard_answer(partial)
         except BrokenChannelError as broken:
             raise broken from exc
-    return _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model)
+    return _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model,
+                                 observation=observations.receipt())
 
 
 def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: str,
-                           u_in: int, u_out: int, u_cached: int, model: str) -> LLMResponse:
+                           u_in: int, u_out: int, u_cached: int, model: str,
+                           observation: dict | None = None) -> LLMResponse:
     text = "".join(parts).strip()
     blocks: list[dict] = [{"type": "text", "text": text}] if text else []
     for idx in sorted(tools_acc):
@@ -2248,7 +2255,8 @@ def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: 
                        usage={"schema": USAGE_SCHEMA,
                               "in": max(0, u_in - u_cached), "out": u_out,
                               **({"cache_read": u_cached} if u_cached else {})},
-                       framework="openai", model=model)
+                       framework="openai", model=model,
+                       provider_observation=observation or {})
 
 
 # --------------------------------------------------------------------------- #

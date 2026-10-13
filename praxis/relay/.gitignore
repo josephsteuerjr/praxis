@@ -1,10 +1,22 @@
 # Rust build artifacts
 target/
 
-# Accidental manual backup from 06.07 (differs from live only in core/{chat_completions,models}.rs).
-# Kept on disk on purpose (rollback source); Егор decides whether to delete it, not this repo.
-src.bak-toolfix/
+# Packaged local binaries and runtime output
+*.exe
+logs/
 
-# Editor/backup junk
+# Relay-owned credentials. Never commit or share this directory.
+local_auth/
+auth.json
+.env
+.env.*
+!.env.example
+
+# Local rollback and Codex workspace metadata
+src.bak-toolfix/
+.agents/
+.codex/
+
+# Editor and backup junk
 *.rs.bk
 *.log

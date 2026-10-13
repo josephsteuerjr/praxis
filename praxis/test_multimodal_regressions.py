@@ -125,6 +125,227 @@ class RegressionBase(unittest.TestCase):
 
 
 class TestAgentGuardRegressions(RegressionBase):
+    def test_sequential_send_media_and_send_file_keep_both_queue_ids(self) -> None:
+        """Sequential tool calls retain both attachments with inspectable speech."""
+        audio = self.audio_path("instrumental.ogg")
+        midi = self.root / "workspace" / "score.mid"
+        midi.write_bytes(b"MThd" + b"\x00" * 32)
+        outbound = []
+        channel_token = agent._TURN_CHANNEL.set(self.owner_ctx)
+        outbound_token = agent._TURN_OUTBOUND.set(outbound)
+        try:
+            before_audio = agent._tool_outbound_snapshot()
+            result = agent._call_tool_with_ceiling(
+                "send_media", agent.tool_send_media,
+                {"path": str(audio), "kind": "audio"},
+            )
+            self.assertIn("Подготовила audio", result)
+            audio_metadata = agent._tool_result_metadata(before_audio)
+            before_file = agent._tool_outbound_snapshot()
+            result = agent._call_tool_with_ceiling(
+                "send_file", workshop.send_file, {"path": str(midi)},
+            )
+            self.assertIn("Подготовила document", result)
+            file_metadata = agent._tool_result_metadata(before_file)
+            queue_ids = [item.queue_id for item in outbound]
+            self.assertEqual(len(set(queue_ids)), 2)
+            self.assertEqual(
+                [item["queue_id"] for item in
+                 audio_metadata["outbound"] + file_metadata["outbound"]], queue_ids,
+            )
+            self.assertEqual(
+                [item["queue_id"] for item in agent._tool_outbound_snapshot()], queue_ids,
+            )
+            with patch.object(media_audio, "transcribe", return_value="Recognized owner speech"):
+                kept, context, images, discriminator = agent._prepare_outbound_guard(
+                    outbound, {}, self.owner_ctx,
+                )
+            self.assertEqual([item.queue_id for item in kept], queue_ids)
+            self.assertEqual(discriminator, "|".join(queue_ids))
+            self.assertIn("Recognized owner speech", context)
+            self.assertIn("document score.mid", context)
+            self.assertEqual(images, ())
+            self.assertTrue(all(item.path.is_file() for item in kept))
+        finally:
+            agent._TURN_OUTBOUND.reset(outbound_token)
+            agent._TURN_CHANNEL.reset(channel_token)
+
+    def _sequential_group_attachments(self, transcript: str) -> None:
+        ctx = agent.ChannelContext(chat_id="779", is_dm=False, known=True)
+        self.assertEqual(ctx.scope, "group")
+        audio = self.audio_path("group-audio.ogg")
+        midi = self.root / "workspace" / "group-score.mid"
+        midi.write_bytes(b"MThd" + b"\x00" * 32)
+        outbound = []
+        channel_token = agent._TURN_CHANNEL.set(ctx)
+        outbound_token = agent._TURN_OUTBOUND.set(outbound)
+        try:
+            before_audio = agent._tool_outbound_snapshot()
+            agent._call_tool_with_ceiling(
+                "send_media", agent.tool_send_media,
+                {"path": str(audio), "kind": "audio"},
+            )
+            audio_metadata = agent._tool_result_metadata(before_audio)
+            before_file = agent._tool_outbound_snapshot()
+            agent._call_tool_with_ceiling(
+                "send_file", workshop.send_file, {"path": str(midi)},
+            )
+            file_metadata = agent._tool_result_metadata(before_file)
+            queue_ids = [item.queue_id for item in outbound]
+            self.assertEqual(len(set(queue_ids)), 2)
+            self.assertEqual(
+                [item["queue_id"] for item in
+                 audio_metadata["outbound"] + file_metadata["outbound"]], queue_ids,
+            )
+            self.assertEqual(
+                [item["queue_id"] for item in agent._tool_outbound_snapshot()], queue_ids,
+            )
+            with (patch.object(media_audio, "transcribe", return_value=transcript),
+                  patch.object(agent, "_run_event") as event):
+                if transcript:
+                    kept, context, images, discriminator = agent._prepare_outbound_guard(
+                        outbound, {}, ctx,
+                    )
+                    event.assert_not_called()
+                    self.assertIn(transcript, context)
+                else:
+                    with self.assertLogs(agent.log, level="WARNING") as logs:
+                        kept, context, images, discriminator = agent._prepare_outbound_guard(
+                            outbound, {}, ctx,
+                        )
+                    event.assert_called_once_with(
+                        "outbound_media_preparation_rejected",
+                        queue_id=queue_ids[0], reason="audio_empty_transcript",
+                    )
+                    self.assertEqual(len(logs.output), 1)
+                    self.assertIn("queue_id=" + queue_ids[0], logs.output[0])
+                    self.assertIn("reason=audio_empty_transcript", logs.output[0])
+                    self.assertNotIn(str(self.root), logs.output[0])
+                    self.assertFalse(outbound[0].path.exists())
+                expected_ids = queue_ids if transcript else queue_ids[1:]
+                self.assertEqual([item.queue_id for item in kept], expected_ids)
+                self.assertEqual(discriminator, "|".join(expected_ids))
+                self.assertIn("document group-score.mid", context)
+                self.assertEqual(images, ())
+                self.assertTrue(all(item.path.is_file() for item in kept))
+        finally:
+            agent._TURN_OUTBOUND.reset(outbound_token)
+            agent._TURN_CHANNEL.reset(channel_token)
+
+    def test_group_sequential_audio_and_midi_with_transcript_keep_both(self) -> None:
+        """Group preparation preserves both sequential queue IDs with inspectable speech."""
+        self._sequential_group_attachments("Recognized speech for the group")
+
+    def test_group_sequential_empty_stt_rejects_audio_but_keeps_midi(self) -> None:
+        """Historical group case is preparation rejection, not staged queue loss."""
+        self._sequential_group_attachments("")
+
+    def test_empty_audio_transcript_rejected_for_every_audience(self) -> None:
+        contexts = [
+            self.owner_ctx,
+            agent.ChannelContext(chat_id="777", is_dm=True, known=True,
+                                 principal_id=agent.PRAXIS_SELF_PRINCIPAL,
+                                 _scope_override="owner"),
+            agent.ChannelContext(chat_id="778", is_dm=True, known=True),
+            agent.ChannelContext(chat_id="779", is_dm=False, owner=True),
+            agent.ChannelContext(chat_id="780", is_dm=True, _scope_override="owner"),
+        ]
+        for index, ctx in enumerate(contexts):
+            with self.subTest(ctx=ctx):
+                item = self.spool.resolve_outbound(
+                    self.audio_path(f"empty-{index}.ogg"), kind="audio",
+                    target_chat_id=ctx.chat_id, scope=ctx.scope)
+                with (
+                    patch.object(media_audio, "transcribe", return_value="  "),
+                    patch.object(agent, "_run_event") as event,
+                    self.assertLogs(agent.log, level="WARNING") as logs,
+                ):
+                    result = agent._prepare_outbound_guard([item], {}, ctx)
+                self.assertEqual(result, ([], "", (), ""))
+                event.assert_called_once_with(
+                    "outbound_media_preparation_rejected",
+                    queue_id=item.queue_id, reason="audio_empty_transcript",
+                )
+                self.assertIn("queue_id=" + item.queue_id, "\n".join(logs.output))
+                self.assertIn("reason=audio_empty_transcript", "\n".join(logs.output))
+                self.assertNotIn(str(item.path), "\n".join(logs.output))
+                self.assertFalse(item.path.exists())
+
+    def test_audio_backend_failure_has_safe_rejection_reason(self) -> None:
+        item = self.spool.resolve_outbound(
+            self.audio_path(), kind="audio", target_chat_id="777", scope="owner")
+        with (
+            patch.object(media_audio, "transcribe",
+                         side_effect=media_audio.AudioProcessingError(
+                             f"backend failed at {item.path}: PRIVATE-TRANSCRIPT")),
+            self.assertLogs(agent.log, level="WARNING") as logs,
+        ):
+            result = agent._prepare_outbound_guard([item], {}, self.owner_ctx)
+        self.assertEqual(result, ([], "", (), ""))
+        self.assertIn("reason=audio_transcription_failed", "\n".join(logs.output))
+        self.assertNotIn("backend failed", "\n".join(logs.output))
+        self.assertNotIn(str(item.path), "\n".join(logs.output))
+        self.assertNotIn("PRIVATE-TRANSCRIPT", "\n".join(logs.output))
+        self.assertIn("queue_id=" + item.queue_id, "\n".join(logs.output))
+        self.assertFalse(item.path.exists())
+
+    def test_invalid_queue_id_is_redacted_from_logs_and_rejection_events(self) -> None:
+        item = self.spool.resolve_outbound(
+            self.audio_path(), kind="audio", target_chat_id="777", scope="owner")
+        invalid_queue_id = f"{item.path}\nPRIVATE-QUEUE-PAYLOAD"
+        item = media.OutboundMedia(
+            kind=item.kind, path=item.path, mime=item.mime, size=item.size,
+            target_chat_id=item.target_chat_id, scope=item.scope,
+            sha256=item.sha256, queue_id=invalid_queue_id,
+        )
+        with (
+            patch.object(media_audio, "transcribe") as stt,
+            patch.object(agent, "_run_event") as event,
+            self.assertLogs(agent.log, level="WARNING") as logs,
+        ):
+            result = agent._prepare_outbound_guard([item], {}, self.owner_ctx)
+        self.assertEqual(result, ([], "", (), ""))
+        stt.assert_not_called()
+        event.assert_called_once_with(
+            "outbound_media_preparation_rejected",
+            queue_id="[redacted-invalid-queue-id]", reason="validation_failed",
+        )
+        diagnostics = ("\n".join(logs.output), repr(event.call_args_list))
+        for diagnostic in diagnostics:
+            self.assertNotIn(invalid_queue_id, diagnostic)
+            self.assertNotIn(str(item.path), diagnostic)
+            self.assertNotIn("PRIVATE-QUEUE-PAYLOAD", diagnostic)
+            self.assertIn("[redacted-invalid-queue-id]", diagnostic)
+
+    def test_audio_preparation_does_not_bypass_validation(self) -> None:
+        for invalid in ("chat", "scope", "bytes"):
+            with self.subTest(invalid=invalid):
+                item = self.spool.resolve_outbound(
+                    self.audio_path(f"invalid-{invalid}.ogg"), kind="audio",
+                    target_chat_id="778" if invalid == "chat" else "777",
+                    scope="known" if invalid == "scope" else "owner")
+                if invalid == "bytes":
+                    item.path.write_bytes(OGG + b"tampered")
+                with (
+                    patch.object(media_audio, "transcribe", return_value="") as stt,
+                    self.assertLogs(agent.log, level="WARNING"),
+                ):
+                    result = agent._prepare_outbound_guard([item], {}, self.owner_ctx)
+                self.assertEqual(result, ([], "", (), ""))
+                stt.assert_not_called()
+
+    def test_audio_guard_still_rejects_oversized_transcript(self) -> None:
+        item = self.spool.resolve_outbound(
+            self.audio_path(), kind="audio", target_chat_id="777", scope="owner")
+        with (
+            patch.object(media_audio, "transcribe",
+                         return_value="x" * (agent._OUTBOUND_AUDIO_GUARD_CHARS + 1)),
+            self.assertLogs(agent.log, level="WARNING") as logs,
+        ):
+            result = agent._prepare_outbound_guard([item], {}, self.owner_ctx)
+        self.assertEqual(result, ([], "", (), ""))
+        self.assertIn("reason=audio_transcript_too_long", "\n".join(logs.output))
+
     def test_outbound_document_guard_uses_exact_metadata_without_contents(self) -> None:
         source = self.root / "workspace" / "build report.txt"
         secret_contents = b"PRIVATE-CONTENTS-MUST-NOT-BE-IN-THE-GUARD"
@@ -476,9 +697,19 @@ class TestRunnerRetryRegressions(RegressionBase):
             self.assertFalse(first)
             self.assertEqual(self.spool.pending(), (item,))
             self.assertTrue(item.path.exists())
+            self.assertEqual(attempts, [], "staging must not attempt an early upload")
+            clock.return_value = 1029.999
+            await runner._media_cleanup_once()
+            self.assertEqual(attempts, [], "the entire 30 second pause is mandatory")
+            clock.return_value = 1030.0
+            await runner._media_cleanup_once()
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(self.spool.pending(), (item,))
+            self.assertTrue(item.path.exists(), "failed upload must remain retryable")
             await runner._media_cleanup_once()
 
         with (
+            patch.object(media.time, "time", return_value=1000.0) as clock,
             patch.object(runner, "client", FlakyClient()),
             patch.object(runner, "_meta", meta),
             patch.object(runner, "_MEDIA_SENDING", set()),

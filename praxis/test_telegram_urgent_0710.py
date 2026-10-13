@@ -96,6 +96,43 @@ class SendDedupTests(unittest.TestCase):
                 "PRAXIS_FOLLOWUP_DEDUP_SEC=0 обязан выключать дедуп")
 
 
+class SaidSameFuzzyTests(unittest.TestCase):
+    """08.10: три письма Роме были ПЕРЕФРАЗАМИ — точное сравнение пропустило все три."""
+
+    def test_paraphrase_duplicates_of_real_incident(self):
+        a = ("Рома, привет. Результаты синхронизации у тебя в папке в оперзадачах — "
+             "Егор просил передать.")
+        b = ("Рома, привет. Это Praxis, ассистент Егора. Он передаёт: результаты "
+             "синхронизации у тебя в папке в оперзадачах.")
+        c = ("Ром, привет — это Праксис, от Егора: результаты синхронизации лежат "
+             "у тебя в папке в оперзадачах.")
+        self.assertTrue(followups._said_same(a, b), "перефраз b инцидента 07.10 должен ловиться")
+        self.assertTrue(followups._said_same(a, c), "перефраз c инцидента 07.10 должен ловиться")
+        dup = self.ledger_of(a, b)
+        self.assertIsNotNone(dup, "recent_same_text обязан видеть перефраз как дубль")
+
+    def ledger_of(self, a, b):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            led = followups.FollowUpLedger(Path(td) / "f.json")
+            led.create(target_ref="x", target_label="X", target_peer_id=42,
+                       target_user_id=42, sent_message_id=1, request_text="",
+                       sent_at=followups.time.time(), sent_excerpt=a)
+            return led.recent_same_text(target_peer_id=42, text=b)
+
+    def test_different_message_is_not_duplicate(self):
+        a = ("Рома, привет. Результаты синхронизации у тебя в папке в оперзадачах — "
+             "Егор просил передать.")
+        d = "Ром, привет! Как продвигается сборка релиза? Нужна твоя оценка по срокам."
+        self.assertFalse(followups._said_same(a, d))
+        self.assertFalse(followups._said_same(a, "Доброе утро! Напоминаю про созвон в 14:00."))
+
+    def test_empty_and_trivial_inputs_never_match(self):
+        self.assertFalse(followups._said_same("", "любой текст"))
+        self.assertFalse(followups._said_same("любой текст", ""))
+        self.assertFalse(followups._said_same("...", "..."))
+
+
 class SweepOlderThreadsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="praxis_sweep_")
@@ -183,6 +220,7 @@ class SweepOlderThreadsTests(unittest.TestCase):
 try:
     import mtproto_runner  # noqa: E402
     _RUNNER_OK = True
+    _RUNNER_EXC = ""
 except Exception as _exc:  # telethon и прочая обвязка есть только в гейте/контейнере
     _RUNNER_OK = False
     _RUNNER_EXC = _exc

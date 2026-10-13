@@ -4168,6 +4168,12 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
                     "and its run is terminal — the proof can never appear")
             raise agent.DurableExecutionError(
                 "direct Telegram tool entry has no exact pre-network run proof")
+    if entry.get("kind") == "file" and not await asyncio.to_thread(
+            _direct_outbox().ready, str(entry["key"])):
+        # A pause is pending work, not a failed upload. Release the live turn;
+        # the durable outbox clock will resume delivery without sleeping here.
+        raise agent.DurableSideEffectPending(
+            str(entry["key"]), "attachment zen pause / retry deadline not reached")
     peer_id = int(entry["peer_id"])
     if entity is None:
         entity = await _resolve_entity(peer_id)
@@ -4571,9 +4577,10 @@ async def _direct_outbox_once() -> None:
 
     outbox = _direct_outbox()
     pending = await asyncio.to_thread(
-        outbox.pending, due_only=True, verify_files=True,
+        outbox.pending, due_only=False, verify_files=True,
     )
-    for entry in pending[:100]:
+    sent_count = 0
+    for entry in pending:
         if str(entry.get("purpose") or "") == "task:message":
             retired = await asyncio.to_thread(
                 outbox.dead_letter,
@@ -4602,8 +4609,15 @@ async def _direct_outbox_once() -> None:
             await asyncio.to_thread(
                 _announce_direct_outbox_dead_letter, dict(retired), reason)
             continue
+        if not await asyncio.to_thread(outbox.ready, str(entry["key"])):
+            continue
+        if sent_count >= 100:
+            continue
+        sent_count += 1
         try:
             accepted = await _send_direct_outbox_entry(entry)
+        except agent.DurableSideEffectPending:
+            continue
         except Exception as exc:
             try:
                 state = await _retry_direct_outbox_entry(entry, exc)
@@ -4709,6 +4723,8 @@ async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
         spool = _media_spool()
         receipt = _MEDIA_ACCEPTED.get(item.queue_id)
         if receipt is None:
+            if not await asyncio.to_thread(spool.ready, item.queue_id):
+                return False
             receipt = await _send_turn_media(
                 entity, item, ctx=ctx, reply_to=reply_to,
                 state_chat_id=state_chat_id,
@@ -4768,6 +4784,23 @@ async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
         return True
     finally:
         _MEDIA_SENDING.discard(item.queue_id)
+
+
+def _stage_authorized_media(items, *, reply_to=None) -> None:
+    """Commit guarded explicit attachments before any cancellable text await.
+
+    A newer chat trigger supersedes a text draft, not these authorized uploads.
+    The persisted reply destination and queue identity remain the original ones.
+    """
+    spool = _media_spool()
+    pending = {item.queue_id for item in spool.pending()}
+    terminal = {row.get("queue_id") for row in spool.outbox_results()}
+    for item in items:
+        if item.reply_to_message_id is None and reply_to is not None:
+            item = replace(item, reply_to_message_id=reply_to)
+        if item.queue_id not in pending and item.queue_id not in terminal:
+            spool.enqueue(item)
+            pending.add(item.queue_id)
 
 
 async def _queue_and_send_media(entity, item: media_core.OutboundMedia, *,
@@ -5233,6 +5266,10 @@ async def _run_pass(chat_id: str) -> None:
             addressed_mid if (addressed and not is_dm) else route.topic_id)
         has_text = bool(reply.strip())
         has_media = bool(envelope.outbound)
+        if has_media:
+            # The envelope has passed privacy/credential gates. Commit before
+            # cancellation can abandon its associated text draft.
+            _stage_authorized_media(envelope.outbound, reply_to=reply_to)
         if not has_text and not has_media:
             if delivery_run_id:
                 _completed, silent_cancelled = await _await_despite_cancellation(
@@ -5303,7 +5340,7 @@ async def _run_pass(chat_id: str) -> None:
                     #     so abandoning is drop-safe only while the process lives to run it.
                     #     During shutdown we keep deployed recovery semantics (boot
                     #     text_outbox replays her authored reply) rather than risk a drop.
-                    if superseded and (is_dm or not _SHUTDOWN.is_set()):
+                    if superseded and not has_media and (is_dm or not _SHUTDOWN.is_set()):
                         abandoned, _late = await _await_despite_cancellation(
                             asyncio.to_thread(
                                 agent.run_delivery_superseded, delivery_run_id,
@@ -5320,11 +5357,14 @@ async def _run_pass(chat_id: str) -> None:
                         else:
                             # Terminalisation did not stick (rare) — keep deployed recovery
                             # semantics so her authored reply is still delivered; never drop.
-                            terminal = bool(delivery_run_id) and not has_media
+                            terminal = bool(delivery_run_id)
                     else:
-                        # No successor, or a group held for durability during shutdown:
-                        # deployed behaviour — text recovers via text_outbox, media re-arms.
-                        terminal = bool(delivery_run_id) and not has_media
+                        # Text and authorized uploads are durable now; do not re-author
+                        # them. A successor still owns its wake/input refs, even though
+                        # this media-bearing run is deliberately NOT cancelled.
+                        terminal = bool(delivery_run_id)
+                        if superseded and has_media:
+                            superseded_abandon = True
                     raise asyncio.CancelledError
             except Exception as exc:
                 # No Telegram call has happened.  The authored model output is
@@ -8451,6 +8491,8 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
             if settled is None:
                 raise
             entry = settled
+    except agent.DurableSideEffectPending:
+        raise
     except Exception as exc:
         # ⚠ 21.09, «почему архивы уходили» (20.09): если во время ожидания пришла отмена
         # хода, `_send_direct_outbox_entry` уже закрыл запись dead_letter'ом

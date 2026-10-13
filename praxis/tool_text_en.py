@@ -173,14 +173,14 @@ EN: dict[str, dict] = {
 
     # ────────────────────────────────────────────────────────────────── речь и молчание
     "reply": {
-        "d": ("Answer the interlocutor of this conversation. Your reply reaches a person "
-              "ONLY this way. Ordinary text you write is a note to yourself: it is sent "
-              "nowhere and it closes the turn. So: you called this hand — the message is "
-              "out, and the turn continues, you can check what you did and answer again; "
-              "you wrote text and did not call it — you stayed silent, and that is a "
-              "legitimate outcome. reply_to is the id of the message you are answering."),
+        "d": ("Reply here; only this hand sends your reply. "
+              "Ordinary text stays private and ends the turn; reply keeps it open. "
+              "Spelling review_required means not_sent, not a transport error. "
+              "Edit and call again, or keep authored text: spelling_confirm_text must equal text exactly. "
+              "Never retry delivery with an unknown transport outcome."),
         "p": {"text": "what to say to the interlocutor",
-              "reply_to": "id of the message you are answering, optional"},
+              "reply_to": "id of the message you are answering, optional",
+              "spelling_confirm_text": "Keep authored text: exact copy of text, not a flag."},
     },
     "say": {
         "d": ("Look at your own reply before it goes out. Returns your own text and one "
@@ -353,7 +353,8 @@ EN: dict[str, dict] = {
     },
     "send_message": {
         "p": {"to": "id, @username or a remembered name",
-              "text": "the message"},
+              "text": "the message",
+              "spelling_confirm_text": "Keep authored text: exact copy of text, not a flag."},
     },
     "telegram_account": {
         "p": {"action": "join | leave | followups | watch_reply | unwatch_reply | cancel_followup",

@@ -5,6 +5,7 @@ This suite is hermetic: no Telegram connection, subprocess, or Forge worker is u
 from __future__ import annotations
 
 import asyncio
+import json
 import collections
 import contextlib
 import datetime
@@ -646,6 +647,7 @@ class TestTopicPassAndHistory(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_missed", {}),
             patch.object(runner, "_cooldown", return_value=0.0),
             patch.object(runner, "_queue_and_send_media", queue_send),
+            patch.object(runner, "_stage_authorized_media", Mock()),
             patch.object(runner, "_maybe_compact", side_effect=_no_compact),
             patch.object(agent, "voice_turn_envelope", return_value=media.TurnEnvelope(
                 text="", outbound=(item,), run_id="run-document-only")),
@@ -670,13 +672,9 @@ class TestTopicPassAndHistory(unittest.IsolatedAsyncioTestCase):
         failed.assert_not_called()
         self.assertNotIn(route.conversation_id, wakes)
 
-    async def test_media_only_reply_under_cancellation_rearms_not_terminal(self):
-        # PASS28 hole-A: a media-only reply cancelled AFTER run_delivery_started must
-        # NOT be marked terminal.  The media bytes are not staged into the durable
-        # spool until the inline send loop (which the cancellation raise skips), and
-        # no recovery clock delivers an unstaged media intent — so the finally must
-        # re-arm the wake and let the model re-author+deliver the media (the original
-        # known-good path).  Marking it terminal would silently DROP the media.
+    async def test_media_only_reply_under_cancellation_keeps_durable_upload_no_rearm(self):
+        # Authorized media is now staged BEFORE delivery-started. Cancellation
+        # cannot lose it, and re-authoring the same wake would duplicate the file.
         route = telegram_topics.TopicRoute("-10042", 101)
         item = media.OutboundMedia(
             kind="document", path=Path("result.txt"),
@@ -712,6 +710,7 @@ class TestTopicPassAndHistory(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_missed", {}),
             patch.object(runner, "_cooldown", return_value=0.0),
             patch.object(runner, "_queue_and_send_media", queue_send),
+            patch.object(runner, "_stage_authorized_media", Mock()),
             patch.object(runner, "_maybe_compact", side_effect=_no_compact),
             patch.object(runner, "_await_despite_cancellation", cancelled_handoff),
             patch.object(runner, "_arm", arm),
@@ -727,8 +726,69 @@ class TestTopicPassAndHistory(unittest.IsolatedAsyncioTestCase):
 
         started.assert_called_once()                    # the durable intent WAS accepted
         self.assertEqual(queue_send.await_count, 0)     # raised before the inline send loop
-        self.assertIn(route.conversation_id, wakes)     # wake NOT consumed (not terminal)
-        self.assertTrue(arm.called)                     # re-armed: model will re-author the media
+        self.assertNotIn(route.conversation_id, wakes)  # staged upload owns the wake
+        self.assertFalse(arm.called)                    # no duplicate model re-author
+
+    async def test_media_newer_trigger_preserves_upload_and_successor_wake(self):
+        # Authorized media is now staged BEFORE delivery-started. Cancellation
+        # cannot lose it, and re-authoring the same wake would duplicate the file.
+        route = telegram_topics.TopicRoute("-10042", 101)
+        item = media.OutboundMedia(
+            kind="document", path=Path("result.txt"),
+            mime="application/octet-stream", size=8,
+            target_chat_id=route.conversation_id, scope="group",
+            queue_id="cancel-media-only", run_id="run-cancel-media",
+        )
+        meta = {route.conversation_id: {
+            "entity": -10042, "peer_id": route.peer_id, "topic_id": route.topic_id,
+            "is_dm": False, "is_owner": False, "known": True, "family": False,
+            "name": "Миша", "title": "Micellium · topic #101", "size": 20,
+            "addressed": True, "addressed_mid": 11, "room_mode": "normal",
+        }}
+        wakes = {route.conversation_id: _wake(11, "пришли результат")}
+        queue_send = AsyncMock(return_value=True)
+        started = Mock()
+        arm = Mock()
+        client = _Client()
+
+        gens = {}
+        superseded = Mock(return_value=True)
+
+        async def cancelled_handoff(awaitable):
+            gens[route.conversation_id] = gens.get(route.conversation_id, 0) + 1
+            return (await awaitable), True
+
+        await _drive_run_pass(route.conversation_id, [
+            patch.object(runner, "client", client),
+            patch.object(runner, "_meta", meta),
+            patch.object(runner, "_supersede_gen", gens),
+            patch.object(agent, "run_delivery_superseded", superseded),
+            patch.object(runner, "_group_wakes", wakes),
+            patch.object(runner, "_last_pass", collections.defaultdict(float)),
+            patch.object(runner, "_passing", set()),
+            patch.object(runner, "_pending_media", collections.defaultdict(
+                lambda: collections.deque(maxlen=16))),
+            patch.object(runner, "_recent_msgs", collections.defaultdict(
+                lambda: collections.deque(maxlen=12))),
+            patch.object(runner, "_missed", {}),
+            patch.object(runner, "_cooldown", return_value=0.0),
+            patch.object(runner, "_queue_and_send_media", queue_send),
+            patch.object(runner, "_stage_authorized_media", Mock()),
+            patch.object(runner, "_maybe_compact", side_effect=_no_compact),
+            patch.object(runner, "_await_despite_cancellation", cancelled_handoff),
+            patch.object(runner, "_arm", arm),
+            patch.object(agent, "voice_turn_envelope", return_value=media.TurnEnvelope(
+                text="", outbound=(item,), run_id="run-cancel-media")),
+            patch.object(agent, "run_delivery_started", started),
+            patch.object(agent, "run_delivery_finalize_recovered", Mock(return_value=True)),
+            patch.object(agent, "run_delivery_failed", Mock()),
+        ])
+
+        started.assert_called_once()                    # the durable intent WAS accepted
+        self.assertEqual(queue_send.await_count, 0)     # raised before the inline send loop
+        superseded.assert_not_called()                 # run is not terminally cancelled
+        self.assertIn(route.conversation_id, wakes)     # successor owns the newer wake
+        self.assertTrue(arm.called)                     # successor still scheduled
 
     async def test_text_only_reply_under_cancellation_is_terminal_no_rearm(self):
         # PASS28 finding #3: a text-only reply cancelled AFTER run_delivery_started must
@@ -1054,10 +1114,12 @@ class TestExplicitTopicTools(unittest.TestCase):
         self.assertEqual(client.sent[0][2], {"reply_to": 101})
         self.assertIn("-10042#topic:101", receipt)
 
-    def test_current_topic_file_delivery_keeps_topic(self):
+    def test_current_topic_file_releases_live_turn_until_durable_pause(self):
         route = telegram_topics.TopicRoute("-10042", 101)
         client = _Client()
         entity = types.SimpleNamespace(id=42, title="Micellium", name="Micellium")
+        clock = [1000.0]
+        runner._direct_outbox().clock = lambda: clock[0]
         with tempfile.TemporaryDirectory() as td:
             source = Path(td) / "result.txt"
             source.write_text("ready", encoding="utf-8")
@@ -1066,6 +1128,37 @@ class TestExplicitTopicTools(unittest.TestCase):
                 patch.object(runner, "_meta", {route.conversation_id: {"entity": entity}}),
                 patch.object(runner.agent, "_active_chat", return_value=route.conversation_id),
                 patch.object(runner, "_threadsafe_result", side_effect=_run_here),
+                patch.object(runner, "_marked_peer_id", return_value=-10042),
+            ):
+                with self.assertRaises(agent.DurableSideEffectPending):
+                    runner._sync_send_file(str(source), "готово")
+                entry, = runner._direct_outbox().pending()
+                self.assertEqual(entry["not_before"], 1030.0)
+                self.assertEqual(entry["attempts"], 0)
+                self.assertEqual(client.files, [])
+                clock[0] = 1030.0
+                accepted = asyncio.run(runner._send_direct_outbox_entry(entry, entity=entity))
+                self.assertEqual(accepted["state"], "accepted")
+                self.assertEqual(len(client.files), 1)
+
+    def test_current_topic_file_delivery_keeps_topic(self):
+        route = telegram_topics.TopicRoute("-10042", 101)
+        client = _Client()
+        entity = types.SimpleNamespace(id=42, title="Micellium", name="Micellium")
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "result.txt"
+            source.write_text("ready", encoding="utf-8")
+            clock = [1000.0]
+            runner._direct_outbox().clock = lambda: clock[0]
+            def send_after_pause(factory, timeout=None):
+                if runner._direct_outbox().pending():
+                    clock[0] = 1030.0
+                return _run_here(factory, timeout)
+            with (
+                patch.object(runner, "client", client),
+                patch.object(runner, "_meta", {route.conversation_id: {"entity": entity}}),
+                patch.object(runner.agent, "_active_chat", return_value=route.conversation_id),
+                patch.object(runner, "_threadsafe_result", side_effect=send_after_pause),
                 patch.object(runner, "_marked_peer_id", return_value=-10042),
             ):
                 receipt = runner._sync_send_file(str(source), "готово")
@@ -1377,6 +1470,8 @@ class TestTopicMediaRecovery(unittest.IsolatedAsyncioTestCase):
                 patch.object(runner, "_MEDIA_ACCEPTED", {}),
                 patch.object(runner, "_MEDIA_SENDING", set()),
                 patch.object(runner, "_send_turn_media", send),
+                patch.object(media.time, "time", return_value=json.loads(
+                    spool._record_path(item.queue_id).read_text())["not_before"]),
             ):
                 self.assertTrue(await runner._attempt_queued_media(
                     -10042, item, ctx=ctx, reply_to=101,
@@ -1423,6 +1518,8 @@ class TestTopicMediaRecovery(unittest.IsolatedAsyncioTestCase):
                 patch.object(runner, "_MEDIA_ACCEPTED", {}),
                 patch.object(runner, "_MEDIA_SENDING", set()),
                 patch.object(runner, "_send_turn_media", send),
+                patch.object(media.time, "time", return_value=json.loads(
+                    spool._record_path(item.queue_id).read_text())["not_before"]),
                 patch.object(
                     agent, "run_delivery_media_result",
                     side_effect=OSError("run WAL temporarily unavailable"),

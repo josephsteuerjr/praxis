@@ -554,7 +554,13 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
     async def test_outbound_handoff_failure_after_text_does_not_repeat_model_turn(self):
         chat_id = "-704"
         inbound_ref = object()
-        outbound = object()
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        spool = media.MediaSpool(Path(temp.name) / "spool")
+        source = Path(temp.name) / "reply.txt"
+        source.write_text("attachment")
+        outbound = spool.resolve_outbound(
+            source, kind="document", target_chat_id=chat_id, scope="group")
         wake = _wake(mid=40, ts=990.0, context="Алиса: ответь",
                      media_refs=(inbound_ref,))
         wakes = {chat_id: wake}
@@ -562,6 +568,15 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         pending[chat_id].append(inbound_ref)
         client = _Client()
         handoff = AsyncMock(return_value=False)
+        turn = Mock(return_value=media.TurnEnvelope(text="ответ", outbound=(outbound,)))
+        original_send = client.send_message
+
+        async def send_after_staging(*args, **kwargs):
+            self.assertEqual(spool.pending()[0].queue_id, outbound.queue_id,
+                             "attachment intent must precede cancellable text delivery")
+            return await original_send(*args, **kwargs)
+
+        client.send_message = send_after_staging
 
         with (
             patch.object(runner, "client", client),
@@ -578,14 +593,20 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_cooldown", return_value=0.0),
             patch.object(runner, "_maybe_compact", side_effect=_no_compact),
             patch.object(runner, "_queue_and_send_media", handoff),
-            patch.object(agent, "voice_turn_envelope",
-                         return_value=media.TurnEnvelope(text="ответ", outbound=(outbound,))),
+            patch.object(runner, "_MEDIA_SPOOL", spool),
+            patch.object(agent, "voice_turn_envelope", turn),
         ):
             await runner._run_pass(chat_id)
             await asyncio.sleep(0)
 
         self.assertEqual(client.sent, [(-704, "ответ", {"reply_to": 40})])
         handoff.assert_awaited_once()
+        turn.assert_called_once()
+        staged = spool.pending()
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(staged[0].queue_id, outbound.queue_id)
+        self.assertEqual(staged[0].reply_to_message_id, 40)
+        self.assertTrue(staged[0].path.exists(), "failed handoff must retain the upload")
         self.assertNotIn(chat_id, wakes)
         self.assertNotIn(chat_id, pending)
 
