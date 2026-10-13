@@ -15,6 +15,7 @@ export interface ChatRow {
   kind?: "window" | "telegram";
   messages?: number;
   mtime_ns?: number | string;
+  size?: number;
 }
 
 const STUB_KEY = "frame.rooms.stub";
@@ -55,7 +56,13 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
   byKey.set(WINDOW_ROOM, { key: WINDOW_ROOM, name: S.agent, kind: "window", live: false, count: 0, mtime: Number.MAX_SAFE_INTEGER });
   for (const c of chats || []) {
     const key = String(c.peer_id);
-    if (key === LEGACY_WINDOW_KEY || key === WINDOW_ROOM) continue;
+    const archiveStamp = `${c.mtime_ns ?? ""}/${c.size ?? ""}/${c.messages ?? 0}`;
+    if (key === LEGACY_WINDOW_KEY || key === WINDOW_ROOM) {
+      const primary = byKey.get(WINDOW_ROOM)!;
+      primary.count = c.messages || 0;
+      primary.archiveStamp = archiveStamp;
+      continue;
+    }
     const kind: Room["kind"] = c.kind === "window" || (c.kind !== "telegram" && isWindowRoom(key)) ? "window" : "telegram";
     if (!byKey.has(key)) {
       byKey.set(key, {
@@ -65,6 +72,7 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
         live: false,
         count: c.messages || 0,
         mtime: Number(c.mtime_ns) || 0,
+        archiveStamp,
       });
     }
   }
@@ -87,7 +95,8 @@ export function buildRooms(runs: Run[], chats?: ChatRow[]): Room[] {
       mtime: 0,
     };
     if (runIsLive(r.status, r)) room.live = true;
-    room.count += 1;
+    // A known archive already counts messages. Runs are only a legacy estimate.
+    if (!room.archiveStamp) room.count += 1;
     if (!byKey.has(key)) byKey.set(key, room);
   }
   return [...byKey.values()].sort((a, b) => {

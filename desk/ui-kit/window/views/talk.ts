@@ -8,10 +8,10 @@
 // событие хода — отсюда прыжки и «сообщение уходит вниз» (слово Егора 28.09). Плашки хода
 // и ошибок стоят ВНИЗУ, у поля ввода: наверху 250 сообщений их никто не видел.
 import { KeyedList } from "../../feed/keyed";
-import { api, post } from "../api";
+import { api, cfg, inTauri, post } from "../api";
 import { artifactCaption, mediaDescriptor, paperMediaHTML } from "../../paper-media";
 import { deliveryWords, type FoldState } from "../../memory-fold";
-import { hideMemoryLine, memoryLineHidden, memoryLineWords } from "../../memory-line";
+import { hideMemoryLine, memoryLineHidden, memoryLineWords, memoryLineSettingsAvailable } from "../../memory-line";
 import { replyPreview } from "../../reply-preview";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
@@ -586,7 +586,7 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
   const html = `${delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : ''}${memoryLineHidden(room) ? '' : `<div class="context-line"${line.state === "failed" ? ' role="status"' : ''}>
     <span title="${esc(line.note || 'Свежие сообщения, ещё не вошедшие в сводку. Переписка сохранена в архиве.')}" data-context-status>${esc(line.text)}</span>
     ${line.canFold ? '<button class="context-link" data-fold type="button">Свернуть</button>' : ''}
-    <button class="context-link" data-context-settings type="button">Настроить</button>
+    ${memoryLineSettingsAvailable(st, inTauri && cfg.local_agent !== false && !foreignHarness()) ? '<button class="context-link" data-context-settings type="button">Контекст владельца</button>' : ''}
     <button class="context-hide" data-context-hide type="button" aria-label="Скрыть строку памяти этого чата" title="Скрыть">×</button>
   </div>`}`;
   if (box.dataset.html === html) return;
@@ -617,6 +617,15 @@ async function paintFold(container: HTMLElement, room: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------- живое
+
+/** Archive intake is independent of model activity and runner pause. */
+export function onArchiveEvent() {
+  if (S.view !== "talk" || !root || !root.isConnected) return;
+  clearTimeout(refreshTimer);
+  refreshTimer = window.setTimeout(() => {
+    if (root && root.isConnected && S.view === "talk") void render(root);
+  }, 700);
+}
 
 export function onRunEvent(runId: string) {
   panel.onRunEvent(runId);

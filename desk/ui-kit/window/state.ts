@@ -79,6 +79,7 @@ export interface Room {
   count: number;
   /** Свежесть архива (нс), для сортировки; 0 — неизвестно. */
   mtime: number;
+  archiveStamp?: string;
   /** Комната-заглушка: канал ещё не умеет несколько чатов, живёт только в этом окне. */
   stub?: boolean;
 }

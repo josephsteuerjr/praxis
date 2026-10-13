@@ -4,6 +4,8 @@ export interface FoldState {
   token_cap?: number; tape_chars?: number; offer_mode?: boolean; backstop_hours?: number;
   chars?: number; tokens?: number; owner_context?: boolean;
   policy_source?: string;
+  operation?: { state: "queued" | "starting" | "running" | "interrupted" | "unconfirmed"; note: string } | null;
+  paused?: boolean;
   delivery?: { state: string; retry_at: number; retries: number; at: number } | null;
   offer: Record<string, unknown> | null;
   pending: { id?: string; at?: string } | null;
@@ -42,8 +44,13 @@ export function foldWords(st: FoldState, now = Date.now()) {
   ].filter(Boolean);
   let note = "";
   let state = "idle";
-  if (st.pending || st.receipt?.state === "running") {
-    note = "Идёт свёртка: агент пишет сводку своими словами. Переписка остаётся в архиве."; state = "running";
+  if (st.operation) {
+    state = st.operation.state; note = st.operation.note;
+  } else if (st.pending || st.receipt?.state === "running") {
+    // Older channels carry no live execution proof. A request is not execution.
+    state = st.receipt?.state === "running" ? "unconfirmed" : "queued";
+    note = state === "queued" ? "Просьба записана; начало свёртки ещё не подтверждено."
+      : "Сохранена старая расписка; выполнение свёртки сейчас не подтверждено.";
   } else if (st.receipt?.at && now - Date.parse(st.receipt.at) < 120_000) {
     state = st.receipt.state || "idle";
     note = state === "done" && st.receipt.folded !== undefined
@@ -55,5 +62,6 @@ export function foldWords(st: FoldState, now = Date.now()) {
       : "Агенту предложено свернуть старую часть разговора.";
   }
   return { counter, explanation: parts.join(" "), note, state,
-    canFold: state !== "running" && (st.hot !== null && st.hot > st.keep || !!st.offer) };
+    canFold: !st.paused && !["running", "starting", "queued"].includes(state)
+      && (st.hot !== null && st.hot > st.keep || !!st.offer) };
 }

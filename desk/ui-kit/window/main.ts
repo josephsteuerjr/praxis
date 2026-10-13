@@ -924,9 +924,25 @@ export function start(opts: WindowOptions): void {
     roomAdd.hidden = false;
   }
 
-  async function loadRooms() {
+  let roomsReading: { identity: string; promise: Promise<void> } | null = null;
+  let lastRoomsAttempt = 0;
+  function loadRooms(): Promise<void> {
+    const identity = cfg.base + "\n" + cfg.key;
+    if (roomsReading?.identity === identity) return roomsReading.promise;
+    lastRoomsAttempt = Date.now();
+    const flight = { identity, promise: Promise.resolve() };
+    flight.promise = readRooms(identity).finally(() => {
+      if (roomsReading === flight) roomsReading = null;
+    });
+    roomsReading = flight;
+    return flight.promise;
+  }
+  async function readRooms(identity: string) {
+    const before = S.rooms.find((r) => r.key === S.room);
     const { runs, chats } = await fetchRooms();
+    if (identity !== cfg.base + "\n" + cfg.key) return;
     S.runs = runs;
+    if (chats === undefined && S.rooms.length) return; // A failed catalog cannot erase known chats.
     S.rooms = buildRooms(runs, chats);
     // Чужой харнесс (Praxis): комната окна у неё пуста — чат открывается
     // на самой свежей комнате, пока владелец не выбрал сам.
@@ -945,6 +961,12 @@ export function start(opts: WindowOptions): void {
       S.roomName = S.agent;
     }
     renderRooms();
+    const after = S.rooms.find((r) => r.key === S.room);
+    if (before && after && before.key === after.key
+        && (before.count !== after.count || before.mtime !== after.mtime
+          || before.archiveStamp !== after.archiveStamp)) {
+      talk.onArchiveEvent();
+    }
   }
 
   async function newRoom() {
@@ -1478,6 +1500,9 @@ export function start(opts: WindowOptions): void {
     if (S.view === "journal") void show("journal", { quiet: true });
   }
   onEvent((ev) => {
+    if (ev.t === "chats") {
+      void loadRooms().then(() => talk.onArchiveEvent()).catch(() => {});
+    }
     if (ev.t === "health") void refreshState();
     if (ev.t === "llm") {
       void refreshPulse();
@@ -1630,7 +1655,15 @@ export function start(opts: WindowOptions): void {
   setInterval(() => {
     const active = !!engineOperation || (channelAvailable && !!S.agentState?.runner?.busy);
     if (Date.now() - lastStateAttempt >= (active ? 1500 : 8000)) void refreshState();
+    // Lost/silent WS must not freeze passive messages while the agent is paused.
+    // Poll cheap room metadata; fetch the visible archive only when it changes.
+    if (!document.hidden && Date.now() - lastRoomsAttempt >= 8000) {
+      void loadRooms().catch(() => {});
+    }
   }, 1500);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) void loadRooms().then(() => talk.onArchiveEvent()).catch(() => {});
+  });
   setInterval(() => void refreshPulse(), 20000);
 }
 

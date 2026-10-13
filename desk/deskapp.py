@@ -2050,6 +2050,20 @@ def _watcher(loop: asyncio.AbstractEventLoop) -> None:
                 _broadcast(loop, {"t": "skips"})
             if probe("shadow", base / "shadow" / "metrics.jsonl"):
                 _broadcast(loop, {"t": "shadow"})
+            # Passive intake changes archives without a model call or run.
+            # Stat only: an open idle chat must not reread every archive here.
+            archive_keys = set()
+            archives_changed = False
+            for archive in (readers.tree() / "memory" / "groups").glob("*.jsonl"):
+                key = "chat:" + archive.name
+                archive_keys.add(key)
+                if probe(key, archive):
+                    archives_changed = True
+            for stale in [k for k in state if k.startswith("chat:") and k not in archive_keys]:
+                state.pop(stale, None)
+                archives_changed = True
+            if archives_changed:
+                _broadcast(loop, {"t": "chats"})
             # Все живые прогоны, а не только самый свежий; заголовки комнат не
             # запрашиваем (with_titles=False) — событию они не нужны.
             watched = readers.list_runs(limit=8, with_titles=False)

@@ -1730,6 +1730,7 @@ def _supervisor_tick(tree: Path, control) -> bool:
 
 #: Свёртка по кнопке идёт одна за раз: вторая просьба ждёт, пока кончится первая.
 _FOLD_BUSY = [False]
+_FOLD_ACTIVE = [None]
 
 
 def _fold_tick(tree: Path) -> None:
@@ -1741,7 +1742,7 @@ def _fold_tick(tree: Path) -> None:
     memory_compact(fold); пороги и голос сводки — её. Итог — расписка
     `memory/.state/fold-receipt.json`, её читает окно (deskd.control.fold_state).
     """
-    if _life is None or _FOLD_BUSY[0] or not hasattr(_life, "fold_now"):
+    if owner_stop.paused() or _life is None or _FOLD_BUSY[0] or not hasattr(_life, "fold_now"):
         return
     ctl = Path(tree) / "memory" / ".control"
     request = ctl / "fold.json"
@@ -1749,18 +1750,33 @@ def _fold_tick(tree: Path) -> None:
         return
     claimed = ctl / "fold.processing.json"
     try:
+        if claimed.is_file():
+            # A new explicit request may replace an orphan, never its evidence.
+            import shutil
+            import uuid
+            history = Path(tree) / 'memory/.state/fold-history' / uuid.uuid4().hex
+            history.mkdir(parents=True)
+            shutil.copy2(claimed, history / 'request.json')
+            previous = Path(tree) / 'memory/.state/fold-receipt.json'
+            if previous.is_file(): shutil.copy2(previous, history / 'receipt.json')
         os.replace(request, claimed)
         asked = json.loads(claimed.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        with contextlib.suppress(OSError):
-            claimed.unlink()
+        # Copy/claim/read can fail at any step. Preserve both the old evidence
+        # and the new request; a later explicit retry can archive the claim.
         return
     if not isinstance(asked, dict):
         asked = {}
     _FOLD_BUSY[0] = True
+    _FOLD_ACTIVE[0] = {"id": asked.get("id"), "room": str(asked.get("room") or STREAM)}
     import threading
-    threading.Thread(target=_fold_run, args=(Path(tree), asked, claimed), name="fold",
-                     daemon=True).start()
+    try:
+        threading.Thread(target=_fold_run, args=(Path(tree), asked, claimed), name="fold",
+                         daemon=True).start()
+    except Exception:
+        _FOLD_BUSY[0] = False
+        _FOLD_ACTIVE[0] = None
+        raise
 
 
 def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
@@ -1769,7 +1785,7 @@ def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
 
     def put(**fields) -> None:
         data = {"schema": 1, "id": asked.get("id"), "room": room, "by": asked.get("by"),
-                "asked_at": asked.get("at"),
+                "asked_at": asked.get("at"), "pid": os.getpid(),
                 "at": dt.datetime.now(dt.timezone.utc).isoformat(), **fields}
         try:
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1806,6 +1822,7 @@ def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
         with contextlib.suppress(OSError):
             claimed.unlink()
         _FOLD_BUSY[0] = False
+        _FOLD_ACTIVE[0] = None
 
 
 def _heartbeat_forever(inbox: Path) -> None:
@@ -1822,6 +1839,7 @@ def _heartbeat_forever(inbox: Path) -> None:
             boot.refresh_tree_lock()
             _write_json(inbox / ".reader.json", {
                 "pid": os.getpid(), "at": time.time(),
+                "fold": _FOLD_ACTIVE[0],
                 "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
                 "since": float(_busy["since"] or 0.0), "chat_id": _busy["chat_id"]})
         except Exception:

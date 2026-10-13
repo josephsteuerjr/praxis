@@ -15,5 +15,10 @@ try {
   denied=true; a.hideMemoryLine('window'); assert.equal(a.memoryLineHidden('window'),true); assert.equal(a.memoryLineHidden('window-11111111'),false);
   a.showMemoryLines(); assert.equal(a.memoryLineHidden('window'),false);
   denied=false; data.set('helene-hidden-context-rooms','broken'); assert.equal(a.memoryLineHidden('window'),false);
+  const base={room:'-1',hot:1360,keep:250,offer_at:400,hard_at:500,offer:null,pending:null,receipt:null,paused:true,operation:{state:'interrupted',note:'preserved'}};
+  const words=a.memoryLineWords(base);
+  assert.match(words.text,/1\s?360/,'hot counter survives operation status');
+  assert.match(words.text,/Свёртка прервана/);assert.match(words.text,/Агент на паузе/);assert.equal(words.canFold,false);
+  assert.equal(a.memoryLineSettingsAvailable({...base,owner_context:false},true),false);
   console.log('adversarial-memory-line: cross-tab, denied storage, rooms, malformed storage PASS');
 } finally { delete globalThis.localStorage; rmSync(dir,{recursive:true,force:true}); }

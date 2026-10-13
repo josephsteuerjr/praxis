@@ -163,6 +163,32 @@ def _life_state(tree: Path, room: str) -> dict:
     return _read(_state_dir(tree) / "life" / f"{safe}.json")
 
 
+def _fold_operation(room, queued, processing, receipt, reader, paused, now):
+    """Requests and old receipts cannot certify a running worker."""
+    def age(value):
+        try:
+            stamp = float(value) if type(value) in (int, float) else dt.datetime.fromisoformat(str(value).replace('Z', '+00:00')).timestamp()
+            return now - stamp
+        except (ValueError, TypeError, OverflowError):
+            return float('inf')
+    fresh = type(reader.get('pid')) is int and reader['pid'] > 0 and 0 <= age(reader.get('at')) < BEAT_STALE
+    active = reader.get('fold') if isinstance(reader.get('fold'), dict) else {}
+    claimed = processing if processing.get('room') == room else {}
+    recorded = receipt if receipt.get('room') == room else {}
+    if fresh and active.get('id') and active.get('room') == room and active.get('id') == claimed.get('id'):
+        return {'state': 'running', 'note': 'Свёртка подтверждена живым исполнителем. Переписка остаётся в архиве.'}
+    if queued.get('room') == room:
+        return {'state': 'queued', 'note': 'Просьба записана; ждёт возобновления агента.' if paused else 'Просьба записана; ждёт начала выполнения.'}
+    if claimed or recorded.get('state') == 'running':
+        if fresh and 'fold' in reader:
+            # Claim→first heartbeat is a short handoff, not an interrupted fold.
+            starting = claimed and recorded.get('id') == claimed.get('id') and recorded.get('pid') == reader.get('pid') and 0 <= age(recorded.get('at')) < BEAT_STALE
+            return {'state': 'starting' if starting else 'interrupted',
+                    'note': 'Жду подтверждения начала от исполнителя.' if starting else 'Живой исполнитель не выполняет этот запрос. Старые просьба и расписка сохранены.'}
+        return {'state': 'unconfirmed', 'note': 'Сохранена старая расписка; выполнение сейчас не подтверждено.'}
+    return None
+
+
 def fold_state(tree: Path, room: str) -> dict:
     """Сколько в горячей памяти места, её пороги, идёт ли свёртка и чем кончилась.
     `hot` — None, если состояния памяти этого места ещё нет (или оно не под этим именем)."""
@@ -173,7 +199,9 @@ def fold_state(tree: Path, room: str) -> dict:
     hot = len(hot_rows) if isinstance(life.get("hot"), list) else None
     offers = _read(_state_dir(tree) / "fold_offers.json")
     ctl = Path(tree) / "memory" / ".control"
-    pending = _read(ctl / FOLD_REQUEST) or _read(ctl / FOLD_PROCESSING)
+    queued = _read(ctl / FOLD_REQUEST)
+    processing = _read(ctl / FOLD_PROCESSING)
+    pending = queued if queued.get('room') == room else processing
     receipt = _read(_state_dir(tree) / FOLD_RECEIPT)
     policy = _read(_state_dir(tree) / "fold-policy.json")
     bounds = policy.get("group" if room.startswith("-") else "chat") or {}
@@ -184,6 +212,8 @@ def fold_state(tree: Path, room: str) -> dict:
         bounds = owner
     delivery = _read(_state_dir(tree) / "telegram-delivery.json").get(room.split('__topic__', 1)[0])
     reader = _read(Path(tree) / 'memory/.control/desk_inbox/.reader.json')
+    paused = (ctl / 'autonomy-paused.json').exists()
+    operation = _fold_operation(room, queued, processing, receipt, reader, paused, time.time())
     if delivery and (delivery.get('pid') != reader.get('pid')
                      or time.time() - float(reader.get('at') or 0) > 30):
         delivery = None  # a dead/replaced sender cannot promise an automatic repeat
@@ -197,6 +227,7 @@ def fold_state(tree: Path, room: str) -> dict:
             "offer_mode": policy.get("offer_mode", True),
             "backstop_hours": policy.get("backstop_hours", 26),
             "policy_source": "runtime" if bounds else "core_defaults",
+            "operation": operation, "paused": paused,
             "delivery": delivery,
             "offer": offers.get(room) if isinstance(offers.get(room), dict) else None,
             "pending": pending if pending.get("room") == room else None,

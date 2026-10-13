@@ -14,7 +14,7 @@ assert.ok(idle.canFold);
 const running = foldWords({...state, pending: {id: 'x'}});
 assert.equal(running.counter, idle.counter);
 assert.equal(running.canFold, false);
-assert.equal(running.state, 'running');
+assert.equal(running.state, 'queued');
 const done = foldWords({...state, hot: 731, receipt: {state: 'done', folded: 190, at: new Date().toISOString(), note: 'старое в сводке её словами'}});
 assert.match(done.counter, /731/);
 assert.match(done.note, /190/);

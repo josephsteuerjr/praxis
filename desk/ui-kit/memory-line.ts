@@ -24,10 +24,19 @@ export function showMemoryLines() {
 
 export function memoryLineWords(st: FoldState, now = Date.now()) {
   const words = foldWords(st, now);
-  const text = words.state === "running" ? "Память сворачивается…"
+  const status = words.state === "running" ? "Память сворачивается…"
+    : words.state === "queued" ? "Свёртка запрошена"
+    : words.state === "starting" ? "Свёртка запускается…"
+    : words.state === "interrupted" ? "Свёртка прервана"
+    : words.state === "unconfirmed" ? "Свёртка не подтверждена"
     : words.state === "failed" ? "Свёртка не завершилась"
     : words.state === "done" ? "Память свёрнута"
-    : st.hot === null ? "Память пока недоступна"
-    : words.counter.replace("Горячая память:", "В памяти:");
+    : "";
+  const counter = st.hot === null ? "Память пока недоступна" : words.counter.replace("Горячая память:", "В памяти:");
+  const text = [counter, status, st.paused ? "Агент на паузе" : ""].filter(Boolean).join(" · ");
   return { text, note: words.note, canFold: words.canFold, state: words.state };
+}
+
+export function memoryLineSettingsAvailable(st: FoldState, localSettings: boolean) {
+  return localSettings && st.owner_context === true;
 }

@@ -313,7 +313,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // переписывает никто, кроме установщика, — а в ней старые имена остаются
   // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
   center.append(inGroup(card("Имена", names, built.namesHint), GROUP.agent));
-  center.append(inGroup(ownerContextCard(draft), GROUP.agent));
+  if (draft.mode !== "remote") center.append(inGroup(ownerContextCard(draft), GROUP.agent));
 
   for (const box of built.cards) center.append(box);
 

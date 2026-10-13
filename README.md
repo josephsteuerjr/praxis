@@ -17,6 +17,8 @@ Linux desktop, configurable owner context, update inspection and Telegram
 recovery that retains missed messages without replying to every old mention.
 [Read the release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v1.6.0).
 
+The `main` branch also contains an **unreleased chat repair** found after 1.6.0: passive Telegram archive updates refresh the window without a model turn, fold status is tied to the current worker, and group chats no longer link to unrelated owner-context settings. These changes are not included in the immutable 1.6.0 downloads.
+
 ## A home for several agents
 
 - **Independent agents.** Each agent has its own constitution, memory, settings, files
