@@ -81,6 +81,33 @@ class ReaderActivity(unittest.TestCase):
             self.assertFalse(receipt["busy"])
             self.assertEqual(receipt["chat_id"], "")
 
+    def test_pause_control_remains_available_after_activity_and_heartbeat(self):
+        from deskd import autonomy
+        inbox = self.root / "memory/.control/desk_inbox"
+        fold = {"room": "window-a", "id": "current-fold"}
+        with patch.object(runner, "_tree", self.root), patch.object(runner, "_busy", {}), \
+                patch.object(runner, "_FOLD_ACTIVE", [fold]), \
+                patch.object(runner.owner_stop, "paused", return_value=False), \
+                patch.object(runner.owner_stop, "stopped", return_value=False):
+            for active in (True, False, True, False):
+                runner._set_busy(active, "current-run", chat_id="window-a")
+                observed = autonomy.state(self.root)
+                self.assertTrue(observed["available"])
+                self.assertTrue(observed["supported"])
+                self.assertEqual(observed["started"], runner._STARTED_UTC)
+                request = autonomy.request(self.root, "pause")
+                self.assertTrue(request["ok"])
+                self.assertEqual(request["request"]["pid"], observed["pid"])
+                self.assertEqual(request["request"]["started"], observed["started"])
+                receipt = json.loads((inbox / ".reader.json").read_text(encoding="utf8"))
+                self.assertEqual(receipt["fold"], fold)
+                self.assertEqual(receipt["busy"], active)
+            with patch.object(runner.boot, "refresh_tree_lock"), \
+                    patch.object(runner.time, "sleep", side_effect=StopIteration):
+                with self.assertRaises(StopIteration):
+                    runner._heartbeat_forever(inbox)
+            self.assertTrue(autonomy.state(self.root)["available"])
+
     def test_phase_follows_events_and_clears_before_idle_heartbeat(self):
         name = self.run_file(-1)
         self.receipt.update(run=name, pid=42)

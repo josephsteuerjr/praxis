@@ -1825,6 +1825,16 @@ def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
         _FOLD_ACTIVE[0] = None
 
 
+def _write_reader(inbox: Path) -> None:
+    """Every activity update retains the current worker and fold identity."""
+    _write_json(inbox / ".reader.json", {
+        "pid": os.getpid(), "at": time.time(), "started": _STARTED_UTC,
+        "autonomy": {"protocol": 1, "paused": owner_stop.paused(), "stopped": owner_stop.stopped()},
+        "fold": _FOLD_ACTIVE[0],
+        "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
+        "since": float(_busy["since"] or 0.0), "chat_id": _busy["chat_id"]})
+
+
 def _heartbeat_forever(inbox: Path) -> None:
     """Квитанция читателя — фоном и с занятостью.
 
@@ -1837,13 +1847,7 @@ def _heartbeat_forever(inbox: Path) -> None:
             # Тем же ударом подтверждаем замок на дереве: живой владелец замка
             # обязан отмечаться, иначе брошенный замок держал бы дерево вечно.
             boot.refresh_tree_lock()
-            _write_json(inbox / ".reader.json", {
-                "pid": os.getpid(), "at": time.time(),
-                "started": _STARTED_UTC,
-                "autonomy": {"protocol": 1, "paused": owner_stop.paused(), "stopped": owner_stop.stopped()},
-                "fold": _FOLD_ACTIVE[0],
-                "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
-                "since": float(_busy["since"] or 0.0), "chat_id": _busy["chat_id"]})
+            _write_reader(inbox)
         except Exception:
             # ⚠ Было log.debug при жёстко прибитом уровне INFO: окно рисовало
             # красное «Не запущен» над живым руннером, а в собранном владельцем
@@ -2043,10 +2047,7 @@ def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
         return
     try:
         inbox = Path(_tree) / "memory" / ".control" / "desk_inbox"
-        _write_json(inbox / ".reader.json", {
-            "pid": os.getpid(), "at": time.time(),
-            "busy": bool(_busy["busy"]), "run": _busy["run"], "since": _busy["since"],
-            "chat_id": _busy["chat_id"]})
+        _write_reader(inbox)
     except Exception:
         # Голое `pass` здесь означало, что «окно считает руннер мёртвым» —
         # диагноз без единой строки в логе. Молчать об этом нельзя.
