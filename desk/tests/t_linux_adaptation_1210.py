@@ -102,7 +102,8 @@ class LinuxContracts(unittest.TestCase):
             base=Path(temporary); program=base/'program'; tree=base/'tree'; program.mkdir()
             state=tree/'memory/.state'; state.mkdir(parents=True)
             (state/'born.json').write_text('{}'); (state/'package-version.json').write_text('{"bad":true}')
-            (program/'helene-build.json').write_text(json.dumps({'version':'1.6.0','platform':'linux','complete':True}))
+            current = json.loads((DESK/'resources/update-inspection.json').read_text(encoding='utf8'))['version']
+            (program/'helene-build.json').write_text(json.dumps({'version':current,'platform':'linux','complete':True}))
             package_notice.observe(tree, program, {'installed':'broken'})
             receipt=package_notice.pending(tree); self.assertEqual(receipt['from_version'], '')
             self.assertEqual(receipt['platform'],'linux')

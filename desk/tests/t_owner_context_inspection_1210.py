@@ -80,14 +80,19 @@ class Inspection(unittest.TestCase):
     def test_report_covers_all_release_goals_with_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = Path(tmp)
-            req = update_inspection.ensure(tree, {"id": "request", "to_version": "1.6.0"})
-            self.assertEqual(len(req["goals"]), 8)
+            current = json.loads((DESK/"resources/update-inspection.json").read_text(encoding="utf8"))["version"]
+            req = update_inspection.ensure(tree, {"id": "request", "to_version": current})
+            self.assertEqual({g["id"] for g in req["goals"]}, {
+                "agent_pause", "passive_feed", "fold_worker_status", "owner_context",
+                "memory_line", "update_inspection", "system_journal", "computer_latency",
+                "telegram_continuity", "emergency_stop", "compatibility",
+            })
             with self.assertRaises(ValueError): update_inspection.report(tree, "request", "ok", [])
             checks = [{"id": g["id"], "status": "unverified", "evidence": "No physical access to that device"} for g in req["goals"]]
             result = update_inspection.report(tree, "request", "Physical checks remain", checks)
             self.assertEqual(result["state"], "reported")
-            self.assertEqual(update_inspection.ensure(tree, {"id": "request", "to_version": "1.6.0"}), result)
-            update_inspection.ensure(tree, {"id": "next", "to_version": "1.6.1"})
+            self.assertEqual(update_inspection.ensure(tree, {"id": "request", "to_version": current}), result)
+            update_inspection.ensure(tree, {"id": "next", "to_version": "9.99.0"})
             self.assertEqual(len(list((tree / "memory/.state/update-inspections").glob("*.json"))), 1)
 
     def run_notice(self, tree, outcome, report=False):
