@@ -605,6 +605,7 @@ class BotTransport:
         # узнать о сообщении в следующем вводе модели. Зовётся из потока приёма.
         self.on_incoming = None
         self.owner_control = None
+        self.autonomy_control = None
         self._cooldown_init_lock = threading.RLock()
         # .strip(): id сверяется СТРОКОЙ (`ident == str(self.owner_id)`), и
         # " 111 " из руками правленного helene.json не совпал бы с "111"
@@ -969,6 +970,29 @@ class BotTransport:
         if outgoing or edited or update.get("_history"):
             return
         sender_id = str(sender.get("id") or "")
+        autonomous = re.fullmatch(r'/(pause|resume)(?:@([A-Za-z0-9_]+))?', str(message.get('text') or '').strip(), re.I)
+        if autonomous:
+            # Never replay a control from history/reconnection or accept another
+            # bot, group sender or merely allowlisted user as the owner.
+            if (not is_dm or not self.owner_id or sender_id != self.owner_id
+                    or update.get('_catchup')
+                    or (autonomous[2] and autonomous[2].lower() != self.username.lower())
+                    or not 0 <= time.time()-float(message.get('date') or 0) < 120):
+                return
+            try:
+                from deskd import autonomy
+                ledger=self.tree/'memory/.control/autonomy-telegram-seen.json'
+                source=int(message.get('message_id') or 0);seen=autonomy._read(ledger)
+                if source<=0 or (seen.get('owner')==self.owner_id and source<=int(seen.get('message_id') or 0)):
+                    return
+                autonomy._write(ledger,{'owner':self.owner_id,'message_id':source})
+                if self.autonomy_control is None: raise RuntimeError('Обнови агента до 1.6.1.')
+                answer=self.autonomy_control(autonomous[1].lower())
+                note=str(answer.get('note') or 'Команда не подтверждена.')
+            except Exception:
+                note='Команда не подтверждена. Проверь состояние агента в окне.'
+            self.client.call('sendMessage',chat_id=chat_id,text=note)
+            return
         # Control has priority over wake, busy turns and model admission. Match
         # the authenticated bot username; a command for another bot is inert.
         command = str(message.get('text') or '').strip().split(maxsplit=1)
@@ -984,6 +1008,9 @@ class BotTransport:
             return
         if update.get('_catchup'):
             return
+        import owner_stop
+        if owner_stop.paused():
+            return  # Archive already persisted. Resume must not replay mentions.
         if not (is_dm or self._addressed(message)):
             return
         if not self.is_allowed(sender_id):
@@ -1026,6 +1053,13 @@ class BotTransport:
                 if not any(row['id'] == source_id for row in rows):
                     rows.append({'id': source_id, 'sender': sender_name, 'sender_id': sender_id, 'gist': gist})
         self._enqueue(conversation, urgent=urgent)
+
+    def discard_pending(self) -> None:
+        """Keep the archive; discard automatic wakes accumulated before pause."""
+        with self._queue_lock:
+            self._pending.clear(); self._pending_set.clear()
+            self._wake_senders.clear(); self._wake_priority.clear()
+            self._wake_priority_gist.clear(); self._wake_priority_rows.clear()
 
     def refresh_admission(self, tg: dict) -> None:
         """Apply the owner's changed sender policy to future ingress, never replay history."""

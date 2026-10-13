@@ -11,13 +11,13 @@ voice, files and a dedicated Doctor. An agent can run locally or on your server.
 [Relay](https://github.com/josephsteuerjr/praxis-relay) ·
 [Build and release guide](desk/installer/RELEASE.md)
 
-**Hélène 1.6.0** is available for Windows, macOS Apple Silicon and Linux x86_64
-(DEB/RPM). This release adds server-to-Windows computer access, an X11/AT-SPI
+**Hélène 1.6.1** is available for Windows, macOS Apple Silicon and Linux x86_64
+(DEB/RPM). It includes server-to-Windows computer access, an X11/AT-SPI
 Linux desktop, configurable owner context, update inspection and Telegram
 recovery that retains missed messages without replying to every old mention.
-[Read the release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v1.6.0).
+[Read the release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v1.6.1).
 
-The `main` branch also contains an **unreleased chat repair** found after 1.6.0: passive Telegram archive updates refresh the window without a model turn, fold status is tied to the current worker, and group chats no longer link to unrelated owner-context settings. These changes are not included in the immutable 1.6.0 downloads.
+**Hélène 1.6.1** adds explicit Pause/Continue for the selected agent in the desktop, phone and Telegram Mini App, plus owner-only `/pause` and `/resume` in the agent’s Telegram DM. Paused agents keep receiving messages without starting replies; resuming does not replay accumulated mentions. It also repairs passive chat refresh, folding status and context-setting links. Update the server harness as well as the client when using a server agent.
 
 ## A home for several agents
 

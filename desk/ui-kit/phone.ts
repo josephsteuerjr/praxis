@@ -18,6 +18,7 @@ import contract from "./contract.json";
 import { mountUsage, usageShell } from "./usage";
 import { artifactCaption, mediaDescriptor, paperMediaHTML, mountPaperMedia } from "./paper-media";
 import { artifactBytes, browserSave } from "./paper-transfer";
+import { mountAutonomy, type AutonomyState } from "./autonomy";
 
 export type Level = "ok" | "live" | "warn" | "error" | "off";
 
@@ -1033,16 +1034,20 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         <div class="muted">Останавливает всех агентов Hélène и их процессы, включая привилегированные поручения. Работает при закрытом окне. Возобновление — явным действием владельца на компьютере или сервере.</div>
       </div>
       <div class="task-row">
-        <div class="actions"><button type="button" class="chip" data-interrupt="all">Прервать ход</button></div>
-        <div class="muted">Останавливает живой ход: руки дальше не зовутся, ответ не уходит. Идущий вызов модели дорабатывает до границы, обычно до 10 секунд.</div>
+        <div class="actions" data-autonomy-box></div>
+        <div class="muted">Пауза останавливает ответы и фоновые ходы этого агента. Telegram сохраняется; накопившиеся обращения не вызывают отдельные ответы после продолжения.</div>
       </div>`;
+    const mountPause = () => {
+      const slot=screen.querySelector<HTMLElement>("[data-autonomy-box]");
+      if (slot) mountAutonomy(slot,{read:()=>api<AutonomyState>("/api/autonomy"),write:action=>post("/api/autonomy",{action}),identity:()=>location.origin+location.pathname,buttonClass:"chip"});
+    };
     if (!boxes || !boxes.available) {
       screen.innerHTML = interruptHTML + `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
         `<div class="screen-title">Система</div>` +
         (closed.has("containers")
           ? notGiven("Система")
           : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
-      return;
+      mountPause(); return;
     }
     const rows = boxes.containers
       .map(
@@ -1110,6 +1115,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       `<div class="screen-title">Мозг</div>${brainRows}${imageRows}` +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
       `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
+    mountPause();
   }
 
   async function renderTasks(guard: () => boolean = () => tab === "tasks") {

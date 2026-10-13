@@ -14,6 +14,7 @@ import "./styles/paper.css";
 // Колонка ходов справа (28.09, переделана целиком).
 import "./styles/turns.css";
 import { ApiError, api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
+import { mountAutonomy, type AutonomyState } from "../autonomy";
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
 import * as look from "./look";
@@ -133,6 +134,16 @@ export function start(opts: WindowOptions): void {
   engineControls.className = "engine-controls";
   engineControls.innerHTML = '<button type="button" data-engine-power hidden></button><button type="button" data-engine-restart>Перезапустить</button>';
   document.querySelector(".head-side")?.append(engineControls);
+  const autonomyControls = document.createElement("div");
+  autonomyControls.className = "engine-controls";
+  document.querySelector(".head-side")?.prepend(autonomyControls);
+  mountAutonomy(autonomyControls, {
+    compact: true,
+    onStateChange: () => void refreshState(),
+    read: () => api<AutonomyState>("/api/autonomy"),
+    write: action => post("/api/autonomy", { action }),
+    identity: () => cfg.base + "\n" + cfg.key,
+  });
   const powerButton = engineControls.querySelector<HTMLButtonElement>("[data-engine-power]")!;
   const restartButton = engineControls.querySelector<HTMLButtonElement>("[data-engine-restart]")!;
   let ownerState: OwnerState | null = null;

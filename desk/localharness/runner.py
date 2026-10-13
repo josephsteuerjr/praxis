@@ -1839,6 +1839,8 @@ def _heartbeat_forever(inbox: Path) -> None:
             boot.refresh_tree_lock()
             _write_json(inbox / ".reader.json", {
                 "pid": os.getpid(), "at": time.time(),
+                "started": _STARTED_UTC,
+                "autonomy": {"protocol": 1, "paused": owner_stop.paused(), "stopped": owner_stop.stopped()},
                 "fold": _FOLD_ACTIVE[0],
                 "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
                 "since": float(_busy["since"] or 0.0), "chat_id": _busy["chat_id"]})
@@ -2843,7 +2845,11 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
         # движок живёт, а записка помечается разобранной: повторная доставка
         # говорила бы одно и то же три раза, а потом врала бы «не дошла».
         try:
-            owner_stop.resume()
+            from deskd import autonomy
+            if owner_stop.stopped(): raise RuntimeError('Use explicit native Resume to clear the seed stop first')
+            if _tree is None: raise RuntimeError('Дерево агента ещё не настроено; продолжение не подтверждено.')
+            answer = autonomy.request(_tree, 'resume', 'window')
+            if not answer.get('ok'): raise RuntimeError(answer.get('note') or 'resume refused')
         except RuntimeError as exc:
             log.error("записка /resume не прошла: %s", exc)
             try:
@@ -2855,7 +2861,7 @@ def _handle_note(path: Path, message: str, processed: Path) -> None:
                 log.exception("записка-ошибка о непринятом /resume не легла в окно")
             _mark_done(processed, path.name, "resume refused: seed stop wants native Resume")
             return
-        _mark_done(processed, path.name, "autonomy resumed explicitly")
+        _mark_done(processed, path.name, "autonomy resume requested explicitly")
         return
     target = _inbox_target(path.stem)
     message, attached = _split_attachments(message)
@@ -3330,7 +3336,9 @@ def main() -> None:
         brain_trail.install_switch_hook(agent, tree)
     except Exception:
         log.exception("след switch_brain не подключился")
+    owner_stop.configure(tree)
     tg = dict(cfg.get("telegram") or {})
+    _desk_control()  # Ensure the shared deskd package is importable before Telegram starts.
     global _status_message
     _status_message = bool(tg.get("status_message", False))
     if str(tg.get("mode") or "bot") == "account" and tg.get("api_id") and tg.get("api_hash"):
@@ -3338,6 +3346,8 @@ def main() -> None:
         try:
             import mtproto
             _bot = mtproto.MtprotoTransport(agent, tree, memory_life, cfg)
+            owner_stop.configure(tree)
+            _bot.autonomy_control = lambda action: __import__('deskd.autonomy',fromlist=['request_and_wait']).request_and_wait(tree, action, 'telegram-owner')
             _bot.owner_control = lambda: __import__('emergency').request(config_path, via="telegram")
             _bot.send_guard = _guard_telegram_send
             _bot.on_incoming = _note_incoming
@@ -3351,6 +3361,8 @@ def main() -> None:
         # окно: продукт остаётся рабочим локально, а причина названа в логе.
         try:
             _bot = botapi.BotTransport(agent, tree, memory_life, cfg)
+            owner_stop.configure(tree)
+            _bot.autonomy_control = lambda action: __import__('deskd.autonomy',fromlist=['request_and_wait']).request_and_wait(tree, action, 'telegram-owner')
             _bot.owner_control = lambda: __import__('emergency').request(config_path, via="telegram")
             _bot.send_guard = _guard_telegram_send
             _bot.on_incoming = _note_incoming
@@ -3400,9 +3412,10 @@ def main() -> None:
     import control_watch
     import process_scope
     owner_stop.configure(tree)
-    process_scope.configure_admission(lambda: not owner_stop.stopped())
+    process_scope.configure_admission(lambda: not owner_stop.paused())
     control_stop, _control_thread = control_watch.start(
-        tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES)
+        tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES,
+        started=_STARTED_UTC, before_resume=lambda: _bot.discard_pending() if _bot and hasattr(_bot, 'discard_pending') else None)
     atexit.register(control_stop.set)
     import refresh_care
     global _refresh_care

@@ -17,6 +17,8 @@
 import { api, post } from "../api";
 import { esc, fmtTime } from "../lib";
 import { updateActive, updateCardHTML, type UpdateState } from "./update-card";
+import { mountAutonomy, type AutonomyState } from "../../autonomy";
+import { cfg } from "../api";
 
 export interface SupervisorChild {
   id: string;
@@ -104,7 +106,7 @@ export function supervisorHTML(s: Supervisor | null): string {
            ? "гасит надзор — контейнер поднимает его заново; окно на несколько секунд потеряет связь"
            : "перезапускает детей на месте: надзор запущен не в контейнере, выходить ему некуда"
        }.</p>`
-    : `<p class="muted">Управление отсюда недоступно: ${esc(s.control.why)}.</p>`;
+    : `<p class="muted">Перезапуск отсюда недоступен: ${esc(s.control.why)}.</p>`;
   const receipt = s.receipt
     ? `<p class="${s.receipt.done ? "receipt ok" : "receipt err"}">Последняя просьба (${esc(
         fmtTime(s.receipt.done_utc),
@@ -284,11 +286,8 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
 
 /** Прерывание живого хода (12.09): просьба в memory/.control, раннер снимает ход на тике. */
 export function interruptHTML(): string {
-  return `<h3 class="section-title">Живой ход</h3>
-    <p class="muted">Останавливает ход агента: тулы дальше не зовутся, ответ не уходит. Идущий вызов модели
-      дорабатывает до границы, обычно до 10 секунд.</p>
-    <div class="actions"><button class="btn" data-interrupt="all">Прервать ход</button></div>
-    <p class="receipt" id="interrupt-note"></p>`;
+  return `<h3 class="section-title">Пауза агента</h3><div class="actions" data-autonomy-box></div>
+    <p class="muted">На паузе Telegram продолжает сохраняться, а новые ответы и фоновые ходы остановлены. После продолжения накопившиеся упоминания не запускают отдельные ответы. Текущий ход останавливается на безопасной границе; совершённые действия остаются.</p>`;
 }
 
 /** Журналы: что есть, насколько свежо, и место под хвост выбранного. */
@@ -326,6 +325,10 @@ async function draw(box: HTMLElement): Promise<void> {
   // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
   const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
   box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}<div id="update-box"></div>${extra}${logsHTML(logs)}`;
+  mountAutonomy(box.querySelector<HTMLElement>("[data-autonomy-box]")!, {
+    read: () => api<AutonomyState>("/api/autonomy"), write: action => post("/api/autonomy", { action }),
+    identity: () => cfg.base + "\n" + cfg.key,
+  });
   // Канал молчит — «в контейнере ли мы» помним с прошлого ответа: иначе посреди подмены
   // раздел обновления пропал бы целиком.
   if (state) box.dataset.inContainer = state.in_container ? "1" : "";

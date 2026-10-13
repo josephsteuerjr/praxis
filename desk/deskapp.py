@@ -185,7 +185,7 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem", "/tg/", "
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt", "/api/interrupt-step", "/api/panic"}
+                 "/api/interrupt", "/api/interrupt-step", "/api/panic", "/api/autonomy"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/")
 
@@ -867,6 +867,15 @@ def _reader(fn: Callable[[], Any]):
     return handler
 
 
+def _state_with_autonomy():
+    from deskd import autonomy
+    snapshot=dict(readers.state())
+    snapshot['autonomy']=autonomy.state(readers.tree())
+    if snapshot['autonomy']['paused'] and snapshot['autonomy']['available'] and (snapshot.get('runner') or {}).get('alive'):
+        snapshot.update(level='off',phrase='На связи · агент на паузе',action=None)
+    return snapshot
+
+
 async def _r_runs(c: Call):
     return await asyncio.to_thread(readers.list_runs, _int_arg(c.query, "limit", 80, 1, 200),
                                    c.query.get("kind") or "", c.query.get("before") or "")
@@ -1249,6 +1258,17 @@ async def _r_supervisor(c: Call):
     return await asyncio.to_thread(control.supervisor_state, readers.tree())
 
 
+async def _r_autonomy(c: Call):
+    from deskd import autonomy
+    return await asyncio.to_thread(autonomy.state, readers.tree())
+
+
+async def _r_autonomy_set(c: Call):
+    from deskd import autonomy
+    if not isinstance(c.body, dict): return Fail(400, 'Нужна команда pause или resume.')
+    return await asyncio.to_thread(autonomy.request, readers.tree(), (c.body or {}).get('action'), c.role)
+
+
 async def _r_supervisor_restart(c: Call):
     """Просьба владельца перезапустить агента, реле или весь харнесс.
 
@@ -1482,7 +1502,7 @@ ROUTES: tuple[Route, ...] = (
     # Обе ручки окно и телефон опрашивают каждые несколько секунд; рубеж от
     # 500-х стоит ВНУТРИ readers.state/readers.health — он общий на оба канала.
     Route("GET", "/api/health", _reader(lambda: readers.health())),
-    Route("GET", "/api/state", _reader(lambda: readers.state())),
+    Route("GET", "/api/state", _reader(_state_with_autonomy)),
     Route("GET", "/api/mode", _r_mode),
     Route("GET", "/api/home", _r_home),
     # Без ключа (в _OPEN_PATHS): «свой или чужой» до предъявления ключа.
@@ -1503,6 +1523,8 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/brain-models", _r_brain_models),
     Route("POST", "/api/brain", _r_brain_set),
     Route("POST", "/api/interrupt", _r_interrupt),
+    Route("GET", "/api/autonomy", _r_autonomy),
+    Route("POST", "/api/autonomy", _r_autonomy_set),
     Route("POST", "/api/panic", _r_panic),
     Route("GET", "/api/panic", _r_panic_state),
     Route("POST", "/api/interrupt-step", _r_interrupt_step),

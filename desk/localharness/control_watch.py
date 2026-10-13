@@ -60,6 +60,10 @@ def delivery(runs, run_id: str):
     This is not a rollback of messages/files sent earlier by tools.
     """
     with _BOUNDARY_LOCK:
+        import owner_stop
+        if owner_stop.paused():
+            yield False
+            return
         if not run_id:
             yield True  # legacy envelope has no durable identity to cancel
             return
@@ -155,7 +159,7 @@ def consume(tree: Path, manager, statuses) -> dict | None:
     return result
 
 
-def start(tree: Path, manager, statuses, *, interval: float = 0.5):
+def start(tree: Path, manager, statuses, *, interval: float = 0.5, started=None, before_resume=None):
     """Start once after tree ownership and agent initialization, before first turn."""
     stop = threading.Event()
 
@@ -165,6 +169,9 @@ def start(tree: Path, manager, statuses, *, interval: float = 0.5):
                 import process_scope
                 process_scope.consume_step_request(tree)
                 consume(tree, manager, statuses)
+                if started:
+                    from deskd import autonomy
+                    autonomy.consume(tree, manager, statuses, started, before_resume)
             except Exception:
                 # Keep the claimed request for recovery after an I/O failure.
                 log.exception("interrupt consumer failed; request retained")

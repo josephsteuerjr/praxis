@@ -1,9 +1,9 @@
 {
-  "version": "1.6.0",
+  "version": "1.6.1",
   "tree_inventory_scope": "published_payload",
   "frozen_tree": "35f04a961da9e869e82be3ec627873a66c3236ea",
   "accepted_tree_baseline": "ea703f1af457eb7272c5ab1d4d559f1b865185b7",
-  "source_public_parent": "5fe695a0ac73f7fb8091879773cdcfd47dd80563",
+  "source_public_parent": "38b73c7fd8d5b11c91b7fe9b81ffe33a94949888",
   "frozen_tree_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".gitattributes": "066ea1b66070539e6165ef10d0cb566f703ccfb03e2b571f8fe876942a9540c2",
@@ -306,9 +306,9 @@
     "workshop.py": "31ca8292debebc27b1949e60a21754168ae2ae978ee8bf38a6c48066ae49fb36"
   },
   "full_core_gate": "red_inherited_baseline_failures",
-  "note": "Hélène 1.6.0: all four platform packages verified; frozen payload inventory preserved independently of current production Praxis. Full Core gate retains historical baseline failures.",
-  "release_candidate_source": "ea6e9220f3c125ddf9a6262c1c50f009c7eb50ea",
-  "mac_candidate_ci": {
+  "note": "Hélène 1.6.1: explicit agent autonomy controls and passive-feed/folding repairs; canonical 299-file payload preserved independently of current Praxis.",
+  "previous_release_candidate_source": "ea6e9220f3c125ddf9a6262c1c50f009c7eb50ea",
+  "previous_mac_candidate_ci": {
     "run": 38347007950,
     "head": "88d4efd4a53634d138d3774870914dcecec91bcf",
     "result": "success"

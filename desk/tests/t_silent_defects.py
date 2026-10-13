@@ -56,7 +56,7 @@ class ResumeNoteUnderSeedStop(unittest.TestCase):
         desk = types.SimpleNamespace(deliver=lambda text, **_kw: said.append(text))
         note = self.processed / "123__to__window.md"
         note.write_text("/resume", encoding="utf-8")
-        with mock.patch.object(runner.owner_stop, "resume", refuse), \
+        with mock.patch.object(runner.owner_stop, "stopped", return_value=True), \
                 mock.patch.object(runner, "_room", lambda _key: desk), \
                 mock.patch.object(runner, "_SEALED", False):
             runner._handle_note(note, "/resume", self.processed)
@@ -75,12 +75,17 @@ class ResumeNoteUnderSeedStop(unittest.TestCase):
         desk = types.SimpleNamespace(deliver=lambda *_a, **_kw: called.append("deliver"))
         note = self.processed / "456.md"
         note.write_text("/resume", encoding="utf-8")
-        with mock.patch.object(runner.owner_stop, "resume", lambda: called.append("resume")), \
+        from deskd import autonomy
+        def request(*args):
+            called.append("resume requested"); return {"ok": True}
+        with mock.patch.object(autonomy, "request", side_effect=request), \
+                mock.patch.object(runner, "_tree", self.processed), \
+                mock.patch.object(runner.owner_stop, "stopped", return_value=False), \
                 mock.patch.object(runner, "_room", lambda _key: desk), \
                 mock.patch.object(runner, "_SEALED", False):
             runner._handle_note(note, "/resume", self.processed)
-        self.assertEqual(called, ["resume"])
-        self.assertIn("resumed", (self.processed / "456.md.done").read_text(encoding="utf-8"))
+        self.assertEqual(called, ["resume requested"])
+        self.assertIn("resume requested", (self.processed / "456.md.done").read_text(encoding="utf-8"))
 
     def test_empty_note_still_ignored(self):
         import runner  # noqa: PLC0415
