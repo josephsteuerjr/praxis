@@ -121,6 +121,10 @@ export interface ComputerState {
 /** Снимок харнесса о теле — `memory/.state/body.json` (localharness/body.py).
  *  Только то, что он прислал; пустой объект — снимка ещё нет. */
 export interface ComputerLive {
+  console?: boolean | null;
+  session?: { kind?: string };
+  checked_at?: string;
+  written_at?: string;
   enabled?: boolean;
   available?: boolean;
   reason?: string;
@@ -132,7 +136,6 @@ export interface ComputerLive {
   /** true — тело ответило через мост; false — спросили, не ответило; null — не спрашивали. */
   connected?: boolean | null;
   identity?: { kind?: string; session_id?: number | null; integrity?: string; elevated?: boolean };
-  checked_at?: string;
   logs?: string[];
   /** macOS: система агента по слову тела (`desktop.status.platform`). */
   platform?: string;

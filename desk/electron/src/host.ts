@@ -9,9 +9,9 @@ export class HostClient extends EventEmitter {
   private pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
   private dead = false;
   readonly ready: Promise<{ script: string; version: string }>;
-  constructor(executable: string, root: string, log: (line: string) => void) {
+  constructor(executable: string, root: string, log: (line: string) => void, agent: string | null = null) {
     super();
-    this.child = spawn(executable, ["--root", root], { cwd: root, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    this.child = spawn(executable, ["--root", root, ...(agent ? ["--agent", agent] : [])], { cwd: root, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     this.child.stderr.on("data", (data) => log(`host: ${String(data).trim()}`));
     let accept!: (value: { script: string; version: string }) => void;
     let reject!: (error: Error) => void;

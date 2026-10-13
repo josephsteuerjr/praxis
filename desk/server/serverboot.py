@@ -455,6 +455,9 @@ def main() -> int:
         print("[serverboot] ⚠ образ без пользователей helene/desk (или надзор не root) — агент "
               "работает под root, как до 1.2.5; пересобери образ из поставки 1.2.5+", flush=True)
     channel_env, runner_env = dict(env), dict(env)
+    remote_controller = secrets.token_urlsafe(32)
+    channel_env['HELENE_REMOTE_CONTROLLER_TOKEN'] = remote_controller
+    runner_env['HELENE_REMOTE_CONTROLLER_TOKEN'] = remote_controller
     channel_env["HELENE_SERVER_AUTH_IMPORT"] = "1"
     runner_env.pop("HELENE_TOKEN", None)   # ключ окна агенту не нужен, а код агента читает среду
     channel_user = runner_user = group = None

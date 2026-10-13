@@ -164,6 +164,8 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     import memory_life
     boot.apply_env(knobs, where="после импорта")
     _agent, _life = agent, memory_life
+    import owner_context
+    owner_context.configure(memory_life, cfg, tree=tree)
     _publish_fold_policy(tree)
     return agent, memory_life
 
@@ -173,7 +175,8 @@ def _publish_fold_policy(tree: Path) -> None:
     try:
         policy = {"schema": 1, "offer_mode": _life.fold_offer_enabled(),
                   "backstop_hours": _life.FOLD_OFFER_BACKSTOP_HOURS}
-        for kind, place in (("chat", "window"), ("group", "-1")):
+        policy["owner"] = getattr(_life, "helene_owner_context", {})
+        for kind, place in (("chat", "private"), ("group", "-1")):
             keep, offer, hard, cap = _life.hot_bounds(place)
             policy[kind] = {"keep": keep, "offer_at": offer, "hard_at": hard,
                             "token_cap": cap, "tape_chars": _life.tape_chars_for(place)}
@@ -204,13 +207,22 @@ def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], st
     if sidecar is not None:
         sidecar.clear()
     try:
-        records = _life.hot_records(chat_id, _life.HOT_HARD_HI)
+        records = _life.hot_records(chat_id, _life.hot_bounds(chat_id)[2])
+        import dialogue_continuity
+        tree = globals().get('_tree')
+        archive_lines = (_tail_lines(Path(tree) / 'memory/groups' / (str(chat_id) + '.jsonl'), _last_n(chat_id))
+                         if tree is not None and dialogue_continuity.safe_chat(chat_id) else [])
+        records = dialogue_continuity.reconcile(records, archive_lines,
+            is_room=transport.is_room(chat_id) if archive_lines else False,
+            is_dm=bool(_bot.rooms.meta(chat_id).get('is_dm', True)) if archive_lines and globals().get('_bot') is not None else True,
+            birth=bool(globals().get('_birth_active', False)))
         # ⚠ ПОТОЛОК ЛЕНТЫ В ЗНАКАХ (КЕАТ, 12.09). Сто двадцать пять записей — это
         # потолок ПАМЯТИ, а не кадра: замер ядра дал 43,5 тыс. знаков ленты при
         # договорённых 5 500. Свёртка подтянется следом сама (`compact_if_due`), но
         # кадр этого хода обязан уместиться СЕЙЧАС. Для группы потолок свой: там
         # лента — это и есть разговор, и общий порог оставлял от неё десять реплик.
-        records = _life.tape_window(records, _life.tape_chars_for(chat_id))
+        import owner_context
+        records = owner_context.window(_life, chat_id, records)
     except Exception:
         log.warning("горячий слой не прочитался [%s] — иду сплошным текстом",
                     chat_id, exc_info=True)
@@ -258,11 +270,23 @@ def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], st
     return history, current
 
 
-def _last_n() -> int:
+def _last_n(chat_id: str = "") -> int:
+    import owner_context
+    profile = getattr(_life, "helene_owner_context", {})
+    if owner_context.is_owner_place(chat_id, profile):
+        return int(profile["hard_at"])
     try:
         return max(1, int(os.getenv("PRAXIS_LAST_N", "80") or 80))
     except ValueError:
         return 80
+
+
+def _conversation(lines, chat_id: str) -> str:
+    import owner_context
+    rows = [{"line": str(line)} for line in lines]
+    if _life is not None:
+        rows = owner_context.window(_life, chat_id, rows)
+    return "\n".join(r["line"] for r in rows)
 
 
 # Подсказка в кадр (одобрена владельцем 02.09): слабые модели пишут ответ текстом,
@@ -1012,7 +1036,7 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
     (`_dialogue(room)`), своё имя в кадре; память жизни — общая.
     """
     desk = _room(room)
-    convo = "\n".join(desk.lines(_last_n()))
+    convo = _conversation(desk.lines(_last_n(room)), room)
     ctx = _agent.ChannelContext(chat_id=room, is_dm=True, owner=True, known=True,
                                 addressed=True, title=desk.title,
                                 origin_text=str(origin_text or ""))
@@ -1228,7 +1252,7 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
     # ходом агент видит, что сработал приоритет и что его просят сделать.
     # Гист зафиксирован в момент приёма (история хода несёт «Имя: текст» —
     # парсить её задним числом ненадёжно).
-    convo = "\n".join(_bot.rooms.lines(chat_id, _last_n()))
+    convo = _conversation(_bot.rooms.lines(chat_id, _last_n(chat_id)), chat_id)
     if not convo.strip():
         return
     # ⚠ `principal_id` раньше не передавался вовсе, и кадр на КАЖДОМ ходе из
@@ -2052,23 +2076,8 @@ def _tail_lines(path: Path, count: int) -> list[str]:
     пяти строк (замер: 38 МБ за 131 мс против 12 мс у хвоста), и оно же роняло
     доставку слова UnicodeDecodeError на одном битом байте В НАЧАЛЕ файла.
     """
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return []
-    chunk = min(size, max(65536, count * 16384))
-    try:
-        with path.open("rb") as src:
-            src.seek(max(0, size - chunk))
-            raw = src.read()
-    except OSError:
-        return []
-    # Ревью 26.09 (W3 S6): только "\n" — U+2028 в тексте реплики не рвёт запись хода, и
-    # граница хода не берётся у прошлого хода.
-    lines = [ln.rstrip("\r") for ln in raw.decode("utf-8", "replace").split("\n")]
-    if lines and lines[-1] == "":
-        lines.pop()
-    return lines[-max(1, int(count)):]
+    from jsonl_tail import tail_lines
+    return tail_lines(path, count)
 
 
 def _turn_record(chat_id: str) -> dict:
@@ -2162,12 +2171,30 @@ def _update_report_due() -> None:
     if receipt is None:
         return
     plan_id, state = str(receipt.get("id") or ""), str(receipt.get("state") or "")
+    inspect = receipt.get("kind") == "package" or state == "done"
+    request = None
+    if inspect:
+        import update_inspection
+        request = update_inspection.ensure(_tree, receipt)
+        if request.get("state") == "reported":
+            updates.mark_reported(_tree, receipt, done=True, noted=True)
+            return
     mark = updates.report_mark(_tree, receipt)
     same = mark.get("id") == plan_id and mark.get("state") == state
     tries = int(mark.get("tries") or 0) if same else 0
+    if inspect and tries >= _UPDATE_TRIES:
+        if request.get("state") != "needs_attention":
+            update_inspection.attention(_tree, request['id'])
+        return
     if same and time.time() < float(mark.get("retry_at") or 0.0):
         return
     note = updates.report_note(receipt, owner=_speaker or "владелец")
+    if inspect:
+        goals = "\n".join(f"- {g['id']}: {g['title']}" for g in request["goals"])
+        note += (f"\nПросьба осмотра {request['id']}. Проверь фактическую реализацию этих целей и названных багов:\n{goals}\n"
+                 "Рукой update_inspection(action=status) перечитай просьбу; затем report с итогом и следом по каждому пункту. "
+                 "Чего не смог проверить, обозначь unverified с причиной. Расскажи владельцу итог рукой reply. "
+                 "Завершение хода или молчание не закрывает просьбу осмотра.")
     now = _now()
     source_id = f"update-{plan_id or int(now.timestamp())}-{state}"
     if not (same and mark.get("noted")):
@@ -2181,7 +2208,7 @@ def _update_report_due() -> None:
     except Exception:
         brain = False
     if not brain:
-        wait=receipt.get('kind')=='package'
+        wait=inspect
         updates.mark_reported(_tree, receipt, done=not wait, tries=tries, noted=True, retry_at=time.time()+_UPDATE_RETRY_SEC)
         log.info("обновление: мозг ещё не настроен — %s",'записка лежит, ход подождёт' if wait else 'только запиской')
         return
@@ -2190,14 +2217,17 @@ def _update_report_due() -> None:
     # второй раз, а последняя попытка закрывает отметку и без удачи.
     package=receipt.get('kind')=='package'
     retry=_UPDATE_RETRY_SEC if not package else min(3600,_UPDATE_RETRY_SEC*2**min(tries-1,5))
-    updates.mark_reported(_tree, receipt, done=not package and tries >= _UPDATE_TRIES, tries=tries, noted=True,
+    updates.mark_reported(_tree, receipt, done=not inspect and not package and tries >= _UPDATE_TRIES, tries=tries, noted=True,
                           retry_at=time.time() + retry)
     outcome = "failed"
     try:
         outcome = _turn_in_window(source_id, speaker=updates.SYSTEM_SPEAKER, origin_text=note)
     except Exception:
         log.exception("обновление: ход по записке упал")
-    if outcome in ("spoken", "silent", "deferred"):
+    saved_inspection = update_inspection.read(update_inspection.path(_tree)) if inspect else {}
+    inspected = (inspect and saved_inspection.get("id") == request.get("id")
+                 and saved_inspection.get("state") == "reported" and update_inspection.valid_request(saved_inspection))
+    if inspected or (not inspect and outcome == "spoken"):
         updates.mark_reported(_tree, receipt, done=True, tries=tries, noted=True)
     log.info("обновление: ход агента по записке — %s (попытка %d из %d)", outcome, tries, _UPDATE_TRIES)
 
@@ -2237,6 +2267,7 @@ def _birth_note(*, note_written: bool = False) -> str:
 
 #: Начало записки рождения — по нему `retire_birth_note` узнаёт её строку в ленте.
 _BIRTH_PREFIX = "Это твой первый запуск"
+_birth_active = False
 
 
 def _retire_birth_note(marker: Path, state: dict) -> None:
@@ -2274,6 +2305,7 @@ def _maybe_birth(tree: Path) -> None:
     записки), `done` — только когда ход СОСТОЯЛСЯ, `gave_up` после пяти попыток,
     и тогда владельцу говорится словами, что делать.
     """
+    global _birth_active
     marker = tree / "memory" / ".state" / "born.json"
     state: dict = {}
     if marker.exists():
@@ -2307,7 +2339,11 @@ def _maybe_birth(tree: Path) -> None:
                              "note_written": True,
                              "at": _now().isoformat(timespec="seconds"),
                              "agent": _agent_name, "owner": _speaker})
-        outcome = _turn_in_window(source_id, speaker="Hélène", birth=True)
+        _birth_active = True
+        try:
+            outcome = _turn_in_window(source_id, speaker="Hélène", birth=True)
+        finally:
+            _birth_active = False
     except Exception:
         log.exception("первый ход при рождении упал")
     if outcome in ("spoken", "silent", "deferred"):
@@ -3453,6 +3489,11 @@ def main() -> None:
         # раз в полминуты.
         if time.time() - update_at > 30:
             update_at = time.time()
+            try:
+                import owner_context
+                owner_context.notice(_tree, _desk, _now())
+            except Exception:
+                log.exception("изменение контекста пока не показано владельцу")
             try:
                 _update_report_due()
             except Exception:

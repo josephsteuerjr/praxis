@@ -30,6 +30,7 @@ import { RELAY_PORT, relayBaseUrl, relayProbeUrl, newRelayKey } from "./relay";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
 import { GROUP, inGroup } from "../../ui-kit/window/views/settings-frame";
 import { serverEdition } from "../../remote/src/settings-server";
+import { remoteComputerCard } from "./remote-computer";
 
 type Provider = "api" | "anthropic" | "chatgpt" | "local";
 
@@ -62,7 +63,11 @@ function renderModels(box: HTMLElement, models: string[], current: string, pick:
 /** Карточки местного агента и его часть записи в конфиг. */
 export async function agentEdition(context: EditionContext): Promise<Edition> {
   // The connected server owns the agent settings; the local Windows config owns this window.
-  if (context.saved.mode === "remote") return serverEdition(context);
+  if (context.saved.mode === "remote") {
+    const edition = await serverEdition(context);
+    edition.cards.push(await remoteComputerCard(context));
+    return edition;
+  }
   const { draft, loaded, platform, freshness } = context;
   // Агент живёт на macOS: службы Windows и тела тула `computer` там нет по
   // построению. Карточки про них не рисуются — не «недоступно», а нет
@@ -770,7 +775,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
   const images = imagesCard(draft, () => loginBtn.click());
   cards.push(inGroup(images.el, GROUP.brain));
-  cards.push(inGroup(agentsCard(mac).el, GROUP.agent));
+  cards.push(inGroup(agentsCard(mac, platform === "linux").el, GROUP.agent));
 
   // --- расширения владельца (25.09, K): модули с манифестом, не патчи дерева
   cards.push(inGroup(extensionsCard(modeLive, loaded.tree).el, GROUP.agent));

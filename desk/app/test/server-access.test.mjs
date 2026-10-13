@@ -106,11 +106,12 @@ test('old server without access capability renders no unsupported privilege cont
 test('actual Hélène edition delegates connected saved agent settings to server edition', async () => {
   const delegation = [];
   globalThis.__serverEdition = async context => { delegation.push(context); return { cards: ['server'] }; };
+  globalThis.__remoteComputerCard = async context => { assert.equal(context.saved.mode, 'remote'); return 'remote-computer'; };
   // Dependency substitution: execute the real exported function with only the remote
   // collaborator mocked. The remote branch must return before any native shell call.
   const local = read('../src/settings-agent.ts').replace(/^import[^\n]*\n/gm, '');
-  const { agentEdition } = await import(url('const serverEdition=globalThis.__serverEdition;\n' + local));
+  const { agentEdition } = await import(url('const serverEdition=globalThis.__serverEdition;const remoteComputerCard=globalThis.__remoteComputerCard;\n' + local));
   const context = { saved: { mode: 'remote' }, draft: { mode: 'local' } };
-  assert.deepEqual(await agentEdition(context), { cards: ['server'] });
+  assert.deepEqual(await agentEdition(context), { cards: ['server', 'remote-computer'] });
   assert.deepEqual(delegation, [context]);
 });

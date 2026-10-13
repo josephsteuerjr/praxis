@@ -182,7 +182,7 @@ assert.ok(!modeSource.includes("picked !== live.name"),
 // --------------------------------------------------------------------------
 // 4. Проводка рамки — якоря на код (образец: settings-firstrun.test.mjs).
 // --------------------------------------------------------------------------
-assert.ok(frameSource.includes("const restartBlocks = blocksNeedingRestart(c, out);"),
+assert.ok(frameSource.includes("const restartBlocks = blocksNeedingRestart(before, out);"),
   "расписка «Сохранить» перестала сверять блоки перезапуска");
 {
   const accept = frameSource.slice(acceptFrom, acceptTill);

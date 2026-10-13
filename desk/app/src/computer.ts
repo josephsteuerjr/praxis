@@ -98,6 +98,12 @@ export function liveLine(live: ComputerLive | undefined, enabledNow: boolean, ma
   }
   if (live.available === false) return { text: `Опция включена, но тела в сборке нет: ${live.reason || `${bodyNames(mac, " / ")} не найдены`}.`, ok: false };
   if (live.connected === true) {
+    if (live.platform === "linux" && live.console === false) {
+      return { text: `Тело подключено; графический рабочий стол недоступен. ${(live.hints || []).join(' ')}${at}`, ok: false };
+    }
+    if (live.platform === "linux" && live.console !== true) {
+      return { text: `Тело подключено; графический рабочий стол ещё не проверен.${at}`, ok: null };
+    }
     const id = live.identity || {};
     const who = [id.kind, id.session_id !== undefined && id.session_id !== null ? `сессия ${id.session_id}` : "", id.integrity].filter(Boolean).join(", ");
     return { text: `Тело подключено: мост 127.0.0.1:${live.port || "?"}${who ? ` (${who})` : ""}.${at}`, ok: true };
@@ -117,6 +123,7 @@ export function liveLine(live: ComputerLive | undefined, enabledNow: boolean, ma
 export function computerCard(live: ModeState | null, stored: StoredComputer, platform = ""): ComputerCard {
   const box = el("section", "card");
   const mac = platform === "macos";
+  const posix = mac || platform === "linux";
   let enabled = stored.enabled;
   const scopes = new Set(stored.scopes);
   const option: ComputerOption | null | undefined = live?.computer_option;
@@ -216,7 +223,7 @@ export function computerCard(live: ModeState | null, stored: StoredComputer, pla
 
   // --- живое состояние: снимок харнесса, кнопка «Проверить» перечитывает трубу.
   const syncStatus = (snap: ComputerLive | undefined) => {
-    const line = liveLine(snap, enabled, mac);
+    const line = liveLine(snap, enabled, posix);
     status.className = "receipt " + (line.ok === true ? "ok" : line.ok === false ? "err" : "");
     status.textContent = line.text;
     syncTcc(snap);

@@ -7,6 +7,10 @@ import { loadMode, type ModeState } from "../mode";
 import { S } from "../state";
 import { isMacPlatform } from "../../platform";
 import { mountSupervisor } from "./supervisor";
+import type { AgentState } from "../state";
+import type { FoldState } from "../../memory-fold";
+import { inspectionHTML } from "./inspection-status";
+import { computerOverview } from "./system-status";
 
 /** Запись леджера ретенции (GET /api/retention). */
 interface RetentionEntry {
@@ -138,6 +142,12 @@ function layerOnMac(h: string, t: string): [string, string] {
   return [layerNameOnMac(h), h.startsWith("helene-body") ? BODY_LAYER_MACOS : t];
 }
 
+function layerOnLinux(h: string, t: string): [string, string] {
+  if (h.startsWith("helene.exe")) return ["helene — окно Electron и Rust-хост", "Окно и значок у часов подключены к общему helene-host. Служба systemd держит агента без входа в систему; графическое тело подключает окно в сеансе владельца."];
+  return [h.replace(/helene-(body|bridge)\.exe/g, "helene-$1"), h.startsWith("helene-body")
+    ? "Окна, ввод и снимки работают в X11; дерево элементов — через AT-SPI. На Wayland управление рабочим столом этого выпуска недоступно. У службы systemd нет графического сеанса; тело работает, пока открыта Hélène в сеансе владельца. Файлы и процессы доступны отдельно." : t];
+}
+
 const LAYERS: Array<[string, string]> = [
   ["helene.exe — оболочка (Rust, Tauri)", "Окно, значок у часов, уведомления. Сама не думает и не переписывается: собрана один раз и поднимает всё остальное тихими дочерними процессами по helene.json."],
   ["канал frame.desk.v1 → deskapp.py", "Всё, что окно показывает, приезжает по одному каналу (запросы и живые события). deskapp — читатель дерева: только файлы, никаких замков движка. Тот же протокол работает с удалённым кодом агента."],
@@ -224,7 +234,7 @@ function modeHTML(m: ModeState | null): string {
   const mac = isMacPlatform(S.platform);
   const facts = [
     `ограда песочницы: ${m.sandbox ? "включена" : "выключена"}`,
-    `${mac ? "служба (демон launchd)" : "служба Windows"}: ${svc}`,
+    `${mac ? "служба (демон launchd)" : S.platform === "linux" ? "служба systemd" : "служба Windows"}: ${svc}`,
     // Две галочки службы — разные вопросы, и на экране они стоят порознь.
     // `session0` — права системы агенту; `firewall` — правило брандмауэра для
     // кнопки «Телефон». Про брандмауэр говорим только когда он ВЫКЛЮЧЕН: это
@@ -358,9 +368,19 @@ function spendCutsHTML(s: Spend | null): string {
 }
 
 export async function render(container: HTMLElement): Promise<void> {
-  const [aR, pR, mR, cR, sR, retR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7"), api<RetentionReport>("/api/retention")]);
+  const [aR, pR, mR, cR, sR, retR, stateR, memoryR] = await Promise.allSettled([api<Anatomy>("/api/anatomy"), api("/api/pulse"), loadMode(), api<FrameCuts>("/api/frame-stats?days=7"), api<Spend>("/api/spend?days=7"), api<RetentionReport>("/api/retention"), api<AgentState>("/api/state"), api<FoldState>("/api/memory-fold/window")]);
   if (aR.status === "rejected") throw aR.reason;
   const a = aR.value;
+  const current = stateR.status === "fulfilled" ? stateR.value : null;
+  const memory = memoryR.status === "fulfilled" ? memoryR.value : null;
+  const mode = mR.status === "fulfilled" ? mR.value : null;
+  const computer = computerOverview(mode?.computer || a.computer, mode?.computer_live);
+  const overview = `<div class="system-overview">
+    <div><span>Агент</span><strong>${esc(current?.phrase || "Состояние не прочиталось")}</strong><small>${esc(a.agent_name || "")}</small></div>
+    <div><span>Модель</span><strong>${esc(current?.brain?.model || "Состояние не прочиталось")}</strong></div>
+    <div><span>Компьютер</span><strong>${esc(computer.status)}</strong><small>${esc(computer.scopes.join(", "))}</small></div>
+    <div><span>Контекст владельца</span><strong>${memory?.hot == null ? "Состояние не прочиталось" : `${fmtN(memory.hot)} свежих сообщений`}</strong><small>${memory?.tape_chars ? `до ${fmtN(memory.tape_chars)} знаков разговора` : "Предел задаётся в настройках"}</small></div>
+  </div>${inspectionHTML(current?.update_inspection)}`;
   const spend = spendHTML(pR.status === "fulfilled" ? pR.value : null);
   const materials = materialsHTML(retR.status === "fulfilled" ? retR.value : null);
   const modeBox = modeHTML(mR.status === "fulfilled" ? mR.value : null);
@@ -380,7 +400,7 @@ export async function render(container: HTMLElement): Promise<void> {
   // свой текст: под службой его поднимает окно, а не код агента (`layerOnMac`).
   const mac = isMacPlatform(S.platform);
   const layers = LAYERS
-    .map(([h, t]) => (mac ? layerOnMac(h, t) : [h, t]) as [string, string])
+    .map(([h, t]) => (mac ? layerOnMac(h, t) : S.platform === "linux" ? layerOnLinux(h, t) : [h, t]) as [string, string])
     .map(([h, t]) => `<details class="fold"><summary><b>${esc(h)}</b></summary><div class="fold-body">${esc(t)}</div></details>`)
     .join("");
   const body = a.computer
@@ -391,6 +411,8 @@ export async function render(container: HTMLElement): Promise<void> {
        <details class="fold"><summary>Подключения и права инструментов</summary><div class="fold-body">Транспорты: ${esc((a.transports || []).join(" + "))} · песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · провайдер модели: ${esc(a.model?.framework || "?")}.</div></details>`
     : '<p class="muted">Снимка ещё нет: движок пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
+    <p class="page-intro">Состояние агента сейчас: связь, память и доступ к компьютеру. Ниже — расход, собственные навыки и детали устройства.</p>
+    ${overview}
     ${meta}${materials}${modeBox}${fenceBox}
     <div id="supervisor-box"></div>
     ${spend}

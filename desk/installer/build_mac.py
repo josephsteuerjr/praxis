@@ -133,7 +133,7 @@ BODY_CRATES = ("praxis-body", "praxis-bridge")
 BODY_BINARIES = {"praxis-bridge": "helene-bridge", "praxis-body": "helene-body"}
 #: Что в исходнике тела считается исходником: то, из чего собирается бинарь.
 #: `target*/`, README и скрипты деплоя — не в счёт (как PATTERNS у реле).
-BODY_SRC_PATTERNS = ("Cargo.toml", "Cargo.lock", "crates/*/Cargo.toml", "crates/*/src/**/*.rs")
+BODY_SRC_PATTERNS = ("Cargo.toml", "Cargo.lock", "crates/*/Cargo.toml", "crates/*/src/**/*.rs", "crates/*/src/**/*.py")
 
 
 def body_src_for(tree: Path | None, *, strict: bool = False) -> Path:

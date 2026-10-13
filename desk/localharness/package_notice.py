@@ -2,8 +2,10 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import time
+import tempfile
 
 def read(path):
     try:
@@ -13,27 +15,41 @@ def read(path):
 
 def write(path,value):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
-    temporary=path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(value,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    os.replace(temporary,path)
+    fd, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as target:
+            json.dump(value, target, ensure_ascii=False, indent=2); target.write('\n')
+            target.flush(); os.fsync(target.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+def version(value):
+    text = value.strip() if isinstance(value, str) else ''
+    return text if re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?', text) else ''
 
 def observe(tree: Path, program: Path, config: dict):
     passport=read(program/'helene-build.json')
-    current=str(passport.get('version') or '').strip()
+    current=version(passport.get('version'))
     if not current or passport.get('complete') is not True: return
     state=Path(tree)/'memory/.state'
     scope=hashlib.sha256(str(program.resolve()).encode()).hexdigest()
     previous=read(state/'package-version.json')
+    installed=read(program/'helene-install.json')
     if previous and previous.get('scope')!=scope:
         old=''  # a carried home is not an upgrade of its former machine
     else:
-        old=str(previous.get('version') or (config.get('installed') or {}).get('version') or '').strip()
+        installed_previous = version(installed.get('previous_version')) if installed.get('version') == current else ''
+        installed_config = config.get('installed')
+        configured = version(installed_config.get('version')) if isinstance(installed_config, dict) else ''
+        old=version(previous.get('version')) or installed_previous or (configured if configured != current else '')
     # Older Linux homes did not record installed.version. An established agent
     # still needs the first package inspection, without inventing its former version.
-    established_linux = not previous and not old and passport.get('platform') == 'linux' and (state/'born.json').is_file()
-    if (old and old!=current) or established_linux:
-        receipt={'kind':'package','desktop':True,'state':'installed','from_version':old,'to_version':current,
-            'scope':scope,'id':hashlib.sha256(f'{scope}:{old}:{current}:{passport.get("commit") or ""}'.encode()).hexdigest()[:24],
+    established_without_version = (not version(previous.get('version')) and not old
+        and previous.get('scope') in (None, '', scope) and (state/'born.json').is_file())
+    if (old and old!=current) or established_without_version:
+        receipt={'kind':'package','desktop':True,'platform':passport.get('platform'),'state':'installed','from_version':old,'to_version':current,
+            'scope':scope,'id':hashlib.sha256(f'{scope}:{old}:{current}:{passport.get("commit") or ""}:{previous.get("at") or installed.get("installed_utc") or ""}'.encode()).hexdigest()[:24],
             'at':time.time()}
         write(state/'package-update.json',receipt)
     if previous.get('version')!=current or previous.get('scope')!=scope:

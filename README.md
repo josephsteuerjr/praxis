@@ -11,6 +11,12 @@ voice, files and a dedicated Doctor. An agent can run locally or on your server.
 [Relay](https://github.com/josephsteuerjr/praxis-relay) ·
 [Build and release guide](desk/installer/RELEASE.md)
 
+**Hélène 1.6.0** is available for Windows, macOS Apple Silicon and Linux x86_64
+(DEB/RPM). This release adds server-to-Windows computer access, an X11/AT-SPI
+Linux desktop, configurable owner context, update inspection and Telegram
+recovery that retains missed messages without replying to every old mention.
+[Read the release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v1.6.0).
+
 ## A home for several agents
 
 - **Independent agents.** Each agent has its own constitution, memory, settings, files
@@ -45,6 +51,13 @@ character can develop through the same authored mechanisms as other agents.
   continuing intentions from dedicated views.
 - **Context and diagnostics.** Inspect retained context, files, activity and journals
   when understanding or diagnosing an agent's work.
+- **Owner context.** Configure the fresh owner conversation budget. Defaults are
+  600 messages, 128,000 characters and roughly 40,000 tokens; retained summaries
+  and archives remain available. The chat's compact memory line can be hidden
+  and restored from settings.
+- **Update inspection.** The agent receives concrete inspection goals after an
+  update. An unfinished turn retains the request, and the System view shows its
+  status and saved report.
 - **Materials and storage.** View material sizes as a diagram and explicitly confirm
   removal of eligible project or cache folders.
 - **Images.** Generate and edit images through the ChatGPT subscription relay from a
@@ -76,6 +89,9 @@ The runtime includes:
   for its current name, authenticated profile name, exact @username or a reply to its message.
 - Offline startup and later connection loss recover automatically without reopening the
   window. Telegram reception health reflects the actual connection, including reconnects.
+- Missed messages are archived before wake-up. Old mentions from reconnect catch-up
+  do not each start a reply; fresh requests still wake the agent. Reception and
+  reconnect leave an owner-requested pause in force.
 - Topic-aware archives, history retrieval, conversation search and participant orientation.
 - Real message IDs reconcile replayed posts and edits. MTProto catches up missed history,
   includes the account's messages sent on another device, and applies received deletions.
@@ -136,6 +152,26 @@ Computer access uses native bodies and explicit scopes for reading, files, proce
 applications. Windows provides UI Automation, screen capture, input, a service and a
 Session 0 broker. Linux and macOS have their own desktop integrations and platform permissions.
 
+**Server agent → Windows PC.** Update both the server harness and Windows Hélène to
+1.6.0. Connect the native Windows window to the server using its address and window
+key. In Settings, open **«Компьютер для серверного агента»**, choose the required
+scopes (**«Смотреть»**, **«Окна и ввод»**, **«Файлы»**, **«Процессы»**) and select
+**«Подключить и разрешить управление»**. The status **«в сети · выбран»** identifies
+the connected, selected PC. The PC opens an outbound WSS connection; it needs no
+inbound port or SSH server. Grants can be revoked and are checked on both ends.
+
+Optional Windows SYSTEM commands require the installed service and a separate
+explicit owner grant. VPS root is separate from desktop access. For an already
+installed Hélène server, [helene-root.sh](desk/server/helene-root.sh) enables and
+checks the existing host broker (`sh helene-root.sh`, with automatic sudo when
+needed); `--check` and `--disable` inspect or revoke it. Its tests use simulated
+isolated installations, not the reader's VPS.
+
+Linux computer access currently uses X11 and AT-SPI. Wayland and headless sessions
+return explicit capability limits. Partial accessibility trees, cancellation and
+clipped screenshots report what actually completed. `computer step` combines
+input and observation with a stable intent key and validates arguments before input.
+
 Execution mode and service mode are separate choices. Interactive execution uses the
 owner's rights; sandbox and broker support depend on the platform. The installation
 shows the capabilities and limits of the selected mode rather than promising a universal fence.
@@ -161,7 +197,7 @@ shows the capabilities and limits of the selected mode rather than promising a u
 |---|---|
 | Windows | Installer, portable ZIP, optional voice-engine archive, native desktop and service |
 | Linux | DEB and RPM packages, Electron desktop, service and rights-broker integration |
-| macOS, Apple Silicon | Native archive and installer script built by GitHub CI from the matching Windows release |
+| macOS, Apple Silicon | Native archive and installer script built and tested by ARM64 GitHub CI from the verified edition snapshot |
 | Server / phone | Server channel, paired mobile interface and Telegram Mini App |
 
 On macOS, install or update from Terminal as the user signed into the desktop:
@@ -171,7 +207,7 @@ no `sudo`, no `su`. The installer opens the setup window in that person's sessio
 curl -fsSL https://github.com/josephsteuerjr/praxis/releases/latest/download/install.sh | sh
 ```
 
-For an archive already downloaded, add `-s -- --from /path/to/Helene-1.4.3-macos-arm64.zip`
+For an archive already downloaded, add `-s -- --from /path/to/Helene-1.6.0-macos-arm64.zip`
 after `sh`. The script extracts the archive and opens the setup window.
 
 Linux Electron cannot infer a stationary touchpad contact from wheel events; its scrolling
@@ -190,8 +226,12 @@ permissions. Package/build checks and real-machine interaction are separate evid
 | [`HELENE-SOURCE.json`](HELENE-SOURCE.json) | Frozen Hélène core, layer and package/CI source provenance |
 
 The production mirror and the packaged edition have separate revision records. Published
-assets include SHA-256 checksums. The macOS workflow checks that its source Windows archive
-exists under the same version before compiling, then validates its contents and passport.
+assets include SHA-256 checksums and platform build passports. The frozen inventory
+binds the packaged agent's files independently of the current production mirror.
+macOS can stage that exact inventory before publication; the public release workflow
+can also use the Windows archive under the same version. Both paths validate the
+contents and passport. The immutable release tag records the released edition;
+later production-source synchronization does not replace published package bytes.
 
 ## Licence
 

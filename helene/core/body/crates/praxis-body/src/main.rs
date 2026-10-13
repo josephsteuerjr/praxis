@@ -5,6 +5,8 @@ mod artifact;
 mod compose;
 mod config;
 mod desktop;
+#[cfg(target_os = "linux")]
+mod linux;
 mod element;
 mod fsops;
 mod identity;

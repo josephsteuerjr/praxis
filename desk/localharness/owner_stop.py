@@ -51,7 +51,30 @@ def present(path):
 
 
 def stopped():
-    return present(seed_file())
+    return present(seed_file()) or (os.name == 'nt' and present(client_file()))
+
+
+def client_file():
+    """Writable user latch; use the same Known Folder as the native client."""
+    if os.name != 'nt': return None
+    buf = ctypes.create_unicode_buffer(32768)
+    fn = ctypes.WinDLL('shell32').SHGetFolderPathW
+    fn.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p]
+    fn.restype = ctypes.c_long
+    if fn(None, 28, None, 0, buf) < 0: return None  # CSIDL_LOCAL_APPDATA
+    return Path(buf.value) / 'Helene' / 'owner-stop.json'
+
+
+def latch_client(via, reason=''):
+    path = client_file()
+    if path is None: raise RuntimeError('Не определена папка состояния владельца.')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open('x', encoding='utf-8') as target:
+            json.dump({'at': time.time(), 'via': via, 'reason': reason[:200],
+                       'by': 'agent' if via == 'agent' else 'owner'}, target)
+            target.flush(); os.fsync(target.fileno())
+    except FileExistsError: pass
 
 
 def configure(tree):

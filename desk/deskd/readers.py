@@ -2094,9 +2094,9 @@ def _state_impl() -> dict:
     model_cfg = dict(anatomy.get("model") or {})
     llm = _load_json(base / "memory" / "llm.json")
     voice = ((llm.get("roles") or {}).get("voice") or {})
-    if not str(model_cfg.get("model") or "").strip():
+    if str(voice.get('model') or '').strip() or not str(model_cfg.get("model") or "").strip():
         model_cfg["model"] = str(voice.get("model") or "").strip()
-    if not str(model_cfg.get("base_url") or "").strip():
+    if str(voice.get('model') or '').strip() or not str(model_cfg.get("base_url") or "").strip():
         frameworks = llm.get("frameworks") or {}
         block = frameworks.get(str(voice.get("framework") or "openai")) or {}
         model_cfg["base_url"] = str(block.get("base_url") or "").strip()
@@ -2226,6 +2226,7 @@ def _state_impl() -> dict:
         # единственный источник версии (оболочки там нет), а выкладка по нему
         # сверяет, что канал встал именно с тем пакетом, который положен.
         "desk": desk_build(),
+        "update_inspection": _load_json(st / "update-inspection.json"),
     }
 
 

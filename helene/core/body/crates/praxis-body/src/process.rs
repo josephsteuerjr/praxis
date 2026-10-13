@@ -52,13 +52,17 @@ pub fn shell_plan(shell: ShellKind) -> Result<ShellPlan> {
                  UTF-8): PowerShell syntax (cmdlets, $env:, Get-*) will not work here",
             ),
         }),
+        ShellKind::PowerShell if cfg!(target_os = "linux") => Ok(ShellPlan {
+            used: "bash",
+            note: Some("PowerShell requested; Linux ran the command with /bin/bash -lc. PowerShell syntax is unavailable; use POSIX shell commands."),
+        }),
         ShellKind::PowerShell => plain("powershell"),
-        ShellKind::Cmd if cfg!(target_os = "macos") => {
-            anyhow::bail!("shell cmd is not available on macOS: use zsh, sh, bash or direct")
+        ShellKind::Cmd if cfg!(any(target_os = "macos", target_os = "linux")) => {
+            anyhow::bail!("shell cmd is not available on {}: use zsh, sh, bash or direct", if cfg!(target_os = "macos") { "macOS" } else { "Linux" })
         }
         ShellKind::Cmd => plain("cmd"),
-        ShellKind::Wsl if cfg!(target_os = "macos") => {
-            anyhow::bail!("shell wsl is not available on macOS: use zsh, sh, bash or direct")
+        ShellKind::Wsl if cfg!(any(target_os = "macos", target_os = "linux")) => {
+            anyhow::bail!("shell wsl is not available on {}: use zsh, sh, bash or direct", if cfg!(target_os = "macos") { "macOS" } else { "Linux" })
         }
         ShellKind::Wsl => plain("wsl"),
         ShellKind::Sh | ShellKind::Zsh | ShellKind::Bash if cfg!(windows) => anyhow::bail!(
@@ -490,6 +494,10 @@ fn build_command(dir: &Path, args: &ProcessStartArgs) -> Result<Command> {
                 .context("PowerShell (run as zsh on macOS) requires command")?;
             Ok(posix_shell("/bin/zsh", "-lc", script))
         }
+        ShellKind::PowerShell if cfg!(target_os = "linux") => {
+            let script = args.command.as_deref().context("PowerShell (run as bash on Linux) requires command")?;
+            Ok(posix_shell("/bin/bash", "-lc", script))
+        }
         ShellKind::Sh => {
             let script = args.command.as_deref().context("sh requires command")?;
             if cfg!(windows) {
@@ -511,10 +519,10 @@ fn build_command(dir: &Path, args: &ProcessStartArgs) -> Result<Command> {
             }
             Ok(posix_shell("/bin/bash", "-lc", script))
         }
-        ShellKind::Cmd | ShellKind::Wsl if cfg!(target_os = "macos") => {
+        ShellKind::Cmd | ShellKind::Wsl if cfg!(any(target_os = "macos", target_os = "linux")) => {
             // Сюда не доходит: `start()` отказал раньше. Оставлено на случай, если запрос
             // положили в каталог операции мимо `start()`.
-            anyhow::bail!("shell {} is not available on macOS", shell_name(args.shell))
+            anyhow::bail!("shell {} is not available on {}", shell_name(args.shell), if cfg!(target_os = "macos") { "macOS" } else { "Linux" })
         }
         ShellKind::PowerShell => {
             let script = args
@@ -893,6 +901,11 @@ mod tests {
             assert!(shell_plan(ShellKind::Cmd).unwrap_err().to_string().contains("macOS"));
             assert!(shell_plan(ShellKind::Wsl).unwrap_err().to_string().contains("macOS"));
             assert_eq!(shell_plan(ShellKind::Zsh).unwrap().used, "zsh");
+        } else if cfg!(target_os = "linux") {
+            assert_eq!(plan.used, "bash");
+            assert!(plan.note.unwrap().contains("Linux ran"));
+            assert!(shell_plan(ShellKind::Cmd).is_err());
+            assert!(shell_plan(ShellKind::Wsl).is_err());
         } else {
             assert_eq!(plan.used, "powershell");
             assert!(plan.note.is_none());
@@ -933,7 +946,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
     #[test]
     fn powershell_script_forces_utf8_process_logs() {
         let root = std::env::temp_dir().join(format!("praxis-process-{}", Uuid::new_v4()));

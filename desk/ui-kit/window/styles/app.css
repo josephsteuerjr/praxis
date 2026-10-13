@@ -4315,3 +4315,33 @@ body.first-run #state {
 .service-notice { line-height: 1.5; }
 .service-notice strong { display: block; font-weight: 600; }
 .service-notice .field-hint { display: block; margin-top: 6px; }
+.context-line { display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  color: var(--ink-3); font: 400 12px/1.5 var(--sans); padding: 6px 0; }
+.context-line button { font: inherit; color: inherit; background: transparent; border: 0; cursor: pointer; padding: 2px 0; }
+.context-line .context-link { text-decoration: underline; text-underline-offset: 3px; }
+.context-line .context-hide { margin-left: auto; padding: 2px 7px; font-size: 18px; }
+.context-line button:hover { color: var(--ink); }
+.page-intro { color: var(--ink-3); max-width: 760px; margin: 0 0 24px; line-height: 1.65; }
+.system-overview { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0 24px; margin-bottom: 24px; }
+.system-overview > div { padding: 16px 0; border-top: 1px solid var(--line); min-width: 0; }
+.system-overview span, .system-overview strong, .system-overview small { display: block; overflow-wrap: anywhere; }
+.system-overview span { font-size: 12px; color: var(--ink-3); margin-bottom: 8px; }
+.system-overview strong { font-size: 19px; font-weight: 500; }
+.system-overview small { color: var(--ink-3); margin-top: 5px; }
+.inspection-status { border-left: 2px solid var(--line); padding: 4px 0 4px 18px; margin-bottom: 24px; }
+.inspection-status.has-problems { border-color: var(--err); }
+.inspection-status h3 { margin: 6px 0; font-size: 19px; font-weight: 500; }
+.inspection-status p { line-height: 1.6; margin: 6px 0; }
+.inspection-check + .inspection-check { margin-top: 16px; }
+.journal-controls { display: flex; flex-wrap: wrap; gap: 18px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.journal-controls button { background: none; border: 0; color: var(--ink-3); font: inherit; cursor: pointer; padding: 4px 0; }
+.journal-controls button[aria-pressed="true"] { color: var(--ink); border-bottom: 2px solid currentColor; }
+.journal-events { margin: 0; padding: 0; list-style: none; }
+.journal-event { display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 20px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+.journal-event time { color: var(--ink-3); font-size: 12px; padding-top: 4px; }
+.journal-event h3 { margin: 0 0 7px; font-size: 18px; font-weight: 500; }
+.journal-event p { margin: 0 0 8px; line-height: 1.6; overflow-wrap: anywhere; }
+.journal-event pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.journal-empty { padding: 32px 0; font-size: 20px; }
+.journal-empty p { font-size: 14px; }
+@container (max-width: 620px) { .system-overview { grid-template-columns: 1fr; } .journal-event { grid-template-columns: 1fr; gap: 6px; } }

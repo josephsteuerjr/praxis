@@ -11,6 +11,9 @@ import { BrowserWindow, Tray, Notification, app, dialog, ipcMain, nativeImage, n
 import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { dirname, extname, join, normalize, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { forwardLaunchWhenReady, launchIntent } from "./launch";
 import { HostClient } from "./host";
 import { bootstrapChannel, initOwner, ownerRoot, programRoot } from "./layout";
 import { runCommand, type Ctx } from "./commands";
@@ -61,6 +64,7 @@ let channel: Record<string, unknown>;
 let initScript = "";
 let stopped = false;
 let closing = false;
+let hostReady: Promise<void>;
 
 function log(line: string) {
   const stamp = new Date().toISOString().replace("T", " ").slice(0, 19);
@@ -74,8 +78,16 @@ function log(line: string) {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => show());
-  app.whenReady().then(start);
+  app.on("second-instance", (_event, argv) => {
+    void app.whenReady().then(async () => {
+      const intent = launchIntent(argv);
+      const note = await forwardLaunchWhenReady(argv, () => hostReady,
+        (cmd, args) => host.invoke(cmd, args), () => controlBeforeBootstrap("panic"));
+      if (!intent.action) show();
+      if (intent.notify && note) await dialog.showMessageBox({ title: PRODUCT_UI, message: String(note) });
+    }).catch((e) => dialog.showErrorBox("Команда Hélène не выполнена", String(e)));
+  });
+  app.whenReady().then(() => { hostReady = start(); });
 }
 
 let win: BrowserWindow | null = null;
@@ -93,10 +105,23 @@ const ctx: Ctx = {
   host: { invoke: (cmd, args) => host.invoke(cmd, args) },
 };
 
+async function controlBeforeBootstrap(action: "panic" | "resume"): Promise<string> {
+  const executable = process.env.HELENE_HOST || join(PROGRAM, process.platform === "win32" ? "helene-host.exe" : "helene-host");
+  const { stdout } = await promisify(execFile)(executable, ["--root", ROOT, "--" + action], { timeout: 120_000, windowsHide: true });
+  return stdout.trim();
+}
+
 async function start() {
   try {
+    const intent = launchIntent(process.argv);
+    const executable = process.env.HELENE_HOST || join(PROGRAM, process.platform === "win32" ? "helene-host.exe" : "helene-host");
+    if (intent.action) {
+      // No existing owner: apply the latch before bootstrap can raise an agent.
+      await controlBeforeBootstrap(intent.action);
+      if (intent.action === "panic") { app.quit(); return; }
+    }
     if (process.platform === "linux") initOwner(PROGRAM, ROOT, !!process.env.HELENE_ROOT);
-    host = new HostClient(process.env.HELENE_HOST || join(PROGRAM, process.platform === "win32" ? "helene-host.exe" : "helene-host"), ROOT, log);
+    host = new HostClient(executable, ROOT, log, intent.agent);
     host.on("event", (name, data) => {
       if (name === "show-window") show();
       if (name === "replace-window") {

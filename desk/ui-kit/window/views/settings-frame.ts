@@ -32,6 +32,8 @@ import { isMacPlatform, platformOf } from "../../platform";
 import { relayAuthCard } from "../relay-auth-card";
 import { collectConnection } from "../server-connection";
 import { paperDialog } from "../../paper-dialog";
+import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
+import { showMemoryLines } from "../../memory-line";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -40,6 +42,7 @@ export const RESTART_BLOCKS: Array<[string, string]> = [
   ["voice", "голос"],
   ["agents", "агенты"],
   ["sandbox", "ограда"],
+  ["owner_context", "контекст владельца"],
 ];
 
 /** Какие из RESTART_BLOCKS изменились между сохранённым и новым конфигом (стабильный JSON). */
@@ -97,6 +100,7 @@ export interface Config {
   voice?: { enabled?: boolean; model?: string; language?: string; threads?: number;
             keep_loaded?: boolean; compute_type?: string; beam_size?: number; [k: string]: unknown };
   installed?: { service?: boolean; [k: string]: unknown };
+  owner_context?: { messages?: number; characters?: number; tokens?: number; [k: string]: unknown };
   // Местожительство харнесса: `local` — дети окна; `remote` — окно ходит в
   // трубу на сервере по `base` и `key`. Это НЕ режим агента — тот в `agent_mode`.
   mode?: string;
@@ -241,6 +245,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
     // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
     center.append(lookCard());
+    center.append(button("Показать скрытые строки памяти в чатах", "quiet", () => {
+      showMemoryLines(); toast("Строки памяти снова видны в чатах");
+    }));
     mountSettings(container, center);
     return;
   }
@@ -306,6 +313,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // переписывает никто, кроме установщика, — а в ней старые имена остаются
   // навсегда, и агент в своём K-слое читает именно их. Обещать обратное нельзя.
   center.append(inGroup(card("Имена", names, built.namesHint), GROUP.agent));
+  center.append(inGroup(ownerContextCard(draft), GROUP.agent));
 
   for (const box of built.cards) center.append(box);
 
@@ -513,6 +521,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       }
       out.setup_complete = true;
       try {
+        const before = c;
         const relayNote = await writeConfig(out);
         saveOut.className = "receipt ok";
         // 25.09 (C.1): мозг (модель, ключ, адрес, запасной) движок перечитывает сам
@@ -525,7 +534,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // Ревью 25.09 (A7 F2): движок на тике перечитывает мозг и пару галочек агента —
         // Telegram, тело, голос, агентов и ограду он читает один раз на старте. Если эти
         // блоки изменились, расписка обязана сказать «перезапуском» и показать кнопку.
-        const restartBlocks = blocksNeedingRestart(c, out);
+        const restartBlocks = blocksNeedingRestart(before, out);
         const restartNote = restartBlocks.length
           ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
           : "";
@@ -595,6 +604,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   };
   class StaleConfig extends Error {}
   const writeConfig = async (out: Config, force = false): Promise<string> => {
+    validateOwnerContext(out);
     const revision = container.dataset.settingsRevision;
     const args: Record<string, unknown> = { config: JSON.stringify(out) };
     if (seenMtime && !force) args.mtimeNs = seenMtime;
@@ -691,6 +701,11 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // restart_self и поднимает агента впервые (симметрия, ревью 06.10).
         if (cfg.needs_local_setup) saveOut.textContent = "Настройки перезаписаны. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
         restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
+        if (cfg.needs_local_setup && !String(out.model?.key || "").trim()) {
+          saveOut.className = "receipt err";
+          saveOut.textContent = "Перезаписано, но ключ модели пуст — агент не сможет думать и отвечать. Вставь ключ в карточке «Модель», сохрани снова и перезапусти окно.";
+          restartBtn.hidden = true;
+        }
       } catch (e) {
         saveOut.className = "receipt err";
         saveOut.textContent = humanError(e).text;

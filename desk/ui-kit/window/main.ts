@@ -24,7 +24,7 @@ import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
 import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, setLocalAgent, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
 import { hostInfo } from "../../ui-kit/window/host";
-import { clientIsMac, isMacPlatform, kbdLabel, platformOf } from "../../ui-kit/platform";
+import { clientIsMac, kbdLabel, platformOf } from "../../ui-kit/platform";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
 import { mountSwitch } from "../../ui-kit/window/agents";
 import { mountWindowMedia, pickPaperFiles } from "./paper-files";
@@ -1527,6 +1527,7 @@ export function start(opts: WindowOptions): void {
   // не перерисовывался. В браузере (Пульт) хост — сервер, там слово клиента
   // ничего не значит: остаётся "" , и не прячется ничего.
   if (inTauri && clientMac) S.platform = "macos";
+  if (electron?.platform === "linux") S.platform = "linux";
   // Тот же ответ несёт систему агента (`platform`): по ней экраны прячут то,
   // чего на ней нет. Один вызов на окно — host.ts кэширует. Старая оболочка
   // поля не шлёт — тогда остаётся слово клиента. Если затвор от ответа
@@ -1537,7 +1538,7 @@ export function start(opts: WindowOptions): void {
     const was = S.platform;
     S.platform = platformOf(i) || S.platform;
     paintRailSign();
-    if (isMacPlatform(was) !== isMacPlatform(S.platform)) void show(S.view, { quiet: true });
+    if (was !== S.platform) void show(S.view, { quiet: true });
   });
   syncComposer();
   addEventListener("frame-room", () => { syncComposer(); paintActivity(); });

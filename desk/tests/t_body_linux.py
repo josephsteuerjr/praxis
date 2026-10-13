@@ -219,10 +219,11 @@ class Live(unittest.TestCase):
         proc, hwnd = self.zenity("--entry", "--text", "модификатор", title="Стенд модификатор")
         self.activate(hwnd)
         time.sleep(0.5)
-        result = self.ok("desktop.input.perform", {"events": [
-            {"type": "mouse", "x": 321, "y": 234},
-            {"type": "key", "key": "ctrl", "action": "down"},
-        ]})
+        self.ok('desktop.input.perform',{'events':[{'type':'mouse','x':321,'y':234}]})
+        # On X11 the pointer can change focus. Restore the desired entry before
+        # the separate keyboard request; keep the real Ctrl cleanup witness.
+        self.ok('desktop.element.act',{'hwnd':f'0x{hwnd:X}','select':{'role':'edit'},'do':'focus'})
+        result = self.ok("desktop.input.perform", {"events": [{"type":"key","key":"ctrl","action":"down"}]})
         self.assertIn("ctrl", result["modifiers_auto_released"])
         # Отладочный слух (STAND_XEV=1): что приходит в окно фокуса zenity.
         xev = None
@@ -233,6 +234,10 @@ class Live(unittest.TestCase):
             self.addCleanup(lambda: xev.poll() is None and xev.kill())
             time.sleep(0.3)
         self.assertIn("x:321 y:234", run("xdotool", "getmouselocation"))
+        # X11 desktops may focus a different widget when the pointer moves.
+        # Explicitly select the entry again; this must not release a stuck Ctrl,
+        # so the following external text witness still proves modifier cleanup.
+        self.ok('desktop.element.act', {'hwnd':f'0x{hwnd:X}', 'select':{'role':'edit'}, 'do':'focus'})
         # Свидетель отпускания: останься Ctrl зажат, «abc» ушло бы как Ctrl+A, Ctrl+B,
         # Ctrl+C, и zenity напечатал бы не «abc».
         self.ok("desktop.input.perform", {"expected_foreground": f"0x{hwnd:X}", "events": [

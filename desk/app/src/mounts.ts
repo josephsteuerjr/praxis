@@ -190,7 +190,7 @@ export function mountsCard(
   const addRow = el("div", "mount-add");
   const input = el("input", "field-input mono");
   input.type = "text";
-  input.placeholder = "C:\\Users\\Имя\\Документы";
+  input.placeholder = S.platform === "linux" ? "/home/имя/Documents" : S.platform === "macos" ? "/Users/имя/Documents" : "C:\\Users\\Имя\\Документы";
   input.autocomplete = "off";
   input.spellcheck = false;
   let addAccess: "read" | "write" = "read";

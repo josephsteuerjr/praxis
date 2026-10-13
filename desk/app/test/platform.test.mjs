@@ -89,10 +89,10 @@ assert.match(state, /platform: "" as string/, "в S нет поля platform (и
 // Windows-словами на Mac и не перерисовывался. Ответ, сменивший затвор,
 // перерисовывает открытый раздел.
 assert.match(chrome, /if \(inTauri && clientMac\) S\.platform = "macos";/, "до ответа app_info система хоста не берётся у клиента");
-assert.match(chrome, /if \(isMacPlatform\(was\) !== isMacPlatform\(S\.platform\)\) void show\(S\.view, \{ quiet: true \}\);/,
+assert.match(chrome, /if \(was !== S\.platform\) void show\(S\.view, \{ quiet: true \}\);/,
   "смена затвора по ответу app_info не перерисовывает открытый раздел");
 assert.match(frame, /const platform = platformOf\(host\) \|\| S\.platform;/, "настройки не берут слово клиента, когда оболочка молчит");
-assert.match(agent, /agentsCard\(mac\)/, "карточке агентов не передают систему хоста");
+assert.match(agent, /agentsCard\(mac, platform === "linux"\)/, "карточке агентов не передают систему хоста");
 assert.match(read(src, "agentscard.ts"), /Helene\.app\/Contents\/MacOS\/helene --agent/, "подсказка про --agent на Mac зовёт helene.exe");
 assert.ok(!/Windows не дал/.test(read(desk, "ui-kit", "text.ts")), "text.ts винит Windows в PermissionError и на macOS");
 // Подписи клавиш — по клиенту, и обработчик слушает metaKey.
@@ -161,7 +161,7 @@ assert.match(modecard, /работает клиентом/, "карточка м
 assert.match(learn, /computer: true,/, "задача про компьютер не помечена как требующая тела");
 assert.ok(!/mac && t\.computer/.test(learn), "задача про компьютер снова спрятана на macOS — тело там есть с 0.8.0");
 // «Система»: строка службы — не на Mac; слой тела — везде, на Mac без `.exe`.
-assert.match(anatomy, /\$\{mac \? "служба \(демон launchd\)" : "служба Windows"\}: \$\{svc\}/, "анатомия на Mac молчит про службу — а она там есть");
+assert.match(anatomy, /\$\{mac \? "служба \(демон launchd\)" : S\.platform === "linux" \? "служба systemd" : "служба Windows"\}: \$\{svc\}/, "анатомия должна различать launchd, systemd и Windows");
 assert.match(anatomy, /function layerNameOnMac/, "в анатомии нет переименования слоёв для Mac");
 assert.match(anatomy, /helene-\(body\|bridge\)\\\.exe/, "слой тела на Mac называется с .exe");
 assert.ok(!/!\(mac && h\.startsWith\("helene-body\.exe"\)\)/.test(anatomy), "анатомия на Mac прячет слой тела — а тело там есть");

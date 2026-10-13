@@ -52,8 +52,8 @@ export async function runCommand(cmd: string, args: Args, ctx: Ctx): Promise<unk
     if (cmd === "update_download" || cmd === "update_install") throw new Error("На Linux обновление устанавливается новым .deb/.rpm через пакетный менеджер.");
     if (cmd === "update_check") {
       const result = await ctx.host.invoke(cmd, args ?? {}) as Record<string, unknown>;
-      const url = "https://github.com/josephsteuerjr/praxis/releases/tag/v" + encodeURIComponent(String(result.latest));
-      return { ...result, url, sha256: "", package_manager: true };
+      // Preserve the configured feed's verified URL, including a custom feed.
+      return { ...result, sha256: "", package_manager: true };
     }
   }
   return ctx.host.invoke(cmd, args ?? {});

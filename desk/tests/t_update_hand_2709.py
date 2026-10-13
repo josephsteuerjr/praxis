@@ -75,7 +75,7 @@ class Hand(unittest.TestCase):
         agent = fake_agent()
         self.hand(agent)
         self.hand(agent)
-        self.assertEqual([t["name"] for t in agent.BASE_TOOLS], [updates.TOOL_NAME])
+        self.assertEqual([t["name"] for t in agent.BASE_TOOLS], [updates.TOOL_NAME, "update_inspection"])
         self.assertIn(updates.TOOL_NAME, agent.HAND_PURPOSE)
         # схема — то, что пропустит провайдер: имя и объект input_schema
         self.assertIn("input_schema", agent.BASE_TOOLS[0])
@@ -230,7 +230,9 @@ class EngineWiring(unittest.TestCase):
             runner._update_report_due()
         self.assertEqual(len(archived), 1)
         self.assertIn("Обновление прошло: 1.1.1 → 1.1.2", archived[0])
-        self.assertIsNone(control.update_unreported(self.tree))
+        self.assertIsNotNone(control.update_unreported(self.tree))
+        import update_inspection
+        self.assertEqual(update_inspection.read(update_inspection.path(self.tree))["state"], "pending")
 
     def test_испытание_и_итог_двумя_записками(self):
         ctl = self.tree / "memory" / ".control"

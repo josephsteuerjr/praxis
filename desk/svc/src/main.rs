@@ -735,7 +735,8 @@ fn load_plan(config_path: &Path) -> Result<Plan, String> {
 /// (иначе то же самое всплывало бы вечным циклом «не поднялся» при зелёном
 /// `sc query`).
 fn plan_usable(plan: &Plan) -> Result<(), String> {
-    if plan.mode != "local" {
+    let remote_desktop = cfg!(windows) && plan.mode == "remote";
+    if plan.mode != "local" && !remote_desktop {
         return Err(format!(
             "helene.json просит mode=\"{}\" — код агента живёт не здесь, служба не нужна",
             plan.mode
@@ -746,6 +747,11 @@ fn plan_usable(plan: &Plan) -> Result<(), String> {
     }
     if !plan.app.exists() {
         return Err(format!("нет канала: {} (ключ \"app\" в helene.json)", plan.app.display()));
+    }
+    if remote_desktop {
+        let script = plan.app.parent().unwrap_or(Path::new(".")).join("localharness/remote_computer_client.py");
+        if !script.is_file() { return Err("нет клиента удалённого Windows-компьютера".into()); }
+        return Ok(());
     }
     if let Some(runner) = &plan.runner {
         if !runner.exists() {
@@ -949,6 +955,8 @@ fn firewall_ensure(python: &Path, port: u16, log: &mut Log) {
 enum Role {
     Trube,
     Runner,
+    #[cfg(windows)]
+    RemoteComputer,
 }
 
 struct Kid {
@@ -1077,6 +1085,8 @@ fn supervise(
             config: plan.config.clone(),
         });
     }
+    #[cfg(windows)]
+    if plan.mode == "remote" { kids.clear(); }
     // Соседи по установке (`agents/<id>/helene.json`). Служба поднимает их так
     // же, как окно: канал — всегда, руннер — когда мозг настроен. Иначе
     // владелец, живущий без окна, получал бы второго агента только по
@@ -1156,7 +1166,7 @@ fn supervise(
     if let Some(warn) = user_writable_warning() {
         log.line(&warn);
     }
-    if plan.phone && firewall {
+    if plan.mode == "local" && plan.phone && firewall {
         firewall_ensure(&plan.python, plan.port, log);
     }
 
@@ -1167,7 +1177,7 @@ fn supervise(
     // состоянии говорится один раз, а не каждую паузу.
     let mut relay_yielded = false;
     // Реле, которого нет в поставке, раньше писало «не поднялось» вечно.
-    let mut relay_enabled = plan.relay_enabled;
+    let mut relay_enabled = plan.mode == "local" && plan.relay_enabled;
     // 25.09 (C.1/C.3): helene.json и auth.json реле перечитываются на тике. Смена
     // ключа, порта или выключателя реле поднимает реле заново; новый вход в подписку —
     // тоже (реле читает вход только при старте). Снимать службу больше не нужно.
@@ -1178,15 +1188,73 @@ fn supervise(
     // Агенты, чей порт держит не наша труба, — по прошлой проверке.
     let mut port_busy_ids: Vec<String> = Vec::new();
     let mut port_noted: Option<Instant> = None;
+    #[cfg(windows)]
+    let mut remote_checked: Option<Instant> = None;
 
     while !stop.load(Ordering::Relaxed) {
+        #[cfg(windows)]
+        if remote_checked.is_none_or(|at| at.elapsed() >= Duration::from_secs(3)) {
+            remote_checked = Some(Instant::now());
+            let remote_agents: Vec<_> = raisable(&install).into_iter().filter(|a| {
+                agent_config(&a.config).get("mode").and_then(|v| v.as_str()) == Some("remote")
+            }).collect();
+            let desired: Vec<_> = remote_agents.iter().map(|a| a.id.clone()).collect();
+            for kid in kids.iter_mut().filter(|k| k.role != Role::RemoteComputer && desired.contains(&k.agent)) {
+                if let Some(mut child) = kid.child.take() {
+                    let _ = child.kill(); let _ = child.wait(); forget_child(&child);
+                }
+            }
+            kids.retain(|k| k.role == Role::RemoteComputer || !desired.contains(&k.agent));
+            for kid in kids.iter_mut().filter(|k| k.role == Role::RemoteComputer && !desired.contains(&k.agent)) {
+                if let Some(mut child) = kid.child.take() {
+                    let _ = child.kill(); let _ = child.wait(); forget_child(&child);
+                }
+            }
+            kids.retain(|k| k.role != Role::RemoteComputer || desired.contains(&k.agent));
+            for agent in remote_agents {
+                if kids.iter().any(|k| k.role == Role::RemoteComputer && k.agent == agent.id) { continue; }
+                let Ok(remote) = load_plan(&agent.config) else { continue; };
+                let script = remote.app.parent().unwrap_or(Path::new(".")).join("localharness/remote_computer_client.py");
+                if !script.is_file() { continue; }
+                kids.push(Kid { role: Role::RemoteComputer, label: "Удалённый компьютер", script,
+                    args: vec!["run".into(), "--config".into(), agent.config.to_string_lossy().into_owned(),
+                        "--data".into(), remote.tree.to_string_lossy().into_owned()], child: None,
+                    started: None, not_before: Instant::now(), backoff: 0, agent: agent.id,
+                    whose: agent.name, python: remote.python, tree: remote.tree,
+                    token: String::new(), port: 0, phone: false, config: agent.config });
+            }
+            // A remote profile can become local while the session host remains alive.
+            for agent in raisable(&install) {
+                let cfg = agent_config(&agent.config);
+                if cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("local") != "local" ||
+                        kids.iter().any(|k| k.agent == agent.id && k.role != Role::RemoteComputer) { continue; }
+                let Ok(local) = load_plan(&agent.config) else { continue; };
+                let token = ensure_desk_token(&local.tree);
+                kids.push(Kid { role: Role::Trube, label: "канал", script: local.app.clone(),
+                    args: vec![local.port.to_string()], child: None, started: None, not_before: Instant::now(),
+                    backoff: 0, agent: agent.id.clone(), whose: agent.name.clone(), python: local.python.clone(),
+                    tree: local.tree.clone(), token: token.clone(), port: local.port, phone: local.phone, config: agent.config.clone() });
+                let ready = cfg.get("setup_complete").and_then(|v| v.as_bool()).unwrap_or(false) ||
+                    cfg.pointer("/model/key").and_then(|v| v.as_str()).is_some_and(|s| !s.trim().is_empty());
+                if ready {
+                    if let Some(runner) = local.runner {
+                        kids.push(Kid { role: Role::Runner, label: "движок", script: runner,
+                            args: vec!["--config".into(), agent.config.to_string_lossy().into_owned()], child: None,
+                            started: None, not_before: Instant::now(), backoff: 0, agent: agent.id, whose: agent.name,
+                            python: local.python, tree: local.tree, token, port: local.port, phone: false, config: agent.config });
+                    }
+                }
+            }
+        }
         if owner_stopped() {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             {
                 // systemd Restart=always поднял бы вышедшую службу снова через 10 с, и
                 // стоп владельца превратился бы в вечную чехарду перезапусков. Поэтому
                 // стоим: дети погашены, флаг опрашиваем раз в секунду, resume продолжает
                 // надзор и поднимает пару заново. Флаг пишет окно правами владельца.
+                // launchd KeepAlive=true has the same restart churn on macOS.
+                // Park this daemon too; only explicit resume releases the latch.
                 log.line("owner stop: гашу детей и жду снятия стопа (кнопка «Возобновить» в окне)");
                 kill_all_descendants();
                 for kid in kids.iter_mut() {
@@ -1210,9 +1278,17 @@ fn supervise(
                     break;
                 }
                 log.line("owner stop снят — поднимаю детей заново");
+                #[cfg(target_os = "macos")]
+                {
+                    let now = Instant::now();
+                    for kid in kids.iter_mut() { kid.backoff = 0; kid.not_before = now; }
+                    relay_backoff = 0;
+                    relay_not_before = now;
+                    port_checked = None;
+                }
                 continue;
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
                 log.line("owner stop: no new children; terminating this supervisor's job");
                 stop.store(true, Ordering::Relaxed);
@@ -1304,6 +1380,7 @@ fn supervise(
             let mut busy = Vec::new();
             let mut said_now = false;
             for id in &ids {
+                if kids.iter().filter(|k| &k.agent == id).all(|k| k.port == 0) { continue; }
                 let hold = kids
                     .iter()
                     .any(|k| &k.agent == id && k.role == Role::Trube && k.child.is_some());
@@ -1411,10 +1488,35 @@ fn supervise(
                             if had_own {
                                 relay_yielded = false;
                             }
-                            relay_enabled = fresh.relay_enabled;
+                            relay_enabled = fresh.mode == "local" && fresh.relay_enabled;
                             if !relay_enabled {
                                 log.line("реле: по новым настройкам выключено");
                             }
+                        }
+                        #[cfg(windows)]
+                        if fresh.mode != plan.mode {
+                            for kid in kids.iter_mut().filter(|k| k.agent == BASE_AGENT_ID) {
+                                if let Some(mut child) = kid.child.take() {
+                                    let _ = child.kill(); let _ = child.wait(); forget_child(&child);
+                                }
+                            }
+                            kids.retain(|k| k.agent != BASE_AGENT_ID);
+                            if fresh.mode == "local" {
+                                let token = ensure_desk_token(&fresh.tree);
+                                kids.push(Kid { role: Role::Trube, label: "канал", script: fresh.app.clone(),
+                                    args: vec![fresh.port.to_string()], child: None, started: None,
+                                    not_before: Instant::now(), backoff: 0, agent: BASE_AGENT_ID.into(), whose: String::new(),
+                                    python: fresh.python.clone(), tree: fresh.tree.clone(), token: token.clone(),
+                                    port: fresh.port, phone: fresh.phone, config: fresh.config.clone() });
+                                if let Some(runner) = &fresh.runner {
+                                    kids.push(Kid { role: Role::Runner, label: "движок", script: runner.clone(),
+                                        args: vec!["--config".into(), fresh.config.to_string_lossy().into_owned()],
+                                        child: None, started: None, not_before: Instant::now(), backoff: 0,
+                                        agent: BASE_AGENT_ID.into(), whose: String::new(), python: fresh.python.clone(),
+                                        tree: fresh.tree.clone(), token, port: fresh.port, phone: false, config: fresh.config.clone() });
+                                }
+                            }
+                            remote_checked = None;
                         }
                         plan = fresh;
                     }
@@ -4504,6 +4606,21 @@ mod broker_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[cfg(windows)]
+    fn remote_windows_plan_requires_publisher_and_ignores_local_runner() {
+        use super::*;
+        let root=std::env::temp_dir().join(format!("helene-remote-plan-{}",std::process::id()));
+        std::fs::create_dir_all(root.join("localharness")).unwrap();
+        let app=root.join("deskapp.py");std::fs::write(&app,b"fixture").unwrap();
+        let mut plan=Plan::for_tests(root.join("helene.json"),root.join("data"));
+        plan.mode="remote".into();plan.python="python".into();plan.app=app;
+        plan.runner=Some(root.join("must-not-start.py"));
+        assert!(plan_usable(&plan).is_err());
+        std::fs::write(root.join("localharness/remote_computer_client.py"),b"fixture").unwrap();
+        assert!(plan_usable(&plan).is_ok());
+        let _=std::fs::remove_dir_all(root);
+    }
     use super::decode_config;
 
     /// ⚠⚠ Служба поднимала ВТОРОЕ реле на занятом порту — раз в минуту, вечно.

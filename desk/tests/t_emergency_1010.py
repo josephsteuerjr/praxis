@@ -23,7 +23,7 @@ class Emergency(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.config = self.root/'helene.json'
-        self.config.write_text(json.dumps({'tree':'data'}))
+        self.config.write_text(json.dumps({'tree':'data', 'installed':{'service':True}}))
         (self.root/'helene-svc.exe').write_bytes(b'fixture-never-executed')
     def transport(self, username='lyra'):
         target = botapi.BotTransport(types.SimpleNamespace(), self.root/'data', None,
@@ -57,7 +57,8 @@ class Emergency(unittest.TestCase):
         target._ingest({'edited_message':message})
         target.owner_control.assert_not_called()
     def test_windows_service_stop_uses_authenticated_pipe_without_shell_or_ui(self):
-        with patch.object(emergency,'WINDOWS',True), patch.object(owner_stop,'stopped',side_effect=[False,True]), \
+        with patch.object(emergency,'WINDOWS',True), patch.object(owner_stop,'stopped',return_value=True), \
+             patch.object(owner_stop,'latch_client'), patch.object(owner_stop,'present',side_effect=[False,True]), \
              patch('broker.read_token',return_value='synthetic-secret'), patch('broker.call_service',return_value={'ok':True}) as pipe, \
              patch.object(emergency.subprocess,'run') as spawn:
             result=emergency.request(self.config,via='agent')
@@ -67,8 +68,9 @@ class Emergency(unittest.TestCase):
         self.assertNotIn('cmd',request)
     def test_pipe_receipt_without_latch_is_not_success(self):
         with patch.object(emergency,'WINDOWS',True), patch.object(owner_stop,'stopped',return_value=False), \
+             patch.object(owner_stop,'latch_client'), patch.object(owner_stop,'present',return_value=False), \
              patch('broker.read_token',return_value='synthetic-secret'), patch('broker.call_service',return_value={'ok':True}):
-            with self.assertRaisesRegex(RuntimeError,'не подтверждён'):
+            with self.assertRaisesRegex(RuntimeError,'не подтвердила'):
                 emergency.request(self.config,via='phone')
     def test_posix_latch_survives_repeated_stop_and_denies_resume_by_autonomy(self):
         path=self.root/'owner-state/stop.json'

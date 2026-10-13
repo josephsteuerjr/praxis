@@ -306,10 +306,10 @@ class Desk:
         # следующее сообщение владельца съедалось падением хода, а окно
         # показывало чат целым — оно читает тот же файл с заменой.
         try:
-            with archive.open(encoding="utf-8", errors="replace") as src:
-                lines = src.readlines()[-max(1, int(limit)):]
-        except OSError:
-            return []
+            from .jsonl_tail import tail_lines
+        except ImportError:
+            from jsonl_tail import tail_lines
+        lines = tail_lines(archive, limit)
         out = []
         for line in lines:
             try:

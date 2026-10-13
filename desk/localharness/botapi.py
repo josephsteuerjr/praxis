@@ -56,6 +56,26 @@ _MSG_LIMIT = 4096          # потолок sendMessage; длиннее — ре
 _CAPTION_LIMIT = 1024
 _POLL_TIMEOUT = 25         # long-poll: столько держит сервер, +10 наш сокет
 _STALE_SEC = 90            # связь считается живой, пока последний poll моложе
+_RECONNECT_WAKE_GRACE = 30  # свежие сообщения вокруг подключения ещё могут будить
+
+
+def _catchup_update(update: dict, wake_not_before: float) -> dict:
+    """Retain missed history without turning old mentions into new conversations.
+
+    The boundary belongs to the connection, not each batch: a slow backlog must
+    not make messages sent after reconnection stale. Control commands are still
+    handled by _ingest before this flag suppresses ordinary model admission.
+    """
+    message = update.get('message') or update.get('channel_post')
+    if not isinstance(message, dict):
+        return update
+    try:
+        created = float(message.get('date') or 0)
+    except (ValueError, TypeError):
+        return update
+    if 0 < created < wake_not_before:
+        return {**update, '_catchup': True}
+    return update
 
 
 # --------------------------------------------------------------------------- #
@@ -445,10 +465,10 @@ class Rooms:
         # подклассом ValueError, мимо `except OSError`, — и агент глохнет на
         # КАЖДОМ следующем сообщении, пока окно показывает чат целым.
         try:
-            with archive.open(encoding="utf-8", errors="replace") as src:
-                raw = src.readlines()[-max(1, int(limit)):]
-        except OSError:
-            return []
+            from .jsonl_tail import tail_lines
+        except ImportError:
+            from jsonl_tail import tail_lines
+        raw = tail_lines(archive, limit)
         out = []
         for line in raw:
             try:
@@ -800,10 +820,12 @@ class BotTransport:
 
     def _poll_forever(self) -> None:
         offset = self._load_offset()
+        wake_not_before = 0.0
         while not self._stop.is_set():
             try:
                 if not self._ready:
                     self._connect()
+                    wake_not_before = int(time.time()) - _RECONNECT_WAKE_GRACE
                 elif time.monotonic() - self._last_profile_ok >= 60:
                     self.refresh_identity()
                 updates = self.client.call(
@@ -841,7 +863,7 @@ class BotTransport:
             for update in updates or []:
                 update_id = int(update.get("update_id") or 0)
                 try:
-                    self._ingest(update)
+                    self._ingest(_catchup_update(update, wake_not_before))
                 except Exception:
                     # ⚠ Курсор двигался ЗДЕСЬ ЖЕ, на упавшем апдейте, и
                     # подтверждённый offset — необратимое удаление сообщения на
@@ -942,7 +964,7 @@ class BotTransport:
         self.rooms.record(conversation, text, outgoing=outgoing, sender=sender_name,
                           source_id=str(message.get("message_id") or ""),
                           ts=float(message.get("date") or 0) or None, edited=edited,
-                          historical=bool(update.get('_history')), media=media,
+                          historical=bool(update.get('_history') or update.get('_catchup')), media=media,
                           reply=message.get('reply_to_message'), sender_id=str(sender.get('id') or ''))
         if outgoing or edited or update.get("_history"):
             return
@@ -959,6 +981,8 @@ class BotTransport:
                 self.owner_control()
             except Exception as exc:
                 self.client.call("sendMessage", chat_id=chat_id, text=f"Остановка не подтверждена: {exc}")
+            return
+        if update.get('_catchup'):
             return
         if not (is_dm or self._addressed(message)):
             return

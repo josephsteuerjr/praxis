@@ -75,7 +75,9 @@ def probe(lever: bool) -> subprocess.CompletedProcess:
     return subprocess.run(
         # -B: слой издания — не наш кэш; без него каждый прогон оставлял бы
         # `helene/core/__pycache__` неотслеживаемым мусором в репозитории.
-        [sys.executable, "-B", "-c", PROBE.format(lever=lever, layer=str(LAYER))],
+        # -S keeps the negative control independent of a PYTHONPATH that
+        # contains this very sitecustomize (as in packaged-runtime test runs).
+        [sys.executable, "-S", "-B", "-c", PROBE.format(lever=lever, layer=str(LAYER))],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
 
 

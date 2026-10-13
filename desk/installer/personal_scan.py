@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import pathlib
+import json
 import re
 import subprocess
 import sys
@@ -85,10 +86,40 @@ def texts(rev: str | None) -> dict[str, str]:
     return out
 
 
+def without_inventory_digests(rel: str, text: str) -> str:
+    """A digit run inside a typed source digest is not a Telegram identity.
+
+    Exemption is limited to this product's explicit payload-inventory fields.
+    Owner/contact fields, untyped JSON and prose remain fully scanned.
+    """
+    schemas = {'HELENE-SOURCE.json': ('tree_inventory_scope', 'published_payload', 'frozen_tree_files',
+               ('frozen_tree','accepted_tree_baseline','source_public_parent')),
+               'desk/tests/fixtures/owner-supplied-skills-1.5.9.json': ('schema', 'helene.owner-supplied-skills.v1', 'files',
+               ('accepted_public_source', 'prior_public_source'))}
+    if rel not in schemas: return text
+    # Keep duplicate keys: ordinary json.loads followed by dumps would erase
+    # earlier owner/contact fields. Exempt only the typed value at its own path.
+    class ObjectPairs(list): pass
+    try: value = json.loads(text, object_pairs_hook=ObjectPairs)
+    except ValueError: return text
+    marker, expected, inventory_key, refs = schemas[rel]
+    if not isinstance(value, ObjectPairs) or dict(value).get(marker) != expected: return text
+    def encode(item, location=()):
+        size = 40 if len(location) == 1 and location[0] in refs else 64 if len(location) == 2 and location[0] == inventory_key else None
+        if size and isinstance(item, str) and re.fullmatch(r'[a-f0-9]{' + str(size) + '}', item):
+            return json.dumps('<source-digest>')
+        if isinstance(item, ObjectPairs):
+            return '{' + ','.join(json.dumps(k, ensure_ascii=False) + ':' + encode(v, location+(k,)) for k,v in item) + '}'
+        if isinstance(item, list): return '[' + ','.join(encode(v, location+('[]',)) for v in item) + ']'
+        return json.dumps(item, ensure_ascii=False)
+    return encode(value)
+
+
 def found(pool: dict[str, str]) -> dict[str, dict[str, set[str]]]:
     hits: dict[str, dict[str, set[str]]] = {}
     for kind, rx in PATTERNS.items():
         for rel, text in pool.items():
+            if kind == "telegram id (9–10 цифр)": text = without_inventory_digests(rel, text)
             for match in rx.finditer(text):
                 value = match.group(1) if match.groups() else match.group(0)
                 if value in HIS_OWN or value in NOISE:

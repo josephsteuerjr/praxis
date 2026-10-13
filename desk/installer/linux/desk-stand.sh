@@ -8,18 +8,26 @@
 #       -v helene-body-target:/target -v helene-cargo-reg:/opt/cargo/registry \
 #       helene-linux-desk sh /src/desk/installer/linux/desk-stand.sh
 #
-# JOBS — потоки cargo (по умолчанию 6: у ПК владельца память общая с его программами).
+# Запускать на сервере. JOBS — потоки cargo, по умолчанию один.
 set -eu
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 if [ "${1:-}" != "--desktop" ]; then
-    JOBS="${JOBS:-6}"
+    JOBS="${JOBS:-1}"
     export CARGO_TARGET_DIR=/target
     echo "== сборка тела"
     cd /src/body
-    cargo build -j "$JOBS" -p praxis-body -p praxis-bridge 2>&1 | tail -3
+    if cargo build -j "$JOBS" -p praxis-body -p praxis-bridge > /tmp/helene-body-build.log 2>&1; then
+        tail -3 /tmp/helene-body-build.log
+    else
+        tail -60 /tmp/helene-body-build.log; exit 1
+    fi
     echo "== стенды Rust тела (чистые части, в том числе x11 и atspi)"
-    cargo test -j "$JOBS" -p praxis-body 2>&1 | grep -E "^test result|FAILED|panicked|failures:" || true
+    if cargo test -j "$JOBS" -p praxis-body > /tmp/helene-body-tests.log 2>&1; then
+        grep -E "^test result|FAILED|panicked|failures:" /tmp/helene-body-tests.log
+    else
+        tail -60 /tmp/helene-body-tests.log; exit 1
+    fi
     id stand >/dev/null 2>&1 || useradd -m -s /bin/bash stand
     chmod -R a+rX /target/debug/praxis-body /target/debug/praxis-bridge 2>/dev/null || true
     exec runuser -u stand -- sh "$0" --desktop

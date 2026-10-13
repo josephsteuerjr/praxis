@@ -164,13 +164,14 @@ export function stamp(now = new Date()): string {
 export function pathProblem(raw: string, platform = ""): string {
   const text = String(raw || "").trim().replace(/^"+|"+$/g, "");
   const mac = platform === "macos";
-  if (!text) return mac ? "Впиши путь к папке — например /Users/имя/Documents." : "Впиши путь к папке — например C:\\Users\\Имя\\Документы.";
-  const looksAbsolute = mac
+  const posix = mac || platform === "linux";
+  if (!text) return posix ? `Впиши путь к папке — например ${mac ? "/Users/имя/Documents" : "/home/имя/Documents"}.` : "Впиши путь к папке — например C:\\Users\\Имя\\Документы.";
+  const looksAbsolute = posix
     ? text.startsWith("/") || text.startsWith("~")
     : /^[a-zA-Z]:[\\/]/.test(text) || /^\\\\/.test(text) || /^%[^%]+%/.test(text) || text.startsWith("~");
   if (!looksAbsolute) {
-    return mac
-      ? "Нужен полный путь: от корня (/Users/имя/Documents) или от домашней папки (~/Documents)."
+    return posix
+      ? `Нужен полный путь: от корня (${mac ? "/Users/имя/Documents" : "/home/имя/Documents"}) или от домашней папки (~/Documents).`
       : "Нужен полный путь: с буквой диска (C:\\Users\\Имя\\Документы), сетевой (\\\\сервер\\папка) или через %USERPROFILE%.";
   }
   return "";

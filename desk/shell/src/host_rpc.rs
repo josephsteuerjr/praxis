@@ -9,7 +9,7 @@ async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -
         "local_files_list" => local_files_list(argument::<String>(args, "path", "path")?).await,
         "local_files_read" => local_files_read(argument::<String>(args, "path", "path")?).await,
         "local_files_save" => local_files_save(argument::<String>(args, "folder", "folder")?, argument::<String>(args, "name", "name")?, argument::<String>(args, "data", "data")?, argument::<bool>(args, "overwrite", "overwrite")?).await,
-        "owner_control" => serde_json::to_value(owner_control(argument::<String>(args, "action", "action")?)?).map_err(|e| e.to_string()),
+        "owner_control" => serde_json::to_value(owner_control(argument::<String>(args, "action", "action")?).await?).map_err(|e| e.to_string()),
         "owner_state" => serde_json::to_value(owner_state()).map_err(|e| e.to_string()),
         "engine_restart" => serde_json::to_value(engine_restart()?).map_err(|e| e.to_string()),
         "config_save" => serde_json::to_value(config_save(app.clone(), argument::<String>(args, "config", "config")?, argument::<Option<String>>(args, "mtime_ns", "mtimeNs")?)?).map_err(|e| e.to_string()),

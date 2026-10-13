@@ -129,7 +129,8 @@ DEPENDS = ("libc6 (>= 2.28)", "git", "bubblewrap", "procps", "ca-certificates",
            "libstdc++6", "libgtk-3-0 | libgtk-3-0t64", "libnss3", "libgbm1", "libasound2 | libasound2t64",
            "libx11-6", "libxcomposite1", "libxdamage1", "libxext6", "libxfixes3",
            "libxrandr2", "libxcb1", "libxkbcommon0", "libatk1.0-0 | libatk1.0-0t64", "libatk-bridge2.0-0 | libatk-bridge2.0-0t64",
-           "libcups2 | libcups2t64", "libdrm2", "libpango-1.0-0", "libcairo2")
+           "libcups2 | libcups2t64", "libdrm2", "libpango-1.0-0", "libcairo2",
+           "xdotool", "x11-utils", "xclip", "libxtst6", "libatspi2.0-0", "at-spi2-core")
 RECOMMENDS = ("at-spi2-core", "pkexec | policykit-1", "xdg-utils")
 #: Те же зависимости именами rpm-семейства (Fedora/RHEL/РЕД ОС/ROSA): glibc 2.28 — это RHEL 8,
 #: ровно наш порог; `procps-ng` — имя procps у Red Hat. Мягкие зависимости rpm (Recommends)
@@ -137,7 +138,8 @@ RECOMMENDS = ("at-spi2-core", "pkexec | policykit-1", "xdg-utils")
 RPM_DEPENDS = ("glibc >= 2.28", "git", "bubblewrap", "procps-ng", "ca-certificates",
                "libstdc++", "gtk3", "nss", "mesa-libgbm", "alsa-lib", "libX11", "libXcomposite",
                "libXdamage", "libXext", "libXfixes", "libXrandr", "libxcb", "libxkbcommon",
-               "atk", "at-spi2-atk", "cups-libs", "libdrm", "pango", "libcairo")
+               "atk", "at-spi2-atk", "cups-libs", "libdrm", "pango", "libcairo.so.2()(64bit)",
+               "xdotool", "/usr/bin/xprop", "/usr/bin/xdpyinfo", "/usr/bin/xwininfo", "xclip", "libXtst", "at-spi2-core")
 RPM_RECOMMENDS = ("at-spi2-core", "polkit", "xdg-utils")
 #: Куда кладётся юнит: у Debian 10 /lib ещё не слит с /usr/lib, у rpm-семейства путь пакетов —
 #: /usr/lib/systemd/system.
@@ -316,17 +318,28 @@ raise SystemExit(1)
 ' "$seats" | grep -c . || true)
             if [ "$count" = "1" ]; then owner="$seats"; fi
         fi
-        if [ -n "$owner" ] && [ "$owner" != "root" ]; then
-            case "$owner" in
-                *[!A-Za-z0-9_.-]*|"") owner="" ;;
-            esac
-        fi
+        case "$owner" in root|*[!A-Za-z0-9_.-]*|"") owner="" ;; esac
         if [ -n "$owner" ]; then
-            # Явный отказ владельца (служба снята программой) — не включаем.
-            cfg="/home/$owner/.local/share/helene/helene.json"
-            if [ -f "$cfg" ] && grep -q '"service"[[:space:]]*:[[:space:]]*false' "$cfg"; then
-                :
-            else
+            # passwd is authoritative: homes can live outside /home. Parse
+            # installed.service, not an unrelated matching JSON fragment.
+            owner_home=$(getent passwd "$owner" 2>/dev/null | cut -d: -f6)
+            if /opt/helene/runtime/bin/python3 -I -c '
+import json, sys
+from pathlib import Path
+home = Path(sys.argv[1])
+if not home.is_absolute():
+    raise SystemExit(1)
+cfg = home / ".local/share/helene/helene.json"
+if not cfg.exists():
+    raise SystemExit(0)
+try:
+    value = json.loads(cfg.read_text())
+    installed = value.get("installed", {})
+    if not isinstance(installed, dict) or installed.get("service") is False:
+        raise SystemExit(1)
+except (OSError, ValueError, AttributeError):
+    raise SystemExit(1)
+' "$owner_home"; then
                 systemctl enable --now "helene@$owner.service" >/dev/null 2>&1 || true
             fi
         fi
@@ -424,10 +437,18 @@ FIRST_RUN_LINUX = f"""# Hélène · первый запуск на Linux (Debian
 
 Тул `computer` — окна, экран, клавиатура и мышь, файлы и процессы. Окна, ввод и снимки
 идут через X-сервер (EWMH, XTest), дерево окна — через доступность (AT-SPI, пакет
-`at-spi2-core`). ⚠ В сеансе **Wayland** (по умолчанию в Debian 12 и Ubuntu 22.04+) тело
-видит и водит только X-программы: так устроен Wayland. Для полного управления выбери при
-входе сеанс X11 («GNOME на Xorg» / «Ubuntu on Xorg»). Дерево окна и действия над
-элементами работают в обоих. На Astra (рабочий стол Fly) сеанс — X11.
+`at-spi2-core`). В этом кандидате графическое управление требует **X11**. В сеансе
+Wayland, включая XWayland, ввод, снимки и доступность окон отказывают до действия;
+выбери при входе «GNOME на Xorg» / «Ubuntu on Xorg». На Astra нужен доступный сеанс X11.
+Файлы и процессы доступны и без рабочего стола. AT-SPI зависит от поддержки приложения:
+invoke/set_value/focus/toggle выполняются нативным интерфейсом; при отсутствии или
+неоднозначном выборе действие отказывает, без скрытой замены кликом по координатам.
+automation_id и Windows numeric VK на Linux недоступны. Имена клавиш, hotkey, click,
+wheel, mouse_down/up и drag поддерживаются; текст ограничен 2048 знаками и числом
+свободных X11 keycodes для различных символов. Стоп не возобновляется автоматически:
+`helene --panic`, затем только явное `helene --resume` после проверки владельца.
+На столах с фокусом вслед за мышью перемещение может сменить место ввода: перед
+набором явно выбери нужное поле (focus). Потеря клавиатурного фокуса прерывает ввод.
 
 ## Ограда тула shell
 
@@ -667,7 +688,7 @@ def nfpm_config(version: str, contents: list[dict], files: dict[str, str]) -> di
     }
 
 
-def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[str, Path]:
+def build_packages(out: Path, version: str, dest: Path, unit_text: str, packagers=("deb", "rpm")) -> dict[str, Path]:
     """Собрать .deb и .rpm из папки поставки `out` (она становится /opt/helene)."""
     work = dest / "pkg-work"
     shutil.rmtree(work, ignore_errors=True)
@@ -689,7 +710,7 @@ def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[
     conf_path.write_text(json.dumps(config, ensure_ascii=False, indent=1), encoding="utf-8")
     names = asset_names(version)
     made: dict[str, Path] = {}
-    for packager in ("deb", "rpm"):
+    for packager in packagers:
         target = dest / names[packager]
         target.unlink(missing_ok=True)
         bm.run(["nfpm", "package", "--config", conf_path, "--packager", packager, "--target", target],
@@ -701,21 +722,24 @@ def build_packages(out: Path, version: str, dest: Path, unit_text: str) -> dict[
             print("RPM archive-size:", rpm_archive_size.repair(target))
         made[packager] = target
     # Проверка чужими руками: dpkg и rpm читают то, что собрал nfpm.
-    bm.run(["dpkg-deb", "--info", made["deb"]], timeout=120)
-    listing = bm.capture(["dpkg-deb", "-c", made["deb"]], timeout=600)
-    rpm_listing = bm.capture(["rpm", "-qlp", made["rpm"]], timeout=600)
-    bm.run(["rpm", "-qip", "--requires", made["rpm"]], timeout=120)
-    bm.run(["rpm", "-Kv", "--nosignature", made["rpm"]], timeout=120)
-    # Drain stdout without buffering the >1GiB archive in memory; require exit0.
-    with subprocess.Popen(["rpm2cpio", str(made["rpm"])], stdout=subprocess.DEVNULL) as check:
-        if check.wait(timeout=600) != 0:
-            raise SystemExit("rpm2cpio не принял архив RPM")
+    listing, rpm_listing = "", ""
+    if "deb" in made:
+        bm.run(["dpkg-deb", "--info", made["deb"]], timeout=120)
+        listing = bm.capture(["dpkg-deb", "-c", made["deb"]], timeout=600)
+    if "rpm" in made:
+        rpm_listing = bm.capture(["rpm", "-qlp", made["rpm"]], timeout=600)
+        bm.run(["rpm", "-qip", "--requires", made["rpm"]], timeout=120)
+        bm.run(["rpm", "-Kv", "--nosignature", made["rpm"]], timeout=120)
+        # Drain stdout without buffering the >1GiB archive in memory; require exit0.
+        with subprocess.Popen(["rpm2cpio", str(made["rpm"])], stdout=subprocess.DEVNULL) as check:
+            if check.wait(timeout=600) != 0:
+                raise SystemExit("rpm2cpio не принял архив RPM")
     for need in (f".{PROGRAM_ROOT}/helene-svc", f".{PROGRAM_ROOT}/runtime/bin/python3 ->",
                  f".{UNIT_PATHS['deb']}", "./usr/share/polkit-1/actions/app.helene.policy"):
-        if need not in listing:
+        if "deb" in made and need not in listing:
             raise SystemExit(f"в .deb нет {need!r} — пакет собран не тем составом")
     for need in (f"{PROGRAM_ROOT}/helene-svc", UNIT_PATHS["rpm"], "/usr/bin/helene-home"):
-        if need not in rpm_listing:
+        if "rpm" in made and need not in rpm_listing:
             raise SystemExit(f"в .rpm нет {need!r} — пакет собран не тем составом")
     shutil.rmtree(work, ignore_errors=True)
     return made
@@ -729,6 +753,8 @@ def arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--from-release", default="", metavar="TAG")
     parser.add_argument("--tag", default="", metavar="TAG")
     parser.add_argument("--tree", default="", metavar="PATH")
+    parser.add_argument("--packager", choices=("deb", "rpm", "both"), default="both",
+                        help="выбрать одну пакетную сборку для последовательного выпуска")
     parser.add_argument("--skip-runtime", action="store_true")
     parser.add_argument("--skip-rust", action="store_true")
     parser.add_argument("--skip-fronts", action="store_true",
@@ -746,7 +772,9 @@ def main() -> None:
     if not sys.platform.startswith("linux"):
         raise SystemExit("эта сборка идёт только на Linux (контейнер installer/linux/Dockerfile.build)")
     version, declared = deskpkg.product_version()
-    tree_tag, tag = bm.resolve_tags(args.from_release, args.tag, args.tree)
+    # Fresh platform source, including the Linux body, is the default. No
+    # dependency on a not-yet-published Windows asset or a private live tree.
+    tree_tag, tag = bm.resolve_tags(args.from_release, args.tag, args.tree or ("candidate" if not args.from_release else ""))
     if tag and bm.version_from_tag(tag) != version:
         raise SystemExit(f"ветка объявляет версию {version}, а сборку просят назвать {tag}")
     out = Path(args.out).resolve() / FOLDER
@@ -795,13 +823,27 @@ def main() -> None:
     not_linked_to_libssl(out / "helene-relay")
 
     print("дерево агента:")
-    if args.tree:
+    if not args.tree and not args.from_release:
+        import candidate_tree
+        candidate = cache / "candidate-tree"
+        if candidate.exists(): shutil.rmtree(candidate)
+        candidate_tree.stage(candidate)
+        staged_tree = bm.stage_from_tree(out, candidate)
+        staged_tree.update(tree_head=bd._git_field(ROOT, "candidate source")[0], tree_dirty=bd._git_field(ROOT, "candidate source")[1])
+        source_release = None
+    elif args.tree:
         staged_tree = bm.stage_from_tree(out, Path(args.tree).resolve())
         source_release = None
     else:
         staged_tree = bm.stage_from_release(out, cache, tree_tag)
         source_release = staged_tree
     live = out / "tree"
+    original_agent_files = {p.relative_to(live).as_posix() for p in live.rglob('*') if p.is_file()}
+    inventory = json.loads((ROOT / "HELENE-SOURCE.json").read_text(encoding="utf8"))
+    actual_inventory = {p.relative_to(live).as_posix(): bd.sha256(p) for p in live.rglob('*') if p.is_file()}
+    if inventory.get("version") != version or inventory.get("frozen_tree_files") != actual_inventory:
+        if not args.allow_partial: raise SystemExit("Linux tree does not match the current complete source inventory")
+        missing.append("agent tree differs from the current source inventory")
 
     print("тело:")
     body_exes, body_info = bm.build_body(
@@ -828,6 +870,7 @@ def main() -> None:
         print("стенды: ПРОПУЩЕНЫ (--skip-tests) — это отладка, не выпуск")
     else:
         bm.run_stands(out, False)
+    bm.clean_generated_agent_files(live, original_agent_files)
 
     print("документы:")
     (out / "ПЕРВЫЙ-ЗАПУСК.md").write_text(FIRST_RUN_LINUX, encoding="utf-8", newline="\n")
@@ -888,10 +931,14 @@ def main() -> None:
         (lib + rel.split("site-packages/", 1)[1], label)
         for rel, label in bd.RUNTIME_KNOWN_FALSE if "site-packages/" in rel
     }
-    print(f"  просканировано файлов: {bd.scan_for_secrets(out, live, scan_runtime=not args.skip_runtime)} — чисто")
+    scanned, generated = bm.final_secret_guard(out, live, original_agent_files, scan_runtime=not args.skip_runtime)
+    final_inventory = {p.relative_to(live).as_posix(): bd.sha256(p) for p in live.rglob('*') if p.is_file()}
+    if final_inventory != actual_inventory: raise SystemExit("Linux agent tree changed during build/tests/privacy scan")
+    print(f"  просканировано файлов: {scanned}; удалено импортных файлов: {generated} — чисто")
 
     print("пакеты (nfpm):")
-    made = build_packages(out, version, out.parent, unit_text)
+    made = build_packages(out, version, out.parent, unit_text,
+                          ("deb", "rpm") if args.packager == "both" else (args.packager,))
     for packager, path in made.items():
         digest = bd.sha256(path)
         (out.parent / names[f"{packager}_sha256"]).write_text(

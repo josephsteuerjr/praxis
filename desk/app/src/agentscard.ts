@@ -54,7 +54,7 @@ type SoulKind = "canon" | "inherit" | "text";
  * Карточка живёт только в оболочке: в браузере и на телефоне переключать и
  * заводить нечего — они пришли к одному каналу по адресу.
  */
-export function agentsCard(mac = false): { el: HTMLElement } {
+export function agentsCard(mac = false, linux = false): { el: HTMLElement } {
   const box = el("div", "agents-card");
   const list = el("div", "agents-list");
   const add = el("div", "actions");
@@ -312,6 +312,7 @@ export function agentsCard(mac = false): { el: HTMLElement } {
         // значок — в строке меню.
         (mac
           ? "Переключает окно полка слева и значок в строке меню; открыть конкретного агента — Helene.app/Contents/MacOS/helene --agent <папка>."
+          : linux ? "Переключает окно полка слева и значок у часов; открыть конкретного агента — helene --agent <папка>."
           : "Переключает окно полка слева и значок у часов; ярлык на конкретного агента — helene.exe --agent <папка>."),
     ),
   };

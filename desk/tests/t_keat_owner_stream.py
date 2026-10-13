@@ -148,6 +148,7 @@ class Sidecar(unittest.TestCase):
 
     def dialogue(self, rows, sidecar):
         life = types.SimpleNamespace(HOT_HARD_HI=125, hot_records=lambda chat_id, n: rows,
+                                     hot_bounds=lambda chat_id: (60,100,125,40000),
                                      tape_window=lambda r, n: r, tape_chars_for=lambda chat_id: 0)
         with mock.patch.object(runner, "_life", life):
             return runner._dialogue(OWNER, sidecar)

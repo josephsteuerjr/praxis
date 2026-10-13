@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import { computerOverview } from '../../ui-kit/window/views/system-status.ts';
+const now=Date.now(),fresh=new Date(now).toISOString(),old=new Date(now-60000).toISOString();
+const cfg={enabled:true,scopes:['computer.apps']};
+const live={enabled:true,available:true,connected:true,checked_at:fresh,written_at:fresh};
+assert.equal(computerOverview(cfg,live,now).status,'Готов к работе');
+assert.equal(computerOverview(cfg,{...live,connected:false},now).status,'Драйвер не отвечает');
+assert.equal(computerOverview(cfg,{...live,written_at:old},now).status,'Снимок компьютера устарел');
+assert.equal(computerOverview(cfg,{...live,checked_at:old},now).status,'Связь ещё не проверена');
+assert.equal(computerOverview(cfg,undefined,now).status,'Снимка пока нет');
+assert.equal(computerOverview({...cfg,enabled:false},live,now).status,'Выключен владельцем');
+assert.equal(computerOverview(cfg,{...live,written_at:'bad'},now).status,'Снимок компьютера устарел');
+console.log('adversarial-system-status: live vs startup, stale, missing, malformed, revoked PASS');

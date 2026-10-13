@@ -21,7 +21,7 @@ for (const m of frame.matchAll(/shell(?:<[^>]*>)?\("(\w+)",\s*\{([^}]*)\}/g)) {
 }
 
 // A7 F2: расписка «Сохранено» отличает блоки, которые движок читает только на старте.
-assert.match(frame, /blocksNeedingRestart\(c, out\)/, "расписка не сверяет блоки перезапуска");
+assert.match(frame, /blocksNeedingRestart\(before, out\)/, "расписка не сверяет блоки перезапуска по состоянию до записи");
 assert.match(frame, /restartBtn\.hidden = !\(modeNote \|\| restartNote \|\| cfg\.needs_local_setup\)/, "перезапуск нужен при смене блоков и первом запуске");
 assert.match(frame, /\["telegram", "Telegram"\]/);
 assert.match(frame, /\["sandbox", "ограда"\]/);

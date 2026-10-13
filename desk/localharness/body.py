@@ -102,6 +102,9 @@ log = logging.getLogger("helene.body")
 
 #: Ключ блока в helene.json.
 KEY = "computer"
+# A scoped per-boot relay credential, distinct from the window owner's key.
+# Capture before importing the agent and remove it from inherited child envs.
+_REMOTE_CONTROLLER = os.environ.pop('HELENE_REMOTE_CONTROLLER_TOKEN', '')
 #: Порт моста по умолчанию. НЕ 9473: на нём у автора живёт тело самой Праксис.
 DEFAULT_PORT = 9480
 #: Сколько портов вверх пробуем, если умолчание занято.
@@ -186,6 +189,10 @@ if ASKS_TCC:
     # ключей в снимке нет: там их некому заполнить, а пустое поле читалось бы
     # окном как «разрешений нет».
     STATE.update({"tcc": None, "hints": [], "platform": ""})
+if sys.platform.startswith("linux"):
+    # A failed first desktop probe must remain unknown, not look like a ready
+    # generic driver merely because body.status already established a link.
+    STATE.update({"platform": "linux", "console": None, "session": None})
 
 _BODY: "Body | None" = None
 _TOKENS: dict = {}          # url, controller, device — читает подменённый _settings
@@ -412,10 +419,12 @@ class _Child:
 
     def kill(self) -> None:
         proc, self.proc = self.proc, None
-        if proc is None or proc.poll() is not None:
+        if proc is None:
             return
         if os.name != "nt":
             kill_group(proc)
+            return
+        if proc.poll() is not None:
             return
         try:
             proc.terminate()
@@ -440,6 +449,68 @@ def spawn_kwargs(posix: bool | None = None) -> dict:
     return {"creationflags": _CREATE_NO_WINDOW}
 
 
+def _linux_group_has_live_members(group: int) -> bool:
+    unknown=False
+    try: folders=list(Path('/proc').iterdir())
+    except OSError: return True  # keep the grace, rather than claiming the group ended
+    for folder in folders:
+        if not folder.name.isdigit(): continue
+        try:
+            fields=(folder/'stat').read_text(encoding='utf8',errors='replace').rpartition(')')[2].split()
+            if len(fields)>=3 and int(fields[2])==group and fields[0] not in ('Z','X'): return True
+        except FileNotFoundError: continue
+        except (OSError,ValueError): unknown=True
+    return unknown
+
+
+def _kill_linux_group(proc: subprocess.Popen, grace: float) -> None:
+    if proc.returncode is not None: return
+    # Do not reap the leader while its children release input: an unreaped
+    # leader keeps its PID/group identity reserved against unrelated PID reuse.
+    flags=os.WEXITED|os.WNOHANG|os.WNOWAIT
+    try: os.waitid(os.P_PID,proc.pid,flags)
+    except ChildProcessError: return
+    try: os.killpg(proc.pid,signal.SIGTERM)
+    except ProcessLookupError:
+        proc.wait(timeout=2); return
+    deadline=time.monotonic()+max(0,grace)
+    while time.monotonic()<deadline:
+        try: exited=os.waitid(os.P_PID,proc.pid,flags)
+        except ChildProcessError: return  # another reader reaped it; never signal a recycled group
+        if exited is not None and not _linux_group_has_live_members(proc.pid):
+            proc.wait(timeout=2); return
+        time.sleep(.02)
+    try: os.killpg(proc.pid,signal.SIGKILL)
+    except ProcessLookupError: pass
+    try: proc.wait(timeout=2)
+    except subprocess.TimeoutExpired: log.debug('тело: группа не завершилась после SIGKILL')
+
+
+def _posix_group_has_live_members(group: int) -> bool:
+    # macOS has no waitid/WNOWAIT. Keep the unreaped leader reserved while
+    # inspecting the whole group; a zombie alone must not trigger SIGKILL.
+    try:
+        result = subprocess.run(['/bin/ps', '-axo', 'pgid=,stat='],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True, timeout=1)
+        if result.returncode != 0 or not result.stdout.strip():
+            return True
+        unknown = False
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) != 2:
+                unknown = True
+                continue
+            try:
+                if int(fields[0]) == group and not fields[1].startswith(('Z', 'X')):
+                    return True
+            except ValueError:
+                unknown = True
+        return unknown
+    except (OSError, subprocess.TimeoutExpired):
+        return True  # unknown never means completed
+
+
 def kill_group(proc: subprocess.Popen, *, grace: float = 5.0) -> None:
     """POSIX: погасить ребёнка группой — SIGTERM, через `grace` секунд SIGKILL.
 
@@ -448,7 +519,9 @@ def kill_group(proc: subprocess.Popen, *, grace: float = 5.0) -> None:
     вебсокет и файлы штатно; не вышел за срок — SIGKILL всей группе, чтобы мост
     не остался держать порт после движка.
     """
-    if proc.poll() is not None:
+    if sys.platform.startswith('linux') and all(hasattr(os,key) for key in ('waitid','WNOWAIT','P_PID')):
+        return _kill_linux_group(proc,grace)
+    if proc.returncode is not None:
         return
     killpg = getattr(os, "killpg", None)
     if killpg is None:
@@ -457,24 +530,35 @@ def kill_group(proc: subprocess.Popen, *, grace: float = 5.0) -> None:
         except Exception:
             pass
         return
-    try:
-        killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    except Exception:
-        log.debug("тело: SIGTERM группе %s не ушёл", proc.pid, exc_info=True)
-    try:
-        proc.wait(timeout=grace)
-    except Exception:
+    # CPython's POSIX Popen lock prevents the watcher from reaping the leader
+    # while descendants release input. Without waitid/WNOWAIT (macOS), reserve
+    # its PID until the whole group finishes; an early leader exit is not
+    # group completion while a descendant is still releasing input.
+    with proc._waitpid_lock:
+        if proc.returncode is not None:
+            return
         try:
-            killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=2)
+            killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
         except Exception:
-            pass
-    # Лидер вышел, а группа живёт, пока жив её последний процесс: внуки, которые
-    # SIGTERM проигнорировали, добиваются отдельно. Пустая группа даёт ESRCH.
+            log.debug("тело: SIGTERM группе %s не ушёл", proc.pid, exc_info=True)
+        deadline = time.monotonic() + max(0, grace)
+        while _posix_group_has_live_members(proc.pid):
+            if time.monotonic() >= deadline:
+                try:
+                    killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    # Darwin may report EPERM for a now zombie-only group.
+                    # A live/inaccessible member is still a real failure.
+                    if _posix_group_has_live_members(proc.pid):
+                        raise
+                break
+            time.sleep(.02)
     try:
-        killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=2)
     except Exception:
         pass
 
@@ -710,6 +794,8 @@ class Body:
         STATE["console"] = (result.get("console")
                             if result.get("ok") and isinstance(result.get("console"), bool)
                             else None)
+        if result.get('ok') and result.get('platform') == 'linux':
+            STATE['session'] = result.get('session') if isinstance(result.get('session'), dict) else None
         if isinstance(tcc, dict):
             STATE["tcc"] = {"screen_recording": bool(tcc.get("screen_recording")),
                             "accessibility": bool(tcc.get("accessibility"))}
@@ -822,7 +908,8 @@ def _settings() -> tuple[str, str, str]:
             str(_TOKENS.get("device") or DEFAULT_DEVICE))
 
 
-def call(capability: str, args: dict | None = None, *, timeout: float = 30.0) -> dict:
+def call(capability: str, args: dict | None = None, *, timeout: float = 30.0,
+         request_id: str = "", operation_id: str = "") -> dict:
     """Вызов через клиент дерева, если он уже загружен; иначе — своим urllib.
 
     Сторож зовёт это до и без импорта `agent` (тесты, ранний старт), поэтому
@@ -833,10 +920,11 @@ def call(capability: str, args: dict | None = None, *, timeout: float = 30.0) ->
     mod = sys.modules.get("body_client")
     if mod is not None and getattr(mod, "_helene_settings", False):
         try:
-            return mod.call(capability, args or {}, execution="interactive", timeout=timeout)
+            ids = {k: v for k, v in (("request_id", request_id), ("operation_id", operation_id)) if v}
+            return mod.call(capability, args or {}, execution="interactive", timeout=timeout, **ids)
         except Exception as exc:
             return {"ok": False, "code": "client", "error": str(exc)}
-    return _raw_call(capability, args or {}, timeout=timeout)
+    return _raw_call(capability, args or {}, timeout=timeout, request_id=request_id, operation_id=operation_id)
 
 
 #: Открыватель БЕЗ прокси: мост — сосед по этой же машине (127.0.0.1), и
@@ -877,13 +965,13 @@ def _raw_request(method: str, path: str, payload: dict | None, timeout: float) -
         return {"ok": False, "code": "transport", "error": f"{type(exc).__name__}: {exc}"}
 
 
-def _raw_call(capability: str, args: dict, *, timeout: float) -> dict:
+def _raw_call(capability: str, args: dict, *, timeout: float, request_id: str = "", operation_id: str = "") -> dict:
     import urllib.parse
     _url, _token, device = _settings()
-    rid = secrets.token_hex(16)
+    rid = request_id or secrets.token_hex(16)
     started = _raw_request(
         "POST", f"/v1/controller/{urllib.parse.quote(device, safe='')}/invoke",
-        {"request_id": rid, "operation_id": f"op-{rid}", "execution": "interactive",
+        {"request_id": rid, "operation_id": operation_id or f"op-{rid}", "execution": "interactive",
          "capability": capability, "args": args}, timeout=min(timeout, 10.0))
     if not started.get("ok"):
         return started
@@ -912,9 +1000,98 @@ def _raw_call(capability: str, args: dict, *, timeout: float) -> dict:
 #  Подъём из раннера
 # --------------------------------------------------------------------------- #
 
-def launch(install_root: Path, tree: Path, cfg: dict) -> "Body | None":
+class RemoteBody:
+    """Server-side controller of the explicitly paired Windows desktop."""
+    def __init__(self, tree: Path, cfg: dict):
+        self.tree = Path(tree)
+        self.cfg = cfg
+        try:
+            from .agents import DESK_PORT
+        except ImportError:
+            from agents import DESK_PORT
+        raw_port = cfg.get('port', DESK_PORT)
+        self.port = int(raw_port)
+        if not 1 <= self.port <= 65535:
+            raise ValueError('Invalid desktop channel port')
+        self.base = f'http://127.0.0.1:{self.port}/api/computer/remote'
+        self.stopping = threading.Event()
+        self.last_metadata = 0.0
+        self.thread = None
+
+    def metadata(self, timeout=2.0, force=False):
+        if not force and time.monotonic() - self.last_metadata < 0.25:
+            return bool(STATE.get('enabled'))
+        import urllib.request
+        request = urllib.request.Request(self.base + '/controller/state',
+            headers={'Authorization': 'Bearer ' + _REMOTE_CONTROLLER})
+        try:
+            with _direct_opener().open(request, timeout=timeout) as response:
+                raw = response.read(262145)
+                if len(raw) > 262144:
+                    raise ValueError('Desktop registry response too large')
+                picture = json.loads(raw)
+            selected = picture.get('selected')
+            row = next((r for r in picture.get('devices', []) if r.get('id') == selected), None)
+            if not row or not isinstance(selected, str) or not re.fullmatch(r'[a-f0-9]{32}', selected):
+                _TOKENS['device'] = ''
+                STATE.update(enabled=False, connected=False, scopes=[], device='', remote=True,
+                             platform='windows', reason='Владелец ещё не выбрал Windows-компьютер')
+                return False
+            actual = row.get('identity') or {}
+            selected_scopes = row.get('scopes') or []
+            effective = [s for s in SCOPES if s in selected_scopes and
+                         (not actual or s in (actual.get('scopes') or []))]
+            _TOKENS['device'] = selected
+            STATE.update(enabled=True, available=True, remote=True, device=selected, scopes=effective,
+                         platform='windows', remote_name=row.get('name'), connected=bool(row.get('connected')),
+                         reason=('Windows-компьютер подключён' if row.get('connected') else 'Выбранный Windows-компьютер не в сети'),
+                         checked_at=_now())
+            return True
+        except Exception as error:
+            _TOKENS['device'] = ''
+            STATE.update(enabled=False, connected=False, scopes=[], remote=True, platform='windows',
+                         reason='Канал удалённого компьютера недоступен (' + type(error).__name__ + ')')
+            return False
+        finally:
+            self.last_metadata = time.monotonic()
+
+    def start(self):
+        _TOKENS.update(url=self.base + '/bridge', controller=_REMOTE_CONTROLLER, device='')
+        STATE.update(available=True, remote=True, platform='windows', logs=[], bridge_pid=0, body_pid=0)
+        self.probe(timeout=2)
+        self.thread = threading.Thread(target=self.watch, name='remote-computer-state', daemon=True)
+        self.thread.start()
+        return True
+
+    def probe(self, timeout=3.0):
+        if not self.metadata(timeout=timeout) or not STATE.get('connected'):
+            return False
+        result = _raw_call('body.status', {}, timeout=timeout)
+        if result.get('ok'):
+            STATE['identity'] = result.get('result') or result
+            return True
+        STATE.update(connected=False, reason='Windows-тело не подтвердило связь')
+        return False
+
+    def watch(self):
+        while not self.stopping.wait(3):
+            self.probe(timeout=3)
+            _write_static_state(self.tree)
+
+    def stop(self):
+        self.stopping.set()
+        _TOKENS.clear()
+        STATE.update(connected=False, reason='Серверный контроллер остановлен')
+
+
+def launch(install_root: Path, tree: Path, cfg: dict) -> "Body | RemoteBody | None":
     """Поднять мост и тело, если владелец включил опцию. Ничего не роняет."""
     global _BODY
+    if os.environ.get('HELENE_SUPERVISOR') == 'serverboot' and _REMOTE_CONTROLLER:
+        remote = RemoteBody(Path(tree), cfg)
+        _BODY = remote
+        remote.start()
+        return remote
     STATE["enabled"] = enabled(cfg)
     STATE["scopes"] = scopes(cfg)
     if not HAS_BODY:
@@ -966,6 +1143,11 @@ def state() -> dict:
 
 
 def windows_truth() -> str:
+    if STATE.get('remote'):
+        rights = ', '.join(STATE.get('scopes') or []) or 'нет прав'
+        return (f"окна: выбран Windows-компьютер {STATE.get('remote_name') or STATE.get('device') or '—'}; "
+                f"{STATE.get('reason')}; права этого компьютера: {rights}. "
+                "Windows SYSTEM — его служба по локальному разрешению; root VPS — отдельный broker_request.")
     """Одна честная строка про окна — в анатомию и на экран «Система»."""
     if not HAS_BODY:
         # Секции тела в картине нет — и строки про окна тоже: пустую строку
@@ -1023,6 +1205,11 @@ class _LiveScopes:
         self.scopes = scopes(initial)
 
     def refresh(self) -> None:
+        if isinstance(_BODY, RemoteBody):
+            _BODY.metadata(timeout=2)
+            self.enabled = bool(STATE.get('enabled'))
+            self.scopes = list(STATE.get('scopes') or [])
+            return
         if self.path is None:
             return
         try:
@@ -1189,6 +1376,27 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
             + str(receipt))
 
 
+def _remote_system(kwargs: dict) -> str:
+    """Windows System belongs to the selected desktop, never the VPS host broker."""
+    command = str(kwargs.get('command') or '').strip()
+    if not command:
+        return 'run execution=system: пустая команда'
+    device = _settings()[2]
+    if not device:
+        return 'Windows-компьютер не выбран владельцем'
+    try:
+        seconds = max(1, min(90, int(kwargs.get('timeout_ms') or 60000) // 1000))
+    except (ValueError, TypeError):
+        return 'run execution=system: неверный срок ожидания'
+    result = _raw_request('POST', '/v1/controller/' + device + '/broker', {
+        'op': 'exec', 'shell': 'powershell', 'command': command,
+        'why': str(kwargs.get('goal') or kwargs.get('why') or 'Команда на выбранном Windows-компьютере')[:300],
+        'timeout_sec': seconds}, timeout=seconds + 5)
+    if result.get('host') != 'windows' or result.get('device_id') != device:
+        return 'Windows-брокер не подтвердил выполнение: ' + str(result)
+    return 'execution=system — служба выбранного Windows-компьютера:\n' + str(result.get('receipt'))
+
+
 def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
     """Подключить руку `computer` к телу и к разрешению владельца.
 
@@ -1208,6 +1416,15 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         if not getattr(body_client, "_helene_settings", False):
             body_client._settings = _settings
             body_client._helene_settings = True
+        if isinstance(_BODY, RemoteBody):
+            body_client._request = lambda method, path, payload=None, timeout=30.0: _raw_request(method, path, payload, timeout)
+            # Artifact upload/download use urllib directly in the canonical client.
+            # Keep its loopback controller credential out of environment proxies.
+            import types, urllib.request, urllib.error, urllib.parse
+            class DirectRequest:
+                def __getattr__(self, name):
+                    return _direct_opener().open if name == 'urlopen' else getattr(urllib.request, name)
+            body_client.urllib = types.SimpleNamespace(request=DirectRequest(), error=urllib.error, parse=urllib.parse)
     except Exception:
         log.warning("тело: body_client не загрузился — рука без тела", exc_info=True)
 
@@ -1236,8 +1453,14 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     if not callable(original) or getattr(original, "_helene_body", False):
         return
     action_scopes = dict(getattr(agent_mod, "_COMPUTER_ACTION_SCOPES", {}) or {})
+    import inspect
+    original_signature = inspect.signature(original)
 
     def computer(*args, **kwargs):
+        try:
+            original_signature.bind(*args, **kwargs)
+        except TypeError as error:
+            return f"computer: неверные аргументы ({error}). Действие не выполнено. Используй поля схемы computer; для UIA — action=read_window/find_elements/act_element, для ввода — events."
         action = str(kwargs.get("action") or (args[0] if args else "") or "").strip().lower()
         live.refresh()
         if not live.enabled:
@@ -1255,6 +1478,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                     f"Выдано: {given}. Галочки — в Настройках, карточка «Управление "
                     f"компьютером»; уговаривать меня бесполезно, решает он.")
         if action == "run" and str(kwargs.get("execution") or "").strip().lower() == "system":
+            if isinstance(_BODY, RemoteBody):
+                return _remote_system(kwargs)
             return _system_via_broker(agent_mod, kwargs)
         if not STATE.get("available") or _BODY is None:
             logs = ", ".join(STATE.get("logs") or []) or "нет"
@@ -1280,6 +1505,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         # маршрутов у дерева написаны под Windows («Windows body», «Session 0», «UI
         # Automation tree»); отсюда у людей «на Mac UIA не реализовано» — AX реализован,
         # врали слова. Схему правит describe_for_mac, результаты — здесь.
+        if isinstance(_BODY, RemoteBody):
+            return out
         if sys.platform == "darwin" and isinstance(out, str):
             return mac_result_text(out)
         if sys.platform.startswith("linux") and isinstance(out, str):
@@ -1287,10 +1514,16 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         return out
 
     computer._helene_body = True
+    computer.__wrapped__ = original
     computer.__name__ = getattr(original, "__name__", "computer")
     computer.__doc__ = getattr(original, "__doc__", "")
     impl["computer"] = computer
-    if sys.platform == "darwin":
+    import computer_steps
+    computer_steps.install(agent_mod, call, device_id=lambda: _settings()[2], tree=tree)
+    if isinstance(_BODY, RemoteBody):
+        # Canonical computer schema already describes the Windows target.
+        pass
+    elif sys.platform == "darwin":
         describe_for_mac(agent_mod)
         speak_mac(agent_mod)
     elif sys.platform.startswith("linux"):

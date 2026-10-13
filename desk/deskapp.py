@@ -88,6 +88,7 @@ _HERE = Path(__file__).resolve().parent
 STATIC = next((d for d in (_HERE / "static", _HERE / "app" / "dist", _HERE.parent / "app" / "dist")
                if (d / "index.html").is_file()), _HERE / "static")
 TOKEN = (os.environ.get("HELENE_TOKEN") or os.environ.get("PRAXIS_DESK_TOKEN") or "").strip()
+from deskd import remote_computer as _remote_computer
 COOKIE = "desk_key"
 _SSE_CLIENTS: set[asyncio.Queue] = set()
 _WATCH_INTERVAL = 1.5
@@ -413,6 +414,14 @@ def _role(request: web.Request) -> str:
     """"owner" — окно/эта машина, "device" — спаренный телефон, "" — никто."""
     bearer = request.headers.get("Authorization", "")
     supplied = (bearer[7:] if bearer.startswith("Bearer ") else "") or request.query.get("key") or request.cookies.get(COOKIE) or ""
+    remote = getattr(request, 'app', {}).get('_remote_computer')
+    if remote is not None and bearer.startswith('Bearer '):
+        if request.path.startswith(_remote_computer.PREFIX + '/connect/'):
+            device = request.path.rsplit('/', 1)[-1]
+            if remote.authenticate(device, supplied):
+                return 'computer-desktop'
+        if _is_loopback(request) and remote.controller(supplied):
+            return 'computer-controller'
     if TOKEN and supplied:
         try:
             if secrets.compare_digest(supplied, TOKEN):
@@ -437,6 +446,10 @@ def _role(request: web.Request) -> str:
 def _scope_ok(role: str, path: str) -> bool:
     if role == "owner":
         return True
+    if role == 'computer-desktop':
+        return bool(re.fullmatch(re.escape(_remote_computer.PREFIX) + r'/connect/[a-f0-9]{32}', path))
+    if role == 'computer-controller':
+        return path == _remote_computer.PREFIX + '/controller/state' or path.startswith(_remote_computer.PREFIX + '/bridge/')
     if role != "device":
         return False
     return path in _DEVICE_PATHS or path.startswith(_DEVICE_PREFIXES)
@@ -828,6 +841,7 @@ class Call:
     body: Any              # разобранный JSON тела POST/DELETE или None
     local: bool            # запрос с этой машины (петля)
     role: str              # owner | device
+    app: Any = None        # per-channel private services, never a global cross-agent relay
 
 
 @dataclasses.dataclass
@@ -843,6 +857,7 @@ class Route:
     path: str              # aiohttp-шаблон: "/api/chat/{peer}"
     handler: Callable[[Call], Awaitable[Any]]
     local_only: bool = False   # только с этой машины (окно): пары телефона
+    http_handler: Any = None   # streaming WebSocket upgrade cannot be nested in the JSON tunnel
 
 
 def _reader(fn: Callable[[], Any]):
@@ -1377,7 +1392,59 @@ async def _r_fold(c: Call):
                                    str(body.get("room") or "window"), str(c.role or "owner"))
 
 
+def _remote_call_owner(c: Call):
+    if c.role != 'owner' or c.app is None:
+        raise web.HTTPForbidden(text='Only the window owner can pair or select a desktop')
+    if not isinstance(c.body, dict) or len(json.dumps(c.body).encode()) > 4096:
+        raise web.HTTPBadRequest(text='Invalid or oversized desktop owner request')
+    return c.body
+
+
+async def _r_remote_pair(c: Call):
+    value = _remote_call_owner(c)
+    try:
+        return c.app['_remote_computer'].pair(value.get('name'), value.get('scopes'))
+    except (ValueError, TypeError) as error:
+        raise web.HTTPBadRequest(text=str(error))
+
+
+async def _r_remote_select(c: Call):
+    value = _remote_call_owner(c)
+    device = value.get('device')
+    if not isinstance(device, str):
+        raise web.HTTPBadRequest(text='Expected a desktop identity')
+    try:
+        return c.app['_remote_computer'].select(device)
+    except ValueError as error:
+        raise web.HTTPBadRequest(text=str(error))
+
+
+async def _r_remote_revoke(c: Call):
+    value = _remote_call_owner(c)
+    device = value.get('device')
+    if not isinstance(device, str) or not _remote_computer.DEVICE.fullmatch(device):
+        raise web.HTTPBadRequest(text='Expected a desktop identity')
+    return await c.app['_remote_computer'].revoke(device)
+
+
+async def _r_remote_snapshot(c: Call):
+    if c.app is None:
+        raise web.HTTPServiceUnavailable(text='Desktop channel unavailable')
+    return c.app['_remote_computer'].snapshot()
+
+
+async def _r_remote_connect(c: Call):
+    return Fail(400, 'Desktop WebSocket requires the dedicated HTTP upgrade')
+
+
 ROUTES: tuple[Route, ...] = (
+    Route('POST', _remote_computer.PREFIX + '/pair', _r_remote_pair),
+    Route('POST', _remote_computer.PREFIX + '/select', _r_remote_select),
+    Route('POST', _remote_computer.PREFIX + '/revoke', _r_remote_revoke),
+    Route('GET', _remote_computer.PREFIX + '/state', _r_remote_snapshot),
+    Route('GET', _remote_computer.PREFIX + '/controller/state', _r_remote_snapshot),
+    Route('GET', _remote_computer.PREFIX + '/connect/{device}', _r_remote_connect,
+          http_handler=lambda request: request.app['_remote_computer'].connect(request)),
     Route("GET", "/api/runs", _r_runs),
     Route("GET", "/api/run/{run_id}", _r_run),
     Route("GET", "/api/run/{run_id}/result/{result_id}", _r_run_result),
@@ -1498,6 +1565,8 @@ def match_route(method: str, path: str) -> tuple[Route | None, dict]:
 def _http_handler(route: Route):
     """HTTP-дверь к строке таблицы: aiohttp-запрос -> Call -> json-ответ."""
     async def handler(request: web.Request):
+        if route.http_handler is not None:
+            return await route.http_handler(request)
         if route.local_only and not _is_loopback(request):
             raise web.HTTPForbidden(text="только с этой машины")
         body = None
@@ -1505,7 +1574,7 @@ def _http_handler(route: Route):
             body = await _json_body(request)
         call = Call(match=dict(request.match_info),
                     query={k: request.query.get(k) for k in request.query},
-                    body=body, local=_is_loopback(request), role=_role(request))
+                    body=body, local=_is_loopback(request), role=_role(request), app=request.app)
         result = await route.handler(call)
         if isinstance(result, web.StreamResponse):
             return result
@@ -1513,7 +1582,9 @@ def _http_handler(route: Route):
             # Текстом, как прежние HTTPConflict/HTTPBadRequest: клиенты читают
             # причину из тела ответа словами.
             return web.Response(status=result.status, text=result.error)
-        return _json(result)
+        response = _json(result)
+        if route.path.startswith(_remote_computer.PREFIX): response.headers['Cache-Control'] = 'no-store'
+        return response
     return handler
 
 
@@ -1726,7 +1797,7 @@ _STARTED_AT = time.time()
 
 
 async def _tunnel_dispatch(method: str, path: str, body, local: bool = False,
-                           role: str = "owner") -> dict:
+                           role: str = "owner", app=None) -> dict:
     """Один запрос канала -> тот же ответ, что у HTTP-ручки того же пути.
 
     Это ШОВ ПРОДУКТА: по каналу отвечает и удалённый харнесс (на сервере), и
@@ -1750,7 +1821,7 @@ async def _tunnel_dispatch(method: str, path: str, body, local: bool = False,
         return {"status": 403, "error": "только с этой машины"}
     try:
         result = await route.handler(Call(match=params, query=query, body=body,
-                                          local=local, role=role))
+                                          local=local, role=role, app=app))
     except web.HTTPError as exc:
         return {"status": exc.status, "error": exc.text or str(exc)}
     except Exception as exc:
@@ -1821,7 +1892,7 @@ async def tunnel(request):
             reply = await _tunnel_dispatch(
                 str(req.get("method") or "GET").upper(),
                 str(req.get("path") or ""), req.get("body"), local=local,
-                role=role)
+                role=role, app=request.app)
         except Exception as exc:               # ответ обязан уйти всегда
             log.warning("канал: обработчик упал", exc_info=True)
             reply = {"status": 500, "error": f"{type(exc).__name__}: {exc}"[:300]}
@@ -2073,10 +2144,36 @@ def _mobile_file(name: str):
     return handler
 
 
+async def _remote_bridge(request):
+    relay = request.app['_remote_computer']
+    path = '/' + request.match_info['tail']
+    if request.query_string:
+        path += '?' + request.query_string
+    if request.content_length and request.content_length > _remote_computer.MAX_BODY:
+        raise web.HTTPRequestEntityTooLarge(max_size=_remote_computer.MAX_BODY, actual_size=request.content_length)
+    raw = await request.read()
+    try:
+        status, result, mime, returned = await relay.rpc(request.method, path, raw,
+            request.headers.get('Content-Type', 'application/json'), headers={
+                k: request.headers[k] for k in _remote_computer.ARTIFACT_REQUEST_HEADERS if k in request.headers})
+    except (ValueError, TypeError) as error:
+        return web.json_response({'ok': False, 'code': 'invalid_desktop_request', 'error': str(error)}, status=400)
+    except PermissionError as error:
+        return web.json_response({'ok': False, 'code': 'owner_refused', 'error': str(error)}, status=403)
+    except (ConnectionError, asyncio.TimeoutError):
+        return web.json_response({'ok': False, 'code': 'desktop_disconnected',
+            'error': 'Selected Windows desktop disconnected; verify any started operation before retry'}, status=503)
+    return web.Response(status=status, body=result, headers={**returned, 'Content-Type': mime, 'Cache-Control': 'no-store'})
+
+
 def build_app(*, port: int | None = None) -> web.Application:
     global _PHONE_ACCESS
     app = web.Application(middlewares=[auth_middleware],
                           client_max_size=_ATTACH_MAX_TOTAL * 4 // 3 + 1024 * 1024)
+    remote = _remote_computer.Relay(readers.tree())
+    app['_remote_computer'] = remote
+    app.router.add_route('*', _remote_computer.PREFIX + '/bridge/{tail:.*}', _remote_bridge)
+    app.on_shutdown.append(remote.close)
     app.router.add_get("/", index)
     # Все ручки API — из одной таблицы (та же, что у канала).
     for route in ROUTES:

@@ -799,6 +799,26 @@ class ProcessGroup(unittest.TestCase):
     SIGTERM, а кто его игнорирует, тот получает SIGKILL. Подставной ребёнок —
     этот же питон."""
 
+    def test_posix_group_probe_counts_live_members_and_keeps_unknown_as_live(self):
+        for text,expected in [('42 Z\n42 ZN\n7 S\n',False),('42 Z\n42 S+\n',True),('bad record extra\n',True),('',True)]:
+            with patch.object(body.subprocess,'run',return_value=types.SimpleNamespace(returncode=0,stdout=text)):
+                self.assertEqual(body._posix_group_has_live_members(42),expected)
+        with patch.object(body.subprocess,'run',side_effect=subprocess.TimeoutExpired('ps',1)):
+            self.assertTrue(body._posix_group_has_live_members(42))
+
+    def test_posix_permission_failure_is_suppressed_only_for_a_finished_group(self):
+        import threading
+        for remaining in (False,True):
+            proc=types.SimpleNamespace(pid=42,returncode=None,_waitpid_lock=threading.Lock(),wait=unittest.mock.Mock())
+            with patch.object(body.sys,'platform','darwin'), \
+                 patch.object(body.os,'killpg',side_effect=[None,PermissionError('denied')]), \
+                 patch.object(body,'_posix_group_has_live_members',side_effect=[True,remaining]):
+                if remaining:
+                    with self.assertRaises(PermissionError):body.kill_group(proc,grace=0)
+                    proc.wait.assert_not_called()
+                else:
+                    body.kill_group(proc,grace=0);proc.wait.assert_called_once()
+
     def test_child_leads_its_group_and_dies_by_sigterm(self):
         proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                                 stdin=subprocess.DEVNULL, **body.spawn_kwargs())

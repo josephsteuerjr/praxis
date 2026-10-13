@@ -194,7 +194,7 @@ def read_restarts(tree: Path, now: float, window_s: float = RESTART_WINDOW_S) ->
     который никто не трогал час, свежий рестарт нести не может."""
     count = 0
     journal = Path(tree) / "memory" / "journal"
-    today = dt.datetime.now()
+    today = dt.datetime.fromtimestamp(now)
     for shift in (-1, 0, 1):
         day = today + dt.timedelta(days=shift)
         path = journal / f"{day:%Y-%m-%d}.md"

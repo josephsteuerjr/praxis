@@ -201,16 +201,17 @@ class Diagnosis(unittest.TestCase):
         tree = self.root / "data"
         journal = tree / "memory" / "journal"
         journal.mkdir(parents=True)
-        now = time.time()
-        today = dt.datetime.now()
-        rows = []
+        # Deterministic midnight: recent rows can belong to yesterday's journal.
+        today = dt.datetime(2026, 1, 2, 0, 3, 45)
+        now = today.timestamp()
+        rows = {}
         for minute in (2, 6, 10):  # три рестарта за последние минуты
-            when = dt.datetime.now() - dt.timedelta(minutes=minute)
-            rows.append(f"- {when:%H:%M} (s3) [restart] перезапускаюсь")
-        (journal / f"{today:%Y-%m-%d}.md").write_text(
-            "\n".join(rows) + "\n", encoding="utf-8", newline="\n")
-        # свежий mtime обязателен: нетронутый час файл не несёт свежего рестарта
-        os.utime(journal / f"{today:%Y-%m-%d}.md", (now, now))
+            when = today - dt.timedelta(minutes=minute)
+            rows.setdefault(f"{when:%Y-%m-%d}.md", []).append(f"- {when:%H:%M} (s3) [restart] перезапускаюсь")
+        for name, lines in rows.items():
+            (journal / name).write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+            # Fresh mtime is required for a recent restart.
+            os.utime(journal / name, (now, now))
         got = doctor.diagnose_agent(tree, now=now)
         self.assertEqual(got["verdict"], doctor.VERDICT_SICK)
         self.assertEqual(got["checks"]["restarts"]["verdict"], doctor.VERDICT_SICK)

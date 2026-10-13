@@ -493,6 +493,7 @@ impl ChildSpec {
                 match script.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default().as_str() {
                     "deskapp.py" => "Связь с агентом",
                     "runner.py" => "Агент",
+                    "remote_computer_client.py" => "Доступ серверного агента к этому компьютеру",
                     _ => "Часть программы",
                 }
             }
@@ -2105,6 +2106,22 @@ fn build_plans(base: &Path) -> Vec<SpawnPlan> {
     for agent in raisable(base) {
         let cfg = agent_config(&agent.config);
         if cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("local") != "local" {
+            #[cfg(windows)]
+            if cfg.get("mode").and_then(|v| v.as_str()) == Some("remote") {
+                let base = &agent.dir;
+                let python = python_path(base, &cfg);
+                let app = resolve(base, cfg.get("app").and_then(|v| v.as_str()).unwrap_or("app/deskapp.py"));
+                let script = app.parent().unwrap_or(Path::new(".")).join("localharness/remote_computer_client.py");
+                if script.is_file() {
+                    out.push(SpawnPlan { agent: agent.id.clone(), name: agent.name.clone(),
+                        config: agent.config.clone(), port: 0, tree: agent.tree.clone(), token: String::new(),
+                        specs: vec![ChildSpec::Script { python, script,
+                            args: vec!["run".into(), "--config".into(), agent.config.to_string_lossy().into_owned(),
+                                "--data".into(), agent.tree.to_string_lossy().into_owned()],
+                            tree: agent.tree.clone(), host: "127.0.0.1".into(), token: String::new(),
+                            config: agent.config.clone() }] });
+                }
+            }
             continue;               // удалённый агент живёт не здесь — поднимать нечего
         }
         // ⚠ Ненастроенному соседу канал поднимаем ВСЁ РАВНО, а раннер — нет.
@@ -2142,7 +2159,7 @@ fn start_children(plan: &SpawnPlan, announce: bool) -> (Vec<Managed>, Option<Ver
     // сравнение с чужим давало ложное «чужая установка».
     let _ = std::fs::create_dir_all(&plan.tree);
     let port = plan.port;
-    if harness_alive(port) {
+    if port != 0 && harness_alive(port) {
         let verdict = harness_verdict(port, &plan.tree, &plan.token);
         match &verdict {
             Verdict::Ours => {
@@ -2462,28 +2479,15 @@ fn stop_child(child: &mut Child) {
 #[cfg(unix)]
 fn stop_child(child: &mut Child) {
     let group = child.id() as libc::pid_t;
+    // WNOWAIT verifies this is still our unreaped child and keeps its PID
+    // reserved. try_wait would reap an exited leader before its surviving
+    // grandchildren were killed, losing both cleanup and group ownership.
+    if !unix_child_unreaped(group) { let _ = child.wait(); return; }
     unsafe {
         libc::killpg(group, libc::SIGTERM);
     }
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut reaped = false;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                reaped = true;
-                break;
-            }
-            Ok(None) => {}
-            Err(_) => break,
-        }
-        if Instant::now() >= deadline {
-            unsafe {
-                libc::killpg(group, libc::SIGKILL);
-            }
-            let _ = child.wait();
-            reaped = true;
-            break;
-        }
+    while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
     // Лидер вышел, а группа жива, пока жив последний её процесс: добиваем
@@ -2494,10 +2498,21 @@ fn stop_child(child: &mut Child) {
     // происходит за секунды. Безусловный `killpg` по пожатому pid — это SIGKILL
     // ЧУЖОЙ группе процессов: у владельца молча умирал бы случайный терминал
     // или браузер, и связать это с закрытием окна было бы нечем.
-    if may_signal_group(reaped, unix_group_leader_alive(group)) {
+    if unix_child_unreaped(group) {
         unsafe {
             libc::killpg(group, libc::SIGKILL);
         }
+    }
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+fn unix_child_unreaped(pid: libc::pid_t) -> bool {
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        if unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT) } == 0 { return true; }
+        if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted { return false; }
     }
 }
 
@@ -2608,6 +2623,10 @@ fn watch_service_body(app: ShellHandle, tree: PathBuf, config: PathBuf) {
         if state.stopping.load(Ordering::Relaxed) {
             stop_service_body();
             return;
+        }
+        if owner_stopped() {
+            stop_service_body();
+            continue;
         }
         // Ребёнок жив? Умер — пауза растёт, как у остальных детей окна.
         {
@@ -3139,28 +3158,36 @@ fn engine_restart() -> Result<String, String> {
     Ok("Перезапуск запрошен; жду готовности движка".into())
 }
 
-/// Стоп-кран владельца. Windows просит согласие UAC и кладёт флаг службой; Linux
-/// пишет флаг сам (движок там всегда от имени владельца — прав не нужно), а детей
-/// гасит и поднимает надзор `watch_children` своими полусекундными тиками.
+/// Native work runs outside the UI thread, including a service or UAC wait.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn owner_control(action: String) -> Result<String, String> {
+async fn owner_control(action: String) -> Result<String, String> {
+    shell_adapter::async_runtime::spawn_blocking(move || owner_control_blocking(action))
+        .await.map_err(|e| e.to_string())?
+}
+
+fn owner_control_blocking(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
+    let _resume_gate = if action == "resume" {
+        Some(RESUME_TRANSFER_GATE.try_lock().map_err(|_| "Другая команда запуска или переноса ещё выполняется".to_string())?)
+    } else { None };
     if action=="resume" && SERVER_TRANSFER_BUSY.load(std::sync::atomic::Ordering::SeqCst) {
         return Err("Перенос на сервер ещё идёт. Дождись его результата, чтобы не запустить второго агента.".into());
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         return match action.as_str() {
             "panic" => {
                 request_owner_stop("window")?;
-                Ok("Остановка записана. Движок и канал погаснут в ближайшую секунду; надзор не поднимет их, пока не нажмёшь «Возобновить».".into())
+                Ok("Стоп сохранён. Надзор завершает процессы; состояние покажет, когда они остановлены. Запуск — только явной командой «Возобновить».".into())
             }
             _ => {
+                #[cfg(target_os = "linux")]
                 if service_owns_harness() && linux_svc_state(&linux_owner_name()) == "stopped" {
                     // Keep the stop marker if systemd could not be started.
                     linux_service_op("start")?;
                 }
                 resume_owner_stop()?;
+                #[cfg(target_os = "linux")]
                 OWNER_RESUME_LIFT.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok("Стоп снят. Надзор поднимет агента в ближайшие секунды.".into())
             }
@@ -3169,6 +3196,13 @@ fn owner_control(action: String) -> Result<String, String> {
     #[cfg(windows)]
     {
         if action == "panic" {
+            // Stop this session first. A missing/stalled service cannot prevent
+            // an unprivileged client from stopping its own process tree.
+            request_client_stop("window")?;
+            if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() { job.terminate(); }
+            if !service_owns_harness() {
+                return Ok("Аварийный стоп сохранён. Клиент завершает агентские процессы; возобновление — только твоей командой.".into());
+            }
             let config = install_root().join("helene.json");
             if let Ok(raw) = std::fs::read(&config) {
                 if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&raw) {
@@ -3176,13 +3210,18 @@ fn owner_control(action: String) -> Result<String, String> {
                     let tree = if raw_tree.is_absolute() { raw_tree } else { install_root().join(raw_tree) };
                     if let Some(token) = broker_token_read(&tree) {
                         let ask = BrokerAsk::new(&token, BrokerOp::Panic, "", &["window".into()], "Аварийная остановка Hélène");
-                        if broker_call_deadline(&broker_pipe_name(&install_root()), &ask, Duration::from_secs(6))
-                            .is_ok_and(|r| r.ok) && owner_stopped() {
+                        if broker_call_deadline(&broker_pipe_name(&install_root()), &ask, Duration::from_secs(2))
+                            .is_ok_and(|r| r.ok) && owner_stop_file().is_some_and(|p| p.exists()) {
                             return Ok("Аварийный стоп включён; надзор завершает все агентские процессы".into());
                         }
                     }
                 }
             }
+            return Err("Клиент остановлен, запрет запуска сохранён. Служба не подтвердила остановку своих процессов; проверь её отдельно.".into());
+        }
+        resume_client_stop()?;
+        if !service_owns_harness() && !owner_stopped() {
+            return Ok("Стоп снят твоей командой; клиент запускает агента.".into());
         }
         let exe = install_root().join("helene-svc.exe");
         let file = exe.to_string_lossy().replace('\'', "''");
@@ -3204,7 +3243,7 @@ fn owner_control(action: String) -> Result<String, String> {
         if owner_stopped() != (action == "panic") { return Err("Флаг не подтвердил команду".into()); }
         Ok(if action == "panic" { "Остановка записана; надзор завершает своё дерево" } else { "Остановка снята явным действием; надзор может запустить агента" }.into())
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     { Err("Нативный стоп-кран этого выпуска реализован на Windows и Linux".into()) }
 }
 
@@ -3238,6 +3277,82 @@ fn config_load() -> Result<serde_json::Value, String> {
         // Отпечаток свежести: окно возвращает его в `config_save`.
         "mtime_ns": file_mtime_ns(&path),
     }))
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+async fn remote_computer_pair(scopes: Vec<String>, system: bool, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+    #[cfg(not(windows))]
+    { let _ = (scopes, system, mtime_ns); return Err("Подключение этого компьютера требует Windows-версии Hélène".into()); }
+    #[cfg(windows)]
+    {
+        let path = current_config_path();
+        shell_adapter::async_runtime::spawn_blocking(move || {
+            let before = file_mtime_ns(&path);
+            if mtime_ns.as_deref() != before.as_deref() {
+                return Err("Настройки изменились — открой текущие настройки перед подключением компьютера".into());
+            }
+            let cfg = match read_config(&path) {
+                ConfigRead::Ok(value) => value,
+                _ => return Err("Настройки подключения не читаются".into()),
+            };
+            if cfg.get("mode").and_then(|v| v.as_str()) != Some("remote") {
+                return Err("Сначала подключи это окно к серверному агенту".into());
+            }
+            let allowed = ["computer.read", "computer.files", "computer.process", "computer.apps"];
+            if scopes.iter().any(|s| !allowed.contains(&s.as_str())) || (system && !scopes.iter().any(|s| s == "computer.process")) {
+                return Err("Права Windows SYSTEM требуют разрешения на процессы этого компьютера".into());
+            }
+            let home = path.parent().ok_or("У настроек нет папки")?;
+            let python = python_path(home, &cfg);
+            let app = resolve(home, cfg.get("app").and_then(|v| v.as_str()).unwrap_or("app/deskapp.py"));
+            let script = app.parent().unwrap_or(home).join("localharness/remote_computer_client.py");
+            if !script.is_file() { return Err("В поставке нет клиента удалённого компьютера".into()); }
+            let mut command = std::process::Command::new(python);
+            command.arg("-u").arg(script).arg("pair").arg("--config").arg(&path)
+                .arg("--scopes").arg(scopes.join(",")).arg(if system { "--system" } else { "--no-system" })
+                .arg("--mtime-ns").arg(before.as_deref().ok_or("У настроек нет отпечатка свежести")?)
+                .env_remove("HELENE_TOKEN").env_remove("PRAXIS_DESK_TOKEN")
+                .stdin(std::process::Stdio::null());
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+            let output = command.output().map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                let error = String::from_utf8_lossy(&output.stderr);
+                return Err(error.lines().last().unwrap_or("Подключение компьютера не завершилось").to_string());
+            }
+            let mut value: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|_| "Клиент не вернул квитанцию подключения")?;
+            value["path"] = serde_json::json!(path);
+            value["before_mtime_ns"] = serde_json::json!(before);
+            value["mtime_ns"] = serde_json::json!(file_mtime_ns(&path));
+            Ok(value)
+        }).await.map_err(|e| e.to_string())?
+    }
+}
+
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn remote_computer_disable(mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+    let path = current_config_path();
+    let before = file_mtime_ns(&path);
+    if before.as_deref() != mtime_ns.as_deref() {
+        return Err("Настройки изменились — открой текущие настройки перед отключением компьютера".into());
+    }
+    let mut cfg = match read_config(&path) { ConfigRead::Ok(v) => v, _ => return Err("Настройки не читаются".into()) };
+    if cfg.get("mode").and_then(|v| v.as_str()) != Some("remote") { return Err("Это окно не подключено к серверу".into()); }
+    let id = disable_remote_grant(&mut cfg)?;
+    let text = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
+    let mut receipt = config_save_at(&path, &text, mtime_ns.as_deref())?;
+    receipt["id"] = id;
+    receipt["path"] = serde_json::json!(path);
+    receipt["before_mtime_ns"] = serde_json::json!(before);
+    Ok(receipt)
+}
+
+fn disable_remote_grant(cfg: &mut serde_json::Value) -> Result<serde_json::Value, String> {
+    let remote = cfg.pointer_mut("/computer/remote").and_then(|v| v.as_object_mut())
+        .ok_or("У этого компьютера нет подключения, которое можно отключить")?;
+    let id = remote.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    remote.insert("enabled".into(), serde_json::Value::Bool(false));
+    Ok(id)
 }
 
 /// Состояние службы по SCM: running / stopped / absent. Прав не требует.
@@ -6305,9 +6420,11 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
 }
 
 fn bootstrap() -> Option<Boot> {
-    if std::env::args().any(|a| a == "--panic") {
+    if let Some(action) = std::env::args().find_map(|a| match a.as_str() {
+        "--panic" => Some("panic"), "--resume" => Some("resume"), _ => None,
+    }) {
         let notify = std::env::args().any(|a| a == "--notify");
-        match owner_control("panic".into()) {
+        match owner_control_blocking(action.into()) {
             Ok(note) => { if notify { message_box_info("Hélène · аварийный стоп", &note); } }
             Err(e) => {
                 eprintln!("{e}");
@@ -6471,6 +6588,14 @@ fn bootstrap() -> Option<Boot> {
                 }
             }
             "remote" => {
+                #[cfg(windows)]
+                {
+                    plans = build_plans(&base);
+                    for plan in &plans {
+                        let (mut lifted, _) = start_children(plan, false);
+                        children.append(&mut lifted);
+                    }
+                }
                 let base_url = cfg.get("base").and_then(|v| v.as_str()).unwrap_or("");
                 let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("");
                 window_key = Some(key.to_owned());
@@ -6525,15 +6650,56 @@ struct Boot {
 
 #[cfg(feature = "desktop")]
 fn main() {
-    let context = tauri::generate_context!();
+    let mut context = tauri::generate_context!();
     init_product(context.config());
+    // Control CLI must first reach the existing owner's process. Running it
+    // in bootstrap would see a new, false SERVER_TRANSFER_BUSY and could
+    // resume the local agent while the main window transfers it to a server.
+    if let Some(action) = std::env::args().find_map(|a| match a.as_str() {
+        "--panic" => Some("panic"), "--resume" => Some("resume"), _ => None,
+    }) {
+        context.config_mut().app.windows.clear();
+        let notify = std::env::args().any(|a| a == "--notify");
+        let result = tauri::Builder::default()
+            .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
+                if let Some(action) = argv.iter().find_map(|a| match a.as_str() {
+                    "--panic" => Some("panic"), "--resume" => Some("resume"), _ => None,
+                }) {
+                    std::thread::spawn(move || {
+                        if let Err(error) = owner_control_blocking(action.into()) { log_line(&error); }
+                    });
+                }
+            }))
+            .setup(move |app| {
+                let exit = match owner_control_blocking(action.into()) {
+                    Ok(note) => { if notify { message_box_info("Hélène · управление агентом", &note); } 0 }
+                    Err(error) => {
+                        eprintln!("{error}");
+                        if notify { message_box("Hélène · команда не подтверждена", &error); }
+                        1
+                    }
+                };
+                app.handle().exit(exit);
+                Ok(())
+            }).run(context);
+        if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
+        return;
+    }
     let Some(Boot { base, children, plans, init_script, window_key, tree, notify_text }) = bootstrap() else { return };
     let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            if argv.iter().any(|a| a == "--panic") {
-                let _ = owner_control("panic".into());
+            if let Some(action) = argv.iter().find_map(|a| match a.as_str() {
+                "--panic" => Some("panic"), "--resume" => Some("resume"), _ => None,
+            }) {
+                // Single-instance callbacks run on the UI thread too.
+                std::thread::spawn(move || {
+                    if let Err(error) = owner_control_blocking(action.into()) {
+                        log_line(&error);
+                        message_box("Hélène · команда не подтверждена", &error);
+                    }
+                });
             }
             show_main(app);
         }));
@@ -6552,6 +6718,8 @@ fn main() {
             owner_state,
             engine_restart,
             config_save,
+            remote_computer_pair,
+            remote_computer_disable,
             restart_self,
             install_service,
             remove_service,
@@ -6832,6 +7000,8 @@ fn window_state_remembered<M: tauri::Manager<tauri::Wry>>(manager: &M) -> bool {
 
 #[cfg(feature = "desktop")]
 include!("tray_popup.rs");
+#[cfg(feature = "desktop")]
+mod initial_window;
 
 /// Построить окно. Вынесено из `setup` целиком, потому что переключение агента
 /// строит его ЗАНОВО: init-скрипт (адрес канала и ключ) задаётся только при
@@ -6882,9 +7052,24 @@ fn open_window<M: tauri::Manager<tauri::Wry>>(
     .title(product_ui())
     .inner_size(1360.0, 860.0)
     .min_inner_size(900.0, 600.0)
-    .center()
     .decorations(false)
     .shadow(true);
+    // Centering the original 1360px window before macOS zoom can leave its
+    // navigation offscreen on a smaller display. Fit the initial geometry first.
+    let initial = manager.app_handle().primary_monitor().ok().flatten().and_then(|monitor| {
+        let area = monitor.work_area();
+        initial_window::fit_initial_window(
+            area.position.x as f64, area.position.y as f64,
+            area.size.width as f64, area.size.height as f64, monitor.scale_factor(),
+        )
+    });
+    if let Some(bounds) = initial {
+        builder = builder.inner_size(bounds.width, bounds.height)
+            .min_inner_size(bounds.min_width, bounds.min_height)
+            .position(bounds.x, bounds.y);
+    } else {
+        builder = builder.center();
+    }
     // ⚠ «На весь экран» — только когда памяти о размере ещё НЕТ.
     //
     // Рядом живёт `tauri_plugin_window_state`: он помнит ширину, высоту, место
@@ -6972,6 +7157,7 @@ fn watch_children(app: ShellHandle) {
         Halt(String, String),
     }
     let mut last_lift = Instant::now();
+    let mut saw_owner_stop = false;
     loop {
         std::thread::sleep(Duration::from_millis(500));
         let state = app.state::<LocalHarness>();
@@ -6979,8 +7165,11 @@ fn watch_children(app: ShellHandle) {
             return;
         }
         if owner_stopped() {
+            saw_owner_stop = true;
             #[cfg(windows)]
             if let Some(job) = JOB.get_or_init(job::Job::new).as_ref() { job.terminate(); }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            stop_service_body();
             if let Ok(mut children) = state.children.lock() {
                 for child in children.iter_mut().filter_map(|m| m.child.as_mut()) {
                     stop_child(child);
@@ -6989,6 +7178,11 @@ fn watch_children(app: ShellHandle) {
             }
             relay_abort();
             continue;
+        }
+        if saw_owner_stop {
+            saw_owner_stop = false;
+            last_lift = Instant::now() - Duration::from_secs(30);
+            if let Ok(mut plans) = state.plans.lock() { *plans = build_plans(&install_root()); }
         }
         #[cfg(target_os = "linux")]
         if OWNER_RESUME_LIFT.swap(false, Ordering::Relaxed) {
@@ -8064,6 +8258,15 @@ fn update_check_blocking(url: &str) -> Result<serde_json::Value, String> {
             .and_then(|a| a.as_array())
             .and_then(|a| if cfg!(target_os = "linux") { None } else { pick_update_zip(a, product_fs(), product_fs() == PRODUCT, macos) });
         let current = env!("CARGO_PKG_VERSION");
+        #[cfg(target_os = "linux")]
+        if text("version").is_empty() && version_newer(&raw_latest, current) {
+            let latest = raw_latest.trim().trim_start_matches(['v', 'V']);
+            let deb = format!("helene_{latest}_amd64.deb");
+            let rpm = format!("helene-{latest}-1.x86_64.rpm");
+            let available = v.get("assets").and_then(|a| a.as_array()).is_some_and(|assets|
+                assets.iter().any(|a| a["name"].as_str().is_some_and(|name| name == deb || name == rpm)));
+            if !available { return Err(format!("Есть версия {latest}, но DEB/RPM для Linux этого выпуска ещё нет")); }
+        }
         // macOS: версия новее есть, а сборки для Mac в ней нет — сказать это
         // словами, а не подсовывать страницу релиза с Windows-архивом. Когда
         // новее ничего нет, отсутствие Mac-архива — не ошибка: ставить нечего.
@@ -8682,6 +8885,7 @@ fn voice_fetch(model: String, kind: Option<String>) -> Result<String, String> {
 
 /// Настройка сервера из окна. SSH credentials идут по stdin в локальный helper.
 static SERVER_TRANSFER_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static RESUME_TRANSFER_GATE: Mutex<()> = Mutex::new(());
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn server_transfer(action: String, request: String) -> Result<serde_json::Value, String> {
     if !["probe", "run", "locate", "status", "telegram-check"].contains(&action.as_str()) || request.len() > 32768 {
@@ -8689,6 +8893,10 @@ async fn server_transfer(action: String, request: String) -> Result<serde_json::
     }
     let base = install_root();
     let config = current_config_path();
+    let moving = action == "run";
+    let transfer_gate = if moving {
+        Some(RESUME_TRANSFER_GATE.try_lock().map_err(|_| "Команда возобновления ещё выполняется".to_string())?)
+    } else { None };
     if action == "run" {
         let input:serde_json::Value=serde_json::from_str(&request).map_err(|_|"неверные данные подключения".to_string())?;
         if input.get("expected_config").and_then(|v|v.as_str())!=Some(config.to_string_lossy().as_ref()) {
@@ -8701,10 +8909,10 @@ async fn server_transfer(action: String, request: String) -> Result<serde_json::
             return Err("Местный агент ещё не остановлен. Дождись остановки перед переносом.".into());
         }
     }
-    let moving=action=="run";
     if moving && SERVER_TRANSFER_BUSY.swap(true,std::sync::atomic::Ordering::SeqCst) {
         return Err("Перенос уже идёт. Дождись его результата перед повтором.".into());
     }
+    drop(transfer_gate);
     shell_adapter::async_runtime::spawn_blocking(move || {
         struct Clear(bool);
         impl Drop for Clear { fn drop(&mut self) { if self.0 { SERVER_TRANSFER_BUSY.store(false,std::sync::atomic::Ordering::SeqCst); } } }
@@ -8795,7 +9003,9 @@ async fn logs_bundle() -> Result<String, String> {
 ///
 /// Формы: `key=…`, `token=…`, `Bearer …`, `sk-…`, `dk-…` (регистр не важен).
 fn mask_secrets(text: &str) -> String {
-    const MARKS: [&str; 3] = ["key=", "token=", "bearer "];
+    const MARKS: [&str; 16] = ["api_key=", "api_hash=", "password=", "secret=", "bot_token=", "basic ",
+        "key=", "token=", "bearer ", "tok=", "k=",
+        "\"key\":", "\"token\":", "\"bot_token\":", "\"api_key\":", "X-Telegram-Bot-Token:"];
     const PREFIXES: [&str; 2] = ["sk-", "dk-"];
     const HIDDEN: &[u8] = "<скрыто>".as_bytes();
     // Символы, из которых состоит сам секрет: на первом чужом байте (пробел,
@@ -8808,14 +9018,30 @@ fn mask_secrets(text: &str) -> String {
     let mut i = 0usize;
     while i < src.len() {
         let rest = &src[i..];
+        // Bot tokens can appear in URL paths, JSON, or arbitrary shell variables.
+        if src[i].is_ascii_digit() && (i == 0 || !src[i - 1].is_ascii_digit()) {
+            let mut end_id = i;
+            while end_id < src.len() && src[end_id].is_ascii_digit() { end_id += 1; }
+            if end_id - i >= 6 && src.get(end_id) == Some(&b':') {
+                let mut end_token = end_id + 1;
+                while end_token < src.len() && (src[end_token].is_ascii_alphanumeric()
+                    || matches!(src[end_token], b'_' | b'-')) { end_token += 1; }
+                if end_token - end_id > 20 {
+                    out.extend_from_slice(HIDDEN); i = end_token; continue;
+                }
+            }
+        }
         // key= / token= / Bearer — прячем значение, сам маркер оставляем.
         if let Some(len) = MARKS
             .iter()
-            .find(|m| rest.len() >= m.len() && rest[..m.len()].eq_ignore_ascii_case(m.as_bytes()))
+            .find(|m| (i == 0 || !body_byte(src[i - 1])) && rest.len() >= m.len() && rest[..m.len()].eq_ignore_ascii_case(m.as_bytes()))
             .map(|m| m.len())
         {
             out.extend_from_slice(&rest[..len]);
             i += len;
+            while i < src.len() && (src[i].is_ascii_whitespace() || matches!(src[i], b'\"' | b'\'')) {
+                out.push(src[i]); i += 1;
+            }
             let mut j = i;
             while j < src.len() && body_byte(src[j]) {
                 j += 1;
@@ -8853,6 +9079,54 @@ fn mask_secrets(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+fn collect_support_secrets(value: &serde_json::Value, secret: bool, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(fields) => for (name, child) in fields {
+            let name = name.to_ascii_lowercase();
+            let marked = secret || matches!(name.as_str(), "key" | "keys" | "api_hash" | "password" | "passphrase" | "authorization")
+                || name.contains("token") || name.contains("secret") || name.ends_with("_key");
+            collect_support_secrets(child, marked, out);
+        },
+        serde_json::Value::Array(items) => for child in items { collect_support_secrets(child, secret, out); },
+        serde_json::Value::String(text) if secret && text.len() >= 8 => {
+            out.push(text.clone());
+            let quoted = serde_json::to_string(text).unwrap_or_default();
+            if quoted.len() >= 2 { out.push(quoted[1..quoted.len()-1].to_string()); }
+            out.push(url::form_urlencoded::byte_serialize(text.as_bytes()).collect());
+        },
+        _ => {},
+    }
+}
+
+fn support_secrets(base: &Path, tree: &Path) -> Vec<String> {
+    let mut paths = vec![base.join(CONFIG_NAME), current_config_path()];
+    if let Ok(entries) = std::fs::read_dir(base.join("agents")) {
+        paths.extend(entries.flatten().map(|entry| entry.path().join(CONFIG_NAME)));
+    }
+    let mut values = Vec::new();
+    for path in paths {
+        if let Some(raw) = read_tail(&path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw.trim_start_matches('\u{feff}')) {
+                collect_support_secrets(&value, false, &mut values);
+            }
+        }
+    }
+    // Read to redact, never copy these files into the support archive.
+    if let Some(token) = read_tail(&tree.join("memory/.state/body-token")) {
+        let token = token.trim();
+        if token.len() >= 8 { values.push(token.to_string()); }
+    }
+    values.sort(); values.dedup();
+    values.sort_by_key(|v| std::cmp::Reverse(v.len()));
+    values
+}
+
+fn mask_support_text(text: &str, values: &[String]) -> String {
+    let mut safe = text.to_string();
+    for value in values { safe = safe.replace(value, "<скрыто>"); }
+    mask_secrets(&safe)
+}
+
 /// Хвост файла в текст: логи режутся ротацией по 5 МБ, но у реле свои правила,
 /// а маска работает по тексту — читаем не больше разумного.
 const BUNDLE_TAIL: u64 = 8 * 1024 * 1024;
@@ -8870,6 +9144,7 @@ fn read_tail(path: &Path) -> Option<String> {
 
 fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
     let base = install_root();
+    let secret_values = support_secrets(&base, &tree);
     // Конфиг здесь не обязателен: логи нужнее всего именно тогда, когда
     // helene.json испорчен, а config_load()? отказывал ровно в этом случае.
     let stamp = std::time::SystemTime::now()
@@ -8909,6 +9184,14 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
     for name in ["deskapp.log", "runner.log", "service.log", "desk.log"] {
         sources.push(tree.join(name));
     }
+    for name in ["body.log", "bridge.log"] { sources.push(tree.join("body").join(name)); }
+    // Only named diagnostic receipts: never include owner config, sessions,
+    // chat transcripts or the raw memory tree in a support archive.
+    for name in ["body.json", "born.json", "package-version.json", "package-update.json",
+        "package-update-reported.json", "update-inspection.json"] {
+        sources.push(tree.join("memory/.state").join(name));
+    }
+    sources.push(base.join("helene-build.json"));
     if let Ok(rd) = std::fs::read_dir(tree.join("relay").join("logs")) {
         sources.extend(rd.flatten().map(|e| e.path()).filter(|p| p.is_file()));
     }
@@ -8919,7 +9202,7 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
         let Some(name) = src.file_name() else { continue };
         // Не copy, а «прочитать → закрыть секреты → записать».
         let Some(text) = read_tail(&src) else { continue };
-        if std::fs::write(stage.join(name), mask_secrets(&text)).is_ok() {
+        if std::fs::write(stage.join(name), mask_support_text(&text, &secret_values)).is_ok() {
             copied.push(name.to_string_lossy().into_owned());
         }
     }
@@ -9925,6 +10208,26 @@ mod tests {
         assert!(may_signal_group(false, true));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn posix_stop_keeps_leader_owned_until_resistant_grandchild_is_dead() {
+        use std::os::unix::process::CommandExt;
+        let marker = std::env::temp_dir().join(format!("helene-group-review-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let mut child = Command::new("/bin/sh").args(["-c",
+            "trap 'exit 0' TERM; /bin/sh -c 'trap \"\" TERM; echo $$ > \"$1\"; while :; do sleep 1; done' fixture \"$1\" & wait",
+            "fixture"]).arg(&marker).process_group(0).spawn().unwrap();
+        let limit = Instant::now() + Duration::from_secs(2);
+        while !marker.is_file() && Instant::now() < limit { std::thread::sleep(Duration::from_millis(10)); }
+        let pid = std::fs::read_to_string(&marker).unwrap().trim().parse::<u32>().unwrap();
+        stop_child(&mut child);
+        assert!(!unix_child_unreaped(child.id() as libc::pid_t));
+        let status = Command::new("/bin/ps").args(["-o", "stat=", "-p", &pid.to_string()]).output().unwrap();
+        let status = String::from_utf8_lossy(&status.stdout);
+        assert!(status.trim().is_empty() || status.trim().starts_with('Z'), "grandchild still runs: {status}");
+        std::fs::remove_file(marker).unwrap();
+    }
+
     /// ⚠ п.2: граница macOS отвергает невидимые знаки во всех трёх полях —
     /// владелец решает по тому, что увидел в окне.
     #[test]
@@ -10039,6 +10342,28 @@ mod tests {
         assert!(plain.contains("sk-1"), "{plain}");
     }
 
+    #[test]
+    fn support_archive_masks_bot_urls_headers_json_and_shell_variables() {
+        let bot = "123456789:synthetic_token_1234567890ABCDE";
+        let secret = "synthetic_proxy_secret_ABCDEFGHIJ";
+        let text = format!("/bot{bot}/getMe\nX-Telegram-Bot-Token: {bot}\nTOK=\"{bot}\"; K=\"{secret}\"; {{\"key\": \"{secret}\"}}");
+        let result = mask_secrets(&text);
+        assert!(!result.contains(bot), "{result}");
+        assert!(!result.contains(secret), "{result}");
+        assert!(result.contains("getMe"));
+    }
+
+    #[test]
+    fn support_archive_masks_exact_custom_secrets_in_all_configured_forms() {
+        let secret = "synthetic/custom+credential=ABCDEFGHIJ";
+        let config = serde_json::json!({"model":{"keys":{"provider":secret}}, "custom":{"access_token":secret}, "owner":{"name":"Public name"}});
+        let mut values = Vec::new();
+        collect_support_secrets(&config, false, &mut values);
+        let encoded: String = url::form_urlencoded::byte_serialize(secret.as_bytes()).collect();
+        let safe = mask_support_text(&format!("{{\"api_key\" : \"{secret}\"}} /{encoded} api_key={secret} Public name"), &values);
+        assert!(!safe.contains(secret)); assert!(!safe.contains(&encoded)); assert!(safe.contains("Public name"));
+    }
+
     // Несколько агентов в одной установке (11.09): планы подъёма и адрес окна.
     use super::*;
 
@@ -10064,6 +10389,42 @@ mod tests {
         )
         .unwrap();
         root
+    }
+
+    #[test]
+    fn remote_disable_handles_owner_edited_settings_without_panicking() {
+        for mut cfg in [serde_json::json!({}), serde_json::json!({"computer":"broken"}),
+                        serde_json::json!({"computer":{"remote":false}})] {
+            assert!(disable_remote_grant(&mut cfg).is_err());
+        }
+        let mut cfg=serde_json::json!({"computer":{"custom":42,"remote":{"enabled":true,"id":"fixture"}},"service":{"session0":true}});
+        assert_eq!(disable_remote_grant(&mut cfg).unwrap(),"fixture");
+        assert_eq!(cfg.pointer("/computer/remote/enabled"),Some(&serde_json::json!(false)));
+        assert_eq!(cfg.pointer("/service/session0"),Some(&serde_json::json!(true)));
+        assert_eq!(cfg.pointer("/computer/custom"),Some(&serde_json::json!(42)));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn remote_windows_profile_has_one_publisher_and_no_local_brain_or_relay() {
+        let root=two_agents("remote-cu");
+        let helper=root.join("app/localharness/remote_computer_client.py");
+        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        std::fs::write(&helper,b"fixture only").unwrap();
+        let path=root.join(CONFIG_NAME);
+        let mut cfg=match read_config(&path) { ConfigRead::Ok(v)=>v,_=>panic!("fixture config") };
+        cfg["mode"]=serde_json::json!("remote");
+        std::fs::write(&path,serde_json::to_vec(&cfg).unwrap()).unwrap();
+        let plans=build_plans(&root);
+        let main=plans.iter().find(|p|p.agent==BASE_AGENT_ID).unwrap();
+        assert_eq!(main.port,0);assert!(main.token.is_empty());assert_eq!(main.specs.len(),1);
+        match &main.specs[0] {
+            ChildSpec::Script{script,args,config,..}=>{
+                assert_eq!(script,&helper);assert_eq!(args[0],"run");assert_eq!(config,&path);
+            },_=>panic!("remote profile started relay")
+        }
+        assert!(plans.iter().find(|p|p.agent=="mira").unwrap().specs.len()>1);
+        let _=std::fs::remove_dir_all(root);
     }
 
     /// Каждый агент поднимается СВОЕЙ парой, в своём доме и на своём порту.

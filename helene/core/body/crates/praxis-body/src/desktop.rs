@@ -138,6 +138,8 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
     // (порт 19.09), и доступен он ровно там, где собран.
     let (name, version) = if cfg!(target_os = "macos") {
         ("native-macos-desktop", "1")
+    } else if cfg!(target_os = "linux") {
+        ("native-linux-x11-desktop", "1")
     } else {
         ("native-win32-desktop", "3")
     };
@@ -148,7 +150,7 @@ pub fn adapter_descriptor() -> AdapterDescriptor {
             .iter()
             .map(|capability| capability.name.to_string())
             .collect(),
-        available: cfg!(any(windows, target_os = "macos")),
+        available: cfg!(any(windows, target_os = "macos", target_os = "linux")),
     }
 }
 
@@ -346,7 +348,14 @@ pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value
     })
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod platform {
+    pub fn dispatch(capability: &str, args: serde_json::Value, state_dir: &std::path::Path) -> anyhow::Result<serde_json::Value> {
+        crate::linux::dispatch(capability, args, state_dir)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use std::path::Path;
 
@@ -4847,7 +4856,7 @@ mod tests {
         }
         assert_eq!(
             adapter_descriptor().version,
-            if cfg!(target_os = "macos") { "1" } else { "3" }
+            if cfg!(any(target_os = "macos", target_os = "linux")) { "1" } else { "3" }
         );
     }
 
@@ -4872,10 +4881,12 @@ mod tests {
     #[test]
     fn adapter_is_only_advertised_as_available_where_it_runs() {
         let adapter = adapter_descriptor();
-        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos")));
+        assert_eq!(adapter.available, cfg!(any(windows, target_os = "macos", target_os = "linux")));
         assert_eq!(
             adapter.name,
-            if cfg!(target_os = "macos") { "native-macos-desktop" } else { "native-win32-desktop" }
+            if cfg!(target_os = "macos") { "native-macos-desktop" }
+            else if cfg!(target_os = "linux") { "native-linux-x11-desktop" }
+            else { "native-win32-desktop" }
         );
     }
 

@@ -169,19 +169,29 @@ def fold_state(tree: Path, room: str) -> dict:
     room = str(room or "window")
     keep, offer_at, hard_at = fold_bounds(room)
     life = _life_state(tree, room)
-    hot = len(life["hot"]) if isinstance(life.get("hot"), list) else None
+    hot_rows = life.get('hot') if isinstance(life.get('hot'), list) else []
+    hot = len(hot_rows) if isinstance(life.get("hot"), list) else None
     offers = _read(_state_dir(tree) / "fold_offers.json")
     ctl = Path(tree) / "memory" / ".control"
     pending = _read(ctl / FOLD_REQUEST) or _read(ctl / FOLD_PROCESSING)
     receipt = _read(_state_dir(tree) / FOLD_RECEIPT)
     policy = _read(_state_dir(tree) / "fold-policy.json")
     bounds = policy.get("group" if room.startswith("-") else "chat") or {}
+    owner = policy.get("owner") or {}
+    from . import rooms
+    owner_place = bool(owner) and (room in owner.get("places", ()) or rooms.is_room(room))
+    if owner_place:
+        bounds = owner
     delivery = _read(_state_dir(tree) / "telegram-delivery.json").get(room.split('__topic__', 1)[0])
     reader = _read(Path(tree) / 'memory/.control/desk_inbox/.reader.json')
     if delivery and (delivery.get('pid') != reader.get('pid')
                      or time.time() - float(reader.get('at') or 0) > 30):
         delivery = None  # a dead/replaced sender cannot promise an automatic repeat
     return {"room": room, "hot": hot, "keep": bounds.get("keep", keep),
+            "chars": sum(len(str(r.get("line") or "")) for r in hot_rows if isinstance(r, dict)),
+            "tokens": sum(r['tokens'] if type(r.get('tokens')) is int and r['tokens'] > 0
+                          else max(1, len(str(r.get('line') or '')) // 3) for r in hot_rows if isinstance(r, dict)),
+            "owner_context": owner_place,
             "offer_at": bounds.get("offer_at", offer_at), "hard_at": bounds.get("hard_at", hard_at),
             "token_cap": bounds.get("token_cap"), "tape_chars": bounds.get("tape_chars"),
             "offer_mode": policy.get("offer_mode", True),

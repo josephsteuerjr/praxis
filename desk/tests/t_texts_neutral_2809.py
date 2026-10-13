@@ -7,11 +7,18 @@
 модели: известные формы с родом, найденные 28.09 во входе модели Джарвиса, и слова чужого
 дома. Новая такая строка — красный стенд с именем файла и строкой.
 
+В 1.5.9 владелец отдельно потребовал включить все предоставленные навыки без изменения
+текста; попытка исключить их была отозвана. Эти заводские файлы проверяются по точным
+принятым байтам, остальные шаблоны и новые навыки — по прежнему языковому контракту.
+Проверка не относится к собственным soul-файлам работающего агента.
+
 Запуск:  python tests/t_texts_neutral_2809.py
 """
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -22,6 +29,12 @@ sys.path.insert(0, str(DESK / "localharness"))
 
 KIT = [RES / "SOUL.md", RES / "self-day-zero.md", RES / "soul" / "VOICE.md",
        RES / "soul" / "self.md", *sorted((RES / "soul" / "skills").glob("*.md"))]
+SUPPLIED = json.loads((Path(__file__).parent / 'fixtures/owner-supplied-skills-1.5.9.json').read_text(encoding='utf8'))
+
+
+def owner_supplied(path):
+    expected = SUPPLIED['files'].get(path.name) if path.parent == RES/'soul/skills' else None
+    return bool(expected) and hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() == expected
 
 #: Чужой дом. `/app` — путь, «докер/контейнер/сервер» — чужая машина, Praxis — чужое имя.
 FOREIGN = re.compile(r"(?i)praxis|праксис|контейнер|container|docker|докер|(?<![\w.])/app\b|"
@@ -48,14 +61,21 @@ def _lines(path: Path):
 
 
 class KitIsNeutral(unittest.TestCase):
+    def test_owner_supplied_factory_skills_keep_the_accepted_bytes(self):
+        self.assertEqual(SUPPLIED['schema'], 'helene.owner-supplied-skills.v1')
+        self.assertTrue(SUPPLIED['files'])
+        for name in SUPPLIED['files']:
+            with self.subTest(skill=name): self.assertTrue(owner_supplied(RES/'soul/skills'/name), 'Owner-supplied skill changed: ' + name)
+
     def test_no_foreign_home_in_the_kit(self):
-        bad = [f"{p.relative_to(RES)}:{no}: {line.strip()}" for p in KIT for no, line in _lines(p)
+        bad = [f"{p.relative_to(RES)}:{no}: {line.strip()}" for p in KIT if not owner_supplied(p) for no, line in _lines(p)
                if FOREIGN.search(line)]
         self.assertEqual(bad, [], "слова чужого дома в стартовом комплекте:\n" + "\n".join(bad))
 
     def test_no_known_gendered_forms_in_the_kit(self):
         bad = []
         for p in KIT:
+            if owner_supplied(p): continue
             for no, line in _lines(p):
                 m = GENDERED.search(line)
                 if m and not any(ok in line for ok in ALLOW.get(p.name, ())):
