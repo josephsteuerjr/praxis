@@ -744,6 +744,7 @@ html.electron #chrome a {
 
 #head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
@@ -755,7 +756,7 @@ html.electron #chrome a {
    состояния — последней, заголовок держит хотя бы 140px (найдено живьём:
    на 1280 с обеими панелями заголовок ужимался в ноль). */
 .head-copy {
-  flex: 1 1 auto;
+  flex: 1 1 140px;
   min-width: 140px;
 }
 
@@ -789,10 +790,13 @@ html.electron #chrome a {
 
 .head-side {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 12px;
   flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
 }
 
 .pulse {
