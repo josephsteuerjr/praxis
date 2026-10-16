@@ -1,3 +1,95 @@
+# One source repository at the workspace root.
+# Admit only the public project's top-level paths; local operational files,
+# old checkouts, owner data and release evidence stay outside version control.
+# To add a new top-level source package, explicitly extend this list.
+# Generated dependencies, compiler outputs, caches and local runtime evidence.
+node_modules/
+target/
+target-*/
+dist/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+coverage/
+htmlcov/
+playwright-report/
+test-results/
+*.egg-info/
+*.dist-info/
+logs/
+*.log
+*.log.*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db-journal
+*.db-wal
+*.db-shm
+.forge-worktrees/
+.ouroboros/
+.codex/
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
+
+# Secret forms apply throughout every admitted source package.
+.env
+.env.*
+*.env
+!*.env.example
+!*.env.template
+!.env.example
+!.env.template
+.deploy.env
+.ssh/
+*.session
+*.session-*
+*.pem
+*.key
+*.pfx
+*.p12
+*.ppk
+*.jks
+*.keystore
+id_rsa*
+id_ecdsa*
+id_ed25519*
+id_praxis*
+credentials*.json
+client_secret*.json
+service-account*.json
+auth.json
+llm.json
+llm.json.*
+helene.json
+.netrc
+_netrc
+.npmrc
+.pypirc
+.pgpass
+.git-credentials
+secret-strings.txt
+
+# A development checkout must not capture a locally started agent's life.
+/praxis/memory/
+/praxis/soul/
+/helene/core/memory/
+/helene/core/soul/
+/helene/core/workspace/
+/helene/core/private/
+**/body/state/
+**/body/body.json
+**/body/service-body.json
+**/body/system-router.json
+
+# Rules carried from the public main tree (package rules also remain nested).
 
 # 13.09: новый код 0.6.0 (голос, прерывание, КЕАТ-порт) отложен по слову Егора
 _hold-0.6.0/
@@ -13,3 +105,27 @@ __pycache__/
 # рантайм-замеры тестов и черновой аудит теневых пар — не для зеркала
 .praxis_test_durations.json
 workspace/shadow_pairs_audit.py
+
+# Keep this allowlist last: secret-template exceptions above must not admit
+# unrelated top-level files into the source repository.
+/*
+!/.gitattributes
+!/.github/
+!/.gitignore
+!/CORE-SOURCE.json
+!/HELENE-SOURCE.json
+!/LICENSE
+!/NOTICE
+!/README.md
+!/RELAY-SOURCE.json
+!/arete-contract/
+!/desk/
+!/helene/
+!/praxis/
+!/remote/
+!/swarm-base/
+!/workspace/
+
+# The public workspace contains research sources, not a live agent workspace.
+/workspace/*
+!/workspace/research/

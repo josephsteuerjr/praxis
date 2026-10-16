@@ -23,7 +23,7 @@ import media
 import mtproto_runner as runner
 
 
-ROOT = "-1001240718803"
+ROOT = "-100999999999999999"
 
 
 class _Client:
@@ -49,11 +49,12 @@ class RunnerRollback(unittest.IsolatedAsyncioTestCase):
         }
         self.policy.write_text(json.dumps(self.policy_doc), encoding="utf-8")
         self.env = {
+            "PRAXIS_ABSTRACTDL_ROOT_CHAT_ID": ROOT,
             "PRAXIS_KEAT_CAPTURE": "on",
             "PRAXIS_KEAT_CAPTURE_POLICY": str(self.policy),
             "PRAXIS_KEAT_ROOT": self.tmp.name,
             "PRAXIS_KEAT": "serve",
-            "PRAXIS_KEAT_PAIRS": '[["group","-1001240718803"]]',
+            "PRAXIS_KEAT_PAIRS": '[["group","-100999999999999999"]]',
             "PRAXIS_DIALOGUE_ROLES": "1",
             "PRAXIS_FRAME_V6": "off",
             "PRAXIS_CHAT_REPLY_HAND": "off",

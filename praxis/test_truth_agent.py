@@ -1448,7 +1448,7 @@ class PacingByPrincipalTests(unittest.TestCase):
     def _foreign_group() -> agent.ChannelContext:
         """Чужая группа: scope='group', ctx.owner=False — ровно там темп и невыносим."""
         return agent.ChannelContext(
-            chat_id="-1001240718803", principal_id="555000444",
+            chat_id="-100999999999999999", principal_id="555000444",
             is_dm=False, owner=False, known=False, title="абстракт",
         )
 

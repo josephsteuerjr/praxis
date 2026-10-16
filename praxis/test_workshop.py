@@ -7,13 +7,19 @@ send_file через мокнутый мост, code_map, кодинг-окно.
 from __future__ import annotations
 
 import os
+import hashlib
+import concurrent.futures
+import json
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import agent
+import forge
 import llm
 import media
 import selfdev
@@ -77,6 +83,169 @@ class TestFsEdit(Base):
         self.assertIn("существует", out)
 
 
+class TestFileMutationReceipt(Base):
+    def test_forge_and_workshop_share_same_preimage_lock(self):
+        p = self.tmp / "workspace/a.txt"
+        p.write_bytes(b"old")
+        before = hashlib.sha256(b"old").hexdigest()
+        task_id = "code-race1234"
+        task_dir = self.tmp / "forge-tasks" / task_id
+        task_dir.mkdir(parents=True)
+        (task_dir / "task.json").write_text(json.dumps({
+            "id": task_id, "goal": "race", "root": str(self.tmp), "status": "active",
+            "run_context": {},
+        }), encoding="utf-8")
+        barrier = threading.Barrier(2)
+        publish = workshop._publish_bytes
+        hash_file = forge._hash
+        first_hash = threading.local()
+
+        def delayed_publish(*args, **kwargs):
+            barrier.wait(timeout=5)  # workshop read its preimage, before taking the lock
+            return publish(*args, **kwargs)
+
+        def delayed_hash(target, *args, **kwargs):
+            if target == p and not getattr(first_hash, "seen", False):
+                first_hash.seen = True
+                barrier.wait(timeout=5)  # Forge already holds the SAME target lock
+            return hash_file(target, *args, **kwargs)
+
+        with patch.object(forge, "TASKS_DIR", self.tmp / "forge-tasks"), \
+             patch.object(forge, "_event"), \
+             patch.object(workshop, "_publish_bytes", delayed_publish), \
+             patch.object(forge, "_hash", delayed_hash), \
+             concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            fs = pool.submit(workshop.fs_edit_result, "workspace/a.txt", "old", "fs",
+                             expected_sha256=before)
+            code = pool.submit(forge.edit, task_id, "replace", path="workspace/a.txt",
+                               old="old", new="forge", expected_sha256=before)
+            fs_result, code_result = fs.result(timeout=10), code.result(timeout=10)
+        if fs_result["status"] == "confirmed":
+            self.assertIn("Конфликт версии", code_result)
+            self.assertEqual(p.read_bytes(), b"fs")
+        else:
+            self.assertEqual(fs_result["status"], "refused")
+            self.assertIn("replace:", code_result)
+            self.assertEqual(p.read_bytes(), b"forge")
+
+    def test_same_preimage_racers_cannot_both_confirm(self):
+        p = self.tmp / "workspace/a.txt"
+        p.write_bytes(b"old")
+        expected = hashlib.sha256(b"old").hexdigest()
+        barrier = threading.Barrier(2)
+        publish = workshop._publish_bytes
+
+        def simultaneous_publish(*args, **kwargs):
+            # Both calls have already observed the SAME preimage before entering
+            # the per-target lock. Only one may still publish after rechecking it.
+            barrier.wait(timeout=5)
+            return publish(*args, **kwargs)
+
+        with patch.object(workshop, "_publish_bytes", simultaneous_publish), \
+             concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            left = pool.submit(workshop.fs_write_result, "workspace/a.txt", "left", "", True,
+                               True, expected)
+            right = pool.submit(workshop.fs_write_result, "workspace/a.txt", "right", "", True,
+                                True, expected)
+            results = [left.result(timeout=10), right.result(timeout=10)]
+        self.assertEqual(sorted(r["status"] for r in results), ["confirmed", "refused"])
+        self.assertIn(p.read_bytes(), {b"left", b"right"})
+
+    def test_python_only_even_if_native_available_or_lost_response(self):
+        with patch.object(workshop.hands, "binary", return_value=Path("compiled-hands")), \
+             patch.object(workshop.hands, "call", side_effect=AssertionError("native call")), \
+             patch.object(workshop.hands, "write", side_effect=AssertionError("native write")), \
+             patch.object(workshop.hands, "edit", side_effect=AssertionError("native edit")):
+            created = workshop.fs_write_result("workspace/a.txt", "alpha")
+            edited = workshop.fs_edit_result("workspace/a.txt", "alpha", "beta")
+        self.assertEqual((created["status"], edited["status"]), ("confirmed", "confirmed"))
+        self.assertEqual((self.tmp / "workspace/a.txt").read_bytes(), b"beta")
+
+    def test_no_binary_is_same_python_mutation_path(self):
+        with patch.object(workshop.hands, "binary", return_value=None), \
+             patch.object(workshop.hands, "call", side_effect=AssertionError("binary missing")):
+            result = workshop.fs_write_result("workspace/no-binary.txt", "direct")
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual((self.tmp / "workspace/no-binary.txt").read_bytes(), b"direct")
+
+    def test_hash_precondition_and_readback(self):
+        p = self.tmp / "workspace/a.txt"
+        p.write_bytes(b"old")
+        before = hashlib.sha256(b"old").hexdigest()
+        blocked = workshop.fs_write_result("workspace/a.txt", "new", overwrite=True,
+                                            expected_sha256="0" * 64)
+        self.assertEqual(blocked["status"], "refused")
+        self.assertEqual(p.read_bytes(), b"old")
+        written = workshop.fs_edit_result("workspace/a.txt", "old", "new",
+                                          expected_sha256=before)
+        self.assertEqual(written["status"], "confirmed")
+        self.assertRegex(written["operation_id"], r"^[0-9a-f]{32}$")
+        self.assertEqual(written["before_sha256"], before)
+        self.assertEqual(written["after_sha256"], hashlib.sha256(p.read_bytes()).hexdigest())
+        self.assertEqual(workshop.fs_edit_result("workspace/a.txt", "new", "again",
+                                                  expected_sha256=before)["status"], "refused")
+
+    def test_symlink_escape_is_refused_without_touching_outside(self):
+        outside = self.tmp.parent / (self.tmp.name + "_outside.txt")
+        outside.write_bytes(b"untouched")
+        link = self.tmp / "workspace" / "alias.txt"
+        try:
+            try:
+                link.symlink_to(outside)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlink unavailable: {exc}")
+            result = workshop.fs_write_result("workspace/alias.txt", "wrong", overwrite=True)
+            self.assertEqual(result["status"], "refused")
+            self.assertEqual(outside.read_bytes(), b"untouched")
+        finally:
+            outside.unlink(missing_ok=True)
+
+    def test_ambiguous_edit_is_refused_without_write(self):
+        p = self.tmp / "workspace/a.txt"
+        p.write_bytes(b"dup\ndup\n")
+        result = workshop.fs_edit_result("workspace/a.txt", "dup", "different")
+        self.assertEqual(result["status"], "refused")
+        self.assertIn("2 совпадений", result["message"])
+        self.assertEqual(p.read_bytes(), b"dup\ndup\n")
+
+    def test_interrupted_publication_is_in_doubt_and_not_retried(self):
+        p = self.tmp / "workspace/a.txt"
+        p.write_bytes(b"old")
+        real_replace = os.replace
+        calls = []
+
+        def commit_then_lose_response(src, dst):
+            calls.append((src, dst))
+            real_replace(src, dst)
+            raise OSError("response lost after commit")
+
+        with patch.object(workshop.os, "replace", side_effect=commit_then_lose_response):
+            result = workshop.fs_edit_result("workspace/a.txt", "old", "new")
+        self.assertEqual(result["status"], "in_doubt")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(p.read_bytes(), b"new")
+        self.assertIsNone(result["after_sha256"])
+
+    def test_readback_failure_after_commit_is_in_doubt(self):
+        p = self.tmp / "workspace/a.txt"
+        p.write_bytes(b"old")
+        original = Path.read_bytes
+        reads = 0
+
+        def fail_third_read(path):
+            nonlocal reads
+            if path == p:
+                reads += 1
+                if reads == 3:
+                    raise OSError("readback unavailable")
+            return original(path)
+
+        with patch.object(Path, "read_bytes", fail_third_read):
+            result = workshop.fs_write_result("workspace/a.txt", "new", overwrite=True)
+        self.assertEqual(result["status"], "in_doubt")
+        self.assertEqual(p.read_bytes(), b"new")
+
+
 class TestZones(Base):
     def test_core_without_pid_refused(self):
         out = workshop.fs_edit("core.py", "VALUE = 1", "VALUE = 2")
@@ -112,6 +281,14 @@ class TestZones(Base):
         out = workshop.fs_read("workspace/big.txt", start=5, end=7)
         self.assertIn("5\tстрока5", out)
         self.assertNotIn("строка8", out.split("…")[0])
+        self.assertIn(hashlib.sha256((self.tmp / "workspace" / "big.txt").read_bytes()).hexdigest(), out)
+
+    def test_fs_read_discloses_lossy_decoding_but_hashes_original_bytes(self):
+        target = self.tmp / "workspace" / "invalid.txt"
+        target.write_bytes(b"alpha\xffbeta\n")
+        out = workshop.fs_read("workspace/invalid.txt")
+        self.assertIn("text is lossy", out)
+        self.assertIn(hashlib.sha256(target.read_bytes()).hexdigest(), out)
 
     def test_fs_search_includes_credential_named_files(self):
         out = workshop.fs_search("SECRET", glob="**/*")
@@ -119,6 +296,16 @@ class TestZones(Base):
 
 
 class TestRunAndQuota(Base):
+    def test_attempted_native_command_with_lost_reply_does_not_run_python_again(self):
+        slug = self._proj()
+        with patch.object(workshop.hands, "binary", return_value=Path("fake-hands")), \
+             patch.object(workshop.hands, "execute", return_value=None) as native, \
+             patch.object(workshop.subprocess, "run") as python_run:
+            out = workshop.run("echo effect", slug)
+        native.assert_called_once()
+        python_run.assert_not_called()
+        self.assertIn("исход неизвестен", out)
+
     def test_run_needs_project_and_caps_output(self):
         self.assertIn("Нет проекта", workshop.run("echo hi", "нету"))
         slug = self._proj()

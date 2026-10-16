@@ -617,11 +617,13 @@ EN: dict[str, dict] = {
                       "start": "first line, 1-based", "end": "last line"}},
     "fs_write": {"p": {"path": "file path to create",
                        "content": "the full file content",
-                       "proposal_id": "write inside this proposal's working copy"}},
+                       "proposal_id": "write inside this proposal's working copy",
+                       "expected_sha256": "optional exact SHA-256 of existing bytes; mismatch refuses before writing"}},
     "fs_edit": {"p": {"path": "file to edit",
                       "old": "exact existing text, must occur exactly once",
                       "new": "replacement text",
-                      "proposal_id": "edit inside this proposal's working copy"}},
+                      "proposal_id": "edit inside this proposal's working copy",
+                      "expected_sha256": "optional exact SHA-256 of existing bytes; mismatch refuses before editing"}},
     "fs_search": {"p": {"pattern": "regular expression to search for",
                         "glob": "file mask, for example **/*.py",
                         "root": "folder to search under; narrows and speeds up the search"}},
@@ -665,6 +667,7 @@ EN: dict[str, dict] = {
               "task_id": "the task to act on",
               "goal": "what the task is for",
               "isolation": "auto | worktree | direct",
+              "max_active_workers": "start: concurrent agents across this task's whole worker tree (default 8)",
               "success_criteria": "start: readiness criteria (advisory)",
               "verify_commands": "start: check commands, not auto-run",
               "title": "finish: what the change does",
@@ -695,10 +698,12 @@ EN: dict[str, dict] = {
                              "timeout": "seconds; 0 means unbounded",
                              "tail": "how many trailing log lines to return"}},
     "coding_agent": {"p": {"task_id": "the coding task",
-                           "action": "spawn | poll | stop | list",
-                           "agent_id": "the subprocess to poll or stop",
+                           "action": "spawn | poll | stop | list | disposition",
+                           "agent_id": "the worker to poll, stop or disposition",
                            "brief": "what the subprocess must do",
                            "role": "scout | worker | reviewer",
+                           "result_sha256": "disposition: exact SHA-256 of the completed worker result",
+                           "disposition": "integrated | irrelevant | deferred; separate from the worker result",
                            "max_iters": "iteration ceiling for the subprocess",
                            "tail": "trailing output lines to return"}},
     "coding_checkpoint": {"p": {"task_id": "the coding task",
@@ -725,12 +730,8 @@ EN: dict[str, dict] = {
                            "lesson": "record: the lesson, in your own words",
                            "regression": "record: the check that keeps it from coming back"}},
     "coding_inspect": {
-        "d": ("Task-bound eyes: orientation/model map the place; symbols/references/"
-              "diagnostics/impact/checks give code and test facts; observations — Windows "
-              "evidence map; read — numbered lines + sha256; diff/history — exact evidence. "
-              "Read state, don't guess. watching/watch/unwatch — watching SOMEONE ELSE'S "
-              "repository (address in query): set/remove; asks only HEAD, a shift arrives "
-              "as a fact in your wake."),
+        "d": ("Task-bound read map: symbols/references/impact/checks, numbered lines+hash, "
+              "diff/history. watch/unwatch observes another repo's HEAD and reports changes."),
         "p": {"task_id": "the coding task",
               "action": "what to inspect",
               "path": "file or directory to look at",
@@ -836,7 +837,7 @@ EN: dict[str, dict] = {
 BASE_SHA: dict[str, str] = {
     "add_alias": "1429a0d6",
     "admit": "443ccc94",
-    "coding_inspect": "97a39a27",
+    "coding_inspect": "d24b8fbb",
     "consolidate_context": "1724d641",
     "end_turn": "8fb868c8",
     "focus": "f066613b",

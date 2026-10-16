@@ -4458,24 +4458,30 @@ def tool_connections(name: str, depth: int = 1, to: str = "") -> str:
 # --- PASS 8.5: мастерская (workshop.py) — обёртки с автокоммитом её правок дома --- #
 
 def tool_fs_write(path: str, content: str, proposal_id: str = "",
-                  overwrite: bool = False, force: bool = False) -> str:
+                  overwrite: bool = False, force: bool = False,
+                  expected_sha256: str | None = None) -> str:
     denied = stewardship.check(path=path, op="write")
     if denied:
         return denied
     pre_dirt = _pre_shell_dirt()  # чужая грязь не приписывается ей (как у shell)
-    out = workshop.fs_write(path, content, proposal_id, overwrite=overwrite, force=force)
-    _autocommit_self_edit(pre_dirt)  # правки soul/memory коммитятся как у shell; workspace — свой git
-    return out
+    outcome = workshop.fs_write_result(path, content, proposal_id, overwrite=overwrite,
+                                       force=force, expected_sha256=expected_sha256)
+    if outcome["status"] == "confirmed":
+        _autocommit_self_edit(pre_dirt)  # только подтверждённая правка дома
+    return outcome["message"] + "\n" + json.dumps(outcome, ensure_ascii=False, sort_keys=True)
 
 
-def tool_fs_edit(path: str, old: str, new: str, proposal_id: str = "") -> str:
+def tool_fs_edit(path: str, old: str, new: str, proposal_id: str = "",
+                 expected_sha256: str | None = None) -> str:
     denied = stewardship.check(path=path, op="edit")
     if denied:
         return denied
     pre_dirt = _pre_shell_dirt()
-    out = workshop.fs_edit(path, old, new, proposal_id)
-    _autocommit_self_edit(pre_dirt)
-    return out
+    outcome = workshop.fs_edit_result(path, old, new, proposal_id,
+                                      expected_sha256=expected_sha256)
+    if outcome["status"] == "confirmed":
+        _autocommit_self_edit(pre_dirt)
+    return outcome["message"] + "\n" + json.dumps(outcome, ensure_ascii=False, sort_keys=True)
 
 
 # --- PASS 23: Forge — задача/место/процессы/субагенты как один coding runtime --- #
@@ -4495,7 +4501,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         title: str = "", review: str = "", checked: str = "",
                         submit: bool = True, reviewer: str = "",
                         success_criteria: list[str] | None = None,
-                        verify_commands: list[str] | None = None) -> str:
+                        verify_commands: list[str] | None = None,
+                        max_active_workers: int = 8) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4506,12 +4513,14 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         # хинты копятся в её истории и подталкивают. Тул в её руках, рамки
         # окна/события приглашают — а делает пусть так, как хочет.
         if str(scope or "").strip().lower() == "host":
-            out = forge.start_host(goal, target, priority=priority, origin_chat=origin)
+            out = forge.start_host(goal, target, priority=priority, origin_chat=origin,
+                                   max_active_workers=max_active_workers)
             if out.startswith("coding-задача hcode-"):
                 tool_journal(f"[serverd] host-задача (root): {goal[:180]}", salience=2)
             return out
         if str(scope or "").strip().lower() == "windows":
-            out = forge.start_windows(goal, target, priority=priority, origin_chat=origin)
+            out = forge.start_windows(goal, target, priority=priority, origin_chat=origin,
+                                      max_active_workers=max_active_workers)
             if out.startswith("coding-задача wcode-"):
                 tool_journal(f"[windows-body] Windows-задача: {goal[:180]}", salience=2)
                 # PASS 30 Этап 3: мягкая депрекация — предупреждение ПОСЛЕ канонической
@@ -4527,7 +4536,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
                           origin_chat=origin,
-                          success_criteria=success_criteria, verify_commands=verify_commands)
+                          success_criteria=success_criteria, verify_commands=verify_commands,
+                          max_active_workers=max_active_workers)
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыта coding-задача: {goal[:180]}", salience=2)
         return out
@@ -5227,9 +5237,11 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
 
 def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
                         query: str = "", glob: str = "**/*", start: int = 1,
-                        end: int = 0) -> str:
+                        end: int = 0, start_char: int = 0,
+                        expected_sha256: str = "") -> str:
     return forge.inspect(task_id, action=action, path=path, query=query, glob=glob,
-                         start=start, end=end)
+                         start=start, end=end, start_char=start_char,
+                         expected_sha256=expected_sha256)
 
 
 def tool_coding_edit(task_id: str, action: str, path: str = "", content: str = "",
@@ -5252,9 +5264,11 @@ def tool_coding_process(task_id: str, action: str, process_id: str = "",
 
 def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                       role: str = "worker", max_iters: int = 0, tail: int = 10000,
-                      model: str = "") -> str:
+                      model: str = "", result_sha256: str = "",
+                      disposition: str = "") -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
-                       model=model, max_iters=max_iters, tail=tail)
+                       model=model, max_iters=max_iters, tail=tail,
+                       result_sha256=result_sha256, disposition=disposition)
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -7741,31 +7755,32 @@ WORKSHOP_TOOLS = [
      "description": "Project status: git status + disk size vs quota.",
      "input_schema": _obj({"name": {"type": "string"}}, ["name"])},
     {"name": "fs_read",
-     "description": ("Read a file with line numbers (paged). Reads anywhere in your home except "
-                     "including .env/session/llm.json. start/end — 1-based line range. An IMAGE "
-                     "file (PNG/JPEG/WebP/GIF, ≤8MB) is attached as real pixels to your next "
-                     "step instead of text — your direct eyes on frames, stickers and photos."),
+     "description": ("Paged numbered text read in your home; start/end are 1-based. "
+                     "The footer carries the whole raw-file sha256 for expected_sha256 edits "
+                     "and labels text decoded with replacement as lossy. "
+                     "Images (PNG/JPEG/WebP/GIF, ≤8MB) attach as pixels to the next step."),
      "input_schema": _obj({"path": {"type": "string"}, "start": {"type": "integer"},
                            "end": {"type": "integer"}}, ["path"])},
     {"name": "fs_write",
-     "description": ("Create a file. An EXISTING file is refused unless overwrite=true, and a "
-                     "rewrite shrinking it below 70% is refused unless force=true (accidental "
-                     "truncation guard). Prefer fs_edit for changes. Write zones: workspace/, "
-                     "soul/, memory/. Core code files need proposal_id (worktree of that proposal)."),
+     "description": ("Create a file; existing requires overwrite=true, shrink below 70% "
+                     "requires force=true. Optional expected_sha256 guards its preimage. "
+                     "Returns confirmed/refused/in_doubt plus readback SHA. Write zones: "
+                     "workspace/, soul/, memory/; core needs proposal_id."),
      "input_schema": _obj({"path": {"type": "string"}, "content": {"type": "string"},
                            "proposal_id": {"type": "string"},
+                           "expected_sha256": {"type": "string"},
                            "overwrite": {"type": "boolean",
                                          "description": "rewrite an existing file wholesale"},
                            "force": {"type": "boolean",
                                      "description": "confirm an intentional big shrink"}},
                           ["path", "content"])},
     {"name": "fs_edit",
-     "description": ("Precise edit: replaces `old` with `new` when `old` occurs EXACTLY once "
-                     "(0 matches → refusal; many → refusal naming the line numbers, widen `old`). "
-                     "This is your main editing hand — never heredoc code through shell. "
-                     "Core files need proposal_id (worktree)."),
+     "description": ("Replace exactly one `old` with `new`; 0 or many refuse with hints. "
+                     "Optional expected_sha256 guards the preimage. Result includes status "
+                     "and readback SHA; core files need proposal_id."),
      "input_schema": _obj({"path": {"type": "string"}, "old": {"type": "string"},
-                           "new": {"type": "string"}, "proposal_id": {"type": "string"}},
+                           "new": {"type": "string"}, "proposal_id": {"type": "string"},
+                           "expected_sha256": {"type": "string"}},
                           ["path", "old", "new"])},
     {"name": "code_outline",
      "description": ("Skeleton of ONE python file: classes/functions with line numbers. Cheap "
@@ -7842,6 +7857,7 @@ FORGE_TOOLS = [
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
          "success_criteria": {"type": "array", "items": {"type": "string"}},
          "verify_commands": {"type": "array", "items": {"type": "string"}},
+         "max_active_workers": {"type": "integer", "description": "Concurrent Forge agents across the whole task tree (default 8); nesting over time is unrestricted."},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
                    "description": "self = my own code repository (the default). host and windows are not available in this edition: the computer tool is the path to this machine. All scopes stay in the same canonical Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
@@ -7866,6 +7882,8 @@ FORGE_TOOLS = [
                                                       "diff", "history", "watching", "watch", "unwatch"]},
          "path": {"type": "string"}, "query": {"type": "string"},
          "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
+         "start_char": {"type": "integer", "description": "Character offset in start line; continue using returned next_char."},
+         "expected_sha256": {"type": "string", "description": "Full read-page sha256 for revision-safe continuation."},
      }, ["task_id", "action"])} ,
     {"name": "coding_edit",
      "description": (
@@ -7889,10 +7907,8 @@ FORGE_TOOLS = [
                            "cwd": {"type": "string"}, "timeout": {"type": "integer"}},
                           ["task_id", "command"])} ,
     {"name": "coding_process",
-     "description": (
-         "Long-running process supervisor: start returns immediately, preserves the full log and "
-         "survives the Telegram turn; poll/stop/list later. Use for dev servers, watchers, long tests "
-         "and experiments. timeout=0 is unbounded."),
+     "description": ("Long-running process: start returns immediately, keeps full logs and "
+                     "survives the turn; poll/stop/list later. timeout=0 is unbounded."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["start", "poll", "stop", "list"]},
@@ -7902,14 +7918,16 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "coding_agent",
      "description": (
-        "Create independent fresh-context coding subprocesses. spawn returns immediately: "
-         "launch several scouts/workers/reviewers in one turn; poll/list gathers results. "
-         "worker edits and tests the shared isolated task tree, scout maps, reviewer attacks the diff. "
-         "Workers themselves can delegate further specialists."),
+        "Fresh-context workers of one Praxis: spawn scout/worker/reviewer, poll/list "
+         "durable results, stop agent descendants (not detached process/verify jobs). "
+         "Workers may delegate. disposition binds "
+         "an exact result SHA without rewriting it."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
-         "action": {"type": "string", "enum": ["spawn", "poll", "stop", "list"]},
+         "action": {"type": "string", "enum": ["spawn", "poll", "stop", "list", "disposition"]},
          "agent_id": {"type": "string"}, "brief": {"type": "string"},
+         "result_sha256": {"type": "string"},
+         "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
          "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
          "model": {"type": "string", "description": "Optional per-agent model from the live/configured catalogue; omitted keeps the voice-role default."},
          "max_iters": {"type": "integer"}, "tail": {"type": "integer"},
@@ -7932,9 +7950,9 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "coding_swarm",
      "description": (
-         "PASS 23.1 swarm coordinator. plan accepts JSON nodes [{id,role,brief,deps,owns}], start/tick "
-         "launches ready workers up to max_parallel, status shows the DAG, signal/mailbox carry findings/"
-         "contracts/blockers, compare assembles worker results. File ownership is advisory, never a veto."),
+         "Forge DAG: plan JSON nodes [{id,role,brief,deps,owns}]; start/tick launches "
+         "ready workers; status/compare show results, signal/mailbox exchange findings. "
+         "File claims are advisory."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["plan", "start", "tick", "status", "signal",
@@ -8003,7 +8021,8 @@ COMPUTER_TOOL = {
         "eyes when the voice model is text-only; pass hwnd from windows (omit for the foreground window), "
         "shape=tree|flat, text_contains to filter, max_nodes/max_depth to bound; the receipt names every limit and "
         "what stayed unread. Prefer the "
-        "typed type_text/hotkey/key/move/click/scroll actions; input accepts one ordered mixed events batch. After "
+        "typed type_text/hotkey/key/move/click/scroll actions; input accepts one ordered mixed events batch, "
+        "including mouse_down/mouse_up and drag (press→move→release). After "
         "activating a window do not assume the caret is free: many controls (WinForms TextBox) select all text when "
         "focus arrives with the window, and type_text would REPLACE it — click once into the field or press End "
         "before typing; Escape keeps the selection, and a second click right after the first is a double-click that "
@@ -8063,9 +8082,12 @@ COMPUTER_TOOL = {
         "hwnd": {"type": "string", "description": "hex native handle returned by action=windows"},
         "events": {"type": "array", "description": (
             "ordered native input events: text; hotkey(keys); key(key,action); mouse(x,y,relative); "
-            "click(button,x,y,count); wheel(delta,horizontal,x,y)"
+            "click(button,x,y,count); wheel(delta,horizontal,x,y); "
+            "mouse_down/mouse_up(button,x,y); drag(button,x,y,to_x,to_y,steps,hold_ms,step_delay_ms,settle_ms). "
+            "A held button is scoped to this one input batch; drag requires both endpoints."
         ), "items": _obj({
-            "type": {"type": "string", "enum": ["text", "hotkey", "key", "mouse", "click", "wheel"]},
+            "type": {"type": "string", "enum": ["text", "hotkey", "key", "mouse", "click", "wheel",
+                                               "mouse_down", "mouse_up", "drag"]},
             "text": {"type": "string"}, "keys": {"type": "array", "items": {
                 "anyOf": [{"type": "string"}, {"type": "integer"}]}},
             "key": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
@@ -8074,6 +8096,9 @@ COMPUTER_TOOL = {
             "count": {"type": "integer"}, "delta": {"type": "integer"},
             "horizontal": {"type": "boolean"}, "relative": {"type": "boolean"},
             "x": {"type": "integer"}, "y": {"type": "integer"},
+            "to_x": {"type": "integer"}, "to_y": {"type": "integer"},
+            "steps": {"type": "integer"}, "hold_ms": {"type": "integer"},
+            "step_delay_ms": {"type": "integer"}, "settle_ms": {"type": "integer"},
         }, ["type"])},
         "text": {"type": "string", "description": "text for clipboard_write or type_text"},
         "keys": {"type": "array", "items": {"type": "string"},
@@ -9910,8 +9935,10 @@ def _scheduled_target_moderation_block(ctx: "ChannelContext") -> str:
         return ""
     try:
         import telegram_moderation
-        moderation = telegram_moderation.history_for_sender(
-            telegram_moderation.TARGET_PEER_ID, int(target))
+        peer_id = telegram_moderation.root_peer_id()
+        if peer_id is None:
+            raise RuntimeError("moderation room identity unavailable")
+        moderation = telegram_moderation.history_for_sender(peer_id, int(target))
         moderation_state: object = moderation
     except Exception as exc:
         moderation_state = {"unavailable": type(exc).__name__}
@@ -12165,6 +12192,11 @@ _READ_ONLY_TOOLS = frozenset({
 
 def _tool_has_side_effect(name: str, call_input: dict) -> bool:
     """Conservative recovery classification; reads never become uncertain mutations."""
+    if name == "coding_inspect":
+        # watch/unwatch enter the upstream observation ledger even though the
+        # same tool's read/diff/symbols actions are passive. An unknown result
+        # must not be replayed as though no registration had occurred.
+        return str(call_input.get("action") or "").lower() in {"watch", "unwatch"}
     if name == "computer":
         # PASS 30 Этап 3: read/hash — чтения; write/replace НАМЕРЕННО отсутствуют
         # (side effect без idempotency-ключа = консервативный recovery-маршрут).

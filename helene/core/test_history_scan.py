@@ -62,12 +62,12 @@ class TestParameterValidation(unittest.TestCase):
 
     def test_explicit_numeric_peer_forms_remain_fail_closed(self):
         self.assertTrue(history_scan.resolved_peer_matches_target(
-            "-1001240718803", 1240718803))
+            "-100999999999999999", 1240718803))
         self.assertTrue(history_scan.resolved_peer_matches_target(
             "1240718803", 1240718803))
         self.assertTrue(history_scan.resolved_peer_matches_target("-123", 123))
         self.assertFalse(history_scan.resolved_peer_matches_target(
-            "-1001240718803", 1240718804))
+            "-100999999999999999", 1240718804))
         self.assertFalse(history_scan.resolved_peer_matches_target(
             "1240718803", 1240718804))
         self.assertFalse(history_scan.resolved_peer_matches_target("-123", 124))
@@ -548,7 +548,7 @@ class TestRuntimeFreezeCeiling(unittest.TestCase):
              mock.patch.object(asyncio, "run_coroutine_threadsafe",
                                side_effect=lambda coro, loop: ImmediateResult(coro)):
             return mtproto_runner._sync_history_scan(
-                "-1001240718803", params, _principal="praxis:self")
+                "-100999999999999999", params, _principal="praxis:self")
 
     def test_latest_freeze_uses_runtime_newest_id_without_offset_overflow(self):
         class Client:

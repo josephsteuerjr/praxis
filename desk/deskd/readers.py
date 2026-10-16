@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import ipaddress
 import json
 import logging
@@ -1125,7 +1126,14 @@ def _taskmd_frontmatter(path: Path) -> dict:
 
 
 def forge_tasks(limit: int = 30) -> list[dict]:
-    """Форж-дети: memory/work/tasks/<задача>/agents/<юнит>/ request+result."""
+    """Read Forge's durable task/worker receipts, without a parallel UI store.
+
+    A request marked running is not proof of liveness. In this read-only
+    projection only a settled result proves its status; absent/invalid results
+    and unresolved stop receipts remain unknown until Forge reconciles them.
+    Never send raw worker output, logs, process command lines or workspace paths
+    to the owner-facing endpoint (which also reaches the phone).
+    """
     root = tree() / "memory" / "work" / "tasks"
     if not root.is_dir():
         return []
@@ -1145,17 +1153,60 @@ def forge_tasks(limit: int = 30) -> list[dict]:
             except OSError:
                 agent_dirs = []
             for unit in agent_dirs:
+                if not unit.is_dir():
+                    continue
                 request = _load_json(unit / "request.json")
-                result = _load_json(unit / "result.json")
+                result_path = unit / "result.json"
+                result = _load_json(result_path)
+                try:
+                    result_sha = hashlib.sha256(result_path.read_bytes()).hexdigest() if result else ""
+                except OSError:
+                    result_sha = ""
+                stop = _load_json(unit / "stop.json")
+                unresolved = stop.get("state") == "unresolved"
+                receipts = []
+                stale_receipts = 0
+                for path in sorted(unit.glob("disposition-*.json")):
+                    row = _load_json(path)
+                    if (result_sha and row.get("result_sha256") == result_sha
+                            and row.get("child_unit_id") == unit.name
+                            and str(row.get("parent_unit_id") or "") == str(request.get("parent_unit_id") or "")
+                            and row.get("disposition") in {"integrated", "irrelevant", "deferred"}):
+                        receipts.append({"parent_unit_id": str(row.get("parent_unit_id") or ""),
+                                         "disposition": row["disposition"],
+                                         "result_sha256": result_sha})
+                    else:
+                        stale_receipts += 1
                 agents.append({
                     "id": unit.name,
                     "role": request.get("role") or result.get("role"),
-                    "status": result.get("status") or request.get("status") or "",
+                    "status": "unknown" if unresolved or not result else str(result.get("status") or "unknown"),
+                    "request_status": str(request.get("status") or ""),
+                    "custody": "unresolved_stop" if unresolved else "result" if result else "unknown",
+                    "parent_unit_id": str(request.get("parent_unit_id") or ""),
+                    "result_sha256": result_sha,
+                    "dispositions": receipts,
+                    "stale_dispositions": stale_receipts,
                     "created": request.get("created"),
                     "finished": result.get("finished"),
-                    "error": str(result.get("error") or "")[:200],
-                    "result_head": str(result.get("result") or "")[:300],
                 })
+        # Ordering from the receipts, not filesystem names: a descendant comes
+        # after its parent. Missing/cyclic ancestry is disclosed, not fabricated.
+        by_id = {row["id"]: row for row in agents}
+        def ancestry(row: dict) -> tuple[int, str]:
+            seen = {row["id"]}
+            parent = row["parent_unit_id"]
+            depth = 0
+            while parent:
+                if parent in seen or parent not in by_id:
+                    row["ancestry_unknown"] = True
+                    break
+                seen.add(parent)
+                depth += 1
+                parent = by_id[parent]["parent_unit_id"]
+            row["depth"] = depth
+            return depth, str(row.get("created") or "")
+        agents.sort(key=ancestry)
         goal = str(task.get("goal") or "")[:300]
         status = task.get("status")
         if not goal:
@@ -1440,7 +1491,8 @@ def chat_turns(peer_id: str, n: int = 120) -> list[dict]:
 
 def anatomy() -> dict:
     """Снимок устройства для вкладки «Устройство»: его пишет руннер на старте
-    из ЖИВОГО списка рук (offered_tools_for). Пусто = руннер ещё не поднимался."""
+    из каталога рук после накладок издания и прямого manifest offered_tools_for.
+    Пусто = руннер ещё не поднимался."""
     return _load_json(tree() / "memory" / ".state" / "anatomy.json")
 
 

@@ -54,6 +54,12 @@ PATTERNS = {
 #: является. Список закрытый и с причиной у каждого.
 NOISE = {
     "1234567890": "явная синтетика фикстур",
+    # 16.10: три точных, несуществующих room-id в test_room_identity_private_1510;
+    # одна используется также в герметичной среде/корпусе модерации. НЕ имя
+    # ключа и не диапазон: любой новый адрес комнаты остаётся находкой.
+    "-100999999999999999": "вымышленная тестовая группа вне рабочего диапазона",
+    "-100999999999999998": "вымышленная чужая группа в отрицательном тесте",
+    "-100000000000000000": "некорректный id из отрицательного теста",
     "0.0.0.0": "адрес прослушивания",
     "127.0.0.1": "петля",
     "255.255.255.255": "маска",
@@ -66,23 +72,59 @@ def texts(rev: str | None) -> dict[str, str]:
     """Файлы ядра на ревизии (или на диске, если rev не задан)."""
     out: dict[str, str] = {}
     if rev is None:
-        # ⚠ Только то, что git ОТСЛЕЖИВАЕТ. Обход диска читал `node_modules` и собранный
-        # рантайм — 5235 «находок», ни одна из которых не публикуется. Публикуется ровно
-        # содержимое индекса, и смотреть надо в него.
+        # Только отслеживаемые имена, но WORKTREE-байты: до staging это проверяет
+        # готовящийся дифф. Для выпуска вызывающий обязан заморозить чистый HEAD;
+        # грязное дерево/частичный index не является доказательством готового снимка.
         listing = subprocess.run(["git", "-C", str(REPO), "-c", "core.quotepath=false",
-                                  "ls-files", "--cached"], capture_output=True)
-        for rel in listing.stdout.decode("utf-8", "replace").splitlines():
-            try:
+                                  "ls-files", "-z", "--cached"], capture_output=True, check=True)
+        for rel in listing.stdout.decode("utf-8", "replace").split("\0"):
+            if rel:
+                # Missing/unreadable tracked bytes cannot mean "no personal
+                # values".  Refuse the entire check, not just this path.
                 out[rel] = (REPO / rel).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                pass
         return out
-    listing = subprocess.run(["git", "-C", str(REPO), "-c", "core.quotepath=false",
-                              "ls-tree", "-r", "--name-only", rev], capture_output=True)
-    for rel in listing.stdout.decode("utf-8", "replace").splitlines():
-        blob = subprocess.run(["git", "-C", str(REPO), "show", f"{rev}:{rel}"],
-                              capture_output=True)
-        out[rel] = blob.stdout.decode("utf-8", "replace")
+    # One historical tree needs one object-reader, not a process per file.  The
+    # old loop took >120 s on this tree and could never finish the release gate.
+    # Request object IDs, not "rev:path": even a legal filename containing a
+    # newline cannot change the batch protocol.  No archive export-ignore rule
+    # is allowed to hide tracked bytes from this privacy scan.
+    listing = subprocess.run(["git", "-C", str(REPO), "ls-tree", "-r", "-z", rev],
+                             capture_output=True, check=True)
+    blobs: list[tuple[str, bytes]] = []
+    for row in listing.stdout.split(b"\0"):
+        if not row:
+            continue
+        header, separator, raw_path = row.partition(b"\t")
+        if not separator:
+            raise ValueError("malformed Git tree entry")
+        mode, kind, oid = header.split()
+        if kind != b"blob":
+            # Gitlinks are not file contents; git show previously returned no
+            # usable text for them.  Trees are represented by their leaves.
+            if kind == b"commit":
+                continue
+            raise ValueError("unexpected Git tree entry")
+        blobs.append((raw_path.decode("utf-8", "replace"), oid))
+    if not blobs:
+        return out
+    batch = subprocess.run(["git", "-C", str(REPO), "cat-file", "--batch"],
+                           input=b"".join(oid + b"\n" for _, oid in blobs),
+                           capture_output=True, check=True).stdout
+    position = 0
+    for rel, oid in blobs:
+        line_end = batch.find(b"\n", position)
+        if line_end < 0:
+            raise ValueError("incomplete Git object header")
+        received, kind, size = batch[position:line_end].split()
+        if received != oid or kind != b"blob" or not size.isdigit():
+            raise ValueError("Git object identity changed during privacy scan")
+        start, end = line_end + 1, line_end + 1 + int(size)
+        if end >= len(batch) or batch[end:end + 1] != b"\n":
+            raise ValueError("incomplete Git object body")
+        out[rel] = batch[start:end].decode("utf-8", "replace")
+        position = end + 1
+    if position != len(batch):
+        raise ValueError("unclaimed Git object bytes")
     return out
 
 

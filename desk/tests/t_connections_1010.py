@@ -28,7 +28,7 @@ class Checks(unittest.TestCase):
             value=replies.pop(0)
             if isinstance(value,Exception):raise value
             return contextlib.closing(io.BytesIO(json.dumps(value).encode()))
-        cfg={'telegram':{'bot_token':'test-bot-token','owner_id':'123','proxy':{'enabled':True,'url':'https://gateway.test/tg','key':'test-gateway-key'}}}
+        cfg={'telegram':{'bot_token':'test-bot-token','owner_id':'123','proxy':{'enabled':True,'url':'https://gateway.test/helene/telegram','key':'test-gateway-key'}}}
         original=json.dumps(cfg,sort_keys=True)
         with mock.patch.object(connection_checks.urllib.request,'build_opener',return_value=types.SimpleNamespace(open=open_request)):
             result=connection_checks.check_telegram(cfg,fields)

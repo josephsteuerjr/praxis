@@ -454,6 +454,10 @@ def _normalize(cfg: dict) -> dict:
                              if str(visions.get(name) or "").strip()}
             if clean_visions:
                 out["roles"][role]["vision_models"] = clean_visions
+        # Perception changes are deploy migrations, never parse-time defaults.
+        # Preserve only an explicitly authored boolean; absent stays legacy-off.
+        if isinstance(cur.get("vision_prepass"), bool):
+            out["roles"][role]["vision_prepass"] = cur["vision_prepass"]
     lim = cfg.get("limits") or {}
     try:
         out["limits"]["max_tool_iters"] = max(1, min(600, int(lim.get("max_tool_iters"))))  # 07.07: потолок 300->600, владелец хочет управлять сам
@@ -1528,7 +1532,7 @@ def _canonicalize_image_blocks(messages):
 # ======================================================================================
 # УЗКИЙ ВЗГЛЯД: одно обращение к зрячей модели вместо целого кадра.
 #
-# ЗАМЕР 16.09, комната -1001240718803, ход с картинкой. Сейчас пиксели едут внутри её
+# ЗАМЕР 16.09, комната <private-root-room>, ход с картинкой. Сейчас пиксели едут внутри её
 # ОБЫЧНОГО кадра, и весь кадр уходит в зрячую модель:
 #
 #     схемы рук        75 612 знаков
@@ -1553,9 +1557,11 @@ def _canonicalize_image_blocks(messages):
 # но глазами чужими. Подменённый блок говорит об этом прямо, чтобы она не приняла описание
 # за собственное зрение.
 #
-# ⚠ ОТКАЗ — НЕ МОЛЧАНИЕ. Не получилось описать (нет зрячей модели, упал вызов, пустой
-# ответ) — накладка НЕ подменяет ничего и возвращает ленту как была: дальше отрабатывает
-# прежняя маршрутизация, то есть целый кадр в зрячую модель. Хуже, чем было, не станет.
+# Издание: явно настроенный узкий взгляд сохраняет голос за её моделью. Если
+# описание сорвалось, ни основная, ни запасная нога не получают пиксели/весь кадр:
+# слепой голос получает явный маркер, а ответ отмечается как не видевший пикселей.
+# Отсутствие vision_prepass оставляет старую маршрутизацию. Менять default вправе
+# только миграция профиля с её видимым receipt; env 0/1 — отдельный явный override.
 VISION_PREPASS_LEVER = "PRAXIS_VISION_PREPASS"
 #: Защита от рекурсии: узкий вызов идёт через тот же `chat`, и второй раз смотреть нечего.
 _IN_VISION_PREPASS = _cv.ContextVar("praxis_vision_prepass", default=False)
@@ -1701,10 +1707,14 @@ def _vision_cache_put(key: str, text: str) -> None:
     _vision_cache_save(cache)
 
 
-def vision_prepass_enabled() -> bool:
-    """Рычаг узкого взгляда. Умолчание — ВЫКЛЮЧЕНО: кадр прежний байт-в-байт."""
-    return str(os.environ.get(VISION_PREPASS_LEVER) or "").strip().lower() in {
-        "1", "true", "yes", "on"}
+def vision_prepass_enabled(role: str = "voice") -> bool:
+    """Explicit env override, then durable role setting; absent means legacy-off."""
+    value = str(os.environ.get(VISION_PREPASS_LEVER) or "").strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return _config()["roles"][role].get("vision_prepass") is True
 
 
 def _vision_prepass_marker(model: str, text: str) -> str:
@@ -1719,8 +1729,8 @@ def _vision_prepass_marker(model: str, text: str) -> str:
 def _describe_images_narrowly(role: str, framework: str, model: str, messages):
     """Заменить блоки-картинки описанием, снятым одним узким обращением к зрячей модели.
 
-    Возвращает (лента, сколько описано). Ноль описанных — лента та же самая, и вызывающий
-    код обязан отработать так, как отрабатывал без рычага.
+    Возвращает (лента, сколько описано). Ноль описанных — исходная лента;
+    вызывающий код издания удаляет из неё пиксели при неудаче помощника.
     """
     if not _has_image_blocks(messages) or _IN_VISION_PREPASS.get():
         return messages, 0
@@ -1750,7 +1760,7 @@ def _describe_images_narrowly(role: str, framework: str, model: str, messages):
                     continue
                 text, author = _look_once(role, sighted, block)
                 if not text:
-                    # Ни одной подмены в этом сообщении: пусть едет прежним путём.
+                    # All-or-nothing: no partial visual account is promoted as complete.
                     return messages, 0
                 blocks.append({"type": "text",
                                "text": _vision_prepass_marker(author, text)})
@@ -1783,20 +1793,20 @@ def _look_once(role: str, sighted: str, block: dict) -> tuple[str, str]:
                       max_tokens=VISION_PREPASS_MAX_TOKENS, model=sighted,
                       reasoning_effort=VISION_PREPASS_EFFORT)
     except Exception:
-        log.warning("узкий взгляд упал — картинка поедет прежним путём", exc_info=True)
+        log.warning("узкий взгляд упал — голос получит маркер без пикселей", exc_info=True)
         return "", ""
     text = str(getattr(answer, "text", "") or "").strip()
     if not text or text.startswith(_NO_PIXELS_RESPONSE):
         # 05.10 (гном-ревью раунд-3, блокер №1): не-описание («NO pixels…» в начале)
         # не имеет права стать кэшированным описанием. ПРЕФИКСНЫЙ тест: маркер ставится
         # в начало ответа; честное описание, цитирующее сентинел в середине, проходит.
-        log.warning("узкий взгляд вернул пустое/без пикселей — картинка поедет прежним путём")
+        log.warning("узкий взгляд вернул пустое/без пикселей — голос получит маркер")
         return "", ""
     if str(getattr(answer, "stop_reason", "")) == "max_tokens":
         # Обрезанное описание хуже, чем поездка прежним путём: полукадр «на картинке
-        # слева виден фрагм» хуже честной подмены модели. Не кэшируем и отступаем.
-        log.warning("узкий взгляд обрезан потолком (%d симв.) — картинка поедет прежним "
-                    "путём, обрезок не кэширую", len(text))
+        # слева виден фрагм» хуже честного маркера. Не кэшируем и отступаем.
+        log.warning("узкий взгляд обрезан потолком (%d симв.) — голос получит маркер, "
+                    "обрезок не кэширую", len(text))
         return "", ""
     # 05.10 (гном-ревью, блокер №2): ключ и маркер — по модели, которая ФАКТИЧЕСКИ
     # ответила (resp.model после возможной ротации), иначе описание ляжет под чужим
@@ -2712,14 +2722,22 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     image_messages = messages
     # Узкий взгляд — ДО маршрутизации: если картинку удалось описать одним обращением,
     # дальше едет обычная текстовая лента, и подмены модели не происходит вовсе.
-    if vision_prepass_enabled():
+    prepass_omitted = False
+    if vision_prepass_enabled(role) and not _IN_VISION_PREPASS.get():
         described_messages, described = _describe_images_narrowly(role, fw, model, messages)
         if described:
             log.info("llm: %s — картинок описано узким взглядом: %d; ход остаётся на %s",
                      _ROLE_RU[role], described, model)
             messages = image_messages = described_messages
+        elif _has_image_blocks(messages) and not accepts_images(model=model):
+            # The auxiliary call failed or was unavailable. Sanitise the ORIGINAL tape
+            # once for both legs: otherwise a fallback could re-send the full agent
+            # frame to Flash even though the primary got only a no-pixels marker.
+            image_messages = _omit_image_blocks(messages, model)
+            prepass_omitted = True
     model, messages, vision_used, pixels_omitted = _route_image_leg(
         role, fw, model, image_messages)
+    pixels_omitted = pixels_omitted or prepass_omitted
     if vision_used:
         log.info("llm: %s — image turn routed to %s/%s", _ROLE_RU[role], fw, model)
     elif pixels_omitted:
@@ -2912,6 +2930,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         resolved_fb_model, fallback_messages, fallback_vision_used, fallback_omitted = (
             _route_image_leg(role, other, resolved_fb_model, image_messages)
         )
+        fallback_omitted = fallback_omitted or prepass_omitted
         # Vision substitution can collapse two same-account legs even when their
         # configured text models differed. Never retry the failed effective channel.
         if other == fw and resolved_fb_model == model:

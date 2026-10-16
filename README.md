@@ -11,13 +11,24 @@ voice, files and a dedicated Doctor. An agent can run locally or on your server.
 [Relay](https://github.com/josephsteuerjr/praxis-relay) ·
 [Build and release guide](desk/installer/RELEASE.md)
 
-**Hélène 1.6.1** is available for Windows, macOS Apple Silicon and Linux x86_64
-(DEB/RPM). It includes server-to-Windows computer access, an X11/AT-SPI
-Linux desktop, configurable owner context, update inspection and Telegram
-recovery that retains missed messages without replying to every old mention.
-[Read the release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v1.6.1).
+**Hélène 1.7.0 — an agent with a real engineering workshop.** Available for
+Windows, macOS Apple Silicon and Linux x86_64 (DEB/RPM), with bundled Python,
+Git, voice and a desktop home for independent agents.
 
-**Hélène 1.6.1** adds explicit Pause/Continue for the selected agent in the desktop, phone and Telegram Mini App, plus owner-only `/pause` and `/resume` in the agent’s Telegram DM. Paused agents keep receiving messages without starting replies; resuming does not replay accumulated mentions. It also repairs passive chat refresh, folding status and context-setting links. Update the server harness as well as the client when using a server agent.
+Give it a project: it can inspect code, make exact edits, run checks, split work
+into nested Forge tasks and keep result and acceptance receipts across turns.
+Python tools make those operations inspectable and extensible. Large-file focus
+reads use addressable pages and source fingerprints; incomplete results and
+unconfirmed process stops stay visible.
+
+The System view exposes the available tool catalogue, and the workshop view
+connects workers to their parent tasks and receipts. Auxiliary vision lets a
+vision-capable model describe a screenshot while your chosen main model keeps
+the conversation. Updates preserve authored skills and now verify the embedded
+Python import policy before reusing an installed runtime.
+
+[Download 1.7.0 and inspect its verification receipts](https://github.com/josephsteuerjr/praxis/releases/tag/v1.7.0)
+· [Explore the Python tools and Forge](desk/docs/PYTHON-TOOLS-1.7.0.md)
 
 ## A home for several agents
 
@@ -238,6 +249,35 @@ macOS can stage that exact inventory before publication; the public release work
 can also use the Windows archive under the same version. Both paths validate the
 contents and passport. The immutable release tag records the released edition;
 later production-source synchronization does not replace published package bytes.
+
+## Working on the source tree
+
+Use a single Git checkout at the repository root for development. `desk/` contains
+Hélène's desktop, harness and packaging; `praxis/` contains the sanitized Praxis
+runtime; `helene/core/` is the declared frozen edition, with its own provenance.
+Keep changes to the production mirror and the packaged edition explicit.
+
+For a Windows checkout, keep source bytes stable:
+
+```sh
+git config core.autocrlf false
+git config core.longpaths true
+```
+
+The root `.gitignore` admits the source packages listed above and excludes other
+top-level workspace content. Nested package rules additionally exclude private
+runtime data; shared rules exclude secrets, sessions, dependencies and build
+outputs. Add a new top-level source package to the root allowlist deliberately.
+Do not force-add local data or turn an old checkout into a nested Git submodule.
+
+Praxis deployment sources are included: [DEPLOY.md](praxis/DEPLOY.md),
+[the standalone Compose bundle](praxis/docker-compose.bundle.yml),
+[the production Compose recipe](praxis/docker-compose.deploy.yml),
+[the host-broker installer](praxis/serverd/install.sh), and
+[body deployment files](praxis/body/deploy/). Hélène's server installer and
+root helper live in [desk/server/](desk/server/). Credentials and machine-specific
+deployment state are configured separately and stay outside Git. A source commit
+does not deploy either project or establish its running production state.
 
 ## Licence
 

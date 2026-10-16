@@ -92,6 +92,19 @@ def _write(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def _publish_result(request_path: Path, task_id: str, data: dict) -> bool:
+    """Stop and worker finalization share one CAS boundary; never replace a settled result."""
+    with forge._mutation_lock(task_id):
+        result = request_path.parent / "result.json"
+        if result.exists():
+            prior = forge._read_json(result)
+            if not isinstance(prior, dict) or str(prior.get("status") or "") not in forge._LIVE_UNIT_STATES:
+                return False
+            data = {**prior, **data}  # preserve any earlier partial observations
+        _write(result, data)
+        return True
+
+
 def _obj(properties: dict, required: list[str]) -> dict:
     return {"type": "object", "properties": properties, "required": required}
 
@@ -100,7 +113,10 @@ INSPECT_TOOL = {
     "name": "inspect",
     "description": (
         "See the exact task place. Besides read/search/diff, model/symbols/references/diagnostics/"
-        "impact/checks expose normalized semantic and test facts; mailbox shows worker signals."
+        "impact/checks expose normalized semantic and test facts; mailbox shows worker signals. "
+        "Large read replies are exact UTF-8 JSON pages (<=8000 chars): continue with "
+        "start=next_start, start_char=next_char, expected_sha256=sha256; a changed file refuses "
+        "the old hash. Small reads retain the legacy numbered-line display."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
@@ -108,6 +124,8 @@ INSPECT_TOOL = {
                     "read", "list", "search", "diff", "history"]},
         "path": {"type": "string"}, "query": {"type": "string"},
         "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
+        "start_char": {"type": "integer", "description": "Unicode character offset within start line, for paged reads."},
+        "expected_sha256": {"type": "string", "description": "Full 64-hex source hash from a read page; pins continuation to those bytes."},
     }, ["action"]),
 }
 
@@ -143,7 +161,9 @@ EDIT_TOOL = {
     "description": (
         "Edit inside this task root. replace is an exact unique replacement; write creates or "
         "rewrites a file; patch applies a unified diff only after git apply --check. Pass the "
-        "sha256 returned by inspect(read) as expected_sha256 when another worker may race you."
+        "full sha256 from inspect(read) as expected_sha256 for write/replace when another "
+        "worker may race you (legacy 16-hex digests remain accepted). A multi-file patch "
+        "refuses expected_sha256 rather than pretending it checked one file's hash."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["replace", "write", "patch"]},
@@ -180,16 +200,20 @@ PROCESS_TOOL = {
 DELEGATE_TOOL = {
     "name": "delegate",
     "description": (
-        "Spawn another independent fresh-context coding agent on this same task. Use several scouts "
-        "for parallel reconnaissance, a worker for a separable implementation, or a reviewer for a "
-        "hostile second look. Returns immediately; poll it through inspect(status) or ask the parent."
+        "Spawn a child fresh-context worker, poll/stop agent descendants, or disposition their "
+        "exact terminal result. The parent identity comes from your worker request, never from "
+        "model arguments. Detached process/verification jobs are task-scoped, separately stopped. "
+        "disposition requires the full result_sha256 returned by poll."
     ),
     "input_schema": _obj({
+        "action": {"type": "string", "enum": ["spawn", "list", "poll", "stop", "disposition"]},
+        "agent_id": {"type": "string"}, "result_sha256": {"type": "string"},
+        "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
         "brief": {"type": "string"},
         "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
         "model": {"type": "string", "description": "Optional per-agent model; omitted keeps the voice-role default."},
         "max_iters": {"type": "integer"},
-    }, ["brief", "role"]),
+    }, ["action"]),
 }
 
 CHECKPOINT_TOOL = {
@@ -206,8 +230,8 @@ def _system(request: dict) -> str:
     identity = f"{request.get('task_id') or ''}:{request.get('id') or ''}"
     cache_scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
     stance = {
-        "scout": "You are a reconnaissance agent. Inspect broadly, run non-mutating probes when useful, and return concrete evidence and file/line references.",
-        "reviewer": "You are an adversarial code reviewer. Read the actual diff and relevant code, run focused checks, and identify real defects or explicitly clear it.",
+        "scout": "You are a reconnaissance agent. Inspect broadly and return concrete evidence and file/line references; ask a worker for process probes.",
+        "reviewer": "You are an adversarial code reviewer. Read the actual diff and relevant code, identify real defects or explicitly clear it; ask a worker for executable checks.",
         "worker": "You are an implementation agent. Orient, edit the real isolated working tree, run checks, and leave it materially closer to done. Do not stop at recommendations when you can act.",
     }[role]
     orientation = forge.inspect(request["task_id"], "orientation")
@@ -227,8 +251,8 @@ Operating contract:
 - The task root is your exact address. Inspect current files and git state; never invent project facts.
 - Work autonomously and use as many tool turns as the job needs. The parent can run other agents concurrently.
 - For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
-- `run` is arbitrary shell for build/test/probes. `process` is for servers, watchers and other long-lived commands. `delegate` can create further fresh-context specialists.
-- Use semantic `inspect` actions before broad text guessing. Use `verify` for a persisted test matrix, and `signal` to leave findings/contracts/blockers in the shared DAG mailbox.
+- A worker may use `run` for arbitrary build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Detached process/verification jobs are task-scoped; stopping your agent subtree does NOT stop them. Stop those jobs explicitly.
+- Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
 - Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
 - End with a compact but complete result: what you learned/changed, exact verification, remaining risks, and the next useful integration step. Do not merely narrate intentions.
 """
@@ -237,6 +261,18 @@ Operating contract:
 def _dispatch(request: dict, name: str, args: dict) -> str:
     task_id = request["task_id"]
     clean = {k: v for k, v in (args or {}).items() if v is not None}
+    role = str(request.get("role") or "worker")
+    # The provider may return a tool name absent from the offered schema. Keep
+    # read-oriented roles read-only at the actual dispatch boundary, not only in
+    # the prompt or tool list. Arbitrary shell/verification commands can mutate.
+    if role != "worker" and name not in {"inspect", "signal", "delegate"}:
+        return f"{role}: tool {name} refused (read-oriented role)."
+    if role != "worker" and name == "inspect" and clean.get("action") not in {
+        "status", "orientation", "overview", "review", "model", "symbols",
+        "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
+        "read", "list", "search", "diff", "history",
+    }:
+        return f"{role}: inspect action refused (read-oriented role)."
     if name == "inspect":
         return forge.inspect(task_id, **clean)
     if name == "edit":
@@ -252,12 +288,31 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
                            kind=str(clean.get("kind") or "finding"),
                            message=str(clean.get("message") or ""), files=clean.get("files") or [])
     if name == "delegate":
-        # расписка манометра: бриф сочинил ЭТОТ воркер, не она напрямую
-        clean.setdefault("spawned_by", str(request.get("id") or ""))
-        return forge.agent(task_id, "spawn", **clean)
+        action = str(clean.pop("action", "spawn"))
+        if action == "spawn":
+            clean.pop("agent_id", None)  # only Forge mints a child identity
+        return forge.agent(task_id, action, _parent_request_path=request.get("_verified_request_path", ""),
+                           **clean)
     if name == "checkpoint":
         return forge.checkpoint(task_id, **clean)
     return f"Unknown tool {name}"
+
+
+def _model_tool_result(output: str, *, limit: int = 12000) -> str:
+    """No model-visible tool output may disappear without an omission marker."""
+    text = str(output)
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - limit
+    while True:
+        warning = (f"\n[TOOL RESULT OMITTED: {omitted} characters not delivered. "
+                   "This is NOT a complete result. Narrow the query/read range and retry; "
+                   "do not infer facts from the missing tail.]\n")
+        corrected = len(text) - (limit - len(warning))
+        if corrected == omitted:
+            break
+        omitted = corrected
+    return text[:limit - len(warning)] + warning
 
 
 def run(request_path: Path) -> int:
@@ -266,7 +321,8 @@ def run(request_path: Path) -> int:
 
 
 def _run_request(request_path: Path, request: dict) -> int:
-    result_path = request_path.parent / "result.json"
+    # This address is supplied by the actual process invocation, not the model's tools.
+    request = {**request, "_verified_request_path": str(request_path.resolve())}
     trace: list[dict] = []
     bindings = contextlib.ExitStack()
     try:
@@ -282,9 +338,9 @@ def _run_request(request_path: Path, request: dict) -> int:
             context = replace(context, forge_task_id=str(request["task_id"]))
             bindings.enter_context(run_context.bind_run(context))
         role = request.get("role") or "worker"
-        tools = [INSPECT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
+        tools = [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
         if role == "worker":
-            tools += [EDIT_TOOL, CHECKPOINT_TOOL]
+            tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
         messages: list[dict] = [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}]
         max_iters = int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2)
         reply = ""
@@ -325,7 +381,7 @@ def _run_request(request_path: Path, request: dict) -> int:
                     trace.append({"tool": block.get("name"), "input": args,
                                   "output": str(output)[:2000], "at": _now()})
                     tool_results.append({"type": "tool_result", "tool_use_id": block.get("id", ""),
-                                         "content": str(output)[:12000]})
+                                         "content": _model_tool_result(output)})
             messages.append({"role": "assistant", "content": assistant_blocks})
             messages.append({"role": "user", "content": tool_results})
         if not reply:
@@ -354,7 +410,9 @@ def _run_request(request_path: Path, request: dict) -> int:
             "result": reply, "tool_calls": len(trace), "trace": trace[-30:],
             "diff_tail": diff[-8000:],
         }
-        _write(result_path, data)
+        if not _publish_result(request_path, request["task_id"], data):
+            print(f"{request['id']} settled concurrently; original result retained", flush=True)
+            return 0
         forge._event(request["task_id"], "agent_finished", agent_id=request["id"], role=role,
                      summary=(f"{request['id']} done; tools={len(trace)}" if stopped_himself
                               else f"{request['id']} исчерпал ходы {used}/{max_iters}; "
@@ -372,7 +430,12 @@ def _run_request(request_path: Path, request: dict) -> int:
                 "model": str(locals().get("final_model") or ""),
                 "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()[-8000:],
                 "trace": trace[-20:]}
-        _write(result_path, data)
+        try:
+            if not _publish_result(request_path, request["task_id"], data):
+                return 2
+        except Exception:
+            print(data["traceback"], flush=True)
+            return 2
         try:
             forge._event(request["task_id"], "agent_error", agent_id=request.get("id"),
                          summary=data["error"])

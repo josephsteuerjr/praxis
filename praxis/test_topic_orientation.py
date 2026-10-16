@@ -48,7 +48,7 @@ class TestBranchesOnEvidence(unittest.TestCase):
     def test_each_verdict_says_something_different_and_true(self):
         """Поведением, а не грепом: греп по исходнику ломался на переносе строки
         три раза подряд — это не тест, это проверка форматирования."""
-        args = ("-1001240718803", 93707, "-1001240718803#topic:93707")
+        args = ("-100999999999999999", 93707, "-100999999999999999#topic:93707")
         forum = tr.orientation_line(*args, tr.TRUE)
         plain = tr.orientation_line(*args, tr.FALSE)
         unknown = tr.orientation_line(*args, tr.UNKNOWN)
@@ -67,7 +67,7 @@ class TestBranchesOnEvidence(unittest.TestCase):
         for line in (forum, plain, unknown):
             self.assertIn("top_msg_id=93707", line,
                           "адресация одинакова во всех случаях — меняется утверждение")
-            self.assertIn("selector=-1001240718803#topic:93707", line)
+            self.assertIn("selector=-100999999999999999#topic:93707", line)
 
     def test_runner_asks_the_registry_instead_of_assuming(self):
         block = _orient_source(code_only=True)
@@ -77,8 +77,8 @@ class TestBranchesOnEvidence(unittest.TestCase):
 
     def test_registry_answers_for_the_measured_rooms(self):
         # AbstractDL: прямой отказ Telegram — не форум.
-        tr.observe("-1001240718803", kind="channel_forum_missing", message_id=1)
-        self.assertEqual(tr.status_at("-1001240718803", 93707)[0], tr.FALSE)
+        tr.observe("-100999999999999999", kind="channel_forum_missing", message_id=1)
+        self.assertEqual(tr.status_at("-100999999999999999", 93707)[0], tr.FALSE)
         # Грибница: настоящие openers — форум.
         tr.observe("-1004301095307", kind="topic_opener_seen", message_id=5)
         self.assertEqual(tr.status_at("-1004301095307", 9)[0], tr.TRUE)

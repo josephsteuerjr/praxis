@@ -986,7 +986,7 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
     answer to it are archived with ``topic_id=None`` while every later reply is archived
     under ``topic_id=<root>``.  Filtering on the column alone therefore dropped the two
     messages the thread is *about*, and the resulting slice looked complete: nothing
-    marked it partial.  Observed 2026-07-23 in -1001240718803, where she said «у меня в
+    marked it partial.  Observed 2026-07-23 in <private-root-room>, where she said «у меня в
     топик попал только твой ответ, без сообщения #93708» and another agent had to paste
     the missing message back by hand.
 

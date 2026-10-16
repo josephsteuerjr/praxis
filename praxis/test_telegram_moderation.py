@@ -53,7 +53,7 @@ class ModerationActionTests(unittest.TestCase):
         self.patch.stop()
         self.tmp.cleanup()
 
-    def run_action(self, client, *, peer=-1001240718803, message=77, sender=88,
+    def run_action(self, client, *, peer=-100999999999999999, message=77, sender=88,
                    action="delete"):
         with mock.patch.object(mtproto_runner, "client", client), \
              mock.patch.object(mtproto_runner, "_marked_peer_id", return_value=int(peer)):
@@ -87,8 +87,8 @@ class ModerationActionTests(unittest.TestCase):
     def test_tampered_completed_receipt_cannot_suppress_transport(self):
         forged = {"schema": "praxis.telegram.moderation.v1", "ts": 1,
                   "previous_sha256": "", "idempotency_key":
-                  telegram_moderation.operation_key(-1001240718803, 77, 88, "delete"),
-                  "actor": "attacker", "peer_id": -1001240718803, "message_id": 77,
+                  telegram_moderation.operation_key(-100999999999999999, 77, 88, "delete"),
+                  "actor": "attacker", "peer_id": -100999999999999999, "message_id": 77,
                   "sender_id": 88, "action": "delete", "status": "completed",
                   "deleted": True, "banned": False, "error": "",
                   "receipt_sha256": "attacker"}
@@ -101,12 +101,12 @@ class ModerationActionTests(unittest.TestCase):
         async def race():
             with mock.patch.object(mtproto_runner, "client", client), \
                  mock.patch.object(mtproto_runner, "_marked_peer_id",
-                                   return_value=-1001240718803):
+                                   return_value=-100999999999999999):
                 return await asyncio.gather(
                     mtproto_runner._moderate_abstractdl(
-                        -1001240718803, 91, 92, "delete", "praxis:self"),
+                        -100999999999999999, 91, 92, "delete", "praxis:self"),
                     mtproto_runner._moderate_abstractdl(
-                        -1001240718803, 91, 92, "delete", "praxis:self"))
+                        -100999999999999999, 91, 92, "delete", "praxis:self"))
         results = asyncio.run(race())
         self.assertEqual(len(client.deleted), 1)
         self.assertTrue(any(result.get("replayed") for result in results))
@@ -116,10 +116,10 @@ class ModerationActionTests(unittest.TestCase):
             async def get_messages(self, entity, ids):
                 return None
         key = telegram_moderation.operation_key(
-            -1001240718803, 93, 94, "delete_and_ban")
+            -100999999999999999, 93, 94, "delete_and_ban")
         telegram_moderation.append_receipt({
             "idempotency_key": key, "actor": "praxis:self",
-            "peer_id": -1001240718803, "message_id": 93, "sender_id": 94,
+            "peer_id": -100999999999999999, "message_id": 93, "sender_id": 94,
             "action": "delete_and_ban", "status": "verified",
             "deleted": False, "banned": False, "sender_verified": True, "error": ""})
         client = CrashLedgerClient()
@@ -181,7 +181,7 @@ class ToolBoundaryTests(unittest.TestCase):
              }, clear=False):
             out = agent.tool_telegram_account(
                 action="moderate_abstractdl",
-                params_json=json.dumps({"peer_id": -1001240718803, "message_id": 1,
+                params_json=json.dumps({"peer_id": -100999999999999999, "message_id": 1,
                                         "sender_id": 2, "decision": "delete"}))
         self.assertIn('"message_id": 1', out)
 

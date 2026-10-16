@@ -56,6 +56,7 @@ import telegram_topics
 import history_scan
 import unanswered
 import workshop
+from room_identity import root_chat_id
 
 try:  # герметичность: любой тест-запуск (unittest/pytest/PRAXIS_TEST) не читает боевой .env
     from _sandbox import _looks_like_test_run as _looks_like_test_run_now
@@ -664,13 +665,13 @@ def _buf_push(chat_id: str, line: str, *, author: str = "",
 
 def _group_native_persistence_enabled(chat_id: str) -> bool:
     """Select split native persistence only for the fully ready exact canary pair."""
-    if str(chat_id) != '-1001240718803':
+    if str(chat_id) != root_chat_id():
         return False
     try:
         import keat_readiness
         import keat_runtime
         return bool(
-            keat_runtime.staged('group', '-1001240718803') and
+            keat_runtime.staged('group', root_chat_id()) and
             keat_readiness.receipt()['serve_ready'])
     except Exception:
         return False
@@ -714,7 +715,7 @@ def _persist_sent_reply(chat_id, chunks, message_ids, *, is_dm):
                 logical_send=dict(id=batch_id, index=index, count=len(chunks)),
                 root_chat_id=(chat_id if not is_dm else None),
                 principal_id=(_self_id if not is_dm else None),
-                ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
+                ordinary_root=(not is_dm and str(chat_id) == root_chat_id()))
 
 
 def _telegram_handle(entity) -> str | None:
@@ -2280,20 +2281,23 @@ async def on_edited(event) -> None:
     msg = getattr(event, "message", None)
     mid = getattr(msg, "id", None)
     peer_id = str(getattr(event, "chat_id", None))
+    # Old captured group coordinates remain revocable during a private binding
+    # or capture-switch outage. This supplies no room-serving authority.
+    import keat_live
+    group_enrolled = (not is_private and
+                      await asyncio.to_thread(keat_live.enrolled_native_group, peer_id))
     try:
         # Telethon message ids are exact positive ``int`` values.  Do not
         # normalize any other shape (including bools or numeric strings) into
         # authority for one occurrence: at the enrolled root it instead means
         # the entire coordinate space must fail closed.
         if type(mid) is not int or mid <= 0:
-            if peer_id == '-1001240718803':
-                import keat_live
+            if group_enrolled:
                 await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
             return
         message_id = mid
     except (TypeError, ValueError, OverflowError):
-        if peer_id == '-1001240718803':
-            import keat_live
+        if group_enrolled:
             await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
         return
 
@@ -2301,8 +2305,7 @@ async def on_edited(event) -> None:
     # immutable native occurrence. In particular, edit_date is not authority to
     # keep old bytes alive: some edit update shapes omit it, and such an update
     # must fail closed for KEAT while retaining the legacy handler's old no-op.
-    if peer_id == '-1001240718803':
-        import keat_live
+    if group_enrolled:
         await asyncio.to_thread(keat_live.invalidate_native, peer_id, message_id)
 
     edited_at = getattr(msg, "edit_date", None)
@@ -2326,7 +2329,7 @@ async def on_edited(event) -> None:
     # Persist/revoke before ANY revision effects or duplicate/self short circuit.
     # Failure propagates: an update must not be acknowledged as safely projected.
     # Exact peer evidence exists on edits for both DMs and the one canonical root
-    # group; invalidate_native itself remains default-off and enrollment-scoped.
+    # group; invalidate_native remains enrollment-scoped even with new capture off.
     if is_private:
         import keat_live
         await asyncio.to_thread(keat_live.invalidate_native, peer_id, int(mid))
@@ -2766,7 +2769,7 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
     ⚑ ЗАЧЕМ ЭТА ФУНКЦИЯ ВООБЩЕ ПОЯВИЛАСЬ.
     `route_for_message` умеет главное с 25.07: `is_forum is False` → обычная супергруппа
     это ОДНА комната, и цепочка ответов не становится ключом хранения. Там же записан
-    живой случай ровно из этой комнаты: «observed 23.07.2026 in -1001240718803: „у меня в
+    живой случай ровно из этой комнаты: «observed 23.07.2026 in <private-root-room>: „у меня в
     топик попал только твой ответ, без сообщения #93708"».
 
     Но знание в эту функцию не доезжало. Раннер копил свидетельства о природе комнаты в
@@ -2777,7 +2780,7 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
 
     Цена этого разрыва, живьём 16.08: лента комнаты в кадре была ПОЛНОЙ (53 упоминания
     Арета, 47 корневых строк, 182 тредовых), а адрес хода говорил
-    `origin_chat_id: "-1001240718803__topic__98994"` — псевдоветка из одного сообщения.
+    `origin_chat_id: "<private-root-room>__topic__98994"` — псевдоветка из одного сообщения.
     Она ответила про ветку и сказала «контекста до этого сообщения в ветке нет»: для
     ветки это правда, для комнаты — нет.
 
@@ -3547,7 +3550,7 @@ async def on_new(event) -> None:
               name=buffer_name,
               source_id=mid, ts=message_ts,
               capture_live=(not bool(media or ref) and
-                            (is_private or (peer_id == '-1001240718803' and
+                            (is_private or (peer_id == root_chat_id() and
                              chat_id == peer_id and room_nature is False and
                              keat_group_principal is not None))),
               root_chat_id=(peer_id if not is_private else None),
@@ -5159,7 +5162,8 @@ async def _run_pass(chat_id: str) -> None:
             reply_targets=reply_targets,  # 15: карта адресных ответов на момент триггера
             envelope=_envelope,           # пункт 4: теневой замер, никем не читается
             telegram_root_group=bool(not is_dm and route.topic_id is None and
-                                     route.peer_id == '-1001240718803' and
+                                     root_chat_id() is not None and
+                                     route.peer_id == root_chat_id() and
                                      chat_id == route.peer_id and
                                      meta.get('room_nature') is False),
         )
@@ -6237,8 +6241,8 @@ async def _resolve_entity(ref):
         # Кандидаты строятся ОДИН раз, числом вперёд и без дублей.
         # Числовая СТРОКА, отданная Telethon как есть, до всякого поиска чата уходит в
         # `utils.parse_phone` — и там она НОМЕР ТЕЛЕФОНА. Проверено на прод-интерпретаторе
-        # 26.07: parse_phone('-100500') -> '100500', parse_phone('-1001240718803') ->
-        # '1001240718803'. Дальше `_get_entity_from_string` делает
+        # 26.07: parse_phone('-100500') -> '100500', parse_phone(root_chat_id()) ->
+        # '<root-room-digits>'. Дальше `_get_entity_from_string` делает
         # `contacts.GetContactsRequest(0)` — ПОЛНУЮ выгрузку адресной книги, и так на
         # каждый промах. Хуже: `for cand in (ref, ref_s)` при уже-строковом `ref` давал
         # два одинаковых кандидата, то есть две выгрузки за вызов; третий заход

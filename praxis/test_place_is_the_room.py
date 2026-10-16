@@ -2,7 +2,7 @@
 
 ЖИВОЙ СЛУЧАЙ 16.08.2026, из-за которого этот файл существует.
 Егор написал в AbstractDL корневое сообщение «Пракс, о чем тут шла речь?». Ход получил
-адрес `origin_chat_id: "-1001240718803__topic__98994"` — псевдоветку из ОДНОГО сообщения.
+адрес `origin_chat_id: "-100999999999999999__topic__98994"` — псевдоветку из ОДНОГО сообщения.
 Лента комнаты в кадре при этом была полной (53 упоминания Арета, 47 корневых строк, 182
 тредовых), но на вопрос «а ветка рядом?» она ответила: «контекста до этого сообщения в
 ветке нет». Для ветки это правда. Для комнаты — нет.
@@ -51,12 +51,12 @@ class TheRoomVerdictReachesTheKey(unittest.TestCase):
         """
         with mock.patch.object(runner.telegram_routes, "status_at",
                                lambda *a, **k: (telegram_routes.FALSE, 1)):
-            forum = runner._known_forum("-1001240718803", _msg(98996, reply_to_top=98994))
+            forum = runner._known_forum("-100999999999999999", _msg(98996, reply_to_top=98994))
         self.assertIs(forum, False, "реестр сказал «не форум», а раннер это потерял")
         route = telegram_topics.route_for_message(
-            "-1001240718803", _msg(98996, reply_to_top=98994),
+            "-100999999999999999", _msg(98996, reply_to_top=98994),
             is_private=False, is_forum=forum)
-        self.assertEqual(route.conversation_id, "-1001240718803",
+        self.assertEqual(route.conversation_id, "-100999999999999999",
                          "комната снова разрезана на псевдоветку")
         self.assertIsNone(route.topic_id)
 

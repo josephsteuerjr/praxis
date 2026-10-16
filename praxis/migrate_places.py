@@ -27,8 +27,8 @@
 
 Канарейка (`--peer`)
 --------------------
-    python migrate_places.py --peer -1001240718803 [--dry-run]
-    python migrate_places.py --rollback --peer -1001240718803 [--run <run_id>]
+    python migrate_places.py --peer <private-root-room> [--dry-run]
+    python migrate_places.py --rollback --peer <private-root-room> [--run <run_id>]
 Ограничивает прогон ОДНОЙ комнатой. Каждый canary-прогон живёт в СОБСТВЕННОМ
 каталоге `_pre_places/runs/<run_id>/` (её контракт 23.08 после живой канарейки
 AbstractDL): полная копия ВСЕХ состояний пира + атомарно закоммиченный
@@ -1022,7 +1022,7 @@ def main(argv=None) -> int:
     mode.add_argument("--rollback", action="store_true")
     parser.add_argument("--peer", default=None,
                         help="канарейка: ограничить прогон одной комнатой, "
-                             "например --peer -1001240718803")
+                             "например --peer <private-root-room>")
     parser.add_argument("--run", default=None,
                         help="откат канарейки: run_id закоммиченного прогона "
                              "(обязателен, если прогонов у пира больше одного)")

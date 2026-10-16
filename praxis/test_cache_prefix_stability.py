@@ -11,7 +11,7 @@ import llm
 import tool_offerings
 
 
-ROOM_ID = "-1001240718803"
+ROOM_ID = "-100999999999999999"
 
 
 def room_ctx(*, owner: bool, known: bool = True) -> agent.ChannelContext:

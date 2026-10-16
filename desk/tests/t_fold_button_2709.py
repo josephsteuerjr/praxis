@@ -45,7 +45,7 @@ class Channel(unittest.TestCase):
 
     def test_пороги_её_личка_и_комната_разные(self):
         self.assertEqual(control.fold_bounds("window"), (150, 250, 300))
-        self.assertEqual(control.fold_bounds("-1001240718803"), (250, 400, 500))
+        self.assertEqual(control.fold_bounds("-100999999999999999"), (250, 400, 500))
 
     def test_состояние_говорит_сколько_горячего(self):
         life_state(self.tree, "window", 212)

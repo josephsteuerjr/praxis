@@ -424,6 +424,15 @@ def build_runtime(out: Path, cache: Path) -> None:
         raise SystemExit(
             f"{pth.name}: не удалось включить `import site` — без него рантайм "
             "не увидит site-packages. Содержимое:\n" + text)
+    # The embeddable interpreter ignores cwd, PYTHONPATH and the script's own
+    # directory while this _pth is present. Forge starts forge_worker.py as a
+    # separate process from tree/; without this sibling path its first
+    # `import forge` fails even though both files are shipped side by side.
+    # Keep the path relative to runtime/, so a moved/private installation
+    # resolves its own tree rather than a builder's checkout.
+    tree_entry = "..\\tree"
+    if tree_entry not in text.splitlines():
+        text = text.rstrip("\n") + "\n" + tree_entry + "\n"
     pth.write_text(text, encoding="utf-8", newline="\n")
     py = runtime / "python.exe"
     print("  ставлю pip…")
@@ -444,13 +453,29 @@ def build_runtime(out: Path, cache: Path) -> None:
     run([str(py), "-m", "pip", "cache", "purge", "-q"], False)
 
 
+def _runtime_env() -> dict[str, str]:
+    # import site in python314._pth otherwise adds the builder's user site.
+    # pip can treat an owner-installed package as already satisfied, leaving
+    # the distributable incomplete (observed with PyYAML). Smokes must use the
+    # same view or they could conceal a missing bundled dependency.
+    return {**os.environ, "PYTHONNOUSERSITE": "1"}
+
+
 def _run_timed(args: list[str], *, check: bool, timeout: int):
     try:
-        return subprocess.run(args, check=check, timeout=timeout)
+        return subprocess.run(args, check=check, timeout=timeout, env=_runtime_env())
     except subprocess.TimeoutExpired:
         raise SystemExit(
             f"шаг сборки рантайма не ответил за {timeout // 60} мин: {args[0]} …\n"
             "скорее всего недоступен индекс PyPI — сборка остановлена") from None
+
+
+def runtime_path_config_digest(out: Path) -> str:
+    """Bind the embedded import-path policy separately from pip package versions."""
+    configs = list((out / "runtime").glob("python3*._pth"))
+    if len(configs) != 1:
+        raise SystemExit("expected exactly one embedded Python _pth for the runtime passport")
+    return sha256(configs[0])
 
 
 def runtime_inventory(out: Path) -> str:
@@ -482,12 +507,31 @@ def smoke_runtime(out: Path, imports: list[str] | tuple[str, ...] = SMOKE_IMPORT
             "для выпуска собирай без флага")
     code = "import " + ", ".join(imports)
     r = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
-                       timeout=300, encoding="utf-8", errors="replace")
+                       timeout=300, encoding="utf-8", errors="replace", env=_runtime_env())
     if r.returncode != 0:
         raise SystemExit("рантайм не импортирует свои зависимости:\n" + (r.stderr or "").strip())
     r = subprocess.run([str(py), "-m", "pip", "freeze"], capture_output=True, text=True,
-                       timeout=300, encoding="utf-8", errors="replace")
+                       timeout=300, encoding="utf-8", errors="replace", env=_runtime_env())
     return (r.stdout or "").strip()
+
+
+def smoke_embedded_forge_worker(out: Path) -> None:
+    """Import the shipped worker with the same isolated interpreter that spawns it.
+
+    A successful host-Python import or a staged file listing does not establish
+    that python314._pth lets a child import its neighbouring Forge modules.
+    This imports only: no request, model call, job, or live process is started.
+    """
+    tree = out / "tree"
+    py = out / "runtime" / "python.exe"
+    if not (tree / "forge_worker.py").is_file() or not (tree / "forge.py").is_file():
+        raise SystemExit("в поставке нет forge_worker.py или forge.py")
+    result = subprocess.run([str(py), "-c", "import forge_worker"], cwd=tree,
+                            capture_output=True, text=True, timeout=60,
+                            encoding="utf-8", errors="replace", env=_runtime_env())
+    if result.returncode:
+        raise SystemExit("встроенный Python не импортирует работника Forge: "
+                         + (result.stderr or "неизвестная ошибка")[-2000:])
 
 
 # --- 1.2.1: голосовой движок — отдельным набором ------------------------------
@@ -656,7 +700,7 @@ assert audio.shape == (16000,) and audio.dtype == numpy.float32
 print("voice decode: 16000 samples, float32")
 """
     r = subprocess.run([str(py), "-c", code], capture_output=True, text=True,
-                       timeout=300, encoding="utf-8", errors="replace")
+                       timeout=300, encoding="utf-8", errors="replace", env=_runtime_env())
     if r.returncode != 0:
         raise SystemExit("голосовой набор не импортируется или не декодирует аудио:\n" + (r.stderr or "").strip())
     print("  " + r.stdout.strip())
@@ -1017,7 +1061,7 @@ def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = No
 
 FIRST_RUN = """# Hélène · первый запуск
 
-Пауза агента: «Пауза / Продолжить» в шапке окна, Системе, телефоне и Mini App. Telegram продолжает приниматься, а новые ответы и фоновые ходы остановлены; накопившиеся упоминания не вызывают отдельные ответы после продолжения. В личке Telegram доступны /pause и /resume только владельцу. Для серверного агента обнови также серверный harness до 1.6.1. Аварийный стоп снимается отдельно.
+Пауза агента: «Пауза / Продолжить» в шапке окна, Системе, телефоне и Mini App. Telegram продолжает приниматься, а новые ответы и фоновые ходы остановлены; накопившиеся упоминания не вызывают отдельные ответы после продолжения. В личке Telegram доступны /pause и /resume только владельцу. Для серверного агента обнови также серверный harness до версии этой же поставки. Аварийный стоп снимается отдельно.
 
 Программа не подписана сертификатом. При первом запуске Windows SmartScreen
 может сказать «Система защитила ваш компьютер»: нажми «Подробнее», затем
@@ -1445,6 +1489,17 @@ def body_provenance(body_exe: Path, bridge_exe: Path, allow_partial: bool, live:
     return info
 
 
+def _public_relay_build(made: dict) -> dict | None:
+    """Only validated hashes may leave the private receipt in a package."""
+    if not made:
+        return None
+    result = {}
+    for key in ("digest", "exe_sha256"):
+        value = made.get(key)
+        result[key] = value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+    return result
+
+
 def relay_provenance(exe: Path, allow_partial: bool) -> dict:
     """Из чего собран `helene-relay.exe` в этой поставке.
 
@@ -1462,12 +1517,16 @@ def relay_provenance(exe: Path, allow_partial: bool) -> dict:
     total, files = relay_src.digest(relay_src.MIRROR)
     note = relay_src.stamp(relay_src.MIRROR)
     made = relay_src.built(relay_src.MIRROR)
-    info = {"digest": total, "files": len(files), "source": note or None,
-            "built": made or None}
+    # Keep full source provenance in the private mirror. The distributable
+    # carries only computed hashes/counts, never free text from local receipts.
+    if note and (note.get("digest") != total or note.get("files") != len(files)):
+        raise SystemExit("частное зеркало реле не совпадает со своей запиской о происхождении")
+    public_note = {"digest": total, "files": len(files)} if note else None
+    info = {"digest": total, "files": len(files), "source": public_note,
+            "built": _public_relay_build(made)}
     print(f"  исходник реле: {len(files)} файлов, отпечаток {total[:12]}")
     if note:
-        print(f"  снят с {note.get('from', '?')} @ {str(note.get('commit', ''))[:7]}"
-              f" ({note.get('pulled_utc', '?')})")
+        print("  происхождение записано в частном зеркале; адрес остаётся только там")
     else:
         print(f"  ⚠ происхождение исходника реле НЕ ЗАПИСАНО ({relay_src.STAMP} нет): "
               "installer/relay_src.py --pull --host <адрес>")
@@ -1480,14 +1539,13 @@ def relay_provenance(exe: Path, allow_partial: bool) -> dict:
                 and hashlib.sha256(exe.read_bytes()).hexdigest() == made.get("exe_sha256"))
     if made.get("digest") != total or not same_exe:
         line = ("helene-relay.exe собран не из этого исходника — пересобрать: "
-                f"installer/relay_src.py --build (отпечаток бинаря "
-                f"{str(made.get('digest', ''))[:12]}, исходника {total[:12]})")
+                f"installer/relay_src.py --build (бинарь не соответствует исходнику {total[:12]})")
         if not allow_partial:
             raise SystemExit(line)
         print(f"  ⚠ {line}")
         info["stale"] = True
     else:
-        print(f"  собран из него же ({made.get('built_utc')})")
+        print("  бинарь совпадает с отпечатком источника")
     return info
 
 
@@ -1509,18 +1567,18 @@ def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
             raise SystemExit(line)
         print(f"  ⚠ {line}")
         return {}
+    public_made = _public_relay_build(made)
     same = (binary.is_file()
             and hashlib.sha256(binary.read_bytes()).hexdigest() == made.get("exe_sha256"))
     if made.get("digest") != total or not same:
         line = ("Linux-бинарь реле собран не из этого исходника — пересобрать: "
-                f"installer/relay_src.py --build-linux (отпечаток бинаря "
-                f"{str(made.get('digest', ''))[:12]}, исходника {total[:12]})")
+                f"installer/relay_src.py --build-linux (бинарь не соответствует исходнику {total[:12]})")
         if not allow_partial:
             raise SystemExit(line)
         print(f"  ⚠ {line}")
-        return dict(made, stale=True)
-    print(f"  Linux-бинарь реле собран из него же ({made.get('built_utc')})")
-    return made
+        return dict(public_made, stale=True)
+    print("  Linux-бинарь реле совпадает с отпечатком источника")
+    return public_made
 
 
 def build_praxis_app(args) -> None:
@@ -1779,6 +1837,11 @@ def main() -> None:
 
     print("app:")
     staged = stage_payload(out, live, args.allow_partial)
+    if args.skip_smokes:
+        print("  импорт Forge worker пропущен (--skip-smokes; только отладка)")
+    else:
+        smoke_embedded_forge_worker(out)
+        print("  встроенный Python импортирует Forge worker из дерева поставки")
 
     print("бинарники:")
     # Четвёртое поле — чью декларацию версии обязан подтвердить сам exe.
@@ -1990,6 +2053,7 @@ def main() -> None:
         # сопоставить ни с чем.
         "downloads": {Path(url).name: SHA256.get(url, "") for url in SHA256},
         "packages": freeze.splitlines(),
+        "runtime_path_config_sha256": runtime_path_config_digest(out),
         # 1.2.1: движок голоса — отдельный актив выпуска рядом с zip; окно качает его
         # вместе с моделью и сверяет по этой сумме (не по чужому слову сети).
         "voice_pack": voice_pack,

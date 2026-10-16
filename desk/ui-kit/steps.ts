@@ -111,6 +111,14 @@ export function subject(args: unknown): string {
   return "";
 }
 
+/** Source is the saved tool input, not a reconstructed OS argv or proof of execution. */
+export function suppliedCommand(args: unknown): string {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const fields = args as Record<string, unknown>;
+  return typeof fields.command === "string" ? fields.command :
+    typeof fields.cmd === "string" ? fields.cmd : "";
+}
+
 function details(key: string, parts: Array<[string, string]>, label = "Подробности"): string {
   const body = parts.filter(([, value]) => value).map(([name, value]) =>
     `<div class="action-detail-label">${esc(name)}</div><pre>${esc(value)}</pre>`).join("");
@@ -284,6 +292,7 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
     for (const t of it.tools || []) {
       hands += 1;
       const args = t.args != null ? pretty(t.args) : "";
+      const command = suppliedCommand(t.args);
       const head = String(t.result?.head || t.result?.tail || "");
       const received = t.result != null || t.status === "received";
       const failed = t.status === "failed";
@@ -304,7 +313,7 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
           `<div class="action-head"><b class="action-title">${esc(title)}</b><span class="action-status">${tstatus}</span></div>` +
           `${what ? `<div class="action-subject">${esc(clip(what, 400))}</div>` : ""}` +
           `${head && !receipt ? textBox(tkey + ":result", resultText(result), { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }) : ""}` +
-          details(tkey, [["Инструмент", t.tool || ""], ["Параметры", args], [receipt ? (t.result?.truncated ? "Сохранённый фрагмент квитанции" : "Квитанция") : "", receipt ? result : ""], ["Ошибка", t.error || ""]]) +
+          details(tkey, [["Инструмент", t.tool || ""], [command ? "Передано инструменту (не системная argv)" : "", command], ["Параметры", args], [receipt ? (t.result?.truncated ? "Сохранённый фрагмент квитанции" : "Квитанция") : "", receipt ? result : ""], ["Ошибка", t.error || ""]]) +
           lesson(lessonKey) +
           `</div>`,
       );

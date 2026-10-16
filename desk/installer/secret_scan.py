@@ -59,6 +59,11 @@ NOT_SECRET = {
     # ключей нет вовсе, они живут в `.env`.
     "gpt-5.6-sol": "имя модели (роль голоса)",
     "glm-5.3-flash": "имя модели (роль оценщика)",
+    # 16.10: значения roles.voice.model и images.model сверены с ПУБЛИЧНЫМИ
+    # исходниками (test_provider_observation.py и карточка Images). Только эти
+    # два точных имени; ключ целиком никогда не освобождает значение от поиска.
+    "gpt-6.1-sol": "публичный идентификатор модели в тесте провайдера",
+    "gpt-image-2": "публичный идентификатор модели генерации изображений",
     "anthropic": "название семейства провайдера, не ключ",
 }
 
@@ -87,10 +92,14 @@ def listing(tree: pathlib.Path) -> tuple[list[tuple[str, pathlib.Path]], str]:
     listed = subprocess.run(
         ["git", "-c", "core.quotepath=false", "ls-files", "-z"],
         cwd=str(tree), capture_output=True)
-    if listed.returncode == 0 and listed.stdout.strip():
-        rows = [r for r in listed.stdout.decode("utf-8", "replace").split("\0") if r]
+    if listed.returncode == 0:
+        rows = [r for r in listed.stdout.decode("utf-8").split("\0") if r]
         out = [(rel, tree / rel) for rel in rows]
-        return [(rel, path) for rel, path in out if path.is_file()], "индекс git"
+        if not out:
+            raise SystemExit("индекс git пуст — нечего проверять; это не чистое зеркало")
+        return out, "пути индекса git, содержимое рабочей копии"
+    if (tree / ".git").exists():
+        raise SystemExit("индекс git недоступен — отказываюсь подменять его обходом папки")
     out = []
     for path in tree.rglob("*"):
         posix = path.as_posix()
@@ -184,11 +193,14 @@ def main() -> None:
     looked = skipped_big = skipped_bad = 0
     for rel, path in files:
         try:
+            if path.is_symlink() or not path.is_file():
+                skipped_bad += 1
+                continue
             if path.stat().st_size > MAX_FILE_BYTES:
                 skipped_big += 1
                 continue
             text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        except (OSError, UnicodeError):
             skipped_bad += 1
             continue
         looked += 1
@@ -199,6 +211,8 @@ def main() -> None:
           + (f", пропущено крупных (> {MAX_FILE_BYTES // (1024 * 1024)} МБ): {skipped_big}"
              if skipped_big else "")
           + (f", не прочиталось: {skipped_bad}" if skipped_bad else ""))
+    if skipped_big or skipped_bad:
+        raise SystemExit("НЕПОЛНАЯ СВЕРКА: пропущен файл из выбранного дерева — не чистое зеркало")
 
     hits = 0
     for name in sorted(found):

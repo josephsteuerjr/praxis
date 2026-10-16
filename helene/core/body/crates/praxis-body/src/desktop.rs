@@ -4162,6 +4162,78 @@ mod platform {
         Ok(inputs)
     }
 
+    #[cfg(test)]
+    mod input_v2_tests {
+        use super::*;
+
+        fn events(value: Value) -> Vec<InputEvent> {
+            serde_json::from_value(value).expect("valid desktop input events")
+        }
+
+        fn mouse_flags(input: &INPUT) -> MOUSE_EVENT_FLAGS {
+            // These are prepared INPUT records only; the test never calls SendInput.
+            assert_eq!(input.r#type, INPUT_MOUSE);
+            unsafe { input.Anonymous.mi.dwFlags }
+        }
+
+        #[test]
+        fn old_events_still_parse_and_new_edges_keep_press_move_release_order() {
+            let old = events(json!([
+                {"type": "mouse", "x": 4, "y": 5},
+                {"type": "click", "button": "right", "count": 1},
+                {"type": "wheel", "delta": -120},
+                {"type": "key", "key": "a"},
+                {"type": "hotkey", "keys": ["ctrl", "a"]},
+                {"type": "text", "text": "ok"}
+            ]));
+            assert_eq!(old.len(), 6);
+            assert!(prepare_input_events(&old, 0).is_ok());
+
+            let batch = events(json!([
+                {"type": "mouse_down", "x": 10, "y": 10},
+                {"type": "mouse", "x": 20, "y": 20},
+                {"type": "mouse_up", "x": 30, "y": 30}
+            ]));
+            let chunks = prepare_input_events(&batch, 0).unwrap();
+            assert_eq!(chunks.len(), 3);
+            assert_eq!(
+                (chunks[0].press, chunks[0].release),
+                (Some(MouseButton::Left), None)
+            );
+            assert_eq!(
+                (chunks[2].press, chunks[2].release),
+                (None, Some(MouseButton::Left))
+            );
+            assert_eq!(mouse_flags(&chunks[0].inputs[1]), MOUSEEVENTF_LEFTDOWN);
+            assert_eq!(
+                mouse_flags(&chunks[1].inputs[0]),
+                MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+            );
+            assert_eq!(mouse_flags(&chunks[2].inputs[1]), MOUSEEVENTF_LEFTUP);
+            assert!(net_held(&batch).unwrap().is_empty());
+            assert_eq!(net_held(&batch[..1]).unwrap(), vec!["left"]);
+
+            let drag = events(json!([{
+                "type": "drag", "button": "right", "x": 10, "y": 10,
+                "to_x": 30, "to_y": 30, "steps": 2,
+                "hold_ms": 1, "step_delay_ms": 2, "settle_ms": 3
+            }]));
+            let chunks = prepare_input_events(&drag, 0).unwrap();
+            assert_eq!(chunks.len(), 4);
+            assert_eq!(chunks[0].press, Some(MouseButton::Right));
+            assert_eq!(mouse_flags(&chunks[0].inputs[1]), MOUSEEVENTF_RIGHTDOWN);
+            for move_chunk in &chunks[1..3] {
+                assert_eq!(
+                    mouse_flags(&move_chunk.inputs[0]),
+                    MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+                );
+            }
+            assert_eq!(mouse_flags(&chunks[3].inputs[0]), MOUSEEVENTF_RIGHTUP);
+            assert_eq!(chunks[3].release, Some(MouseButton::Right));
+            assert!(net_held(&drag).unwrap().is_empty());
+        }
+    }
+
     fn text_inputs(text: &str) -> Result<Vec<INPUT>> {
         let units: Vec<_> = text.encode_utf16().collect();
         if units.len() > MAX_INPUT_TEXT_UTF16_UNITS {

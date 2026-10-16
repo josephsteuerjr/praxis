@@ -83,6 +83,7 @@ class Inspection(unittest.TestCase):
             current = json.loads((DESK/"resources/update-inspection.json").read_text(encoding="utf8"))["version"]
             req = update_inspection.ensure(tree, {"id": "request", "to_version": current})
             self.assertEqual({g["id"] for g in req["goals"]}, {
+                "coding_workshop", "worker_tree", "coding_focus", "native_input",
                 "agent_pause", "passive_feed", "fold_worker_status", "owner_context",
                 "memory_line", "update_inspection", "system_journal", "computer_latency",
                 "telegram_continuity", "emergency_stop", "compatibility",

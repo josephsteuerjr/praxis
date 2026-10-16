@@ -15,10 +15,9 @@ Praxis — мастерская: настоящие кодинг-руки вме
   * code_map — ast-карта кода (проверяемое «как я устроена»), кэш по mtime;
   * code_outline — скелет одного файла (PASS 16.5).
 
-PASS 16.3: рельсы этой мастерской продублированы в компилируемом полу (`hands/`,
-бинарь praxis-hands). Если он собран — путь/зоны/таймауты/потолки решает ОН,
-и её правки этого файла пола не двигают. Не собран — всё работает как раньше, той же
-семантикой. Одна семантика, две реализации; расхождение ловят тесты.
+PASS 16.3: компилируемый пол остаётся для чтения/поиска/запуска. Файловые
+мутации выполняет только Python: потерянный ответ бинаря нельзя повторять
+другим движком. Результат мутации отдельно сообщает об исходе и hash readback.
 
 Модель здесь не зовётся. agent импортируется лениво (тулы регистрируются в agent).
 """
@@ -32,14 +31,18 @@ import hashlib
 import logging
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
 from pathlib import Path
 
 import hands
 import rails
 import selfdev
+from self_model import FileLock
 
 log = logging.getLogger("praxis-workshop")
 
@@ -215,7 +218,7 @@ def _resolve_inbox(path: str) -> Path | None:
         return INBOX.resolve()
     p = Path(raw)
     # 13.09: описание руки говорит «папка внутри workspace/inbox», и она так и зовёт —
-    # `inbox_list("from-helene")`, `inbox_list("groups/AbstractDL_Chat_-1001240718803")`.
+    # `inbox_list("from-helene")`, `inbox_list("groups/AbstractDL_Chat_<room-id>")`.
     # Резолвер клеил такое имя к дому (`/app/from-helene`), не находил его внутри ящика и
     # отвечал «Нет такой папки», хотя папка есть. Сегодня она так не нашла ни папку группы,
     # ни мою записку. Относительное имя сначала пробуем от самого ящика; полный путь
@@ -426,12 +429,24 @@ def fs_read(path: str, start: int = 0, end: int = 0) -> str:
         return "Не читаю: путь вне дома. Для хоста используй Forge scope='host'."
     if not p.is_file():
         return f"Нет файла {path}."
-    lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+    raw = p.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    try:
+        text = raw.decode("utf-8")
+        decoding = "utf-8 exact"
+    except UnicodeDecodeError:
+        # The digest still covers the WHOLE original byte stream. Replacement
+        # characters are a display limitation, not evidence of its contents.
+        text = raw.decode("utf-8", errors="replace")
+        decoding = "utf-8 replacement: text is lossy; do not edit from this view"
+    lines = text.splitlines()
     s = max(1, int(start) or 1)
     e = min(len(lines), int(end) or (s + READ_CAP_LINES - 1))
     body = "\n".join(f"{i:>5}\t{lines[i - 1]}" for i in range(s, e + 1))
     tail = f"\n… (в файле {len(lines)} строк; дальше — fs_read(start={e + 1}))" if e < len(lines) else ""
-    return body + tail if body else "(пустой файл)"
+    return (body + tail if body else "(пустой файл)") + (
+        f"\n[fs_read whole-file sha256={digest}; bytes={len(raw)}; {decoding}]"
+    )
 
 
 SHRINK_GUARD_RATIO = 0.7    # PASS 16.5: новый текст < 70% старого = похоже на усечение
@@ -442,80 +457,203 @@ def _wt_root(proposal_id: str) -> str:
     return str(selfdev.worktree_path(str(proposal_id).strip())) if proposal_id else ""
 
 
-def fs_write(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
-             force: bool = False) -> str:
-    """Создать файл; overwrite=True — осознанно переписать существующий.
+def _mutation_result(status: str, message: str, path: str, before: str | None = None,
+                     after: str | None = None) -> dict:
+    # One receipt ID per attempted API call, NOT a persisted deduplication key.
+    return {"operation_id": uuid.uuid4().hex, "status": status, "message": message, "path": path,
+            "before_sha256": before, "after_sha256": after}
 
-    PASS 16.5: перезапись возможна, но под гардом усечения (новый текст меньше 70%
-    старого → отказ, force=true снимает). PASS 16.3: если собран компилируемый пол —
-    решение принимает он (та же семантика, рельсы вне самоизменяемого питона)."""
-    r = hands.write(path, content, root=_wt_root(proposal_id), overwrite=overwrite,
-                    force=force, base=BASE)
-    if r is not None:
-        if r.get("ok"):
-            log.info("fs_write(hands) %s%s", path, f" [proposal {proposal_id}]" if proposal_id else "")
-        return r.get("msg") or ("Записала." if r.get("ok") else "Не пишу.")
 
+def _mutation_target(path: str, proposal_id: str, op: str) -> tuple[Path | None, str]:
+    """Resolve and check the actual target, rejecting symlink components altogether.
+
+    A symlink to an allowed target still has a mutable authority boundary; do not
+    make the Python and Rust interpretations of it a write policy.
+    """
     p, err = _resolve_write(path, proposal_id)
     if p is None:
-        rails.deny("hands_floor", "fs_write", f"{err}: {str(path)[:100]}")
-        return f"Не пишу: {err}"
-    if p.exists():
-        if not overwrite:
-            return (f"Файл {path} уже существует — правь точечно через fs_edit, "
-                    "или передай overwrite=true, если правда хочешь переписать целиком.")
-        if not force:
-            old_len = len(p.read_text(encoding="utf-8", errors="ignore"))
-            if old_len > 0 and len(content) < old_len * SHRINK_GUARD_RATIO:
-                pct = round(len(content) / old_len * 100)
-                rails.deny("hands_floor", "fs_write", f"shrink-guard {pct}%: {str(path)[:100]}")
-                return (f"Стоп: новый текст {path} — {pct}% от старого ({old_len} → {len(content)} симв.). "
-                        "Похоже на случайное усечение. Точечно — fs_edit; если перезапись "
-                        "осознанная — force=true.")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(content, encoding="utf-8")
-    log.info("fs_write %s (%d байт)%s", path, len(content.encode("utf-8", "ignore")),
-             f" [proposal {proposal_id}]" if proposal_id else "")
-    return f"Записала {path} ({len(content)} симв.)."
+        rails.deny("hands_floor", op, f"{err}: {str(path)[:100]}")
+        return None, err
+    raw = Path(str(path).strip())
+    raw = raw if raw.is_absolute() else (selfdev.worktree_path(str(proposal_id).strip()) / raw
+                                           if proposal_id else BASE / raw)
+    try:
+        if any(part.is_symlink() for part in (raw, *raw.parents)):
+            return None, "символическая ссылка в пути записи"
+    except OSError:
+        return None, "не удалось проверить компоненты пути"
+    return p, ""
 
 
-def fs_edit(path: str, old: str, new: str, proposal_id: str = "") -> str:
-    """Точная правка: `old` должен встречаться РОВНО один раз. 0 или >1 — отказ с подсказкой.
-
-    PASS 16.5: при >1 совпадении называем номера строк первых вхождений — меньше слепых
-    итераций. PASS 16.3: при собранном поле правку делает бинарь (одна семантика)."""
-    r = hands.edit(path, old, new, root=_wt_root(proposal_id), base=BASE)
-    if r is not None:
-        if r.get("ok"):
-            log.info("fs_edit(hands) %s%s", path, f" [proposal {proposal_id}]" if proposal_id else "")
-        return r.get("msg") or ("Поправила." if r.get("ok") else "Не правлю.")
-
-    p, err = _resolve_write(path, proposal_id)
-    if p is None:
-        rails.deny("hands_floor", "fs_edit", f"{err}: {str(path)[:100]}")
-        return f"Не правлю: {err}"
+def _file_snapshot(p: Path) -> tuple[bytes | None, str | None]:
+    if not p.exists():
+        return None, None
     if not p.is_file():
-        return f"Нет файла {path} — новый файл создаётся fs_write."
-    if not old:
-        return "Пустой old — так не правлю (для нового файла есть fs_write)."
-    text = p.read_text(encoding="utf-8", errors="ignore")
-    n = text.count(old)
-    if n == 0:
-        return ("Вхождение не найдено (0 совпадений). Проверь точный текст через fs_read — "
-                "пробелы/табуляция/кавычки должны совпадать байт в байт.")
-    if n > 1:
-        pos, start = [], 0
-        for _ in range(min(n, 5)):
-            i = text.index(old, start)
-            pos.append(f"строка {text[:i].count(chr(10)) + 1}")
-            start = i + 1
-        return (f"Неоднозначно: {n} совпадений (первые: {', '.join(pos)}). Расширь old "
-                "несколькими строками контекста вокруг нужного места, чтобы вхождение "
-                "стало уникальным.")
-    p.write_text(text.replace(old, new, 1), encoding="utf-8")
-    log.info("fs_edit %s (-%d +%d симв.)%s", path, len(old), len(new),
-             f" [proposal {proposal_id}]" if proposal_id else "")
-    return f"Поправила {path}: 1 вхождение заменено."
+        raise IsADirectoryError(str(p))
+    data = p.read_bytes()
+    return data, hashlib.sha256(data).hexdigest()
+
+
+def mutation_lock() -> FileLock:
+    """One short shared transaction for workshop writes and local Forge edits.
+
+    A Forge patch can touch multiple files: a target-specific lock would let it
+    race an fs_edit of one hunk. Keep the lock outside project worktrees so its
+    own bytes cannot enter a proposal/commit.
+    """
+    return FileLock(BASE / "memory" / ".state" / "workshop-mutations.lock",
+                    timeout=10.0)
+
+
+def _publish_bytes(p: Path, data: bytes, previous: str | None, path: str,
+                   proposal_id: str, op: str, success: str) -> dict:
+    """Stage complete bytes beside target; no second executor or blind retry.
+
+    An error after the commit attempt is in_doubt even if a later read appears to
+    match. A missing/failed readback is never a confirmed success.
+    """
+    temp = None
+    attempted = False
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp = tempfile.mkstemp(prefix=".praxis-write-", dir=p.parent)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if previous is not None:
+            os.chmod(temp, stat.S_IMODE(p.stat().st_mode))
+        else:
+            # A tempfile starts at 0600; newly authored project files previously
+            # inherited ordinary directory accessibility, not private temp mode.
+            os.chmod(temp, stat.S_IMODE(p.parent.stat().st_mode) & 0o666)
+        # The preimage comparison and publication must serialize across processes.
+        # An atomic replace alone does not make two equal-preimage edits a CAS.
+        with mutation_lock() as lock:
+            checked, err = _mutation_target(path, proposal_id, op)
+            if checked != p:
+                result = _mutation_result("refused", f"Не пишу: {err or 'путь изменился'}", path, previous)
+            else:
+                _, current = _file_snapshot(p)
+                if current != previous:
+                    result = _mutation_result("refused", "Не пишу: файл изменился до записи (conflict).",
+                                              path, current)
+                else:
+                    if previous is None:
+                        # Link is an atomic create-if-absent; replace would clobber a creator.
+                        attempted = True
+                        os.link(temp, p)
+                    else:
+                        attempted = True
+                        os.replace(temp, p)
+                        temp = None
+                    observed = hashlib.sha256(p.read_bytes()).hexdigest()
+                    wanted = hashlib.sha256(data).hexdigest()
+                    if observed != wanted:
+                        result = _mutation_result("in_doubt", "Исход неизвестен: readback hash не совпал; перечитай файл, не повторяй слепо.",
+                                                  path, previous, observed)
+                    else:
+                        log.info("%s %s (%d bytes) confirmed", op, path, len(data))
+                        result = _mutation_result("confirmed", success, path, previous, observed)
+        if lock.lost_to_takeover:
+            return _mutation_result("in_doubt", "Исход неизвестен: блокировка потеряла владельца; перечитай файл, не повторяй слепо.",
+                                    path, previous)
+        return result
+    except TimeoutError:
+        return _mutation_result("refused", "Не пишу: файл занят другой операцией; перечитай и повтори позже.",
+                                path, previous)
+    except OSError as exc:
+        status = "in_doubt" if attempted else "refused"
+        return _mutation_result(status,
+                                f"{'Исход неизвестен' if attempted else 'Не пишу'}: {type(exc).__name__}; "
+                                f"{'перечитай файл, не повторяй слепо' if attempted else 'изменение не подтверждено'}.",
+                                path, previous)
+    finally:
+        if temp is not None:
+            try:
+                if os.path.lexists(temp):
+                    os.unlink(temp)
+            except OSError:
+                log.warning("temporary write artifact remains: %s", temp)
+
+
+def fs_write_result(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
+                    force: bool = False, expected_sha256: str | None = None) -> dict:
+    """Python-only mutation. Return typed status and hashes; expected_sha256 is a CAS guard.
+
+    The expected hash denotes the existing file's raw bytes; it is not a desired
+    output hash. The default None preserves old unconditioned callers.
+    """
+    p, err = _mutation_target(path, proposal_id, "fs_write")
+    if p is None:
+        return _mutation_result("refused", f"Не пишу: {err}", path)
+    if not isinstance(content, str):
+        return _mutation_result("refused", "Не пишу: content должен быть строкой.", path)
+    if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)):
+        return _mutation_result("refused", "Не пишу: expected_sha256 должен быть SHA-256 hex.", path)
+    try:
+        old, before = _file_snapshot(p)
+        if expected_sha256 is not None and expected_sha256 != before:
+            return _mutation_result("refused", "Не пишу: expected_sha256 не совпал (conflict).", path,
+                                    before)
+        if old is not None:
+            if not overwrite:
+                return _mutation_result("refused", f"Файл {path} уже существует — правь точечно через fs_edit, или передай overwrite=true, если правда хочешь переписать целиком.", path, before)
+            if not force:
+                old_len = len(old.decode("utf-8"))
+                if old_len > 0 and len(content) < old_len * SHRINK_GUARD_RATIO:
+                    pct = round(len(content) / old_len * 100)
+                    rails.deny("hands_floor", "fs_write", f"shrink-guard {pct}%: {str(path)[:100]}")
+                    return _mutation_result("refused", f"Стоп: новый текст {path} — {pct}% от старого ({old_len} → {len(content)} симв.). Похоже на случайное усечение. Точечно — fs_edit; если перезапись осознанная — force=true.", path, before)
+        return _publish_bytes(p, content.encode("utf-8"), before, path, proposal_id,
+                              "fs_write", f"Записала {path} ({len(content)} симв.).")
+    except (OSError, UnicodeError) as exc:
+        return _mutation_result("refused", f"Не пишу: не удалось прочитать исходный файл ({type(exc).__name__}).", path)
+
+
+def fs_edit_result(path: str, old: str, new: str, proposal_id: str = "",
+                   expected_sha256: str | None = None) -> dict:
+    """Replace exactly one occurrence in UTF-8 text, with optional byte-hash CAS."""
+    p, err = _mutation_target(path, proposal_id, "fs_edit")
+    if p is None:
+        return _mutation_result("refused", f"Не правлю: {err}", path)
+    if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)):
+        return _mutation_result("refused", "Не правлю: expected_sha256 должен быть SHA-256 hex.", path)
+    try:
+        raw, before = _file_snapshot(p)
+        if raw is None:
+            return _mutation_result("refused", f"Нет файла {path} — новый файл создаётся fs_write.", path)
+        if expected_sha256 is not None and expected_sha256 != before:
+            return _mutation_result("refused", "Не правлю: expected_sha256 не совпал (conflict).", path, before)
+        if not isinstance(old, str) or not old or not isinstance(new, str):
+            return _mutation_result("refused", "Пустой old — так не правлю (для нового файла есть fs_write).", path, before)
+        text = raw.decode("utf-8")
+        n = text.count(old)
+        if n == 0:
+            return _mutation_result("refused", "Вхождение не найдено (0 совпадений). Проверь точный текст через fs_read — пробелы/табуляция/кавычки должны совпадать байт в байт.", path, before)
+        if n > 1:
+            pos, start = [], 0
+            for _ in range(min(n, 5)):
+                i = text.index(old, start)
+                pos.append(f"строка {text[:i].count(chr(10)) + 1}")
+                start = i + 1
+            return _mutation_result("refused", f"Неоднозначно: {n} совпадений (первые: {', '.join(pos)}). Расширь old несколькими строками контекста вокруг нужного места, чтобы вхождение стало уникальным.", path, before)
+        return _publish_bytes(p, text.replace(old, new, 1).encode("utf-8"), before, path,
+                              proposal_id, "fs_edit", f"Поправила {path}: 1 вхождение заменено.")
+    except (OSError, UnicodeError) as exc:
+        return _mutation_result("refused", f"Не правлю: не удалось прочитать UTF-8 файл ({type(exc).__name__}).", path)
+
+
+def fs_write(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
+             force: bool = False, expected_sha256: str | None = None) -> str:
+    """Legacy text surface; typed contract is fs_write_result."""
+    return fs_write_result(path, content, proposal_id, overwrite, force, expected_sha256)["message"]
+
+
+def fs_edit(path: str, old: str, new: str, proposal_id: str = "",
+            expected_sha256: str | None = None) -> str:
+    """Legacy text surface; typed contract is fs_edit_result."""
+    return fs_edit_result(path, old, new, proposal_id, expected_sha256)["message"]
 
 
 def code_outline(path: str) -> str:
@@ -735,27 +873,32 @@ def _venv_python(d: Path) -> Path | None:
 
 
 def run(cmd: str, project: str, timeout: int = RUN_TIMEOUT) -> str:
-    """Запуск в проекте мастерской. PASS 16.3: при собранном полу — через бинарь
-    (тайм-аут, джейл cwd, потолок вывода и расписка зашиты в нём)."""
+    """Run one shell command in a project. Never retry an attempted exec on another backend.
+
+    A command may have changed files even when its process/transport reply was lost.
+    """
     d = _project_dir(project)
     if d is None:
         return f"Нет проекта {_slug(project)} — run работает в проектах мастерской."
     timeout = max(1, min(int(timeout or RUN_TIMEOUT), 600))
     log.info("workshop run [%s] $ %s", d.name, cmd[:120])
-    r = hands.execute(cmd, cwd=str(d), timeout=timeout, cap=RUN_OUT_CAP, base=BASE)
-    if r is not None and ("out" in r or r.get("msg")):
+    if hands.binary() is not None:
+        r = hands.execute(cmd, cwd=str(d), timeout=timeout, cap=RUN_OUT_CAP, base=BASE)
+        if r is None:
+            return "[исход неизвестен: бинарь не ответил; проверь эффекты команды, не повторяй вслепую]"
         if "out" in r:
             out = (r.get("out") or "").strip() or "(пустой вывод)"
             code = int(r.get("code", 0))
             return out + (f"\n[exit {code}]" if code != 0 and not r.get("killed") else "")
-        return f"[ошибка запуска] {r.get('msg')}"
+        return f"[ошибка запуска] {r.get('msg') or 'нет полного результата'}"
     try:
         r2 = subprocess.run(cmd, shell=True, cwd=str(d), capture_output=True, text=True,
                             timeout=timeout)
         out = (r2.stdout or "") + (r2.stderr or "")
         tail = f"\n[exit {r2.returncode}]" if r2.returncode != 0 else ""
     except subprocess.TimeoutExpired:
-        return f"[прервано по тайм-ауту {timeout}с]"
+        return (f"[прервано по тайм-ауту {timeout}с; исход эффектов неизвестен, "
+                "проверь состояние, не повторяй вслепую]")
     except Exception as e:
         return f"[ошибка запуска] {type(e).__name__}: {e}"
     return (_cap_output(out.strip()) or "(пустой вывод)") + tail

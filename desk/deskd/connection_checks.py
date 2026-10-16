@@ -23,7 +23,7 @@ def check_telegram(config: dict, fields: dict | None = None) -> dict:
     try:
         url,key=telegram_proxy.settings({'telegram':tg})
     except ValueError:
-        rows.append({'name':'Прокси','ok':False,'message':'Нужны HTTPS-адрес сервера и ключ доступа. Их выдаёт тот, кто подготовил подключение Telegram.'})
+        rows.append({'name':'Прокси','ok':False,'message':'Нужны HTTPS-адрес подключения с путём /helene/telegram и ключ доступа. Их выдаёт тот, кто подготовил подключение Telegram.'})
         return out
     def read(req):
         with opener.open(req,timeout=15) as response:raw=response.read(262145)

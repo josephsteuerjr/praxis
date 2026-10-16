@@ -92,17 +92,20 @@
 
 | Файл/каталог | Роль |
 |---|---|
-| `forge.py` | Единственная Forge state machine: task root/base, inspect/edit/run, checkpoint, workers, swarm, verification, learning и finish. |
+| `forge.py` | Единственная Forge state machine: task root/base, bounded paged inspect с полным digest, edit с preimage, checkpoint, workers и их parent/result/disposition/unknown-stop receipts, task-wide active-worker cap, swarm, verification, learning и finish. |
 | `forge_intelligence.py` | Manifest/source orientation и semantic project model без обязательного LSP. |
-| `forge_process.py` | Supervisor одного detached Forge process с полным log/result. |
-| `forge_worker.py` | Fresh-context worker protocol и tool dispatch. |
+| `forge_process.py` | Supervisor одного detached Forge process с полным log/result; timeout без подтверждённой смерти группы сохраняет unknown custody. |
+| `forge_worker.py` | Fresh-context worker protocol, role-limited tool dispatch и terminal result CAS с subtree stop. |
 | `forge_swarm.py` | Persistent worker DAG, mailbox и advisory ownership. |
-| `forge_verify.py` | Detached verification matrix с bounded parallelism и независимыми logs. |
+| `forge_verify.py` | Detached verification matrix с bounded parallelism, private check groups, stop-request/exit readback, независимыми logs и повторной проверкой clean tree SHA до reuse/terminal PASS. |
 | `forge_learning.py` | Evidence-linked reusable lessons завершённых задач. |
 | `test_forge_contract_0610.py` | Контракт задачи (критерии + verify_commands), дедуп верификации по tree-sha и честный finish: regression-набор PR oro/forge-contract-0610. |
-| `workshop.py` | Python file/shell/dev-tool surface, используемая model tools. |
-| `hands.py` | Мост к компилируемому filesystem/process floor с Python fallback. |
-| `hands/` | Rust `praxis-hands`, path/write/output rails и генератор согласованного Python registry. |
+| `test_forge_tree_1310.py` | Pure regression-тесты вложенных worker receipts, cap, stop-fence, dispositions и роли; без detached запуска. |
+| `test_forge_focus_read_1410.py`, `accept_workshop.py` | Постраничная квитанция чтения/полный preimage SHA и one-command bounded acceptance для source+edition; Linux native release gate отдельно. |
+| `test_forge_timeout_custody_1410.py` | Регрессии timeout/stop процесса и verify-групп: не выдавать terminal result при непроверенном потомке. |
+| `workshop.py` | Python file/shell/dev-tool surface: единственный активный writer fs_write/fs_edit, optional preimage SHA и confirmed/refused/in_doubt readback. |
+| `hands.py` | Мост к compiled read/search/run; read/search допускают Python fallback после ошибки, `exec` — только если бинарь отсутствовал до вызова; нативные write/edit отказывают до запуска. |
+| `hands/` | Rust `praxis-hands`, retained read/search/run rails и генератор согласованного Python registry; write/edit в бинаре не предлагаются активному модельному пути. |
 | `selfgit.py` | Автокоммиты изменений собственного дерева и provenance core edits. |
 | `selfdev.py` | Sovereign worktree proposal/test/review/merge/restart workflow с rollback и durable override reason. |
 | `_sandbox.py`, `praxis_test.py`, `conftest.py` | Test-only перенаправление `PRAXIS_BASE` в disposable tree до импорта runtime-модулей; bare unittest не является поддержанным локальным entrypoint. |

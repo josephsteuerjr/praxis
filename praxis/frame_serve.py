@@ -16,6 +16,7 @@ import frame_measure
 import frame_shadow
 import keat_readiness
 import keat_runtime
+from room_identity import root_chat_id
 
 _BOUND = ContextVar('frame_serve_bound', default=None)
 _COVERAGE = ContextVar('frame_serve_coverage', default=None)
@@ -43,11 +44,13 @@ def _ordinary_dm(ctx) -> bool:
 
 def _root_group(ctx) -> bool:
     """Match only the proved flat AbstractDL root-group ingress boundary."""
+    root = root_chat_id()
     return bool(
-        getattr(ctx, 'is_dm', True) is False
+        root is not None
+        and getattr(ctx, 'is_dm', True) is False
         and getattr(ctx, 'telegram_root_group', False) is True
-        and str(getattr(ctx, 'chat_id', None)) == '-1001240718803'
-        and str(getattr(ctx, 'room_chat_id', None)) == '-1001240718803'
+        and str(getattr(ctx, 'chat_id', None)) == root
+        and str(getattr(ctx, 'room_chat_id', None)) == root
     )
 
 
@@ -69,7 +72,7 @@ def enabled(ctx) -> bool:
         root_group = bool(
             os.getenv('PRAXIS_FRAME_V6', '').strip().lower() == 'serve'
             and _root_group(ctx)
-            and keat_runtime.staged('group', '-1001240718803')
+            and keat_runtime.staged('group', root_chat_id())
             and keat_readiness.receipt(dict(os.environ))['serve_ready'])
         if root_group:
             return True

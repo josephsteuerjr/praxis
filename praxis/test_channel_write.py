@@ -45,11 +45,11 @@ class WritingIsRecordedApartFromForumEpochs(unittest.TestCase):
 
     def test_a_channel_with_a_discussion_names_the_address(self):
         telegram_routes.note_writing("-1001341326876", broadcast=True,
-                                     linked_chat_id="-1001240718803",
+                                     linked_chat_id="-100999999999999999",
                                      linked_title="AbstractDL Chat")
         line = telegram_routes.writing_line("-1001341326876")
         self.assertIn("AbstractDL Chat", line)
-        self.assertIn("-1001240718803", line, "адрес назван словами, но не адресом")
+        self.assertIn("-100999999999999999", line, "адрес назван словами, но не адресом")
 
     def test_an_empty_observation_does_not_erase_what_is_known(self):
         """«Я не посмотрел» не должно выглядеть как «посмотрел, и там пусто»."""

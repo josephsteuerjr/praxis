@@ -44,7 +44,7 @@ def _rows(n: int, *, gap_sec: int = 3600) -> list[dict]:
 
 class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
     def test_room_bounds_are_wider_than_the_dm_ones(self):
-        lo, hi, hard, cap = ml.hot_bounds("-1001240718803")
+        lo, hi, hard, cap = ml.hot_bounds("-100999999999999999")
         self.assertEqual((lo, hi, hard, cap),
                          (ml.GROUP_HOT_LO, ml.GROUP_HOT_HI, ml.GROUP_HOT_HARD_HI, ml.GROUP_HOT_TOKEN_CAP))
         self.assertGreater(lo, ml.HOT_LO)
@@ -81,11 +81,11 @@ class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
         rows = _rows(n)
         dm = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("809306689"), place="809306689")
         self.assertTrue(dm["due"], dm)
-        group = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("-1001240718803"),
-                                 place="-1001240718803")
+        group = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("-100999999999999999"),
+                                 place="-100999999999999999")
         self.assertFalse(group["due"], group)
         self.assertEqual(group["reason"], "within_window")
-        big = ml.plan_hot_fold(_rows(ml.GROUP_HOT_HI + 10), tape_chars=0, place="-1001240718803")
+        big = ml.plan_hot_fold(_rows(ml.GROUP_HOT_HI + 10), tape_chars=0, place="-100999999999999999")
         self.assertTrue(big["due"], big)
         # сколько остаётся горячим после свёртки комнаты — по GROUP_HOT_LO, не по HOT_LO
         self.assertGreaterEqual((ml.GROUP_HOT_HI + 10) - big["fold"], ml.GROUP_HOT_LO - 1)

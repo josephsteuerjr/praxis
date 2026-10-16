@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 import hashlib
 import json
+from collections import Counter
 import sys
 import unittest
 from pathlib import Path
@@ -30,10 +31,18 @@ sys.path.insert(0, str(DESK / "localharness"))
 KIT = [RES / "SOUL.md", RES / "self-day-zero.md", RES / "soul" / "VOICE.md",
        RES / "soul" / "self.md", *sorted((RES / "soul" / "skills").glob("*.md"))]
 SUPPLIED = json.loads((Path(__file__).parent / 'fixtures/owner-supplied-skills-1.5.9.json').read_text(encoding='utf8'))
+# 16.10: Yegor approved one narrowly sanitized factory revision. The historical
+# 1.5.9 hash stays in the fixture; only these exact NEW bytes may replace that
+# template. An old copy containing the private room ID is not acceptable again.
+SANITIZED_TEMPLATE_HASHES = {
+    'abstractdl-mtproto-moderation.md': '0b54434ff6ea97b2bbb87d65ed44a79ad34a08986f18529f2e47aa5f5f35536f',
+}
 
 
 def owner_supplied(path):
     expected = SUPPLIED['files'].get(path.name) if path.parent == RES/'soul/skills' else None
+    if expected and path.name in SANITIZED_TEMPLATE_HASHES:
+        expected = SANITIZED_TEMPLATE_HASHES[path.name]
     return bool(expected) and hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() == expected
 
 #: Чужой дом. `/app` — путь, «докер/контейнер/сервер» — чужая машина, Praxis — чужое имя.
@@ -56,7 +65,23 @@ ALLOW: dict[str, tuple[str, ...]] = {}
 
 
 def _lines(path: Path):
+    accepted = Counter()
+    if path == RES / 'soul' / 'skills' / 'INDEX.md':
+        # The 1.5.9 INDEX is a byte-accepted owner document, but unlike the
+        # 78 skills it is also factory navigation and grows with new skills.
+        # Scan the changed/added lines, not accepted owner lines already there.
+        # A multiset prevents one historical line from excusing arbitrarily
+        # many new copies of the same forbidden text.
+        import boot
+        expected = SUPPLIED['files']['INDEX.md']
+        for prior in boot._kit_history().get('soul/skills/INDEX.md', []):
+            if hashlib.sha256(prior.encode('utf-8').replace(b'\r\n', b'\n')).hexdigest() == expected:
+                accepted = Counter(prior.split('\n'))
+                break
     for no, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+        if accepted[line]:
+            accepted[line] -= 1
+            continue
         yield no, line
 
 
@@ -65,7 +90,35 @@ class KitIsNeutral(unittest.TestCase):
         self.assertEqual(SUPPLIED['schema'], 'helene.owner-supplied-skills.v1')
         self.assertTrue(SUPPLIED['files'])
         for name in SUPPLIED['files']:
-            with self.subTest(skill=name): self.assertTrue(owner_supplied(RES/'soul/skills'/name), 'Owner-supplied skill changed: ' + name)
+            with self.subTest(skill=name):
+                if name == 'INDEX.md':
+                    # The INDEX was owner-supplied in 1.5.9, but is also the factory
+                    # navigation page: later additions must appear there without
+                    # rewriting the historical owner-accepted text in the fixture.
+                    # The immutable predecessor stays in the stock-upgrade history;
+                    # refresh_kit only migrates byte-identical stock homes.
+                    import boot
+                    old_hash = SUPPLIED['files'][name]
+                    predecessors = boot._kit_history().get('soul/skills/INDEX.md', [])
+                    approved = [t for t in predecessors
+                                if hashlib.sha256(t.encode('utf-8').replace(b'\r\n', b'\n')).hexdigest() == old_hash]
+                    self.assertEqual(len(approved), 1, 'Owner-supplied INDEX predecessor lost')
+                    # Four new rows and the corrected count in the introduction
+                    # are the only intended changes to this accepted factory
+                    # INDEX. Preserve every other owner-authored line (including
+                    # the older 78 purpose links); the fixture itself stays old.
+                    old_lines = Counter(approved[0].split('\n'))
+                    old_intro = [line for line in old_lines if line.startswith('Эти двадцать написаны до меня')]
+                    self.assertEqual(len(old_intro), 1)
+                    old_lines[old_intro[0]] -= 1
+                    current_lines = Counter((RES / 'soul' / 'skills' / name).read_text(encoding='utf-8').split('\n'))
+                    self.assertEqual(old_lines - current_lines, Counter(), 'Accepted INDEX lines disappeared')
+                else:
+                    if name in SANITIZED_TEMPLATE_HASHES:
+                        self.assertNotEqual(SUPPLIED['files'][name], SANITIZED_TEMPLATE_HASHES[name],
+                                            'The owner-approved revision must not bless the former private value')
+                    self.assertTrue(owner_supplied(RES/'soul/skills'/name),
+                                    'Owner-accepted factory skill changed: ' + name)
 
     def test_no_foreign_home_in_the_kit(self):
         bad = [f"{p.relative_to(RES)}:{no}: {line.strip()}" for p in KIT if not owner_supplied(p) for no, line in _lines(p)

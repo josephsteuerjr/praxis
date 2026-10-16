@@ -40,7 +40,7 @@ sys.modules.setdefault("dotenv", _fd)
 import agent  # noqa: E402
 import llm  # noqa: E402
 
-ROOM_ID = "-1001240718803"
+ROOM_ID = "-100999999999999999"
 OTHER_ROOM_ID = "-1004301095307"
 
 #: Четыре аудитории её кадра и тег, которым каждая обязана адресоваться.

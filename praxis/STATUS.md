@@ -13,6 +13,51 @@
 >
 > Проверять расхождение: `git -C /opt/praxis rev-parse --short HEAD` против шапки ниже.
 
+## Local follow-on 2026-10-14: unified workshop/edition/UI candidate (NOT RELEASED)
+
+- Branch `oro/python-workshop-phase1-1310` extends the separate Phase-A candidate;
+  the implementation checkpoint is `14dfc202df56e4bc78f580ac4ba24ff4fb6d3e3f`.
+  Version metadata and source inventory target 1.7.0, but the *release candidate*
+  still needs a final exact-SHA test/build receipt. No push, installed runtime or
+  public 1.7.0 release is claimed by this section.
+- Edition's `agent.py`/`forge.py`/tool text now select the Python-first contracts in the
+  actual Hélène package overlay; edition `desktop.rs` already supported native v2
+  mouse-down/up/drag, and a regression checks the model schema and event ordering.
+  Windows file move's partial-copy/reparse case has a bounded static guard in the
+  selected `praxis/body` source; a malicious concurrent junction swap remains out
+  of this guarantee. Forge verification refuses reuse on a dirty Git tree or a tree
+  moved during verification; process stop with live/unknown descendants no longer
+  gets a terminal-success receipt. `coding_inspect(read)` pages a capped result with
+  a whole-file digest; raw source is not truncated to pretend it is complete.
+- The Hélène System screen now receives the effective post-overlay model-tool
+  catalog, and the Plans screen receives Forge parent/result/disposition/unknown
+  projections. `praxis/accept_workshop.py --list` describes the reproducible
+  focused Linux acceptance path. Local targeted Python/Node/source-browser checks
+  are preparation, not a four-platform release gate. A complete isolated writable
+  Linux run, native build/package checks, installed UI and public bytes are still
+  unverified at this checkpoint; later exact-commit evidence must replace this note.
+
+## Historical local candidate 2026-10-13: Python workshop/tool Phase A (NOT LIVE)
+
+- Root checkout `C:\Users\yegor\Downloads\Praxis`, separate branch
+  `oro/python-workshop-phase1-1310` based on sanitized `d6ff83957e3a3d89195ebd7b850183f35887960c`.
+  This is a **local source candidate**, not installed Praxis or Hélène 1.6.1.
+- First vertical contract only: model-visible `fs_*` edits now return confirmed/refused/in_doubt
+  with hashes, native write/edit cannot trigger fallback, attempted shell exec cannot silently
+  rerun on another backend; Forge worker requests carry parent identity, task-wide active slots,
+  result hash, separate parent disposition and agent-only subtree stop. Detached process/verify
+  jobs remain task-scoped and require separate stop. Windows `computer.*` is unchanged.
+- Hermetic, single-process focused suite: 111 tests OK, one binary-unavailable skip,
+  no network. An independent source critic found two equal-preimage CAS races; the first
+  was addressed with a target lock for `fs_*`, the second by sharing it with local Forge
+  write/replace; thread-barrier regressions passed. The critic did not execute tests or
+  review these final corrected bytes. The first Forge builder failed on the host's usage
+  accounting lock; its surviving code was inspected and tested by the integrating task.
+- **Not verified:** full Linux battery twice on this exact commit, native detached worker
+  stop/process behavior, live server, or cross-backend Windows parity. No push, tag, deploy,
+  service restart or production state change was performed for this candidate. Any release
+  requires the ordinary exact-commit server gates and separate live decision/receipts.
+
 ## Live update 2026-10-13: hosted web action receipts
 
 - Tested implementation `4e93f7acd72ea592f6ce6e7a37e16b5049b22fdd` deployed fast-forward

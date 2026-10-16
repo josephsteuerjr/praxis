@@ -32,7 +32,7 @@ import memory_life as ml
 import memory_provenance
 import telegram_routes as tr
 
-ROOM = "-1001240718803"
+ROOM = "-100999999999999999"
 OTHER = "-1009999999999"
 
 
@@ -344,7 +344,7 @@ class TestCoverageProvesEveryEvent(unittest.TestCase):
     Эти тесты КРАСНЫЕ на c7e5a1f7 и зелёные после узкой правки.
     """
 
-    ROOM = "-1001240718803"
+    ROOM = "-100999999999999999"
     # Строка должна быть НАСТОЯЩЕЙ телеграмной: без dedupe_key/meta у неё нет
     # телеграмной идентичности, а без идентичности событие и не может быть
     # вытеснено ревизией — такой случай в жизни не встречается.

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import hashlib
 import re
+import signal
+import threading
 import subprocess
 import sys
 import tempfile
@@ -60,6 +64,53 @@ class ForgeCase(unittest.TestCase):
         m = re.search(r"coding-задача (code-[0-9a-f]+)", out)
         self.assertIsNotNone(m, out)
         return m.group(1)
+
+    @staticmethod
+    def _cleanup_group_fixture(leader, child_fd: int) -> None:
+        # Census None must not silently skip cleanup. pidfd binds the signal
+        # to the child we observed even if its numeric PID was recycled.
+        if child_fd >= 0:
+            try:
+                with contextlib.suppress(ProcessLookupError):
+                    signal.pidfd_send_signal(child_fd, signal.SIGKILL)
+            finally:
+                os.close(child_fd)
+        if leader.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait(timeout=5)
+
+    @staticmethod
+    def _pin_group_fixture_child(pid: int, ready: Path) -> int:
+        birth = forge._proc_started_at(pid)
+        if not birth or str(ready) not in forge._proc_cmdline(pid):
+            raise AssertionError("fixture child identity unavailable")
+        fd = os.pidfd_open(pid)
+        if (forge._proc_started_at(pid) != birth
+                or str(ready) not in forge._proc_cmdline(pid)):
+            os.close(fd)  # never send to the newly pinned foreign process
+            raise AssertionError("fixture child changed before identity pin")
+        return fd
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "pidfd_open")
+                         and hasattr(signal, "pidfd_send_signal"), "Linux pidfd required")
+    def test_recycled_fixture_child_fd_is_closed_without_signal(self):
+        ready = self.base / "unique-child-marker"
+        pinned_fd = -1
+        leader = mock.Mock()
+        leader.poll.return_value = 0
+        with mock.patch.object(forge, "_proc_started_at", side_effect=["old", "new"]), \
+             mock.patch.object(forge, "_proc_cmdline", return_value=str(ready)), \
+             mock.patch.object(os, "pidfd_open", return_value=81), \
+             mock.patch.object(os, "close") as close_fd, \
+             mock.patch.object(signal, "pidfd_send_signal") as signal_child:
+            with self.assertRaisesRegex(AssertionError, "changed before identity pin"):
+                try:
+                    pinned_fd = self._pin_group_fixture_child(1234, ready)
+                finally:
+                    self._cleanup_group_fixture(leader, pinned_fd)
+            close_fd.assert_called_once_with(81)
+            signal_child.assert_not_called()
 
     def test_start_orients_on_real_place_and_persists(self):
         task_id = self.start()
@@ -125,6 +176,161 @@ new file mode 100644
         diff = forge.inspect(task_id, "diff")
         self.assertIn("return 42", diff)
         self.assertIn("test_app.py", diff)
+
+    def test_patch_and_workshop_edit_serialize_on_same_project(self):
+        import workshop
+
+        workspace = self.base / "workspace"
+        workspace.mkdir()
+        moved = workspace / "project"
+        self.project.rename(moved)
+        self.project = moved
+        before = hashlib.sha256((moved / "app.py").read_bytes()).hexdigest()
+        patch_text = """diff --git a/app.py b/app.py
+--- a/app.py
++++ b/app.py
+@@ -1,2 +1,2 @@
+ def answer():
+-    return 41
++    return 42
+"""
+        barrier = threading.Barrier(2)
+        publish = workshop._publish_bytes
+        git = forge._run
+
+        def wait_before_workshop_publish(*args, **kwargs):
+            barrier.wait(timeout=5)
+            return publish(*args, **kwargs)
+
+        def wait_during_patch_check(cmd, **kwargs):
+            if cmd[:3] == ["git", "apply", "--check"]:
+                barrier.wait(timeout=5)  # Forge holds the common lock already
+            return git(cmd, **kwargs)
+
+        with mock.patch.object(workshop, "BASE", self.base), \
+             mock.patch.object(workshop, "REPO", self.base), \
+             mock.patch.object(workshop, "PROJECTS", workspace / "projects"), \
+             mock.patch.object(workshop, "_publish_bytes", wait_before_workshop_publish), \
+             mock.patch.object(forge, "_run", wait_during_patch_check):
+            task_id = self.start()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                edit = pool.submit(workshop.fs_edit_result, "workspace/project/app.py",
+                                   "return 41", "return 43", expected_sha256=before)
+                patch = pool.submit(forge.edit, task_id, "patch", patch=patch_text)
+                fs_result, patch_result = edit.result(timeout=15), patch.result(timeout=15)
+        self.assertIn("Patch применён", patch_result)
+        self.assertEqual(fs_result["status"], "refused")
+        self.assertIn("return 42", (moved / "app.py").read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "POSIX process group requires Linux")
+    def test_group_census_retries_uncertainty_without_claiming_an_unknown_stop(self):
+        cases = (
+            ("TERM recovers", [None, True, False], [0, 0, .1, 2], "остановлен", 1),
+            ("KILL recovers", [True, True, None, False], [0, 0, 2, 2, 2, 2.1], "остановлен", 2),
+            ("KILL remains unknown", [True, True, None, None], [0, 0, 2, 2, 2, 4],
+             "не остановлен: состав группы после KILL неизвестен", 2),
+        )
+        for label, observations, clock, expected, signals in cases:
+            with self.subTest(label=label):
+                with mock.patch.object(forge, "_kill_identity", return_value=""), \
+                     mock.patch.object(forge, "_group_live_members", side_effect=observations), \
+                     mock.patch.object(forge.time, "monotonic", side_effect=clock), \
+                     mock.patch.object(forge.time, "sleep"), \
+                     mock.patch.object(forge.os, "killpg") as signal_group:
+                    self.assertEqual(forge._kill_tree(1234, "born"), expected)
+                    self.assertEqual(signal_group.call_count, signals)
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "pidfd_open")
+                         and hasattr(signal, "pidfd_send_signal"), "Linux pidfd cleanup required")
+    def test_group_stop_kills_foreground_child_after_leader_exits(self):
+        ready = self.base / "child-ready"
+        pid_file = self.base / "child-pid"
+        script = self.base / "group-parent.py"
+        child_code = (
+            "import signal,time,sys; from pathlib import Path; "
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+            "Path(sys.argv[1]).write_text('ready'); time.sleep(60)"
+        )
+        script.write_text(
+            "import signal,subprocess,sys,time\n"
+            "from pathlib import Path\n"
+            f"child = {child_code!r}\n"
+            "proc = subprocess.Popen([sys.executable,'-c',child,sys.argv[1]], "
+            "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+            "while not Path(sys.argv[1]).exists(): time.sleep(.01)\n"
+            "Path(sys.argv[2]).write_text(str(proc.pid))\n"
+            "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+            "time.sleep(60)\n", encoding="utf-8")
+        leader = subprocess.Popen([sys.executable, str(script), str(ready), str(pid_file)],
+                                  start_new_session=True, cwd=self.base,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        child_fd = -1
+        try:
+            deadline = time.monotonic() + 4
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue(pid_file.exists(), "fixture child failed to start")
+            child_fd = self._pin_group_fixture_child(int(pid_file.read_text()), ready)
+            birth = forge._proc_started_at(leader.pid)
+            self.assertTrue(birth)
+            self.assertEqual(forge._group_live_members(leader.pid), True)
+            self.assertEqual(forge._kill_tree(leader.pid, birth), "остановлен")
+            self.assertEqual(forge._group_live_members(leader.pid), False)
+        finally:
+            self._cleanup_group_fixture(leader, child_fd)
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and hasattr(os, "pidfd_open")
+                         and hasattr(signal, "pidfd_send_signal"), "Linux pidfd cleanup required")
+    def test_terminal_worker_result_does_not_spare_its_living_group(self):
+        ready = self.base / "child-ready"
+        pid_file = self.base / "child-pid"
+        release = self.base / "release-parent"
+        child_code = (
+            "import signal,time,sys; from pathlib import Path; "
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+            "Path(sys.argv[1]).write_text('ready'); time.sleep(60)"
+        )
+        script = self.base / "exiting-worker.py"
+        script.write_text(
+            "import subprocess,sys,time\nfrom pathlib import Path\n"
+            f"child = {child_code!r}\n"
+            "proc = subprocess.Popen([sys.executable,'-c',child,sys.argv[1]], "
+            "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+            "while not Path(sys.argv[1]).exists(): time.sleep(.01)\n"
+            "Path(sys.argv[2]).write_text(str(proc.pid))\n"
+            "while not Path(sys.argv[3]).exists(): time.sleep(.01)\n",
+            encoding="utf-8")
+        leader = subprocess.Popen([sys.executable, str(script), str(ready), str(pid_file),
+                                   str(release)], start_new_session=True, cwd=self.base,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        child_fd = -1
+        try:
+            deadline = time.monotonic() + 4
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(.02)
+            self.assertTrue(pid_file.exists())
+            child_fd = self._pin_group_fixture_child(int(pid_file.read_text()), ready)
+            birth = forge._proc_started_at(leader.pid)
+            self.assertTrue(birth)
+            release.write_text("go", encoding="utf-8")
+            leader.wait(timeout=5)
+            self.assertTrue(forge._group_live_members(leader.pid),
+                            "child must survive after its leader exits")
+            task_id = self.start()
+            unit_id = "agent-deadcafe"
+            directory = forge._unit_dir(task_id, "agents", unit_id)
+            forge._atomic_json(directory / "request.json", {
+                "id": unit_id, "task_id": task_id, "role": "worker", "created": forge._now(),
+                "supervisor_pid": leader.pid, "supervisor_started_at": birth,
+            })
+            forge._atomic_json(directory / "result.json", {"status": "done", "result": "kept"})
+            original = (directory / "result.json").read_bytes()
+            response = forge.agent(task_id, "stop", agent_id=unit_id)
+            self.assertIn("supervisor group stop: остановлен", response)
+            self.assertFalse(forge._group_live_members(leader.pid))
+            self.assertEqual((directory / "result.json").read_bytes(), original)
+        finally:
+            self._cleanup_group_fixture(leader, child_fd)
 
     def test_foreground_run_keeps_evidence(self):
         task_id = self.start()

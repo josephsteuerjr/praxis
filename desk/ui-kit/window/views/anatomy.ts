@@ -102,8 +102,9 @@ const INTRO: Array<[string, string]> = [
   ],
   [
     "Тулы",
-    "Тул — функция с именем, описанием и схемой аргументов. Список ниже — те же байты, что видит модель: описание тулы " +
-      "и есть условие её вызова, другого правила нет. Расписка каждого вызова видна в ходах справа от разговора.",
+    "Тул — функция с именем, описанием и схемой аргументов. Список ниже — полный набор для хода владельца в окне: " +
+      "часть рук предлагается модели напрямую, остальные вызываются через call после describe. " +
+      "Описание и аргументы берутся из живого каталога после накладок Hélène; расписки вызовов видны в ходах.",
   ],
   [
     "Память",
@@ -195,7 +196,7 @@ interface Anatomy {
   // Тело руки `computer` (localharness/body.py): включено ли владельцем, есть
   // ли exe в поставке, подключилось ли на момент снимка, какие права выданы.
   computer?: { enabled?: boolean; available?: boolean; reason?: string; port?: number; scopes?: string[]; connected?: boolean | null };
-  tools?: Array<{ name: string; desc?: string; params?: string[]; required?: string[] }>;
+  tools?: Array<{ name: string; desc?: string; params?: string[]; required?: string[]; invocation?: "direct" | "via_call" }>;
   skills_index?: string;
   knobs?: Record<string, unknown>;
 }
@@ -407,7 +408,7 @@ export async function render(container: HTMLElement): Promise<void> {
     ? ` · тело: ${esc(!a.computer.enabled ? "выключено владельцем" : !a.computer.available ? "нет в сборке" : a.computer.connected === true ? `подключено, мост 127.0.0.1:${a.computer.port}` : a.computer.connected === false ? "не отвечает" : "поднималось на старте")}${a.computer.enabled && a.computer.scopes ? ` (права: ${esc(a.computer.scopes.join(", ") || "нет")})` : ""}`
     : "";
   const meta = tools.length
-    ? `<p class="muted">Модель: <b>${esc(a.model?.model || "?")}</b> · ${modeName}доступных инструментов: <b>${tools.length}</b> · снимок ${esc(fmtTime(a.written_at))}.</p>
+    ? `<p class="muted">Модель: <b>${esc(a.model?.model || "?")}</b> · ${modeName}инструментов в каталоге: <b>${tools.length}</b> · снимок ${esc(fmtTime(a.written_at))}. Снимок для хода владельца в окне; в других каналах и для других акторов набор может отличаться.</p>
        <details class="fold"><summary>Подключения и права инструментов</summary><div class="fold-body">Транспорты: ${esc((a.transports || []).join(" + "))} · песочница: ${esc(a.sandbox ? (a.sandbox.container ? "shell в контейнере" : a.sandbox.enabled ? "без контейнера" : "выключена") : "?")}${a.sandbox?.reason ? " · " + esc(a.sandbox.reason) : ""}${outsideCount ? ` · <b>вне ограды рук: ${outsideCount}</b>` : ""}${a.sandbox?.windows ? " · " + esc(a.sandbox.windows) : ""}${body} · провайдер модели: ${esc(a.model?.framework || "?")}.</div></details>`
     : '<p class="muted">Снимка ещё нет: движок пишет его при старте.</p>';
   container.innerHTML = `<div class="center">
@@ -520,7 +521,8 @@ export async function render(container: HTMLElement): Promise<void> {
             const mark = f
               ? `<span class="${f.fence === "outside" ? "receipt err" : "muted"}" style="margin-left:6px">${esc(f.fence === "outside" ? "вне ограды" : f.fence === "unknown" ? "ограда её не нашла" : "в ограде")}</span>`
               : "";
-            return `<details class="fold"><summary><code>${esc(t.name)}</code>${mark} <span class="muted">${esc(first.slice(0, 110))}</span></summary>
+            const invocation = t.invocation === "via_call" ? "через describe → call" : t.invocation === "direct" ? "напрямую" : "способ вызова не записан";
+            return `<details class="fold"><summary><code>${esc(t.name)}</code> <span class="muted">${esc(invocation)}</span>${mark} <span class="muted">${esc(first.slice(0, 110))}</span></summary>
             <div class="fold-body" style="white-space:pre-wrap">${esc(t.desc || "")}${f ? `<div class="${f.fence === "outside" ? "receipt err" : "muted"}" style="margin-top:6px">ограда: ${esc(f.why)}</div>` : ""}${params ? `<div class="muted" style="margin-top:6px">аргументы: ${params}</div>` : ""}</div></details>`;
           })
           .join("") || '<div class="empty">ничего не нашлось</div>';

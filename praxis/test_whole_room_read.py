@@ -34,7 +34,7 @@ class Base(unittest.TestCase):
             setattr(mod, k, v)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _room(self, peer="-1001240718803"):
+    def _room(self, peer="-100999999999999999"):
         """Комната как в жизни: три цепочки, у каждой корень + первый ответ без
         topic_id (Telegram его на первый ответ не ставит) и продолжения под корнем."""
         n = 0

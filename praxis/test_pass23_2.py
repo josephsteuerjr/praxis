@@ -87,7 +87,8 @@ class RoutingCase(unittest.TestCase):
                                return_value="coding-задача hcode-one: g") as start:
             out = agent.tool_coding_session("start", goal="g", target="/etc", scope="host")
         self.assertIn("hcode-one", out)
-        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="")
+        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="",
+                                      max_active_workers=8)
 
     def test_host_task_primitives_and_worker_route_through_forge(self):
         import forge

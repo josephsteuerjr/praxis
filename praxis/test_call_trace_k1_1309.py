@@ -33,10 +33,10 @@ class CallTraceFields(unittest.TestCase):
     def test_fields_written_when_given(self):
         llm._call_trace("voice", "gpt-5.6-sol", ok=True, cached=19456, prompt=49000,
                         out_tokens=200, latency_ms=1200, tools_digest="7b3c45f99602d481",
-                        key="praxis:gpt-5.6-sol:room:-1001240718803",
+                        key="praxis:gpt-5.6-sol:room:-100999999999999999",
                         sys_sha8="0123abcd", sys_len=23340, cc=0)
         row = self._last()
-        self.assertEqual(row["key"], "praxis:gpt-5.6-sol:room:-1001240718803")
+        self.assertEqual(row["key"], "praxis:gpt-5.6-sol:room:-100999999999999999")
         self.assertEqual(row["sys"], "0123abcd")
         self.assertEqual(row["slen"], 23340)
         # ноль — «провайдер сказал: записи в кэш не было», а не «не знаем»

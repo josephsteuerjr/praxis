@@ -75,7 +75,7 @@ class AnEmptyQueueLowersThePriority(unittest.TestCase):
         mtproto_runner._MODERATION_PRIORITY_PENDING = True
         busy = mock.Mock()
         busy.done.return_value = False
-        self._run_tick([], passing={"-1001240718803"}, debounce={"809306689": busy})
+        self._run_tick([], passing={"-100999999999999999"}, debounce={"809306689": busy})
         self.assertFalse(mtproto_runner._MODERATION_PRIORITY_PENDING,
                          "занятость чатов снова удержала флаг — это и есть петля")
 

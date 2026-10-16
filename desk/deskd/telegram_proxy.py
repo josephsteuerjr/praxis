@@ -14,12 +14,19 @@ def settings(cfg: dict) -> tuple[str, str]:
     proxy = (cfg.get('telegram') or {}).get('proxy') or {}
     if not proxy.get('enabled'):
         return '', ''
-    url = str(proxy.get('url') or '').strip().rstrip('/')
+    raw = str(proxy.get('url') or '').strip()
+    # Older configurations accepted one trailing slash; keep that spelling
+    # usable while refusing extra path segments and repeated slashes.
+    url = raw[:-1] if raw.endswith('/') and not raw.endswith('//') else raw
     key = str(proxy.get('key') or '').strip()
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password \
-            or parsed.query or parsed.fragment or not key:
-        raise ValueError('Telegram proxy needs an HTTPS address and an access key')
+    # The proxy transport appends /health, /bot, /file and /connect to this
+    # base. Never attach credentials to an arbitrary service path. Compare the
+    # literal URL too: urlsplit discards empty ?/# delimiters and control chars.
+    if parsed.scheme != 'https' or not parsed.hostname or '@' in parsed.netloc \
+            or parsed.path != '/helene/telegram' or '\\' in url or not key \
+            or urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, '', '')) != url:
+        raise ValueError('Telegram proxy needs an HTTPS /helene/telegram address and an access key')
     return url, key
 
 

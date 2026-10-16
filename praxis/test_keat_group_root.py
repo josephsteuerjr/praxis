@@ -19,7 +19,7 @@ import keat_readiness
 import keat_runtime
 import mtproto_runner as runner
 
-ROOT = '-1001240718803'
+ROOT = '-100999999999999999'
 
 
 class OrdinaryRootGroupCanary(unittest.TestCase):
@@ -34,10 +34,11 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
         self.policy.write_text(json.dumps(dict(
             schema='keat.capture-policy.v1', namespace='abstractdl-offline',
             root=root, enrollments=[self.row])), encoding='utf-8')
-        self.env = dict(PRAXIS_KEAT_CAPTURE='on',
+        self.env = dict(PRAXIS_ABSTRACTDL_ROOT_CHAT_ID=ROOT,
+                        PRAXIS_KEAT_CAPTURE='on',
                         PRAXIS_KEAT_CAPTURE_POLICY=str(self.policy),
                         PRAXIS_KEAT_ROOT=root, PRAXIS_KEAT='serve',
-                        PRAXIS_KEAT_PAIRS='[["group","-1001240718803"]]')
+                        PRAXIS_KEAT_PAIRS='[["group","-100999999999999999"]]')
 
     def capture(self, mid, role, text, principal):
         return keat_live.capture_ingress(
@@ -189,7 +190,7 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
         with patch.dict(os.environ, self.env, clear=False):
             baseline = dict(role='user', content='Member: x', actor='Member')
             for kwargs in (
-                dict(chat_id='1001240718803', root_chat_id='1001240718803', principal_id='2', ordinary_root=True),
+                dict(chat_id='100999999999999999', root_chat_id='100999999999999999', principal_id='2', ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id=None, ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id='-2', ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id='2', ordinary_root=False),

@@ -24,7 +24,7 @@ _METADATA = '_keat_occurrence'
 _WAKE_SOURCE = '_keat_wake_source'
 _BOUND = ContextVar('keat_live_bound', default=None)
 _ACTIVATION_REASON = ContextVar('keat_live_activation_reason', default='capture_unavailable')
-ABSTRACTDL_ROOT_CHAT_ID = '-1001240718803'
+from room_identity import ROOT_ROOM_ENV, root_chat_id as configured_root_chat_id
 
 
 def activation_reason():
@@ -76,8 +76,8 @@ def _policy(ctx, mode=None):
                  'ordinary DM authority must be exact and nontransferable')
     elif mode == 'group':
         # One proved ordinary root group, deliberately not a generic group/topic mode.
-        _require(stream == ABSTRACTDL_ROOT_CHAT_ID and
-                 row['capture']['audience'] == ['group:' + ABSTRACTDL_ROOT_CHAT_ID] and
+        _require(stream == configured_root_chat_id() and
+                 row['capture']['audience'] == ['group:' + configured_root_chat_id()] and
                  row['capture']['transfer'] == 'none' and
                  row['capture']['presence_hidden'] is False,
                  'ordinary root-group authority must be exact')
@@ -102,8 +102,8 @@ def _group_context(ctx):
     origin = str(getattr(ctx, 'origin_message_id', ''))
     _require(getattr(ctx, 'is_dm', None) is False and
              getattr(ctx, 'telegram_root_group', None) is True and
-             str(getattr(ctx, 'chat_id', None)) == ABSTRACTDL_ROOT_CHAT_ID and
-             root == ABSTRACTDL_ROOT_CHAT_ID and
+             str(getattr(ctx, 'chat_id', None)) == configured_root_chat_id() and
+             root == configured_root_chat_id() and
              principal.isascii() and principal.isdecimal() and int(principal) > 0 and
              origin.isascii() and origin.isdecimal() and int(origin) > 0 and
              not getattr(ctx, 'praxis_self', False),
@@ -724,7 +724,7 @@ def capture_ingress(chat_id, *, is_dm, payload, source_id, direction,
             root = str(root_chat_id)
             principal = str(principal_id)
             _require(is_dm is False and ordinary_root is True and
-                     str(chat_id) == root == ABSTRACTDL_ROOT_CHAT_ID and
+                     str(chat_id) == root == configured_root_chat_id() and
                      principal.isascii() and principal.isdecimal() and int(principal) > 0,
                      'unsupported root-group ingress')
             payload = dict(payload, telegram_root_chat_id=root,
@@ -789,7 +789,7 @@ def adopt_projection(ctx, history, user_msg, sidecar):
                 _require(payload['role'] == role and type(payload['content']) is str,
                          'unsupported native role')
                 if row['mode'] == 'group':
-                    _require(payload.get('telegram_root_chat_id') == ABSTRACTDL_ROOT_CHAT_ID and
+                    _require(payload.get('telegram_root_chat_id') == configured_root_chat_id() and
                              payload.get('telegram_ordinary_root') is True,
                              'missing immutable root-group evidence')
                     native_principal = str(payload.get('telegram_principal_id', ''))
@@ -830,29 +830,77 @@ def adopt_projection(ctx, history, user_msg, sidecar):
         return None
 
 
+def _revocation_ledger(chat_id):
+    """Locate old native authority without consulting the *current* rollout.
+
+    A policy names the canonical namespace, but only a previous group capture
+    proves that a group remained enrolled after its private binding went away.
+    This path grants no serving authority: _policy still checks the live switch
+    and the independently configured root on every read/admission.
+    """
+    path = os.getenv('PRAXIS_KEAT_CAPTURE_POLICY')
+    if not path:
+        # Default-off installations have never configured a ledger to revoke.
+        # If a previously used policy path is removed and later restored, we
+        # cannot reconstruct edits that arrived during that gap: keep the policy
+        # path configured when disabling capture, so revocation can continue.
+        _require(os.getenv('PRAXIS_KEAT_CAPTURE') != 'on',
+                 'missing capture policy during active capture')
+        return None, None
+    policy = _json(Path(path).read_bytes())
+    _require(policy['schema'] == 'keat.capture-policy.v1' and
+             Path(policy['root']).is_absolute(), 'invalid capture policy')
+    stream = str(chat_id)
+    rows = [row for row in policy['enrollments'] if row.get('stream') == stream and
+            row.get('mode') in ('owner', 'dm', 'group')]
+    if not rows:
+        return None, None
+    _require(len(rows) == 1, 'ambiguous native revocation enrollment')
+    row = rows[0]
+    ledger = CaptureLedger(Path(policy['root']) / 'capture' / _digest(policy['namespace']),
+                           policy['namespace'])
+    if row['mode'] == 'group':
+        _require(configured_root_chat_id({ROOT_ROOM_ENV: stream}) == stream and
+                 row['capture']['audience'] == ['group:' + stream] and
+                 row['capture']['transfer'] == 'none' and
+                 row['capture']['presence_hidden'] is False,
+                 'invalid historical root enrollment')
+        if configured_root_chat_id() != stream:
+            with ledger.guard():
+                receipts, payloads, _, _, _, _ = ledger._state()
+                if not any(
+                    r['kind'] == 'message' and
+                    r['key'].startswith('telegram:' + stream + ':message:') and
+                    r['capture']['audience'] == ['group:' + stream] and
+                    (p := payloads[r['event']]).get('telegram_root_chat_id') == stream and
+                    p.get('telegram_ordinary_root') is True
+                    for r in receipts):
+                    return None, None
+    return ledger, row
+
+
+def enrolled_native_group(chat_id):
+    """Read-only edit routing: root identity from live binding OR captured proof."""
+    _, row = _revocation_ledger(chat_id)
+    return row is not None and row['mode'] == 'group'
+
+
 def invalidate_native(chat_id, message_id):
     """An admitted native edit/delete permanently revokes the original grant.
 
-    No new historical grant is minted. Missing capture history is harmless; I/O
-    failure raises so the caller must not silently acknowledge the invalidation.
+    No new historical grant is minted. Revocation persists across capture-off and
+    private root-binding outages; neither condition permits fresh group serving.
+    Missing capture history is harmless; I/O failure raises rather than silently
+    acknowledging an edit/delete.
     For the exact root-group adapter, an observed edit with no trustworthy
     message id retires the whole root coordinate space: preserving one stale
     occurrence would be a fail-open claim about which message Telegram edited.
     """
-    if os.getenv('PRAXIS_KEAT_CAPTURE') != 'on':
+    ledger, row = _revocation_ledger(chat_id)
+    if row is None:
         return
-    policy_raw = _json(Path(os.environ['PRAXIS_KEAT_CAPTURE_POLICY']).read_bytes())
-    if not any(
-            (row.get('mode') in ('owner', 'dm') or
-             (row.get('mode') == 'group' and
-              row.get('stream') == ABSTRACTDL_ROOT_CHAT_ID)) and
-            row.get('stream') == str(chat_id)
-            for row in policy_raw.get('enrollments', [])):
-        return
-    policy, row = _native_policy(chat_id)
-    ledger = CaptureLedger(Path(policy['root']) / 'capture' / _digest(policy['namespace']), policy['namespace'])
     if message_id is None:
-        _require(str(chat_id) == ABSTRACTDL_ROOT_CHAT_ID and row.get('mode') == 'group',
+        _require(row['mode'] == 'group',
                  'ambiguous invalidation only supported for exact root group')
         prefix = 'telegram:' + str(chat_id) + ':message:'
     else:
@@ -871,14 +919,17 @@ def invalidate_peerless_deletion(message_ids):
     native IDs, so their enrollment prefix must still fail closed. Wake/group
     enrollments and unrelated native coordinates are not retired.
     """
-    if os.getenv('PRAXIS_KEAT_CAPTURE') != 'on':
-        return
     ids = list(message_ids)
     _require(all(type(mid) is int and mid > 0 for mid in ids),
              'invalid peerless deletion IDs')
     if not ids:
         return
-    policy = _json(Path(os.environ['PRAXIS_KEAT_CAPTURE_POLICY']).read_bytes())
+    path = os.getenv('PRAXIS_KEAT_CAPTURE_POLICY')
+    if not path:
+        _require(os.getenv('PRAXIS_KEAT_CAPTURE') != 'on',
+                 'missing capture policy during active capture')
+        return
+    policy = _json(Path(path).read_bytes())
     _require(policy['schema'] == 'keat.capture-policy.v1' and
              Path(policy['root']).is_absolute(), 'invalid capture policy')
     ledger = CaptureLedger(Path(policy['root']) / 'capture' / _digest(policy['namespace']), policy['namespace'])
@@ -887,7 +938,7 @@ def invalidate_peerless_deletion(message_ids):
         for row in policy['enrollments']:
             if row['mode'] not in ('owner', 'dm'):
                 continue
-            _, row = _native_policy(row['stream'])
+            _, row = _revocation_ledger(row['stream'])
             prefixes = [
                 'telegram:' + row['stream'] + ':message:' + str(mid) + ':'
                 for mid in sorted(set(ids))

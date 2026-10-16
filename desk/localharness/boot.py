@@ -1359,6 +1359,21 @@ def ensure_shell() -> None:
              + (" (найденный %s — заглушка WSL)" % found if found else ""))
 
 
+def chosen_dotenv(code_dir: Path) -> Path | None:
+    """Match python-dotenv's ordinary upward search from agent.py's directory.
+
+    The runner already resolved `code_dir` as the source it will import. Looking
+    only beside that source misses a parent `.env` which bare load_dotenv reads.
+    Do not parse or return any credential bytes at this discovery seam.
+    """
+    code_dir = Path(code_dir)
+    for folder in (code_dir, *code_dir.parents):
+        path = folder / ".env"
+        if path.is_file():
+            return path
+    return None
+
+
 def dotenv_gate(code_dir: Path, cfg: dict) -> None:
     """Решить судьбу `.env` рядом с кодом — ДО импорта дерева.
 
@@ -1371,9 +1386,9 @@ def dotenv_gate(code_dir: Path, cfg: dict) -> None:
     helene.json. Кому нужен старый способ — ставит `true`, и дерево читает `.env` как
     читало. Оба случая называются в логе: тихой разницы между ними быть не должно.
     """
-    stray = code_dir / ".env"
+    stray = chosen_dotenv(code_dir)
     if bool(cfg.get("read_dotenv")):
-        if stray.exists():
+        if stray is not None:
             log.warning("читаю %s по просьбе конфига: его значения перекроют helene.json "
                         "на импорте (load_dotenv override=True)", stray)
         return
@@ -1382,7 +1397,7 @@ def dotenv_gate(code_dir: Path, cfg: dict) -> None:
     except ImportError:
         return
     dotenv.load_dotenv = lambda *a, **kw: False
-    if stray.exists():
+    if stray is not None:
         log.warning("рядом с деревом лежит %s — НЕ читаю его (read_dotenv=false): "
                     "настройки продукта живут в helene.json", stray)
 
@@ -1747,10 +1762,14 @@ def project_brain(tree: Path, cfg: dict) -> str:
             merged = {}
     merged = _merge_brain(merged, built, previously_projected)
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(".tmp-llm.json")
-    tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=1),
-                   encoding="utf-8", newline="\n")
-    os.replace(tmp, target)
+    # The projection can contain provider keys. A named temp inherited a broad
+    # Windows directory ACL until AFTER its bytes had been written. Use the same
+    # empty-file-first, verified private writer as the vision-policy migration;
+    # its restricted ACL follows the file through the atomic replacement.
+    from vision_policy import _write as _write_private_config
+    _write_private_config(
+        target, json.dumps(merged, ensure_ascii=False, indent=1).encode("utf-8"),
+        private=True)
     _own_only(target)
     receipt.parent.mkdir(parents=True, exist_ok=True)
     receipt.write_text(json.dumps({"fingerprint": fingerprint,

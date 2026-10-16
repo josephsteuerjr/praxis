@@ -60,6 +60,9 @@ ENV_PIN = {
     # доставалось и тем, кто про него не знал. Заодно настоящий telegram-id Егора
     # больше не попадает в прогон.
     "PRAXIS_OWNER_ID": "101",
+    # An impossible-to-deploy synthetic root keeps single-group tests off real rooms.
+    # Production identity comes only from the explicit private configuration.
+    "PRAXIS_ABSTRACTDL_ROOT_CHAT_ID": "-100999999999999999",
     # 29.09.2026, полный прогон 6015. Тесты CJK-вклеек ставят
     # PRAXIS_CJK_VKLADKI_LLM=0 на СВОЁМ импорте (discover импортирует все модули
     # до первого теста) — и значение доживало до test_gate_hermetic как «протечка

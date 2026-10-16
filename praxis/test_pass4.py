@@ -454,7 +454,14 @@ class TestLegacyGone(unittest.TestCase):
 
     def test_skills_index_honest(self):
         repo = Path(agent.__file__).resolve().parent
-        idx = (repo / "soul" / "skills" / "INDEX.md").read_text(encoding="utf-8")
+        live = repo / "soul" / "skills" / "INDEX.md"
+        # A source checkout intentionally omits the owner-authored soul. Inspect
+        # its actual shipped starter index instead; an installed, present index
+        # still takes precedence, and absence of both remains an error.
+        factory = repo.parent / "desk" / "resources" / "soul" / "skills" / "INDEX.md"
+        source = live if live.is_file() else factory
+        self.assertTrue(source.is_file(), "no live or shipped skills index to inspect")
+        idx = source.read_text(encoding="utf-8")
         self.assertNotIn("family_help_bridge", idx, "инвентарь навыков должен быть честным")
 
 

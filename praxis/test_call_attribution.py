@@ -42,7 +42,7 @@ class WorkerAttributionTests(unittest.TestCase):
             with mock.patch.object(forge, '_task_root', return_value=(task, root, '')), \
                  mock.patch.object(forge, '_unit_dir', return_value=unit), \
                  mock.patch.object(forge, '_spawn_runner', return_value=1), \
-                 mock.patch.object(forge, '_event'), mock.patch.object(forge, '_id', return_value='agent-test'):
+                 mock.patch.object(forge, '_event'), mock.patch.object(forge, '_id', return_value='agent-1a2b3c4d'):
                 forge.agent(task_id, 'spawn', brief='offline')
             request = unit / 'request.json'
             captured = []

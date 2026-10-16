@@ -33,15 +33,45 @@ class Configuration(unittest.TestCase):
 
     def test_only_valid_https_proxy_with_key_can_be_enabled(self):
         self.assertEqual(telegram_proxy.settings({}), ('', ''))
-        for url in ('http://server', 'https://u:p@server', 'https://server?q=token', 'https://server/#key'):
+        self.assertEqual(telegram_proxy.settings({'telegram': {'proxy': {'enabled': False,
+            'url': 'https://gateway.invalid/wrong', 'key': ''}}}), ('', ''))
+        for url in ('http://server/helene/telegram', 'https://u:p@server/helene/telegram',
+                    'https://@server/helene/telegram', 'https://server/helene/telegram?q=token',
+                    'https://server/helene/telegram/#key', 'https://server',
+                    'https://server/', 'https://server/helene/telegram//',
+                    'https://server/helene/telegram/bot', 'https://server/other',
+                    'https://server/%68elene/telegram', 'https://server/helene%2Ftelegram',
+                    'https://server/helene/telegram/%2e%2e/other',
+                    'https://server/helene/telegram?','https://server/helene/telegram#',
+                    'https://server/helene/telegram\\bogus.invalid'):
             with self.assertRaises(ValueError):
                 telegram_proxy.settings({'telegram': {'proxy': {'enabled': True, 'url': url, 'key': 'fixture'}}})
         self.assertEqual(telegram_proxy.settings({'telegram': {'proxy':
+            {'enabled': True, 'url': 'https://gateway.invalid/helene/telegram', 'key': 'fixture'}}}),
+            ('https://gateway.invalid/helene/telegram', 'fixture'))
+        # Already saved 1.6.1 configurations may carry this trailing slash.
+        self.assertEqual(telegram_proxy.settings({'telegram': {'proxy':
             {'enabled': True, 'url': 'https://gateway.invalid/helene/telegram/', 'key': 'fixture'}}}),
             ('https://gateway.invalid/helene/telegram', 'fixture'))
+        self.assertEqual(telegram_proxy.settings({'telegram': {'proxy':
+            {'enabled': True, 'url': ' https://gateway.invalid:8443/helene/telegram ', 'key': ' fixture '}}}),
+            ('https://gateway.invalid:8443/helene/telegram', 'fixture'))
+
+    def test_connection_check_rejects_wrong_path_without_opening_any_request(self):
+        from deskd import connection_checks
+        with mock.patch('urllib.request.build_opener') as opener:
+            result = connection_checks.check_telegram({'telegram': {
+                'bot_token': '123:fixture', 'proxy': {'enabled': True,
+                    'url': 'https://gateway.invalid/other', 'key': 'fixture-access'}}})
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['checks'][0]['name'], 'Прокси')
+        self.assertIn('/helene/telegram', result['checks'][0]['message'])
+        opener.return_value.open.assert_not_called()
 
     def test_bot_call_keeps_token_out_of_gateway_url_and_preserves_body(self):
-        client = botapi.BotClient('123:fixture', proxy_url='https://gateway.invalid/helene/telegram', proxy_key='access')
+        url, key = telegram_proxy.settings({'telegram': {'proxy': {'enabled': True,
+            'url': 'https://gateway.invalid/helene/telegram', 'key': 'access'}}})
+        client = botapi.BotClient('123:fixture', proxy_url=url, proxy_key=key)
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok":true,"result":{"id":123}}'
         with mock.patch('urllib.request.urlopen', return_value=response) as open_url:
@@ -51,6 +81,15 @@ class Configuration(unittest.TestCase):
         self.assertEqual(request.get_header('X-telegram-bot-token'), '123:fixture')
         self.assertEqual(request.get_header('Authorization'), 'Bearer access')
         self.assertEqual(request.data, b'')
+
+    def test_file_request_uses_validated_base_without_leaking_token_into_url(self):
+        url, key = telegram_proxy.settings({'telegram': {'proxy': {'enabled': True,
+            'url': 'https://gateway.invalid/helene/telegram', 'key': 'access'}}})
+        request = telegram_proxy.file_request('fixture-file', '123:fixture', url, key)
+        self.assertEqual(request.full_url, 'https://gateway.invalid/helene/telegram/file')
+        self.assertEqual(request.data, b'file_id=fixture-file')
+        self.assertEqual(request.get_header('X-telegram-bot-token'), '123:fixture')
+        self.assertEqual(request.get_header('Authorization'), 'Bearer access')
 
     def test_proxy_failure_cannot_silently_send_directly(self):
         client = botapi.BotClient('123:fixture', proxy_url='https://gateway.invalid/helene/telegram', proxy_key='access')
@@ -164,7 +203,9 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         def ws_connect(session, url, **kwargs):
             self.assertEqual(url, 'wss://gateway.invalid/helene/telegram/connect')
             return original_ws(session, self.http.make_url('/helene/telegram/connect'), **kwargs)
-        conn = telegram_proxy.connection_type('https://gateway.invalid/helene/telegram', 'fixture-access')(
+        url, key = telegram_proxy.settings({'telegram': {'proxy': {'enabled': True,
+            'url': 'https://gateway.invalid/helene/telegram', 'key': 'fixture-access'}}})
+        conn = telegram_proxy.connection_type(url, key)(
             '149.154.167.51', 443, 2, loggers=defaultdict(lambda: logging.getLogger('proxy-test')))
         try:
             with mock.patch.object(asyncio, 'open_connection', open_connection), \

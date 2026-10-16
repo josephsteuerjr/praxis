@@ -30,7 +30,7 @@ class Target(unittest.TestCase):
     def test_public_names_and_ids(self):
         self.assertEqual(mtproto.join_target("@AbstractDL_chat"), ("public", "AbstractDL_chat"))
         self.assertEqual(mtproto.join_target("https://t.me/AbstractDL_chat/"), ("public", "AbstractDL_chat"))
-        self.assertEqual(mtproto.join_target("-1001240718803"), ("public", "-1001240718803"))
+        self.assertEqual(mtproto.join_target("-100999999999999999"), ("public", "-100999999999999999"))
 
     def test_garbage_is_named_not_guessed(self):
         for raw in ("", "   ", "чат агентов", "@a", "t.me/"):

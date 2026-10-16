@@ -100,7 +100,7 @@ def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 3
     for nid in graph:
         visit(nid)
     plan = {"version": 1, "created": _now(), "updated": _now(),
-            "max_parallel": max(1, min(int(max_parallel or 3), 8)), "nodes": nodes}
+            "max_parallel": max(1, int(max_parallel or 3)), "nodes": nodes}
     _atomic(_plan_path(task_dir), plan)
     return plan
 
@@ -140,7 +140,8 @@ def ready_nodes(plan: dict) -> list[dict]:
         deps = node.get("deps") or []
         if all(status.get(dep) == "done" for dep in deps):
             ready.append(node)
-        elif any(status.get(dep) in {"failed", "stopped", "lost", "blocked", "stalled"} for dep in deps):
+        elif any(status.get(dep) in {"failed", "stopped", "lost", "blocked", "stalled",
+                                         "blocked_identity"} for dep in deps):
             node["status"] = "blocked"
             node["finished"] = _now()
     return ready[:slots]

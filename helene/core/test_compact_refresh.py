@@ -27,7 +27,7 @@ import memory_life as ml
 import memory_provenance
 import telegram_routes as tr
 
-ROOM = "-1001240718803"
+ROOM = "-100999999999999999"
 
 #: ⚠⚠ ЭТОТ ФАЙЛ ПРОВЕРЯЕТ ПРЕЖНЕЕ ПОКОЛЕНИЕ ОБНОВЛЕНИЯ КОМПАКТОВ.
 #:

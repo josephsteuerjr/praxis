@@ -7,7 +7,7 @@ const kit = new URL("../../ui-kit/", import.meta.url);
 const moduleURL = (source) => "data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(source)).toString("base64");
 const text = moduleURL(readFileSync(new URL("text.ts", kit), "utf8"));
 const source = readFileSync(new URL("steps.ts", kit), "utf8").replace('"./text"', JSON.stringify(text));
-const { stepsHTML } = await import(moduleURL(source));
+const { stepsHTML, suppliedCommand } = await import(moduleURL(source));
 const show = (iteration, status = "running") => stepsHTML({ manifest: { status }, iterations: [iteration] });
 
 // ⚠ Слова здесь — те же, что показывает компонент СЕЙЧАС. Прежние («Ожидает
@@ -29,6 +29,10 @@ const long = "echo " + "x".repeat(500) + "<script>alert(1)</script>";
 const html = show({ ms: 10, tools: [{ call_id: "a", tool: "shell", args: { cmd: long }, result: { head: "head", tail: "tail", truncated: true } }] });
 assert.match(html, /Команда/);
 assert.ok(html.includes("x".repeat(500)), "полная команда остаётся в подробностях");
+assert.match(html, /Передано инструменту \(не системная argv\)/);
+assert.equal(suppliedCommand({command:long}), long);
+assert.equal(suppliedCommand({cmd:long}), long);
+assert.equal(suppliedCommand({path:'report.txt',content:long}), '', 'Python fs input is not a shell command');
 // Обрезанный результат: обе половины на месте, а между ними сказано, что
 // пропущено. Прежняя подпись «Сохранённый фрагмент результата» исчезла вместе
 // с переделкой ленты — теперь длинный текст раскрывается кнопкой.

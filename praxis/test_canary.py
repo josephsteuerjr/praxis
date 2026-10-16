@@ -22,7 +22,7 @@ import canary
 import perception
 import telegram_routes as tr
 
-PEER = "-1001240718803"
+PEER = "-100999999999999999"
 HOUR = 3600.0
 
 

@@ -17,7 +17,7 @@ import type { Scroller } from "../feed/scroller";
 import { api } from "./api";
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
 import { fmtK } from "../text";
-import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, pretty, resultText, subject, terminalLabel, textBox, type RunDetail } from "../steps";
+import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, pretty, resultText, subject, suppliedCommand, terminalLabel, textBox, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type Run } from "./state";
@@ -198,11 +198,20 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
       if (emptyDelivery && !(t.args as { media_count?: number } | null)?.media_count) return;
       const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
       const what = t.tool === "reply" ? String((t.args as { text?: string } | null)?.text || "") : subject(t.args);
+      const command = suppliedCommand(t.args);
       const head = String(t.result?.head || t.result?.tail || "");
       const result = t.result?.truncated ? [t.result.head, "… пропущена часть результата …", t.result.tail].filter(Boolean).join("\n") : head;
       const receipt = ["reply", "end_turn", "telegram.deliver"].includes(t.tool || "");
       const mark = failed ? "ошибка" : active ? "выполняется…" : emptyDelivery ? "нечего доставлять" : "";
       const detail: string[] = [];
+      // The model's full command is already in the durable tool input. A
+      // 160-character headline / 4000-character JSON cut hid its useful text.
+      // Keep it behind the owner's existing expansion (inputs may be private),
+      // folded rather than truncated, and never call it observed process argv.
+      if (command) detail.push(`<div class="st-k">Передано инструменту (не системная argv)</div>` +
+                               textBox(tkey + ":command", command));
+      else if (t.tool === "fs_write" || t.tool === "fs_edit")
+        detail.push(`<div class="st-k">Операция Python · без shell; исход — в результате</div>`);
       if (t.args != null && t.tool !== "reply") detail.push(`<div class="st-k">Параметры</div><pre class="st-pre">${esc(clip(pretty(t.args), 4000))}</pre>`);
       if (head && !receipt) detail.push(`<div class="st-k">Результат</div>` + textBox(tkey + ":result", resultText(result), { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }));
       if (receipt && result) detail.push(`<div class="st-k">Квитанция</div><pre class="st-pre">${esc(clip(result, 2000))}</pre>`);

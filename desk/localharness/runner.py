@@ -56,6 +56,7 @@ import forge_events
 import updates
 import owner_stop
 import run_trigger
+import vision_policy
 
 # Уровень лога — ручкой, а не константой: две главные глухоты продукта (квитанция
 # читателя не пишется; сторож живых файлов сдох) диагностировались строками
@@ -1374,22 +1375,31 @@ def _write_anatomy(tree: Path, cfg: dict) -> None:
 
     Прозрачность — стержень продукта (слово владельца 31.08: «ясный список тулов,
     что они делают, чтение скиллов и их место, условие вызова, нутрянка
-    простыми словами»). Список рук берётся у ЕЁ сборщика offered_tools_for —
-    того же, что собирает руки модели (контракт A1: один ответ на вопрос «что
-    у неё есть»). Описания — те же байты, что читает модель: это и есть
-    «условие вызова» руки, других условий нет.
+    простыми словами»). Полный набор берётся из сборщика catalog_tools_for
+    ПОСЛЕ накладок издания. При режиме указателей offered_tools_for передаёт
+    модели лишь прямые руки и describe/call; остальные доступны через call.
+    Два списка различаются способом вызова, а не полномочиями.
     """
     try:
         ctx = _agent.ChannelContext(chat_id=STREAM, is_dm=True, owner=True,
                                     known=True, addressed=True, title=_title)
+        offered = _agent.offered_tools_for(ctx)
+        direct_names = {str(t.get("name") or "") for t in offered}
+        # describe/call may exist only in the offered pointer manifest. Preserve
+        # them as direct tools, without manufacturing them into the full catalog.
+        catalog = _agent.catalog_tools_for(ctx)
+        catalog_names = {str(t.get("name") or "") for t in catalog}
         rows = []
-        for tool in _agent.offered_tools_for(ctx):
+        for tool in [*catalog, *(t for t in offered
+                                  if str(t.get("name") or "") not in catalog_names)]:
             schema = tool.get("input_schema") or {}
+            name = str(tool.get("name") or f"[{tool.get('type') or 'hosted'}]")
             rows.append({
-                "name": tool.get("name") or f"[{tool.get('type') or 'hosted'}]",
+                "name": name,
                 "desc": str(tool.get("description") or ""),
                 "params": sorted((schema.get("properties") or {}).keys()),
                 "required": list(schema.get("required") or ()),
+                "invocation": "direct" if name in direct_names or bool(tool.get("type")) else "via_call",
             })
         skills_index = ""
         try:
@@ -3186,12 +3196,39 @@ def main() -> None:
     if hasattr(_agent, "BOUNDARY_DELIVERS_UNSPOKEN"):
         _agent.BOUNDARY_DELIVERS_UNSPOKEN = bool(_deliver_unspoken)
 
+    # A damaged owner profile is not a blank profile: project_brain's older
+    # best-effort reader could otherwise replace it before the migration sees it.
+    try:
+        vision_policy.preflight(tree)
+    except vision_policy.MigrationError as exc:
+        log.error("профиль зрения не тронут: %s", exc)
+        raise SystemExit(3) from exc
+    # Finish a previous interrupted transaction before the older brain
+    # projection has a chance to change its byte-exact recovery snapshot.
+    if (tree / "memory" / ".state" / "vision-policy-change.json").exists():
+        try:
+            vision_policy.migrate(tree, code_dir=code_dir,
+                                  read_dotenv=bool(cfg.get("read_dotenv")))
+        except (vision_policy.MigrationError, OSError) as exc:
+            log.error("незавершённая миграция зрения: %s", exc)
+            raise SystemExit(3) from exc
     try:
         import brain_trail
         log.info("%s", brain_trail.project(tree, config_path, cfg, boot.project_brain))
+    except vision_policy.MigrationError as exc:
+        # A denied ACL is not a failed *history* write to retry through a
+        # second unobserved producer. No model loads until the profile is safe.
+        log.error("права конфигурации мозга не подтверждены: %s", exc)
+        raise SystemExit(3) from exc
     except Exception:
         log.exception("след мозга на старте не записался — проецирую без него")
         log.info("%s", boot.project_brain(tree, cfg))
+    try:
+        vision_policy.migrate(tree, code_dir=code_dir,
+                              read_dotenv=bool(cfg.get("read_dotenv")))
+    except (vision_policy.MigrationError, OSError) as exc:
+        log.error("профиль зрения не применён до загрузки модели: %s", exc)
+        raise SystemExit(3) from exc
     # Тело для руки `computer` — ДО импорта дерева: импорт занимает секунды, а
     # тело за них успевает подключиться к мосту. Опция владельца
     # (`computer.enabled`); выключена — только строка в журнал. Токены живут
@@ -3229,6 +3266,13 @@ def main() -> None:
     _desks = transport.Desks(tree, _speaker, _title, memory_life=memory_life,
                              agent_name=_agent_name)
     _desk = _desks.default
+    # The receipt must reach the activity stream before the first owner/image
+    # turn, not merely on a periodic maintenance tick thirty seconds later.
+    try:
+        vision_policy.notice(tree, _desk, _now())
+    except (vision_policy.MigrationError, OSError, ValueError) as exc:
+        log.error("изменение политики зрения не показано владельцу: %s", exc)
+        raise SystemExit(3) from exc
     transport.install(agent, _desks)
     _continuity = continuity.Continuity(
         agent, _desks, config_path,
@@ -3524,6 +3568,7 @@ def main() -> None:
             try:
                 import owner_context
                 owner_context.notice(_tree, _desk, _now())
+                vision_policy.notice(_tree, _desk, _now())
             except Exception:
                 log.exception("изменение контекста пока не показано владельцу")
             try:

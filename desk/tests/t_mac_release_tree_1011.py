@@ -41,14 +41,19 @@ class FinalGuard(unittest.TestCase):
             out=Path(tmp)/'out';live=out/'tree';target=live/'core/secrets.py'
             target.parent.mkdir(parents=True);shutil.copyfile(source,target)
             original={'core/secrets.py'};authored=target.read_bytes()
-            previous=sys.dont_write_bytecode;sys.dont_write_bytecode=False
+            previous=sys.dont_write_bytecode;prefix=sys.pycache_prefix
+            # The packaged Ouroboros interpreter redirects bytecode outside
+            # the source tree. This case specifically simulates a builder
+            # whose import creates pyc *inside* its payload, so pin both
+            # interpreter cache switches for the duration of this fixture.
+            sys.dont_write_bytecode=False;sys.pycache_prefix=None
             try:
                 # The same real import caused the late addition in the CI archive.
                 build_mac.bd.scan_for_secrets(out,live,scan_runtime=False)
                 self.assertTrue(list(live.rglob('*.pyc')))
                 scanned,removed=build_mac.final_secret_guard(out,live,original,scan_runtime=False)
             finally:
-                sys.dont_write_bytecode=previous
+                sys.dont_write_bytecode=previous;sys.pycache_prefix=prefix
             self.assertGreater(scanned,0);self.assertGreater(removed,0)
             self.assertEqual({p.relative_to(live).as_posix() for p in live.rglob('*') if p.is_file()},original)
             self.assertFalse(list(live.rglob('__pycache__')))

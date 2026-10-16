@@ -289,8 +289,8 @@ class ExternalHostAndPairUses(unittest.TestCase):
         return type("R", (), {"headers": {"Host": name}})()
 
     def test_external_host_from_url_and_bare(self):
-        self._write_cfg({"phone": {"external": "https://helene.209.222.251.74.nip.io"}})
-        self.assertEqual(deskapp._phone_external_host(), "helene.209.222.251.74.nip.io")
+        self._write_cfg({"phone": {"external": "https://helene.example.invalid"}})
+        self.assertEqual(deskapp._phone_external_host(), "helene.example.invalid")
         self._write_cfg({"phone": {"external": "helene.example.com"}})
         self.assertEqual(deskapp._phone_external_host(), "helene.example.com")
         self._write_cfg({"phone": {}})

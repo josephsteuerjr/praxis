@@ -28,7 +28,7 @@ import group_context
 import memory_life as ml
 import telegram_routes as tr
 
-ROOM = "-1001240718803"
+ROOM = "-100999999999999999"
 FORUM = "-1004301095307"
 
 

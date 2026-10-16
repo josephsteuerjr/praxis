@@ -1,18 +1,18 @@
 """
-hands — мост к компилируемому полу её рук (`hands/`, бинарь praxis-hands).
+hands — мост к компилируемому полу чтения/поиска/запуска (`hands/`, бинарь praxis-hands).
 
-Зачем: рельсы (разрешение путей, зоны записи, тайм-ауты, потолки вывода,
-гард от случайного усечения) живут ВНЕ самоизменяемого питона. Она правит мастерскую
-(пальцы) сколько хочет — пол под ней не двигается: он скомпилирован и лежит рядом.
+Файловые мутации исполняются только в workshop.py. После вызова Rust с
+потерянным ответом нельзя знать, совершилась ли запись, и нельзя повторять её
+Python-путём. Старые мостовые методы write/edit оставлены как явный отказ.
 
 Как это устроено:
   * бинарь ищется по PRAXIS_HANDS, затем bin/praxis-hands, затем hands/target/release/…;
-  * НЕТ бинаря — питон-мастерская работает как раньше (одна семантика, две реализации);
+  * НЕТ бинаря — чтение/поиск/запуск имеют прежний Python-путь;
   * каждый вызов оставляет расписку в memory/.state/hands.jsonl (что, где, чем кончилось).
 
 Контракт: бинарь всегда печатает одну JSON-строку. Ошибка операции — это ok:false,
 а не исключение. Ни один сбой моста не должен ронять её ход: не вышло — вернём None,
-и мастерская пойдёт питоновым путём.
+и немутирующие операции мастерской пойдут питоновым путём.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
 from pathlib import Path
 
 log = logging.getLogger("praxis-hands")
@@ -74,13 +73,17 @@ def available() -> bool:
 def call(subcmd: str, wait: int = 150, base: str | Path | None = None, **flags) -> dict | None:
     """Позвать бинарь. -> разобранный JSON, или None если бинаря нет / он не ответил.
 
-    None значит ровно одно: «иди питоновым путём». Ни ошибок операции, ни отказов
-    рельсов здесь нет — они приезжают внутри dict как ok:false.
+    None permits Python fallback only for proven non-effectful reads/searches.
+    `exec` may change state: after attempted launch a missing reply is unknown,
+    never a license to run the same shell command through Python. write/edit
+    always refuse before launching the binary.
 
     Имена служебных параметров нарочно НЕ пересекаются с флагами бинаря: `subcmd`
     (а не `op` — у guard свой --op) и `wait` (а не `timeout` — у exec свой --timeout;
     когда-то здесь `timeout` съедался сигнатурой и рельс тайм-аута молча не применялся,
     бинарь ждал дефолтные 120с. Тест test_run_timeout_is_reported держит это место)."""
+    if subcmd in ("write", "edit"):
+        return {"ok": False, "status": "refused", "msg": "Файловые мутации доступны только через workshop."}
     exe = binary()
     if exe is None:
         return None
@@ -98,7 +101,7 @@ def call(subcmd: str, wait: int = 150, base: str | Path | None = None, **flags) 
         proc = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=wait)
     except (OSError, subprocess.TimeoutExpired):
-        log.warning("hands: %s не ответил — питоновый путь", subcmd, exc_info=True)
+        log.warning("hands: %s не ответил; exec не повторять", subcmd, exc_info=True)
         return None
     if proc.returncode != 0:
         log.warning("hands: %s вернул %s: %s", subcmd, proc.returncode, (proc.stderr or "")[:200])
@@ -110,38 +113,15 @@ def call(subcmd: str, wait: int = 150, base: str | Path | None = None, **flags) 
         return None
 
 
-def _tmp(text: str) -> str:
-    """Содержимое уезжает файлом, не аргументом: длина и кавычки — не наша забота."""
-    fd, path = tempfile.mkstemp(prefix="praxis_hands_", suffix=".txt")
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(text)
-    return path
-
-
 def edit(path: str, old: str, new: str, root: str = "", base=None) -> dict | None:
-    """Точная правка одного вхождения. dict{ok,msg[,lines]} или None (нет бинаря)."""
-    of, nf = _tmp(old), _tmp(new)
-    try:
-        return call("edit", base=base, file=path, old_file=of, new_file=nf, root=root or None)
-    finally:
-        for p in (of, nf):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+    """Retired mutation route: never invoke a second writer."""
+    return {"ok": False, "status": "refused", "msg": "Правка доступна только через workshop.fs_edit_result."}
 
 
 def write(path: str, content: str, root: str = "", overwrite: bool = False,
           force: bool = False, base=None) -> dict | None:
-    cf = _tmp(content)
-    try:
-        return call("write", base=base, file=path, content_file=cf, root=root or None,
-                    overwrite=overwrite or None, force=force or None)
-    finally:
-        try:
-            os.unlink(cf)
-        except OSError:
-            pass
+    """Retired mutation route: never invoke a second writer."""
+    return {"ok": False, "status": "refused", "msg": "Запись доступна только через workshop.fs_write_result."}
 
 
 def outline(path: str, base=None) -> dict | None:
@@ -202,8 +182,8 @@ def state_line() -> str:
     """Строка для my_capabilities/STATE: есть ли пол под руками и свежи ли его рельсы."""
     exe = binary()
     if exe is None:
-        return "руки: питон (компилируемый пол не собран — рельсы из workshop.py)"
-    line = f"руки: питон + компилируемый пол ({exe.name})"
+        return "руки: файловые правки питон (компилируемый пол не собран)"
+    line = f"руки: файловые правки питон; чтение/запуск питон + компилируемый пол ({exe.name})"
     if rails_status() == "stale":
         line += " ⚠ рельсы бинаря отстали от кода — пересобери praxis-hands"
     return line

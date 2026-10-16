@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 
 from keat_source import _json
+from room_identity import root_chat_id
 
 MODES = frozenset(('owner', 'dm', 'group', 'wake', 'window'))
 
@@ -90,7 +91,7 @@ def _serving_adapter_ready(row):
         stream = row['stream']
         capture = row['capture']
         return bool(
-            stream == '-1001240718803' and
+            stream == root_chat_id() and
             capture['audience'] == ['group:' + stream] and
             capture['transfer'] == 'none' and
             capture['presence_hidden'] is False)

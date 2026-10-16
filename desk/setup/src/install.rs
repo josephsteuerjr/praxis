@@ -1006,7 +1006,9 @@ fn static_plan(payload: &Path, dir: &Path) -> StaticPlan {
 }
 
 /// Рантайм одинаков по паспорту сборки (`helene-build.json`): версия Python,
-/// суммы скачанного, список пакетов. Одинаковый — не копировать 200 МБ впустую.
+/// суммы скачанного, список пакетов. На Windows ещё сравниваем _pth: состав
+/// пакетов не отражает путь к tree/, необходимый дочерним Forge-процессам.
+/// Одинаковый — не копировать 200 МБ впустую.
 /// Установка без живого питона рантайма (`PYTHON_REL`) — не одинаковый ни при чём.
 fn runtime_same(payload: &Path, dir: &Path) -> bool {
     if !python_exe(dir).exists() {
@@ -1016,7 +1018,54 @@ fn runtime_same(payload: &Path, dir: &Path) -> bool {
         return false;
     };
     ["python", "downloads", "packages"].iter().all(|k| new.get(k).is_some() && new.get(k) == old.get(k))
+        && runtime_path_config_same(&new, dir, |rel| std::fs::read(payload.join(rel)).ok())
 }
+
+/// Embeddable Python ignores cwd and the script directory while _pth is active.
+/// A rebuilt _pth is part of runtime identity, not merely package metadata.
+#[cfg(windows)]
+fn runtime_pth_rel(passport: &serde_json::Value) -> Option<String> {
+    let Some(version) = passport.get("python").and_then(|v| v.as_str()) else { return None };
+    let mut parts = version.split('.');
+    let (Some(major), Some(minor)) = (parts.next(), parts.next()) else { return None };
+    if major.is_empty() || minor.is_empty()
+        || !major.bytes().all(|b| b.is_ascii_digit()) || !minor.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("runtime/python{major}{minor}._pth"))
+}
+
+#[cfg(windows)]
+fn runtime_path_config_same(
+    passport: &serde_json::Value, dir: &Path, read_payload: impl FnOnce(&str) -> Option<Vec<u8>>,
+) -> bool {
+    let Some(rel) = runtime_pth_rel(passport) else { return false };
+    match (read_payload(&rel), std::fs::read(dir.join(&rel))) {
+        (Some(candidate), Ok(installed)) => candidate == installed,
+        _ => false,
+    }
+}
+
+/// The embedded setup tail exposes only its first archive entries through
+/// Source::read. The passport carries the complete _pth digest instead; an
+/// older passport without it conservatively copies the new runtime once.
+#[cfg(windows)]
+fn runtime_path_config_hash_same(passport: &serde_json::Value, dir: &Path) -> bool {
+    use sha2::Digest;
+    let Some(rel) = runtime_pth_rel(passport) else { return false };
+    let Some(expected) = passport.get("runtime_path_config_sha256").and_then(|v| v.as_str()) else { return false };
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) { return false; }
+    let Ok(installed) = std::fs::read(dir.join(rel)) else { return false };
+    format!("{:x}", sha2::Sha256::digest(installed)) == expected
+}
+
+#[cfg(not(windows))]
+fn runtime_path_config_same(
+    _passport: &serde_json::Value, _dir: &Path, _read_payload: impl FnOnce(&str) -> Option<Vec<u8>>,
+) -> bool { true }
+
+#[cfg(not(windows))]
+fn runtime_path_config_hash_same(_passport: &serde_json::Value, _dir: &Path) -> bool { true }
 
 // ---------------------------------------------------------------- конфиг
 
@@ -3342,6 +3391,7 @@ fn runtime_same_from(new_passport: Option<&serde_json::Value>, dir: &Path) -> bo
         return false;
     };
     ["python", "downloads", "packages"].iter().all(|k| new.get(k).is_some() && new.get(k) == old.get(k))
+        && runtime_path_config_hash_same(new, dir)
 }
 
 /// Имя пакета, нормализованное (PEP 503): `faster_whisper` → `faster-whisper`.
@@ -5326,6 +5376,8 @@ mod tests {
         put(root, &format!("app/static/{STATIC_MANIFEST}"), &format!("{{\"v\":1,\"digest\":\"{digest}\",\"files\":{{}}}}"));
         put(root, "app/deskapp.py", "py");
         put(root, PYTHON_REL, "py-exe");
+        #[cfg(windows)]
+        put(root, "runtime/python314._pth", "python314.zip\n.\nimport site\n");
         put(root, "helene-build.json", build);
     }
 
@@ -5381,6 +5433,26 @@ mod tests {
         assert!(!runtime_same(&payload, &dir), "рантайма ещё нет — копировать");
         copy_dir_skip(&payload, &dir, &SKIP_FROM_PAYLOAD, &[]).unwrap();
         assert!(runtime_same(&payload, &dir));
+        #[cfg(windows)]
+        {
+            // A newly built runtime at the SAME Python/package versions must
+            // not leave the installed worker unable to import its sibling.
+            put(&payload, "runtime/python314._pth", "python314.zip\n.\nimport site\n..\\tree\n");
+            assert!(!runtime_same(&payload, &dir));
+            use sha2::Digest;
+            let mut passport: serde_json::Value = serde_json::from_str(BUILD_A).unwrap();
+            assert!(!runtime_same_from(Some(&passport), &dir), "old passport cannot prove path parity");
+            let candidate = std::fs::read(payload.join("runtime/python314._pth")).unwrap();
+            passport["runtime_path_config_sha256"] = format!("{:x}", sha2::Sha256::digest(candidate)).into();
+            assert!(!runtime_same_from(Some(&passport), &dir), "same pip packages, changed _pth");
+            put(&dir, "runtime/python314._pth", "python314.zip\n.\nimport site\n..\\tree\n");
+            assert!(runtime_same(&payload, &dir));
+            assert!(runtime_same_from(Some(&passport), &dir));
+            std::fs::remove_file(dir.join("runtime/python314._pth")).unwrap();
+            assert!(!runtime_same(&payload, &dir), "missing bootstrap config is not same");
+            assert!(!runtime_same_from(Some(&passport), &dir));
+            put(&dir, "runtime/python314._pth", "python314.zip\n.\nimport site\n..\\tree\n");
+        }
         // Тот же паспорт: runtime пропускается, остальное едет.
         put(&payload, PYTHON_REL, "py-exe-2");
         put(&payload, "app/deskapp.py", "py-2");

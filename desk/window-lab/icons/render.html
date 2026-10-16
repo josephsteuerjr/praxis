@@ -18,7 +18,16 @@ const HELENE = [[256, 3, 176], [128, 4, 178], [64, 7, 182], [48, 9, 186], [32, 1
 // [размер, рамка, дуга, обводка точки, радиус точек]
 const RELAY = [[256, 7, 10, 9, 24], [128, 8, 12, 10, 25], [64, 11, 16, 13, 28], [48, 13, 19, 15, 30], [32, 16, 23, 18, 33], [24, 18, 26, 20, 35], [16, 20, 30, 22, 38]];
 
-function helene([, sw, fs]) {
+function helene([size, sw, fs]) {
+  // At 16/24 the font's handwritten strokes downsample into a dark blob.
+  // Give those two frames a separate, open-counter glyph with a detached accent;
+  // larger frames keep Yegor's original handwriting unchanged.
+  if (size === 16) return `<svg viewBox="0 0 256 256"><circle cx="128" cy="128" r="122" fill="${TERRA}"/>
+    <path d="M70 150 C70 115 96 94 130 94 C165 94 185 117 185 145 L185 154 H72 M72 154 C78 186 99 201 128 201 C138 201 145 199 149 197" fill="none" stroke="${INK}" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M121 72 L151 49" fill="none" stroke="${INK}" stroke-width="18" stroke-linecap="round"/></svg>`;
+  if (size === 24) return `<svg viewBox="0 0 256 256"><circle cx="128" cy="128" r="122" fill="${TERRA}"/>
+    <path d="M79 149 C79 121 97 103 126 103 C154 103 173 120 173 148 L173 154 H83 M84 154 C88 176 106 189 128 189 C139 189 145 188 151 185" fill="none" stroke="${INK}" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M124 80 L151 60" fill="none" stroke="${INK}" stroke-width="17" stroke-linecap="round"/></svg>`;
   return `<svg viewBox="0 0 256 256"><circle cx="128" cy="128" r="122" fill="${TERRA}"/>
     <text x="128" y="${128 + fs * 0.28}" font-family="Zen Kurenaido" font-size="${fs}" fill="${INK}" stroke="${INK}" stroke-width="${sw}" stroke-linejoin="round" text-anchor="middle">é</text></svg>`;
 }

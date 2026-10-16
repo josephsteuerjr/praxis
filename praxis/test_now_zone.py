@@ -158,6 +158,9 @@ def zone_span(text: str) -> str:
     return text[start:text.index(CLOSE, start) + len(CLOSE) + 1]
 
 
+TEST_ROOM = "-100" + ("9" * 10)  # synthetic, 14 chars: original frame-width fixture
+
+
 class ZoneBase(unittest.TestCase):
     """Своя память/душа и заглушённые источники — кадр обязан быть воспроизводим."""
 
@@ -204,7 +207,7 @@ class ZoneBase(unittest.TestCase):
     # --- формы канала ---
 
     def group(self, **over):
-        facts = dict(chat_id="-1001240718803", principal_id="777", is_dm=False,
+        facts = dict(chat_id=TEST_ROOM, principal_id="777", is_dm=False,
                      known=True, title="AbstractDL Chat", size=98000, addressed=True,
                      origin_message_id=555, address_message_id=555,
                      origin_text="а что ты думаешь про источник и доставку",
@@ -284,7 +287,7 @@ class ZoneBase(unittest.TestCase):
         """Ровно та форма, на которой спецификация считала цену: девять тиров."""
         (self.soul / "visit_card.md").write_text("Визитка: я Praxis.\n", encoding="utf-8")
         (self.mem / "INDEX.md").write_text("- memory/notes/x.md — заметки\n", encoding="utf-8")
-        (self.mem / "rooms" / "-1001240718803.md").write_text(
+        (self.mem / "rooms" / f"{TEST_ROOM}.md").write_text(
             "mode: normal\ndisclosure: standard\n\n## О комнате\nБольшой чат.\n",
             encoding="utf-8")
         self.patch("_mailbox_index", lambda: "- письмо от Ивана: про счёт")
@@ -1023,7 +1026,7 @@ class TheLeverGivesBackYesterdaysFrame(ZoneBase):
 
     def test_the_old_form_still_carries_a_room_profile_that_exists(self):
         """Обратная половина отката: то, что вчера в кадре БЫЛО, обязано вернуться."""
-        (self.mem / "rooms" / "-1001240718803.md").write_text(
+        (self.mem / "rooms" / f"{TEST_ROOM}.md").write_text(
             "## О комнате\nБольшой публичный чат про DL.\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {frame_layout.ENV_LEVER: "old"}):
             tail = self.turn()["tail"]
@@ -1102,11 +1105,11 @@ class TheFrameDoesNotContradictItselfAboutTheRoom(ZoneBase):
         """КРАСНЫЙ. Названная пустота утверждает файл, которого нет.
 
         Наблюдено: при отсутствующем `memory/rooms/<id>.md` тир печатает
-        `↳ документ · пусто: профиль rooms/-1001240718803.md есть, но её текста
+        `↳ документ · пусто: профиль rooms/<синтетический-id>.md есть, но её текста
         в нём нет`. Фраза «профиль есть» — утверждение о диске, которого сборщик
         не проверял: тир добавляется по одному лишь `room_profile_id is not None`.
         """
-        self.assertFalse((self.mem / "rooms" / "-1001240718803.md").exists())
+        self.assertFalse((self.mem / "rooms" / f"{TEST_ROOM}.md").exists())
         tail = self.turn()["tail"]
         self.assertIn("ЭТА КОМНАТА", tail, "тир не собрался — сверка вакуумна")
         room_sign = next(ln for ln in tail.split("\n")
@@ -1122,7 +1125,7 @@ class TheFrameDoesNotContradictItselfAboutTheRoom(ZoneBase):
         кадре печатает «профиля комнаты нет». Одно из двух — ложь, и различить их
         по кадру нельзя.
         """
-        (self.mem / "rooms" / "-1001240718803.md").write_text(
+        (self.mem / "rooms" / f"{TEST_ROOM}.md").write_text(
             "## О комнате\nБольшой публичный чат про DL.\n", encoding="utf-8")
         tail = self.turn()["tail"]
         self.assertIn("Большой публичный чат про DL", tail,

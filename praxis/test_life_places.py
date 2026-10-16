@@ -26,7 +26,7 @@ import memory_life as ml
 import memory_provenance
 import telegram_routes as tr
 
-ROOM = "-1001240718803"
+ROOM = "-100999999999999999"
 A = f"{ROOM}__topic__100"
 B = f"{ROOM}__topic__200"
 FORUM = "-1004301095307"

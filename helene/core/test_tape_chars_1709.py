@@ -56,14 +56,14 @@ class TapeLevers(unittest.TestCase):
 
     def test_a_group_has_its_own_lever_and_it_is_off_by_default(self):
         self.assertEqual(ml.GROUP_TAPE_CHARS, 0)
-        self.assertEqual(ml.tape_chars_for("-1001240718803"), 0)
+        self.assertEqual(ml.tape_chars_for("-100999999999999999"), 0)
         self.assertEqual(ml.tape_chars_for("809306689"), 5500)
         self.assertEqual(ml.tape_chars_for("-100123__topic__7"), 0,
                          "тема форума — то же место группы, а не личка")
 
     def test_the_window_of_a_group_is_not_cut_at_the_private_ceiling(self):
         rows = _rows(40, 300)
-        self.assertEqual(len(ml.tape_window(rows, ml.tape_chars_for("-1001240718803"))), 40)
+        self.assertEqual(len(ml.tape_window(rows, ml.tape_chars_for("-100999999999999999"))), 40)
 
 
 class CharPressure(unittest.TestCase):
