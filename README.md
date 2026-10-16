@@ -1,36 +1,33 @@
 # Praxis & Hélène
 
-**A persistent AI agent, and a desktop home for agents you make your own.**
-
-Praxis is the agent runtime: memory, tools, Telegram, durable work and self-authorship.
-Hélène brings it to a desktop with a calm, paper-like interface, independent agents,
-voice, files and a dedicated Doctor. An agent can run locally or on your server.
+Praxis is an agent runtime with persistent memory, Python tools, Telegram and
+durable coding tasks. Hélène is its desktop application for Windows, macOS Apple
+Silicon and Linux x86_64 (DEB/RPM). Agents can run locally or on a server.
 
 [Download Hélène](https://github.com/josephsteuerjr/praxis/releases/latest) ·
 [Release history](https://github.com/josephsteuerjr/praxis/releases) ·
 [Relay](https://github.com/josephsteuerjr/praxis-relay) ·
 [Build and release guide](desk/installer/RELEASE.md)
 
-**Hélène 1.7.0 — an agent with a real engineering workshop.** Available for
-Windows, macOS Apple Silicon and Linux x86_64 (DEB/RPM), with bundled Python,
-Git, voice and a desktop home for independent agents.
+## Hélène 1.7.0
 
-Give it a project: it can inspect code, make exact edits, run checks, split work
-into nested Forge tasks and keep result and acceptance receipts across turns.
-Python tools make those operations inspectable and extensible. Large-file focus
-reads use addressable pages and source fingerprints; incomplete results and
-unconfirmed process stops stay visible.
+- Nested Forge tasks link workers, parent tasks and results, with separate
+  completion and acceptance records.
+- Focus reads provide addressable file pages and source fingerprints; truncated
+  output is marked explicitly.
+- System shows the available tool catalogue. Execution details distinguish direct
+  Python file operations, submitted command requests and confirmed process state.
+- Auxiliary vision can describe a screenshot through a separate model while the
+  selected main model continues the conversation.
+- Windows upgrades verify the embedded Python import policy before runtime reuse,
+  including access to the installed Forge tree.
+- Four additional default skills cover secrets, infrastructure authorization,
+  Windows paths and verification. Authored changes are preserved during upgrades.
 
-The System view exposes the available tool catalogue, and the workshop view
-connects workers to their parent tasks and receipts. Auxiliary vision lets a
-vision-capable model describe a screenshot while your chosen main model keeps
-the conversation. Updates preserve authored skills and now verify the embedded
-Python import policy before reusing an installed runtime.
+[Release notes, downloads and verification receipts](https://github.com/josephsteuerjr/praxis/releases/tag/v1.7.0)
+· [Python tools and Forge guide](desk/docs/PYTHON-TOOLS-1.7.0.md)
 
-[Download 1.7.0 and inspect its verification receipts](https://github.com/josephsteuerjr/praxis/releases/tag/v1.7.0)
-· [Explore the Python tools and Forge](desk/docs/PYTHON-TOOLS-1.7.0.md)
-
-## A home for several agents
+## Independent agents
 
 - **Independent agents.** Each agent has its own constitution, memory, settings, files
   and runtime. Switch agents in the window, choose the default, or open a specific one.
