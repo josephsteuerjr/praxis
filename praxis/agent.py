@@ -18457,7 +18457,8 @@ _MODEL_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                   ctx: "ChannelContext",
-                  model_text: str | None = None) -> tuple[str, str | list[dict]]:
+                  model_text: str | None = None,
+                  unavailable_refs: list | None = None) -> tuple[str, str | list[dict]]:
     """Проверить вложения, расшифровать аудио и собрать канонический multimodal user content.
 
     Возвращает ДВА разных текста, и это намеренно:
@@ -18468,15 +18469,24 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
     показать его дважды. Расшифровка аудио при этом снимается ОДИН раз и приклеивается к
     обоим: платить за STT дважды нельзя, а терять расшифровку в расписке — тем более."""
     spool = _media_spool()
-    refs = tuple(media_refs or ())[-spool.max_turn_media:]
+    refs = tuple(media_refs or ())
+    selected_start = max(0, len(refs) - spool.max_turn_media)
     photos: list[dict] = []
     additions: list[str] = []
     audio_n = photo_n = 0
-    for ref in refs:
+    for index, ref in enumerate(refs):
         try:
             spool.validate_ref(ref, expected_scope=ctx.scope, expected_chat_id=ctx.chat_id)
-        except media.MediaError:
-            log.warning("отброшено чужое/испорченное медиа [%s]", ctx.chat_id, exc_info=True)
+        except media.MediaMissingError:
+            # Missing bytes are not evidence of what the attachment contained.
+            # Binding checks above must succeed even for this text-only fallback.
+            additions.append(
+                f"[Вложение #{index + 1} ({ref.kind}) недоступно: локальный файл "
+                "отсутствует; содержимое не просмотрено и не восстановлено.]")
+            if unavailable_refs is not None:
+                unavailable_refs.append(ref)
+            continue
+        if index < selected_start:
             continue
         if ref.kind == "photo":
             photo_n += 1
@@ -18898,9 +18908,11 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                 and str(item.get("content") or "").strip()]
     if dialogue and not str(current_text or "").strip():
         dialogue = []           # без «сейчас» роли собрать нечестно — идём старым путём
+    unavailable_inbound: list[media.MediaRef] = []
     grounded_text, user_content = _media_prompt(
         convo_text, tuple(media_refs or ()), ctx,
-        model_text=(current_text if dialogue else None))
+        model_text=(current_text if dialogue else None),
+        unavailable_refs=unavailable_inbound)
     grounding_images = tuple(
         block for block in user_content
         if isinstance(user_content, list) and isinstance(block, dict)
@@ -18934,8 +18946,17 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     # проставлялся, поэтому связать намерение с транспортом было нечем.
     turn["run_id"] = durable_id
     try:
+        if unavailable_inbound and durable_id:
+            _runs().append_event(
+                durable_id, "inbound_media_unavailable", reason="local_file_missing",
+                attachments=[{
+                    "kind": ref.kind, "message_id": ref.message_id,
+                    "sha256": ref.sha256, "size": ref.size,
+                } for ref in unavailable_inbound],
+            )
         archived_inbound = _archive_run_media(
-            durable_id, media_refs, prefix="inbound", strict=True)
+            durable_id, tuple(ref for ref in media_refs if ref not in unavailable_inbound),
+            prefix="inbound", strict=True)
     except Exception as exc:
         turn["held"] = "error"
         turns.record(turn)

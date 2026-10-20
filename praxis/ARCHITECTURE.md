@@ -499,3 +499,76 @@ The estimator is local JSON UTF-8 bytes divided by four, includes the entire
 request envelope, and leaves provider token counts/cache savings unknown. Provider
 serialization, multimodal token prices and actual usage attribution still require
 separate evidence. These offline tests do not authorize activation or serving.
+
+### Candidate: отдельная локальная история авторской памяти
+
+`memory_history.py` — **не включённая автоматически** POSIX-утилита; import, boot и writers
+её не вызывают. Она читает только точные пути из внешнего JSON-manifest и сохраняет байты
+в отдельный bare Git с mode 0700. Ни checkout живой памяти, ни source Git не меняются.
+Ref `refs/heads/memory` содержит последовательные снимки, включая удаления; одинаковый
+снимок не создаёт коммит. Нет push/fetch/network-команд, remote запрещены, inherited Git
+routing/config очищается, hooks отключены. Каталог истории обязан лежать вне memory,
+source и других Git-репозиториев (checkout с `.git` и bare с `HEAD`/`objects`/`refs`).
+Это private history, **не публичное зеркало и не backup**.
+
+Исследование выполнено по коду и Git, без чтения содержимого живой памяти:
+
+- Уже initial `665a9200:.gitignore` исключал people/rooms/journal/INDEX; отдельного объяснения
+  мотива именно initial-ignore в доступной записи коммита нет. `43543e68` прямо объясняет
+  последующее снятие reflections/graph и исключение home/trash: «privacy … blueprints public,
+  the lived stays private». Это подтверждённая privacy-граница, не повод вернуть memory в source.
+- `people.write` перезаписывает `memory/people/<slug>.md`; `rooms._profile_write` вызывает
+  атомарный `_atomic_text` для `memory/rooms/*.md`. Автоматического вызова новой истории нет.
+- `notes.py` пишет rolling `.scratch` — исключён. `authored_notes.py` пишет авторский
+  `memory/notes/events.jsonl` и lock в `.state`; этот ledger намеренно **не** входит в
+  Markdown-кандидат. Данное решение не заявляет сохранение всех форм канона.
+- `memory_index.py:touch_index/rebuild_index` передаёт сборку `INDEX.md` в `memory_catalog`.
+  Текущий INDEX — generated catalogue, не авторский текст: он исключён, несмотря на имя.
+  Авторский index, если понадобится, требует отдельного review расширения policy.
+- `STATUS.md` фиксирует локальный private review tar для `905e09d` (342 members, без FTS);
+  `AGENTS.md` требует отдельного backup memory вместе с runtime/key ledger. Это свидетельства
+  существовавшего archive и требований, **не проверка наличия, свежести или restore backup**.
+  Код writers выше не создаёт per-write backup. Live backup scheduler/архивы в этом проходе
+  не исследовались; историю из них автоматически не импортируем.
+
+Allowlist двухступенчатый: потолок policy — только `people/<name>.md`, `rooms/<name>.md`,
+`notes/<name>.md`, `home.md`, `appetite.md`; затем **точный** внешний manifest без glob,
+рекурсии и автоматического discovery. Даже внутри разрешённой семьи файл не копируется без
+явного выбора. Скрытые файлы, traversal, symlink/hardlink, credential/runtime-подобные имена,
+не-UTF-8, NUL и файлы больше 2 MB отклоняются. Вся выборка проходит проверку секретов
+**до** записи объектов: private-key headers, распространённые token/password assignments,
+Bearer/Telegram/GitHub/API tokens, URL credentials. Проверка эвристическая: не гарантирует
+распознавания произвольного секрета или персональных данных. Private dossier остаётся private,
+даже если сканер ничего не нашёл. Внешний manifest должен быть рассмотрен владельцем по
+авторству и приватности; legacy people не объявляются автоматически очищенными.
+
+**План включения после review (не выполнен):**
+
+1. На доверенном POSIX-хосте подтвердить реальные memory/source пути, backup и права; сделать
+   отдельный private backup штатным процессом. Не переносить память в proposal/public checkout.
+2. Создать вне checkout/memory приватный родительский каталог, например
+   `/var/lib/praxis-private` (0700), и защищённый внешний manifest (0600), содержащий JSON-массив
+   согласованных относительных Markdown-путей. Не коммитить manifest или вывод private diff в source.
+3. Запустить узкие тесты; затем вручную, только после одобрения:
+   `python /path/to/source/memory_history.py --source /path/to/source --memory /path/to/memory --history /var/lib/praxis-private/canonical.git --manifest /var/lib/praxis-private/allowlist.json --initialize-reviewed`.
+   Первый коммит — только текущий снимок с текущим временем; **утраченную историю он не восстанавливает**.
+   Review архивов и возможный импорт — отдельная задача с реальным provenance, не backdating.
+4. Проверить локально отсутствие remotes и список `git --git-dir=… ls-tree -r --name-only
+   refs/heads/memory`; не публиковать вывод, если имена приватны. Следующие ручные снимки той же
+   командой без `--initialize-reviewed`. Scheduler/hook только отдельным одобренным изменением.
+5. Проверить restore на временной private копии через `git show <commit>:<path>`; перенос назад
+   в live только отдельным согласованным действием с backup и review, не reset всего memory.
+
+**Откат:** прекратить ручные вызовы/будущий scheduler; writers и живые тексты не затронуты.
+Историю сохранить offline с private ACL либо удалить отдельно после согласия владельца; удаление
+ref/новый чистый снимок не стирают секрет из старых Git objects/backup. При обнаружении утечки
+изолировать весь history, ротировать credential, пересоздать из проверенной выборки и отдельно
+решить судьбу старых копий. Не добавлять remote даже «для backup».
+
+Ограничения candidate: snapshot не транзакционен между несколькими writers (и прямой
+`people.write` может пересекаться с чтением); для согласованного снимка требуется quiescence.
+Lock защищает только конкурирующие snapshots; stale lock снимается вручную после проверки.
+Нет защиты от злонамеренного владельца хоста, меняющего пути/config во время операции; history
+и manifest должны быть недоступны другим пользователям. Root может обойти любые эти guards.
+Нет автоматического recovery/retention/restore. Тесты `test_memory_history.py` используют только
+временные синтетические деревья, не live memory.
