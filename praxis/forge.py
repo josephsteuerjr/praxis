@@ -617,6 +617,8 @@ def _missing_root_reason(task: dict, root: Path) -> str:
     Праксис прочитала «пропал», сделала единственный вывод, который из этого слова следует
     («восстанавливать потерянный worktree цель прямо запрещала»), и закрыла задачу по
     ложной причине. Слово, которое сообщает о причине, обязано её знать."""
+    close_hint = ("" if task.get("status") in {"done", "abandoned"}
+                  else " Закрыть запись — coding_session(action='abandon').")
     wt_raw = str(task.get("worktree_root") or "")
     if wt_raw:
         try:
@@ -633,13 +635,10 @@ def _missing_root_reason(task: dict, root: Path) -> str:
                     f"в нём нет «{rel}», потому что worktree это чекаут HEAD, а git этот путь "
                     f"не отслеживает (обычно он в .gitignore). Такого корня не было ни разу с "
                     f"момента открытия задачи: это не пропажа, а изоляция, которая не могла "
-                    f"состояться. Восстанавливать нечего; закрыть запись — "
-                    f"coding_session(action='abandon').")
+                    f"состояться. Восстанавливать нечего.{close_hint}")
         if inside and wt is not None:
-            return (f"корень задачи пропал вместе с worktree: нет ни {root}, ни {wt}. "
-                    f"Закрыть запись — coding_session(action='abandon').")
-    return (f"корень задачи пропал: {root}. Закрыть запись — "
-            f"coding_session(action='abandon').")
+            return f"корень задачи пропал вместе с worktree: нет ни {root}, ни {wt}.{close_hint}"
+    return f"корень задачи пропал: {root}.{close_hint}"
 
 
 def _manifest_hints(root: Path) -> list[str]:
@@ -2434,24 +2433,30 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
     if str(action or "").strip().lower() in ("watch", "unwatch", "watching"):
         return upstream_lever(action, task_id=task_id, arg=query or path)
     task, root, err = _task_root(task_id)
-    if err:
-        return err
-    assert task is not None and root is not None
     action = str(action or "status").strip().lower()
-    remote = _remote_client(task)
+    # Status and history live in the durable task store, not in its disposable
+    # worktree. Keep the root guard strict for every file/mutation operation.
+    if err and (task is None or action not in {"status", "history"}):
+        return err
+    assert task is not None
+    if action == "history":
+        return json.dumps(_events(task_id, max(1, min(int(end or 30), 200))), ensure_ascii=False, indent=2)
+    remote = _remote_client(task) if root is not None else None
     if action == "orientation":
         return _orientation_text(task)
     if action == "status":
         agents = _worker_tree(task_id)
         jobs = _units(task_id, "processes")
         checks = _units(task_id, "verifications")
-        swarm_plan = forge_swarm.refresh(
+        swarm_plan = forge_swarm.load(_task_dir(task_id)) if err else forge_swarm.refresh(
             _task_dir(task_id),
             lambda aid: _unit_state(_unit_dir(task_id, "agents", aid))
             if _unit_dir(task_id, "agents", aid).is_dir() else {"status": "lost"},
         )
-        git = _git_root(root) if remote is None else None
-        if remote is not None:
+        git = _git_root(root) if root is not None and remote is None else None
+        if err:
+            git_block = "недоступен (нет рабочего дерева)"
+        elif remote is not None:
             with _remote_observations(task):
                 git_block = remote.workspace_inspect(str(root), "status")
         else:
@@ -2459,7 +2464,8 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                          if git else "нет")
         return _cap("\n".join([
             f"{task_id} [{task.get('status')}] {task.get('goal')}",
-            f"root: {root}; isolation: {task.get('isolation')}",
+            f"root: {task.get('root')}; isolation: {task.get('isolation')}",
+            *([f"⚠ Рабочее дерево недоступно: {err}"] if err else []),
             f"agents: {_unit_counts(agents)}; processes: {_unit_counts(jobs)}; "
             f"verification: {_unit_counts(checks)}",
             f"worker slots: {sum(r.get('status') in (_LIVE_UNIT_STATES | {'unknown'}) for r in agents)}"
@@ -2476,8 +2482,7 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                 for e in _events(task_id, 12)
             ),
         ]) + _upstream_note(task))
-    if action == "history":
-        return json.dumps(_events(task_id, max(1, min(int(end or 30), 200))), ensure_ascii=False, indent=2)
+    assert root is not None
     if action == "lessons":
         return forge_learning.format_recall(
             forge_learning.recall(STATE_DIR, query or str(task.get("goal") or ""), root,
