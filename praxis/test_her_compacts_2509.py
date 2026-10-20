@@ -327,15 +327,13 @@ class HistoryIsOutsideTheRecallCorpus(unittest.TestCase):
 class FoldByHand(unittest.TestCase):
     """25.09, слово Егора: свёртка предлагается, а делает её она — рукой memory_compact(fold)."""
 
-    def test_fold_calls_fold_now_and_reports(self):
+    def test_fold_applies_only_the_authors_selected_text(self):
         import agent
-        out = {"ok": True, "folded": 160, "compact_id": "cmp-x", "hot": 250, "tiers": ["cmp-t2"]}
-        with mock.patch.object(agent.memory_life, "fold_now", return_value=out, create=True) as fn:
-            text = agent.tool_memory_compact("fold", place="-100777")
-        fn.assert_called_once_with("-100777")
-        self.assertIn("160", text)
-        self.assertIn("cmp-x", text)
-        self.assertIn("250", text)
+        out = {"ok": True, "folded": 3, "compact_id": "cmp-x", "hot": 250}
+        with mock.patch.object(agent.memory_life, "apply_authored_fold", return_value=out) as fn:
+            text = agent.tool_memory_compact("fold", place="-100777", selection="selected", text="My recap")
+        fn.assert_called_once_with("-100777", "selected", "My recap")
+        self.assertEqual(json.loads(text), out)
 
     def test_fold_without_a_place_asks_for_one(self):
         import agent

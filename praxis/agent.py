@@ -1952,7 +1952,7 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
 
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
                         tier: int | None = None, since: str = "", limit: int = 0, selection: str = "") -> str:
-    """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop / fold."""
+    """Acting-author prepare/fold; inspect, rewrite or stop episodic recap work."""
     op = str(action or "").strip().casefold()
     where = str(place or "").strip() or str(_active_chat() or "")
     if op in {"prepare", "fold"}:
@@ -1972,7 +1972,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             mark = " · обрубок" if r.get("degraded") else ""
             lines.append(f"- {r['id']} · tier {r['tier']} · {r['first_ts'][:16]} → {r['last_ts'][:16]} "
                          f"· {r['events']} соб. · {r['chars']} зн.{mark}\n  «{r['head']}»")
-        lines.append("read — одну целиком; rewrite — переписать суть; refold — перевыпустить пачкой.")
+        lines.append("read — одну; rewrite — твоя новая суть; prepare → fold — выбрать источники и свернуть самой.")
         return "\n".join(lines)
     if op == "read":
         if not compact_id:

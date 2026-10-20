@@ -381,14 +381,13 @@ class FoldIsOfferedNotForced(unittest.TestCase):
         self.assertEqual(out.get("folded"), 0)
         self.assertIn("-100777", ml.fold_offers())
 
-    def test_fold_now_is_forced_and_clears_the_offer(self):
+    def test_fold_now_requires_author_and_keeps_the_offer(self):
         ml._note_fold_offer("-100777", {"count": 410, "tokens": 5, "fold": 160})
-        self.assertIn("-100777", ml.fold_offers())
-        with mock.patch.object(ml, "compact_if_due", return_value={"ok": True, "folded": 160}) as cid:
+        with mock.patch.object(ml, "compact_if_due", side_effect=AssertionError("no forced fold")):
             out = ml.fold_now("-100777")
-        cid.assert_called_once_with("-100777", force=True)
-        self.assertEqual(out["folded"], 160)
-        self.assertNotIn("-100777", ml.fold_offers())
+        self.assertTrue(out["author_required"])
+        self.assertEqual(out["folded"], 0)
+        self.assertIn("-100777", ml.fold_offers())
 
     def test_state_evidence_shows_the_offer(self):
         ml._note_fold_offer("-100777", {"count": 410, "tokens": 5, "fold": 160})

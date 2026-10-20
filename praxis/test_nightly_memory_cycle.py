@@ -171,16 +171,15 @@ class TestHardThresholdOffer(NightBase):
         self.assertIn(place, ml.fold_offers())
         self.assertEqual(out.get("hot"), hard_hi + 5, "авто-свёртка не должна была случиться")
 
-    def test_fold_now_folds_and_clears_offer(self):
+    def test_fold_now_keeps_offer_for_the_acting_author(self):
         place = "-1002"
-        lo, hi, hard_hi, _cap = ml.hot_bounds(place)
+        _, _, hard_hi, _ = ml.hot_bounds(place)
         self.seed_hot(place, hard_hi + 5)
         ml.compact_if_due(place)
-        self.llm_responses.append(json.dumps({
-            "summary": "тестовая сводка", "open_threads": [], "claims": [], "episodes": []}))
         out = ml.fold_now(place)
-        self.assertGreater(out.get("folded") or 0, 0, f"свёртка не прошла: {out}")
-        self.assertNotIn(place, ml.fold_offers())
+        self.assertEqual(out["folded"], 0)
+        self.assertTrue(out["author_required"])
+        self.assertIn(place, ml.fold_offers())
 
     def test_reject_fold_reason(self):
         place = "-1003"
@@ -190,28 +189,22 @@ class TestHardThresholdOffer(NightBase):
 
 
 class TestFoldBackstop(NightBase):
-    """D3 (ревью 05.10): жёсткое давление без решения голоса дольше FOLD_OFFER_BACKSTOP_HOURS
-    сворачивается физикой с квитанцией; свежий оффер — только предложение."""
+    """Age changes reminder urgency, never the authorship of episodic memory."""
 
-    def test_hard_offer_fresh_stays_old_folds(self):
+    def test_old_hard_offer_still_requires_its_author(self):
         import datetime as _dt
         place = "-1005"
-        lo, hi, hard_hi, _cap = ml.hot_bounds(place)
+        _, _, hard_hi, _ = ml.hot_bounds(place)
         self.seed_hot(place, hard_hi + 5)
-        out = ml.compact_if_due(place)
-        self.assertTrue(out.get("offered"))
-        self.assertEqual(out.get("folded"), 0, "свежий оффер свернулся сам — бэкстоп сломан")
-        self.assertIn(place, ml.fold_offers())
-        # состариваем оффер: физический потолок обязан вернуть свёртку
+        ml.compact_if_due(place)
         data = ml._fold_offers_read()
-        data[place]["since"] = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(
-            hours=ml.FOLD_OFFER_BACKSTOP_HOURS + 2)).isoformat()
+        data[place]["since"] = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=3)).isoformat()
         ml._fold_offers_write(data)
-        self.llm_responses.append(json.dumps({
-            "summary": "бэкстоп-сводка", "open_threads": [], "claims": [], "episodes": []}))
-        out2 = ml.compact_if_due(place)
-        self.assertGreater(out2.get("folded") or 0, 0, f"бэкстоп не свернул: {out2}")
-        self.assertNotIn(place, ml.fold_offers(), "свёртка не сняла оффер")
+        out = ml.compact_if_due(place)
+        self.assertEqual(out["folded"], 0)
+        self.assertTrue(out["author_required"])
+        self.assertIn(place, ml.fold_offers())
+        self.assertEqual(self.llm_calls, [])
 
     def test_reject_resets_backstop_clock(self):
         # reject снимает оффер: часы бэкстопа стартуют заново, живое решение не перебивается
@@ -222,18 +215,13 @@ class TestFoldBackstop(NightBase):
 
 
 class TestVoiceCompacts(NightBase):
-    def test_compact_uses_voice_role(self):
-        """План 3: compact_if_due идёт в модель ролью voice (не evaluator)."""
+    def test_compact_does_not_spawn_a_second_voice(self):
         place = "-1004"
-        lo, hi, hard_hi, _cap = ml.hot_bounds(place)
+        _, _, hard_hi, _ = ml.hot_bounds(place)
         self.seed_hot(place, hard_hi + 5)
-        ml.compact_if_due(place)
-        self.llm_responses.append(json.dumps({
-            "summary": "сводка голосом", "open_threads": [], "claims": [], "episodes": []}))
-        out = ml.fold_now(place)
-        self.assertGreater(out.get("folded") or 0, 0)
-        roles = [c["role"] for c in self.llm_calls]
-        self.assertIn("voice", roles, f"voice-роль не вызвана: {roles}")
+        out = ml.compact_if_due(place, force=True)
+        self.assertEqual(out["folded"], 0)
+        self.assertEqual(self.llm_calls, [])
 
 
 class TestVerifyPass(NightBase):
