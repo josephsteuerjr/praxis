@@ -221,16 +221,9 @@ def clear_fold_offer(place: str | int) -> bool:
 
 
 def fold_now(place: str | int) -> dict:
-    """Свернуть горячее окно места по её воле (рука memory_compact fold) — принудительно,
-    как на жёстком пороге. Предложение снимается, если свёртка случилась или сворачивать
-    нечего; при `state_changed` (окно сдвинулось под рукой) оно остаётся — повод не исчез."""
-    out = compact_if_due(place, force=True)
-    if out.get("author_required"):
-        return out
-    if str(out.get("reason") or "") != "state_changed":
-        clear_fold_offer(adopt_place(place))
-        clear_fold_offer(place)
-    return out
+    """Legacy owner shortcut cannot author a recap or dismiss the author's pending offer."""
+    return {"ok": False, "author_required": True, "reason": "acting_author_required",
+            "folded": 0, "instruction": "Use memory_compact prepare, then fold(selection, text)."}
 
 EPISODE_GAP_SEC = max(60.0, float(os.getenv("PRAXIS_EPISODE_GAP_MIN", "45") or 45) * 60.0)
 TIER_LO = max(1, int(os.getenv("PRAXIS_COMPACT_TIER_LO", "4") or 4))

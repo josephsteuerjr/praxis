@@ -854,7 +854,7 @@ BASE_SHA: dict[str, str] = {
     "manage_identity": "ffe60eb9",
     "manage_loop": "e6a256b9",
     "manage_notes": "861b97e0",
-    "memory_compact": "9c114173",
+    "memory_compact": "71dce3a1",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",

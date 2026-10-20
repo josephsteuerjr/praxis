@@ -1,10 +1,9 @@
 """Свёртку пишет она (25.09, слово Егора).
 
 Раньше свёртку писал «хроникёр» — отдельный промпт про неё в третьем лице, ролью
-evaluator. Теперь system свёртки — её собственная персона (SOUL + CURRENT) и её правила
-записи (soul/memory_style.md или умолчание), задача от первого лица, роль memory → voice.
-И у неё есть руки на своих свёртках: list / read / rewrite (на месте, под тем же id, прежний
-текст — в историю) / refold (перевыпуск пачкой в фоне её голосом).
+evaluator. Теперь свёртку пишет сама действующая Praxis: prepare выбирает точные источники,
+fold(selection, text) сохраняет её текст. Вспомогательная модель и фоновый refold
+не пишут за неё. list / read / rewrite сохраняют доступ к прежним свёрткам.
 
 Запуск:  python praxis_test.py test_her_compacts_2509 -v
 """
@@ -93,49 +92,12 @@ class TheSystemIsHerOwnVoice(Base):
 
 
 class TheModelCallIsHers(Base):
-    def _with_llm(self, fake):
-        had = sys.modules.get("llm")
-        sys.modules["llm"] = fake
-        self.addCleanup(lambda: (sys.modules.pop("llm", None) if had is None
-                                 else sys.modules.__setitem__("llm", had)))
-
-    def test_role_is_memory_when_configured_else_voice(self):
-        fake, captured = _fake_llm(role_ok=("memory", "voice"))
-        self._with_llm(fake)
-        rows = [{"id": "evt-1", "line": "Николай: привет", "actor": "Николай", "direction": "in",
-                 "salience": 2, "ts": 1.0}]
-        out = ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertEqual(out.get("summary"), "я записала это сама")
-        self.assertEqual(captured["role"], "memory")
-        fake2, captured2 = _fake_llm(role_ok=("voice",))
-        self._with_llm(fake2)
-        ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertEqual(captured2["role"], "voice")
-        # Прод 26.09: роли `memory` в llm нет, а `configured("memory")` отвечает «да».
-        fake3, captured3 = _fake_llm(role_ok=("memory", "voice"), roles=("voice", "evaluator"))
-        self._with_llm(fake3)
-        out3 = ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertEqual(captured3.get("role"), "voice")
-        self.assertEqual(out3.get("summary"), "я записала это сама")
-
-    def test_evaluator_alone_is_not_enough_anymore(self):
-        fake, captured = _fake_llm(role_ok=("evaluator",))
-        self._with_llm(fake)
-        rows = [{"id": "evt-1", "line": "Николай: привет", "actor": "Николай", "direction": "in",
-                 "salience": 2, "ts": 1.0}]
-        self.assertEqual(ml._model_compact(rows, tier=1, depth=1, continued=False), {})
-        self.assertNotIn("calls", captured, "чужой ролью её память не пишется")
-
-    def test_system_sent_is_compact_system(self):
-        (self.tmp / "soul").mkdir(parents=True, exist_ok=True)
-        (self.tmp / "soul" / "SOUL.md").write_text("# Конституция Praxis\nЯ — Praxis.", encoding="utf-8")
-        fake, captured = _fake_llm()
-        self._with_llm(fake)
-        rows = [{"id": "evt-1", "line": "Николай: привет", "actor": "Николай", "direction": "in",
-                 "salience": 2, "ts": 1.0}]
-        ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertTrue(captured["system"].startswith("# Конституция Praxis"))
-        self.assertIn("Это моя память", captured["system"])
+    def test_no_auxiliary_role_can_write_the_authors_recap(self):
+        fake, captured = _fake_llm(role_ok=("memory", "voice", "evaluator"))
+        with mock.patch.dict(sys.modules, {"llm": fake}):
+            with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                ml._model_compact([], tier=1, depth=1, continued=False)
+        self.assertNotIn("calls", captured)
 
 
 class RewriteInPlace(Base):
@@ -224,22 +186,20 @@ class RefoldInHerVoice(Base):
         self.assertEqual(len(ml.refold_plan(ROOM, limit=1)), 1)
         self.assertEqual(ml.refold_plan("-1000000"), [])
 
-    def test_refold_one_rewrites_in_place_from_the_same_inputs(self):
-        rows = self._rows(3)
-        meta = self._compact(rows, summary="хроникёр писал")
+    def test_refold_one_keeps_recap_for_the_acting_author(self):
+        meta = self._compact(self._rows(3), summary="old retained recap")
         out = ml.refold_one(ROOM, meta["id"])
-        self.assertTrue(out["ok"], out)
-        self.assertEqual(self.calls, [[r["id"] for r in rows]], "те же события, что у свёртки")
-        self.assertEqual(ml.read_compact(meta["id"], ROOM)["recap"], "перевыпущено моим голосом")
-        evidence = memory_provenance.claim_evidence_index(ml.MEM_DIR)
-        self.assertTrue(memory_provenance.compact_coverage(meta["id"], evidence)["valid"])
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["reason"], "acting_author_required")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(ml.read_compact(meta["id"], ROOM)["recap"], "old retained recap")
 
     def test_refold_skips_a_leaf_whose_sources_are_no_longer_current(self):
         rows = self._rows(2)
         meta = self._compact(rows)
         self._edit(1, "исправленная реплика")
         out = ml.refold_one(ROOM, meta["id"])
-        self.assertEqual(out.get("reason"), "sources_not_current")
+        self.assertEqual(out.get("reason"), "acting_author_required")
         self.assertEqual(self.calls, [], "модель не звалась")
 
     def test_refold_start_runs_in_background_and_reports(self):
@@ -253,10 +213,10 @@ class RefoldInHerVoice(Base):
         worker(*kwargs)
         st = ml.refold_status()
         self.assertFalse(st["running"])
-        self.assertEqual((st["done"], st["failed"], st["skipped"]), (1, 0, 0))
+        self.assertEqual((st["done"], st["failed"], st["skipped"]), (0, 1, 0))
         self.assertEqual(st["last"]["id"], meta["id"])
         self.assertTrue((ml.MEM_DIR / ".state" / "refold.json").exists())
-        self.assertEqual(ml.read_compact(meta["id"], ROOM)["recap"], "перевыпущено моим голосом")
+        self.assertNotEqual(ml.read_compact(meta["id"], ROOM)["recap"], "перевыпущено моим голосом")
 
     def test_second_refold_while_running_is_refused_and_stop_flags(self):
         ml._REFOLD.clear()
@@ -296,7 +256,7 @@ class TheHandIsWired(unittest.TestCase):
         self.assertIn("Переписала cmp-x", out)
         journal.assert_called()
         with mock.patch.object(agent, "_active_chat", return_value=None):
-            self.assertIn("назови place", agent.tool_memory_compact("refold"))
+            self.assertIn("prepare", agent.tool_memory_compact("refold"))
         with mock.patch.object(agent.memory_life, "refold_status", return_value={"planned": 0}):
             self.assertIn("не запускался", agent.tool_memory_compact("status"))
 

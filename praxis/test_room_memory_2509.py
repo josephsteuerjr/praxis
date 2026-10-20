@@ -336,7 +336,8 @@ class FoldIsOfferedNotForced(unittest.TestCase):
         import contextlib
         return (mock.patch.object(ml, "adopt_place", lambda cid: str(cid)),
                 mock.patch.object(ml, "_state_write_guard", lambda place: contextlib.nullcontext()),
-                mock.patch.object(ml, "_load_state", lambda cid, rebuild=True: {"hot": list(rows)}),
+                mock.patch.object(ml, "_rebuild_state_locked", lambda cid: {"hot": list(rows)}),
+                mock.patch.object(ml, "_tier_fold_candidate", return_value=None),
                 mock.patch.object(ml, "_drop_unprovable_inputs", lambda rows_, cid: list(rows_)))
 
     def test_soft_threshold_offers_instead_of_folding(self):
@@ -359,13 +360,14 @@ class FoldIsOfferedNotForced(unittest.TestCase):
                 ml.compact_if_due("-100777")
         self.assertNotIn("-100777", ml.fold_offers())
 
-    def test_lever_off_folds_as_before(self):
+    def test_old_lever_off_cannot_restore_auxiliary_authorship(self):
         rows = _rows(ml.GROUP_HOT_HI + 10)
         with mock.patch.dict(os.environ, {"PRAXIS_FOLD_OFFER": "off"}):
             with contextlib_all(self._patches(rows)):
-                with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("свернула сама")):
-                    with self.assertRaises(AssertionError):
-                        ml.compact_if_due("-100777")
+                with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("helper forbidden")):
+                    out = ml.compact_if_due("-100777")
+        self.assertTrue(out["offered"])
+        self.assertEqual(out["folded"], 0)
 
     def test_hard_threshold_offers_too_since_night_cycle(self):
         # 05.10 (ночной цикл честности памяти): жёсткий порог днём тоже ПРЕДЛАГАЕТСЯ —
@@ -377,7 +379,7 @@ class FoldIsOfferedNotForced(unittest.TestCase):
                 with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("свернула сама")):
                     out = ml.compact_if_due("-100777")
         self.assertTrue(out.get("offered"), out)
-        self.assertTrue(out.get("hard"), out)
+        self.assertTrue(out["plan"].get("hard"), out)
         self.assertEqual(out.get("folded"), 0)
         self.assertIn("-100777", ml.fold_offers())
 
@@ -394,7 +396,7 @@ class FoldIsOfferedNotForced(unittest.TestCase):
         block = agent.build_state_evidence_block(self_only=True)
         self.assertIn("fold_offers", block)
         self.assertIn("-100777", block)
-        self.assertIn("memory_compact(action=fold", block)
+        self.assertIn("fold(selection,text)", block)
 
 
 def contextlib_all(patches):

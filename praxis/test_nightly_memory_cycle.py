@@ -8,7 +8,7 @@
 Что проверяется (номера — пункты тест-плана ордера):
 1. Идемпотентность ночи: повторный run() того же дня = ноль дублей квитанций/вердиктов.
 2. Жёсткий порог: pressure → offer (не авто-свёртка); fold_place → свёртка; reject → статус+причина.
-3. Компакты через voice: заглушка llm.chat регистрирует роли; role == 'voice'.
+3. Ночь оставляет fold-offers действующему автору и не вызывает модель для свёртки.
 4. Ночь end-to-end: три исхода сверки в досье; канонические записи датированы; квитанции в JSONL.
 5. Гномы: вердикты в JSONL; в промпте нет дневника/диалогов/soul; канон не изменён (hash до/после).
 6. Round-trip шапки people (last_verified переживает write); маркер возраста в _render_lifted.
@@ -412,50 +412,16 @@ class TestGnomes(NightBase):
 
 
 class TestFoldOffersDegraded(NightBase):
-    """B1/A1: поведение офферов без голоса и при неудачном fold_now."""
-
-    def test_no_voice_leaves_offers_open(self):
-        ml._note_fold_offer("-3001", {"count": 300, "tokens": 10, "fold": 100,
-                                      "reason": "token_cap"})
-        with self._voice_off():
+    def test_pending_offers_are_neither_failed_nor_written_by_the_clock(self):
+        place = "-3001"
+        ml._note_fold_offer(place, {"count": 300, "tokens": 10, "fold": 100})
+        with mock.patch.object(ml, "fold_now", side_effect=AssertionError("clock cannot fold")):
             out = nm.resolve_fold_offers()
-        self.assertEqual(out["rejected"], 0)
-        self.assertEqual(out["failed"], 1)
-        self.assertIn("-3001", ml.fold_offers(), "оффер убит без голоса")
-
-    def test_voice_error_leaves_offers_open(self):
-        import llm
-        ml._note_fold_offer("-3002", {"count": 300, "tokens": 10, "fold": 100,
-                                      "reason": "token_cap"})
-        def _boom(*a, **k):
-            raise RuntimeError("сеть легла")
-        with mock.patch.object(llm, "chat", _boom):
-            out = nm.resolve_fold_offers()
-        self.assertEqual(out["failed"], 1)
-        self.assertEqual(out["rejected"], 0)
-        self.assertIn("-3002", ml.fold_offers(), "оффер убит при упавшем голосе")
-
-    def test_unanswered_place_leaves_offer_open(self):
-        ml._note_fold_offer("-3003", {"count": 300, "tokens": 10, "fold": 100,
-                                      "reason": "token_cap"})
-        self.llm_responses.append(json.dumps({"decisions": []}))  # голос промолчал
-        out = nm.resolve_fold_offers()
-        self.assertEqual(out["failed"], 1)
-        self.assertIn("-3003", ml.fold_offers())
-
-    def test_fold_now_failure_counts_failed_not_rejected(self):
-        """A1: fold_now не свернул — failed, оффер открыт, не «отклонено»."""
-        ml._note_fold_offer("-3004", {"count": 300, "tokens": 10, "fold": 100,
-                                      "reason": "token_cap"})
-        self.llm_responses.append(json.dumps({
-            "decisions": [{"place": "-3004", "accept": True, "reason": "свёртываем"}]}))
-        with mock.patch.object(ml, "fold_now",
-                               lambda p: {"folded": 0, "reason": "state_changed"}):
-            out = nm.resolve_fold_offers()
-        self.assertEqual(out["accepted"], 0)
-        self.assertEqual(out["failed"], 1)
-        self.assertEqual(out["rejected"], 0)
-        self.assertIn("-3004", ml.fold_offers())
+        self.assertEqual((out["accepted"], out["rejected"], out["failed"]), (0, 0, 0))
+        self.assertEqual(out["pending"], 1)
+        self.assertTrue(out["author_required"])
+        self.assertIn(place, ml.fold_offers())
+        self.assertEqual(self.llm_calls, [])
 
 
 class TestPeopleHeaderFailClosed(NightBase):
