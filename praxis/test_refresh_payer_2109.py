@@ -26,18 +26,18 @@ PLACE = "-1003701205730"
 class TheDebtPaysItself(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self._debt = memory_life.refresh_debt
-        self._refresh = memory_life.refresh_compacts
+        self._refresh = memory_life.compact_if_due
         self._cooldown = mr._REFRESH_COOLDOWN_SEC
         mr._REFRESH_LAST_PAID.clear()
         self.debt_calls: list[str] = []
         self.paid: list[str] = []
         memory_life.refresh_debt = self._answer_debt
-        memory_life.refresh_compacts = self._answer_refresh
+        memory_life.compact_if_due = self._answer_refresh
         self.groups = 3
 
     def tearDown(self) -> None:
         memory_life.refresh_debt = self._debt
-        memory_life.refresh_compacts = self._refresh
+        memory_life.compact_if_due = self._refresh
         mr._REFRESH_COOLDOWN_SEC = self._cooldown
         mr._REFRESH_LAST_PAID.clear()
 
@@ -47,9 +47,8 @@ class TheDebtPaysItself(unittest.IsolatedAsyncioTestCase):
 
     def _answer_refresh(self, place, *a, **k):
         self.paid.append(str(place))
-        self.groups = max(0, self.groups - 1)
-        return {"ok": True, "reason": "target_refreshed", "refreshed_count": 75,
-                "target_count": 75, "room_unresolved_group_count": self.groups}
+        self.assertEqual(k, {"force": True})
+        return {"offered": True, "author_required": True, "folded": 0}
 
     async def test_one_group_is_paid_per_pass(self):
         await mr._maybe_pay_refresh_debt(PLACE)
@@ -83,7 +82,7 @@ class TheDebtPaysItself(unittest.IsolatedAsyncioTestCase):
     async def test_a_broken_payment_is_survived_too(self):
         def boom(*_a, **_k):
             raise RuntimeError("модель молчит")
-        memory_life.refresh_compacts = boom
+        memory_life.compact_if_due = boom
         await mr._maybe_pay_refresh_debt(PLACE)
 
     async def test_the_lever_turns_the_payer_off(self):

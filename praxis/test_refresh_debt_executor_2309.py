@@ -65,13 +65,14 @@ class RefreshDebtHasItsOwnExecutorTests(unittest.TestCase):
             seen.append(("debt", threading.current_thread().name))
             return {"unresolved_group_count": 1}
 
-        def pay(place):
+        def pay(place, *, force):
+            self.assertTrue(force)
             seen.append(("pay", threading.current_thread().name))
             return {"reason": "refreshed", "refreshed_count": 1, "target_count": 1,
                     "room_unresolved_group_count": 0}
 
         with mock.patch.object(runner.memory_life, "refresh_debt", debt), \
-                mock.patch.object(runner.memory_life, "refresh_compacts", pay), \
+                mock.patch.object(runner.memory_life, "compact_if_due", pay), \
                 mock.patch.object(runner, "_REFRESH_LAST_PAID", {}), \
                 mock.patch.object(runner, "_REFRESH_COOLDOWN_SEC", 600.0):
             asyncio.run(runner._maybe_pay_refresh_debt("room-pay"))
