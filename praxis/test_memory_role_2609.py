@@ -44,17 +44,13 @@ class MemoryRoleFollowsLlmRoles(unittest.TestCase):
                 mock.patch.object(llm, "_client_for", return_value=object()):
             self.assertEqual(ml._memory_role(), "memory")
 
-    def test_compaction_reaches_the_model_instead_of_the_degraded_fallback(self):
-        calls: list[str] = []
-        inputs = [{"line": "Егор: привет", "text": "привет", "salience": 3},
-                  {"line": "Она: здравствуй", "text": "здравствуй", "salience": 2}]
-        with mock.patch.object(llm, "_client_for", return_value=object()), \
-                mock.patch.object(llm, "chat", side_effect=_strict_chat(calls)), \
-                mock.patch.object(ml, "_anchor_self", side_effect=lambda data, **kw: data):
-            result = ml._model_compact(inputs, tier=1, depth=1, continued=False)
-        self.assertEqual(calls, ["voice"])
-        self.assertEqual(result.get("summary"), "Сводка модели.")
-        self.assertFalse(result.get("degraded"), result)
+    def test_legacy_compaction_never_borrows_the_voice_role(self):
+        # Acting authorship supersedes the former auxiliary role fallback.
+        inputs = [{"line": "source", "text": "source", "salience": 3}]
+        with mock.patch.object(llm, "chat") as channel:
+            with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                ml._model_compact(inputs, tier=1, depth=1, continued=False)
+        channel.assert_not_called()
 
 
 if __name__ == "__main__":       # pragma: no cover

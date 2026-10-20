@@ -1,4 +1,4 @@
-"""PASS 19: append-only life journal, provenance compacts and 50↔100 hot memory.
+"""Append-only life journal, provenance compacts and acting-author hot memory.
 
 Markdown is the canonical interpreted layer; JSONL is the append-only evidence spine.
 Everything under ``memory/.state/life`` is a rebuildable cursor/cache.  No SQLite and no
@@ -624,6 +624,15 @@ def _append_record(record: dict) -> None:
             os.close(fd)
 
 
+def canonical_event_text(text: str, direction: str = "internal") -> str:
+    """Exact life bytes for producers that also stamp an archive receipt.
+
+    Only incoming text is stripped; outgoing chunk-edge whitespace is meaningful.
+    """
+    value = str(text or "")
+    return value.strip() if str(direction or "internal") == "in" else value
+
+
 def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "Praxis",
                  direction: str = "internal", text: str = "", source: str = "runtime",
                  source_id: str | int | None = None, salience: int = 2,
@@ -649,8 +658,7 @@ def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "P
         # куски ответ склеивается обратно по сохранённому тексту, и `strip()` там
         # склеивает «first chunk » с «second chunk» без шва
         # (test_keat_native_ingress, 8 красных на первой попытке подровнять всё).
-        "text": (str(text or "").strip() if str(direction or "internal") == "in"
-                 else str(text or "")),
+        "text": canonical_event_text(text, direction),
         "source": str(source or "runtime"),
         "source_id": str(source_id) if source_id is not None else None,
         "salience": sal, "refs": [str(x) for x in refs if str(x)],
@@ -967,6 +975,73 @@ def _legacy_summary(chat_id: str | int) -> str:
         except OSError:
             pass
     return ""
+
+
+def epoch_snapshot(chat_id: str | int, *, summary_max_chars: int = 7000) -> dict:
+    """One coherent read of uncovered bytes and independently proved coverage.
+
+    Absence in hot is not evidence of a fold. State-only/changed residuals and
+    unindexable events are preserved; this reader neither folds nor repairs them.
+    """
+    import copy
+
+    place = str(place_key(chat_id))
+    with _state_write_guard(place):
+        messages = iter_events(chat_id=place, kinds={"conversation_message"})
+        presentable, coverage, _legacy = _both_graphs(place)
+        covered = {str(eid) for meta, _text in coverage.values()
+                   for eid in meta.get("source_event_ids") or ()}
+        current = memory_provenance.current_conversation_events(messages)
+        current_ids = {str(row.get("id")) for row in current}
+        by_id = {str(row.get("id")): row for row in messages}
+        hot, identities = [], set()
+
+        def append(item, *, residual=False):
+            direction = str(item.get("direction") or "")
+            actor = str(item.get("actor") or "")
+            if direction not in ("in", "out"):
+                direction = "out" if actor.casefold() == "praxis" else "in"
+            row = dict(id=item.get("id"), source_id=item.get("source_id"),
+                       source=item.get("source"), chat=item.get("chat"),
+                       line=str(item.get("line", "")), actor=actor,
+                       direction=direction, ts=item.get("ts"),
+                       meta=copy.deepcopy(item.get("meta") or {}),
+                       unprovable=bool(item.get("unprovable") or residual),
+                       state_residual=residual)
+            identity = (str(row["id"]), str(row["source_id"]), direction, row["line"])
+            if identity not in identities:
+                identities.add(identity)
+                hot.append(row)
+
+        for event in current:
+            if str(event.get("id")) not in covered:
+                append(dict(event, line=event.get("text", ""), chat=event.get("chat_id"),
+                            unprovable=not memory_provenance.event_row_indexable(event)))
+        for item in _load_state(place, rebuild=False).get("hot") or ():
+            if not isinstance(item, dict):
+                continue
+            event = by_id.get(str(item.get("id")))
+            exact = event is not None and all(
+                str(event.get(a) or "") == str(item.get(b) or "")
+                for a, b in (("text", "line"), ("direction", "direction"),
+                             ("source_id", "source_id")))
+            if exact and str(event.get("id")) not in current_ids:
+                continue
+            if not (exact and str(event.get("id")) in covered):
+                append(item, residual=not exact)
+        material = {"place": place, "members": sorted(map(str, _member_keys(place))),
+                    "coverage": [[cid, meta, hashlib.sha256(text.encode()).hexdigest()]
+                                 for cid, (meta, text) in sorted(coverage.items())]}
+        boundary = hashlib.sha256(json.dumps(
+            material, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        # Reuse ROOM recap policy against THIS graph, not a second disk read.
+        # All uncovered source bytes above remain intact; only the historical
+        # recap projection uses the existing widest+recent disclosure policy.
+        summary = render_context_summary(presentable, max_chars=summary_max_chars)
+        return copy.deepcopy(dict(place=place, boundary=boundary, hot=hot,
+                                  events=messages, covered_event_ids=sorted(covered),
+                                  current_event_ids=sorted(current_ids),
+                                  summary=summary))
 
 
 def bootstrap_legacy(chat_id: str | int, lines: list[str], *, summary: str = "",
@@ -1698,9 +1773,8 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
             if suffix_tokens <= token_cap:
                 break
     if char_pressure:
-        # Лента переросла потолок в знаках: сворачиваем старое так, чтобы горячим
-        # осталось ~TAPE_KEEP потолка. Давление жёсткое, как у токенов: ждать границу
-        # эпизода нельзя — кадр уже превышен.
+        # Давление по знакам предлагает префикс с остатком ~TAPE_KEEP потолка.
+        # Это план для автора, не автоматическая свёртка даже при hard pressure.
         keep = int(tape_limit * TAPE_KEEP)
         suffix_chars = chars
         char_target = 1
@@ -1735,7 +1809,7 @@ def plan_hot_fold(hot: list[dict], *, force: bool = False, tape_chars: int | Non
         return {"due": True, "fold": fold, "continued": False, "reason": "episode_boundary",
                 "gap_sec": gap, "count": count, "tokens": tokens,
                 "budget_fit": budget_fit,
-                # 25.09: жёсткий ли повод (токены/знаки/HARD_HI/force) — мягкий только предлагается
+                # Hard помечает срочность предложения, но не разрешает чужого автора.
                 "hard": bool(token_pressure or char_pressure or count >= hard_hi or force)}
     hard = token_pressure or count >= hard_hi or force
     if not hard:
@@ -2402,6 +2476,16 @@ def context_summary(chat_id: str | int, max_chars: int = 7000) -> str:
     if not has_life_memory(chat_id):
         return ""  # cold pre-PASS19/test tree: do not create runtime state merely by reading
     canonical, _legacy_seen = _canonical_compact_graph(chat_id)
+    return render_context_summary(canonical, max_chars=max_chars)
+
+
+def render_context_summary(canonical: dict, max_chars: int = 7000) -> str:
+    """Pure widest+recent projection of an already strict-presentable graph.
+
+    Shared by the live summary reader and the coherent epoch snapshot. Omitted
+    recaps stay on disk; the existing notices (including one oversized block)
+    travel with the selected text. This does not change event coverage.
+    """
     consumed = {
         source_id for meta, _recap in canonical.values()
         for source_id in meta["source_compact_ids"]

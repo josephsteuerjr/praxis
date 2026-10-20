@@ -2198,16 +2198,19 @@ def _summary_budget(chat_id: str | int) -> int:
     return 7_000
 
 
+def _summary_context_budget(chat_id: str | int) -> int:
+    """Effective ROOM recap cap, shared by ordinary reads and frozen epochs."""
+    budget = _summary_budget(chat_id)
+    if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
+        budget = min(budget, SUMMARY_FRAME_CHARS)
+    return budget
+
+
 def read_summary(chat_id: str | int) -> str:
     """PASS 19 frontier; плоская сводка — только fallback холодной миграции."""
     try:
         modern = memory_life.has_life_memory(chat_id)
-        budget = _summary_budget(chat_id)
-        if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
-            # 25.09: потолок кадра применяется здесь, ЦЕЛЫМИ блоками, — срез хвоста в
-            # сборке тиров резал по знакам и первым терял верхний ярус.
-            budget = min(budget, SUMMARY_FRAME_CHARS)
-        current = memory_life.context_summary(chat_id, max_chars=budget)
+        current = memory_life.context_summary(chat_id, max_chars=_summary_context_budget(chat_id))
         if current or modern:
             return current
     except Exception:
@@ -10703,7 +10706,9 @@ def _build_prompt_parts(
     # остаётся, тело не печатается, подпись называет причину. Список закрыт намеренно, и
     # пустота печатается только там, где решение о тире вообще принималось.
     with pre_model_timing.span("old_context.summary"):
-        summary = read_summary(chat_id) if chat_id is not None else ""
+        selected_epoch = frame_epoch.bound_tape(chat_id) if room_epoch else None
+        summary = (selected_epoch["summary"] if selected_epoch is not None
+                   else read_summary(chat_id) if chat_id is not None else "")
     if chat_id is not None:
         # ⚑ ЕЁ ПЯТЫЙ ПУНКТ 09.08: «compact-recap не должен постоянно ехать всем архивом.
         # Живая лента остаётся каноном текущего разговора; старые recap доступны
@@ -10713,7 +10718,8 @@ def _build_prompt_parts(
         # понятный указатель на продолжение истории». Поэтому сводка не выбрасывается —
         # она ОБРЕЗАЕТСЯ с головы (свежее важнее давнего) и обрыв называется вслух,
         # вместе с рукой, которой достаётся остальное.
-        if summary and dossier_contract_enabled() and len(summary) > SUMMARY_FRAME_CHARS:
+        if (selected_epoch is None and summary and dossier_contract_enabled()
+                and len(summary) > SUMMARY_FRAME_CHARS):
             kept = summary[-SUMMARY_FRAME_CHARS:]
             summary = (f"[сводка обрезана: показано {len(kept)} знаков из {len(summary)}, "
                        f"давнее осталось за кадром и достаётся рукой `recall` или "
@@ -10920,7 +10926,8 @@ def _build_prompt_parts(
         # undroppable exception (the positive-budget counter still stays at or below its limit).
         charge = (0 if state_moved and owner_context and title == _STATE_NOW_TIER
                   else len(block))
-        if budget > 0 and used + charge > budget:
+        if (budget > 0 and used + charge > budget
+                and not (selected_epoch is not None and title.startswith("Ранее в этом диалоге"))):
             dropped.append(title)
             frame_trace.absent("evidence.tier", "evidence", tier_kind, "context_budget",
                                label=title, chars=len(block), cause=cause)
@@ -17458,12 +17465,16 @@ def _voice_impl(
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
     chat_id, is_dm, is_owner, known, scope = ctx.chat_id, ctx.is_dm, ctx.owner, ctx.known, ctx.scope
+    # A selected epoch is already a complete frozen conversation. Legacy turn
+    # windows must not slide it again after the runner's source selection.
+    epoch_history = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
+    selected_history = history if epoch_history else history[-HISTORY_TURNS:]
     # Issue only the delivered original; history has opaque references, not lookup.
     capture_state = _KEAT_CAPTURE_STATE.get()
     if capture_state is _KEAT_CAPTURE_UNSET and _KEAT_ORIGINAL_INGRESS.get():
         try:
             capture_state = keat_live.capture_turn(
-                ctx=ctx, user_msg=user_msg, history=history[-HISTORY_TURNS:],
+                ctx=ctx, user_msg=user_msg, history=selected_history,
             )
         except Exception:
             pass
@@ -17471,16 +17482,16 @@ def _voice_impl(
         try:
             sidecar = _KEAT_PROJECTION.get()
             projection = dict(
-                history=sidecar['history'][-HISTORY_TURNS:],
+                history=(sidecar['history'] if epoch_history else sidecar['history'][-HISTORY_TURNS:]),
                 current=sidecar['current'],
             )
             if 'projection_history' in sidecar:
                 projection.update(
-                    projection_history=sidecar['projection_history'][-HISTORY_TURNS:],
+                    projection_history=(sidecar['projection_history'] if epoch_history else sidecar['projection_history'][-HISTORY_TURNS:]),
                     projection_current=sidecar['projection_current'],
                 )
             capture_state = keat_live.adopt_projection(
-                ctx, history[-HISTORY_TURNS:], user_msg, projection)
+                ctx, selected_history, user_msg, projection)
         except Exception:
             pass
     if capture_state is _KEAT_CAPTURE_UNSET: capture_state = None
@@ -17529,8 +17540,8 @@ def _voice_impl(
     # сообщений, граница выборки, источник и ЯВНАЯ пометка об обрезке. Считается ровно
     # здесь, где обе величины ещё видны: `history` — всё, что дал источник, срез — то, что
     # вправду уедет. Число тиров на этот вопрос не отвечает и отвечать не имеет права.
-    frame_layout.stash(tape_delivered=len(history[-HISTORY_TURNS:]),
-                       tape_available=len(history), tape_limit=HISTORY_TURNS,
+    frame_layout.stash(tape_delivered=len(selected_history),
+                       tape_available=len(history), tape_limit=(0 if epoch_history else HISTORY_TURNS),
                        tape_source=("ролевая лента разговора" if history else ""))
     # Пятая зона кадра. Строится ЗДЕСЬ: только отсюда видно, есть ли у неё дом (конверт
     # evidence) и предложены ли руки — от второго зависит, вправе ли прибор сказать «последней».
@@ -17543,7 +17554,7 @@ def _voice_impl(
     # `memory_life`, кольцо ходов и расписки держат дословный текст без единого «>».
     role_history = [{key: value for key, value in row.items()
                      if key != "_keat_occurrence"}
-                    for row in history[-HISTORY_TURNS:]]
+                    for row in selected_history]
     # 15.09, эпоха комнаты (frame_epoch): замороженный документ E — ПЕРВЫМ сообщением, до
     # ленты; лента с якоря — ролями как раньше; живой конверт — последним. Нет эпохи — список
     # прежний байт-в-байт. Порядок и есть смысл: ничто, что меняется чаще, не стоит выше того,
@@ -18483,10 +18494,12 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                 f"[Аудио #{audio_n}, расшифровка]: {transcript}"
                 if transcript else f"[Аудио #{audio_n}: речь не распознана]")
     def _with_additions(text: str) -> str:
-        base = (text or "").strip()
+        selected_epoch = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
+        base = (text or "") if selected_epoch else (text or "").strip()
         if not additions:
             return base
-        return (base + "\n\n" + "\n".join(additions)).strip() if base else "\n".join(additions)
+        combined = base + "\n\n" + "\n".join(additions) if base else "\n".join(additions)
+        return combined if selected_epoch else combined.strip()
 
     augmented = _with_additions(convo_text)
     for_model = augmented if model_text is None else _with_additions(model_text)
@@ -18876,9 +18889,10 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
         ctx = ChannelContext.from_legacy(chat_id, is_dm=is_dm, owner=is_owner, known=known, scope=scope)
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
+    selected_epoch = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
     dialogue = [dict(item) for item in (history or [])
                 if isinstance(item, dict) and item.get("role") in ("user", "assistant")
-                and str(item.get("content") or "").strip()]
+                and (selected_epoch or str(item.get("content") or "").strip())]
     if dialogue and not str(current_text or "").strip():
         dialogue = []           # без «сейчас» роли собрать нечестно — идём старым путём
     unavailable_inbound: list[media.MediaRef] = []

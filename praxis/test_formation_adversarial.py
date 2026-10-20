@@ -13,8 +13,9 @@ from test_pass19 import Pass19Base
 class TestFormationAdversarial(Pass19Base):
     def _fresh_compact(self, *, start: float = 1_700_000_000.0):
         raw = self.add_messages("7", 6, start=start, gap_after={3})
-        result = life.compact_if_due("7")
-        self.assertTrue(result.get("ok") and result.get("compact_id"), result)
+        result = self._authored_fold("7")
+        self.assertIn(raw[0]["id"], result["source_ids"])
+        self.assertIn(raw[1]["id"], result["source_ids"])
         return result["compact_id"], raw
 
     def _install_supported_model(self, current: dict) -> None:

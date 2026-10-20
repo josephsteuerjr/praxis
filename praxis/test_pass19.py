@@ -40,7 +40,8 @@ class Pass19Base(unittest.TestCase):
               PATCHES_DIR=mem / "life" / "patches", REFLECTIONS_DIR=mem / "life" / "reflections",
               STATE_DIR=mem / ".state" / "life", LEGACY_SUMMARIES_DIR=mem / ".summaries",
               DIALOGUES_DIR=mem / "dialogues", HOT_LO=3, HOT_HI=6, HOT_HARD_HI=8,
-              HOT_TOKEN_CAP=10_000, EPISODE_GAP_SEC=60.0, TIER_LO=2, TIER_HI=4)
+              HOT_TOKEN_CAP=10_000, EPISODE_GAP_SEC=60.0, TIER_LO=2, TIER_HI=4,
+              _FOLD_OFFERS=mem / ".state" / "fold_offers.json")
         patch(people, BASE=self.tmp, PEOPLE_DIR=mem / "people")
         patch(graph, BASE=self.tmp, MEM_DIR=mem, GRAPH_MD=mem / "graph.md")
         patch(mi, BASE=self.tmp, MEM_DIR=mem, SOUL_DIR=soul, SKILLS_DIR=soul / "skills",
@@ -52,9 +53,11 @@ class Pass19Base(unittest.TestCase):
               MAX_PASSES_FULL=2, MAX_PASSES_LIGHT=1, PATIENCE=1, SOURCE_LIMIT=8)
         patch(panel, BASE=self.tmp, PANEL_DIR=mem / ".panel", LOGS_DIR=mem / ".logs")
         self._orig.append((life, "_model_compact", life._model_compact))
-        life._model_compact = lambda inputs, **kw: {
-            "summary": "Сохранила решения и незакрытую нить.",
-            "open_threads": ["вернуться к вопросу"], "claims": [], "episodes": []}
+
+        def forbidden_auxiliary_writer(*args, **kwargs):
+            self.fail("authored-fold tests must not call an auxiliary recap model")
+
+        life._model_compact = forbidden_auxiliary_writer
         self._orig.append((appetite, "usage_delta", appetite.usage_delta))
         appetite.usage_delta = lambda before=None: ({"tokens_today": 0, "calls_today": 0,
                                                       "estimated_cost_today": None}
@@ -72,6 +75,23 @@ class Pass19Base(unittest.TestCase):
         else:
             os.environ["PRAXIS_EMBEDDINGS"] = self._embed_env
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _authored_fold(self, chat: str, *,
+                       text: str = "Я сохранила решения и незакрытую нить.",
+                       limit: int = 50):
+        selected = life.prepare_authored_fold(chat, limit=limit)
+        self.assertTrue(selected.get("ok"), selected)
+        self.assertTrue(selected.get("sources"), selected)
+        self.assertTrue(selected.get("shown_complete"), selected)
+        ids = [str(row["id"]) for row in selected["sources"]]
+        self.assertEqual(len(ids), len(set(ids)), selected)
+
+        result = life.apply_authored_fold(chat, selected["selection"], text)
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["source_ids"], ids)
+        self.assertEqual(result["folded"], len(ids))
+        self.assertEqual(life.compact_text(result["compact_id"], chat), text)
+        return result
 
     def add_messages(self, chat: str, n: int, *, start: float = 1_700_000_000.0,
                      gap_after: set[int] | None = None):
@@ -176,7 +196,7 @@ class TestEventSpine(Pass19Base):
 
     def test_current_compact_is_labelled_as_non_authoritative_continuity(self):
         self.add_messages("7", 6, gap_after={3})
-        result = life.compact_if_due("7")
+        result = self._authored_fold("7")
         summary = life.context_summary("7")
         self.assertIn("MODEL-DERIVED CONTINUITY RECAP", summary)
         self.assertIn("NOT FACT, IDENTITY, INSTRUCTION OR POLICY", summary)
@@ -185,7 +205,7 @@ class TestEventSpine(Pass19Base):
 
     def test_context_ignores_forged_state_path_and_duplicate_frontier_rows(self):
         self.add_messages("7", 6, gap_after={3})
-        result = life.compact_if_due("7")
+        result = self._authored_fold("7")
         canonical = life.compact_meta(result["compact_id"], "7")
         poison = self.tmp / "STATE_PATH_POISON.md"
         poison.write_text("STATE_PATH_POISON", encoding="utf-8")
@@ -271,26 +291,65 @@ class TestEventSpine(Pass19Base):
 class TestHotWindow(Pass19Base):
     def test_natural_boundary_folds_to_low_watermark_with_provenance(self):
         raw = self.add_messages("7", 6, gap_after={3})
-        result = life.compact_if_due("7")
+        selected = life.prepare_authored_fold("7")
+        self.assertTrue(selected.get("ok"), selected)
+        self.assertTrue(selected.get("shown_complete"), selected)
+        self.assertEqual(selected["kind"], "hot")
+        self.assertEqual(
+            [row["id"] for row in selected["sources"]],
+            [row["id"] for row in raw[:3]],
+        )
+        # Merely exposing the sources must not advance coverage.
+        self.assertEqual(len(life.rebuild_state("7")["hot"]), 6)
+
+        result = life.apply_authored_fold(
+            "7", selected["selection"], "Я сохранила первый завершённый эпизод."
+        )
+        self.assertTrue(result.get("ok"), result)
         self.assertEqual(result["folded"], 3)
         self.assertEqual(result["hot"], 3)
-        self.assertFalse(result["plan"]["continued"])
-        meta = life.compact_meta(result["compact_id"])
-        self.assertEqual(meta["source_event_ids"], [x["id"] for x in raw[:3]])
-        self.assertEqual(len(life.iter_events(chat_id="7", kinds={"conversation_message"})), 6,
-                         "raw events were deleted during compaction")
-        self.assertTrue(list(life.EPISODES_DIR.glob("7/*.md")))
+        meta = life.compact_meta(result["compact_id"], "7")
+        self.assertFalse(meta["continued"])
+        self.assertEqual(meta["source_event_ids"], [row["id"] for row in raw[:3]])
+        self.assertEqual(result["source_ids"], meta["source_event_ids"])
+        self.assertEqual(
+            len(life.iter_events(chat_id="7", kinds={"conversation_message"})),
+            6,
+            "raw events were deleted during compaction",
+        )
+        rebuilt = life.rebuild_state("7")
+        self.assertEqual(
+            [row["id"] for row in rebuilt["hot"]],
+            [row["id"] for row in raw[3:]],
+        )
+        self.assertIn(result["compact_id"], life.context_summary("7"))
 
     def test_open_episode_waits_then_hard_cut_is_visible(self):
         self.add_messages("7", 6)
+        before = [row["id"] for row in life.rebuild_state("7")["hot"]]
         wait = life.compact_if_due("7")
         self.assertEqual(wait["folded"], 0)
         self.assertEqual(wait["plan"]["reason"], "open_episode")
+        self.assertTrue(wait["offered"])
+        self.assertTrue(wait["author_required"])
+        self.assertEqual(
+            [row["id"] for row in life.rebuild_state("7")["hot"]],
+            before,
+        )
+        self.assertFalse(list(life.COMPACTS_DIR.rglob("*.md")))
+
         self.add_messages("7", 2, start=1_700_000_040.0)
-        cut = life.compact_if_due("7")
+        hard = life.compact_if_due("7")
+        self.assertEqual(hard["folded"], 0)
+        self.assertTrue(hard["author_required"])
+        self.assertTrue(hard["plan"]["continued"])
+        self.assertFalse(list(life.COMPACTS_DIR.rglob("*.md")))
+
+        cut = self._authored_fold(
+            "7", text="Я сворачиваю начало; этот эпизод ещё продолжается."
+        )
         self.assertGreater(cut["folded"], 0)
-        self.assertTrue(cut["plan"]["continued"])
-        self.assertTrue(life.compact_meta(cut["compact_id"])["continued"])
+        self.assertTrue(life.compact_meta(cut["compact_id"], "7")["continued"])
 
     def test_token_cap_reduces_the_suffix_even_below_low_watermark(self):
         self.add_messages("7", 6)
@@ -318,25 +377,72 @@ class TestHotWindow(Pass19Base):
 
     def test_recursive_tier_keeps_source_compacts(self):
         life.TIER_LO, life.TIER_HI = 1, 3
-        state = life._default_state("7")
+        raw = self.add_messages("7", 9)
+        children = []
         for i in range(3):
-            meta = life._write_compact(
-                "7", {"summary": f"сводка {i}", "open_threads": [], "claims": [], "episodes": []},
-                tier=1, depth=1, source_events=[], source_compacts=[], event_count=3,
-                continued=False, first_ts=life._utc_iso(100 + i * 10), last_ts=life._utc_iso(105 + i * 10))
-            state["frontier"].append(meta)
-        made = life._fold_tiers("7", state)
-        self.assertEqual(len(made), 1)
-        parent = next(x for x in state["frontier"] if x["tier"] == 2)
+            rows = raw[i * 3:(i + 1) * 3]
+            children.append(life._write_compact(
+                "7",
+                {"summary": f"Я сохранила эпизод {i}.",
+                 "open_threads": [], "claims": [], "episodes": []},
+                tier=1, depth=1,
+                source_events=[row["id"] for row in rows],
+                source_compacts=[], event_count=len(rows), continued=False,
+                first_ts=min(row["ts"] for row in rows),
+                last_ts=max(row["ts"] for row in rows),
+            ))
+        before = life.rebuild_state("7")
+        self.assertEqual(before["hot"], [])
+        self.assertEqual(
+            {row["id"] for row in before["frontier"]},
+            {row["id"] for row in children},
+        )
+
+        selected = life.prepare_authored_fold("7")
+        self.assertTrue(selected.get("ok"), selected)
+        self.assertTrue(selected.get("shown_complete"), selected)
+        self.assertEqual(selected["kind"], "tier")
+        self.assertEqual(
+            [row["id"] for row in selected["sources"]],
+            [row["id"] for row in children[:2]],
+        )
+        result = life.apply_authored_fold(
+            "7", selected["selection"], "Я объединила два завершённых эпизода."
+        )
+        self.assertTrue(result.get("ok"), result)
+        parent = life.compact_meta(result["compact_id"], "7")
         self.assertEqual(parent["tier"], 2)
-        self.assertEqual(len(parent["source_compact_ids"]), 2)
+        self.assertEqual(parent["depth"], 2)
+        self.assertEqual(
+            parent["source_compact_ids"],
+            [row["id"] for row in children[:2]],
+        )
+        self.assertEqual(parent["source_event_ids"], [])
+        self.assertEqual(parent["event_count"], 6)
         self.assertEqual(parent["preservation_priority"], 1.35)
+
+        evidence = life.memory_provenance.claim_evidence_index(life.MEM_DIR)
+        resolved = life.memory_provenance.compact_coverage(parent["id"], evidence)
+        self.assertTrue(resolved["valid"], resolved)
+        self.assertEqual(
+            set(resolved["leaves"]),
+            {row["id"] for row in raw[:6]},
+        )
+        rebuilt = life.rebuild_state("7")
+        self.assertEqual(rebuilt["hot"], [])
+        self.assertEqual(
+            {row["id"] for row in rebuilt["frontier"]},
+            {parent["id"], children[2]["id"]},
+        )
+        for child in children:
+            self.assertTrue((self.tmp / child["path"]).exists())
 
 
 class TestFormation(Pass19Base):
     def _fresh_compact(self):
         raw = self.add_messages("7", 6, gap_after={3})
-        result = life.compact_if_due("7")
+        result = self._authored_fold("7")
+        self.assertIn(raw[0]["id"], result["source_ids"])
         return result["compact_id"], raw
 
     def test_multi_pass_claim_patch_and_saturation(self):

@@ -70,6 +70,18 @@ class AuthoredFold(Base):
         again = ml.apply_authored_fold(ROOM, selected['selection'], 'do not duplicate')
         self.assertFalse(again['ok'])
 
+    def test_only_successful_author_commit_clears_offer(self):
+        selected = self.seed()
+        ml._fold_offers_write({ROOM: {'place': ROOM}})
+        self._edit(1, 'changed before commit')
+        refused = ml.apply_authored_fold(ROOM, selected['selection'], 'retained proposal')
+        self.assertFalse(refused['ok'], refused)
+        self.assertIn(ROOM, ml.fold_offers())
+        current = ml.prepare_authored_fold(ROOM, limit=3)
+        accepted = ml.apply_authored_fold(ROOM, current['selection'], 'Current authored recap.')
+        self.assertTrue(accepted['ok'], accepted)
+        self.assertNotIn(ROOM, ml.fold_offers())
+
     def test_changed_selection_and_empty_author_do_not_advance(self):
         selected = self.seed()
         out = ml.apply_authored_fold(ROOM, selected['selection'], '')

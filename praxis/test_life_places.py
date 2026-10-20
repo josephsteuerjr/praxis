@@ -38,7 +38,8 @@ class Base(unittest.TestCase):
         self._orig = {name: getattr(ml, name) for name in
                       ("BASE", "MEM_DIR", "LIFE_DIR", "EVENTS_DIR", "COMPACTS_DIR",
                        "EPISODES_DIR", "CLAIMS_DIR", "PATCHES_DIR", "REFLECTIONS_DIR",
-                       "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR")}
+                       "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR",
+                       "_FOLD_OFFERS")}
         ml.BASE = self.tmp
         ml.MEM_DIR = self.tmp / "memory"
         ml.LIFE_DIR = ml.MEM_DIR / "life"
@@ -51,6 +52,7 @@ class Base(unittest.TestCase):
         ml.STATE_DIR = ml.MEM_DIR / ".state" / "life"
         ml.LEGACY_SUMMARIES_DIR = ml.MEM_DIR / ".summaries"
         ml.DIALOGUES_DIR = ml.MEM_DIR / "dialogues"
+        ml._FOLD_OFFERS = ml.MEM_DIR / ".state" / "fold_offers.json"
         self._routes = tr.DIR
         tr.DIR = self.tmp / "memory" / ".state" / "group_context"
 
@@ -59,6 +61,24 @@ class Base(unittest.TestCase):
             setattr(ml, name, value)
         tr.DIR = self._routes
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _author_fold(self, chat):
+        selected = ml.prepare_authored_fold(chat, limit=50)
+        self.assertTrue(selected.get("ok"), selected)
+        self.assertTrue(selected.get("sources"), selected)
+        self.assertTrue(selected.get("shown_complete"), selected)
+        self.assertEqual(selected["kind"], "hot")
+        ids = [str(row["id"]) for row in selected["sources"]]
+        self.assertEqual(len(ids), len(set(ids)), selected)
+
+        result = ml.apply_authored_fold(
+            chat, selected["selection"],
+            "Я сохранила выбранную часть разговора и её происхождение.",
+        )
+        self.assertTrue(result.get("ok"), result)
+        self.assertEqual(result["source_ids"], ids)
+        self.assertEqual(result["folded"], len(ids))
+        return result
 
     def _say(self, chat, text):
         return ml.record_message(chat, text, actor="Николай", direction="in")
@@ -208,7 +228,7 @@ class TestTrustOnlyGrows(Base):
     def _fold(self, chat):
         for i in range(ml.HOT_HI + 5):
             self._say(chat, f"событие {i} для свёртки")
-        out = ml.compact_if_due(chat, force=True)
+        out = self._author_fold(chat)
         self.assertTrue(out.get("compact_id"), out)
         return out["compact_id"]
 
@@ -237,7 +257,7 @@ class TestTrustOnlyGrows(Base):
         self.assertEqual(tr.status_at(ROOM, 5000)[0], tr.FALSE)
         for i in range(ml.HOT_HI + 5):
             self._say(late, f"событие {i}")
-        out = ml.compact_if_due(late, force=True)
+        out = self._author_fold(late)
         compact_id = out["compact_id"]
         self.assertIn(compact_id, ml.context_summary(ROOM, max_chars=200000))
 
@@ -274,22 +294,33 @@ class TestTrustOnlyGrows(Base):
                         "уже свёрнутое остаётся свёрнутым — иначе компакт пропадёт")
 
     def test_already_folded_events_are_never_folded_twice(self):
-        """Реестр «моргнул» — ветка снова сама по себе. Уже свёрнутое обязано остаться
-        свёрнутым, иначе те же события уходят во вторую свёртку и она читает один и тот
-        же кусок разговора как две независимые памяти (адверсарка 25.07)."""
+        """A disappearing route registry cannot return covered sources to hot."""
         self._one_room()
         for i in range(ml.HOT_HI + 5):
             self._say(A, f"событие {i}")
-        out = ml.compact_if_due(A, force=True)
-        covered = set(out.get("folded_lines") or [])
+        out = self._author_fold(A)
+        covered = set(out["source_ids"])
         self.assertTrue(covered)
-        shutil.rmtree(tr.DIR, ignore_errors=True)     # реестра больше нет
-        self.assertEqual(ml.place_key(A), ROOM,
-                         "журнал сильнее реестра: место, на котором подействовали, "
-                         "не пересматривается")
-        hot = {str(x.get("line")) for x in ml.rebuild_state(A)["hot"]}
-        self.assertFalse(hot & covered,
-                         "свёрнутое не возвращается в горячее ни при каком реестре")
+        shutil.rmtree(tr.DIR, ignore_errors=True)
+        self.assertEqual(
+            ml.place_key(A), ROOM,
+            "журнал сильнее реестра: место, на котором подействовали, "
+            "не пересматривается",
+        )
+        rebuilt = ml.rebuild_state(A)
+        hot = {str(row["id"]) for row in rebuilt["hot"]}
+        self.assertFalse(
+            hot & covered,
+            "свёрнутое не возвращается в горячее ни при каком реестре",
+        )
+        every = {
+            str(row["id"])
+            for row in ml.iter_events(chat_id=A, kinds={"conversation_message"})
+        }
+        self.assertEqual(
+            hot | covered, every,
+            "после исчезновения реестра потерялись события",
+        )
 
     def test_a_fold_under_a_branch_survives_the_registry_changing_twice(self):
         """Вторая адверсарка: свёртка происходит, пока ветка САМА себе место, — тогда
@@ -298,7 +329,7 @@ class TestTrustOnlyGrows(Base):
         late = f"{ROOM}__topic__5000"
         for i in range(ml.HOT_HI + 5):
             self._say(late, f"событие {i}")
-        out = ml.compact_if_due(late, force=True)     # реестр молчит: место = ключ
+        out = self._author_fold(late)     # реестр молчит: место = ключ
         compact_id = out["compact_id"]
         tr.observe(ROOM, kind="channel_forum_missing",
                    since_message_id=1, until_message_id=1000)
@@ -348,7 +379,7 @@ class TestCompactionFollowsThePlace(Base):
         self._one_room()
         for i in range(ml.HOT_HI + 5):
             self._say(A, f"строка {i}")
-        out = ml.compact_if_due(A, force=True)
+        out = self._author_fold(A)
         self.assertTrue(out.get("compact_id"))
         self.assertTrue((ml._compact_dir(ROOM) / f"{out['compact_id']}.md").exists(),
                         "свёртка комнаты живёт под комнатой, а не под веткой")
@@ -357,7 +388,7 @@ class TestCompactionFollowsThePlace(Base):
         self._one_room()
         for i in range(ml.HOT_HI + 5):
             self._say(A if i % 2 else B, f"строка {i}")
-        ml.compact_if_due(B, force=True)
+        self._author_fold(B)
         hot_after = len(ml._load_state(A, rebuild=True).get("hot") or [])
         self.assertLess(hot_after, ml.HOT_HI + 5,
                         "курсор у места один: свернули из одной ветки — сдвинулось везде")

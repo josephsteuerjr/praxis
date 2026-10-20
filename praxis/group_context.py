@@ -144,7 +144,8 @@ def _line_key(row: dict) -> tuple:
         return (kind, str(row.get("peer_id")), int(row.get("topic_id") or 0),
                 str(row.get("title") or ""), str(row.get("origin") or ""))
     if kind == "deletion":
-        return (kind, str(row.get("peer_id")), int(row.get("message_id") or 0))
+        return (kind, str(row.get("peer_id")), int(row.get("message_id") or 0),
+                str(row.get("origin") or ""))
     # Telegram keeps the message id when text is edited.  The immutable archive
     # treats each edit timestamp as a revision event while ordinary replay of the
     # original message still collapses to the empty revision.
@@ -159,7 +160,7 @@ def _line_key(row: dict) -> tuple:
             ensure_ascii=False, separators=(",", ":"),
         ).encode("utf-8")).hexdigest()[:20]
     return (kind, str(row.get("peer_id")), int(row.get("topic_id") or 0),
-            int(row.get("message_id") or 0), edited_at, payload)
+            int(row.get("message_id") or 0), edited_at, payload, str(row.get("origin") or ""))
 
 
 def _iter_lines(path: Path, max_records: int | None = None) -> Iterable[str]:
@@ -299,7 +300,8 @@ def observe_message(*, peer_id: str | int, topic_id: int | None,
                     sender_name: str, reply_to_message_id: int | None,
                     timestamp, text: str, topic_title: str = "",
                     media: str = "", outgoing: bool = False,
-                    edited_at=None, revision_order: int | None = None) -> bool:
+                    edited_at=None, revision_order: int | None = None,
+                    origin: str = "", life_source: dict | None = None) -> bool:
     """Append one exact admitted Telegram message, idempotently."""
 
     peer = _peer(peer_id)
@@ -324,6 +326,17 @@ def observe_message(*, peer_id: str | int, topic_id: int | None,
         "media": str(media or "")[:1000],
         "outgoing": bool(outgoing),
     }
+    if origin:
+        if origin not in ("live", "backfill"):
+            raise ValueError("unknown archive origin")
+        row["origin"] = origin
+    if life_source is not None:
+        row["life_source"] = dict(life_source)
+    elif origin == "live":
+        signature = epoch_life_signature(row)
+        if signature is not None:
+            sid, direction, line = signature
+            row["life_source"] = dict(source_id=sid, direction=direction, line=line)
     return _append(peer, row)
 
 
@@ -450,13 +463,13 @@ def observe_deletion(*, peer_id: str | int, message_id: int, timestamp,
                      topic_id: int | None = None, topic_title: str = "",
                      sender_id: int | None = None, sender_name: str = "",
                      reply_to_message_id: int | None = None,
-                     outgoing: bool = False) -> bool:
+                     outgoing: bool = False, origin: str = "") -> bool:
     """Append one terminal deletion tombstone without erasing the audit history."""
 
     peer = _peer(peer_id)
     message = _positive(message_id, optional=False)
     previous = latest_message(peer, message)
-    if previous and previous.get("kind") == "deletion":
+    if previous and previous.get("kind") == "deletion" and previous.get("origin", "") == origin:
         return False
     if previous:
         topic_id = previous.get("topic_id")
@@ -482,19 +495,24 @@ def observe_deletion(*, peer_id: str | int, message_id: int, timestamp,
         "original_known": bool(previous and previous.get("kind") == "message"),
         "outgoing": bool(outgoing),
     }
+    if origin:
+        row["origin"] = origin
+    if origin == "live":
+        sid, direction, line = epoch_life_signature(row)
+        row["life_source"] = dict(source_id=sid, direction=direction, line=line)
     return _append(peer, row)
 
 
 def append_deletion_retry(
     *, peer_id: str | int, message_id: int, timestamp, attempts: int = 3,
-    delay_sec: float = 0.02,
+    delay_sec: float = 0.02, origin: str = "",
 ) -> bool:
     """Retry a canonical deletion append after a transient filesystem failure."""
     last: Exception | None = None
     for attempt in range(max(1, int(attempts))):
         try:
             return observe_deletion(
-                peer_id=peer_id, message_id=message_id, timestamp=timestamp)
+                peer_id=peer_id, message_id=message_id, timestamp=timestamp, origin=origin)
         except Exception as exc:
             last = exc
             if attempt + 1 < max(1, int(attempts)):
@@ -1227,6 +1245,139 @@ def context_rows(peer_id: str | int, *, topic_id: int | None, limit: int = 80,
 # ни шире, ни уже. Ширина — прежний «широкий» потолок свежих строк; сообщения Telegram и так
 # не длиннее 4 096 знаков, а обрез длиннее названного помечается как всегда.
 EPOCH_TEXT_CHARS = FULL_TEXT_CHARS
+
+
+def archive_cursor(peer_id) -> dict:
+    """Freeze the end of complete archive evidence, without replaying old history.
+
+    Capture BEFORE the coherent life snapshot. An unfinished physical tail stays
+    after this cursor and is retried by archive_occurrences, never skipped.
+    """
+    with _LOCK:
+        try:
+            stream = archive_path(peer_id).open("rb")
+        except FileNotFoundError:
+            return {"offset": 0, "tail_sha256": hashlib.sha256(b"").hexdigest()}
+        with stream:
+            end = os.fstat(stream.fileno()).st_size
+            offset = end
+            while offset:
+                start = max(0, offset - 4096)
+                stream.seek(start)
+                block = stream.read(offset - start)
+                last = block.rfind(b"\n")
+                if last >= 0:
+                    offset = start + last + 1
+                    break
+                offset = start
+            stream.seek(max(0, offset - 4096))
+            return {"offset": offset,
+                    "tail_sha256": hashlib.sha256(stream.read(min(offset, 4096))).hexdigest()}
+
+
+def archive_occurrences(peer_id, *, cursor: dict | None = None) -> dict:
+    """Exact append-only byte occurrences, with no sliding physical window.
+
+    An incomplete final line is retried. Invalid complete lines are retained as
+    explicit gaps; a changed cursor is an operational error, not a fresh tail.
+    """
+    peer = _peer(peer_id)
+    cursor = cursor or {}
+    start = int(cursor.get("offset") or 0)
+
+    def digest(stream, offset):
+        stream.seek(max(0, offset - 4096))
+        return hashlib.sha256(stream.read(min(offset, 4096))).hexdigest()
+
+    with _LOCK:
+        try:
+            stream = archive_path(peer).open("rb")
+        except FileNotFoundError:
+            if start:
+                raise ValueError("epoch_archive_missing")
+            return {"cursor": {"offset": 0, "tail_sha256": hashlib.sha256(b"").hexdigest()},
+                    "occurrences": []}
+        with stream:
+            stop = os.fstat(stream.fileno()).st_size
+            if start < 0 or start > stop:
+                raise ValueError("epoch_archive_truncated")
+            if cursor.get("tail_sha256") is not None and digest(stream, start) != cursor["tail_sha256"]:
+                raise ValueError("epoch_archive_cursor_changed")
+            stream.seek(start)
+            occurrences, offset = [], start
+            while offset < stop:
+                raw = stream.readline(stop - offset)
+                if not raw.endswith(b"\n"):
+                    break
+                end = offset + len(raw)
+                occurrence = dict(offset=offset, end=end, sha256=hashlib.sha256(raw).hexdigest())
+                try:
+                    row = json.loads(raw.decode("utf-8"))
+                    if not isinstance(row, dict) or not _valid_record(row, peer):
+                        raise ValueError("invalid canonical record")
+                    occurrence["row"] = row
+                except (UnicodeError, ValueError, TypeError) as exc:
+                    occurrence.update(gap=type(exc).__name__, raw_hex=raw.hex())
+                occurrences.append(occurrence)
+                offset = end
+            return {"cursor": {"offset": offset, "tail_sha256": digest(stream, offset)},
+                    "occurrences": occurrences,
+                    "incomplete_tail_bytes": stop - offset}
+
+
+def epoch_life_signature(row: dict):
+    """Exact known-producer join (source revision, direction, life bytes).
+
+    Unsupported historical reply/media envelopes remain archive residuals; a
+    numeric Telegram id or absence in hot never proves coverage.
+    """
+    mid = int(row.get("message_id") or 0)
+    source = row.get("life_source")
+    if isinstance(source, dict) and set(source) == {"source_id", "direction", "line"}:
+        return str(source["source_id"]), str(source["direction"]), str(source["line"])
+    kind = row.get("kind")
+    if not mid or kind not in ("message", "deletion"):
+        return None
+    sender = str(row.get("sender_name") or "")
+    reply = row.get("reply_to_message_id")
+    text, media = str(row.get("text") or ""), str(row.get("media") or "")
+    mark = f", reply to #{reply}" if reply is not None else ""
+    if kind == "deletion":
+        line = f"Telegram [deleted #{mid}{mark}]: message removed"
+        if sender and sender != "unknown":
+            line += f" (former sender: {sender})"
+        return f"{mid}:delete", "in", line.strip()
+    if row.get("edited_at"):
+        payload = json.dumps({"media": media, "text": text}, ensure_ascii=False,
+                             sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        revision = str(row["edited_at"]) + ":" + hashlib.sha256(payload).hexdigest()[:20]
+        body = " ".join(part for part in (media, text) if part).strip() or "[empty message after edit]"
+        return f"{mid}:edit:{revision}", "in", f"{sender} [edited #{mid} at {revision}{mark}]: {body}".strip()
+    if row.get("outgoing") is True:
+        return (str(mid), "out", "Praxis: " + text) if sender == "Praxis" and not media else None
+    if not sender or reply is not None or media:
+        return None
+    return str(mid), "in", (sender + ": " + text).strip()
+
+
+def epoch_occurrence_row(occurrence: dict) -> dict:
+    """Render exact stored text once: no text cap, strip or NUL deletion."""
+    if "gap" in occurrence:
+        line = "[ARCHIVE GAP; exact bytes hex=" + occurrence["raw_hex"] + "]"
+        return dict(self=False, service=True, line=line, role_line=line)
+    row = occurrence["row"]
+    envelope = {k: v for k, v in row.items() if k not in ("text", "media")}
+    head = "[archive " + json.dumps(envelope, ensure_ascii=False, sort_keys=True,
+                                   separators=(",", ":")) + "]"
+    media, text = str(row.get("media") or ""), str(row.get("text") or "")
+    body = ("[message deleted in Telegram]" if row.get("kind") == "deletion"
+            else media + ("\n" if media and text else "") + text)
+    line = head + "\n" + body
+    own = row.get("kind") == "message" and row.get("outgoing") is True
+    return {"self": own, "line": line, "role_line": body if own else line,
+            "archive_occurrence": {key: occurrence[key] for key in ("offset", "sha256")},
+            "archive_residual": True}
+
 
 
 def epoch_rows(peer_id: str | int, *, since_message_id: int, topic_id: int | None,

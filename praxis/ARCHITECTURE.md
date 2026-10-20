@@ -148,6 +148,56 @@ MAP — перестраиваемая проекция. Cross-topic конте�
 живой Telethon client, ограничен профилем, дедуплицируется по message identity и не вызывает модель
 на каждое сообщение.
 
+### Эпоха группового разговора
+
+При включённом `PRAXIS_FRAME_EPOCH` для выбранной комнаты `frame_epoch.prepare_tape`
+сохраняет в существующем `memory/.state/epoch/<chat>.json` полный текущий непокрытый
+канон life и state-only residual, включая ghosts. Покрытие берётся из проверенного
+графа, не из отсутствия строки в hot и не из числового Telegram anchor. Старый
+нетипизированный raw archive остаётся доступным архивным свидетельством, а не
+объявляется покрытым или автоматически возвращается в текущую ленту.
+
+Новые archive producers явно различают `origin=live|backfill`; live несёт точный
+`life_source` (revision/direction/line), нормализованный тем же
+`memory_life.canonical_event_text`, что и life append (только входящее); backfill
+голос не получает. Bootstrap читает
+live receipts до и после курсора, поэтому archive→failed-life не теряется даже до
+первого снимка. Курсор фиксируется до coherent life snapshot; дальнейшие чтения —
+физический append без окна 50 000 и без отсечения low-ID edits/deletes. Непривязанный
+live residual остаётся в epoch JSON при смене coverage boundary, пока точное
+покрытие его не разрешит. У legacy-записей без origin историческую admission задним
+числом не угадываем; этот предел не равен восстановлению утраченного live input.
+
+Для выбранных epoch-комнат исходящий голос сохраняет каждую принятую Telegram
+реплику отдельным life event даже без native KEAT; архивный `life_source` тогда
+совпадает с реальным producer. Буфер остаётся агрегатом; KEAT capture по-прежнему
+требует native readiness. `logical_send` связывает только полный упорядоченный
+принятый префикс и склеивает его без добавленных разделителей при рендере ролей.
+Счёт hot — число Telegram-сообщений, как в native-пути; новых вызовов напоминаний
+нет. Вне выбранных эпох legacy aggregate persistence не меняется; исторические
+агрегаты не переписываются.
+Provenance принимает непустой conversation text с исходными пробелами, иначе
+разделённые Telegram-ответы оставались бы вечными unprovable ghosts. Проверки
+идентификаторов/метаданных и отказ для пустого текста не ослаблены.
+
+`GroupWake` удерживает detached tape, summary, boundary, cursor и frozen E. Правка
+или удаление контекста pending wake заменяет selection и соответствующий E вместе,
+не меняя authority и адрес исходного обращения. Сводка выбирается тем же чистым
+`memory_life.render_context_summary`, что и `agent.read_summary`: самый широкий
+recap и свежие блоки с прежними уведомлениями об опущенном/обрезанном и recall.
+Раннер передаёт effective room cap (включая dossier frame cap) в coherent snapshot;
+граф не перечитывается. Cap и hash выбранной сводки входят в identity поколения,
+поэтому новая policy не переиспользует чужой E, а delayed wake хранит прежние bytes.
+Warning-overhead прежнего renderer может немного превысить cap; вторичный legacy
+tail-slice здесь не применяется, выбранные блоки и notices едут целиком.
+Непокрытая лента при этом не сокращается. Все
+prepare/serve/flip сериализуются одним file lock; поздний wake не откатывает новое
+состояние комнаты. Selected epoch не режется `TAPE_CHARS` или `HISTORY_TURNS`, пробелы
+сохраняются до рендера. Превышение существующего `PRAXIS_FRAME_EPOCH_MAX_CHARS`
+(0 снимает предел) или неполные источники дают явный `EpochUnavailable` с сохранённым
+материалом, а не возврат к скользящему окну. Это источник/вместимость, не новый cap
+инструментального цикла и не дополнительный компактор.
+
 ## Durable run и side effects
 
 Каждый существенный модельный ход получает каталог
