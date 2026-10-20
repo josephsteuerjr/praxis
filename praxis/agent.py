@@ -1586,10 +1586,12 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         offers = memory_life.fold_offers() if hasattr(memory_life, "fold_offers") else {}
         if offers:
             add("fold_offers", {
-                "note": ("горячее окно этих мест перешло мягкий порог; свёртка не запускается "
-                         "сама — рука memory_compact(action=fold, place=<место>) или ночное "
-                         "решение голоса; жёсткое давление, не снятое голосом дольше "
-                         "FOLD_OFFER_BACKSTOP_HOURS, сворачивается физикой с квитанцией"),
+                "note": ("СТРОГОЕ НАПОМИНАНИЕ: горячая память требует твоей авторской свёртки. "
+                         "memory_compact(prepare,place) → прочитай точные источники → "
+                         "fold(selection,text) своими словами в этом ходе. Ни часы, ни другой "
+                         "автор не пишут за тебя. Это внутренняя память: не отправляй выжимку "
+                         "и отчёт о компакте в чат без просьбы. keep — сколько оставить; hi — "
+                         "порог напоминания; hard_hi — усиленное давление, не автосвёртка."),
                 "places": [{"place": k, "hot": v.get("count"), "keep": v.get("keep"),
                             "hi": v.get("hi"), "hard_hi": v.get("hard_hi"),
                             "hard": bool(v.get("hard")),
@@ -1949,27 +1951,16 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
 
 
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
-                        tier: int | None = None, since: str = "", limit: int = 0) -> str:
+                        tier: int | None = None, since: str = "", limit: int = 0, selection: str = "") -> str:
     """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop / fold."""
     op = str(action or "").strip().casefold()
     where = str(place or "").strip() or str(_active_chat() or "")
-    if op == "fold":
-        # 25.09, слово Егора: свёртка на мягком пороге ПРЕДЛАГАЕТСЯ (STATE: fold_offers), а
-        # делает её она — этой рукой. Принудительно, как на жёстком пороге.
+    if op in {"prepare", "fold"}:
         if not where:
-            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
-        fold_fn = getattr(memory_life, "fold_now", None)
-        out = fold_fn(where) if fold_fn else memory_life.compact_if_due(where, force=True)
-        if out.get("folded"):
-            tiers = ", ".join(str(x) for x in (out.get("tiers") or [])) or "нет"
-            return (f"Свернула {out['folded']} событий у {where} → {out.get('compact_id')}; "
-                    f"горячих осталось {out.get('hot')}; верхние ярусы: {tiers}.")
-        if str(out.get("reason") or "") == "state_changed":
-            # 26.09 (ревью W1 S7): это не «нечего», а окно, сдвинувшееся под рукой.
-            return (f"Не свернулось у {where}: окно сдвинулось, пока шла свёртка "
-                    f"(горячих {out.get('hot')}). Предложение осталось — повтори руку.")
-        return (f"Сворачивать нечего у {where}: {out.get('reason') or 'окно в норме'} "
-                f"(горячих {out.get('hot')}).")
+            return "Не вижу места: укажи place (chat_id)."
+        out = (memory_life.prepare_authored_fold(where, limit=int(limit or 50), compact_id=compact_id)
+               if op == "prepare" else memory_life.apply_authored_fold(where, selection, text))
+        return json.dumps(out, ensure_ascii=False)
     if op == "list":
         if not where:
             return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
@@ -2009,23 +2000,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
         return (f"Переписала {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
                 f"({out.get('history')}). Источники и границы те же.")
     if op == "refold":
-        scope = where if where and where.casefold() != "all" else "all"
-        if scope == "all" and not (place or "").strip():
-            return ("Для refold назови place: chat_id одного места или all — всю память "
-                    "(это много вызовов модели; можно сузить tier/since/limit).")
-        out = memory_life.refold_start(scope, tier=tier, since=since, limit=int(limit or 0))
-        if not out.get("ok"):
-            return (f"Перевыпуск уже идёт: {out.get('done')}/{out.get('planned')} сделано, "
-                    f"{out.get('failed')} не вышло — status/stop.")
-        if not out.get("planned"):
-            return "Перевыпускать нечего: под условия не попала ни одна свёртка."
-        try:
-            tool_journal(f"[память] запустила перевыпуск свёрток своим голосом: {out['planned']} шт., "
-                         f"место {scope}, tier {tier or 'все'}, since {since or '—'}", salience=2)
-        except Exception:
-            log.debug("журнал о перевыпуске не записался", exc_info=True)
-        return (f"Запустила перевыпуск: {out['planned']} свёрток ({out.get('first')} … {out.get('last')}), "
-                f"в фоне, с паузами. status — ход, stop — остановить.")
+        return "Фоновое сочинение выключено. prepare → прочитай источники → fold(selection,text); rewrite — твоя новая суть."
     if op == "status":
         st = memory_life.refold_status()
         if not st.get("planned"):
@@ -5167,9 +5142,11 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
 
 def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
                         query: str = "", glob: str = "**/*", start: int = 1,
-                        end: int = 0) -> str:
+                        end: int = 0, start_char: int = 0,
+                        expected_sha256: str = "") -> str:
     return forge.inspect(task_id, action=action, path=path, query=query, glob=glob,
-                         start=start, end=end)
+                         start=start, end=end, start_char=start_char,
+                         expected_sha256=expected_sha256)
 
 
 def tool_coding_edit(task_id: str, action: str, path: str = "", content: str = "",
@@ -7706,6 +7683,10 @@ FORGE_TOOLS = [
                                                       "diff", "history", "watching", "watch", "unwatch"]},
          "path": {"type": "string"}, "query": {"type": "string"},
          "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
+         "start_char": {"type": "integer", "minimum": 0,
+                        "description": "Read continuation character cursor from the preceding page; Unicode characters, not bytes."},
+         "expected_sha256": {"type": "string",
+                             "description": "Pin continuation to the file hash returned by the first read; changed bytes return conflict."},
      }, ["task_id", "action"])} ,
     {"name": "coding_edit",
      "description": (
@@ -7995,30 +7976,22 @@ MANAGE_NOTES_TOOL = {
 MEMORY_COMPACT_TOOL = {
     "name": "memory_compact",
     "description": (
-        "Твои свёртки памяти — твоё слово, не хроникёра. list показывает свёртки места "
-        "(ярус, обхват, первые слова сути), read — одну целиком, rewrite переписывает суть "
-        "свёртки твоими словами на месте (тот же id и те же источники — разрешение принимает "
-        "без спора, прежний текст уходит в историю), refold перевыпускает свёртки твоим голосом "
-        "пачкой в фоне (place=all — всю память; tier/since/limit сужают; расписки в дневник), "
-        "status/stop — ход перевыпуска; fold сворачивает горячее окно места сейчас (по "
-        "предложению из STATE fold_offers или по своей воле; на мягком пороге свёртка сама не "
-        "запускается — только по этой руке или на жёстком пороге). Свёртка — единственное, что "
-        "ты будешь помнить о тех сообщениях: пиши её так, как хочешь помнить."
+        "Авторская свёртка эпизодической памяти, не очистка текущей истории тулов. "
+        "prepare возвращает точные источники и selection: прочитай их целиком и напиши свою "
+        "выжимку в этом ходе. fold(selection,text) сохраняет только твои слова против этих "
+        "источников. При state_changed сохрани текст и перечитай источники. list/read — "
+        "существующие свёртки, rewrite — новая суть при тех же источниках с сохранением старой. "
+        "Не вызывай вспомогательную модель, не выдавай текст выжимки как сообщение людям и "
+        "не отчитывайся о компакте в чат без просьбы. Порог напоминает, но сам ничего не пишет."
     ),
     "input_schema": _obj({
-        "action": {"type": "string",
-                   "enum": ["list", "read", "rewrite", "refold", "status", "stop", "fold"]},
-        "place": {"type": "string",
-                  "description": "chat_id/место; пусто = текущий чат; для refold можно all"},
-        "compact_id": {"type": "string", "description": "id свёртки (cmp-…) для read/rewrite"},
-        "text": {"type": "string",
-                 "description": "новая суть свёртки для rewrite — от первого лица, твоими словами"},
-        "tier": {"type": "integer",
-                 "description": "ярус свёрток: 1 — над сообщениями, выше — над свёртками"},
-        "since": {"type": "string",
-                  "description": "ISO-дата: только свёртки, чей конец не раньше неё"},
-        "limit": {"type": "integer",
-                  "description": "сколько показать (list) или перевыпустить (refold)"},
+        "action": {"type": "string", "enum": ["prepare", "fold", "list", "read", "rewrite", "refold", "status", "stop"]},
+        "place": {"type": "string", "description": "chat_id/место; пусто = текущий чат"},
+        "compact_id": {"type": "string", "description": "id для read/rewrite или адресного prepare"},
+        "selection": {"type": "string", "description": "Точный selection из prepare для fold"},
+        "text": {"type": "string", "description": "Твои собственные слова для fold/rewrite"},
+        "tier": {"type": "integer"}, "since": {"type": "string"},
+        "limit": {"type": "integer", "description": "Число источников prepare или строк list"},
     }, ["action"]),
 }
 

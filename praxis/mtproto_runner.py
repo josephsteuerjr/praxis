@@ -5624,17 +5624,10 @@ async def _in_refresh_executor(fn, *args):
 
 
 async def _maybe_pay_refresh_debt(place: str) -> None:
-    """Погасить одну группу долга обновления. Не чаще раза в `PRAXIS_REFRESH_COOLDOWN_SEC`.
+    """Expose refresh debt to the acting author, at the existing cooldown.
 
-    Протокол погашения (`refresh_debt` / `refresh_compacts`) написан целиком и покрыт
-    тестами, но в проде его не звал НИКТО: замер 21.09 нашёл `refresh_debt` только в
-    `test_coverage_vs_current.py`. Свёртка, чьё сообщение потом правили, годна как
-    покрытие и не годна для показа, поэтому фронтир комнаты Ouroboros стоял с 08.09, а
-    долг копился месяцами. Плательщик обязан быть внутри жизни, а не в руках того, кто
-    однажды вспомнит про ручной дренаж.
-
-    Одна группа за проход и потолок по времени — чтобы это никогда не превращалось в
-    вызов модели в минуту: именно так выглядели все три мельницы этой ночи.
+    The runner offers work; only memory_compact prepare/fold with the author's
+    own text may replace stale coverage. No background model writes a recap.
     """
     if _REFRESH_COOLDOWN_SEC <= 0:
         return
@@ -5650,15 +5643,10 @@ async def _maybe_pay_refresh_debt(place: str) -> None:
     groups = int(debt.get("unresolved_group_count") or 0)
     if not groups:
         return
-    log.info("refresh [%s]: групп с долгом %d, гашу одну", place, groups)
-    try:
-        out = await _in_refresh_executor(memory_life.refresh_compacts, place)
-    except Exception:
-        log.warning("refresh [%s]: погашение упало", place, exc_info=True)
-        return
-    log.info("refresh [%s]: %s, целей %s/%s, групп осталось %s", place,
-             out.get("reason"), out.get("refreshed_count"), out.get("target_count"),
-             out.get("room_unresolved_group_count"))
+    # Refresh requires the acting author's source selection and own recap.
+    # Keep this work visible in the existing offer, never spawn a helper writer.
+    await _in_refresh_executor(lambda: memory_life.compact_if_due(place, force=True))
+    log.info("refresh [%s]: %d groups await authored prepare/fold", place, groups)
 
 
 async def _maybe_compact(chat_id: str) -> None:

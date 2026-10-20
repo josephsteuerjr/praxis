@@ -184,85 +184,11 @@ FOLD_RESOLVE_SYS = (
 
 
 def resolve_fold_offers(offers: dict | None = None) -> dict:
-    """Ночь, шаг 1: один голосовой ход по всем открытым офферам.
-
-    -> {"accepted": n, "rejected": n, "failed": n, "decisions": [...]}. Принятое —
-    та же транзакция `fold_now` (voice-роль внутри `compact_if_due`); отклонённое
-    голосом — reject_fold; НЕ отклоняем без голоса: если voice не настроен или
-    ход упал, офферы остаются открытыми до следующей ночи (failed-счётчик,
-    причина в решении). «Утро без зависших offers» держит голос, не враньё.
-    """
-    ml = _memory_life()
-    offers = dict(offers if offers is not None else open_offers())
-    if not offers:
-        return {"accepted": 0, "rejected": 0, "failed": 0, "decisions": []}
-    if not _llm().configured("voice"):
-        return {"accepted": 0, "rejected": 0, "failed": len(offers), "decisions": [],
-                "reason": "voice не настроен — предложения свёртки оставлены открытыми"}
-    decisions: list[dict] = []
-    user_lines = []
-    for place, off in sorted(offers.items()):
-        if not isinstance(off, dict):
-            continue
-        user_lines.append(
-            f"- place {place}: горячих {off.get('count')}, токенов {off.get('tokens')}, "
-            f"предлагаю свернуть первые {off.get('fold')} (мягкий порог {off.get('hi')}, "
-            f"жёсткий {off.get('hard_hi')}, предложение с {off.get('since')})")
-    try:
-        resp = _llm().chat("voice", system=FOLD_RESOLVE_SYS,
-                           messages=[{"role": "user", "content": "\n".join(user_lines)[:40000]}],
-                           max_tokens=1200, reasoning_effort="low")
-        data = _json_obj(resp.text)
-        for d in (data.get("decisions") or [])[:64]:
-            if isinstance(d, dict) and d.get("place"):
-                decisions.append({"place": str(d["place"]),
-                                  "accept": bool(d.get("accept")),
-                                  "reason": str(d.get("reason") or "")[:120]})
-    except Exception:
-        log.warning("night: голосовой ход по офферам упал — предложения остаются открытыми",
-                    exc_info=True)
-        return {"accepted": 0, "rejected": 0, "failed": len(offers), "decisions": [],
-                "reason": "голосовой ход по офферам упал — оставлены открытыми до следующей ночи"}
-    accepted = rejected = failed = 0
-    by_place = {d["place"]: d for d in decisions}
-    for place in sorted(offers):
-        d = by_place.get(place)
-        if d is None:
-            # голос промолчал про место — НЕ отклоняем (окно могло ещё жить):
-            # предложение остаётся открытым, вернётся следующей ночью
-            failed += 1
-            decisions.append({"place": place, "accept": False,
-                              "reason": "голос не ответил — предложение остаётся открытым"})
-            continue
-        if d["accept"]:
-            try:
-                out = ml.fold_now(place)
-                if out.get("folded"):
-                    accepted += 1
-                    continue
-                # не свернулось (state_changed/окно сдвинулось) — честный failed,
-                # не «отклонено»: предложение остаётся у memory_life
-                failed += 1
-                decisions[decisions.index(d)] = dict(
-                    d, reason=f"fold_now не свернул: {out.get('reason') or 'без причины'}")
-                continue
-            except Exception:
-                log.warning("night: fold_now(%s) упал", place, exc_info=True)
-                failed += 1
-                decisions[decisions.index(d)] = dict(
-                    d, reason="fold_now упал — предложение остаётся открытым")
-                continue
-        else:
-            try:
-                ml.reject_fold(place, d.get("reason") or "отклонено голосом ночью")
-            except AttributeError:
-                log.warning("night: reject_fold отсутствует в memory_life — "
-                            "предложение %s остаётся открытым", place)
-                failed += 1
-                continue
-        rejected += 1
-    return {"accepted": accepted, "rejected": rejected, "failed": failed,
-            "decisions": decisions}
+    """Keep memory work for the acting author; the night clock writes no recap."""
+    pending = dict(offers if offers is not None else open_offers())
+    return {"accepted": 0, "rejected": 0, "failed": 0, "decisions": [],
+            "pending": len(pending), "author_required": bool(pending),
+            "reason": "acting_author_required" if pending else "no_offers"}
 
 
 # --------------------------------------------------------------------------- #

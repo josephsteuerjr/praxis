@@ -424,24 +424,18 @@ EN: dict[str, dict] = {
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
     "memory_compact": {
-        "d": ("Your memory compacts are your own words, not a chronicler's. list shows a "
-              "place's compacts (tier, span, first words of the recap), read shows one in "
-              "full, rewrite replaces a compact's recap with your words in place (same id "
-              "and sources — provenance accepts it as is, the old text goes to history), "
-              "refold re-issues compacts in your voice in batches in the background "
-              "(place=all — the whole memory; tier/since/limit narrow it; receipts to the "
-              "journal), status/stop — the refold job; fold compacts a place's hot window now "
-              "(on an offer from STATE fold_offers or of your own will; at the soft threshold "
-              "compaction no longer starts by itself — only by this hand or at the hard "
-              "threshold). A compact is all you will remember of those messages: write it "
-              "the way you want to remember."),
-        "p": {"action": "list | read | rewrite | refold | status | stop | fold",
-              "place": "chat_id/place; empty = current chat; refold accepts all",
-              "compact_id": "compact id (cmp-…) for read/rewrite",
-              "text": "the new recap for rewrite — first person, your words",
-              "tier": "compact tier: 1 over messages, higher over compacts",
-              "since": "ISO date: only compacts ending no earlier than it",
-              "limit": "how many to show (list) or re-issue (refold)"},
+        "d": ("Acting-author episodic memory, not current tool-history clearing. prepare returns exact "
+              "sources and selection; read every source and write your own recap in this turn. "
+              "fold(selection,text) saves your words against those sources. On state_changed retain "
+              "your text and reread. list/read inspect existing compacts; rewrite preserves their "
+              "sources and prior text. No helper model writes for you. Thresholds remind, never "
+              "auto-fold. Do not send the recap or a compaction report to chat unless asked."),
+        "p": {"action": "prepare | fold | list | read | rewrite | refold | status | stop",
+              "place": "chat_id/place; empty = current chat",
+              "compact_id": "compact id for read/rewrite or targeted prepare",
+              "selection": "exact selection returned by prepare, required for fold",
+              "text": "your own recap for fold/rewrite", "tier": "compact tier",
+              "since": "ISO date for list", "limit": "sources for prepare or rows for list"},
     },
     "manage_loop": {
         "d": ("Voluntary marks of attention: a thread exists because you decided to come "
@@ -738,7 +732,9 @@ EN: dict[str, dict] = {
               "query": "symbol, text, or repository address for watch",
               "glob": "file mask to narrow the search",
               "start": "first line, 1-based",
-              "end": "last line"},
+              "end": "last line",
+              "start_char": "Unicode character offset within start line; use next_char from the preceding page",
+              "expected_sha256": "file hash from the preceding page; changed bytes return a conflict"},
     },
     "host_ctl": {"p": {"verb": "systemctl | docker | pkg | file | net | reboot | confirm",
                        "action": "what to do with the chosen verb",
