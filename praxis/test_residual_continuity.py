@@ -40,6 +40,22 @@ class ResidualAcceptance(Base):
             selected = ml.prepare_authored_fold(ROOM, limit=1)
             self.assertEqual(selected['sources'][0]['line'], 'Николай: canonical')
 
+    def test_fold_preserves_changed_residual_sharing_selected_event_id(self):
+        for i in range(1, 4):
+            self._msg(i, f'canonical {i}')
+        state = ml._load_state(ROOM)
+        state['hot'].append(dict(state['hot'][0], line='SAME ID DIFFERENT BYTES \u00a0'))
+        ml._save_state(state)
+        selected = ml.prepare_authored_fold(ROOM, limit=1)
+        applied = ml.apply_authored_fold(ROOM, selected['selection'], 'First source recap.')
+        self.assertTrue(applied['ok'], applied)
+        for _ in range(2):
+            state = ml.rebuild_state(ROOM)
+            self.assertEqual([r['line'] for r in state['hot'] if r.get('state_residual')],
+                             ['SAME ID DIFFERENT BYTES \u00a0'])
+        snapshot = ml.epoch_snapshot(ROOM)
+        self.assertIn('SAME ID DIFFERENT BYTES \u00a0', [r['line'] for r in snapshot['hot']])
+
     def test_exact_covered_row_is_not_retained_as_residual(self):
         for i in range(1, 4):
             self._msg(i, f'canonical {i}')

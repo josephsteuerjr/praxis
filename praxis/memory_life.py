@@ -3584,7 +3584,8 @@ def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
                     "surface": "episodic_memory_not_current_tool_history"}
         state["hot" if payload["kind"] == "hot" else "frontier"] = [
             row for row in state["hot" if payload["kind"] == "hot" else "frontier"]
-            if str(row.get("id")) not in set(ids)]
+            if str(row.get("id")) not in set(ids)
+            or (payload["kind"] == "hot" and row.get("state_residual"))]
         state["frontier"].append(meta)
         append_event("memory_compact", chat_id=chat, text=f"Author → {meta['id']}",
                      source="acting_agent", refs=ids,
