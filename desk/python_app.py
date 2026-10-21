@@ -376,8 +376,11 @@ def main(argv=None):
             app.stopping.wait()
         else:
             import webview
+            webview.settings['DRAG_REGION_SELECTOR'] = '#chrome, .chrome-drag, .rail-sign'
+            webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
             app.window = webview.create_window("Hélène", app.origin, **window_geometry(webview.screens[0]),
-                                               frameless=True, background_color="#1d1914")
+                                               frameless=True, easy_drag=False, text_select=True,
+                                               background_color="#1d1914")
             bind_window_state(app)
             if args.migration:
                 def migration_loaded():
