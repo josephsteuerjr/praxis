@@ -89,7 +89,7 @@ def assemble(stage, output, relay, relay_source, *, version, toolchain=None, run
         for entry in ('..\\app','..\\app\\localharness'):
             if entry not in text.splitlines():text+='\n'+entry+'\n'
         pth.write_text(text,encoding='utf-8')
-    for name in ('python_app.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
+    for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
     for name in ('deskd','localharness'):
         shutil.copytree(DESK/name,app/name,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if (DESK/'server').is_dir():

@@ -194,7 +194,7 @@ class DeliveryTests(unittest.TestCase):
             put(stage,'runtime/psutil/__init__.py');put(stage,'runtime/socks.py')
             put(stage,'runtime/Lib/site-packages/vendor/data/needed')
             put(stage,'runtime/Lib/site-packages/piper/module.py')
-            for name in ('python_app.py','python_migrate.py','deskapp.py','deskd/__init__.py','localharness/__init__.py','app/dist/index.html','resources/entry','shell/icons/icon.ico'):put(desk,name)
+            for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py','deskd/__init__.py','localharness/__init__.py','app/dist/index.html','resources/entry','shell/icons/icon.ico'):put(desk,name)
             binary=put(root,'helene-relay.exe');put(source,'Cargo.toml');put(source,'src/main.rs');put(source,'target/disposable');put(source,'.git/config')
             output=root/'application'
             put(root,'LICENSE');put(desk,'installer/ЛИЦЕНЗИЯ.md');put(desk,'installer/THIRD-PARTY.md');put(desk,'installer/PYTHON-START-HERE.md')

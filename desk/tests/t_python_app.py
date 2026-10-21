@@ -29,6 +29,24 @@ class Host:
 
 
 class PythonApplicationTests(unittest.TestCase):
+    def test_close_hides_but_exit_and_relaunch_destroy(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as temporary:
+            app = python_app.Application(Path(temporary), Path(temporary))
+            try:
+                app.window = Mock()
+                app.tray = object()
+                app.invoke('python_window', {'action': 'close'})
+                app.window.hide.assert_called_once()
+                app.window.destroy.assert_not_called()
+                self.assertFalse(app.stopping.is_set())
+                app.invoke('python_window', {'action': 'exit'})
+                app.window.destroy.assert_called_once()
+                self.assertTrue(app.exiting)
+                self.assertIn("win('exit')", app.bridge())
+            finally:
+                app.server.server_close()
+
     def test_migration_proof_checks_base_not_selected_remote_agent(self):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch

@@ -29,6 +29,8 @@ class Application:
         self.window = None
         self.window_maximized = False
         self.relaunch = False
+        self.tray = None
+        self.exiting = False
         self.token = secrets.token_urlsafe(32)
         self.events: list[dict] = []
         self.stopping = threading.Event()
@@ -120,7 +122,10 @@ class Application:
                         self.window.restore()
                     else:
                         self.window.maximize()
-                elif action == "close":
+                elif action == "close" and self.tray is not None and not self.exiting:
+                    self.window.hide()
+                elif action in ("close", "exit"):
+                    self.exiting = True
                     self.window.destroy()
             return None
         if self.host is None:
@@ -164,7 +169,7 @@ window.__HELENE__ = {shell:'python', platform:%s,
  if(r.ok) for(const e of await r.json()) {
   if(e.name==='replace-window') location.replace('/');
   else if(e.name==='retire-window') location.replace('/__python__/retired?id='+encodeURIComponent(e.data.id));
-  else if(e.name==='exit') window.__HELENE__.win('close');
+  else if(e.name==='exit') window.__HELENE__.win('exit');
   else window.dispatchEvent(new CustomEvent('helene:'+e.name,{detail:e.data}));
  }
 } catch(e){console.error(e)} setTimeout(events,500)})();
@@ -308,6 +313,8 @@ def bind_window_state(app):
             def set_bounds():
                 native.MaximizedBounds = Screen.FromHandle(native.Handle).WorkingArea
             native.Invoke(Action(set_bounds))
+            from python_tray import install
+            install(app)
 
     def maximized():
         app.window_maximized = True
