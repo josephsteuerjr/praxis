@@ -814,10 +814,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   let feedReady = false;
 
   async function readArchive(peer: string): Promise<Msg[]> {
-    const m = peer.match(/^(.+)__topic__(\d+)$/);
-    if (!m) return api<Msg[]>("/api/chat/" + encodeURIComponent(peer) + "?n=120");
-    const rows = await api<Msg[]>("/api/chat/" + encodeURIComponent(m[1]) + "?n=400");
-    return rows.filter((r) => String(r.topic_id ?? "") === m[2]).slice(-120);
+    return api<Msg[]>("/api/chat/" + encodeURIComponent(peer) + "?n=120");
   }
 
   async function renderRoom(guard: () => boolean = () => tab === "chats" && !!room) {
@@ -1015,7 +1012,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     status?: string;
     priority?: string;
     goal?: string;
-    agents?: Array<{ id: string; role?: string; status?: string; error?: string; result_head?: string }>;
+    agents?: Array<{ id: string; role?: string; status?: string; parent_unit_id?: string;
+      custody?: "result" | "unknown" | "unresolved_stop"; ancestry_unknown?: boolean }>;
   }
 
   async function renderSystem(guard: () => boolean = () => tab === "system") {
@@ -1126,7 +1124,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       scoped<{ board?: string }>("/api/board", "board"),
     ]);
     if (!guard()) return;
-    if (!agenda && !forge && !board && (closed.has("agenda") || closed.has("board"))) {
+    if (!agenda && !forge && !board && (closed.has("agenda") || closed.has("forge") || closed.has("board"))) {
       screen.innerHTML = `<div class="screen-title">Задачи</div>` + notGiven("Задачи");
       return;
     }
@@ -1147,14 +1145,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       ? `<div class="screen-title">Субагенты <span class="n">${forge.length}</span></div>` +
         (forge
           .map((t) => {
-            const live = t.status === "active" || (t.agents || []).some((a) => a.status === "running");
             const units = (t.agents || [])
-              .map((a) => `<div class="task-unit"><span class="mono">${esc(a.id)}</span> <span class="badge">${esc(a.role || "?")}</span> <b class="${a.status === "error" || a.status === "failed" ? "err" : ""}">${esc(a.status || "")}</b>${a.error ? `<div class="err">${esc(a.error.slice(0, 120))}</div>` : ""}${a.result_head ? `<div class="muted">${esc(a.result_head.slice(0, 160))}</div>` : ""}</div>`)
+              .map((a) => `<div class="task-unit">
+                <span class="mono">${esc(a.id)}</span> <span class="badge">${esc(a.role || "исполнитель")}</span>
+                <b class="${a.status === "error" || a.status === "failed" || a.status === "unknown" ? "err" : ""}">${esc(a.status === "unknown" ? "живость не подтверждена" : a.status || "неизвестно")}</b>
+                ${a.custody === "unresolved_stop" ? '<div class="err">остановка не подтверждена</div>' : ""}
+                ${a.parent_unit_id ? `<div class="muted">родитель ${esc(a.parent_unit_id)}</div>` : ""}
+                ${a.ancestry_unknown ? '<div class="err">связь с родителем не подтверждена</div>' : ""}
+              </div>`)
               .join("");
-            return `<details class="fold"><summary><span class="dot ${live ? "live" : ""}"></span> <b>${esc(t.id)}</b> · ${esc(t.status || "")} · ${(t.agents || []).length} — ${esc((t.goal || "").slice(0, 80))}</summary><div class="fold-body">${units || '<span class="muted">юнитов нет</span>'}</div></details>`;
+            return `<details class="fold"><summary><span class="dot"></span> <b>${esc(t.id)}</b> · ${esc(t.status === "done" ? "завершено" : t.status || "неизвестно")} · исполнителей: ${(t.agents || []).length} · по записи, живость не подтверждена</summary><div class="fold-body">${units || '<span class="muted">юнитов нет</span>'}</div></details>`;
           })
           .join("") || '<div class="empty">Субагентов сейчас нет.</div>')
-      : "";
+      : `<div class="screen-title">Субагенты</div>${closed.has("forge") ? notGiven("Субагенты") : '<div class="empty">не прочиталось</div>'}`;
     const boardHTML = board ? `<div class="screen-title">Доска</div><div class="card md">${md(board.board || "Доска пуста.")}</div>` : "";
     screen.innerHTML = agendaHTML + forgeHTML + boardHTML;
   }

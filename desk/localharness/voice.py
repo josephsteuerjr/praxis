@@ -84,35 +84,10 @@ CATALOG: dict[str, dict] = {
 }
 DEFAULT_MODEL = "turbo"
 
-#: Голоса синтеза — те же правила, что у моделей слуха: библиотека едет в
-#: рантайме, голос качает владелец. Числа — живая проба 11.09 на машине
-#: владельца: первая фраза 3,1 с (загрузка голоса с диска), следующие 0,24 с на
-#: 3,7 с речи, то есть примерно в пятнадцать раз быстрее реального времени.
-#:
-#: ⚠ Почему piper, а не Edge и не Silero. Edge — это голос МИКРОСОФТА по сети:
-#: текст ответа агента уходил бы наружу на каждую фразу, а продукт обещает
-#: обратное. Silero тянет torch (около двух гигабайт) ради того же результата.
-#: Piper — 34 МБ библиотеки поверх уже привезённого onnxruntime и 60 МБ голоса,
-#: целиком на этой машине и без сети.
-VOICES: dict[str, dict] = {
-    "irina": {
-        "voice": "ru_RU-irina-medium",
-        "path": "ru/ru_RU/irina/medium",
-        "title": "Ирина — женский",
-        "size_mb": 61,
-        "note": "Ровный женский голос, 22 кГц. 3,7 секунды речи синтезирует за "
-                "четверть секунды (машина владельца).",
-    },
-    "dmitri": {
-        "voice": "ru_RU-dmitri-medium",
-        "path": "ru/ru_RU/dmitri/medium",
-        "title": "Дмитрий — мужской",
-        "size_mb": 61,
-        "note": "Мужской голос того же качества и веса.",
-    },
-}
-DEFAULT_VOICE = "irina"
-VOICES_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/"
+# XTTS voices are model speakers or owner-supplied references, never Piper aliases.
+VOICES = {"xtts": {"voice":"xtts", "title":"XTTS — локальный голос", "size_mb":0,
+                   "note":"Отдельный локальный runtime и модель; без сетевого fallback."}}
+DEFAULT_VOICE = "xtts"
 
 
 def _utc() -> str:
@@ -153,7 +128,16 @@ def models_dir(tree: Path) -> Path:
 
 def manifest(tree: Path) -> dict:
     """Что скачано на самом деле. Пусто — не скачано ничего."""
-    return _read(models_dir(tree) / INSTALLED)
+    value=_read(models_dir(tree) / INSTALLED)
+    recorded=Path(str(value.get('path') or ''))
+    repo=value.get('repo')
+    # download_model records an absolute cache path. A preserved/copied tree has
+    # the same pinned snapshot under its own model store, not the old install.
+    if isinstance(repo,str) and len(recorded.parts)>=3 and recorded.parts[-3:-1]==('models--'+repo.replace('/','--'),'snapshots'):
+        candidate=models_dir(tree).joinpath(*recorded.parts[-3:])
+        if (candidate/'model.bin').is_file() and candidate.resolve().is_relative_to(models_dir(tree).resolve()):
+            value=dict(value,path=str(candidate.resolve()))
+    return value
 
 
 # --- движок голоса (1.2.1) ----------------------------------------------------
@@ -244,7 +228,12 @@ def ensure_engine_path(root: Path | None = None) -> bool:
 
 def pack_record(root: Path | None = None) -> dict:
     """Что паспорт этой установки говорит об архиве движка. Пусто — движок в рантайме."""
-    passport = _read(Path(root or install_root()) / "helene-build.json")
+    root=Path(root or install_root())
+    application=_read(root/'python-app.json')
+    if 'whisper' in (application.get('extensions') or {}):
+        return {'format':'helene-component-zip.v1','name':'Helene-components-whisper.zip',
+                'version':str(application['version'])}
+    passport = _read(root / "helene-build.json")
     if passport.get('voice_runtime') is True:
         return {}
     rec = passport.get("voice_pack")
@@ -257,6 +246,8 @@ def _windows_pack_supported() -> bool:
 
 def _engine_missing(what: str, fallback: str) -> dict:
     rec = pack_record()
+    if rec.get('format')=='helene-component-zip.v1':
+        return {'present':False,'downloadable':True,'why':'Whisper — отдельное загружаемое расширение'}
     if rec.get("name", "").endswith("-windows.tar.zst") and not _windows_pack_supported():
         return {"present": False, "downloadable": False,
                 "why": f"в серверном рантайме нет {what}; Windows-движок сюда не подходит — обнови зависимости серверной поставки"}
@@ -298,7 +289,7 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
     rec = pack_record(root)
     if rec.get("name", "").endswith("-windows.tar.zst") and not _windows_pack_supported():
         raise SystemExit("Windows-движок голоса не подходит этой системе; нужны зависимости серверной поставки")
-    if not rec.get("name") or not rec.get("sha256"):
+    if not rec.get("name") or (not rec.get("sha256") and rec.get('format')!='helene-component-zip.v1'):
         raise SystemExit("в этой сборке движок голоса едет в рантайме — качать нечего")
     home = engine_home(root)
     home.mkdir(parents=True, exist_ok=True)
@@ -311,22 +302,27 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
     installed_new = False
     committed = False
     try:
-        with urllib.request.urlopen(url, timeout=300) as src, part.open("wb") as sink:
-            while True:
-                chunk = src.read(1 << 20)
-                if not chunk:
-                    break
-                sink.write(chunk)
-                digest.update(chunk)
-                got += len(chunk)
-                if on_bytes:
-                    on_bytes(got, total)
-        if digest.hexdigest() != str(rec["sha256"]).lower():
-            raise SystemExit("архив движка голоса не сошёлся по сумме с паспортом — скачанное удалено")
-        with tarfile.open(part, mode="r:zst") as tar:
-            tar.extractall(fresh, filter="data")
-        meta = _read(fresh / "voice-pack.json")
-        if not (fresh / "site-packages").is_dir():
+        content=fresh
+        if rec.get('format')=='helene-component-zip.v1':
+            if __package__:from . import python_updates
+            else:import python_updates
+            rec['sha256']=python_updates.asset_sha(url)
+            downloaded=python_updates._download(url,part,rec['sha256'],
+                (lambda value:on_bytes(value['bytes'],value.get('total_bytes') or 0)) if on_bytes else None)
+            got=downloaded['bytes'];python_updates._extract(part,fresh,prefix='Helene/voice/')
+            content=fresh/'Helene/voice'
+        else:
+            with urllib.request.urlopen(url, timeout=300) as src, part.open("wb") as sink:
+                while True:
+                    chunk = src.read(1 << 20)
+                    if not chunk:break
+                    sink.write(chunk);digest.update(chunk);got += len(chunk)
+                    if on_bytes:on_bytes(got,total)
+            if digest.hexdigest() != str(rec["sha256"]).lower():
+                raise SystemExit("архив движка голоса не сошёлся по сумме с паспортом — скачанное удалено")
+            with tarfile.open(part, mode="r:zst") as tar:tar.extractall(fresh,filter="data")
+        meta = _read(content / "voice-pack.json")
+        if not (content / "site-packages").is_dir():
             raise SystemExit("в архиве движка нет site-packages")
         if meta.get("python") and not _same_python(str(meta["python"])):
             raise SystemExit(f"движок собран под питон {meta['python']}, а здесь "
@@ -334,7 +330,7 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
         site_dir = engine_site(root)
         if site_dir.exists():
             os.replace(site_dir, old)
-        os.replace(fresh / "site-packages", site_dir)
+        os.replace(content / "site-packages", site_dir)
         installed_new = True
         result = {"schema": SCHEMA, "source": "download", "version": rec.get("version", ""),
                   "python": str(meta.get("python") or rec.get("python") or ""),
@@ -389,67 +385,100 @@ def dir_size(path: Path) -> int:
 
 
 def chosen_voice(cfg: dict) -> str:
-    name = str(block(cfg).get("voice") or "").strip().lower()
-    return name if name in VOICES else DEFAULT_VOICE
+    return "xtts"
 
 
 def voices_dir(tree: Path) -> Path:
-    """Куда кладутся голоса синтеза. Рядом с моделями слуха, но отдельно: это
-    разные вещи, и «удалить голос» не должно задевать слух."""
-    return Path(tree) / "models" / "piper"
+    return Path(tree) / "models" / "xtts"
 
 
 def speech_library() -> dict:
-    """Есть ли чем говорить. Импорта нет: он тянет onnxruntime на полсекунды."""
-    import importlib.util  # noqa: PLC0415 — нужен только здесь
+    if __package__:
+        from .xtts_install import runtime_for
+    else:
+        from xtts_install import runtime_for
+    python = Path(os.environ.get("HELENE_XTTS_PYTHON") or runtime_for(install_root()) / ("python.exe" if os.name == "nt" else "bin/python3"))
+    metadata=_read(install_root()/'components/xtts/xtts-bundle.json').get('runtime') or {}
+    cuda=(bool(metadata['cuda_build']) if 'cuda_build' in metadata else None) if not os.environ.get('HELENE_XTTS_PYTHON') else None
+    return {"present": python.is_file(), "python":str(python),
+            "why":"" if python.is_file() else "XTTS runtime не установлен", "downloadable":True,'cuda_supported':cuda}
 
-    ensure_engine_path()
-    if importlib.util.find_spec("piper") is not None:
-        return {"present": True, "why": ""}
-    return _engine_missing("piper-tts", "поставка собрана без голоса наружу")
+
+def worker_live(home: Path, ready: dict):
+    """A retained ready file is metadata, not proof that its old PID still owns IPC."""
+    if not ready.get('ready') or type(ready.get('pid')) is not int or ready['pid']<=0:return False
+    try:
+        import psutil
+    except ImportError:return None
+    try:
+        args=psutil.Process(ready['pid']).cmdline()
+        selected=next((args[i+1] for i,arg in enumerate(args[:-1]) if arg=='--home'),None)
+        if selected is None:selected=next((arg.split('=',1)[1] for arg in args if arg.startswith('--home=')),None)
+        return any(Path(arg).name=='xtts_tts_worker.py' for arg in args) and selected is not None and Path(selected).resolve()==home.resolve()
+    except psutil.NoSuchProcess:return False
+    except (psutil.AccessDenied,OSError,ValueError):return None
 
 
 def speech_state(tree: Path, cfg: dict) -> dict:
-    """Правда о голосе агента НАРУЖУ: чем говорить, каким голосом, что мешает.
-
-    Отдельно от слуха намеренно: слышать и говорить — разные умения, и владелец
-    вправе включить одно без другого (например, слышать голосовые, но отвечать
-    текстом). Общий выключатель `voice.enabled` — про слух; здесь свой.
-    """
     tree = Path(tree)
-    want = chosen_voice(cfg)
     lib = speech_library()
-    spec = VOICES[want]
-    model = voices_dir(tree) / f"{spec['voice']}.onnx"
-    config = voices_dir(tree) / f"{spec['voice']}.onnx.json"
-    # Голос — это ДВА файла, и один без другого piper не поднимет. Проверяем оба:
-    # «скачано наполовину» и «скачано» выглядели бы одинаково.
-    ready_voice = model.is_file() and config.is_file() and model.stat().st_size > 1_000_000
+    model = voices_dir(tree)
+    ready_model = all((model / name).is_file() for name in ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth"))
     enabled = bool(block(cfg).get("speak"))
-    out = {
-        "enabled": enabled,
-        "voice": want,
-        "catalog": [dict(one, id=key,
-                         installed=(voices_dir(tree) / f"{one['voice']}.onnx").is_file())
-                    for key, one in VOICES.items()],
-        "library": lib,
-        "model": str(model) if ready_voice else "",
-        "dir": str(voices_dir(tree)),
-        "download": _read(Path(tree) / "memory" / ".state" / SPEECH_PROGRESS) or None,
-    }
-    if not enabled:
-        out["ready"] = False
-        out["why"] = "голос агента выключен владельцем"
-    elif not lib["present"]:
-        out["ready"] = False
-        out["why"] = lib["why"] + (" — скачается вместе с голосом" if lib.get("downloadable") else "")
-    elif not ready_voice:
-        out["ready"] = False
-        out["why"] = "голос не скачан — агент отвечает текстом"
-    else:
-        out["ready"] = True
-        out["why"] = ""
-    return out
+    catalog = _read(model / 'voices.json')
+    worker = _read(tree / 'memory/.state/xtts/ready.json')
+    live=worker_live(tree/'memory/.state/xtts',worker)
+    speakers = (worker.get('speakers') if live else None) or catalog.get('speakers') or []
+    languages = (worker.get('languages') if live else None) or catalog.get('languages') or []
+    why = "голос агента выключен" if not enabled else lib["why"] if not lib["present"] else "XTTS модель не установлена" if not ready_model else ""
+    return {"enabled":enabled,"voice":"xtts","catalog":[dict(VOICES["xtts"],id="xtts",installed=ready_model)],
+            "library":lib,"model":str(model),"dir":str(model),"ready":not bool(why),"why":why,
+            "download":_read(tree / "memory/.state" / SPEECH_PROGRESS) or None,
+            "speaker":str(block(cfg).get("tts_speaker") or "Ana Florence"),
+            "language":str(block(cfg).get("tts_language") or "ru"),
+            "speakers":speakers,"languages":languages,"worker_ready":live,
+            "device":str(block(cfg).get('tts_device') or 'cpu')}
+
+
+def preview(tree: Path, cfg: dict, request: dict, timeout=90):
+    """One local sample via the supervised worker, never a Telegram delivery."""
+    import uuid
+    import base64
+    home=Path(tree)/'memory/.state/xtts'
+    ready=_read(home/'ready.json')
+    if worker_live(home,ready) is not True:
+        raise ValueError('XTTS ещё не готов. Установи расширение, включи голос и дождись запуска процесса.')
+    speaker=str(request.get('speaker') or block(cfg).get('tts_speaker') or 'Ana Florence')
+    language=str(request.get('language') or block(cfg).get('tts_language') or 'ru')
+    catalog=_read(voices_dir(Path(tree))/'voices.json')
+    if speaker not in (ready.get('speakers') or catalog.get('speakers') or []):raise ValueError('Выбери голос из каталога установленной модели')
+    if language not in (ready.get('languages') or catalog.get('languages') or []):raise ValueError('Язык отсутствует в установленной модели')
+    text=str(request.get('text') or 'Привет. Это мой голос. Настройки можно изменить.')
+    if not 1<=len(text.strip())<=300:raise ValueError('Образец: от 1 до 300 символов')
+    identity=uuid.uuid4().hex;incoming=home/'inbox';output=home/'output'
+    incoming.mkdir(parents=True,exist_ok=True)
+    path=incoming/(identity+'.json');temporary=path.with_suffix('.tmp')
+    payload={'text':text,'speaker':speaker,'language':language}
+    reference=str(request.get('reference') or block(cfg).get('tts_reference') or '').strip()
+    if reference:
+        chosen=Path(reference).expanduser()
+        if not chosen.is_file() or chosen.suffix.lower()!='.wav':raise ValueError('Свой образец должен быть существующим локальным WAV')
+        payload['reference']=str(chosen.resolve())
+    temporary.write_text(json.dumps(payload),encoding='utf-8')
+    temporary.replace(path);receipt=output/(identity+'.json');audio=output/(identity+'.wav')
+    deadline=time.monotonic()+timeout
+    while not receipt.is_file():
+        if time.monotonic()>=deadline:
+            (incoming/(identity+'.cancel')).touch()
+            raise TimeoutError('Образец ещё не готов; запрос отменён, звук не отправлялся')
+        time.sleep(.05)
+    try:
+        result=_read(receipt)
+        if not result.get('ok') or result.get('request_id')!=identity:raise ValueError(result.get('error') or 'XTTS не подтвердил образец')
+        if audio.stat().st_size>8*1024*1024:raise ValueError('Образец слишком велик')
+        return {'mime':'audio/wav','base64':base64.b64encode(audio.read_bytes()).decode('ascii')}
+    finally:
+        audio.unlink(missing_ok=True);receipt.unlink(missing_ok=True)
 
 
 def state(tree: Path, cfg: dict) -> dict:
@@ -527,20 +556,13 @@ def env_for(tree: Path, cfg: dict) -> dict:
 
 
 def speech_env_for(tree: Path, cfg: dict) -> dict:
-    """Переменные синтеза для дерева. Пусто — агент отвечает текстом, и почему,
-    говорит `speech_state()['why']`."""
     said = speech_state(tree, cfg)
-    if not said["ready"]:
-        return {}
-    return {
-        "PRAXIS_TTS_BACKEND": "piper",
-        # Путь к файлу, а не имя голоса: имя разрешается внутри библиотеки и
-        # молча промахивается, когда раскладка папки не та, которую она ждёт.
-        "PRAXIS_PIPER_MODEL": said["model"],
-        # Синтезированное складывается В ДЕРЕВО агента, а не во временную папку
-        # системы: это его слова, и переезд дерева обязан увозить их с собой.
-        "PRAXIS_TTS_OUTPUT_DIR": str(Path(tree) / "media" / "tts"),
-    }
+    return {"PRAXIS_TTS_BACKEND":"xtts" if said["ready"] else "disabled",
+            "HELENE_TTS_REASON":said["why"],
+            "HELENE_XTTS_HOME":str(Path(tree) / "memory/.state/xtts"),
+            "HELENE_XTTS_SPEAKER":said["speaker"],"HELENE_XTTS_LANGUAGE":said["language"],
+            "HELENE_XTTS_REFERENCE":str(block(cfg).get("tts_reference") or ""),
+            "PRAXIS_TTS_OUTPUT_DIR":str(Path(tree) / "media/tts")}
 
 
 def apply(tree: Path, cfg: dict) -> dict:
@@ -651,68 +673,20 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
 
 
 def fetch_voice(tree: Path, voice_id: str, *, quiet: bool = False) -> dict:
-    """Скачать голос синтеза: два файла, оба обязательны.
-
-    ⚠ Файла два — сам голос (`.onnx`) и его описание (`.onnx.json`), и piper без
-    второго не поднимется. Поэтому «скачано» здесь значит «оба на месте»: иначе
-    полускачанный голос выглядел бы готовым и молчал уже в бою.
-    """
-    import urllib.request  # noqa: PLC0415 — нужен только здесь
-
     tree = Path(tree)
-    voice_id = str(voice_id or "").strip().lower() or DEFAULT_VOICE
-    if voice_id not in VOICES:
-        raise SystemExit(f"голос «{voice_id}»: знаю только {', '.join(VOICES)}")
-    spec = VOICES[voice_id]
-    home = voices_dir(tree)
-    home.mkdir(parents=True, exist_ok=True)
-    progress = Path(tree) / "memory" / ".state" / SPEECH_PROGRESS
-    started = time.time()
-
-    def note(**extra) -> dict:
-        got = {"schema": SCHEMA, "voice": voice_id, "at": _utc(),
-               "size_mb": spec["size_mb"], **extra}
-        _write(progress, got)
-        if not quiet:
-            print(json.dumps(got, ensure_ascii=False), flush=True)
-        return got
-
-    # 1.2.1: без движка голос не заговорит — он первым, той же строкой хода.
-    lib = speech_library()
-    if not lib["present"]:
-        if not lib.get("downloadable"):
-            return note(state="failed", error=lib["why"])
-        note(state="running", voice="движок голоса", done_mb=0, size_mb=lib.get("size_mb"))
-        try:
-            fetch_engine(on_bytes=lambda got, of: note(
-                state="running", voice="движок голоса", done_mb=round(got / 1024 / 1024, 1),
-                size_mb=round(of / 1024 / 1024) if of else lib.get("size_mb")))
-        except SystemExit as exc:
-            return note(state="failed", error=f"движок голоса не встал: {exc}"[:300])
-        except Exception as exc:  # noqa: BLE001 — причина уезжает владельцу
-            return note(state="failed", error=f"движок голоса не скачался: {type(exc).__name__}: {exc}"[:300])
-    note(state="running", done_mb=0)
-    got_bytes = 0
+    progress = tree / 'memory/.state' / SPEECH_PROGRESS
+    _write(progress, {'state':'running','voice':'xtts','at':_utc(),'note':'Устанавливаю runtime и модель из локального комплекта'})
     try:
-        for name in (f"{spec['voice']}.onnx", f"{spec['voice']}.onnx.json"):
-            url = f"{VOICES_BASE}{spec['path']}/{name}?download=true"
-            # Кладём под временным именем и переименовываем: оборванная закачка
-            # не должна оставить файл, который выглядит скачанным.
-            final = home / name
-            partial = home / f".part-{name}"
-            with urllib.request.urlopen(url, timeout=300) as src, partial.open("wb") as sink:
-                while True:
-                    chunk = src.read(1 << 20)
-                    if not chunk:
-                        break
-                    sink.write(chunk)
-                    got_bytes += len(chunk)
-                    note(state="running", done_mb=round(got_bytes / 1024 / 1024, 1))
-            os.replace(partial, final)
-    except Exception as exc:                      # noqa: BLE001 — причина уезжает владельцу
-        return note(state="failed", error=f"{type(exc).__name__}: {exc}"[:300])
-    return note(state="done", done_mb=round(got_bytes / 1024 / 1024, 1),
-                seconds=round(time.time() - started, 1))
+        if __package__:
+            from .xtts_install import install
+        else:
+            from xtts_install import install
+        result = install(tree)
+    except (OSError, ValueError) as exc:
+        _write(progress, {'state':'failed','voice':'xtts','at':_utc(),'error':str(exc)})
+        raise
+    _write(progress, {'state':'done','voice':'xtts','at':_utc(),'note':'XTTS установлен; применяется перезапуском'})
+    return result
 
 
 def main() -> int:

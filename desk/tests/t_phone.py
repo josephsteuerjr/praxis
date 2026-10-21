@@ -108,7 +108,7 @@ class Login(unittest.TestCase):
 
 class Scope(unittest.TestCase):
     def test_device_scope_matches_the_contract(self):
-        for path in ("/api/runs", "/api/pulse", "/api/chats", "/api/say", "/api/rooms",
+        for path in ("/api/runs", "/api/pulse", "/api/chats", "/api/say", "/api/rooms", "/api/forge",
                      "/api/chat-turns/window", "/api/run/run-1", "/api/rooms/window-0123abcd",
                      "/api/chat/window", "/tunnel", "/events"):
             self.assertTrue(deskapp._scope_ok("device", path), path)

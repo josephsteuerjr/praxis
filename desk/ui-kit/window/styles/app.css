@@ -578,6 +578,8 @@ html.electron #chrome a {
 
 .room {
   position: relative;
+  flex-shrink: 0;
+  min-height: 34px;
   display: flex;
   align-items: center;
   gap: 9px;
@@ -625,6 +627,23 @@ html.electron #chrome a {
   width: 22px;
   height: 22px;
 }
+
+.room-select {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.room:focus-within .room-more { opacity: 1; }
 
 .room:hover .room-more,
 .room[aria-current="true"] .room-more {
@@ -2624,6 +2643,15 @@ select.field-input {
   backdrop-filter: blur(8px);
   box-shadow: var(--shadow-pop);
 }
+
+.settings-source {
+  margin: 16px 0 12px;
+  color: var(--ink-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-source summary { cursor: pointer; }
 
 /* ⚠ Мерим КОНТЕЙНЕР, а не окно. Колонка настроек — это окно минус полка 272px,
    которая ещё и схлопывается по Ctrl+B: порог по вьюпорту срабатывал на 1100,

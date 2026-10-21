@@ -278,7 +278,13 @@ export function agentsCard(mac = false, linux = false): { el: HTMLElement } {
                   toast(`Агент «${a.name}» удалён: ${where}.`);
                   void paint();
                 })
-                .catch(shellToast);
+                .catch((error) => {
+                  // A post-archive cleanup failure is reported as an error, yet
+                  // the agent folder may already be in the attic. Re-read the
+                  // roster instead of leaving a vanished agent's card actionable.
+                  shellToast(error);
+                  void paint();
+                });
             }),
             button("Отмена", "quiet", () => (kill.hidden = true)),
           );

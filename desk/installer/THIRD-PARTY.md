@@ -80,6 +80,11 @@ https://github.com/git-for-windows/git (тег `v2.55.0.windows.5`).
 
 - `helene-relay.exe` — MIT (исходники в репозитории автора)
 
+When the explicit embedded relay lane is selected, its pinned `LICENSE` and
+`NOTICE` ship under `licenses/embedded-relay/`; its Cargo dependencies join
+`licenses/rust/README.md`. Source selection is recorded separately from the
+Windows and Linux build receipts; this does not claim an offline rebuild kit.
+
 ## Тело руки `computer` (`helene-body.exe`, `helene-bridge.exe`)
 
 Оба собраны из крейтов дерева агента — `tree/body/crates/praxis-body`,

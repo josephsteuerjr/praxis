@@ -50,7 +50,7 @@ export const cfg: Cfg = shellCfg
   : { base: "", key: keyFromUrl() };
 /** Мост оболочки на Electron (28.09, desk/electron/src/preload.ts). */
 export interface ElectronBridge {
-  shell: "electron";
+  shell: "electron" | "python";
   platform: string;
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   win(action: "minimize" | "maximize" | "close"): void;

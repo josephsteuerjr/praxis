@@ -1013,6 +1013,10 @@ def describe(picture: dict) -> dict:
     обратно на экране нельзя: из этой склейки и вырос P0.
     """
     # Есть ли служба в картине вообще: старая картина без ключа — с Windows.
+    if os.environ.get('HELENE_BROKER_DISABLED') == '1':
+        picture = dict(picture, service_here=False, service_installed=False,
+                       session0=False, session0_set=False, session0_warning='', firewall=False,
+                       ladder_name=picture.get('name'), ladder_title=picture.get('title'))
     here = bool(picture.get("service_here", HAS_SERVICE))
     return {
         "name": picture.get("name") or DEFAULT_MODE,
@@ -1071,7 +1075,7 @@ def ladder() -> list[dict]:
     есть корневой брокер systemd. Состав решает харнесс, а не окно.
     """
     rungs = catalogue()
-    if not HAS_SERVICE_TOGGLES:
+    if not HAS_SERVICE_TOGGLES or os.environ.get('HELENE_BROKER_DISABLED') == '1':
         return rungs
     return rungs + [{
         "name": "session0",

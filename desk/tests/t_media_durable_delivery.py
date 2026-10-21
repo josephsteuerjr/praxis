@@ -80,7 +80,8 @@ class File429RespectsCooldown(unittest.TestCase):
             with mock.patch.object(botapi.time, "sleep") as slept:
                 receipt = bot.deliver_file(path, chat_id="123", media_kind="photo")
         self.assertEqual(len(calls), 2, "ровно один повтор, не больше")
-        slept.assert_called_once_with(0.6)  # full retry_after + 0.5
+        self.assertAlmostEqual(sum(call.args[0] for call in slept.call_args_list), 2.1)
+        self.assertTrue(all(call.args[0] <= 1 for call in slept.call_args_list))
         self.assertIn("113216", receipt)
         self.assertNotIsInstance(receipt, _Refusal)
 
@@ -130,7 +131,7 @@ class File429RespectsCooldown(unittest.TestCase):
                 receipt = bot.deliver_file(path, chat_id="123", media_kind="photo")
         self.assertEqual(len(attempts), 2)
         self.assertIn('71', receipt)
-        self.assertAlmostEqual(sum(call.args[0] for call in slept.call_args_list), 120.5)
+        self.assertAlmostEqual(sum(call.args[0] for call in slept.call_args_list), 122.0)
         self.assertTrue(all(call.args[0] <= 1 for call in slept.call_args_list))
 
 

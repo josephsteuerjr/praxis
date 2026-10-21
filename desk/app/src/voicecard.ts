@@ -9,7 +9,7 @@
 // Состояние спрашивается у КАНАЛА (`/api/voice`, тот же `localharness/voice.py`,
 // которым голос поднимает раннер), а не считается здесь: вторая правда о том,
 // скачана ли модель, разъехалась бы с первой молча.
-import { api, shell } from "../../ui-kit/window/api";
+import { api, shell, channelURL } from "../../ui-kit/window/api";
 import { el, humanError } from "../../ui-kit/window/lib";
 import { button, card, choice, toggle } from "../../ui-kit/dom";
 import type { Config } from "../../ui-kit/window/views/settings-frame";
@@ -49,10 +49,15 @@ interface EngineState {
   why: string;
   downloadable?: boolean;
   size_mb?: number;
+  cuda_supported?: boolean | null;
 }
 
 /** Голос агента наружу — вторая половина того же ответа канала. */
 interface SpeechState {
+  speaker?: string;
+  speakers?: string[];
+  languages?: string[];
+  worker_ready?: boolean | null;
   enabled: boolean;
   voice: string;
   ready: boolean;
@@ -90,7 +95,8 @@ export function voiceCard(draft: Config): VoiceCard {
   // Речь — отдельный выключатель, а не часть слуха: слышать голосовые и
   // отвечать голосом — разные желания, и одно без другого законно.
   let speak = !!voice.speak;
-  let speakVoice = String(voice.voice || "irina");
+  let speakVoice = "xtts";
+  voice.voice = speakVoice;
 
   const box = el("div");
   const status = el("p", "field-hint", "спрашиваю канал…");
@@ -198,6 +204,20 @@ export function voiceCard(draft: Config): VoiceCard {
         const mine = { ...speech, voice: speakVoice, enabled: speak };
         if (!speechPicker.el.childElementCount) drawVoices(mine);
         sayVoice(mine);
+        const names = speech.speakers || [];
+        cudaOption.disabled=speech.library.cuda_supported===false;
+        deviceNote.textContent=speech.library.cuda_supported===false?'Этот runtime собран для CPU. Для CUDA нужен совместимый runtime и видеокарта; веса модели остаются теми же.':'CUDA требует совместимого runtime и видеокарты. На машине без GPU используй CPU; менять модель не нужно.';
+        if (names.join('\n') !== speakerSelect.dataset.catalog) {
+          speakerSelect.replaceChildren(...names.map(name => new Option(name, name)));
+          const selected = String(voice.tts_speaker || speech.speaker || 'Ana Florence');
+          if (!names.includes(selected)) speakerSelect.append(new Option(selected+' · недоступен в каталоге', selected));
+          speakerSelect.value = selected;
+          speakerSelect.dataset.catalog = names.join('\n');
+          speakerSelect.disabled = !names.length;
+          speakerCount.textContent = names.length ? `${names.length} голосов установленной модели` : 'Каталог появится после установки XTTS';
+        }
+        previewBtn.disabled = previewing || speech.worker_ready !== true;
+        if (!previewing && speech.worker_ready !== true) previewNote.textContent = speech.worker_ready === null ? 'Не удалось проверить процесс XTTS; смотри журнал.' : 'Процесс XTTS ещё не готов. Включи голос, сохрани настройки и проверь журнал, если ожидание затянулось.';
       } else {
         speechStatus.textContent = "этот канал про голос агента ничего не знает";
         speechBtn.disabled = true;
@@ -205,7 +225,8 @@ export function voiceCard(draft: Config): VoiceCard {
       const down = state.download;
       const dv = speech?.download;
       if ((down && down.state === "running" && fresh(down.updated_utc))
-          || (dv && dv.state === "running" && fresh(dv.at || ""))) {
+          || (dv && dv.state === "running" && fresh(dv.at || ""))
+          || (speak && speech?.library.present && speech.speakers?.length && speech.worker_ready !== true)) {
         timer = setTimeout(() => void refresh(), 2000);
       }
     } catch (e) {
@@ -242,8 +263,56 @@ export function voiceCard(draft: Config): VoiceCard {
   const speechPickBox = el("div");
   const speechActions = el("div", "actions");
   const speechNote = el("span", "receipt");
-  const speechBtn = button("Скачать голос", "quiet", () => void startVoice());
+  const speechBtn = button("Установить XTTS из комплекта", "quiet", () => void startVoice());
   speechActions.append(speechBtn, speechNote);
+  const speechFields = el("div");
+  const deviceLabel=el('label','field-label','Вычисления XTTS');
+  const deviceSelect=document.createElement('select');deviceSelect.className='field-input';
+  const cudaOption=new Option('CUDA · совместимая NVIDIA GPU','cuda');
+  deviceSelect.append(new Option('CPU · работает без видеокарты','cpu'),cudaOption);
+  deviceSelect.value=String(voice.tts_device||'cpu');deviceSelect.onchange=()=>{voice.tts_device=deviceSelect.value};
+  const deviceNote=el('small','field-hint','CPU — базовый путь; поддержку CUDA определяет runtime.');
+  deviceLabel.append(deviceSelect,deviceNote);speechFields.append(deviceLabel);
+  const speakerLabel = el('label','field-label','Голос XTTS');
+  const speakerSelect = document.createElement('select');speakerSelect.className='field-input';
+  speakerSelect.onchange=()=>{voice.tts_speaker=speakerSelect.value};
+  const speakerCount=el('small','field-hint','Читаю каталог установленной модели…');
+  speakerLabel.append(speakerSelect,speakerCount);speechFields.append(speakerLabel);
+  const sample=el('input','field-input') as HTMLInputElement;
+  sample.value='Привет. Это мой голос. Его можно изменить.';sample.maxLength=300;
+  sample.setAttribute('aria-label','Текст для прослушивания голоса');
+  const audio=document.createElement('audio');audio.controls=true;audio.preload='none';audio.hidden=true;
+  audio.setAttribute('aria-label','Образец выбранного голоса');
+  let previewing = false;
+  const previewNote=el('span','receipt');
+  const previewBtn=button('Прослушать голос','quiet',async()=>{
+    if (previewing) return;
+    previewing=true;previewBtn.disabled=true;previewNote.textContent='Готовлю образец локально…';
+    try {
+      // Synthesis can exceed the event tunnel's 25s. Use the same authenticated
+      // HTTP channel, not a second service or the model/Telegram transport.
+      const response=await fetch(channelURL('/api/voice/preview'),{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({speaker:speakerSelect.value,language:voice.tts_language||'ru',text:sample.value})});
+      if(!response.ok)throw new Error(await response.text());
+      const result=await response.json();
+      if(result.mime!=='audio/wav'||typeof result.base64!=='string')throw new Error('Нет аудио в ответе XTTS');
+      audio.src='data:audio/wav;base64,'+result.base64;audio.hidden=false;
+      await audio.play();previewNote.textContent='Образец готов. Выбор сохранится вместе с настройками.';
+    }catch(e){previewNote.textContent=humanError(e).text}finally{previewing=false;previewBtn.disabled=false}
+  });
+  previewBtn.disabled=true;
+  speechActions.append(previewBtn,previewNote);
+  speechFields.append(sample,audio);
+  for (const [key, title, fallback] of [
+    ["tts_language", "Язык синтеза", "ru"],
+    ["tts_reference", "Свой образец голоса (локальный WAV, необязательно)", ""],
+  ]) {
+    const label = el("label", "field-label", title);
+    const input = el("input", "field-input") as HTMLInputElement;
+    input.value = String(voice[key] || fallback);
+    input.oninput = () => { voice[key] = input.value; };
+    label.append(input); speechFields.append(label);
+  }
   const speakOff = toggle("Отвечать голосом, когда сочтёт нужным", speak, (v) => {
     speak = v;
     voice.speak = v;
@@ -285,8 +354,7 @@ export function voiceCard(draft: Config): VoiceCard {
     if (!state.library.present) {
       if (state.library.downloadable) {
         speechStatus.textContent =
-          `Агент отвечает текстом: движок голоса ещё не скачан. «Скачать голос» сначала скачает его ` +
-          `(~${state.library.size_mb ?? "?"} МБ, один раз на обе половины голоса), потом голос.`;
+          `XTTS ещё не установлен. Кнопка устанавливает отдельный runtime и модель из комплекта; Whisper остаётся независимым.`;
         return;
       }
       speechStatus.textContent = state.library.why + ". Говорить в этой сборке нечем.";
@@ -294,8 +362,7 @@ export function voiceCard(draft: Config): VoiceCard {
       return;
     }
     speechStatus.textContent = state.ready
-      ? `Агент может говорить: голос ${state.voice} на диске. Синтез идёт на процессоре — ` +
-        `первая фраза около трёх секунд (голос читается с диска), дальше доли секунды. Голоса лежат в ${state.dir}.`
+      ? `XTTS установлен. Время синтеза зависит от устройства; модель держит отдельный процесс под общим Stop. Модель: ${state.dir}.`
       : `Агент отвечает текстом: ${state.why}. Голоса лежат в ${state.dir}.`;
   };
 
@@ -320,9 +387,9 @@ export function voiceCard(draft: Config): VoiceCard {
       "Модель держится в памяти около 1,5 ГБ. Дома это дорого за несколько голосовых в день, поэтому по умолчанию " +
       "она загружается на время расшифровки и отпускается; на сервере наоборот. Применяется перезапуском."),
     el("hr", "card-split"),
-    speakOff, speechStatus, speechPickBox, speechActions,
+    speakOff, speechStatus, speechPickBox, speechFields, speechActions,
     el("p", "field-hint",
-      "Синтез местный — текст ответа никуда не уходит. Настройки голоса применяются перезапуском."));
+      "XTTS местный, без Piper и сетевого fallback. Модель XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License). Whisper — входящий голос; вместе готовятся к live-режиму. Настройки применяются перезапуском."));
 
   const onSection = (event: Event) => {
     if (!box.closest(".page")) {
@@ -331,7 +398,7 @@ export function voiceCard(draft: Config): VoiceCard {
       return;
     }
     if ((event as CustomEvent).detail === "settings" && box.isConnected) void refresh();
-    else if (timer) { clearTimeout(timer); timer = null; }
+    else {audio.pause();if (timer) { clearTimeout(timer); timer = null; }}
   };
   addEventListener("frame-section", onSection);
   void refresh();

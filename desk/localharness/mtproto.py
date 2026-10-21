@@ -53,7 +53,7 @@ class MtprotoClient:
         connection = {'connection': telegram_proxy.connection_type(proxy_url, proxy_key)} if proxy_url else {}
         self.client = TelegramClient(str(session), int(api_id), str(api_hash), **connection,
                                      loop=self._loop, sequential_updates=True,
-                                     catch_up=True)
+                                     catch_up=True, flood_sleep_threshold=0)
 
     # ------------------------------------------------------------- жизнь
     def _run(self, coro, timeout: float = 60.0):
@@ -65,6 +65,13 @@ class MtprotoClient:
             return future.result(timeout)
         except TimeoutError:
             future.cancel()
+            raise
+        except Exception as error:
+            from telethon.errors import FloodWaitError, SlowModeWaitError
+            if isinstance(error, (FloodWaitError, SlowModeWaitError)):
+                seconds = getattr(error, "seconds", None)
+                if type(seconds) in (int, float) and seconds > 0:
+                    raise botapi.BotApiError("MTProto send", 429, type(error).__name__, seconds) from error
             raise
 
     def start(self) -> None:
@@ -224,6 +231,7 @@ class MtprotoClient:
         if isinstance(action, MessageActionTopicCreate):
             message["forum_topic_created"] = {"name": action.title}
             message["message_thread_id"] = int(m.id)
+            message["is_topic_message"] = True
         self._seq += 1
         return {"update_id": self._seq, "message": message,
                 "_outgoing": bool(getattr(m, "out", False)), "_history": bool(historical)}

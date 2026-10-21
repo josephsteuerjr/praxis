@@ -595,6 +595,19 @@ class Body:
             return False
         bridge_exe, body_exe = pair
         STATE["available"] = True
+        python_reads = os.name == "nt" and block(self.cfg).get("python_reads") is True
+        python_fs = os.name == "nt" and block(self.cfg).get("python_fs") is True
+        if python_reads or python_fs:
+            # Both explicit vNext choices use the body journal and package-bound
+            # executors; neither passes controller credentials to a child.
+            python_exe = self.install_root / "runtime" / "python.exe"
+            read_script = Path(__file__).resolve().with_name("cu_read_cli.py")
+            fs_script = Path(__file__).resolve().with_name("cu_fs_cli.py")
+            if (not python_exe.is_file() or
+                    (python_reads and not read_script.is_file()) or
+                    (python_fs and not fs_script.is_file())):
+                STATE["reason"] = "Python CU executor is missing from this installation"
+                return False
         chosen = pick_port(port(self.cfg))
         if chosen is None:
             STATE["reason"] = (f"порты {port(self.cfg)}…{port(self.cfg) + PORT_SPAN} заняты — "
@@ -620,12 +633,20 @@ class Body:
             "state_dir": str(state_dir),
         }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
         base_env = {k: v for k, v in os.environ.items()
-                    if not k.startswith("PRAXIS_BODY") and not k.startswith("PRAXIS_BRIDGE")}
+                    if not k.startswith(("PRAXIS_BODY", "PRAXIS_BRIDGE", "HELENE_CU_"))}
         bridge_env = dict(base_env, PRAXIS_BRIDGE_DEVICE_TOKEN=self.device_token,
                           PRAXIS_BRIDGE_CONTROLLER_TOKEN=self.controller_token,
                           RUST_LOG=base_env.get("HELENE_BODY_RUST_LOG", "praxis_bridge=info,tower_http=warn"))
         body_env = dict(base_env, PRAXIS_BODY_TOKEN=self.device_token,
                         RUST_LOG=base_env.get("HELENE_BODY_RUST_LOG", "praxis_body=info"))
+        if python_reads:
+            body_env.update(HELENE_CU_PYTHON_READS="1",
+                            HELENE_CU_PYTHON_EXE=str(python_exe),
+                            HELENE_CU_PYTHON_SCRIPT=str(read_script))
+        if python_fs:
+            body_env.update(HELENE_CU_PYTHON_FS="1",
+                            HELENE_CU_PYTHON_EXE=str(python_exe),
+                            HELENE_CU_PYTHON_FS_SCRIPT=str(fs_script))
         self.children = [
             _Child("мост", [str(bridge_exe), "--listen", f"127.0.0.1:{self.port}",
                             "--state-dir", str(bridge_dir)],
@@ -1352,6 +1373,8 @@ def _system_via_broker(agent_mod, kwargs: dict) -> str:
     включены. Теперь тот же вызов идёт туда, где права есть, и агенту не нужно знать про
     два пути.
     """
+    if os.environ.get('HELENE_BROKER_DISABLED') == '1':
+        return 'execution=system недоступен: брокер исключён из Python-поставки. Используй execution=interactive с правами текущего пользователя.'
     impl = getattr(agent_mod, "TOOL_IMPL", None)
     hand = impl.get("broker_request") if isinstance(impl, dict) else None
     if not callable(hand):
@@ -1478,6 +1501,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
                     f"Выдано: {given}. Галочки — в Настройках, карточка «Управление "
                     f"компьютером»; уговаривать меня бесполезно, решает он.")
         if action == "run" and str(kwargs.get("execution") or "").strip().lower() == "system":
+            if os.environ.get('HELENE_BROKER_DISABLED') == '1':
+                return 'execution=system недоступен: брокер исключён из Python-поставки.'
             if isinstance(_BODY, RemoteBody):
                 return _remote_system(kwargs)
             return _system_via_broker(agent_mod, kwargs)
@@ -1500,7 +1525,8 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         if isinstance(out, str) and PROTOCOL_WIRE in out:
             out = out.replace(PROTOCOL_WIRE, PROTOCOL_SAID)
         if action == "status" and isinstance(out, str) and sys.platform == "win32":
-            out += "\n" + SYSTEM_ROUTE_NOTE
+            out += "\n" + ('execution=system недоступен: брокер исключён из Python-поставки.'
+                            if os.environ.get('HELENE_BROKER_DISABLED') == '1' else SYSTEM_ROUTE_NOTE)
         # 25.09 (D2): результаты руки на Mac — словами Mac. Строка состояния и отказы
         # маршрутов у дерева написаны под Windows («Windows body», «Session 0», «UI
         # Automation tree»); отсюда у людей «на Mac UIA не реализовано» — AX реализован,

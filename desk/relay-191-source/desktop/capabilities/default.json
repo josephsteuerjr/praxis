@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Local relay window; all account operations pass through native IPC.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

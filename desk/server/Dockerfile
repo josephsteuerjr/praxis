@@ -31,7 +31,7 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-server.txt
 COPY app/ ./app/
 COPY tree/ ./tree/
 COPY helene-build.json ./helene-build.json
-COPY server/serverboot.py server/emergency_stop.py ./server/
+COPY server/serverboot.py server/supervisor_policy.py server/emergency_stop.py ./server/
 
 # Реле подписки ChatGPT — Linux-бинарь из поставки. Скобки делают его
 # НЕОБЯЗАТЕЛЬНЫМ: поставка без реле (собранная там, где нет докера) соберётся

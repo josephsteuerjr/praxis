@@ -20,7 +20,8 @@
 // «Сохранить»), а издание приносит свои карточки и свою часть записи в конфиг.
 // Веток `remote` здесь нет ни одной — если понадобилась, значит разрез прошёл
 // не там.
-import { api, cfg, inTauri, post, shell } from "../api";
+import { api, cfg, electron, inTauri, post, shell } from "../api";
+import { componentsCard } from "../components-card";
 import { keepBlock } from "../config";
 import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
@@ -33,7 +34,6 @@ import { relayAuthCard } from "../relay-auth-card";
 import { collectConnection } from "../server-connection";
 import { paperDialog } from "../../paper-dialog";
 import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
-import { showMemoryLines } from "../../memory-line";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -245,9 +245,6 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
     // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
     center.append(lookCard());
-    center.append(button("Показать скрытые строки памяти в чатах", "quiet", () => {
-      showMemoryLines(); toast("Строки памяти снова видны в чатах");
-    }));
     mountSettings(container, center);
     return;
   }
@@ -324,6 +321,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   if (c.mode === "remote" && c.base) {
     center.append(inGroup(relayAuthCard(String(c.base)), GROUP.app));
   }
+
+  if (electron?.shell === "python") center.append(inGroup(componentsCard(), GROUP.app));
 
   // --- копии памяти (1.2): расписание, «сейчас», последние снимки
   center.append(inGroup(backupCard(draft), GROUP.app));
@@ -539,7 +538,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
           : "";
         saveOut.textContent =
-          "Сохранено. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
+          "Сохранено. Модель и ключ движок перечитает перед следующим запросом." +
           relayWords + restartNote + modeNote;
         if (cfg.needs_local_setup) saveOut.textContent = "Настройки сохранены. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
         // Пустой ключ при первом запуске — не «настройки сохранены», а полдела:
@@ -725,8 +724,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   restartBtn.hidden = true;
   save.append(restartBtn);
   const saveCard = el("section", "card save-bar");
-  saveCard.append(save, conflictBox, el("p", "field-hint", `Файл настроек: ${loaded.path}`));
-  center.append(saveCard);
+  saveCard.append(save, conflictBox);
+  const sourceInfo = el("details", "settings-source");
+  sourceInfo.append(el("summary", "", "Где хранятся настройки"), el("p", "mono", loaded.path));
+  center.append(sourceInfo, saveCard);
 
   mountSettings(container, center, built.groups || []);
 }
@@ -834,6 +835,10 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
       a.href = "#" + c.id;
       a.addEventListener("click", (e) => {
         e.preventDefault();
+        // Measure wrapped tabs at this viewport/DPI; an 8px anchor margin put
+        // the section heading underneath their sticky surface.
+        const tabs = body.querySelector<HTMLElement>(".settings-tabs");
+        c.style.scrollMarginTop = `${(tabs?.getBoundingClientRect().height || 0) + 12}px`;
         c.scrollIntoView({ block: "start", behavior: "smooth" });
         for (const l of links) l.setAttribute("aria-current", String(l === a));
       });
@@ -902,7 +907,7 @@ function backupCard(draft: Config): HTMLElement {
     placeholder: "backups рядом с программой",
     hint: "пусто — рядом с программой, вне папки агента",
   });
-  grid.append(every, keep, dir);
+  grid.append(every, ...(electron?.shell === "python" ? [] : [keep]), dir);
   const out = el("span", "receipt");
   const listBox = el("ul", "backup-list");
   let where = "";
@@ -956,7 +961,9 @@ function backupCard(draft: Config): HTMLElement {
     el(
       "p",
       "field-hint",
-      "Копия — один zip: память, конституция, рабочая папка агента, расширения, настройки и соседние агенты. " +
+      (electron?.shell === "python"
+        ? "Малая копия: конституция, память, досье, граф, состояния, inbox, Telegram-сессии и настройки всех агентов. Runtime, модели, кэши и проекты не копируются. Прежние архивы не удаляются. "
+        : "Копия — один zip: память, конституция, рабочая папка агента, расширения, настройки и соседние агенты. ") +
         "Вход в ChatGPT, журналы и голосовые модели в копию не идут. Перед каждым обновлением установщик снимает свою копию сам. " +
         "Вернуть — распаковать нужное из zip на место при закрытой программе.",
     ),

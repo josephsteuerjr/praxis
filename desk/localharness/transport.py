@@ -121,7 +121,7 @@ def _publish(tmp: Path, path: Path, data: dict) -> None:
 
 
 def _registry(tree: Path, stream: str, archive: Path, *,
-              participants: int = 2, topics: int = 0) -> None:
+              participants: int = 2, topics: int = 0, title: str = "") -> None:
     """Реестр комнаты для окна: сколько сообщений, когда последнее.
 
     ⚠ Две правки против прежней версии.
@@ -159,7 +159,7 @@ def _registry(tree: Path, stream: str, archive: Path, *,
             log.warning("реестр комнаты %s не обновлён: %s", stream, exc)
             return
     try:
-        _write_json(path, {"peer_id": str(stream),
+        _write_json(path, {**prev, "title": title or prev.get("title", ""), "peer_id": str(stream),
                            "archive": "memory/groups/" + str(stream) + ".jsonl",
                            "message_count": count,
                            "participant_count": int(participants),

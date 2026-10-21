@@ -65,6 +65,8 @@ import sys
 import time
 from pathlib import Path
 
+from supervisor_policy import decide_exit
+
 
 def _utc() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -349,21 +351,14 @@ def settle(child: Child, now: float) -> str:
     """
     code = child.proc.poll() if child.proc is not None else None
     child.proc = None
-    if child.key == "runner" and code == RESTART_EXIT_CODE:
-        child.falls, child.retry_at = [], 0.0
-        said = f"раннер попросил перезапуска (код {code}) — поднимаю"
-    elif child.key == "runner" and code in (2, 3):
-        child.halted = ("конфиг или раскладка папки данных" if code == 3
-                        else "нет папки с кодом агента (tree/)")
-        said = (f"раннер вышел с кодом {code}: {child.halted} — перезапуск не поможет, "
-                f"правь и перезапусти контейнер")
-    else:
-        child.falls = [t for t in child.falls if now - t < 600] + [now]
-        pause = min(60.0, 2.0 ** min(len(child.falls), 6))
-        child.retry_at = now + pause
-        said = f"{child.name} завершился (код {code}) — снова через {pause:.0f} с"
-    print(f"[serverboot] {said}", flush=True)
-    return said
+    decision = decide_exit(key=child.key, name=child.name, code=code, now=now,
+                           falls=tuple(child.falls), retry_at=child.retry_at,
+                           halted=child.halted, restart_code=RESTART_EXIT_CODE)
+    child.falls = list(decision.falls)
+    child.retry_at = decision.retry_at
+    child.halted = decision.halted
+    print(f"[serverboot] {decision.note}", flush=True)
+    return decision.note
 
 
 def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":

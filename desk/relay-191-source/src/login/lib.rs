@@ -1,0 +1,1052 @@
+use chrono::DateTime;
+
+use chrono::Utc;
+use serde::Deserialize;
+use serde::Serialize;
+use std::env;
+use std::fs;
+use std::fs::remove_file;
+use std::fs::File;
+use std::io::Read;
+use std::io::Write;
+use std::io::{self};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::path::PathBuf;
+use std::process::Child;
+use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::time::Duration;
+use tempfile::NamedTempFile;
+use tokio::process::Command;
+
+use crate::login::token_data::parse_id_token;
+pub use crate::login::token_data::TokenData;
+
+const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
+
+static LOGIN_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+pub fn login_url() -> Option<String> {
+    LOGIN_URL.lock().ok().and_then(|s| s.clone())
+}
+pub fn clear_login_url() {
+    if let Ok(mut url) = LOGIN_URL.lock() {
+        *url = None;
+    }
+}
+
+const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
+
+#[derive(Clone, Debug, PartialEq, Copy)]
+pub enum AuthMode {
+    ApiKey,
+    ChatGPT,
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexAuth {
+    pub mode: AuthMode,
+
+    // Retained for the legacy API-key client API (`get_token`), which is not
+    // used by the subscription-only relay binary.
+    #[allow(dead_code)]
+    api_key: Option<String>,
+    auth_dot_json: Arc<Mutex<Option<AuthDotJson>>>,
+    auth_file: PathBuf,
+}
+
+impl PartialEq for CodexAuth {
+    fn eq(&self, other: &Self) -> bool {
+        self.mode == other.mode
+    }
+}
+
+impl CodexAuth {
+    pub fn from_api_key(api_key: &str) -> Self {
+        Self {
+            api_key: Some(api_key.to_owned()),
+            mode: AuthMode::ApiKey,
+            auth_file: PathBuf::new(),
+            auth_dot_json: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Loads the available auth information for Codex Proxy Server from the auth.json file (in ~/.codex, ~/.opencode, or ./local_auth) or from the OPENAI_API_KEY environment variable. This supports both Codex Proxy Server and Opencode integration.
+    pub fn from_codex_home(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
+        load_auth(codex_home, true)
+    }
+
+    pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
+        let auth_dot_json: Option<AuthDotJson> = self.get_current_auth_json();
+        match auth_dot_json {
+            Some(AuthDotJson {
+                tokens: Some(mut tokens),
+                last_refresh: Some(last_refresh),
+                ..
+            }) => {
+                // ⚠ ДВА РАЗНЫХ СРОКА, И РАНЬШЕ ЖИЛ ТОЛЬКО ОДИН.  `last_refresh` — когда мы
+                // в последний раз ходили за токеном; срок жизни самого access-токена
+                // короче примерно втрое (28 дней против ~10).  10.08.2026 это стоило
+                // компаньону нескольких часов немоты: токен слота протух в 09:34 UTC,
+                // реле продолжало его предъявлять, апстрим отвечал 401 на КАЖДЫЙ вызов, а
+                // рефреш ждал двадцать восьмого дня. Теперь смотрим на оба: календарь
+                // ИЛИ собственный `exp` токена, с запасом в час.
+                let now_secs = Utc::now().timestamp();
+                let stale_by_calendar = last_refresh < Utc::now() - chrono::Duration::days(28);
+                let expiring_soon = tokens.access_token_expiring(now_secs, 3600);
+                if stale_by_calendar || expiring_soon {
+                    let refresh_response = tokio::time::timeout(
+                        Duration::from_secs(60),
+                        try_refresh_token(tokens.refresh_token.clone()),
+                    )
+                    .await
+                    .map_err(|_| {
+                        std::io::Error::other("timed out while refreshing OpenAI API key")
+                    })?
+                    .map_err(std::io::Error::other)?;
+
+                    let updated_auth_dot_json = update_tokens(
+                        &self.auth_file,
+                        refresh_response.id_token,
+                        refresh_response.access_token,
+                        refresh_response.refresh_token,
+                    )
+                    .await?;
+
+                    tokens = updated_auth_dot_json
+                        .tokens
+                        .clone()
+                        .ok_or(std::io::Error::other(
+                            "Token data is not available after refresh.",
+                        ))?;
+
+                    #[expect(clippy::unwrap_used)]
+                    let mut auth_lock = self.auth_dot_json.lock().unwrap();
+                    *auth_lock = Some(updated_auth_dot_json);
+                }
+
+                Ok(tokens)
+            }
+            _ => Err(std::io::Error::other("Token data is not available.")),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_token(&self) -> Result<String, std::io::Error> {
+        match self.mode {
+            AuthMode::ApiKey => Ok(self.api_key.clone().unwrap_or_default()),
+            AuthMode::ChatGPT => {
+                let id_token = self.get_token_data().await?.access_token;
+
+                Ok(id_token)
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_account_id(&self) -> Option<String> {
+        self.get_current_token_data()
+            .and_then(|t| t.account_id.clone())
+    }
+
+    #[allow(dead_code)]
+    pub fn get_plan_type(&self) -> Option<String> {
+        self.get_current_token_data()
+            .and_then(|t| t.id_token.chatgpt_plan_type.as_ref().map(|p| p.as_string()))
+    }
+
+    fn get_current_auth_json(&self) -> Option<AuthDotJson> {
+        #[expect(clippy::unwrap_used)]
+        self.auth_dot_json.lock().unwrap().clone()
+    }
+
+    #[allow(dead_code)]
+    fn get_current_token_data(&self) -> Option<TokenData> {
+        self.get_current_auth_json().and_then(|t| t.tokens.clone())
+    }
+
+    /// Consider this private to integration tests.
+    #[allow(dead_code)]
+    pub fn create_dummy_chatgpt_auth_for_testing() -> Self {
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: None,
+            tokens: Some(TokenData {
+                id_token: Default::default(),
+                access_token: "Access Token".to_string(),
+                refresh_token: "test".to_string(),
+                account_id: Some("account_id".to_string()),
+            }),
+            last_refresh: Some(Utc::now()),
+        };
+
+        let auth_dot_json = Arc::new(Mutex::new(Some(auth_dot_json)));
+        Self {
+            api_key: None,
+            mode: AuthMode::ChatGPT,
+            auth_file: PathBuf::new(),
+            auth_dot_json,
+        }
+    }
+}
+
+fn load_auth(codex_home: &Path, include_env_var: bool) -> std::io::Result<Option<CodexAuth>> {
+    // First, check to see if there is a valid auth.json file in ~/.codex, ~/.opencode, or ./local_auth (Codex Proxy Server and Opencode integration supported). If not, we fall
+    // back to AuthMode::ApiKey using the OPENAI_API_KEY environment variable
+    // (if it is set).
+    let auth_file = get_auth_file(codex_home);
+    let auth_dot_json = match try_read_auth_json(&auth_file) {
+        Ok(auth) => auth,
+        // If auth.json does not exist, try to read the OPENAI_API_KEY from the
+        // environment variable.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && include_env_var => {
+            return match read_openai_api_key_from_env() {
+                Some(api_key) => Ok(Some(CodexAuth::from_api_key(&api_key))),
+                None => Ok(None),
+            };
+        }
+        // Though if auth.json exists but is malformed, do not fall back to the
+        // env var because the user may be expecting to use AuthMode::ChatGPT.
+        Err(e) => {
+            return Err(e);
+        }
+    };
+
+    let AuthDotJson {
+        openai_api_key: auth_json_api_key,
+        tokens,
+        last_refresh,
+    } = auth_dot_json;
+
+    // If the auth.json has an API key AND does not appear to be on a plan that
+    // should prefer AuthMode::ChatGPT, use AuthMode::ApiKey.
+    if let Some(api_key) = &auth_json_api_key {
+        // Should any of these be AuthMode::ChatGPT with the api_key set?
+        // Does AuthMode::ChatGPT indicate that there is an auth.json that is
+        // "refreshable" even if we are using the API key for auth?
+        match &tokens {
+            Some(tokens) => {
+                if tokens.is_plan_that_should_use_api_key() {
+                    return Ok(Some(CodexAuth::from_api_key(api_key)));
+                } else {
+                    // Ignore the API key and fall through to ChatGPT auth.
+                }
+            }
+            None => {
+                // We have an API key but no tokens in the auth.json file.
+                // Perhaps the user ran the 'Login' option in the CLI menu or updated
+                // auth.json by hand. Either way, let's assume they are trying
+                // to use their API key.
+                return Ok(Some(CodexAuth::from_api_key(api_key)));
+            }
+        }
+    }
+
+    // For the AuthMode::ChatGPT variant, perhaps neither api_key nor
+    // openai_api_key should exist?
+    Ok(Some(CodexAuth {
+        api_key: None,
+        mode: AuthMode::ChatGPT,
+        auth_file,
+        auth_dot_json: Arc::new(Mutex::new(Some(AuthDotJson {
+            openai_api_key: None,
+            tokens,
+            last_refresh,
+        }))),
+    }))
+}
+
+fn read_openai_api_key_from_env() -> Option<String> {
+    env::var(OPENAI_API_KEY_ENV_VAR)
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
+pub fn get_auth_file(codex_home: &Path) -> PathBuf {
+    codex_home.join("auth.json")
+}
+
+/// Delete the auth.json file inside `codex_home` if it exists. Returns `Ok(true)`
+/// if a file was removed, `Ok(false)` if no auth file was present.
+#[allow(dead_code)]
+pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
+    let auth_file = get_auth_file(codex_home);
+    match remove_file(&auth_file) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+/// Represents a running login subprocess. The child can be killed by holding
+/// the mutex and calling `kill()`.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SpawnedLogin {
+    pub child: Arc<Mutex<Child>>,
+    _script: Arc<tempfile::TempPath>,
+    pub stdout: Arc<Mutex<Vec<u8>>>,
+    pub stderr: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SpawnedLogin {
+    /// Returns the login URL, if one has been emitted by the login subprocess.
+    ///
+    /// The Python helper prints the URL to stderr; we capture it and extract
+    /// the last whitespace-separated token that starts with "http".
+    #[allow(dead_code)]
+    pub fn get_login_url(&self) -> Option<String> {
+        self.stderr
+            .lock()
+            .ok()
+            .and_then(|buffer| String::from_utf8(buffer.clone()).ok())
+            .and_then(|output| {
+                output
+                    .split_whitespace()
+                    .rfind(|part| part.starts_with("http"))
+                    .map(|s| s.to_string())
+            })
+    }
+}
+
+// Helpers for streaming child output into shared buffers
+#[allow(dead_code)]
+struct AppendWriter {
+    buf: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for AppendWriter {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        if let Ok(mut b) = self.buf.lock() {
+            b.extend_from_slice(data);
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
+fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
+    std::thread::spawn(move || {
+        let _ = io::copy(&mut reader, &mut AppendWriter { buf });
+    });
+}
+
+/// RELAY_LOCAL=1 (Hélène and other embedding hosts): the credentials belong to THIS
+/// installation and live in ./local_auth of the working directory, never in ~/.codex.
+/// The host looks for ./local_auth/auth.json and would otherwise wait forever for a
+/// login that actually succeeded elsewhere.
+pub fn relay_local() -> bool {
+    relay_local_from(env::var("RELAY_LOCAL").ok().as_deref())
+}
+
+fn relay_local_from(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some(v) if !v.is_empty() && v != "0")
+}
+
+/// Probe the interpreter, rather than accepting Windows Store aliases as Python.
+/// Explicit configuration is authoritative: a typo must be reported, not hidden.
+#[derive(Clone, Debug)]
+pub struct PythonCommand {
+    program: std::ffi::OsString,
+    args: Vec<String>,
+}
+
+pub fn python_interpreter() -> io::Result<PythonCommand> {
+    let configured = env::var_os("RELAY_PYTHON").filter(|p| !p.is_empty());
+    let candidates = if let Some(path) = configured {
+        vec![PythonCommand {
+            program: path,
+            args: vec![],
+        }]
+    } else if cfg!(windows) {
+        vec![
+            PythonCommand {
+                program: "python.exe".into(),
+                args: vec![],
+            },
+            PythonCommand {
+                program: "py.exe".into(),
+                args: vec!["-3".into()],
+            },
+            PythonCommand {
+                program: "python3.exe".into(),
+                args: vec![],
+            },
+        ]
+    } else {
+        vec![
+            PythonCommand {
+                program: "python3".into(),
+                args: vec![],
+            },
+            PythonCommand {
+                program: "python".into(),
+                args: vec![],
+            },
+        ]
+    };
+    for candidate in candidates {
+        let mut probe = std::process::Command::new(&candidate.program);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            probe.creation_flags(0x08000000);
+        }
+        let result = probe.args(&candidate.args)
+            .args(["-c", "import sys,ssl,http.server; assert sys.version_info >= (3,10); print('praxis-relay-python-ok')"])
+            .stdin(Stdio::null()).output();
+        if result.is_ok_and(|o| {
+            o.status.success()
+                && String::from_utf8_lossy(&o.stdout).trim() == "praxis-relay-python-ok"
+        }) {
+            return Ok(candidate);
+        }
+    }
+    Err(io::Error::other("Python 3.10+ with SSL is required for login. Install Python or set RELAY_PYTHON to its executable. Windows Store aliases are not interpreters."))
+}
+
+/// Stage OAuth away from the serving credential. The old login survives any
+/// browser/helper failure, and an unwritable destination fails before a browser opens.
+pub async fn staged_chatgpt_login(destination: &Path) -> io::Result<tempfile::TempDir> {
+    fs::create_dir_all(destination)?;
+    let staged = tempfile::tempdir_in(destination)?;
+    login_with_chatgpt(staged.path(), false).await?;
+    // Parsing validates the raw JWT shape without spending/refreshing a token.
+    let auth = try_read_auth_json(&get_auth_file(staged.path()))?;
+    if auth.tokens.is_none() {
+        return Err(io::Error::other(
+            "Login helper exited without subscription credentials",
+        ));
+    }
+    Ok(staged)
+}
+
+pub fn install_staged_login(staged: &Path, destination: &Path) -> io::Result<()> {
+    let file = get_auth_file(staged);
+    let parsed = try_read_auth_json(&file)?;
+    let raw: serde_json::Value = serde_json::from_slice(&fs::read(&file)?)?;
+    let tokens = parsed
+        .tokens
+        .as_ref()
+        .ok_or_else(|| io::Error::other("Subscription credentials missing"))?;
+    if tokens.access_token.trim().is_empty()
+        || tokens.refresh_token.trim().is_empty()
+        || tokens
+            .account_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty())
+    {
+        return Err(io::Error::other(
+            "Login returned incomplete subscription credentials",
+        ));
+    }
+    write_auth_json(
+        &get_auth_file(destination),
+        &parsed,
+        raw["tokens"]["id_token"].as_str(),
+    )
+}
+
+/// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
+#[allow(dead_code)]
+pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
+    let script_path = write_login_script_to_disk()?;
+    let python = python_interpreter()?;
+    let mut cmd = std::process::Command::new(&python.program);
+    cmd.args(&python.args)
+        .arg(script_path.as_os_str())
+        .env("CODEX_HOME", codex_home)
+        .env("CODEX_CLIENT_ID", CLIENT_ID)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+
+    if let Some(out) = child.stdout.take() {
+        spawn_pipe_reader(out, stdout_buf.clone());
+    }
+    if let Some(err) = child.stderr.take() {
+        spawn_pipe_reader(err, stderr_buf.clone());
+    }
+
+    Ok(SpawnedLogin {
+        _script: Arc::new(script_path),
+        child: Arc::new(Mutex::new(child)),
+        stdout: stdout_buf,
+        stderr: stderr_buf,
+    })
+}
+
+/// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
+/// environment variable set to the provided `codex_home` path. If the
+/// subprocess exits 0, read the OPENAI_API_KEY property out of
+/// CODEX_HOME/auth.json and return Ok(OPENAI_API_KEY). Otherwise, return Err
+/// with any information from the subprocess.
+///
+/// If `capture_output` is true, the subprocess's output will be captured and
+/// recorded in memory. Otherwise, the subprocess's output will be sent to the
+/// current process's stdout/stderr.
+pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
+    use tokio::io::AsyncReadExt;
+    let python = tokio::task::spawn_blocking(python_interpreter)
+        .await
+        .map_err(io::Error::other)??;
+    let script_path = write_login_script_to_disk()?;
+    let mut command = Command::new(&python.program);
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    command.args(&python.args).arg(script_path.as_os_str());
+    if env::var("RELAY_NO_BROWSER").is_ok_and(|v| v == "1") {
+        command.arg("--no-browser");
+    }
+    let mut child = command
+        .env("CODEX_HOME", codex_home)
+        .env("CODEX_CLIENT_ID", CLIENT_ID)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut stderr = child.stderr.take().expect("piped stderr");
+    let reader = async move {
+        let mut recent = Vec::new();
+        let mut chunk = [0; 4096];
+        loop {
+            let n = stderr.read(&mut chunk).await?;
+            if n == 0 {
+                break;
+            }
+            if !capture_output {
+                let _ = io::stderr().write_all(&chunk[..n]);
+            }
+            recent.extend_from_slice(&chunk[..n]);
+            if let Some(url) = String::from_utf8_lossy(&recent)
+                .split_whitespace()
+                .find(|word| word.starts_with("https://auth.openai.com/"))
+            {
+                if let Ok(mut value) = LOGIN_URL.lock() {
+                    *value = Some(url.to_string());
+                }
+            }
+            if recent.len() > 16384 {
+                recent.drain(..recent.len() - 16384);
+            }
+        }
+        Ok::<_, io::Error>(recent)
+    };
+    let (status, diagnostic) = tokio::join!(child.wait(), reader);
+    let status = status?;
+    let diagnostic = diagnostic?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "ChatGPT login helper exited {status}: {}",
+            String::from_utf8_lossy(&diagnostic)
+        )));
+    }
+    if !get_auth_file(codex_home).is_file() {
+        return Err(io::Error::other(
+            "Login helper exited without creating auth.json",
+        ));
+    }
+    Ok(())
+}
+
+fn write_login_script_to_disk() -> io::Result<tempfile::TempPath> {
+    let mut tmp = NamedTempFile::new()?;
+    tmp.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
+    tmp.flush()?;
+    Ok(tmp.into_temp_path())
+}
+
+#[allow(dead_code)]
+pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
+    let auth_dot_json = AuthDotJson {
+        openai_api_key: Some(api_key.to_string()),
+        tokens: None,
+        last_refresh: None,
+    };
+    write_auth_json(&get_auth_file(codex_home), &auth_dot_json, None)
+}
+
+/// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.
+/// Returns the full AuthDotJson structure after refreshing if necessary.
+pub fn try_read_auth_json(auth_file: &Path) -> std::io::Result<AuthDotJson> {
+    let mut file = File::open(auth_file)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    let auth_dot_json: AuthDotJson = serde_json::from_str(&contents)?;
+
+    Ok(auth_dot_json)
+}
+
+/// ⚠ ЗАЧЕМ ЗДЕСЬ ОТДЕЛЬНЫЙ АРГУМЕНТ `id_token_jwt`.
+///
+/// `TokenData::id_token` в памяти — это РАЗОБРАННЫЕ поля (почта, план), а на диске у
+/// апстрима там лежит сам JWT.  Прямая сериализация структуры записывала объект, который
+/// наш же читатель не принимал: 13.08.2026 слот `primary` после рефреша перестал грузиться,
+/// и компаньон онемел.  Сырой токен теряется при разборе, поэтому его приходится нести
+/// сюда отдельно.
+///
+/// Если токены есть, а JWT не дали — пишем не «как получится», а ОТКАЗЫВАЕМСЯ.  Молчаливая
+/// запись неполного файла и есть та поломка, которую этот патч закрывает; пусть новое место
+/// вызова падает громко, а не портит auth.json.
+fn write_auth_json(
+    auth_file: &Path,
+    auth_dot_json: &AuthDotJson,
+    id_token_jwt: Option<&str>,
+) -> std::io::Result<()> {
+    let mut value = serde_json::to_value(auth_dot_json)?;
+    if auth_dot_json.tokens.is_some() {
+        let jwt = id_token_jwt.ok_or_else(|| {
+            std::io::Error::other("refusing to write token data without the raw id_token")
+        })?;
+        value["tokens"]["id_token"] = serde_json::Value::String(jwt.to_owned());
+    }
+    let json_data = serde_json::to_string_pretty(&value)?;
+    let parent = auth_file
+        .parent()
+        .ok_or_else(|| std::io::Error::other("auth file has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let mut temp = NamedTempFile::new_in(parent)?;
+    #[cfg(unix)]
+    {
+        temp.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    temp.as_file_mut().write_all(json_data.as_bytes())?;
+    temp.as_file_mut().flush()?;
+    temp.as_file_mut().sync_all()?;
+    temp.persist(auth_file)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+async fn update_tokens(
+    auth_file: &Path,
+    id_token: String,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+) -> std::io::Result<AuthDotJson> {
+    let mut auth_dot_json = try_read_auth_json(auth_file)?;
+
+    let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
+    tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
+    if let Some(access_token) = access_token {
+        tokens.access_token = access_token.to_string();
+    }
+    if let Some(refresh_token) = refresh_token {
+        tokens.refresh_token = refresh_token.to_string();
+    }
+    auth_dot_json.last_refresh = Some(Utc::now());
+    write_auth_json(auth_file, &auth_dot_json, Some(&id_token))?;
+    Ok(auth_dot_json)
+}
+
+async fn try_refresh_token(refresh_token: String) -> std::io::Result<RefreshResponse> {
+    let refresh_request = RefreshRequest {
+        client_id: CLIENT_ID,
+        grant_type: "refresh_token",
+        refresh_token,
+        scope: "openid profile email",
+    };
+
+    let client = crate::core::network::client().map_err(std::io::Error::other)?;
+    let response = client
+        .post("https://auth.openai.com/oauth/token")
+        .header("Content-Type", "application/json")
+        .json(&refresh_request)
+        .send()
+        .await
+        .map_err(std::io::Error::other)?;
+
+    if response.status().is_success() {
+        let refresh_response = response
+            .json::<RefreshResponse>()
+            .await
+            .map_err(std::io::Error::other)?;
+        Ok(refresh_response)
+    } else {
+        Err(std::io::Error::other(format!(
+            "Failed to refresh token: {}",
+            response.status()
+        )))
+    }
+}
+
+#[derive(Serialize)]
+struct RefreshRequest {
+    client_id: &'static str,
+    grant_type: &'static str,
+    refresh_token: String,
+    scope: &'static str,
+}
+
+#[derive(Deserialize, Clone)]
+struct RefreshResponse {
+    id_token: String,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+}
+
+/// Expected structure for $CODEX_HOME/auth.json.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct AuthDotJson {
+    #[serde(rename = "OPENAI_API_KEY")]
+    pub openai_api_key: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<TokenData>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refresh: Option<DateTime<Utc>>,
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used, clippy::unwrap_used)]
+    use super::*;
+    use crate::login::token_data::IdTokenInfo;
+    use crate::login::token_data::KnownPlan;
+    use crate::login::token_data::PlanType;
+    use base64::Engine;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    const LAST_REFRESH: &str = "2025-08-06T20:41:36.232376Z";
+
+    #[test]
+    fn writes_api_key_and_loads_auth() {
+        let dir = tempdir().unwrap();
+        login_with_api_key(dir.path(), "sk-test-key").unwrap();
+        let auth = load_auth(dir.path(), false).unwrap().unwrap();
+        assert_eq!(auth.mode, AuthMode::ApiKey);
+        assert_eq!(auth.api_key.as_deref(), Some("sk-test-key"));
+    }
+
+    #[test]
+    fn loads_from_env_var_if_env_var_exists() {
+        let dir = tempdir().unwrap();
+
+        let env_var = std::env::var(OPENAI_API_KEY_ENV_VAR);
+
+        if let Ok(env_var) = env_var {
+            let auth = load_auth(dir.path(), true).unwrap().unwrap();
+            assert_eq!(auth.mode, AuthMode::ApiKey);
+            assert_eq!(auth.api_key, Some(env_var));
+        }
+    }
+
+    #[tokio::test]
+    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+        let codex_home = tempdir().unwrap();
+        write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let CodexAuth {
+            api_key,
+            mode,
+            auth_dot_json,
+            auth_file: _,
+        } = load_auth(codex_home.path(), false).unwrap().unwrap();
+        assert_eq!(None, api_key);
+        assert_eq!(AuthMode::ChatGPT, mode);
+
+        let guard = auth_dot_json.lock().unwrap();
+        let auth_dot_json = guard.as_ref().expect("AuthDotJson should exist");
+        assert_eq!(
+            &AuthDotJson {
+                openai_api_key: None,
+                tokens: Some(TokenData {
+                    id_token: IdTokenInfo {
+                        email: Some("user@example.com".to_string()),
+                        chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                    },
+                    access_token: "test-access-token".to_string(),
+                    refresh_token: "test-refresh-token".to_string(),
+                    account_id: None,
+                }),
+                last_refresh: Some(
+                    DateTime::parse_from_rfc3339(LAST_REFRESH)
+                        .unwrap()
+                        .with_timezone(&Utc)
+                ),
+            },
+            auth_dot_json
+        )
+    }
+
+    /// Even if the OPENAI_API_KEY is set in auth.json, if the plan is not in
+    /// [`TokenData::is_plan_that_should_use_api_key`], it should use
+    /// [`AuthMode::ChatGPT`].
+    #[tokio::test]
+    async fn pro_account_with_api_key_still_uses_chatgpt_auth() {
+        let codex_home = tempdir().unwrap();
+        write_auth_file(
+            AuthFileParams {
+                openai_api_key: Some("sk-test-key".to_string()),
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let CodexAuth {
+            api_key,
+            mode,
+            auth_dot_json,
+            auth_file: _,
+        } = load_auth(codex_home.path(), false).unwrap().unwrap();
+        assert_eq!(None, api_key);
+        assert_eq!(AuthMode::ChatGPT, mode);
+
+        let guard = auth_dot_json.lock().unwrap();
+        let auth_dot_json = guard.as_ref().expect("AuthDotJson should exist");
+        assert_eq!(
+            &AuthDotJson {
+                openai_api_key: None,
+                tokens: Some(TokenData {
+                    id_token: IdTokenInfo {
+                        email: Some("user@example.com".to_string()),
+                        chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                    },
+                    access_token: "test-access-token".to_string(),
+                    refresh_token: "test-refresh-token".to_string(),
+                    account_id: None,
+                }),
+                last_refresh: Some(
+                    DateTime::parse_from_rfc3339(LAST_REFRESH)
+                        .unwrap()
+                        .with_timezone(&Utc)
+                ),
+            },
+            auth_dot_json
+        )
+    }
+
+    /// If the OPENAI_API_KEY is set in auth.json and it is an enterprise
+    /// account, then it should use [`AuthMode::ApiKey`].
+    #[tokio::test]
+    async fn enterprise_account_with_api_key_uses_chatgpt_auth() {
+        let codex_home = tempdir().unwrap();
+        write_auth_file(
+            AuthFileParams {
+                openai_api_key: Some("sk-test-key".to_string()),
+                chatgpt_plan_type: "enterprise".to_string(),
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let CodexAuth {
+            api_key,
+            mode,
+            auth_dot_json,
+            auth_file: _,
+        } = load_auth(codex_home.path(), false).unwrap().unwrap();
+        assert_eq!(Some("sk-test-key".to_string()), api_key);
+        assert_eq!(AuthMode::ApiKey, mode);
+
+        let guard = auth_dot_json.lock().expect("should unwrap");
+        assert!(guard.is_none(), "auth_dot_json should be None");
+    }
+
+    struct AuthFileParams {
+        openai_api_key: Option<String>,
+        chatgpt_plan_type: String,
+    }
+
+    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<()> {
+        let auth_file = get_auth_file(codex_home);
+        // Create a minimal valid JWT for the id_token field.
+        #[derive(Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({
+            "email": "user@example.com",
+            "email_verified": true,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "bc3618e3-489d-4d49-9362-1561dc53ba53",
+                "chatgpt_plan_type": params.chatgpt_plan_type,
+                "chatgpt_user_id": "user-12345",
+                "user_id": "user-12345",
+            }
+        });
+        let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+        let header_b64 = b64(&serde_json::to_vec(&header)?);
+        let payload_b64 = b64(&serde_json::to_vec(&payload)?);
+        let signature_b64 = b64(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let auth_json_data = json!({
+            "OPENAI_API_KEY": params.openai_api_key,
+            "tokens": {
+                "id_token": fake_jwt,
+                "access_token": "test-access-token",
+                "refresh_token": "test-refresh-token"
+            },
+            "last_refresh": LAST_REFRESH,
+        });
+        let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
+        std::fs::write(auth_file, auth_json)
+    }
+
+    #[test]
+    fn id_token_info_handles_missing_fields() {
+        // Payload without email or plan should yield None values.
+        let header = serde_json::json!({"alg": "none", "typ": "JWT"});
+        let payload = serde_json::json!({"sub": "123"});
+        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&header).unwrap());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"sig");
+        let jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let info = parse_id_token(&jwt).expect("should parse");
+        assert!(info.email.is_none());
+        assert!(info.chatgpt_plan_type.is_none());
+    }
+
+    #[tokio::test]
+    async fn loads_api_key_from_auth_json() {
+        let dir = tempdir().unwrap();
+        let auth_file = dir.path().join("auth.json");
+        std::fs::write(
+            auth_file,
+            r#"
+        {
+            "OPENAI_API_KEY": "sk-test-key",
+            "tokens": null,
+            "last_refresh": null
+        }
+        "#,
+        )
+        .unwrap();
+
+        let auth = load_auth(dir.path(), false).unwrap().unwrap();
+        assert_eq!(auth.mode, AuthMode::ApiKey);
+        assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
+
+        assert!(auth.get_token_data().await.is_err());
+    }
+
+    /// ЖИВОЙ СЛУЧАЙ 13.08.2026 — то, ради чего написан весь этот патч.
+    ///
+    /// Рефреш записывал `tokens.id_token` объектом, читатель требовал строку: файл ломался
+    /// о собственную запись, и первая же аренда слота (`lease_slot` перечитывает auth.json
+    /// каждый раз) находила труп. Здесь охраняется КРУГ: то, что мы записали, обязано
+    /// читаться нами же — и на диске обязан лежать сам токен, а не его разбор.
+    #[test]
+    fn what_the_refresh_writes_is_what_the_reader_accepts() {
+        let dir = tempdir().unwrap();
+        let auth_file = dir.path().join("auth.json");
+        write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            dir.path(),
+        )
+        .expect("failed to write auth file");
+
+        // Ровно то, что делает update_tokens: разобрать JWT в структуру и записать файл.
+        let jwt = {
+            let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+            let payload = json!({
+                "email": "second@example.com",
+                "https://api.openai.com/auth": {"chatgpt_plan_type": "plus"},
+            });
+            format!(
+                "{}.{}.{}",
+                b64(b"{}"),
+                b64(&serde_json::to_vec(&payload).unwrap()),
+                b64(b"sig")
+            )
+        };
+        let mut auth_dot_json = try_read_auth_json(&auth_file).expect("исходный файл читается");
+        let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
+        tokens.id_token = parse_id_token(&jwt).expect("jwt разбирается");
+        tokens.access_token = "fresh-access".to_string();
+        write_auth_json(&auth_file, &auth_dot_json, Some(&jwt)).expect("запись обязана пройти");
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&auth_file).unwrap()).unwrap();
+        assert_eq!(
+            raw["tokens"]["id_token"].as_str(),
+            Some(jwt.as_str()),
+            "на диске снова оказался разбор вместо самого токена"
+        );
+
+        let back = try_read_auth_json(&auth_file).expect("свой же файл обязан читаться");
+        let tokens = back.tokens.expect("токены на месте");
+        assert_eq!(tokens.id_token.email.as_deref(), Some("second@example.com"));
+        assert_eq!(
+            tokens.id_token.chatgpt_plan_type,
+            Some(PlanType::Known(KnownPlan::Plus))
+        );
+        assert_eq!(tokens.access_token, "fresh-access");
+    }
+
+    /// Токены есть, сырого токена не дали — молчаливо писать неполный файл НЕЛЬЗЯ.
+    /// Новое место вызова обязано падать громко, а не повторять поломку 13.08.
+    #[test]
+    fn writing_tokens_without_the_raw_jwt_is_refused() {
+        let dir = tempdir().unwrap();
+        let auth_file = dir.path().join("auth.json");
+        let auth_dot_json = AuthDotJson {
+            openai_api_key: None,
+            tokens: Some(TokenData::default()),
+            last_refresh: None,
+        };
+        assert!(write_auth_json(&auth_file, &auth_dot_json, None).is_err());
+        assert!(
+            !auth_file.exists(),
+            "отказ не должен оставлять огрызок файла"
+        );
+    }
+
+    #[test]
+    fn incomplete_staged_login_cannot_replace_an_existing_account() {
+        let destination = tempdir().unwrap();
+        login_with_api_key(destination.path(), "existing-local-credential").unwrap();
+        let before = fs::read(get_auth_file(destination.path())).unwrap();
+        let staged = tempdir().unwrap();
+        login_with_api_key(staged.path(), "incomplete-new-credential").unwrap();
+        assert!(install_staged_login(staged.path(), destination.path()).is_err());
+        assert_eq!(fs::read(get_auth_file(destination.path())).unwrap(), before);
+    }
+
+    #[test]
+    fn logout_removes_auth_file() -> Result<(), std::io::Error> {
+        let dir = tempdir()?;
+        login_with_api_key(dir.path(), "sk-test-key")?;
+        assert!(dir.path().join("auth.json").exists());
+        let removed = logout(dir.path())?;
+        assert!(removed);
+        assert!(!dir.path().join("auth.json").exists());
+        Ok(())
+    }
+}

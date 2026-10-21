@@ -1,0 +1,25 @@
+# Rust build artifacts
+target/
+
+# Packaged local binaries and runtime output
+*.exe
+logs/
+
+# Relay-owned credentials. Never commit or share this directory.
+local_auth/
+auth.json
+.env
+.env.*
+!.env.example
+
+# Local rollback and Codex workspace metadata
+src.bak-toolfix/
+.agents/
+.codex/
+
+# Editor and backup junk
+*.rs.bk
+*.log
+__pycache__/
+*.py[cod]
+/desktop/gen/

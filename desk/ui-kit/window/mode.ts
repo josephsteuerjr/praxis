@@ -156,6 +156,7 @@ export interface ComputerLive {
  */
 export interface ModeState {
   name: string;
+  service_here?: boolean;
   ladder_name?: string;
   ladder_title?: string;
   title: string;

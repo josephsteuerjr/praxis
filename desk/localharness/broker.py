@@ -222,6 +222,8 @@ def _read_exact(pipe, n: int) -> bytes:
 def call_service(pipe: str, payload: dict, wait_sec: float) -> dict:
     """Один запрос в трубу службы -> квитанция словарём. Отказ — исключение с
     человеческими словами (труба не открылась, оборвалась, не ответила)."""
+    if os.environ.get('HELENE_BROKER_DISABLED') == '1':
+        raise RuntimeError('Брокер исключён из Python-поставки; запрос недоступен.')
     import threading
     deadline = time.monotonic() + PIPE_BUSY_WAIT
     handle = None
@@ -559,6 +561,8 @@ class Broker:
 
     def ask(self, op: str, cmd: str, args, why: str, timeout_sec: int,
             wait_sec: int) -> str:
+        if os.environ.get('HELENE_BROKER_DISABLED') == '1':
+            return 'Брокер исключён из Python-поставки; запрос недоступен.'
         why = " ".join(str(why or "").split())
         cmd = str(cmd or "").strip()
         if isinstance(args, str):
@@ -897,6 +901,16 @@ def install(agent_mod, tree: Path, cfg: dict | None = None) -> None:
     править нельзя, поэтому схема дописывается в `BASE_TOOLS`, а исполнение — в
     `TOOL_IMPL`. Без записи в `BASE_TOOLS` модель об этой руке просто не узнает.
     """
+    if os.environ.get('HELENE_BROKER_DISABLED') == '1':
+        impl = getattr(agent_mod, 'TOOL_IMPL', {})
+        if isinstance(impl, dict):
+            impl.pop('broker_request', None)
+        tools = getattr(agent_mod, 'BASE_TOOLS', None)
+        if isinstance(tools, list):
+            tools[:] = [t for t in tools if not isinstance(t, dict) or t.get('name') != 'broker_request']
+        STATE.update({'hand': False, 'desk': '', 'asks': 0, 'answers': 0,
+                      'note': 'Брокер исключён из Python-поставки; повышение прав недоступно.'})
+        return
     if not HAS_BROKER:
         # Брокера на этой платформе нет (прочие POSIX): просьбы о правах
         # исполняет служба Windows или оболочка на macOS, здесь их подписывать

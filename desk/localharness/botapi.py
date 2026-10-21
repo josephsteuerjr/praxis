@@ -323,6 +323,13 @@ class Rooms:
         known = self._titles.get(str(chat_id))
         if known:
             return known
+        path = self.tree / "memory/.state/group_context" / (str(chat_id) + ".json")
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        if saved.get("title"):
+            return {"title": saved["title"], "is_dm": not str(chat_id).startswith("-")}
         # Карта комнат живёт в RAM и после рестарта пуста, а комнаты — на диске.
         # Минимум, который можно сказать честно по одному ключу: минусовый peer —
         # группа. Иначе ход из окна в группу после рестарта шёл бы личкой.
@@ -334,7 +341,7 @@ class Rooms:
         # приращением, а не полным перечитыванием файла на каждом сообщении.
         meta = self.meta(chat_id)
         _registry(self.tree, str(chat_id), archive,
-                  participants=int(meta.get("size") or 2))
+                  participants=int(meta.get("size") or 2), title=str(meta.get("title") or ""))
 
     def record(self, chat_id: str, text: str, *, outgoing: bool, sender: str = "",
                source_id: str = "", ts: float | None = None,
@@ -938,8 +945,9 @@ class BotTransport:
         if thread_id and replied_topic.get("name"):
             self._topic_names[(chat_id, thread_id)] = str(replied_topic["name"])
         if thread_id:
-            topic = self._topic_names.get((chat_id, thread_id)) or f"тема {thread_id}"
-            title = f"{title} · {topic}"
+            topic = self._topic_names.get((chat_id, thread_id))
+            saved_title = str(self.rooms.meta(conversation).get("title") or "")
+            title = f"{title} · {topic}" if topic else (saved_title or f"{title} · тема {thread_id}")
         self.rooms.describe(conversation, title=title, is_dm=is_dm,
                             sender=(sender_name, str(sender.get("id") or "")))
         self.contacts.note(str(sender.get("id") or ""), name=sender_name,
@@ -1164,6 +1172,12 @@ class BotTransport:
                 os.replace(temporary, path)
         except Exception:
             log.warning('статус ожидания Telegram не записался', exc_info=True)
+
+    def cooldown_snapshot(self, chat_id):
+        peer, _thread = peer_thread(str(chat_id))
+        cooldown = getattr(self, '_cooldown', None)
+        return cooldown.snapshot(str(peer)) if cooldown else {
+            "peer": str(peer), "state": "unknown", "source": "no_observed_deadline", "margin_seconds": 2}
 
     def _retry_send(self, peer, method, operation):
         from telegram_retry import Cooldown, DeliveryCancelled

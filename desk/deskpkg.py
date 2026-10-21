@@ -88,6 +88,8 @@ class Part:
 
 
 PARTS: tuple[Part, ...] = (
+    Part("python_app.py", "python_app.py", DESKTOP, kind="file",
+         why="Python application: existing UI, component lifecycle and native host bridge"),
     Part("deskapp.py", "deskapp.py", FLAVORS, kind="file",
          why="канал: HTTP, вебсокет, ключи, комнаты"),
     Part("deskd", "deskd", FLAVORS, kind="py",
@@ -137,6 +139,8 @@ def requirements(flavor: str) -> list[str]:
     deps = list(DEPS_CHANNEL)
     if "localharness" in names:
         deps += DEPS_RUNNER
+    if "python_app.py" in names:
+        deps += ["pywebview==6.2.1"]
     return deps
 
 

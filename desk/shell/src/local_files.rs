@@ -1,134 +1,140 @@
-//! File operations belong to the interactive shell, including remote-agent windows.
-//! They never delegate a local path to the server or elevate its filesystem rights.
-use std::{fs, io::{Read, Write}, path::{Path, PathBuf}, sync::atomic::{AtomicU64, Ordering}};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use serde_json::{Value, json};
-const MAX: u64 = 64 * 1024 * 1024;
-static SEQ: AtomicU64 = AtomicU64::new(0);
-
-fn home() -> Result<PathBuf, String> {
-    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
-        .filter(|p| p.is_absolute() && p.is_dir()).ok_or_else(|| "Не удалось найти домашнюю папку".into())
-}
-fn visible_path(path: &Path) -> String {
-    let said = path.to_string_lossy();
-    if let Some(unc) = said.strip_prefix("\\\\?\\UNC\\") { return format!("\\\\{unc}"); }
-    said.strip_prefix("\\\\?\\").unwrap_or(&said).to_string()
-}
-#[cfg(windows)]
-fn known(id: windows::core::GUID) -> Option<PathBuf> {
-    use windows::Win32::{UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT}, System::Com::CoTaskMemFree};
-    unsafe {
-        let raw = SHGetKnownFolderPath(&id, KF_FLAG_DEFAULT, None).ok()?;
-        let value = raw.to_string().ok().map(PathBuf::from);
-        CoTaskMemFree(Some(raw.0.cast())); value
-    }
-}
-fn places() -> Result<Vec<(String, PathBuf)>, String> {
-    let h = home()?;
-    #[cfg(windows)]
-    let dirs = {
-        use windows::Win32::UI::Shell::{FOLDERID_Downloads, FOLDERID_Documents, FOLDERID_Desktop};
-        vec![("Загрузки", known(FOLDERID_Downloads).unwrap_or_else(|| h.join("Downloads"))),
-             ("Документы", known(FOLDERID_Documents).unwrap_or_else(|| h.join("Documents"))),
-             ("Рабочий стол", known(FOLDERID_Desktop).unwrap_or_else(|| h.join("Desktop")))]
-    };
-    #[cfg(not(windows))]
-    let dirs = vec![("Загрузки", h.join("Downloads")), ("Документы", h.join("Documents")), ("Рабочий стол", h.join("Desktop"))];
-    let mut out: Vec<_> = dirs.into_iter().filter(|(_, p)| p.is_dir()).map(|(n,p)| (n.to_string(),p)).collect();
-    out.push(("Домашняя папка".into(), h));
-    #[cfg(windows)]
-    for c in b'A'..=b'Z' { let p = PathBuf::from(format!("{}:\\", c as char)); if p.is_dir() { out.push((format!("{}:", c as char), p)); } }
-    #[cfg(not(windows))]
-    out.push(("Файловая система".into(), PathBuf::from("/")));
-    Ok(out)
-}
-pub fn list(said: &str) -> Result<Value, String> {
-    let locations = places()?;
-    let p = if said.is_empty() { locations[0].1.clone() } else { PathBuf::from(said) };
-    if !p.is_absolute() { return Err("Выбери абсолютный путь к папке".into()); }
-    let path = fs::canonicalize(p).map_err(|e| format!("Не удалось открыть папку: {e}"))?;
-    let mut rows: Vec<(bool, String, Value)> = Vec::new();
-    for entry in fs::read_dir(&path).map_err(|e| format!("Не удалось прочитать папку: {e}"))?.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let Ok(meta) = fs::metadata(entry.path()) else { continue; };
-        if !meta.is_dir() && !meta.is_file() { continue; }
-        let folder = meta.is_dir();
-        rows.push((!folder, name.to_lowercase(), json!({"name": name, "path": visible_path(&entry.path()), "folder": folder, "size": if folder {0} else {meta.len()}})));
-    }
-    rows.sort_by(|a,b| (&a.0,&a.1).cmp(&(&b.0,&b.1)));
-    let total = rows.len();
-    Ok(json!({"path": visible_path(&path), "parent": path.parent().map(visible_path).unwrap_or_default(),
-        "locations": locations.into_iter().map(|(name,path)| json!({"name":name,"path":path})).collect::<Vec<_>>(),
-        "entries": rows.into_iter().map(|(_,_,v)|v).collect::<Vec<_>>(), "total":total}))
-}
-pub fn read(said: &str) -> Result<Value, String> {
-    let p = Path::new(said); if !p.is_absolute() { return Err("Выбери абсолютный путь к файлу".into()); }
-    let file = fs::File::open(p).map_err(|e| format!("Не удалось открыть файл: {e}"))?;
-    let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() || meta.len() > MAX { return Err("Выбери файл до 64 МБ".into()); }
-    let mut data = Vec::new(); file.take(MAX + 1).read_to_end(&mut data).map_err(|e| format!("Не удалось прочитать файл: {e}"))?;
-    if data.len() as u64 > MAX { return Err("Файл больше 64 МБ".into()); }
-    let ext = p.extension().and_then(|x|x.to_str()).unwrap_or("").to_lowercase();
-    let mime = match ext.as_str() { "png"=>"image/png", "jpg"|"jpeg"=>"image/jpeg", "webp"=>"image/webp", "gif"=>"image/gif", "mp3"=>"audio/mpeg", "wav"=>"audio/wav", "ogg"=>"audio/ogg", "webm"=>"audio/webm", "m4a"=>"audio/mp4", "txt"|"md"=>"text/plain", _=>"application/octet-stream" };
-    Ok(json!({"name":p.file_name().unwrap_or_default().to_string_lossy(), "mime":mime, "size":data.len(), "data":STANDARD.encode(data)}))
-}
-fn valid_name(name: &str) -> bool {
-    if name.is_empty() || name == "." || name == ".." || name.ends_with(['.', ' ']) || name.chars().any(|c| c.is_control() || "/\\:*?\"<>|".contains(c)) { return false; }
-    let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
-    !matches!(stem.as_str(), "CON"|"PRN"|"AUX"|"NUL"|"COM1"|"COM2"|"COM3"|"COM4"|"COM5"|"COM6"|"COM7"|"COM8"|"COM9"|"LPT1"|"LPT2"|"LPT3"|"LPT4"|"LPT5"|"LPT6"|"LPT7"|"LPT8"|"LPT9")
-}
-#[cfg(windows)]
-fn move_file(from: &Path, to: &Path, overwrite: bool) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
-    let a: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let b: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    let flags = MOVEFILE_WRITE_THROUGH | if overwrite { MOVEFILE_REPLACE_EXISTING } else { 0 };
-    if unsafe { MoveFileExW(a.as_ptr(), b.as_ptr(), flags) } == 0 { Err(std::io::Error::last_os_error()) } else { Ok(()) }
-}
+//! Windows native file-dialog IO is Python-owned; other platforms retain their
+//! prior native owner until their process custody can be qualified separately.
+//!
+//! No Windows file operation or fallback lives here. The bundled Python and the
+//! reviewed source package are siblings of the native binary; the owner-only
+//! HTTP route uses the same deskd.local_files implementation. A dispatched
+//! save with a missing result is UNKNOWN, never a reason to retry blindly.
 #[cfg(not(windows))]
-fn move_file(from: &Path, to: &Path, overwrite: bool) -> std::io::Result<()> {
-    if overwrite { fs::rename(from, to) } else { fs::hard_link(from, to)?; fs::remove_file(from) }
-}
-pub fn save(folder: &str, name: &str, data: &str, overwrite: bool) -> Result<Value, String> {
-    if !valid_name(name) { return Err("Имя файла содержит путь или служебные символы".into()); }
-    let parent = Path::new(folder);
-    if !parent.is_absolute() || !parent.is_dir() { return Err("Выбери существующую папку".into()); }
-    if data.len() as u64 > MAX.div_ceil(3) * 4 { return Err("Файл больше 64 МБ".into()); }
-    let bytes = STANDARD.decode(data).map_err(|_| "Не удалось прочитать содержимое файла")?;
-    if bytes.len() as u64 > MAX { return Err("Файл больше 64 МБ".into()); }
-    let target = parent.join(name);
-    if !overwrite && target.symlink_metadata().is_ok() { return Err("file_exists: файл с этим именем уже существует".into()); }
-    let tmp = parent.join(format!(".helene-save-{}-{}", std::process::id(), SEQ.fetch_add(1,Ordering::Relaxed)));
-    let mut created = false;
-    let result = (|| -> std::io::Result<()> {
-        let mut sink = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        created = true;
-        sink.write_all(&bytes)?; sink.sync_all()?; drop(sink);
-        move_file(&tmp, &target, overwrite)?;
-        Ok(())
-    })();
-    if created { let _ = fs::remove_file(&tmp); }
-    if let Err(e) = result {
-        if e.kind() == std::io::ErrorKind::AlreadyExists { return Err("file_exists: файл с этим именем уже существует".into()); }
-        return Err(format!("Не удалось сохранить файл: {e}"));
+#[path = "local_files_legacy.rs"]
+mod native;
+#[cfg(not(windows))]
+pub use native::{list, read, save};
+
+#[cfg(windows)]
+use std::{io::{Read, Write}, path::Path, process::{Command, Stdio}, time::{Duration, Instant}};
+#[cfg(windows)]
+use serde_json::{json, Value};
+
+#[cfg(windows)]
+const MAX_CONTENT: usize = 64 * 1024 * 1024;
+#[cfg(windows)]
+const MAX_FRAME: usize = ((MAX_CONTENT + 2) / 3) * 4 + 65536;
+#[cfg(windows)]
+const FILE_CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[cfg(windows)]
+fn drain(mut pipe: impl Read, keep: usize) -> std::io::Result<Vec<u8>> {
+    let mut result = Vec::new();
+    let mut buffer = [0; 16384];
+    loop {
+        let count = pipe.read(&mut buffer)?;
+        if count == 0 { break; }
+        let room = keep.saturating_sub(result.len());
+        result.extend_from_slice(&buffer[..room.min(count)]);
+        // Continue draining even after a cut so the child cannot deadlock on
+        // a full pipe. A cut is refused rather than parsed as a valid receipt.
     }
-    Ok(json!({"path":target,"bytes":bytes.len(),"saved":true}))
+    Ok(result)
 }
 
-#[cfg(test)] mod tests {
+#[cfg(windows)]
+pub fn list(path: &str) -> Result<Value, String> {
+    invoke("list", json!({"path": path}))
+}
+
+#[cfg(windows)]
+pub fn read(path: &str) -> Result<Value, String> {
+    invoke("read", json!({"path": path}))
+}
+
+#[cfg(windows)]
+pub fn save(folder: &str, name: &str, data: &str, overwrite: bool) -> Result<Value, String> {
+    if data.len() > MAX_FRAME {
+        return Err("Файл больше 64 МБ".into());
+    }
+    invoke("save", json!({"folder":folder,"name":name,"data":data,"overwrite":overwrite}))
+}
+
+#[cfg(windows)]
+fn invoke(action: &str, args: Value) -> Result<Value, String> {
+    let base = super::install_root();
+    let script = base.join("app").join("localharness").join("local_files_cli.py");
+    let python = super::bundled_python(&base);
+    if !script.is_file() || !python.is_file() {
+        return Err("Файловый диалог Python в этой установке недоступен".into());
+    }
+    run(&python, &script, action, args)
+}
+
+#[cfg(windows)]
+fn run(python: &Path, script: &Path, action: &str, mut args: Value) -> Result<Value, String> {
+    args["action"] = Value::String(action.into());
+    let input = serde_json::to_vec(&args).map_err(|e| e.to_string())?;
+    if input.len() > MAX_FRAME {
+        return Err("Файл больше 64 МБ".into());
+    }
+    let mut cmd = Command::new(python);
+    cmd.arg("-u").arg(script).env("PYTHONUTF8", "1")
+        .env("HELENE_PARENT_PID", std::process::id().to_string())
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Admission to the window's kill-on-close Job must happen BEFORE the
+        // script sees any input, including a save it could commit after Stop.
+        cmd.creation_flags(super::CREATE_NO_WINDOW | 0x4);
+    }
+    let mut child = cmd.spawn().map_err(|e| format!("Python файлового диалога не запустился: {e}"))?;
+    if let Err(error) = super::adopt_suspended(&mut child) {
+        return Err(format!("Python файлового диалога не получил Job: {error}"));
+    }
+    let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let (Some(input_pipe), Some(output_pipe), Some(error_pipe)) = pipes else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Python не открыл канал; исход файловой операции неизвестен".into());
+    };
+    let writer = std::thread::spawn(move || {
+        let mut input_pipe = input_pipe;
+        input_pipe.write_all(&input)
+    });
+    let reader = std::thread::spawn(move || drain(output_pipe, MAX_FRAME + 1));
+    let errors = std::thread::spawn(move || drain(error_pipe, 0));
+    let until = Instant::now() + FILE_CALL_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < until => std::thread::sleep(Duration::from_millis(25)),
+            Ok(None) => break Err("Файловая операция превысила 120 с; исход неизвестен".to_string()),
+            Err(e) => break Err(format!("Исход файловой операции неизвестен: {e}")),
+        }
+    };
+    if status.is_err() { let _ = child.kill(); let _ = child.wait(); }
+    // Join even on a failed write or timeout: Python may already have
+    // committed a save. Never re-dispatch this invocation automatically.
+    let sent = writer.join().ok().and_then(Result::ok).is_some();
+    let output = reader.join().ok().and_then(Result::ok);
+    let _ = errors.join();
+    let status = status?;
+    let output = output.ok_or("Исход файловой операции неизвестен; перечитай файл")?;
+    if !sent || !status.success() || output.len() > MAX_FRAME {
+        return Err("Исход файловой операции неизвестен; перечитай файл перед повтором".into());
+    }
+    let receipt: Value = serde_json::from_slice(&output)
+        .map_err(|_| "Python не вернул квитанцию; перечитай файл перед повтором".to_string())?;
+    match (receipt.get("ok").and_then(Value::as_bool), receipt.get("result")) {
+        (Some(true), Some(value)) if value.is_object() => Ok(value.clone()),
+        (Some(false), _) => Err(receipt.get("error").and_then(Value::as_str)
+                                .unwrap_or("Python отказал в файловой операции").to_string()),
+        _ => Err("Python вернул неполную квитанцию; перечитай файл перед повтором".into()),
+    }
+}
+
+#[cfg(all(test, windows))] mod tests {
     use super::*;
-    #[test] fn atomic_save_conflict_replace_and_local_read() {
-        let p = std::env::temp_dir().join(format!("helene-paper-files-{}-{}",std::process::id(),SEQ.fetch_add(1,Ordering::Relaxed))); fs::create_dir(&p).unwrap();
-        let folder = p.to_str().unwrap();
-        save(folder,"отчёт.txt", &STANDARD.encode(b"first"), false).unwrap();
-        assert!(save(folder,"отчёт.txt", &STANDARD.encode(b"lost"), false).unwrap_err().contains("file_exists"));
-        assert_eq!(fs::read(p.join("отчёт.txt")).unwrap(),b"first");
-        save(folder,"отчёт.txt", &STANDARD.encode(b"second"), true).unwrap();
-        assert_eq!(read(p.join("отчёт.txt").to_str().unwrap()).unwrap()["data"], STANDARD.encode(b"second"));
-        assert_eq!(list(folder).unwrap()["entries"].as_array().unwrap().len(),1);
-        assert!(save(folder,"../bad","",false).is_err()); assert!(save(folder,"CON.txt","",false).is_err());
-        fs::remove_dir_all(p).unwrap();
+    #[test] fn missing_python_refuses_without_rust_file_io() {
+        assert!(run(Path::new("missing-python"), Path::new("missing-script"),
+                    "list", json!({"path":"C:/"})).is_err());
     }
 }

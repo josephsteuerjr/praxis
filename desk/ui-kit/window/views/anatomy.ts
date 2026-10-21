@@ -235,7 +235,7 @@ function modeHTML(m: ModeState | null): string {
   const mac = isMacPlatform(S.platform);
   const facts = [
     `ограда песочницы: ${m.sandbox ? "включена" : "выключена"}`,
-    `${mac ? "служба (демон launchd)" : S.platform === "linux" ? "служба systemd" : "служба Windows"}: ${svc}`,
+    m.service_here !== false ? `${mac ? "служба (демон launchd)" : S.platform === "linux" ? "служба systemd" : "служба Windows"}: ${svc}` : '',
     // Две галочки службы — разные вопросы, и на экране они стоят порознь.
     // `session0` — права системы агенту; `firewall` — правило брандмауэра для
     // кнопки «Телефон». Про брандмауэр говорим только когда он ВЫКЛЮЧЕН: это

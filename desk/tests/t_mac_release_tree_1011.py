@@ -50,6 +50,11 @@ class FinalGuard(unittest.TestCase):
             try:
                 # The same real import caused the late addition in the CI archive.
                 build_mac.bd.scan_for_secrets(out,live,scan_runtime=False)
+                # The scanner now suppresses its import's bytecode itself.
+                self.assertFalse(list(live.rglob('*.pyc')))
+                # Still exercise cleanup of a cache left by an earlier builder.
+                import py_compile
+                py_compile.compile(str(target), doraise=True)
                 self.assertTrue(list(live.rglob('*.pyc')))
                 scanned,removed=build_mac.final_secret_guard(out,live,original,scan_runtime=False)
             finally:

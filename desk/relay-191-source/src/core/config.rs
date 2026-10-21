@@ -1,0 +1,147 @@
+use std::path::{Path, PathBuf};
+
+pub const RELAY_INSTRUCTIONS_FILE_ENV_VAR: &str = "RELAY_INSTRUCTIONS_FILE";
+pub const DEFAULT_INSTRUCTIONS_FILE: &str = "instructions.txt";
+
+/// Where the operator's own instructions text lives.
+///
+/// `RELAY_INSTRUCTIONS_FILE` wins when set; otherwise `instructions.txt` sits next
+/// to the executable, beside the auth directory the relay already keeps there.
+pub fn instructions_file_path() -> PathBuf {
+    if let Some(value) = std::env::var_os(RELAY_INSTRUCTIONS_FILE_ENV_VAR) {
+        let path = PathBuf::from(value);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(DEFAULT_INSTRUCTIONS_FILE)))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_INSTRUCTIONS_FILE))
+}
+
+/// The operator's instructions, if they wrote any.
+///
+/// Read per request rather than at startup, so an edit lands on the next call with
+/// no restart.  Missing, unreadable, or blank is not an error: it means "no
+/// override", and the built-in text answers instead -- a wrong path degrades to
+/// today's behavior rather than to an empty instructions field upstream.
+pub fn custom_instructions() -> Option<String> {
+    read_instructions(&instructions_file_path())
+}
+
+fn read_instructions(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let text = text.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Config {
+    pub codex_home: PathBuf,
+    pub chatgpt_base_url: String,
+    pub model: String,
+    pub user_instructions: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub instructions_mode: Option<String>,
+    pub parallel_tool_calls: bool,
+}
+
+impl Config {
+    pub fn load() -> anyhow::Result<Self> {
+        let codex_home = auth_root()?;
+        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let reasoning_effort = Self::load_reasoning_effort();
+        let instructions_mode = Self::load_instructions_mode();
+        let parallel_tool_calls = Self::load_parallel_tool_calls();
+
+        Ok(Config {
+            codex_home,
+            chatgpt_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
+            model: std::env::var("RELAY_DEFAULT_MODEL").unwrap_or_default(),
+            user_instructions,
+            reasoning_effort,
+            instructions_mode,
+            parallel_tool_calls,
+        })
+    }
+
+    /// RELAY_INSTRUCTIONS: "codex" (default — full vendored prompt.md, known-accepted
+    /// by the backend) or "minimal" — a ~60-word neutral stub instead of ~5k tokens of
+    /// coding-agent instructions per call.  When minimal is rejected upstream (4xx) the
+    /// request is retried once with the full prompt, so the worst case is the default.
+    pub fn minimal_instructions(&self) -> bool {
+        self.instructions_mode.as_deref() == Some("minimal")
+    }
+
+    fn load_instructions_mode() -> Option<String> {
+        std::env::var("RELAY_INSTRUCTIONS")
+            .ok()
+            .map(|v| v.trim().to_lowercase())
+    }
+
+    /// RELAY_PARALLEL_TOOL_CALLS: unset/"true" lets the model batch several tool calls
+    /// in one response (the only client executes batched tool_use natively); "false"
+    /// restores the old one-tool-per-round-trip behavior.
+    fn load_parallel_tool_calls() -> bool {
+        !matches!(
+            std::env::var("RELAY_PARALLEL_TOOL_CALLS")
+                .ok()
+                .as_deref()
+                .map(str::trim),
+            Some("false") | Some("0") | Some("off")
+        )
+    }
+
+    /// RELAY_REASONING_EFFORT: none|minimal|low|medium|high|xhigh, applied when a
+    /// request carries no reasoning_effort of its own.  "passthrough"/"default"/""
+    /// omit the field entirely (upstream default, currently medium).  Env unset
+    /// keeps today's behavior: reasoning disabled ("none") on every call.
+    fn load_reasoning_effort() -> Option<String> {
+        match std::env::var("RELAY_REASONING_EFFORT") {
+            Ok(value) => {
+                let value = value.trim().to_lowercase();
+                if value.is_empty() || value == "passthrough" || value == "default" {
+                    None
+                } else {
+                    Some(value)
+                }
+            }
+            Err(_) => Some("none".to_string()),
+        }
+    }
+
+    fn load_instructions(codex_dir: Option<&std::path::Path>) -> Option<String> {
+        let mut p = codex_dir?.to_path_buf();
+
+        p.push("AGENTS.md");
+        std::fs::read_to_string(&p).ok().and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        })
+    }
+}
+
+/// Standalone credentials belong to the relay installation. Embedding hosts
+/// retain their explicit working-directory contract through RELAY_LOCAL.
+pub fn auth_root() -> std::io::Result<PathBuf> {
+    if let Some(path) = std::env::var_os("RELAY_AUTH_DIR").filter(|p| !p.is_empty()) {
+        return std::path::absolute(path);
+    }
+    if crate::login::lib::relay_local() {
+        return Ok(std::env::current_dir()?.join("local_auth"));
+    }
+    let exe = std::env::current_exe()?;
+    Ok(exe
+        .parent()
+        .ok_or_else(|| std::io::Error::other("executable has no directory"))?
+        .join("local_auth"))
+}

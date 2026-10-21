@@ -171,7 +171,7 @@ export function fileDialog(access: FileAccess, options: { save?: string; count?:
           receipt.textContent = "Существующий файл оставлен без изменений.";
           confirmText.textContent = `«${said}» уже есть в этой папке. Заменить его содержимое?`;
           confirm.hidden = false; working(false); keep.focus();
-        } else receipt.textContent = "Не удалось сохранить: " + fileError(e);
+        } else receipt.textContent = "Не удалось подтвердить сохранение: " + fileError(e) + " Проверь файл в папке перед повтором.";
       } finally { saving = false; if (!ended) working(false); }
     }
     working(false); void load("");

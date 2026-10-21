@@ -186,13 +186,18 @@ class Runner(unittest.TestCase):
         life = FakeLife(hold=hold)
         runner._life = life
         control.fold_request(self.tree, "window")
-        runner._fold_tick(self.tree)
-        time.sleep(0.1)
+        reader = threading.Thread(target=runner._fold_tick, args=(self.tree,))
+        reader.start()
+        end = time.time() + 2
+        while not life.calls and time.time() < end:
+            time.sleep(0.01)
         control.fold_request(self.tree, "chat-2")
         runner._fold_tick(self.tree)          # занято — не берёт
         self.assertTrue((self.tree / "memory" / ".control" / control.FOLD_REQUEST).is_file())
         self.assertEqual(control.fold_state(self.tree, "window")["receipt"]["state"], "running")
         hold.set()
+        reader.join(3)
+        self.assertFalse(reader.is_alive())
         self.settle("done")
         runner._fold_tick(self.tree)          # теперь берёт вторую
         end = time.time() + 5
@@ -207,6 +212,38 @@ class Runner(unittest.TestCase):
         runner._fold_tick(self.tree)
         self.assertTrue((self.tree / "memory" / ".control" / control.FOLD_REQUEST).is_file())
 
+
+class AuthoredButton(unittest.TestCase):
+    def test_control_reaches_exact_window_or_topic_without_helper_or_inbox_file(self):
+        from unittest import mock
+        for room in ('window-deadbeef', '-123__topic__19'):
+            with self.subTest(room=room), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); claimed=root/'fold.processing.json'; claimed.write_text('{}')
+                with mock.patch.object(runner, '_life', type('Life',(),{'fold_now':staticmethod(lambda place:{'author_required':True})})), mock.patch.object(runner,'handle_desk') as window, mock.patch.object(runner,'handle_owner_note') as topic:
+                    runner._fold_run(root, {'room':room,'id':'request'}, claimed)
+                    call=(window if room.startswith('window') else topic).call_args
+                    self.assertIsNotNone(call)
+                    self.assertIn(room, str(call))
+                    self.assertIn('prepare', str(call))
+                    self.assertFalse(list((root/'memory/.control/desk_inbox').glob('*')))
+
+class AuthoredCompletion(unittest.TestCase):
+    def test_returned_author_turn_never_remains_requested_and_done_is_preserved(self):
+        from unittest import mock
+        for completed in (False, True):
+            with self.subTest(completed=completed), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); claimed=root/'fold.processing.json'; claimed.write_text('{}')
+                receipt=root/'memory/.state/fold-receipt.json'
+                def author(*args, **kwargs):
+                    if completed:
+                        row=json.loads(receipt.read_text(encoding='utf-8'))
+                        row.update(state='done', compact_id='confirmed')
+                        receipt.write_text(json.dumps(row),encoding='utf-8')
+                with mock.patch.object(runner,'_life',type('Life',(),{'fold_now':staticmethod(lambda place:{'author_required':True})})), mock.patch.object(runner,'handle_desk',side_effect=author):
+                    runner._fold_run(root,{'room':'window-deadbeef','id':'request'},claimed)
+                row=json.loads(receipt.read_text(encoding='utf-8'))
+                self.assertEqual(row['state'],'done' if completed else 'nothing')
+                self.assertFalse(claimed.exists())
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

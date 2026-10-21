@@ -1,5 +1,5 @@
 // CLI intent is delivered to the owning host, including its transfer/resume gate.
-export function launchIntent(argv: string[]): { action: "panic" | "resume" | null; agent: string | null; notify: boolean } {
+export function launchIntent(argv: string[]): { action: "panic" | "resume" | null; agent: string | null; notify: boolean; pythonSupervisor: boolean } {
   const controls = argv.filter((a) => a === "--panic" || a === "--resume");
   if (controls.length > 1) throw new Error("Укажи одну команду: --panic или --resume");
   const index = argv.indexOf("--agent");
@@ -8,12 +8,13 @@ export function launchIntent(argv: string[]): { action: "panic" | "resume" | nul
     throw new Error("--agent требует одну папку агента");
   }
   return { action: controls[0] === "--panic" ? "panic" : controls[0] === "--resume" ? "resume" : null,
-    agent: agent || null, notify: argv.includes("--notify") };
+    agent: agent || null, notify: argv.includes("--notify"), pythonSupervisor: argv.includes("--python-supervisor") };
 }
 
 export async function forwardLaunch(argv: string[], invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>): Promise<unknown> {
   const intent = launchIntent(argv);
   if (intent.action) return invoke("owner_control", { action: intent.action });
+  if (intent.pythonSupervisor) throw new Error("Python owner is a startup choice; close this window before changing its process owner");
   if (intent.agent) return invoke("switch_agent", { id: intent.agent });
   return null;
 }

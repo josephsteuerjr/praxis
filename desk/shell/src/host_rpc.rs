@@ -11,8 +11,12 @@ async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -
         "local_files_save" => local_files_save(argument::<String>(args, "folder", "folder")?, argument::<String>(args, "name", "name")?, argument::<String>(args, "data", "data")?, argument::<bool>(args, "overwrite", "overwrite")?).await,
         "owner_control" => serde_json::to_value(owner_control(argument::<String>(args, "action", "action")?).await?).map_err(|e| e.to_string()),
         "owner_state" => serde_json::to_value(owner_state()).map_err(|e| e.to_string()),
+        "window_retire_ack" => {
+            app.retire_window_ack(argument::<u64>(args, "retire_id", "retireId")?)?;
+            Ok(serde_json::json!({"ok": true}))
+        },
         "engine_restart" => serde_json::to_value(engine_restart()?).map_err(|e| e.to_string()),
-        "config_save" => serde_json::to_value(config_save(app.clone(), argument::<String>(args, "config", "config")?, argument::<Option<String>>(args, "mtime_ns", "mtimeNs")?)?).map_err(|e| e.to_string()),
+        "config_save" => serde_json::to_value(config_save(app.clone(), argument::<String>(args, "config", "config")?, argument::<Option<String>>(args, "mtime_ns", "mtimeNs")?).await?).map_err(|e| e.to_string()),
         "restart_self" => serde_json::to_value(restart_self(app.clone())).map_err(|e| e.to_string()),
         "install_service" => serde_json::to_value(install_service().await?).map_err(|e| e.to_string()),
         "remove_service" => serde_json::to_value(remove_service().await?).map_err(|e| e.to_string()),
@@ -50,7 +54,7 @@ async fn host_command(app: &ShellHandle, name: &str, args: &serde_json::Value) -
         "agents_list" => serde_json::to_value(agents_list(app.state::<LocalHarness>())).map_err(|e| e.to_string()),
         "switch_agent" => serde_json::to_value(switch_agent(app.clone(), argument::<String>(args, "id", "id")?)?).map_err(|e| e.to_string()),
         "agent_add" => serde_json::to_value(agent_add(app.clone(), argument::<String>(args, "name", "name")?, argument::<Option<serde_json::Value>>(args, "soul", "soul")?, argument::<Option<String>>(args, "soul_kind", "soulKind")?, argument::<Option<String>>(args, "soul_text", "soulText")?, argument::<Option<String>>(args, "soul_from", "soulFrom")?).await?).map_err(|e| e.to_string()),
-        "agent_default_set" => serde_json::to_value(agent_default_set(argument::<String>(args, "id", "id")?)?).map_err(|e| e.to_string()),
+        "agent_default_set" => serde_json::to_value(agent_default_set(argument::<String>(args, "id", "id")?).await?).map_err(|e| e.to_string()),
         "agent_enabled_set" => serde_json::to_value(agent_enabled_set(app.clone(), argument::<String>(args, "id", "id")?, argument::<bool>(args, "enabled", "enabled")?).await?).map_err(|e| e.to_string()),
         "agent_remove" => serde_json::to_value(agent_remove(app.clone(), argument::<String>(args, "id", "id")?).await?).map_err(|e| e.to_string()),
         _ => Err(format!("unknown host command: {name}")),
@@ -80,6 +84,10 @@ pub fn run_host() {
     let app = ShellHandle::new(LocalHarness {
         children: Mutex::new(boot.children), plans: Mutex::new(boot.plans),
         stopping: std::sync::atomic::AtomicBool::new(false),
+        #[cfg(windows)]
+        python: Mutex::new(boot.python),
+        #[cfg(windows)]
+        python_selected: boot.python_selected,
     });
     #[cfg(target_os = "linux")]
     if service_owns_harness() {
@@ -104,7 +112,10 @@ pub fn run_host() {
     let worker = app.clone();
     std::thread::spawn(move || watch_children(worker));
     std::thread::spawn(update_autocheck);
-    std::thread::spawn(backup_ticker);
+    // Python application owns the essential backup policy/timer, not two tickers.
+    if !std::env::args().any(|a| a == "--python-app") {
+        std::thread::spawn(backup_ticker);
+    }
     if boot.tree.is_some() {
         for agent in raisable(&boot.base) {
             watch_outbound(app.clone(), agent.tree.clone(), agent.name.clone(), boot.notify_text);

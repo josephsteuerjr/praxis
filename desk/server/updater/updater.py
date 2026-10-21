@@ -132,6 +132,7 @@ SERVER_SKIP = frozenset({"runtime"})
 REQUIRED = ("helene-build.json", "requirements.txt", "app/deskapp.py", "app/desk.json",
             "app/localharness/runner.py", "app/deskd/control.py", "tree",
             "server/Dockerfile", "server/docker-compose.yml", "server/serverboot.py",
+            "server/supervisor_policy.py",
             "server/updater/updater.py", "server/updater/protocol.py")
 
 #: Переменные compose-файла агента -> откуда взять их значение в ЖИВОМ контейнере.

@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>praxis-relay</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="titlebar">
+      <div class="window-controls">
+        <button
+          data-window="minimize"
+          title="Свернуть в трей"
+          aria-label="Свернуть в трей"
+        >
+          <svg viewBox="0 0 16 16"><path d="M3 8h10" /></svg></button
+        ><button
+          data-window="maximize"
+          title="Развернуть / восстановить"
+          aria-label="Развернуть или восстановить"
+        >
+          <svg viewBox="0 0 16 16">
+            <rect x="3.5" y="3.5" width="9" height="9" rx="1" />
+          </svg></button
+        ><button
+          data-window="close"
+          title="Убрать в трей"
+          aria-label="Закрыть в трей"
+        >
+          <svg viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8" /></svg>
+        </button>
+      </div>
+    </div>
+    <aside>
+      <div class="brand">
+        <div>
+          <strong>praxis-relay</strong
+          ><small id="sidebar-version">v.1.0.0</small>
+        </div>
+      </div>
+      <nav aria-label="Разделы">
+        <button
+          data-page="overview"
+          class="selected"
+          aria-label="Главная"
+          title="Главная · Ctrl+1"
+        >
+          <svg viewBox="0 0 24 24">
+            <path d="m3 11 9-7 9 7M6 10v10h12V10m-8 10v-6h4v6" /></svg
+          ><span>Главная</span><kbd>1</kbd></button
+        ><button
+          data-page="accounts"
+          aria-label="Подписки"
+          title="Подписки · Ctrl+2"
+        >
+          <svg viewBox="0 0 24 24">
+            <circle cx="9" cy="8" r="3" />
+            <path
+              d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v2"
+            /></svg
+          ><span>Подписки</span><kbd>2</kbd></button
+        ><button
+          data-page="activity"
+          aria-label="События"
+          title="События · Ctrl+3"
+        >
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h11M4 18h14" /></svg
+          ><span>События</span><kbd>3</kbd></button
+        ><button
+          data-page="settings"
+          aria-label="Настройки"
+          title="Настройки · Ctrl+,"
+        >
+          <svg viewBox="0 0 24 24">
+            <path d="M4 6h16M4 12h16M4 18h16M9 3v6m7 0v6M8 15v6" /></svg
+          ><span>Настройки</span><kbd>,</kbd>
+        </button>
+      </nav>
+      <div class="sidebar-bottom">
+        <span id="sidebar-dot" class="dot"></span
+        ><span id="sidebar-status">Подключаемся…</span>
+      </div>
+    </aside>
+    <main>
+      <header class="page-header">
+        <div>
+          <h1 id="page-title">Главная</h1>
+        </div>
+        <div class="server-control">
+          <span id="server-badge" class="status">Проверка…</span
+          ><button id="server-toggle" class="primary">Запустить API</button>
+        </div>
+      </header>
+      <div id="notice" role="alert" hidden></div>
+      <div id="toast" role="status" hidden></div>
+      <div id="restart-banner" class="banner" hidden>
+        <div>
+          <strong>Настройки сохранены</strong>
+          <p>
+            Новый порт и параметры запросов применятся после перезапуска API.
+            Текущие запросы могут прерваться.
+          </p>
+        </div>
+        <button id="restart-api">Перезапустить API</button>
+      </div>
+      <div id="login-banner" class="banner" hidden>
+        <div>
+          <strong>Остался один шаг — вход в браузере</strong>
+          <p>Текущая сессия сохраняется до успешного входа.</p>
+          <button id="login-link" class="link">Открыть страницу входа</button>
+        </div>
+        <button id="cancel-login">Отменить</button>
+      </div>
+      <section class="page" id="overview">
+        <div class="section-heading">
+          <h2>Подключение</h2>
+          <span class="muted" id="connection-state">API остановлен</span>
+        </div>
+        <div class="connection card">
+          <div>
+            <label>Адрес API <span>Base URL</span></label>
+            <div class="copy-field">
+              <code id="base-url">—</code
+              ><button data-copy="url" aria-label="Скопировать адрес API">
+                Копировать
+              </button>
+            </div>
+          </div>
+          <div>
+            <label>Ключ приложения <span>API key</span></label>
+            <div class="copy-field">
+              <code id="api-key">••••••••••••••••</code
+              ><button id="reveal-key" aria-label="Показать ключ">
+                Показать</button
+              ><button data-copy="key" aria-label="Скопировать ключ API">
+                Копировать
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="section-heading">
+          <h2>Подписки</h2>
+          <button class="link" data-go="accounts">Открыть квоты ↗</button>
+        </div>
+        <div id="overview-accounts" class="account-grid"></div>
+        <p class="footnote">
+          Крестик и сворачивание убирают реле к часам. API продолжает
+          работать.<br />Полный выход — через меню в трее или
+          <button class="inline-link" data-window="quit">
+            «Завершить реле»</button
+          >.
+        </p>
+      </section>
+      <section class="page" id="accounts" hidden>
+        <div class="page-intro">
+          <p>
+            Два отдельных входа. Переключай подписку для новых запросов,<br />а
+            квоты каждой проверяй независимо.
+          </p>
+          <button id="refresh-quotas">Обновить все квоты</button>
+        </div>
+        <div id="account-cards" class="account-grid detailed"></div>
+        <p class="footnote">
+          Проверка квот не вызывает модель. При исчерпании квоты реле может
+          перейти на другую подключённую подписку.
+        </p>
+      </section>
+      <section class="page" id="activity" hidden>
+        <div class="section-heading">
+          <h2>Что происходит</h2>
+          <span class="muted">Текущая сессия · без токенов и переписок</span>
+        </div>
+        <div id="events" class="events"></div>
+      </section>
+      <section class="page" id="settings" hidden>
+        <div class="settings-tabs" role="tablist" aria-label="Группы настроек">
+          <button role="tab" aria-selected="true" data-settings-tab="look">
+            Внешний вид</button
+          ><button
+            role="tab"
+            aria-selected="false"
+            data-settings-tab="behavior"
+          >
+            Поведение</button
+          ><button role="tab" aria-selected="false" data-settings-tab="model">
+            Запросы</button
+          ><button role="tab" aria-selected="false" data-settings-tab="data">
+            Данные
+          </button>
+        </div>
+        <p class="settings-caption" id="save-state" role="status">
+          Изменения сохраняются сразу
+        </p>
+        <div class="settings-panel" id="settings-look" role="tabpanel">
+          <div class="setting-group">
+            <h2>Цвета</h2>
+
+            <div class="setting-row">
+              <label for="theme">Тема</label
+              ><select id="theme" data-setting="appearance.theme">
+                <option value="system">Как в системе</option>
+                <option value="light">Светлая</option>
+                <option value="dark">Тёмная</option>
+              </select>
+            </div>
+            <div class="palette-row">
+              <div>
+                <label>Светлая бумага</label>
+                <div
+                  class="swatches"
+                  id="paper-light"
+                  role="group"
+                  aria-label="Светлая бумага"
+                ></div>
+              </div>
+              <div>
+                <label>Тёмная бумага</label>
+                <div
+                  class="swatches"
+                  id="paper-dark"
+                  role="group"
+                  aria-label="Тёмная бумага"
+                ></div>
+              </div>
+            </div>
+            <label>Акцент</label>
+            <div
+              class="swatches"
+              id="accents"
+              role="group"
+              aria-label="Цвет акцента"
+            ></div>
+          </div>
+          <div class="setting-group">
+            <h2>Отображение</h2>
+            <div class="setting-row">
+              <label for="scale">Размер текста</label
+              ><select id="scale" data-setting="appearance.scale" data-number>
+                <option value="85">Мельче · 85%</option>
+                <option value="100">Обычный · 100%</option>
+                <option value="115">Крупнее · 115%</option>
+                <option value="130">Крупный · 130%</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label for="density">Плотность</label
+              ><select id="density" data-setting="appearance.density">
+                <option value="comfortable">Просторно</option>
+                <option value="compact">Компактно</option>
+              </select>
+            </div>
+            <label class="check-row"
+              ><span>Рукописные заголовки<small>Zen Kurenaido</small></span
+              ><input
+                type="checkbox"
+                data-setting="appearance.handwritten"
+                role="switch" /></label
+            ><label class="check-row"
+              ><span>Фактура бумаги</span
+              ><input
+                type="checkbox"
+                data-setting="appearance.grain"
+                role="switch" /></label
+            ><label class="check-row"
+              ><span>Меньше движения</span
+              ><input
+                type="checkbox"
+                data-setting="appearance.reduced_motion"
+                role="switch"
+            /></label>
+          </div>
+        </div>
+        <div
+          class="settings-panel"
+          id="settings-behavior"
+          role="tabpanel"
+          hidden
+        >
+          <div class="setting-group">
+            <h2>Запуск и окно</h2>
+            <label class="check-row"
+              ><span
+                >Запускать API вместе с реле<small
+                  >При открытии приложения, без лишнего нажатия</small
+                ></span
+              ><input
+                type="checkbox"
+                data-setting="auto_start_api"
+                role="switch" /></label
+            ><label class="check-row"
+              ><span
+                >Начинать в трее<small
+                  >При следующем запуске окно останется у часов</small
+                ></span
+              ><input
+                type="checkbox"
+                data-setting="start_in_tray"
+                role="switch"
+            /></label>
+            <p class="muted">
+              Открыть окно можно нажатием на иконку в трее или повторным
+              запуском приложения.
+            </p>
+          </div>
+          <div class="setting-group">
+            <h2>Подключение и подписки</h2>
+            <div class="setting-row">
+              <label for="port"
+                >Порт API<small
+                  >Применяется при следующем запуске API</small
+                ></label
+              ><input
+                id="port"
+                data-setting="port"
+                type="number"
+                min="1"
+                max="65535"
+                data-number
+              />
+            </div>
+            <div class="setting-row">
+              <label for="primary-label">Первый аккаунт</label
+              ><input
+                id="primary-label"
+                data-setting="labels.primary"
+                maxlength="48"
+              />
+            </div>
+            <div class="setting-row">
+              <label for="secondary-label">Второй аккаунт</label
+              ><input
+                id="secondary-label"
+                data-setting="labels.secondary"
+                maxlength="48"
+              />
+            </div>
+            <div class="setting-row">
+              <label for="quota-refresh"
+                >Обновлять квоты<small
+                  >Только пока открыто это окно</small
+                ></label
+              ><select
+                id="quota-refresh"
+                data-setting="quota_refresh_seconds"
+                data-number
+              >
+                <option value="0">Вручную</option>
+                <option value="60">Каждую минуту</option>
+                <option value="300">Раз в 5 минут</option>
+                <option value="900">Раз в 15 минут</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="settings-panel" id="settings-model" role="tabpanel" hidden>
+          <div id="environment-note" class="info-note" hidden></div>
+          <div class="setting-group">
+            <h2>Параметры по умолчанию</h2>
+            <p>
+              Параметры из запроса приложения имеют приоритет. Сохранённые
+              значения применяются при запуске API.
+            </p>
+            <div class="setting-row">
+              <label for="default-model"
+                >Модель<small
+                  >Пусто — первая доступная из каталога</small
+                ></label
+              ><input
+                id="default-model"
+                data-setting="defaults.model"
+                list="model-list"
+                placeholder="Автоматически"
+                maxlength="160"
+              /><datalist id="model-list"></datalist>
+            </div>
+            <button id="load-models" class="link">
+              Загрузить доступные модели</button
+            ><span id="model-source" class="muted"></span>
+            <div class="setting-row">
+              <label for="reasoning"
+                >Глубина рассуждений<small
+                  >Уровень ограничивается возможностями модели</small
+                ></label
+              ><select id="reasoning" data-setting="defaults.reasoning">
+                <option value="default">По умолчанию у модели</option>
+                <option value="none">Без рассуждений</option>
+                <option value="minimal">Минимальная</option>
+                <option value="low">Низкая</option>
+                <option value="medium">Средняя</option>
+                <option value="high">Высокая</option>
+                <option value="xhigh">Очень высокая</option>
+                <option value="max">Максимальная</option>
+                <option value="ultra">Ultra</option>
+              </select>
+            </div>
+            <label class="check-row"
+              ><span
+                >Параллельные вызовы инструментов<small
+                  >Разрешить несколько вызовов в одном ответе</small
+                ></span
+              ><input
+                type="checkbox"
+                data-setting="defaults.parallel_tools"
+                role="switch"
+            /></label>
+          </div>
+          <div class="setting-group">
+            <h2>Инструкции реле</h2>
+            <div id="instructions-note" class="info-note" hidden></div>
+            <div class="setting-row">
+              <label for="instruction-mode">Базовый контекст</label
+              ><select
+                id="instruction-mode"
+                data-setting="defaults.instructions_mode"
+              >
+                <option value="codex">Полный контекст Codex</option>
+                <option value="minimal">Короткий нейтральный</option>
+              </select>
+            </div>
+            <label for="instructions">Дополнительные инструкции</label
+            ><textarea
+              id="instructions"
+              data-setting="defaults.instructions"
+              rows="6"
+              placeholder="Как реле должно направлять модель…"
+            ></textarea>
+            <p class="muted">
+              Добавляются к базовым инструкциям и локальному AGENTS.md. При
+              отказе бэкенда короткий контекст может быть заменён полным.
+            </p>
+          </div>
+        </div>
+        <div class="settings-panel" id="settings-data" role="tabpanel" hidden>
+          <div class="setting-group">
+            <h2>Хранилище и версии</h2>
+            <label>Хранилище</label><code id="auth-dir" class="path"></code>
+            <p>
+              Входы, ключ и настройки находятся в этой папке. Обновление
+              программы сохраняет их.
+            </p>
+            <div class="data-row">
+              <span>praxis-relay</span><strong id="app-version"></strong>
+            </div>
+            <div class="data-row">
+              <span>Версия протокола Codex</span
+              ><strong id="protocol-version"></strong>
+            </div>
+            <p class="muted">
+              Идентификатор совместимости с бэкендом. Реле работает
+              самостоятельно.
+            </p>
+            <details>
+              <summary>Шрифты и лицензии</summary>
+              <p>Golos Text и Zen Kurenaido — SIL Open Font License 1.1.</p>
+              <a href="fonts/golostext-OFL.txt" target="_blank">Golos Text</a> ·
+              <a href="fonts/zenkurenaido-OFL.txt" target="_blank"
+                >Zen Kurenaido</a
+              >
+            </details>
+          </div>
+          <div class="setting-group">
+            <h2>Без окна</h2>
+            <p>Отдельный headless не требует Tauri, WebView или трея.</p>
+            <pre>
+praxis-relay-headless.exe serve --headless
+praxis-relay-headless.exe status
+praxis-relay-headless.exe switch secondary
+praxis-relay-headless.exe configure patch.json</pre
+            >
+            <p class="muted">
+              Тот же файл настроек. Команда configure принимает JSON с
+              изменяемыми полями.
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

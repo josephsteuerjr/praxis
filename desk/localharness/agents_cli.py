@@ -5,6 +5,7 @@
     python agents_cli.py add  --base <папка установки> --name "Мира"
         [--soul-kind canonical|inherit|text] [--soul-file <путь>] [--soul-from <донор>]
     python agents_cli.py set-enabled --base <папка> --id mira --enabled false
+    python agents_cli.py set-default --base <папка> --id mira
     python agents_cli.py remove --base <папка> --id mira [--attic <папка>]
 
 Зачем отдельная программа, если правила и так в `agents.py`. Затем, что читать
@@ -82,7 +83,7 @@ def _soul_args(args) -> dict | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="агенты этой установки")
-    parser.add_argument("what", choices=("list", "add", "set-enabled", "remove"))
+    parser.add_argument("what", choices=("list", "add", "set-enabled", "set-default", "remove"))
     parser.add_argument("--base", default="", help="папка установки (где helene.json)")
     parser.add_argument("--name", default="", help="имя нового агента словами владельца")
     parser.add_argument("--soul-kind", default="", help="canonical | inherit | text (умолчание canonical)")
@@ -113,9 +114,24 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": True, "agent": fresh.as_dict()}, ensure_ascii=False))
         return 0
 
+    if args.what == "set-default":
+        try:
+            chosen = agents.set_default(base, args.id)
+        except (ValueError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        except OSError as exc:
+            print(f"выбор агента не записался: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps({"ok": True, "id": chosen.id, "name": chosen.name}, ensure_ascii=False))
+        return 0
+
     if args.what == "remove":
         try:
             dest = agents.remove_agent(base, args.id, Path(args.attic) if args.attic else None)
+        except agents.RemovalPartialError as exc:
+            print(str(exc), file=sys.stderr)
+            return 3
         except (ValueError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             return 2
@@ -140,7 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         made = agents.create(base, name, soul=soul,
                              donor_id=(args.soul_from or "").strip().lower() or None)
-    except ValueError as exc:
+    except (ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     except OSError as exc:

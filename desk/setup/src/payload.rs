@@ -588,6 +588,37 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Run explicitly with HELENE_TEST_SETUP_EXE set to a Python build_dist
+    /// product (not by executing that installer). This tests the real Rust
+    /// consumer of the Python writer's exact file format.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires a separately built Python setup payload fixture"]
+    fn python_packer_payload_is_readable_by_setup() {
+        let exe = std::path::PathBuf::from(std::env::var("HELENE_TEST_SETUP_EXE")
+            .expect("set HELENE_TEST_SETUP_EXE to the produced setup.exe"));
+        let source = Source::locate(&exe, |_| false).expect("setup payload footer");
+        assert!(source.is_tail());
+        source.verify().expect("setup payload checksum");
+        let manifest = source.manifest();
+        assert_eq!(manifest.product, "Helene");
+        assert!(manifest.files > 0);
+        let parent = std::env::temp_dir().join(format!("vnext-payload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&parent);
+        let cancel = AtomicBool::new(false);
+        let skip = Skip { top: &[], rel: &[] };
+        let stats = source.extract(&parent, &skip, &cancel, &mut |_, _, _| {})
+            .expect("extract actual Python-packed payload");
+        assert!(stats.files > 0);
+        assert_eq!(std::fs::read(parent.join(MANIFEST)).unwrap(), source.read(MANIFEST).unwrap());
+        use sha2::Digest;
+        let expected = std::env::var("HELENE_TEST_AGENT_SHA256")
+            .expect("Python fixture must supply its agent.py digest");
+        let actual = sha2::Sha256::digest(std::fs::read(parent.join("tree/agent.py")).unwrap());
+        assert_eq!(format!("{actual:x}"), expected);
+        let _ = std::fs::remove_dir_all(parent);
+    }
+
     #[test]
     fn foreign_paths_are_refused() {
         assert_eq!(safe_rel(Path::new("app/deskapp.py")).as_deref(), Some("app/deskapp.py"));

@@ -44,11 +44,13 @@ def window_stands() -> list[Path]:
     return sorted((DESK / "app" / "test").glob("*.mjs"))
 
 
-def run(cmd: list[str], cwd: Path, name: str, quiet: bool) -> tuple[bool, str]:
+def run(cmd: list[str], cwd: Path, name: str, quiet: bool,
+        extra_env: dict[str, str] | None = None) -> tuple[bool, str]:
     started = time.time()
     done = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
                           encoding="utf-8", errors="replace",
-                          env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+                          env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                               **(extra_env or {})})
     took = time.time() - started
     ok = done.returncode == 0
     mark = "  ok" if ok else "ПАДАЕТ"
@@ -84,7 +86,12 @@ def main() -> int:
     failed: list[str] = []
 
     for one in py:
-        ok, name = run([sys.executable, str(one)], DESK, f"питон · {one.name}", args.quiet)
+        # A full Windows --rust gate must drive the Python writer's bytes into
+        # the real Rust setup reader. The fast Python-only loop can skip its
+        # cold Cargo compile; build_dist invokes this runner with --rust.
+        cross = {"HELENE_RUST_PAYLOAD_CONSUMER": "1"} if args.rust and os.name == "nt" else {}
+        ok, name = run([sys.executable, str(one)], DESK, f"питон · {one.name}", args.quiet,
+                       cross if one.name == "t_vnext_dist_1810.py" else {})
         if not ok:
             failed.append(name)
 

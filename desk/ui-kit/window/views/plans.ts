@@ -59,7 +59,7 @@ function forgeCard(t: ForgeTask): string {
     )
     .join("");
   return `<details class="fold">
-    <summary><b>${esc((t.goal || t.id).split("\n")[0].slice(0, 150))}</b> · ${esc(statusLabel(t.status))} · исполнителей: ${(t.agents || []).length}</summary>
+    <summary><b>${esc((t.goal || t.id).split("\n")[0].slice(0, 150))}</b> · ${esc(statusLabel(t.status))} (по записи; живость не подтверждена) · исполнителей: ${(t.agents || []).length}</summary>
     <div class="fold-body"><p class="muted">Номер задачи: <span class="mono">${esc(t.id)}</span>${t.priority ? " · приоритет: " + esc(t.priority) : ""}</p>${t.goal ? `<p>${esc(t.goal)}</p>` : ""}${agents || '<span class="muted">Исполнители ещё не назначены.</span>'}</div>
   </details>`;
 }

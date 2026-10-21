@@ -553,6 +553,9 @@ def _orient(chat_id: str) -> str:
             line = identity() if callable(identity) else ""
             if isinstance(line, str) and line:
                 bits.append(line)
+            cooldown = getattr(_bot, "cooldown_snapshot", None)
+            if callable(cooldown):
+                bits.append("Telegram send constraint (not voluntary cadence): " + json.dumps(cooldown(chat_id), ensure_ascii=False))
             status = getattr(_bot, "status_line", None)
             if callable(status):
                 bits.append(status())
@@ -616,6 +619,14 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     history, current = (_dialogue(chat_id, sidecar) if sidecar is not None
                         else _dialogue(chat_id))
     orient = _orient(chat_id)
+    if getattr(ctx, "owner", False) and getattr(ctx, "is_dm", False) and _tree is not None:
+        # Distribution text is a candidate, never persona. Only the owner's
+        # addressed turn shows the pointer; public rooms see no skill names.
+        import kit_proposals
+        proposal_note = kit_proposals.pending_line(
+            _tree, _install_root / "kit-birth.json" if _install_root is not None else None)
+        if proposal_note:
+            orient = proposal_note + "\n\n" + orient
     extra = {"media_refs": tuple(media_refs)} if media_refs else {}
     if sidecar:
         extra["occurrence_sidecar"] = sidecar
@@ -684,24 +695,7 @@ def _ext_hook(event: str, *args) -> None:
 
 
 def _compact(chat_id: str) -> None:
-    """Свернуть горячий слой, если пора. ПОСЛЕ хода, чтобы не удлинять ответ.
-
-    ⚠ Продукт написал свой раннер и не перенёс из ядра этот вызов — единственный,
-    который применяет потолок горячего слоя В ТОКЕНАХ (HOT_TOKEN_CAP=24000).
-    Чтение слоя режет только по ЧИСЛУ записей (125), поэтому лента, уезжающая в
-    модель, росла без предела: владелец, вставляющий в окно логи и куски файлов,
-    набирал десятки тысяч токенов за вечер, и они платились заново на каждой
-    итерации каждого следующего хода.
-
-    ЧЕМ ЭТО ПЛАТИТСЯ, ЧЕСТНО. Свёртка зовёт модель сама — роль `evaluator`
-    (`live/memory_life.py:847`), промпт до 48 000 знаков и мимо кэша, плюс
-    рекурсивные тиры на верхних слоях. Зовётся она не на каждый ход, а по
-    давлению слоя (число записей или 24 000 токенов), и «дешёвой» эта модель
-    становится не сама: пока владелец не назвал модель свёрток
-    (`evaluator.model` или `model.compact_model` в helene.json — см.
-    `boot._brain_config`), она ТА ЖЕ ФЛАГМАНСКАЯ, что и голос. Прежняя строчка
-    здесь обещала «один дешёвый вызов»; дешёвого в нём не было ничего.
-    """
+    """Обновить предложение авторского компакта. Не вызывает модель и не сворачивает за агента."""
     if _life is None:
         return
     try:
@@ -1634,7 +1628,7 @@ def _warm_voice_models(cfg: dict) -> None:
     import threading
     voice_cfg = dict(cfg.get("voice") or {})
     stt = bool(_voice_state.get("ready")) and bool(voice_cfg.get("keep_loaded"))
-    tts = bool(os.environ.get("PRAXIS_PIPER_MODEL"))
+    tts = False  # XTTS loads in the supervisor-owned isolated model process.
     if not (stt or tts):
         return
 
@@ -1744,101 +1738,15 @@ _FOLD_ACTIVE = [None]
 
 
 def _fold_tick(tree: Path) -> None:
-    """Свёртка памяти чата по кнопке окна (27.09): просьба `memory/.control/fold.json`.
-
-    Раннер берёт её переименованием (второй тик не возьмёт ту же) и сворачивает ФОНОМ:
-    свёртка — вызов модели на десятки секунд, а записка владельца ждать его не должна.
-    Сворачивает её же `memory_life.fold_now` — ровно то, что делает её рука
-    memory_compact(fold); пороги и голос сводки — её. Итог — расписка
-    `memory/.state/fold-receipt.json`, её читает окно (deskd.control.fold_state).
-    """
-    if owner_stop.paused() or _life is None or _FOLD_BUSY[0] or not hasattr(_life, "fold_now"):
-        return
-    ctl = Path(tree) / "memory" / ".control"
-    request = ctl / "fold.json"
-    if not request.is_file():
-        return
-    claimed = ctl / "fold.processing.json"
-    try:
-        if claimed.is_file():
-            # A new explicit request may replace an orphan, never its evidence.
-            import shutil
-            import uuid
-            history = Path(tree) / 'memory/.state/fold-history' / uuid.uuid4().hex
-            history.mkdir(parents=True)
-            shutil.copy2(claimed, history / 'request.json')
-            previous = Path(tree) / 'memory/.state/fold-receipt.json'
-            if previous.is_file(): shutil.copy2(previous, history / 'receipt.json')
-        os.replace(request, claimed)
-        asked = json.loads(claimed.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # Copy/claim/read can fail at any step. Preserve both the old evidence
-        # and the new request; a later explicit retry can archive the claim.
-        return
-    if not isinstance(asked, dict):
-        asked = {}
-    _FOLD_BUSY[0] = True
-    _FOLD_ACTIVE[0] = {"id": asked.get("id"), "room": str(asked.get("room") or STREAM)}
-    import threading
-    try:
-        threading.Thread(target=_fold_run, args=(Path(tree), asked, claimed), name="fold",
-                         daemon=True).start()
-    except Exception:
-        _FOLD_BUSY[0] = False
-        _FOLD_ACTIVE[0] = None
-        raise
-
-
-def _fold_run(tree: Path, asked: dict, claimed: Path) -> None:
-    room = str(asked.get("room") or STREAM)
-    receipt_path = tree / "memory" / ".state" / "fold-receipt.json"
-
-    def put(**fields) -> None:
-        data = {"schema": 1, "id": asked.get("id"), "room": room, "by": asked.get("by"),
-                "asked_at": asked.get("at"), "pid": os.getpid(),
-                "at": dt.datetime.now(dt.timezone.utc).isoformat(), **fields}
-        try:
-            receipt_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = receipt_path.with_name(".tmp-" + receipt_path.name)
-            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(tmp, receipt_path)
-        except OSError:
-            log.exception("расписка свёртки не записалась")
-
-    put(state="running", note="сворачиваю — пишу сводку своими словами")
-    log.info("свёртка по кнопке [%s]: начинаю", room)
-    try:
-        out = _life.fold_now(room) or {}
-        folded = int(out.get("folded") or 0)
-        if out.get("ok") is False and out.get("reason") == "state_changed":
-            # Автоповтор уже случился внутри compact_if_due: до расписки дошёл
-            # ВТОРОЙ конфликт подряд — честно зовём владельца, не раньше.
-            put(state="retry", note="дважды подряд что-то менялось в памяти под рукой — "
-                                    "нажми ещё раз")
-        elif folded:
-            note = f"свёрнуто сообщений: {folded} — старое теперь в сводке словами агента"
-            if out.get("retried"):
-                note += " (после второго захода)"
-            put(state="done", folded=folded, note=note)
-        else:
-            reason = str((out.get("plan") or {}).get("reason") or out.get("reason") or "")
-            put(state="nothing", reason=reason,
-                note="сворачивать нечего: горячая память укладывается в текущий хвост")
-        log.info("свёртка по кнопке [%s]: %s", room, {k: out.get(k) for k in ("ok", "folded", "reason")})
-    except Exception as exc:  # noqa: BLE001 — причина уходит владельцу распиской
-        log.exception("свёртка по кнопке [%s] не прошла", room)
-        put(state="failed", note=f"не свернулось: {type(exc).__name__}: {exc}"[:300])
-    finally:
-        with contextlib.suppress(OSError):
-            claimed.unlink()
-        _FOLD_BUSY[0] = False
-        _FOLD_ACTIVE[0] = None
+    """Retired owner control: compaction belongs to the current agent turn."""
+    return
 
 
 def _write_reader(inbox: Path) -> None:
     """Every activity update retains the current worker and fold identity."""
     _write_json(inbox / ".reader.json", {
         "pid": os.getpid(), "at": time.time(), "started": _STARTED_UTC,
+        "code": str(Path(_agent.__file__).resolve().parent) if _agent is not None else "",
         "autonomy": {"protocol": 1, "paused": owner_stop.paused(), "stopped": owner_stop.stopped()},
         "fold": _FOLD_ACTIVE[0],
         "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
@@ -3051,6 +2959,7 @@ def main() -> None:
     # Отчёт JSON в stdout; код 0 — грузятся все, 2 — хоть одно нет. Зовёт мастер из
     # новой поставки до подмены папок; годится и человеку из терминала.
     parser.add_argument("--check-extensions", action="store_true")
+    parser.add_argument("--extension-report", default="")
     parser.add_argument("--data", default="")
     # Версия ПРОГРАММЫ, под которую репетируем: мастер передаёт её из паспорта ПОСТАВКИ
     # (ревью 25.09, A5 F1: паспорт в корне установки — это старая версия, и `requires`
@@ -3068,12 +2977,23 @@ def main() -> None:
         # 25.09 (ревью V3 F4): та же среда, что при живой загрузке — дерево движка в sys.path
         # (расширение вправе `import memory_life`), иначе совместимое расширение = отказ.
         tree_dir = Path(__file__).resolve().parents[2] / "tree"
+        if args.config:
+            from essential_backup import load
+            configured = load(Path(args.config))
+            tree_dir = Path(configured.get('code') or tree_dir)
+            if not tree_dir.is_absolute():
+                tree_dir = Path(args.config).resolve().parent / tree_dir
         if tree_dir.is_dir():
             sys.path.insert(0, str(tree_dir))
         # Код расширений печатает в stdout что хочет (отладочный print на импорте —
         # обычное дело); отчёт обязан остаться единственным JSON в stdout (A5 F2).
         with contextlib.redirect_stdout(sys.stderr):
-            report = extensions.check(data_dir, host_version=passport)
+            report = extensions.check(data_dir, host_version=passport, config_path=args.config)
+        if args.extension_report:
+            report_path = Path(args.extension_report)
+            temporary = report_path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
+            temporary.replace(report_path)
         print(json.dumps(report, ensure_ascii=False, indent=1))
         raise SystemExit(0 if report.get("ok") else 2)
     if not args.config:
@@ -3143,8 +3063,6 @@ def main() -> None:
             log.warning("знания рождения не читаются (%s): агент родится без них — %s",
                         skills_dir, exc)
             skills_seed = {}
-        boot.ensure_layout(tree, cfg, soul_seed=soul_seed,
-                           skills_seed=skills_seed or None)
     except boot.LayoutError as exc:
         log.error("папка данных не готова: %s", exc)
         raise SystemExit(3)
@@ -3174,6 +3092,17 @@ def main() -> None:
     if busy:
         _say_tree_is_busy(tree, cfg, busy)
         raise SystemExit(TREE_BUSY_EXIT_CODE)
+
+    # Birth and proposal writes belong to the ONE runner holding this tree.
+    # Formerly layout ran above claim_tree: the losing runner could still seed
+    # soul or publish a proposal/decision pointer before it learned it lost.
+    try:
+        boot.ensure_layout(tree, cfg, soul_seed=soul_seed,
+                           skills_seed=skills_seed or None,
+                           birth_receipt=config_path.with_name("kit-birth.json"))
+    except boot.LayoutError as exc:
+        log.error("папка данных не готова: %s", exc)
+        raise SystemExit(3)
 
     code_raw = str(cfg.get("code") or "../../live")
     code_dir = Path(code_raw)
@@ -3317,6 +3246,13 @@ def main() -> None:
         edition_tools.install(agent)
     except Exception:
         log.exception("руки серверного издания остались в наборе")
+    # Divergent distribution Markdown is retained, never installed as persona.
+    # Only her explicit read/decision after an authored revision resolves it.
+    try:
+        import kit_proposals
+        kit_proposals.install(agent, tree)
+    except Exception:
+        log.exception("рука review_kit не подключена: предложения остаются непринятыми")
     # Модель, закреплённая владельцем (1.2.4): пока стоит галочка, switch_brain агента
     # отказывает словами — агент Дмитрия трижды уходил на мёртвый мозг «по просьбе хозяина».
     try:
@@ -3515,11 +3451,7 @@ def main() -> None:
             except OSError:
                 continue
             _handle_note(processed / path.name, message, processed)
-        # 27.09: свёртка памяти чата по кнопке окна — между ходами, сама идёт фоном.
-        try:
-            _fold_tick(tree)
-        except Exception:
-            log.exception("просьба свёртки не разобралась")
+        # No owner-fold queue: only the current agent may author its memory.
         # 20.09: replay processed-записок, чей ход не дошёл до модели (краш между
         # переносом в processed и ходом). `.done` — по факту завершения handle_desk без
         # исключения; упавшая записка ждёт следующего прохода. ⚠ 1.0.1: проход — при

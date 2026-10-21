@@ -1,0 +1,55 @@
+name: Windows product acceptance
+on:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  product:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust toolchain
+        run: rustup default 1.94.1
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: windows-relay-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-relay-
+      - name: Offline OAuth callback tests
+        run: python -m unittest discover -s tests -p test_login_helper.py -v
+      - name: Shared Rust service tests
+        run: cargo test --locked -j 2 -- --test-threads=1
+      - name: Build headless
+        run: cargo build --release --locked -j 2 --bin praxis-relay-headless
+      - name: Accept actual headless process
+        run: python tests/accept_headless.py target/release/praxis-relay-headless.exe
+      - uses: actions/upload-artifact@v7
+        with:
+          name: headless-candidate-${{ github.sha }}
+          path: target/release/praxis-relay-headless.exe
+          retention-days: 7
+      - name: Build native Tauri app
+        run: cargo build --manifest-path desktop/Cargo.toml --release --locked -j 2 --target-dir target
+      - name: Package portable product
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory package | Out-Null
+          Copy-Item target/release/praxis-relay-headless.exe,target/release/praxis-relay-desktop.exe package/
+          Copy-Item README.md,ПАМЯТКА.md,LICENSE,LICENSE-APACHE,NOTICE package/
+          $files = Get-ChildItem package -File | ForEach-Object { @{name=$_.Name;bytes=$_.Length;sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()} }
+          @{version='1.0.0';commit='${{ github.sha }}';target='x86_64-pc-windows-msvc';files=$files;limits=@('Real browser OAuth and native tray interaction require separate acceptance')} | ConvertTo-Json -Depth 5 | Set-Content package/BUILD-PASSPORT.json -Encoding utf8
+      - uses: actions/upload-artifact@v7
+        with:
+          name: praxis-relay-windows-${{ github.sha }}
+          path: package/
+          retention-days: 7

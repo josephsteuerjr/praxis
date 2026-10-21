@@ -17,12 +17,14 @@ import { api, shell } from "../../ui-kit/window/api";
 import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../ui-kit/providers";
 import { keepBlock } from "../../ui-kit/window/config";
 import { el, humanError, toast } from "../../ui-kit/window/lib";
-import { button, card, chips, copyText, field, setField, toggle } from "../../ui-kit/dom";
+import { button, card, chips, field, setField, toggle } from "../../ui-kit/dom";
 import { computerCard, storedComputer } from "./computer";
 import { MODE_KEY, loadMode, type ModeState } from "../../ui-kit/window/mode";
 import { modeCard } from "./modecard";
 import { mountsCard, type LiveSandbox } from "./mounts";
 import { voiceCard } from "./voicecard";
+import { relayAccounts } from "./relay-accounts";
+import { relayProxy } from "./relay-proxy";
 import { agentsCard } from "./agentscard";
 import { imagesCard } from "./imagescard";
 import { extensionsCard } from "./extensionscard";
@@ -245,89 +247,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   );
   panes.anthropic.append(anthGrid, anthPresets, presetNote, anthModels, el("p", "field-hint", "Все эти провайдеры говорят на протоколе Anthropic Messages: кнопка подставляет адрес и модель, ключ — из кабинета провайдера. Проверка спросит список моделей, если сервер его отдаёт."));
 
-  const relayRow = el("div", "actions");
-  relayRow.style.marginTop = "14px";
-  const relayOut = el("span", "receipt");
-  let relayAuthorized = false;
-  // Ссылка входа (1.2.3): 27.09 у Егора помощник реле не открыл браузер, и экран
-  // висел на «Ждём вход в браузере» без выхода. Помощник печатает ссылку — окно её
-  // показывает: открыть своей рукой или скопировать.
-  let relayLinkUrl = "";
-  const relayLinkRow = el("div", "actions");
-  relayLinkRow.hidden = true;
-  relayLinkRow.append(
-    button("Открыть страницу входа", "quiet", async () => {
-      try {
-        await shell("open_login_page");
-      } catch (e) {
-        toast("Страница не открылась: " + humanError(e).text + " — скопируй ссылку и открой её в браузере сам.");
-      }
-    }),
-    button("Скопировать ссылку", "quiet", async () => {
-      toast((await copyText(relayLinkUrl))
-        ? "Ссылка скопирована — вставь её в адресную строку браузера"
-        : "Скопировать не вышло — нажми «Открыть страницу входа»");
-    }),
-    el("span", "field-hint", "если вкладка со входом не появилась сама"),
-  );
-  const relayRefresh = async () => {
-    try {
-      const st = await shell<string>("relay_status");
-      relayAuthorized = st === "authorized";
-      relayOut.className = "receipt " + (relayAuthorized ? "ok" : "");
-      // Реле читает учётные данные ОДИН раз, на старте. 25.09 (C.3): новый вход
-      // оболочка (или служба) применяет сама — поднимает реле заново, а живое реле
-      // само говорит, какой слот у него активен (`relay_account` → GET /v1/account).
-      // Раньше здесь висело «применится перезапуском» — вечно, потому что файл
-      // входа не факт применения.
-      let applied = "";
-      if (relayAuthorized) {
-        try {
-          const acc = await shell<{ reachable?: boolean; active_slot?: string | null; configured_slots?: number | null; port?: number }>("relay_account");
-          if (acc?.reachable && acc.active_slot) {
-            applied = ` и применён (слот ${acc.active_slot}${acc.configured_slots ? ` из ${acc.configured_slots}` : ""})`;
-          } else if (acc?.reachable) {
-            applied = " — реле ещё перечитывает вход";
-          } else {
-            applied = ` — реле на порту ${acc?.port ?? RELAY_PORT} не отвечает, поднимется само`;
-          }
-        } catch {
-          applied = "";
-        }
-      }
-      relayOut.textContent =
-        relayAuthorized
-          ? `Вход выполнен${applied}`
-          : st === "pending" ? "Ждём вход в браузере. «Начать вход заново» отменит эту попытку." : "Вход ещё не выполнен";
-      loginBtn.textContent = st === "pending" ? "Начать вход заново" : "Войти в ChatGPT";
-      relayLinkUrl = st === "pending" ? (await shell<string | null>("relay_login_url").catch(() => null)) || "" : "";
-      relayLinkRow.hidden = !relayLinkUrl;
-      relayRestart.hidden = !relayAuthorized || applied.includes("применён");
-    } catch (e) {
-      relayOut.className = "receipt err";
-      relayOut.textContent = humanError(e).text;
-    }
-  };
-  const relayRestart = button("Перезапустить сейчас", "quiet", () => dispatchEvent(new Event("frame-restart")));
-  relayRestart.hidden = true;
-  let relayPoll = 0;
-  const loginBtn = button("Войти в ChatGPT", "quiet", async () => {
-    try {
-      toast(await shell<string>("relay_login"));
-      window.clearInterval(relayPoll);
-      // Первый опрос — сразу: ссылка входа появляется через секунду, и кнопки под ней
-      // не должны ждать трёхсекундного тика.
-      window.setTimeout(() => void relayRefresh(), 1200);
-      let tries = 0;
-      relayPoll = window.setInterval(() => {
-        void relayRefresh();
-        if (++tries > 100) window.clearInterval(relayPoll);
-      }, 3000);
-    } catch (e) {
-      toast("Вход не запустился: " + humanError(e).text);
-    }
-  });
-  relayRow.append(loginBtn, relayRestart, relayOut);
+  const subscriptions = relayAccounts();
+  const relayConnection = relayProxy(draft.relay?.proxy);
+  const relayRefresh = subscriptions.refresh;
   const chatgptDraft = { model: provider === "chatgpt" ? String(draft.model.model || "gpt-5.6-sol") : "gpt-5.6-sol" };
   const chatgptGrid = el("div", "form-grid two");
   chatgptGrid.style.marginTop = "14px";
@@ -360,10 +282,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         const relayDown = savedProvider !== "chatgpt"
           ? "Реле подписки ещё не запущено — сейчас агент работает через другого провайдера. Войди в ChatGPT и нажми «Сохранить»: реле поднимется само, перезапуск не нужен, и список моделей появится здесь."
           : `Реле подписки не отвечает на порту ${Number(draft.relay?.port) || RELAY_PORT}. Оно поднимается само — подожди несколько секунд и нажми ещё раз; если не поднялось, причина — в «Журнале».`;
-        chatgptProbeOut.className = "receipt " + (r.ok && relayAuthorized ? "ok" : r.ok || savedProvider !== "chatgpt" ? "" : "err");
+        chatgptProbeOut.className = "receipt " + (r.ok && subscriptions.authorized() ? "ok" : r.ok || savedProvider !== "chatgpt" ? "" : "err");
         chatgptProbeOut.title = r.ok ? "" : r.note;
         chatgptProbeOut.textContent = r.ok
-          ? relayAuthorized
+          ? subscriptions.authorized()
             ? `Реле живо, вход в ChatGPT выполнен. ${r.note}`
             : `Реле живо, но вход в ChatGPT НЕ выполнен — агент будет молчать. Нажми «Войти в ChatGPT» выше. (${r.note})`
           : relayDown;
@@ -378,8 +300,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     }),
     chatgptProbeOut,
   );
-  panes.chatgpt.append(el("p", "field-hint", "Реле ходит в ChatGPT по подписке и поднимается само, когда подписка сохранена основным провайдером. Вход открывает браузер; после входа ключ не нужен."), relayRow, relayLinkRow, chatgptGrid, chatgptProbeRow, chatgptModels);
-  void relayRefresh();
+  panes.chatgpt.append(el("p", "field-hint", "Реле ходит в ChatGPT по подписке и поднимается само, когда подписка сохранена основным провайдером. Вход открывает браузер; после входа ключ не нужен."), chatgptGrid, chatgptProbeRow, chatgptModels);
 
   const localGrid = el("div", "form-grid two");
   localGrid.style.marginTop = "14px";
@@ -530,6 +451,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   syncPick();
   syncEffort();
   cards.push(inGroup(card("Модель", model), GROUP.brain));
+  const subscriptionBody = el("div");
+  subscriptionBody.append(subscriptions.element, relayConnection.element);
+  cards.push(inGroup(card("Подписки и реле", subscriptionBody), GROUP.brain));
 
   // --- Telegram: бот или свой аккаунт агента
   const tgBox = el("div");
@@ -773,7 +697,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   //
   // Карточка стоит перед «Данными агента» намеренно: сразу за ней идёт папка
   // ЭТОГО агента, и владелец видит, чей дом ему показывают.
-  const images = imagesCard(draft, () => loginBtn.click());
+  const images = imagesCard(draft, () => { subscriptions.element.scrollIntoView({ block: "center" }); subscriptions.element.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus(); });
   cards.push(inGroup(images.el, GROUP.brain));
   cards.push(inGroup(agentsCard(mac, platform === "linux").el, GROUP.agent));
 
@@ -890,6 +814,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
           if (Object.keys(relayBlock).length) out.relay = { ...relayBlock, enabled: false };
           else delete out.relay;
         }
+        const proxyError = relayConnection.error();
+        if (proxyError) return proxyError;
+        out.relay = keepBlock(out.relay, { proxy: relayConnection.collect() });
         const imageError = images.collect(out);
         if (imageError) return imageError;
         if (provider === "chatgpt") out.relay = keepBlock(out.relay, { key: out.model.key });

@@ -26,8 +26,64 @@ class Retry(unittest.TestCase):
             if len(calls)<3: raise botapi.BotApiError('sendMessage',429,'cooldown',retry_after=95 if len(calls)==1 else 40)
             return {'message_id':8}
         value,retries=gate.call('-1','sendMessage',operation)
-        self.assertEqual(calls,[0,95.5,136.0]);self.assertEqual(retries,2)
+        self.assertEqual(calls,[0,97.0,139.0]);self.assertEqual(retries,2)
+        snapshot = gate.snapshot('-1')
+        self.assertEqual(snapshot['margin_seconds'], 2)
+        self.assertEqual(snapshot['state'], 'not_waiting')
+        self.assertEqual(gate.snapshot('-other')['state'], 'unknown')
         self.assertEqual(value['message_id'],8);self.assertEqual(notes[-1][2],0)
+
+    def test_orientation_exposes_current_peer_deadline_not_cadence(self):
+        from unittest import mock
+        clock, gate = self.clock()
+        gate.deadlines['-1'] = 97
+        bot = botapi.BotTransport.__new__(botapi.BotTransport)
+        bot._cooldown = gate
+        bot.identity_line = lambda: ''
+        bot.status_line = lambda: 'connected'
+        with mock.patch.object(runner, '_bot', bot):
+            text = runner._orient('-1__topic__5')
+        self.assertIn('remaining_seconds', text)
+        self.assertIn('97', text)
+        self.assertIn('not voluntary cadence', text)
+
+    def test_mtproto_known_refusal_is_exposed_without_hidden_sleep(self):
+        import asyncio, threading
+        from unittest import mock
+        import mtproto
+        class FloodWaitError(Exception):
+            seconds = 12
+        errors = types.ModuleType('telethon.errors')
+        errors.FloodWaitError = FloodWaitError
+        errors.SlowModeWaitError = type('SlowModeWaitError', (Exception,), {})
+        class Future:
+            def result(self, timeout): raise FloodWaitError('known refusal')
+        client = mtproto.MtprotoClient.__new__(mtproto.MtprotoClient)
+        client._thread = object(); client._loop = object()
+        async def operation(): return None
+        coro = operation()
+        try:
+            with mock.patch.dict(sys.modules, {'telethon.errors': errors}), mock.patch.object(asyncio, 'run_coroutine_threadsafe', return_value=Future()):
+                with self.assertRaises(botapi.BotApiError) as result: client._run(coro)
+            self.assertEqual(result.exception.code, 429)
+            self.assertEqual(result.exception.retry_after, 12)
+        finally: coro.close()
+        with tempfile.TemporaryDirectory() as directory:
+            constructor = mock.Mock()
+            module = types.ModuleType('telethon'); module.TelegramClient = constructor
+            with mock.patch.dict(sys.modules, {'telethon': module}):
+                instance = mtproto.MtprotoClient(1, 'synthetic', Path(directory)/'session')
+            self.assertEqual(constructor.call_args.kwargs['flood_sleep_threshold'], 0)
+            instance._loop.close()
+
+    def test_unknown_send_outcome_never_retries(self):
+        _clock, gate = self.clock()
+        calls = []
+        def operation():
+            calls.append(1)
+            raise TimeoutError('unknown send')
+        with self.assertRaises(TimeoutError): gate.call('-1', 'sendMessage', operation)
+        self.assertEqual(len(calls), 1)
 
     def test_cancel_during_wait_prevents_next_send(self):
         clock,gate=self.clock()

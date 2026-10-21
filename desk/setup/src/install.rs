@@ -1430,6 +1430,26 @@ fn write_atomic(path: &Path, text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// One-use authority to seed an agent's home. It lives BESIDE config, not under
+/// data: losing the data folder cannot turn a previously born agent into a new
+/// one. Only a first-time setup after it wrote the chosen SOUL may mint this.
+fn prepare_kit_birth(dir: &Path, tree: &Path) -> Result<(), String> {
+    let receipt = dir.join("kit-birth.json");
+    if receipt.exists() {
+        return Err(format!("маркер первого рождения уже существует: {}", receipt.display()));
+    }
+    let root = std::fs::canonicalize(tree).map_err(|e| io_note(tree, &e))?;
+    let body = serde_json::json!({"schema": 1, "state": "prepared",
+                                 "tree": root.to_string_lossy(), "source": "setup"});
+    write_atomic(&receipt, &body.to_string())
+}
+
+fn kit_home_is_new(previous: Option<&serde_json::Value>, prior_install: bool,
+                   prior_data: bool) -> bool {
+    !prior_install && !prior_data &&
+        previous.and_then(|v| v.get("setup_complete")).and_then(|v| v.as_bool()) != Some(true)
+}
+
 // ---------------------------------------------------------------- процессы
 
 /// Сколько процессов запущено из этой папки (кроме нас самих). None — спросить
@@ -3109,6 +3129,8 @@ fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Recei
         .filter(|k| k.starts_with("sk-frame-"))
         .map(|k| k.to_string());
     let mut merged = merge_config(existing.clone(), config_json(s, prev_relay_key, relay_port), s);
+    let fresh_home = kit_home_is_new(existing.as_ref(), false,
+                                     configured_tree(&dir, &merged).exists());
     migrate_phone(&dir, &mut merged)?;
     // Окну — знать, что интерфейс обновлён, а прежний отложен рядом: ключ
     // `installed.static_prev` живёт, пока лежит папка `app/static.prev`.
@@ -3124,7 +3146,8 @@ fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Recei
     // Конституция — только если её ещё нет: принятый при установке текст и всё,
     // что владелец и агент правили после, обновление не трогает (тот же договор,
     // что у localharness/boot.py).
-    let soul_path = dir.join("data").join("soul").join("SOUL.md");
+    let soul_tree = configured_tree(&dir, &merged);
+    let soul_path = soul_tree.join("soul").join("SOUL.md");
     let soul_exists = std::fs::read_to_string(&soul_path).map(|t| !t.trim().is_empty()).unwrap_or(false);
     let mut cfg_note = if existing.is_some() {
         Some("настройки обновлены, прежние решения сохранены".to_string())
@@ -3147,9 +3170,12 @@ fn install_legacy(s: &Setup, mut progress: impl FnMut(Progress)) -> Result<Recei
             Some(n) => format!("{n}; конституция оставлена как есть"),
             None => "конституция оставлена как есть".to_string(),
         });
-    } else {
+    } else if fresh_home {
         let soul = s.constitution.replace("\r\n", "\n");
         write_atomic(&soul_path, &soul)?;
+        prepare_kit_birth(&dir, &soul_tree)?;
+    } else {
+        cfg_note = Some("конституция отсутствует в прежнем дереве; поставка не заменяет её без решения агента".into());
     }
     steps.push(Step { label: "Настройки и конституция".into(), ok: true, note: cfg_note });
     if s.provider == "chatgpt" {
@@ -3599,6 +3625,8 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
         steps.push(Step { label: "Прерванная установка".into(), ok: true, note: Some(note) });
     }
     let had_install = dir.join("helene.exe").exists() || dir.join("helene.json").exists();
+    let fresh_home = kit_home_is_new(read_json(&dir.join("helene.json")).as_ref(),
+                                     had_install, dir.join("data").exists());
     // Проверка, раскладка, подмена, настройка, регистрация, служба, готово; стоящая —
     // ещё снимок и остановка.
     let service_step = s.wants_service() || service_state() != "absent";
@@ -3989,8 +4017,11 @@ fn install_tx(s: &Setup, cancel: &AtomicBool, progress: &mut dyn FnMut(Progress)
                 Some(n) => format!("{n}; конституция оставлена как есть"),
                 None => "конституция оставлена как есть".to_string(),
             });
-        } else {
+        } else if fresh_home && !configured_tree(&dir, &merged).exists() {
             write_atomic(&soul_path, &s.constitution.replace("\r\n", "\n"))?;
+            prepare_kit_birth(&dir, &configured_tree(&dir, &merged))?;
+        } else {
+            note = Some("конституция отсутствует в прежнем дереве; поставка не заменяет её без решения агента".into());
         }
         out.push(Step { label: "Настройки и конституция".into(), ok: true, note });
         if s.provider == "chatgpt" {
@@ -5056,6 +5087,30 @@ pub fn launch_installed(app: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kit_birth_requires_new_home_and_retains_one_prepared_receipt() {
+        use super::*;
+        let configured = serde_json::json!({"setup_complete": true});
+        let template = serde_json::json!({"setup_complete": false});
+        assert!(kit_home_is_new(None, false, false));
+        assert!(kit_home_is_new(Some(&template), false, false));
+        assert!(!kit_home_is_new(Some(&configured), false, false));
+        assert!(!kit_home_is_new(None, true, false));
+        assert!(!kit_home_is_new(None, false, true));
+        let dir = std::env::temp_dir().join(format!("helene-kit-birth-{}-{}",
+            std::process::id(), std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let tree = dir.join("data");
+        std::fs::create_dir_all(&tree).unwrap();
+        prepare_kit_birth(&dir, &tree).unwrap();
+        let receipt = dir.join("kit-birth.json");
+        let captured: serde_json::Value = serde_json::from_slice(&std::fs::read(&receipt).unwrap()).unwrap();
+        assert_eq!(captured["state"], "prepared");
+        assert_eq!(captured["tree"], std::fs::canonicalize(&tree).unwrap().to_string_lossy().as_ref());
+        assert!(prepare_kit_birth(&dir, &tree).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn phone_upgrade_preserves_enabled_choice_and_exact_backup() {
         let dir=std::env::temp_dir().join(format!("helene-phone-migration-{}",std::process::id()));

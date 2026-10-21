@@ -5,7 +5,7 @@ import { esc, fmtDur, fmtTime } from "../lib";
 import { api } from "../api";
 import { mountUsage, usageShell } from "../../usage";
 import { frameStripHTML, type RunDetail } from "../../steps";
-import { activityHTML, selectActivity, updateActivity } from "../../activity";
+import { activityHTML, updateActivity } from "../../activity";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
 import { bindRuns, loadWords, runDetail, runRowHTML } from "../runlist";
 
@@ -47,7 +47,7 @@ export async function render(container: HTMLElement): Promise<void> {
   const my = ++gen;
   const live = liveRun();
   const list = S.runs.filter((r) => r.kind !== "wake").slice(0, 40);
-  focusedRun = selectActivity(focusedRun, live, list);
+  focusedRun = live;
   const shown = focusedRun;
   let liveDetail: RunDetail | undefined;
   if (shown) {
@@ -58,12 +58,6 @@ export async function render(container: HTMLElement): Promise<void> {
     }
   }
   if (my !== gen) return;
-  const existing = container.querySelector<HTMLElement>("#turn-live");
-  if (shown && existing?.dataset.run === shown.id) {
-    if (liveDetail) updateActivity(existing, liveDetail, live ? since(live) : "");
-    scheduleLive(!!live);
-    return;
-  }
   await loadWords(list.slice(0, 15));
   if (my !== gen) return;
   let strip = liveDetail;

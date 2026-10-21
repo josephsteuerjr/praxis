@@ -30,14 +30,18 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 DESK = Path(__file__).resolve().parent.parent
 ROOT = DESK.parent
 sys.path.insert(0, str(DESK))
 import layout  # noqa: E402 — где на диске лежат соседи раскладки
+import relay_rebuild_kit  # noqa: E402 — byte-exact build input inventory
 
 MIRROR = layout.relay_mirror()
 STAMP = "RELAY-SOURCE.json"
@@ -81,6 +85,28 @@ def digest(root: Path) -> tuple[str, dict[str, str]]:
     return total, files
 
 
+INPUT_DIGEST_KIND = "byte_exact_relay_build_inputs_v1"
+WINDOWS_BUILD_METHOD = "cargo_explicit_target_v1"
+LINUX_BUILD_METHOD = "docker_immutable_image_v1"
+
+
+def build_inputs(root: Path) -> tuple[str, int]:
+    """All selected Rust/Docker source files, distinct from the legacy LF locator.
+
+    Includes Dockerfile, build.rs, .cargo and resources; excludes Git, target
+    and private receipts. External toolchain/network inputs remain unqualified.
+    """
+    files = relay_rebuild_kit.inventory(root, source=True, private_mirror=True)
+    return relay_rebuild_kit._digest(files), len(files)
+
+
+def _build_input_receipt(root: Path, before: tuple[str, int]) -> dict:
+    if build_inputs(root) != before:
+        raise SystemExit("relay source changed during build; no build receipt written")
+    return {"input_digest_kind": INPUT_DIGEST_KIND,
+            "input_sha256": before[0], "input_files": before[1]}
+
+
 def newest_mtime(root: Path = MIRROR) -> float:
     """Когда исходник трогали в последний раз — чтобы сборка увидела, что
     бинарь старше своих же исходников (09.09 в поставку уехало реле от 03.09)."""
@@ -112,18 +138,29 @@ def build(root: Path = MIRROR) -> dict:
     «этот ли бинарь у меня в поставке». По времени файлов судить нельзя: любое
     обновление зеркала переписывает mtime, ничего не меняя по существу.
     """
+    root = Path(root).resolve()
     total, files = digest(root)
+    inputs = build_inputs(root)
     print(f"cargo build --release в {root} ({len(files)} файлов исходника)…")
-    r = subprocess.run(["cargo", "build", "--release"], cwd=root,
+    target = "x86_64-pc-windows-msvc"
+    r = subprocess.run(["cargo", "build", "--release", "--locked", "--target", target,
+                        "--target-dir", str(root / "target")], cwd=root,
                        text=True, encoding="utf-8", errors="replace")
     if r.returncode != 0:
         raise SystemExit("реле не собралось")
-    exe = next((p for p in (root / "target" / "release").glob("*.exe")
-                if "codex" in p.name or "relay" in p.name), None)
-    if exe is None:
-        raise SystemExit(f"после сборки не нашёлся бинарь в {root / 'target' / 'release'}")
+    produced = root / "target" / target / "release" / "codex-proxy-server.exe"
+    if not produced.is_file():
+        raise SystemExit(f"после сборки не нашёлся бинарь в {produced}")
+    exe = root / "target" / "release" / produced.name
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(produced, exe)
+    if hashlib.sha256(exe.read_bytes()).digest() != hashlib.sha256(produced.read_bytes()).digest():
+        raise SystemExit("relay build output copy differs")
     note = {
         "digest": total,
+        **_build_input_receipt(root, inputs),
+        "build_method": WINDOWS_BUILD_METHOD,
+        "target": target,
         "exe": exe.name,
         "exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
         "built_utc": dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -145,7 +182,8 @@ def built_linux(root: Path = MIRROR) -> dict:
     return _read(root / LINUX_BUILT)
 
 
-def build_linux(root: Path = MIRROR, image: str = LINUX_IMAGE) -> dict:
+def build_linux(root: Path = MIRROR, image: str = LINUX_IMAGE,
+                memory_limit: str = "") -> dict:
     """Собрать реле под Linux в докере и записать, ИЗ ЧЕГО оно собрано.
 
     Windows-бинарь собирается `cargo` на месте, Linux-бинарь — в контейнере по
@@ -157,13 +195,24 @@ def build_linux(root: Path = MIRROR, image: str = LINUX_IMAGE) -> dict:
     в бинд-маунт: маунт с диска Windows в контейнер медленнее раз в сорок, и
     сборка в нём идёт минутами вместо секунд.
     """
+    root = Path(root).resolve()
     total, files = digest(root)
+    inputs = build_inputs(root)
     print(f"docker build (реле под Linux) в {root} ({len(files)} файлов исходника)…")
-    r = subprocess.run(["docker", "build", "--target", "builder", "-t", image, "."],
-                       cwd=root, text=True, encoding="utf-8", errors="replace")
-    if r.returncode != 0:
-        raise SystemExit("реле под Linux не собралось (docker build)")
-    made = subprocess.run(["docker", "create", image], cwd=root, capture_output=True,
+    # The tag can be replaced by another concurrent build. Create only from
+    # this invocation's immutable image ID recorded in a private temporary file.
+    with tempfile.TemporaryDirectory(prefix="relay-image-") as tmp:
+        iid = Path(tmp) / "image-id"
+        r = subprocess.run(["docker", "build", *(["--memory", memory_limit] if memory_limit else []),
+                            "--target", "builder", "--iidfile", str(iid),
+                            "-t", image, "."], cwd=root,
+                           text=True, encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            raise SystemExit("реле под Linux не собралось (docker build)")
+        image_id = iid.read_text(encoding="ascii").strip()
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None:
+        raise SystemExit("docker did not attest an immutable image id")
+    made = subprocess.run(["docker", "create", image_id], cwd=root, capture_output=True,
                           text=True, encoding="utf-8", errors="replace")
     cid = made.stdout.strip()
     if made.returncode != 0 or not cid:
@@ -179,6 +228,10 @@ def build_linux(root: Path = MIRROR, image: str = LINUX_IMAGE) -> dict:
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True, text=True)
     note = {
         "digest": total,
+        **_build_input_receipt(root, inputs),
+        "build_method": LINUX_BUILD_METHOD,
+        "image_id": image_id,
+        "memory_limit": memory_limit or None,
         "target": "x86_64-unknown-linux-gnu",
         "exe": out.name,
         "exe_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
@@ -260,7 +313,9 @@ def main() -> int:
     ap.add_argument("--build", action="store_true",
                     help="собрать реле и записать, из какого исходника")
     ap.add_argument("--build-linux", action="store_true",
-                    help="собрать реле под Linux (докер) — оно едет в поставку для сервера")
+                    help="собрать Linux реле в Docker на сервере (не на локальном Windows)")
+    ap.add_argument("--docker-memory", default="",
+                    help="limit server Docker builder memory, e.g. 1536m")
     args = ap.parse_args()
 
     mirror = Path(args.mirror)
@@ -269,7 +324,7 @@ def main() -> int:
         if not (args.check or args.pull or args.build_linux):
             return 0
     if args.build_linux:
-        build_linux(mirror)
+        build_linux(mirror, memory_limit=args.docker_memory)
         if not (args.check or args.pull):
             return 0
     if args.digest or not (args.check or args.pull):

@@ -179,6 +179,8 @@ def _fold_operation(room, queued, processing, receipt, reader, paused, now):
         return {'state': 'running', 'note': 'Свёртка подтверждена живым исполнителем. Переписка остаётся в архиве.'}
     if queued.get('room') == room:
         return {'state': 'queued', 'note': 'Просьба записана; ждёт возобновления агента.' if paused else 'Просьба записана; ждёт начала выполнения.'}
+    if recorded.get('state') == 'requested':
+        return {'state': 'queued', 'note': 'Агент получил просьбу; авторская свёртка ещё не подтверждена.'}
     if claimed or recorded.get('state') == 'running':
         if fresh and 'fold' in reader:
             # Claim→first heartbeat is a short handoff, not an interrupted fold.
@@ -235,19 +237,9 @@ def fold_state(tree: Path, room: str) -> dict:
 
 
 def fold_request(tree: Path, room: str, by: str = "owner") -> dict:
-    """Попросить раннер свернуть память места сейчас. Просьба одна на всё дерево: новая
-    заменяет лежащую (свёртка идёт по одной, и второе нажатие — то же желание)."""
-    room = str(room or "").strip() or "window"
-    if not _ROOM_RE.fullmatch(room):
-        return {"ok": False, "note": "непонятное имя чата — просьба не записана"}
-    request = {"id": secrets.token_hex(8), "room": room, "by": str(by or "owner")[:40],
-               "at": dt.datetime.now(dt.timezone.utc).isoformat()}
-    try:
-        _write(Path(tree) / "memory" / ".control" / FOLD_REQUEST, request)
-    except OSError as exc:
-        return {"ok": False, "note": f"просьба не записалась: {exc}"}
-    return {"ok": True, "request": request,
-            "note": "просьба записана — свернёт между ходами, сводку пишет своими словами"}
+    """Compatibility refusal: the owner cannot force an internal author turn."""
+    return {"ok": False, "note": "Компакт пишет текущий агент; попроси его в разговоре."}
+
 
 
 def supervisor_state(tree: Path) -> dict:
