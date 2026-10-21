@@ -32,6 +32,11 @@ Praxis. LocalSystem service владеет единственным исходя
 Soul и текущая история tool-loop этим инструментом не редактируются.
 `coding_inspect` основного агента проводит `start_char` и `expected_sha256` в тот же
 Forge reader, что и worker: длинный файл можно дочитать, проверяя ревизию.
+Старый backend без paging продолжает обслуживать обычные вызовы, но запрос
+continuation/revision guard отвергается явно, без незащищённого повторного чтения.
+Remote readers пока также явно отказывают в этих опциях, не теряя их молча.
+При rebuild state-only/изменённые bytes сохраняются как unprovable hot residual:
+prepare и unrelated fold не считают их покрытыми и не стирают их при смене epoch.
 
 ### Генерация изображений через реле
 

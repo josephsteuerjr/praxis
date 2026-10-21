@@ -2308,7 +2308,7 @@ def _filter_compact_graph(parsed: dict[str, tuple[dict, str]], evidence: dict, *
 
 
 def rebuild_state(chat_id: str | int) -> dict:
-    """Reconstruct hot/frontier solely from JSONL events and immutable Markdown compacts.
+    """Reconstruct canonical hot/frontier, retaining unproved state-only bytes.
 
     Восстанавливается состояние МЕСТА: события собираются по всем его ключам, покрытыми
     считаются те, что уже вошли в любой канонический компакт места. Событие не может
@@ -2350,6 +2350,7 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
     # реестре: он вправе уточниться, и блок молча выпал бы из её сводки — при том что
     # сам компакт остаётся каноническим (вторая адверсарка 25.07).
     bind_place(chat_id, _member_keys(chat_id))
+    previous_hot = _load_state(chat_id, rebuild=False).get("hot") or []
     state = _default_state(chat_id)
     messages = iter_events(chat_id=chat_id, kinds={"conversation_message"})
     current_messages = memory_provenance.current_conversation_events(messages)
@@ -2391,6 +2392,22 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
             "место %s: %d событий индекс доказательств не принимает — в ленте они "
             "остаются, в свёртку не идут (%s)", chat_id, len(unprovable),
             ", ".join(sorted(marked)[:3]))
+    # A rebuild proves canonical coverage, not coverage of bytes that exist only
+    # in the old cursor. Keep those bytes explicitly unprovable: an unrelated
+    # authored fold (including its prepare step) must not silently erase them.
+    # Exact historical revisions, unlike changed/state-only rows, remain governed
+    # by the canonical current/coverage graph and must not be resurrected.
+    by_id = {str(row.get("id")): row for row in messages}
+    for item in previous_hot:
+        if not isinstance(item, dict):
+            continue
+        event = by_id.get(str(item.get("id")))
+        exact = event is not None and all(
+            str(event.get(a) or "") == str(item.get(b) or "")
+            for a, b in (("text", "line"), ("direction", "direction"),
+                         ("source_id", "source_id")))
+        if not exact:
+            state["hot"].append(dict(item, unprovable=True, state_residual=True))
     state["frontier"] = [m for m in shown_metas
                          if str(m.get("id")) not in consumed_compacts]
     state["dedupe"] = [{"key": r.get("dedupe_key"), "id": r.get("id")} for r in messages

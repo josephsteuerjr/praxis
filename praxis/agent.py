@@ -5147,9 +5147,20 @@ def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
                         query: str = "", glob: str = "**/*", start: int = 1,
                         end: int = 0, start_char: int = 0,
                         expected_sha256: str = "") -> str:
-    return forge.inspect(task_id, action=action, path=path, query=query, glob=glob,
-                         start=start, end=end, start_char=start_char,
-                         expected_sha256=expected_sha256)
+    kwargs = dict(action=action, path=path, query=query, glob=glob,
+                  start=start, end=end)
+    # Older Forge deployments do not implement the paging extension. Keep their
+    # ordinary status/read calls usable, but never silently ignore a requested
+    # continuation or revision guard (nor retry an internal TypeError).
+    if start_char or expected_sha256:
+        parameters = inspect.signature(forge.inspect).parameters
+        if not ({"start_char", "expected_sha256"} <= parameters.keys()
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD
+                       for p in parameters.values())):
+            return ("Forge backend does not support paged reads: start_char/expected_sha256 "
+                    "require the paging backend prerequisite. No read was performed.")
+        kwargs.update(start_char=start_char, expected_sha256=expected_sha256)
+    return forge.inspect(task_id, **kwargs)
 
 
 def tool_coding_edit(task_id: str, action: str, path: str = "", content: str = "",

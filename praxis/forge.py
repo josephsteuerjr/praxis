@@ -2494,6 +2494,11 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
         return json.dumps(forge_swarm.mailbox(_task_dir(task_id), end or 100),
                           ensure_ascii=False, indent=2)
     if remote is not None:
+        # Remote readers do not yet implement the local paging/revision contract.
+        # Never discard a cursor or hash and return a different, unguarded read.
+        if start_char or expected_sha256:
+            return ("Remote Forge backend does not support paged reads: "
+                    "start_char/expected_sha256 are unavailable. No read was performed.")
         with _remote_observations(task):
             return remote.workspace_inspect(
                 str(root), action, path=path, query=query, glob=glob, start=start, end=end,
