@@ -96,6 +96,22 @@ class EpochSources(unittest.TestCase):
         self.add(1, 'edit bytes', edited_at='2026-10-20T00:01:00Z')
         self.assertIn('edit bytes', self.text(self.prepare()))
 
+    def test_scope_changes_reselect_archive_only_live_occurrences(self):
+        for wide_scope in ({'members': {1, 2}}, {'whole_room': True}):
+            with self.subTest(wide_scope=wide_scope):
+                narrow = lambda: fe.prepare_tape(ROOM, peer_id=ROOM, topic_id=1, members={1})
+                narrow()
+                gc.observe_message(peer_id=ROOM, topic_id=2, message_id=22,
+                    sender_id=2, sender_name='Alice', reply_to_message_id=None,
+                    timestamp='2026-10-20T00:00:00Z', text='orphan live source', origin='live')
+                narrow()
+                selected = fe.prepare_tape(ROOM, peer_id=ROOM, topic_id=1, **wide_scope)
+                self.assertIn('orphan live source', self.text(selected))
+                self.assertEqual(len(selected['rows']), 1)
+                repeated = fe.prepare_tape(ROOM, peer_id=ROOM, whole_room=True)
+                self.assertEqual(len(repeated['rows']), 1)
+                self.assertNotIn('orphan live source', self.text(narrow()))
+
     def test_bootstrap_is_current_canonical_not_whole_archive(self):
         self.add(1, 'old archive-only evidence', reply=99, origin='backfill')
         self.life('e1', '2', 'Alice: current canonical absent from archive')

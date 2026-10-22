@@ -135,7 +135,7 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
         initial = None
         record = load(chat_id) or {}
         old = record.get("tape") or {}
-        if old.get("v") != 4:
+        if old.get("v") != 4 or old.get("scope") != scope:
             # Only new producer-stamped live evidence can recover a failed life
             # write before bootstrap. Legacy/backfill is not inferred live.
             initial = group_context.archive_occurrences(peer_id)
@@ -202,7 +202,7 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
             for row in snapshot["hot"]:
                 emit(row)
         batch = initial if initial is not None else group_context.archive_occurrences(peer_id, cursor=tape["cursor"])
-        pending = ([] if same else old.get("residuals", [])) + batch["occurrences"]
+        pending = ([] if same or initial is not None else old.get("residuals", [])) + batch["occurrences"]
         for occurrence in pending:
             if "gap" in occurrence:
                 if initial is not None and occurrence["end"] <= bootstrap["offset"]:
