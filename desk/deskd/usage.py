@@ -184,7 +184,9 @@ def allowances(tree: Path):
             name, normalize = "GLM", normalize_glm
             endpoint = f"https://{url.hostname}/api/monitor/usage/quota/limit"
             authorization = secret
-        elif framework == "openai" and url.hostname not in {"api.openai.com", None}:
+        elif (str(block.get("protocol") or framework) == "openai"
+              and (block.get("provider") == "relay"
+                   or (not block.get("provider") and url.hostname in {"localhost", "127.0.0.1", "::1"}))):
             name, normalize = "Codex · реле", normalize_codex
             endpoint = (base if base.endswith("/v1") else base + "/v1") + "/limits"
             authorization = "Bearer " + secret

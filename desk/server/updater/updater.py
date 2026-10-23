@@ -537,6 +537,8 @@ def carried(info: dict) -> dict:
         out["HELENE_PORT"] = str(binding["HostPort"])
     if info["mounts"].get("/models"):
         out["HELENE_MODELS"] = info["mounts"]["/models"]
+    if info["mounts"].get("/opt/helene-xtts"):
+        out["HELENE_XTTS_RUNTIME"] = info["mounts"]["/opt/helene-xtts"]
     return out
 
 
@@ -783,6 +785,15 @@ def check_layout(root: Path, version: str) -> dict:
     if passport.get("complete") is False:
         raise UpdateError("поставка собрана неполной: "
                           + ", ".join(passport.get("partial_reason") or []))
+    if (protocol.version_tuple(version) or ()) >= (1, 9, 2):
+        needed = ("helene-relay", "server/emergency_stop.py", "server/updater/codecarry.py",
+                  "app/localharness/relay_network.py")
+        missing = [rel for rel in needed if not (root / rel).is_file()]
+        if missing:
+            raise UpdateError(f"серверная поставка неполна: {', '.join(missing)}")
+        with (root / "helene-relay").open("rb") as relay:
+            if relay.read(4) != b"\x7fELF":
+                raise UpdateError("helene-relay — не Linux ELF-бинарь")
     return {"version": version, "built_utc": str(passport.get("built_utc") or ""),
             "git": (passport.get("git") or {}).get("desk", ""),
             "relay_linux": (root / "helene-relay").is_file()}
@@ -1467,7 +1478,8 @@ class Updater:
         cmd = ["compose", "-p", project]
         for path in files:
             cmd += ["-f", str(path)]
-        return self.docker.run([*cmd, *args], env=st.get("carried") or {}, timeout=timeout)
+        env = dict(st.get("carried") or {}, HELENE_PROJECT=project, HELENE_CONTAINER=self.cfg.container)
+        return self.docker.run([*cmd, *args], env=env, timeout=timeout)
 
     def _must(self, done: tuple[int, str, str], what: str) -> str:
         code, out, err = done

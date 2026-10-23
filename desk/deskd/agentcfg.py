@@ -28,14 +28,12 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 from pathlib import Path
 from typing import Any
 
 from . import readers
 
 SCHEMA = "helene.agentcfg.v1"
-_WRITE_LOCK = threading.RLock()
 
 #: Что окно вправе править. Ключ верхнего уровня → человеческое имя для расписки.
 #: Всё, чего здесь нет, — про раскладку установки и правится там, где её клали.
@@ -47,6 +45,7 @@ EDITABLE: dict[str, str] = {
     "voice": "голос",
     "notifications": "уведомления",
     "env": "ручки среды дерева",
+    "self_review": "саморевью исходников",
 }
 
 #: Что НЕ отдаётся окну на чтение вовсе. Не из-за секретности — ключ владельца и
@@ -129,13 +128,18 @@ def state() -> dict:
 
 
 def save(patch: Any, seen: str | None = None) -> dict:
-    # HTTP handlers run in different threads. Only one writer may check freshness
-    # and commit; a second request with the old receipt must get a conflict.
-    with _WRITE_LOCK:
-        return _save(patch, seen)
+    from localharness.config_transaction import transaction
+    path = readers.config_path()
+    if path is None:
+        return {"ok": False, "code": "no_config", "error": "Agent config is unavailable"}
+    try:
+        with transaction(path):
+            return _save(patch, seen, path)
+    except OSError as exc:
+        return {"ok": False, "code": "write_failed", "error": str(exc)}
 
 
-def _save(patch: Any, seen: str | None = None) -> dict:
+def _save(patch: Any, seen: str | None = None, path: Path | None = None) -> dict:
     """Записать разрешённые блоки. Возвращает расписку, а не «ок».
 
     `patch` — объект с ключами верхнего уровня. Каждый разрешённый блок
@@ -143,7 +147,7 @@ def _save(patch: Any, seen: str | None = None) -> dict:
     ключи файла остаются как были. Неразрешённые ключи в ответе названы
     поимённо: «отброшено» обязано быть видимым.
     """
-    path = readers.config_path()
+    path = path if path is not None else readers.config_path()
     if path is None:
         return {"ok": False, "code": "no_config",
                 "error": "рядом с каналом нет helene.json — править нечего"}
@@ -160,6 +164,13 @@ def _save(patch: Any, seen: str | None = None) -> dict:
                          "открыло — перечитай и перенеси правку заново."}
 
     access = patch.get("access")
+    if "self_review" in patch:
+        try:
+            from localharness.self_review import settings
+            review_settings = settings({"self_review": patch["self_review"]})
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "code": "bad_self_review", "error": str(exc)}
+        patch = {**patch, "self_review": review_settings}
     if "access" in patch:
         if server_access(current) is None:
             return {"ok": False, "code": "unsupported_access", "error": "Эта установка не серверный Docker агент"}

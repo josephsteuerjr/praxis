@@ -15,13 +15,13 @@
 #
 # Отдельный проект, а не сервис в compose агента: `up` агента не должен пересоздавать
 # исполнителя посреди его же работы. Никогда не запускать с --remove-orphans.
-name: helene-updater
+name: ${HELENE_PROJECT:-helene}-updater
 
 services:
   updater:
     build:
       context: .
-    container_name: helene-updater
+    container_name: ${HELENE_CONTAINER:-helene}-updater
     restart: unless-stopped
     # Код — из установки; запасной вход — копия, которую исполнитель держит у себя
     # (.updater/self): подмена кладёт новую поставку двумя переименованиями, и

@@ -57,16 +57,24 @@ if [ $# -gt 0 ]; then
   ARCHIVE=$(cd "$(dirname "$1")" && printf '%s/%s' "$(pwd)" "$(basename "$1")")
 fi
 
-CONTAINER=${HELENE_CONTAINER:-helene}
+if [ -n "${HELENE_DIR:-}" ] && [ -f "$HELENE_DIR/server/.env" ]; then
+  saved="$HELENE_DIR/server/.env"
+  HELENE_PROJECT=${HELENE_PROJECT:-$(sed -n 's/^HELENE_PROJECT=\([a-z0-9][a-z0-9_-]*\)$/\1/p' "$saved" | tail -1)}
+  HELENE_CONTAINER=${HELENE_CONTAINER:-$(sed -n 's/^HELENE_CONTAINER=\([a-zA-Z0-9][a-zA-Z0-9_.-]*\)$/\1/p' "$saved" | tail -1)}
+fi
+CONTAINER=${HELENE_CONTAINER:-${HELENE_PROJECT:-helene}}
+PROJECT=${HELENE_PROJECT:-${HELENE_CONTAINER:-helene}}
 INSTALL=${HELENE_DIR:-}
 if docker inspect "$CONTAINER" >/dev/null 2>&1; then
   WD=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$CONTAINER")
   [ -n "$WD" ] || die "контейнер $CONTAINER поднят не через docker compose — такой я не трогаю."
   [ -z "$INSTALL" ] || [ "$INSTALL" = "$(dirname "$WD")" ] || die "контейнер $CONTAINER — из $(dirname "$WD"), а HELENE_DIR=$INSTALL"
   INSTALL=$(dirname "$WD")
+  PROJECT=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$CONTAINER")
 fi
 INSTALL=${INSTALL:-/opt/helene}
-export HELENE_DIR="$INSTALL" HELENE_CONTAINER="$CONTAINER"
+UPDATER_CONTAINER="$CONTAINER-updater"
+export HELENE_DIR="$INSTALL" HELENE_CONTAINER="$CONTAINER" HELENE_PROJECT="$PROJECT"
 say "Hélène $VERSION → $INSTALL"
 
 remember_host() {
@@ -80,6 +88,21 @@ remember_host() {
   mv "$env_file.tmp" "$env_file"
 }
 
+remember_install() {
+  env_file="$INSTALL/server/.env"
+  touch "$env_file"
+  grep -v '^HELENE_PROJECT=\|^HELENE_CONTAINER=\|^HELENE_DIR=' "$env_file" > "$env_file.tmp" || true
+  printf 'HELENE_PROJECT=%s\nHELENE_CONTAINER=%s\nHELENE_DIR=%s\n' "$PROJECT" "$CONTAINER" "$INSTALL" >> "$env_file.tmp"
+  for key in HELENE_PORT HELENE_MODELS HELENE_XTTS_RUNTIME HELENE_STT_THREADS HELENE_STT_KEEP_LOADED; do
+    value=$(printenv "$key" || true)
+    [ -n "$value" ] || continue
+    grep -v "^$key=" "$env_file.tmp" > "$env_file.next" || true
+    mv "$env_file.next" "$env_file.tmp"
+    printf '%s=%s\n' "$key" "$value" >> "$env_file.tmp"
+  done
+  mv "$env_file.tmp" "$env_file"
+}
+
 up_agent() {
   say "· запускаю агента (первый раз сборка — несколько минут)"
   (cd "$INSTALL" && quiet docker compose -f server/docker-compose.yml up -d --build) \
@@ -88,13 +111,13 @@ up_agent() {
 
 up_updater() {
   say "· поднимаю исполнитель обновлений"
-  (cd "$INSTALL" && quiet docker compose -f server/updater/docker-compose.yml up -d --build) \
+  (cd "$INSTALL" && quiet docker compose --env-file server/.env -f server/updater/docker-compose.yml up -d --build) \
     || die "исполнитель обновлений не запустился — вывод выше"
   tries=0
-  until docker exec helene-updater python3 "$INSTALL/server/updater/updater.py" status >/dev/null 2>&1; do
+  until docker exec "$UPDATER_CONTAINER" python3 "$INSTALL/server/updater/updater.py" status >/dev/null 2>&1; do
     tries=$((tries + 1))
     if [ "$tries" -ge 30 ]; then
-      why=$(docker exec helene-updater python3 "$INSTALL/server/updater/updater.py" status 2>&1 || true)
+      why=$(docker exec "$UPDATER_CONTAINER" python3 "$INSTALL/server/updater/updater.py" status 2>&1 || true)
       die "исполнитель обновлений не готов: $why"
     fi
     sleep 2
@@ -133,7 +156,7 @@ prepare_archive() {
   if [ ! -f "$marker" ]; then
     say "· разворачиваю агента из архива"
     quiet docker run --rm -v "$INSTALL:/opt/helene" -v "$ARCHIVE:/carry.zip:ro" -w /opt/helene \
-      --entrypoint python helene-helene app/localharness/carry.py import \
+      --entrypoint python "$PROJECT-helene" app/localharness/carry.py import \
       --config /opt/helene/helene.json --archive /carry.zip \
       || die "архив агента не развернулся — данные сохранены; повтори перенос"
     printf '%s\n' "$sum" > "$marker"
@@ -144,7 +167,7 @@ prepare_archive() {
   connect_args=""
   [ "${HELENE_AUTOMATIC_CONNECTION:-}" != "1" ] || connect_args="--connect"
   quiet docker run --rm --init -v "$INSTALL:/opt/helene" -w /opt/helene \
-    --entrypoint python helene-helene app/localharness/server_prepare.py --config /opt/helene/helene.json $connect_args \
+    --entrypoint python "$PROJECT-helene" app/localharness/server_prepare.py --config /opt/helene/helene.json $connect_args \
     || die "слух или голос не подготовлен — агент ещё не запущен; повтори перенос"
 }
 
@@ -153,6 +176,7 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
     # Установка есть, а контейнера нет (его удалили): сначала поднять то, что стоит, —
     # обновлять дальше будет исполнитель, с переносом правок агента.
     say "· Hélène лежит в $INSTALL, но не запущена — запускаю то, что стоит"
+    remember_install
     prepare_archive
     up_agent
   else
@@ -164,6 +188,7 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
     [ -f "$INSTALL/helene.json" ] || cp "$INSTALL/server/helene.server.json" "$INSTALL/helene.json"
     mkdir -p "$INSTALL/data" "$INSTALL/server/models"
     remember_host
+    remember_install
     prepare_archive
     up_agent
     up_updater
@@ -183,6 +208,7 @@ if [ "$REL" != "$INSTALL" ] && { [ ! -f "$INSTALL/server/updater/updater.py" ] \
   mkdir -p "$INSTALL/server/updater"
   cp -R "$REL/server/updater/." "$INSTALL/server/updater/"
 fi
+remember_install
 up_updater
 lock_folder
 
@@ -199,9 +225,9 @@ if [ -n "$INSTALLED" ] && ! newer "$VERSION" "$INSTALLED"; then
 fi
 
 say "· обновляю ${INSTALLED:-?} → $VERSION (агент пропадёт на несколько минут)"
-ID=$(docker exec helene-updater python3 "$INSTALL/server/updater/updater.py" plan "$VERSION") \
+ID=$(docker exec "$UPDATER_CONTAINER" python3 "$INSTALL/server/updater/updater.py" plan "$VERSION") \
   || die "исполнитель не взял обновление: $ID"
-docker exec helene-updater python3 "$INSTALL/server/updater/updater.py" watch "$ID" || exit 1
+docker exec "$UPDATER_CONTAINER" python3 "$INSTALL/server/updater/updater.py" watch "$ID" || exit 1
 say ""
 say "Дальше обновления — кнопкой «Обновить» в окне (Система → Обновление) или просто скажи"
 say "агенту «обновись». Эта команда больше не нужна."

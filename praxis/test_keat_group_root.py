@@ -148,7 +148,7 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
                                     ('_build_prompt_parts', ('persona', 'dynamic', ''))):
                     stack.enter_context(patch.object(agent, name, return_value=value))
                 stack.enter_context(patch.object(agent, '_media_prompt',
-                    side_effect=lambda convo, refs, ctx, model_text=None, unavailable_refs=None: (convo, model_text or convo)))
+                    side_effect=lambda convo, refs, ctx, model_text=None: (convo, model_text or convo)))
                 stack.enter_context(patch.object(agent.turns, 'begin', return_value={}))
                 stack.enter_context(patch.object(agent.llm, 'configured', return_value=True))
                 stack.enter_context(patch.object(agent.frame_shadow, 'enabled', return_value=False))

@@ -5,7 +5,7 @@ Praxis — свой мозг, свой счёт (PASS 22): каталог мод
 свойства на МОИХ задачах (вызовы, токены, сбои по классам, пустые ответы, латентность,
 фолбэки) — и меняю модель роли сама, без одобрения, объясняя зачем. Ключи фреймворков я
 не вижу и не трогаю (дом Егора): свитч оперирует именами через llm.update_config/
-swap_fallback-семантику — тройка framework/model/fallback_model остаётся согласованной,
+swap_fallback-семантику — framework/model и fallback_framework/fallback_model согласованы,
 иначе ломается фолбэк.
 
 Выбор — по сложности задачи, не по «модель X умнее вообще»: рутина (extract/компакт/
@@ -122,12 +122,39 @@ def allowlist(framework: str) -> list[str]:
             rc = (cfg.get("roles") or {}).get(role) or {}
             if rc.get("framework") == framework and rc.get("model"):
                 names.add(rc["model"])
-            other = "openai" if rc.get("framework") == "anthropic" else "anthropic"
+            other = (rc.get("fallback_framework") or
+                     ("openai" if llm._protocol(rc.get("framework")) == "anthropic" else "anthropic"))
             if other == framework and rc.get("fallback_model"):
                 names.add(rc["fallback_model"])
     except Exception:
         pass
     return sorted(names)
+
+
+def _frameworks():
+    import llm
+    return list((llm._config().get('frameworks') or {}).keys())
+
+
+def _target_framework(model, current):
+    """Resolve an endpoint identity, never an arbitrary same-protocol account."""
+    import llm
+    specs = llm._config().get('frameworks') or {}
+    candidates = [fw for fw in specs if model in allowlist(fw)]
+    if current in candidates:
+        return current
+    if not candidates:
+        raise ValueError(f'«{model}» нет в моём каталоге')
+    groups = {}
+    for fw in candidates:
+        spec = specs[fw]
+        identity = (llm._protocol(fw), str(spec.get('base_url') or '').rstrip('/'),
+                    str(spec.get('api_key') or ''), str(spec.get('api_mode') or ''))
+        groups.setdefault(identity, []).append(fw)
+    if len(groups) != 1:
+        raise ValueError('Model has several configured accounts; choose an endpoint: ' + ', '.join(candidates))
+    equivalent = next(iter(groups.values()))
+    return next((fw for fw in equivalent if fw not in llm.FRAMEWORKS), equivalent[0])
 
 
 def catalog() -> dict:
@@ -140,7 +167,7 @@ def catalog() -> dict:
         snap = llm.snapshot()
         for role, rc in snap.items():
             out["roles"][role] = {k: rc.get(k) for k in
-                                  ("framework", "model", "fallback_model", "on_fallback",
+                                  ("framework", "model", "fallback_model", "fallback_framework", "on_fallback",
                                    "last_error", "fallback_armed", "reasoning_effort")}
     except Exception:
         log.debug("brain.catalog: snapshot не собрался", exc_info=True)
@@ -150,7 +177,7 @@ def catalog() -> dict:
         if voice.get("model") == spec["model"]
         and (voice.get("reasoning_effort") or "") == spec["effort"]
     ]
-    for fw in ("anthropic", "openai"):
+    for fw in _frameworks():
         out["frameworks"][fw] = {"allowlist": allowlist(fw)}
     try:  # usage за 7 дней по-модельно — токены как наблюдаемое свойство
         days = llm.usage_days(7)
@@ -204,15 +231,10 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
     cur_fw, cur_model = rc.get("framework"), rc.get("model")
     if model == cur_model:
         return {"ok": False, "error": f"{model} и так основная модель роли {role}"}
-    fws = [fw for fw in ("anthropic", "openai") if model in allowlist(fw)]
-    if not fws:
-        lists = {fw: allowlist(fw) for fw in ("anthropic", "openai")}
-        live = {fw: bool(v) for fw, v in lists.items()}
-        return {"ok": False, "error": f"«{model}» нет в моём каталоге. Доступно: "
-                                      + "; ".join(f"{fw}: {', '.join(v) or '(провайдер не ответил)'}"
-                                                  for fw, v in lists.items()),
-                "live": live}
-    target_fw = cur_fw if cur_fw in fws else fws[0]
+    try:
+        target_fw = _target_framework(model, cur_fw)
+    except ValueError as error:
+        return {"ok": False, "error": str(error)}
     prev = {"framework": cur_fw, "model": cur_model,
             "fallback_model": rc.get("fallback_model"),
             # Откат обязан вернуть и прибитый фреймворк запасной: пустая строка значит
@@ -223,23 +245,11 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
     if target_fw == cur_fw:
         changes["roles"][role]["model"] = model
     else:
-        # swap-семантика: прежняя основная становится запасной на прежнем фреймворке
-        #
-        # ⚠ 15.09.2026, ЖИВОЙ СЛУЧАЙ. Согласовывались ТРИ поля из четырёх, и прибитый
-        # `fallback_framework` переживал смену. Голос ушёл с anthropic/glm-5.3 на
-        # openai/gpt-6-astra, запасной стала glm-5.3 — правильно, — но пин «openai»
-        # остался, и запасная нога поехала искать glm у реле, которое её не знает.
-        # Код это молча заглаживал: ротировал имя в основную модель, ловил схлопывание
-        # и брал gpt-5.6-sol. То есть конфиг обещал запас на z.ai, а запас сидел на том
-        # же реле и той же подписке — отвалилось бы реле, отвалился бы и он.
-        #
-        # `llm.swap_fallback` этот случай знает и снимает пин («прибитый
-        # fallback_framework стал бы ложью»); здесь его просто забыли. Пустая строка —
-        # способ СНЯТЬ ключ через слияние: `save_config` нормализует перед записью, и
-        # значение вне {openai, anthropic} в файл не попадает вовсе.
+        # Keep the previous account ID, not merely its wire protocol: several
+        # independent accounts can use the same Chat or Messages protocol.
         changes["roles"][role] = {"framework": target_fw, "model": model,
                                   "fallback_model": cur_model or "",
-                                  "fallback_framework": ""}
+                                  "fallback_framework": cur_fw}
     try:
         llm.update_config(changes)
     except Exception as e:
@@ -279,11 +289,10 @@ def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
     old_fw = str(before.get("framework") or "")
     old_model = str(before.get("model") or "")
     old_effort = str(before.get("reasoning_effort") or "")
-    fws = [fw for fw in ("anthropic", "openai") if spec["model"] in allowlist(fw)]
-    if not fws:
-        return {"ok": False, "error": f"«{spec['model']}» нет в моём каталоге", "stage": "model"}
-    before.setdefault("fallback_framework", "")
-    target_fw = old_fw if old_fw in fws else fws[0]
+    try:
+        target_fw = _target_framework(spec["model"], old_fw)
+    except ValueError as error:
+        return {"ok": False, "error": str(error), "stage": "model"}
     before.setdefault("fallback_framework", "")  # чтобы откат вернул и отсутствие пина
     target = dict(before)
     target["framework"] = target_fw
@@ -291,9 +300,7 @@ def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
     target["reasoning_effort"] = spec["effort"]
     if target_fw != old_fw:
         target["fallback_model"] = old_model
-        # Тот же случай, что в `switch`: пин на прежний фреймворк пережил бы смену и
-        # отправил бы запасную ногу к провайдеру, который этой модели не знает.
-        target["fallback_framework"] = ""
+        target["fallback_framework"] = old_fw
     try:
         llm.update_config({"roles": {"voice": target}})
     except Exception as error:

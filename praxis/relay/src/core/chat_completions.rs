@@ -622,7 +622,9 @@ fn map_tools_for_responses(tools: &[Tool]) -> Vec<Value> {
                     "type": "function",
                     "name": function.name,
                     "parameters": function.parameters,
-                    "strict": function.strict.unwrap_or(true),
+                    // Chat Completions tools are non-strict unless the caller
+                    // opts in. Preserve that contract when mapping to Responses.
+                    "strict": function.strict.unwrap_or(false),
                 });
                 if let Some(description) = &function.description {
                     mapped["description"] = json!(description);
@@ -1226,7 +1228,7 @@ pub async fn stream_chat_completions(
                                     break 'read_stream;
                                 }
                                 // Convert to our ResponseEvent format
-                                if let Some(response_event) =
+                                if let Some(mut response_event) =
                                     parse_sse_event(&event_json, tool_call_index)
                                 {
                                     if response_event
@@ -1240,7 +1242,7 @@ pub async fn stream_chat_completions(
                                     // Deduplication logic
                                     let mut should_send = true;
                                     // Try to extract content from the event
-                                    let content = response_event
+                                    let mut content = response_event
                                         .choices
                                         .first()
                                         .and_then(|choice| choice.delta.content.as_ref())
@@ -1254,6 +1256,15 @@ pub async fn stream_chat_completions(
                                                 should_send = false;
                                             }
                                         }
+                                    }
+                                    // Suppress repeated text, never the terminal choice that
+                                    // tells Chat clients the Responses stream completed.
+                                    if !should_send && response_event.choices.iter().any(|choice| choice.finish_reason.is_some()) {
+                                        for choice in &mut response_event.choices {
+                                            choice.delta.content = None;
+                                        }
+                                        content = None;
+                                        should_send = true;
                                     }
                                     if !should_send && (response_event.usage.is_some()
                                         || response_event.relay_provider_observation.is_some()) {
@@ -1520,7 +1531,8 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                                 "function": { "name": name, "arguments": arguments }
                             }])),
                         },
-                        finish_reason: Some("tool_calls".to_string()),
+                        // An item can finish before the upstream response fails.
+                        finish_reason: None,
                     }],
                     relay_terminal: None,
                     relay_provider_observation: None,
@@ -1579,6 +1591,18 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
         .unwrap_or("gpt-4")
         .to_string();
 
+    // response.completed may contain no output or usage: it still closes the
+    // single Chat choice. Tool items emitted earlier do not finish it themselves.
+    let finish_reason = if event_type == Some("response.completed") {
+        let has_tool_calls = tool_call_index > 0 || event
+            .pointer("/response/output")
+            .and_then(Value::as_array)
+            .is_some_and(|output| output.iter().any(|item| item["type"] == "function_call"));
+        Some(if has_tool_calls { "tool_calls" } else { "stop" }.to_string())
+    } else {
+        event.get("finish_reason").and_then(Value::as_str).map(str::to_string)
+    };
+
     // Create OpenAI-compatible response
     Some(ResponseEvent {
         relay_terminal: None,
@@ -1608,14 +1632,11 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                     content: Some(content),
                     tool_calls: None,
                 },
-                finish_reason: event
-                    .get("finish_reason")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string()),
+                finish_reason: finish_reason.clone(),
             }]
         } else {
             // Check if this is a finish event
-            if event.get("finish_reason").is_some() {
+            if finish_reason.is_some() {
                 vec![ResponseChoice {
                     index: 0,
                     delta: ResponseDelta {
@@ -1623,10 +1644,7 @@ fn parse_sse_event(event: &Value, tool_call_index: usize) -> Option<ResponseEven
                         content: None,
                         tool_calls: None,
                     },
-                    finish_reason: event
-                        .get("finish_reason")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string()),
+                    finish_reason,
                 }]
             } else {
                 vec![]
@@ -2266,6 +2284,7 @@ mod tests {
         TextThenError,
         /// A valid response.completed without usage.
         CompletedWithoutUsage,
+        Sse(&'static str),
         /// First request closes cleanly before completed; second completes.
         CleanEofThenCompleted,
         /// First request leaves an unterminated SSE line; second completes.
@@ -2355,6 +2374,9 @@ mod tests {
                              \"error\":{\"message\":\"internal stream failure\"}}}\n\n",
                         ))
                         .unwrap(),
+                    Upstream::Sse(frames) => Response::builder()
+                        .status(200).header("content-type", "text/event-stream")
+                        .body(Body::from(frames)).unwrap(),
                     Upstream::CompletedWithoutUsage => completed(),
                     Upstream::CompletedThenHang => {
                         let chunks = async_stream::stream! {
@@ -3388,6 +3410,45 @@ mod tests {
     }
 
     #[test]
+    fn responses_tool_strict_default_matches_chat_and_preserves_schema() {
+        // Ordinary Chat tools may have optional properties and open objects.
+        // Mapping them to Responses must not silently enable strict mode.
+        let parameters = json!({
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "options": {
+                    "type": "object",
+                    "properties": {"detail": {"type": "string"}},
+                    "required": []
+                }
+            },
+            "required": []
+        });
+        for (strict, expected) in [
+            (None, false), (Some(Value::Null), false),
+            (Some(json!(false)), false), (Some(json!(true)), true),
+        ] {
+            let mut function = json!({
+                "name": "analyze_screenshot",
+                "description": "Inspect a screenshot",
+                "parameters": parameters.clone()
+            });
+            if let Some(value) = strict {
+                function["strict"] = value;
+            }
+            let tool: Tool = serde_json::from_value(json!({
+                "type": "function", "function": function
+            })).unwrap();
+            let mapped = map_tools_for_responses(&[tool]);
+            assert_eq!(mapped[0]["strict"], json!(expected));
+            assert_eq!(mapped[0]["parameters"], parameters);
+            assert_eq!(mapped[0]["name"], "analyze_screenshot");
+            assert_eq!(mapped[0]["description"], "Inspect a screenshot");
+        }
+    }
+
+    #[test]
     fn maps_hosted_search_without_unsupported_max_tool_calls() {
         let request: ChatRequest = serde_json::from_value(json!({
             "model": "gpt-5.6-sol",
@@ -3509,6 +3570,69 @@ mod tests {
             conversation_affinity(&request),
             conversation_affinity(&longer)
         );
+    }
+
+    #[test]
+    fn completed_frames_close_choices_with_or_without_usage() {
+        for count in [0, 2] {
+            for response in [
+                json!({"model":"gpt-6.1-sol"}),
+                json!({"model":"gpt-6.1-sol","output":[],"usage":{"input_tokens":7,"output_tokens":1,"total_tokens":8}}),
+            ] {
+                let event = parse_sse_event(&json!({"type":"response.completed","response":response}), count).unwrap();
+                assert_eq!(event.choices.len(), 1, "successful Responses completion must finish the Chat choice");
+                assert_eq!(event.choices[0].finish_reason.as_deref(), Some(if count == 0 {"stop"} else {"tool_calls"}));
+                assert!(event.choices[0].delta.content.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn function_item_is_not_a_finished_response() {
+        let event = parse_sse_event(&json!({"type":"response.output_item.done","item":{
+            "type":"function_call","name":"echo","arguments":"{}","call_id":"call-a"}}),0).unwrap();
+        assert!(event.choices[0].delta.tool_calls.is_some());
+        assert_eq!(event.choices[0].finish_reason, None, "a later failure must still reject the turn");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn repeated_completed_text_keeps_finish_and_usage() {
+        let _guard = lever_guard();
+        for frames in [
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}]}}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":7,\"output_tokens\":1,\"total_tokens\":8}}}\n\n",
+        ] {
+            let (wire,hits)=run_turn_with_hits(Upstream::Sse(frames),TerminalNaming::Field).await;
+            assert_eq!(hits,1);
+            assert!(torn_events(&wire).is_empty());
+            let text:Vec<_>=wire.iter().filter_map(|(_,e)| e["choices"][0]["delta"]["content"].as_str()).collect();
+            assert_eq!(text,["ok"]);
+            assert_eq!(last(&wire)["choices"][0]["finish_reason"],"stop");
+            if frames.contains("usage") { assert_eq!(last(&wire)["usage"]["total_tokens"],8); }
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn tool_items_only_finish_after_upstream_completion() {
+        let _guard = lever_guard();
+        let incomplete="data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{}\",\"call_id\":\"call-a\"}}\n\n";
+        let complete=concat!(
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{}\",\"call_id\":\"call-a\"}}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"echo\",\"arguments\":\"{}\",\"call_id\":\"call-b\"}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n");
+        let (wire,hits)=run_turn_with_hits(Upstream::Sse(incomplete),TerminalNaming::Field).await;
+        assert_eq!(hits,1,"never replay a surfaced tool call");
+        assert_eq!(torn_events(&wire).len(),1);
+        assert!(wire.iter().all(|(_,e)| e["choices"][0]["finish_reason"] != "tool_calls"));
+        let (wire,hits)=run_turn_with_hits(Upstream::Sse(complete),TerminalNaming::Field).await;
+        assert_eq!(hits,1);
+        assert!(torn_events(&wire).is_empty());
+        assert_eq!(last(&wire)["choices"][0]["finish_reason"],"tool_calls");
+        let calls:Vec<_>=wire.iter().filter_map(|(_,e)| e["choices"][0]["delta"]["tool_calls"][0]["index"].as_u64()).collect();
+        assert_eq!(calls,[0,1]);
+        assert_eq!(wire.iter().filter(|(_,e)|e["choices"][0]["finish_reason"]=="tool_calls").count(),1);
     }
 
     #[test]

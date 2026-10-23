@@ -98,8 +98,9 @@ pub fn dispatch(capability: &str, args: Value, state: &Path) -> Result<Value> {
         }
         if !stdout_done { stdout_done=drain(&mut stdout,&mut received,16*1024*1024,true)?; }
         if !stderr_done { stderr_done=drain(&mut stderr,&mut errors,2000,false)?; }
-        if let Some(status)=child.0.try_wait()? {
-            if stdout_done && stderr_done { break status }
+        if let Some(status)=child.0.try_wait()?
+            && stdout_done && stderr_done {
+            break status;
         }
         std::thread::sleep(Duration::from_millis(5));
     };

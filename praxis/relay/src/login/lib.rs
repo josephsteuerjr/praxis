@@ -553,7 +553,7 @@ async fn try_refresh_token(refresh_token: String) -> std::io::Result<RefreshResp
         scope: "openid profile email",
     };
 
-    let client = reqwest::Client::new();
+    let client = crate::core::network::client().map_err(std::io::Error::other)?;
     let response = client
         .post("https://auth.openai.com/oauth/token")
         .header("Content-Type", "application/json")

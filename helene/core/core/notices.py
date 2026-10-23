@@ -270,7 +270,7 @@ def note_owner_decision(text: str, *, run_id: str = "", ts: float | None = None)
 
 
 def note_node(*, task_id: str, unit_id: str, status: str, goal: str = "",
-              origin_chat: str = "", ts: float | None = None) -> dict | None:
+              origin_chat: str = "", ts: float | None = None, result_ref=None) -> dict | None:
     """Узел Forge / субагент закончил. Дедуп по (task_id, unit_id)."""
     if not enabled():
         return None
@@ -280,7 +280,9 @@ def note_node(*, task_id: str, unit_id: str, status: str, goal: str = "",
         gist += f" — {_clip(goal, 60)}"
     return _put({"kind": "node", "ts": now, "chat_id": str(origin_chat or ""),
                  "chat_title": "Forge", "who": str(unit_id), "message_id": "",
-                 "gist": _clip(gist, 160), "private": False},
+                 "gist": _clip(gist, 160), "private": False,
+                 "work_ref": f"forge:{task_id}:{unit_id}", "task_id": task_id,
+                 "unit_id": unit_id, "result_ref": result_ref},
                 dedup=f"node:{task_id}:{unit_id}")
 
 
@@ -334,7 +336,9 @@ def _line(row: dict, *, owner_context: bool, fresh: bool) -> str:
             return f"• {mark}  Forge · узел {who} закончил, {when}"
         return f"• {mark}  {place} · {who} — {what}, {when}"
     if kind == "node":
-        return f"• {mark}  {gist}, {when}"
+        import authored_notes
+        linked = authored_notes.for_notice(BASE, row, owner=owner_context)
+        return f"• {mark}  {gist}, {when}" + linked
     return f"• {mark}  {place} · {who} — {what}, {when}: «{gist}»"
 
 

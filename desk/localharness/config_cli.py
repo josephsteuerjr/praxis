@@ -3,8 +3,8 @@
 
 The shell transports the document through stdin (not argv), and owns the UI and
 relay lifecycle. This is deliberately not deskd.agentcfg's restricted server writer.
-The mtime check is optimistic, like the former Rust config_save_at: independent
-writers changing the file *after* comparison are not serialized by this CLI.
+The mtime comparison and replacement share one per-config transaction with the
+channel writer, so two concurrent saves cannot both accept the same old receipt.
 """
 from __future__ import annotations
 
@@ -34,7 +34,22 @@ def save(path: Path, document: str, seen: str | None) -> dict:
     # down the working supervisor on its next roster refresh.
     relay=value.get('relay')
     environment({} if relay is None else relay)
+    if 'self_review' in value:
+        if __package__:
+            from .self_review import settings
+        else:
+            from self_review import settings
+        value['self_review'] = settings({'self_review': value['self_review']})
     pretty = json.dumps(value, ensure_ascii=False, indent=2)
+    if __package__:
+        from .config_transaction import transaction
+    else:
+        from localharness.config_transaction import transaction
+    with transaction(path):
+        return _commit(path, pretty, seen)
+
+
+def _commit(path, pretty, seen):
     seen = seen.strip() if seen else None
     if seen:
         current = mtime_ns(path)

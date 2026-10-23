@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { stripTypeScriptTypes } from 'node:module';
+
+const source = readFileSync(new URL('../../ui-kit/providers.ts', import.meta.url), 'utf8');
+const providers = await import('data:text/javascript;base64,' + Buffer.from(stripTypeScriptTypes(source)).toString('base64'));
+const values = (model, url) => providers.effortPlan('anthropic', model, url).chips.map(chip => chip.value);
+assert.deepEqual(values('glm-5.3','https://api.z.ai/api/anthropic'), ['', 'low', 'high', 'max']);
+assert.deepEqual(values('k3','https://api.kimi.ai/coding'), ['', 'low', 'high', 'max']);
+assert.deepEqual(values('deepseek-flash','https://api.deepseek.com/anthropic'), ['', 'low', 'high', 'max']);
+assert.deepEqual(values('MiniMax-M3.1-Flash','https://api.minimax.io/anthropic'), ['', 'low', 'medium', 'high', 'xhigh', 'max']);
+assert.deepEqual(values('MiniMax-M3','https://api.minimax.io/anthropic'), []);
+assert.deepEqual(values('qwen3.8-max','https://coding.dashscope.aliyuncs.com/apps/anthropic'), ['', 'low', 'medium', 'xhigh']);
+assert.deepEqual(values('claude-opus-4-7','https://api.anthropic.com'), ['', 'low', 'medium', 'high', 'xhigh', 'max']);
+assert.deepEqual(values('claude-opus-4-6','https://api.anthropic.com'), ['', 'low', 'medium', 'high', 'max']);
+assert.deepEqual(values('claude-opus-4-5','https://api.anthropic.com'), ['', 'low', 'medium', 'high']);
+assert.deepEqual(values('claude-opus-4-7','https://unqualified.invalid/anthropic'), []);
+assert.deepEqual(values('glm-5.3','https://unqualified.invalid/anthropic'), []);
+assert.equal(providers.clampEffort('anthropic','k3','max','https://api.kimi.ai/coding'),'max');
+assert.equal(providers.clampEffort('anthropic','k3','medium','https://api.kimi.ai/coding'),'');
+assert.doesNotMatch(providers.effortPlan('chatgpt','gpt-6.1-sol').hint,/выключено/);
+console.log('provider effort: 14 qualified mappings and limits PASS');

@@ -1042,6 +1042,21 @@ async def _r_agent_config_save(c: Call):
     return result
 
 
+async def _r_self_review(c: Call):
+    if c.role != "owner":
+        return Fail(403, "Self-review controls require the owner key.")
+    from localharness import self_review_integration
+    try:
+        if c.body is not None:
+            result = await asyncio.to_thread(self_review_integration.command, readers.tree(), c.body)
+            return result
+        config = agentcfg.state()
+        return await asyncio.to_thread(self_review_integration.status, readers.tree(),
+                                       config.get("config") or {}, str(c.query.get("id") or ""))
+    except (OSError, ValueError, TypeError) as exc:
+        return Fail(400, str(exc))
+
+
 async def _r_media(c: Call):
     """Вложение из ленты — байтами. Голос агента окно проигрывает этим.
 
@@ -1511,6 +1526,8 @@ ROUTES: tuple[Route, ...] = (
     Route("POST", "/api/local-files", _r_local_files, local_only=True),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
+    Route("GET", "/api/self-review", _r_self_review),
+    Route("POST", "/api/self-review", _r_self_review),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
     # Обе ручки окно и телефон опрашивают каждые несколько секунд; рубеж от
     # 500-х стоит ВНУТРИ readers.state/readers.health — он общий на оба канала.

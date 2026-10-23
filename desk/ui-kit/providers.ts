@@ -1,15 +1,3 @@
-// Провайдеры модели — одна таблица на установщик и окно настроек (слово
-// владельца 06.09: «из популярных ведь GLM, MiniMax и Kimi; DeepSeek и Qwen —
-// только по счётчику»). Адреса и имена моделей сверены 06.09.2026 с
-// документацией провайдеров; менять здесь, а не в двух интерфейсах порознь.
-//
-// Что программа умеет передать в запрос, а что нет — по коду ядра
-// (tree/llm.py), а не по желанию: по протоколу OpenAI уходит `reasoning_effort`
-// роли; по протоколу Anthropic ступень уходит ТОЛЬКО моделям glm-* (словарь
-// Z.ai low/high/max, полем `output_config.effort` — `reasoning_effort` этот
-// эндпойнт Z.ai молча глотал, проба 08.09), остальным — ничего, глубину решает модель. Параметр
-// `thinking` (MiniMax M3, DeepSeek V4, Qwen) ядро шлёт лишь из своих рук, не
-// из настроек: ручки для него здесь нет, и обещать её на экране нельзя.
 
 export type ProviderKind = "api" | "anthropic" | "chatgpt" | "local";
 
@@ -38,15 +26,15 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.z.ai/api/anthropic",
     model: "glm-5.3",
     billing: "both",
-    note: "GLM Coding Plan — подписка; тот же адрес работает и по счётчику. Рассуждение у GLM-5.3 не выключается, ступень low / high / max уходит в запрос.",
+    note: "Тип ключа определяет Coding Plan или оплату по счётчику; проверь его в кабинете Z.ai. GLM-5.3: low / high / max; доступность моделей зависит от плана.",
   },
   {
     id: "minimax",
     label: "MiniMax",
     url: "https://api.minimax.io/anthropic",
-    model: "MiniMax-M2.7",
+    model: "MiniMax-M3.1-Flash",
     billing: "both",
-    note: "Coding Plan — подписка, ключ плана отдельный от ключа по счётчику; для аккаунтов материкового Китая адрес api.minimaxi.com. M2.7 думает всегда; M3 — только с параметром thinking, которого программа пока не шлёт.",
+    note: "Coding Plan и оплата по счётчику используют разные ключи. Для материкового Китая — api.minimaxi.com. M3.1: low / medium / high / xhigh / max; M3 использует adaptive thinking.",
   },
   {
     id: "kimi",
@@ -54,7 +42,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.kimi.com/coding",
     model: "k3",
     billing: "both",
-    note: "Kimi Code — подписка (модели k3, k3-256k, kimi-for-coding). По счётчику — адрес https://api.moonshot.ai/anthropic и модель kimi-k3. Рассуждение у k3 включено всегда.",
+    note: "Kimi Code: Китай — api.kimi.com/coding, международный — api.kimi.ai/coding. По счётчику — api.moonshot.ai/anthropic. Шкала low / high / max, модели и доступ зависят от аккаунта.",
   },
   {
     id: "anthropic",
@@ -62,15 +50,15 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://api.anthropic.com",
     model: "",
     billing: "pay",
-    note: "Claude по счётчику. Глубину рассуждения выбирает сама модель; список моделей сервер отдаёт — нажми «Проверить».",
+    note: "Claude по счётчику. Новые модели используют adaptive thinking и output_config.effort; допустимые ступени зависят от версии модели. Каталог не проверяет генерацию.",
   },
   {
     id: "deepseek",
     label: "DeepSeek",
     url: "https://api.deepseek.com/anthropic",
-    model: "deepseek-v4-flash",
+    model: "deepseek-flash",
     billing: "pay",
-    note: "Только по счётчику (V4 Flash дешевле, V4 Pro сильнее). Рассуждение у V4 включается параметром thinking, которого программа пока не шлёт, — отвечает быстрым режимом.",
+    note: "По счётчику. Текущий Flash и V4 Pro поддерживают рассуждение; серверное умолчание — high. Ступени low / high / max. Старый V4 Flash может быть алиасом более новой модели.",
   },
   {
     id: "qwen",
@@ -78,7 +66,7 @@ export const ANTHROPIC_PRESETS: Preset[] = [
     url: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
     model: "qwen3.8-max",
     billing: "both",
-    note: "Этот адрес — Coding Plan (подписка). По счётчику адрес с id рабочего пространства выдаёт кабинет Model Studio. Списка моделей сервер не отдаёт: «Проверить» скажет «нет /models», это не ошибка. Рассуждение — параметром thinking, его программа пока не шлёт.",
+    note: "Этот адрес — китайский Coding Plan; международный план и API по счётчику имеют другие адреса и каталоги из кабинета Model Studio. Для Qwen3.8: low / medium / xhigh. Отсутствие /models не доказывает отказ генерации.",
   },
 ];
 
@@ -89,7 +77,7 @@ export const OPENAI_PRESETS: Preset[] = [
     url: "https://api.openai.com/v1",
     model: "gpt-5.4",
     billing: "pay",
-    note: "По счётчику. Ступень уходит полем reasoning_effort.",
+    note: "По счётчику. Прямой API использует Responses; effort передаётся в reasoning.effort и зависит от модели.",
   },
 ];
 
@@ -110,43 +98,60 @@ const HIGH: EffortChip = { value: "high", label: "high" };
 const XHIGH: EffortChip = { value: "xhigh", label: "xhigh" };
 
 /** Шкала рассуждения, которую программа ДЕЙСТВИТЕЛЬНО передаст провайдеру. */
-export function effortPlan(provider: ProviderKind, model: string): EffortPlan {
+export function effortPlan(provider: ProviderKind, model: string, baseUrl = ""): EffortPlan {
   const m = (model || "").trim().toLowerCase();
+  let host = "";
+  try { host = new URL(baseUrl).hostname; } catch {}
+  const max: EffortChip = { value: "max", label: "max" };
+  const defaults: EffortChip = { value: "", label: "не задавать" };
   if (provider === "chatgpt") {
     return {
-      chips: [{ value: "", label: "без рассуждения" }, LOW, MEDIUM, HIGH, XHIGH],
-      hint: "На подписке пустое усилие означает «рассуждение выключено»: реле гасит его своим умолчанием. Это быстро и дёшево; для трудных ходов бери medium и выше.",
+      chips: [defaults, LOW, MEDIUM, HIGH, XHIGH],
+      hint: "Ступень передаётся реле; доступные значения и умолчание зависят от выбранной модели и аккаунта. Пустое поле не обещает отключения рассуждения.",
     };
   }
   if (provider === "anthropic") {
-    if (m.startsWith("glm-")) {
-      // Ядро проецирует ступени в словарь Z.ai: low→low, high→high, xhigh→max
-      // (tree/llm.py, _GLM_EFFORT); medium там сливается с high, поэтому не
-      // предлагается — ярлык обязан совпадать с тем, что уедет.
+    if (host === "api.z.ai" || (!baseUrl && m.startsWith("glm-"))) {
       return {
-        chips: [{ value: "", label: "по умолчанию (max)" }, LOW, HIGH, { value: "xhigh", label: "max" }],
+        chips: [{ value: "", label: "по умолчанию (max)" }, LOW, HIGH, max],
         hint: "Z.ai: шкала low / high / max, у GLM-5.3 рассуждение не выключается. Пустое — серверное умолчание max: самое глубокое и самое дорогое.",
       };
     }
+    if (["api.kimi.com", "api.kimi.ai", "api.moonshot.ai", "api.moonshot.cn", "api.deepseek.com"].includes(host)) {
+      return { chips: [defaults, LOW, HIGH, max], hint: "output_config.effort: low / high / max. Умолчание и доступность определяет конкретная модель провайдера." };
+    }
+    if (["api.minimax.io", "api.minimaxi.com"].includes(host) && m.startsWith("minimax-m3.1")) {
+      return { chips: [defaults, LOW, MEDIUM, HIGH, XHIGH, max], hint: "MiniMax M3.1: output_config.effort; серверное умолчание max." };
+    }
+    if (host.endsWith(".aliyuncs.com") && m.startsWith("qwen3.8")) {
+      return { chips: [defaults, LOW, MEDIUM, XHIGH], hint: "Qwen3.8: output_config.effort low / medium / xhigh, серверное умолчание xhigh." };
+    }
+    if (host === "api.anthropic.com") {
+      const version = /claude-(?:opus|sonnet|haiku)-(\d+)[.-](\d+)/.exec(m);
+      const major = Number(version?.[1] || 0), minor = Number(version?.[2] || 0);
+      if (major > 4 || (major === 4 && minor >= 7)) return { chips: [defaults, LOW, MEDIUM, HIGH, XHIGH, max], hint: "Claude 4.7+: adaptive thinking и output_config.effort; поддержка зависит от модели." };
+      if (major === 4 && minor === 6) return { chips: [defaults, LOW, MEDIUM, HIGH, max], hint: "Claude 4.6: adaptive thinking; effort low / medium / high / max." };
+      if (m.startsWith("claude-opus-4-5") || m.startsWith("claude-opus-4.5")) return { chips: [defaults, LOW, MEDIUM, HIGH], hint: "Claude Opus 4.5: effort low / medium / high." };
+    }
     return {
       chips: [],
-      hint: "По протоколу Anthropic ступень в запрос не уходит — глубину решает модель: Claude выбирает сама, Kimi k3 и MiniMax M2.x думают всегда, а MiniMax M3, DeepSeek V4 и Qwen включают рассуждение параметром thinking, которого программа пока не шлёт.",
+      hint: "Для этого адреса и модели шкала не подтверждена. Совместимость с Messages сама по себе не задаёт effort; неизвестное значение не отправляется вслепую.",
     };
   }
   if (provider === "local") {
     return {
       chips: [{ value: "", label: "не задавать" }, LOW, MEDIUM, HIGH],
-      hint: "Ollama и LM Studio поле reasoning_effort чаще всего пропускают мимо: «не задавать» — самое честное.",
+      hint: "reasoning_effort передаётся совместимому серверу; поддержку определяет загруженная модель и сервер, а не название Ollama или LM Studio. Каталог не подтверждает инструменты или зрение.",
     };
   }
   return {
     chips: [{ value: "", label: "не задавать" }, LOW, MEDIUM, HIGH, XHIGH],
-    hint: "Уходит полем reasoning_effort протокола OpenAI. Серверам с другой шкалой (DeepSeek: low / high / max, Qwen: enable_thinking) оставь «не задавать» — чужое значение вернётся отказом 400.",
+    hint: "Поле reasoning_effort зависит от модели. Прямой OpenAI использует Responses, совместимые адреса — Chat Completions, если в конфиге не выбран api_mode. Каталог не доказывает поддержку инструментов или изображений.",
   };
 }
 
 /** Ступень, которую можно сохранить для провайдера: чужая сбрасывается в пустую. */
-export function clampEffort(provider: ProviderKind, model: string, effort: string): string {
+export function clampEffort(provider: ProviderKind, model: string, effort: string, baseUrl = ""): string {
   const value = (effort || "").trim().toLowerCase();
-  return effortPlan(provider, model).chips.some((c) => c.value === value) ? value : "";
+  return effortPlan(provider, model, baseUrl).chips.some((c) => c.value === value) ? value : "";
 }

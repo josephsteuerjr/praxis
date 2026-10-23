@@ -198,7 +198,11 @@ async fn run_login() -> anyhow::Result<()> {
     // polls exactly that file; writing anywhere else looks to it like a login
     // that never completed.
     if login::lib::relay_local() {
-        let local_auth_dir = std::env::current_dir()?.join("local_auth");
+        let slot = std::env::var("RELAY_LOGIN_SLOT").unwrap_or_else(|_| "primary".into());
+        if !matches!(slot.as_str(), "primary" | "secondary") {
+            anyhow::bail!("RELAY_LOGIN_SLOT must be primary or secondary");
+        }
+        let local_auth_dir = std::env::current_dir()?.join("local_auth").join("accounts").join(slot);
         std::fs::create_dir_all(&local_auth_dir)?;
         let local_auth_path = local_auth_dir.join("auth.json");
         println!("RELAY_LOCAL is set: auth file path: {:?}", local_auth_path);
@@ -321,6 +325,8 @@ fn app_router(app_state: AppState) -> Router {
         .route("/v1/limits", get(limits_handler))
         .route("/v1/account", get(account_handler))
         .route("/v1/account/switch", post(account_switch_handler))
+        .route("/v1/network", get(network_handler))
+        .route("/v1/network/check", post(network_check_handler))
         .route("/health", get(health_handler))
         .layer(CorsLayer::permissive())
         .with_state(app_state)
@@ -345,17 +351,7 @@ async fn run_server() -> anyhow::Result<()> {
     let accounts = AccountRouter::load(&config.codex_home).await?;
 
     // Create app state
-    let client = reqwest::Client::builder()
-        .tcp_keepalive(std::time::Duration::from_secs(30))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .build()
-        .unwrap_or_else(|error| {
-            warn!(
-                "shared client builder failed ({}), falling back to default",
-                error
-            );
-            reqwest::Client::new()
-        });
+    let client = core::network::client()?;
     // Before any upstream call: the presented Codex version gates the model catalog.
     chat_completions::resolve_codex_cli_version(&client).await;
     let app_state = AppState {
@@ -702,16 +698,17 @@ async fn limits_handler(State(state): State<AppState>) -> Response {
 
 /// Which subscriptions exist and which one is live right now.
 ///
-/// The active slot lives in the router's memory, so editing auth files on a
-/// running relay changes nothing until a restart.  Without this pair of
+/// The active slot is persisted by the router; changes to the credential file
+/// set require the host's login-generation restart. Without this pair of
 /// endpoints "switch me to the other subscription" had no executor at all —
 /// only an instruction telling a human to do it by hand.
-async fn account_handler(State(state): State<AppState>) -> Json<serde_json::Value> {
+async fn account_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !key_ok(&headers) {return key_refusal()}
     Json(serde_json::json!({
         "active_slot": state.accounts.active_slot().await,
         "configured_slots": state.accounts.account_count(),
         "slots": state.accounts.describe().await,
-    }))
+    })).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -721,8 +718,10 @@ struct AccountSwitchRequest {
 
 async fn account_switch_handler(
     State(state): State<AppState>,
+    headers: HeaderMap,
     payload: Result<Json<AccountSwitchRequest>, JsonRejection>,
 ) -> Response {
+    if !key_ok(&headers) {return key_refusal()}
     let requested = match payload {
         Ok(Json(request)) => request.slot,
         Err(rejection) => {
@@ -769,6 +768,32 @@ async fn account_switch_handler(
             )
                 .into_response()
         }
+    }
+}
+
+fn key_refusal() -> Response {
+    (StatusCode::UNAUTHORIZED, Json(serde_json::json!({"error":{"code":"invalid_api_key","message":"Missing or wrong relay key"}}))).into_response()
+}
+
+async fn network_handler(headers: HeaderMap) -> Response {
+    if !key_ok(&headers) {return key_refusal()}
+    Json(core::network::status()).into_response()
+}
+
+async fn network_check_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !key_ok(&headers) {return key_refusal()}
+    let account=match state.accounts.lease_active().await {
+        Ok(value)=>value,
+        Err(_)=>return (StatusCode::CONFLICT,Json(serde_json::json!({"ok":false,"generation_sent":false,"error":"Selected subscription is unavailable"}))).into_response(),
+    };
+    let result=state.client.get(format!("{}/models",state.config.chatgpt_base_url.trim_end_matches('/')))
+        .query(&[("client_version",chat_completions::codex_cli_version())])
+        .bearer_auth(account.access_token).header("ChatGPT-Account-ID",account.account_id)
+        .header("User-Agent",chat_completions::codex_user_agent())
+        .timeout(std::time::Duration::from_secs(10)).send().await;
+    match result {
+        Ok(response)=>Json(serde_json::json!({"ok":response.status().is_success(),"http_status":response.status().as_u16(),"generation_sent":false,"network":core::network::status()})).into_response(),
+        Err(_)=>(StatusCode::BAD_GATEWAY,Json(serde_json::json!({"ok":false,"generation_sent":false,"error":"Selected outbound route did not reach the backend"}))).into_response(),
     }
 }
 

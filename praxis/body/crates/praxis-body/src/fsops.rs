@@ -117,6 +117,10 @@ fn default_parents() -> bool {
 }
 
 pub fn dispatch(capability: &str, args: Value) -> Result<Value> {
+    #[cfg(windows)]
+    if crate::cu_python::selected_fs(capability) {
+        return crate::cu_python::dispatch_fs(capability, args);
+    }
     match capability {
         "fs.stat" => stat(serde_json::from_value(args)?),
         "fs.list" => list(serde_json::from_value(args)?),
@@ -528,6 +532,7 @@ fn check_copy_destination(path: &Path) -> std::io::Result<()> {
 /// ответе он значит ровно «сколько раз атрибут снимали МЫ», а не «сколько было read-only».
 /// Спрашивать её «снять атрибут?» было бы забором на ровном месте: она сказала «скопируй»,
 /// права у неё полные. Наше дело — не спрятать, что атрибут пришлось снять.
+#[cfg(windows)]
 fn clear_readonly(path: &Path) -> bool {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
@@ -538,6 +543,13 @@ fn clear_readonly(path: &Path) -> bool {
     }
     permissions.set_readonly(false);
     fs::set_permissions(path, permissions).is_ok()
+}
+
+// Unix has no Windows read-only attribute. Clearing its readonly bit grants
+// write access to every class, not just the owner: preserve the original error.
+#[cfg(not(windows))]
+fn clear_readonly(_path: &Path) -> bool {
+    false
 }
 
 fn remove_entry(path: &Path, as_directory: bool, tally: &mut Tally) -> std::io::Result<()> {

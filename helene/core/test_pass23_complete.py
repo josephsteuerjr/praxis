@@ -154,7 +154,18 @@ class CompleteForgeCase(unittest.TestCase):
             {"id": "build", "role": "worker", "brief": "implement", "deps": ["map"]},
         ]})
         self.assertIn("map [pending]", forge.swarm(task_id, "plan", plan=plan, max_parallel=2))
-        with mock.patch.object(forge, "agent", return_value="Порождён agent-a1b2c3d4 (scout, pid 1)."):
+        def accepted_spawn(_task_id, _action, **kw):
+            unit = forge._unit_dir(task_id, "agents", kw["agent_id"])
+            forge._atomic_json(unit / "request.json", {
+                "id": kw["agent_id"], "task_id": task_id, "node_id": kw["node_id"],
+                "role": kw["role"], "brief": kw["brief"], "created": forge._now(),
+                "status": "running", "supervisor_pid": 42,
+                "supervisor_started_at": "fixture-birth",
+            })
+            return f"Порождён {kw['agent_id']} (scout, pid 42)."
+
+        with mock.patch.object(forge, "agent", side_effect=accepted_spawn), \
+             mock.patch.object(forge, "_pid_alive", return_value=True):
             started = forge.swarm(task_id, "start")
         self.assertIn("map [running]", started)
         first = forge.swarm(task_id, "signal", node_id="map", kind="claim", files=["app.py"])
@@ -172,6 +183,14 @@ class CompleteForgeCase(unittest.TestCase):
         self.assertIn(lesson_id, recalled)
         rows = forge_learning.recall(forge.STATE_DIR, "answer unittest", self.project)
         self.assertTrue(rows)
+
+    def test_spawn_prose_without_reserved_identity_is_not_running(self):
+        task_id = self._start()
+        forge.swarm(task_id, "plan", plan=json.dumps({"nodes": [
+            {"id": "map", "role": "scout", "brief": "map seams"}]}))
+        with mock.patch.object(forge, "agent", return_value="spawned pid 42"):
+            result = forge.swarm(task_id, "start")
+        self.assertIn("blocked_identity", result)
 
     def test_owner_surface_contains_completed_engineering_cycle(self):
         import agent

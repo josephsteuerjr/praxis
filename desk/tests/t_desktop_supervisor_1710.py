@@ -320,10 +320,8 @@ class WindowsForeground(unittest.TestCase):
         self.psutil = psutil
         self.home = tempfile.TemporaryDirectory(prefix="helene-python-owner-")
         self.base = Path(self.home.name)
-        (self.base / "app/localharness").mkdir(parents=True)
-        for name in ("desktop_supervisor.py", "desktop_process.py", "owner_stop.py", "agents.py",
-                     "agents_cli.py"):
-            shutil.copy2(DESK / "localharness" / name, self.base / "app/localharness" / name)
+        shutil.copytree(DESK / "localharness", self.base / "app/localharness",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         self.tree = self.base / "data"
         self.tree.mkdir()
         with socket.socket() as probe:
@@ -1017,31 +1015,37 @@ class WindowsForeground(unittest.TestCase):
         self.owner.wait(timeout=8)
         self.assert_dead(new_ids)
 
-    def test_native_owner_crash_leaves_record_unresolved(self):
+    def test_native_owner_crash_allows_python_recovery(self):
         self.owner = self.legacy(self.base / "helene.json")
         ids = self.identities()
         self.owner.kill()
         self.owner.wait(timeout=8)
         self.assert_dead(ids)
-        refused = subprocess.run([sys.executable, "-u", str(self.script),
-                                  "--config", str(self.other_config())],
-                                 capture_output=True, timeout=8)
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn(b"prior ownership or record unresolved", refused.stderr)
         self.assertEqual((self.tree / ".desktop-owner.lock").read_bytes(), b"active\n")
+        self.owner.communicate(timeout=2)
+        for name in ("channel.pid", "runner.pid", "grandchild.pid"):
+            (self.tree / name).unlink()
+        self.start()
+        new_ids = self.identities()
+        self.owner.send_signal(signal.CTRL_BREAK_EVENT)
+        self.owner.wait(timeout=8)
+        self.assert_dead(new_ids)
 
-    def test_crashed_owner_keeps_active_record_after_os_lock_releases(self):
+    def test_crashed_owner_recovers_after_os_lock_releases(self):
         self.start()
         ids = self.identities()
         self.owner.kill()
         self.owner.wait(timeout=8)
         self.assert_dead(ids)
-        refused = subprocess.run([sys.executable, "-u", str(self.script),
-                                  "--config", str(self.other_config())],
-                                 capture_output=True, timeout=8)
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn(b"prior ownership or record unresolved", refused.stderr)
         self.assertEqual((self.tree / ".desktop-owner.lock").read_bytes(), b"active\n")
+        self.owner.communicate(timeout=2)
+        for name in ("channel.pid", "runner.pid", "grandchild.pid"):
+            (self.tree / name).unlink()
+        self.start()
+        new_ids = self.identities()
+        self.owner.send_signal(signal.CTRL_BREAK_EVENT)
+        self.owner.wait(timeout=8)
+        self.assert_dead(new_ids)
 
     def test_childless_job_refusal_does_not_strand_tree_record(self):
         from threading import Event

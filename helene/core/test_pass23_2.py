@@ -90,7 +90,14 @@ class RoutingCase(unittest.TestCase):
                                return_value="coding-задача hcode-one: g") as start:
             out = agent.tool_coding_session("start", goal="g", target="/etc", scope="host")
         self.assertIn("hcode-one", out)
-        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="")
+        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="",
+                                      max_active_workers=8)
+        with mock.patch.object(agent, "_active_chat", return_value=None), \
+             mock.patch.object(agent.forge, "start_host", return_value="coding-задача hcode-three: g") as start:
+            agent.tool_coding_session("start", goal="g", target="/etc", scope="host",
+                                      max_active_workers=3)
+        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="",
+                                      max_active_workers=3)
 
     @unittest.skipIf(sys.platform == "win32", "порт: hostd/брокер форжа не входят в v1 локального порта")
     def test_host_task_primitives_and_worker_route_through_forge(self):

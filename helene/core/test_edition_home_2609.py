@@ -62,7 +62,7 @@ class HandsNameTheMissingArgument(unittest.TestCase):
         def fs_search(pattern, path="."):
             raise AssertionError("рука не должна быть позвана")
         out = agent._call_tool_with_ceiling("fs_search", fs_search, {})
-        self.assertIn("не позвана", out)
+        self.assertIn("Вызов `fs_search` НЕ выполнен", out)
         self.assertIn("pattern", out)
 
 

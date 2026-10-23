@@ -219,11 +219,22 @@ def main():
             if child.poll() is not None:raise RuntimeError('Updated application exited before startup confirmation')
             time.sleep(.3)
         else:raise TimeoutError('Updated startup unconfirmed')
-    except BaseException:
-        if child is not None and child.handle is not None and child.poll() is None:
-            from localharness.migration_windows import close_python
-            close_python(old)
-        if child is not None and child.handle is not None:child.stop()
+    except BaseException as failure:
+        graceful_error = None
+        if child is not None and child.handle is not None:
+            try:
+                if child.poll() is None:
+                    from localharness.migration_windows import close_python
+                    close_python(old)
+            except Exception as exc:
+                graceful_error = exc
+            finally:
+                # poll can settle/clear the retained Job. A failed stop MUST
+                # retain incoming bytes and journal, never race a live owner.
+                if child.handle is not None:
+                    child.stop()
+        if graceful_error is not None:
+            failure.add_note('Graceful exit failed; owned update Job stopped: ' + str(graceful_error))
         rollback(old,recovery)
         active_update(old).unlink(missing_ok=True)
         print('Update failed; previous program restored, recovery retained:',recovery,flush=True)

@@ -32,7 +32,7 @@ def preserve_source(source: Path, destination: Path, progress=None):
     # memory, Git index or owner Stop/pause record is removed.
     ephemeral = {'.desktop-owner.lock', '.python-desktop-status'}
     def ignore(directory, names):
-        return [n for n in names if n in ephemeral or n.startswith('.python-desktop-status.')]
+        return [n for n in names if n in ephemeral or n.startswith(('.python-desktop-status.', '.python-window-'))]
     copied = 0
     def copy_file(src, dst):
         nonlocal copied

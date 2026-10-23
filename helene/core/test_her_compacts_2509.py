@@ -94,49 +94,103 @@ class TheSystemIsHerOwnVoice(Base):
 
 
 class TheModelCallIsHers(Base):
+    """The acting turn supplies the recap; no auxiliary role can author it."""
+
     def _with_llm(self, fake):
         had = sys.modules.get("llm")
         sys.modules["llm"] = fake
-        self.addCleanup(lambda: (sys.modules.pop("llm", None) if had is None
-                                 else sys.modules.__setitem__("llm", had)))
+        self.addCleanup(
+            lambda: (
+                sys.modules.pop("llm", None)
+                if had is None
+                else sys.modules.__setitem__("llm", had)
+            )
+        )
 
-    def test_role_is_memory_when_configured_else_voice(self):
-        fake, captured = _fake_llm(role_ok=("memory", "voice"))
-        self._with_llm(fake)
-        rows = [{"id": "evt-1", "line": "Николай: привет", "actor": "Николай", "direction": "in",
-                 "salience": 2, "ts": 1.0}]
-        out = ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertEqual(out.get("summary"), "я записала это сама")
-        self.assertEqual(captured["role"], "memory")
-        fake2, captured2 = _fake_llm(role_ok=("voice",))
-        self._with_llm(fake2)
-        ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertEqual(captured2["role"], "voice")
-        # Прод 26.09: роли `memory` в llm нет, а `configured("memory")` отвечает «да».
-        fake3, captured3 = _fake_llm(role_ok=("memory", "voice"), roles=("voice", "evaluator"))
-        self._with_llm(fake3)
-        out3 = ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertEqual(captured3.get("role"), "voice")
-        self.assertEqual(out3.get("summary"), "я записала это сама")
+    def test_auxiliary_generation_is_forbidden_for_every_role_configuration(self):
+        rows = [
+            {"id": "evt-1", "line": "Николай: привет",
+             "actor": "Николай", "direction": "in",
+             "salience": 2, "ts": 1.0}
+        ]
+        configurations = (
+            (("memory", "voice"), ("voice", "evaluator", "memory")),
+            (("voice",), ("voice", "evaluator", "memory")),
+            (("memory", "voice"), ("voice", "evaluator")),
+            (("evaluator",), ("voice", "evaluator")),
+        )
+        for role_ok, roles in configurations:
+            with self.subTest(role_ok=role_ok, roles=roles):
+                fake, captured = _fake_llm(role_ok=role_ok, roles=roles)
+                self._with_llm(fake)
+                with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                    ml._model_compact(
+                        rows, tier=1, depth=1, continued=False)
+                self.assertNotIn("calls", captured)
 
-    def test_evaluator_alone_is_not_enough_anymore(self):
-        fake, captured = _fake_llm(role_ok=("evaluator",))
-        self._with_llm(fake)
-        rows = [{"id": "evt-1", "line": "Николай: привет", "actor": "Николай", "direction": "in",
-                 "salience": 2, "ts": 1.0}]
-        self.assertEqual(ml._model_compact(rows, tier=1, depth=1, continued=False), {})
-        self.assertNotIn("calls", captured, "чужой ролью её память не пишется")
+    def test_prepare_then_apply_preserves_exact_author_text_and_sources(self):
+        rows = [self._msg(i, "реплика %d" % i) for i in range(1, 302)]
+        recap = "Я записываю две первые реплики; остальные пока остаются горячими."
+        with mock.patch.object(
+                ml, "_FOLD_OFFERS", self.tmp / "fold_offers.json"), \
+             mock.patch.object(ml, "_model_compact") as helper:
+            ml._note_fold_offer(
+                ROOM, {"count": len(rows), "tokens": 5, "fold": 2})
+            prepared = ml.prepare_authored_fold(ROOM, limit=2)
+            self.assertTrue(prepared["ok"], prepared)
+            self.assertTrue(prepared["shown_complete"], prepared)
+            self.assertEqual(
+                [r["id"] for r in prepared["sources"]],
+                [r["id"] for r in rows[:2]])
+            self.assertEqual(ml.list_compacts(ROOM), [])
+            self.assertEqual(
+                [r["id"] for r in ml.rebuild_state(ROOM)["hot"]],
+                [r["id"] for r in rows])
+            self.assertIn(ROOM, ml.fold_offers())
 
-    def test_system_sent_is_compact_system(self):
-        (self.tmp / "soul").mkdir(parents=True, exist_ok=True)
-        (self.tmp / "soul" / "SOUL.md").write_text("# Конституция Praxis\nЯ — Praxis.", encoding="utf-8")
-        fake, captured = _fake_llm()
-        self._with_llm(fake)
-        rows = [{"id": "evt-1", "line": "Николай: привет", "actor": "Николай", "direction": "in",
-                 "salience": 2, "ts": 1.0}]
-        ml._model_compact(rows, tier=1, depth=1, continued=False)
-        self.assertTrue(captured["system"].startswith("# Конституция Praxis"))
-        self.assertIn("Это моя память", captured["system"])
+            out = ml.apply_authored_fold(
+                ROOM, prepared["selection"], recap)
+
+            self.assertTrue(out["ok"], out)
+            self.assertEqual(out["folded"], 2)
+            self.assertEqual(out["source_ids"], [r["id"] for r in rows[:2]])
+            self.assertEqual(out["recap"], recap)
+            read = ml.read_compact(out["compact_id"], ROOM)
+            self.assertTrue(read["ok"], read)
+            self.assertEqual(read["recap"], recap)
+            self.assertEqual(
+                ml._read_compact_candidate(
+                    ml.BASE / out["path"], ROOM)[0]["source_event_ids"],
+                [r["id"] for r in rows[:2]])
+            self.assertEqual(
+                [r["id"] for r in ml.rebuild_state(ROOM)["hot"]],
+                [r["id"] for r in rows[2:]])
+            coverage = memory_provenance.compact_coverage(
+                out["compact_id"],
+                memory_provenance.claim_evidence_index(ml.MEM_DIR))
+            self.assertTrue(coverage["valid"], coverage)
+            self.assertNotIn(ROOM, ml.fold_offers())
+            self.assertEqual(
+                out["surface"], "episodic_memory_not_current_tool_history")
+            helper.assert_not_called()
+
+    def test_changed_sources_refuse_the_prepared_text_without_reauthoring(self):
+        rows = [self._msg(i, "реплика %d" % i) for i in range(1, 302)]
+        prepared = ml.prepare_authored_fold(ROOM, limit=2)
+        self.assertEqual(
+            [r["id"] for r in prepared["sources"]],
+            [r["id"] for r in rows[:2]])
+        self._edit(1, "исправленная первая реплика")
+        recap = "Мой текст по прежним источникам."
+        with mock.patch.object(ml, "_model_compact") as helper:
+            out = ml.apply_authored_fold(
+                ROOM, prepared["selection"], recap)
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["reason"], "state_changed")
+        self.assertEqual(out["folded"], 0)
+        self.assertEqual(out["retained_text"], recap)
+        self.assertEqual(ml.list_compacts(ROOM), [])
+        helper.assert_not_called()
 
 
 class RewriteInPlace(Base):
@@ -196,17 +250,6 @@ class RewriteInPlace(Base):
 
 
 class RefoldInHerVoice(Base):
-    def setUp(self):
-        super().setUp()
-        self._model = ml._model_compact
-        self.calls = []
-
-        def stub(inputs, **kw):
-            self.calls.append([str(x.get("id")) for x in inputs])
-            return {"summary": "перевыпущено моим голосом", "open_threads": [], "claims": [],
-                    "episodes": []}
-        ml._model_compact = stub
-        self.addCleanup(lambda: setattr(ml, "_model_compact", self._model))
 
     def _rows(self, n=3, start=1):
         return [self._msg(mid, "реплика %d" % mid) for mid in range(start, start + n)]
@@ -225,39 +268,8 @@ class RefoldInHerVoice(Base):
         self.assertEqual(len(ml.refold_plan(ROOM, limit=1)), 1)
         self.assertEqual(ml.refold_plan("-1000000"), [])
 
-    def test_refold_one_rewrites_in_place_from_the_same_inputs(self):
-        rows = self._rows(3)
-        meta = self._compact(rows, summary="хроникёр писал")
-        out = ml.refold_one(ROOM, meta["id"])
-        self.assertTrue(out["ok"], out)
-        self.assertEqual(self.calls, [[r["id"] for r in rows]], "те же события, что у свёртки")
-        self.assertEqual(ml.read_compact(meta["id"], ROOM)["recap"], "перевыпущено моим голосом")
-        evidence = memory_provenance.claim_evidence_index(ml.MEM_DIR)
-        self.assertTrue(memory_provenance.compact_coverage(meta["id"], evidence)["valid"])
 
-    def test_refold_skips_a_leaf_whose_sources_are_no_longer_current(self):
-        rows = self._rows(2)
-        meta = self._compact(rows)
-        self._edit(1, "исправленная реплика")
-        out = ml.refold_one(ROOM, meta["id"])
-        self.assertEqual(out.get("reason"), "sources_not_current")
-        self.assertEqual(self.calls, [], "модель не звалась")
 
-    def test_refold_start_runs_in_background_and_reports(self):
-        rows = self._rows(2)
-        meta = self._compact(rows)
-        with mock.patch.object(ml.threading, "Thread") as thread:
-            out = ml.refold_start(ROOM, pause_sec=0)
-            self.assertTrue(out["ok"])
-            self.assertEqual(out["planned"], 1)
-            worker, kwargs = thread.call_args[1]["target"], thread.call_args[1]["args"]
-        worker(*kwargs)
-        st = ml.refold_status()
-        self.assertFalse(st["running"])
-        self.assertEqual((st["done"], st["failed"], st["skipped"]), (1, 0, 0))
-        self.assertEqual(st["last"]["id"], meta["id"])
-        self.assertTrue((ml.MEM_DIR / ".state" / "refold.json").exists())
-        self.assertEqual(ml.read_compact(meta["id"], ROOM)["recap"], "перевыпущено моим голосом")
 
     def test_second_refold_while_running_is_refused_and_stop_flags(self):
         ml._REFOLD.clear()
@@ -266,6 +278,74 @@ class RefoldInHerVoice(Base):
         self.assertEqual(ml.refold_start(ROOM)["reason"], "already_running")
         self.assertTrue(ml.refold_stop()["stopping"])
         self.assertTrue(ml._REFOLD["stop"])
+
+    def setUp(self):
+        super().setUp()
+        previous = dict(ml._REFOLD)
+        ml._REFOLD.clear()
+
+        def restore():
+            ml._REFOLD.clear()
+            ml._REFOLD.update(previous)
+
+        self.addCleanup(restore)
+        patcher = mock.patch.object(ml, "_model_compact")
+        self.helper = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_refold_one_requires_acting_author_and_preserves_original(self):
+        rows = self._rows(3)
+        meta = self._compact(rows, summary="прежняя суть")
+        path = ml.BASE / meta["path"]
+        before = path.read_bytes()
+
+        out = ml.refold_one(ROOM, meta["id"])
+
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["reason"], "acting_author_required")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(ml.read_compact(meta["id"], ROOM)["recap"], "прежняя суть")
+        coverage = memory_provenance.compact_coverage(
+            meta["id"],
+            memory_provenance.claim_evidence_index(ml.MEM_DIR))
+        self.assertTrue(coverage["valid"], coverage)
+        self.helper.assert_not_called()
+
+    def test_stale_sources_do_not_enable_a_helper_or_change_original(self):
+        meta = self._compact(self._rows(2))
+        path = ml.BASE / meta["path"]
+        before = path.read_bytes()
+        self._edit(1, "исправленная реплика")
+
+        out = ml.refold_one(ROOM, meta["id"])
+
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["reason"], "acting_author_required")
+        self.assertEqual(path.read_bytes(), before)
+        self.helper.assert_not_called()
+
+    def test_legacy_background_worker_reports_refusal_without_generation(self):
+        meta = self._compact(self._rows(2))
+        path = ml.BASE / meta["path"]
+        before = path.read_bytes()
+        with mock.patch.object(ml.threading, "Thread") as thread:
+            out = ml.refold_start(ROOM, pause_sec=0)
+            self.assertTrue(out["ok"], out)
+            self.assertEqual(out["planned"], 1)
+            worker = thread.call_args.kwargs["target"]
+            args = thread.call_args.kwargs["args"]
+
+        worker(*args)
+
+        st = ml.refold_status()
+        self.assertFalse(st["running"])
+        self.assertEqual(
+            (st["done"], st["failed"], st["skipped"]), (0, 1, 0))
+        self.assertEqual(st["last"]["id"], meta["id"])
+        self.assertEqual(st["last"]["reason"], "acting_author_required")
+        self.assertTrue((ml.MEM_DIR / ".state" / "refold.json").exists())
+        self.assertEqual(path.read_bytes(), before)
+        self.helper.assert_not_called()
 
 
 class TheHandIsWired(unittest.TestCase):
@@ -297,7 +377,7 @@ class TheHandIsWired(unittest.TestCase):
         self.assertIn("Переписано cmp-x", out)
         journal.assert_called()
         with mock.patch.object(agent, "_active_chat", return_value=None):
-            self.assertIn("назови place", agent.tool_memory_compact("refold"))
+            self.assertIn("Фоновое сочинение", agent.tool_memory_compact("refold"))
         with mock.patch.object(agent.memory_life, "refold_status", return_value={"planned": 0}):
             self.assertIn("не запускался", agent.tool_memory_compact("status"))
 
@@ -326,26 +406,66 @@ class HistoryIsOutsideTheRecallCorpus(unittest.TestCase):
 
 
 class FoldByHand(unittest.TestCase):
-    """25.09, слово Егора: свёртка предлагается, а делает её она — рукой memory_compact(fold)."""
+    """The hand exposes sources, then commits the current author's exact text."""
 
-    def test_fold_calls_fold_now_and_reports(self):
+    def test_prepare_calls_source_selection_and_returns_its_receipt(self):
         import agent
-        out = {"ok": True, "folded": 160, "compact_id": "cmp-x", "hot": 250, "tiers": ["cmp-t2"]}
-        with mock.patch.object(agent.memory_life, "fold_now", return_value=out, create=True) as fn:
-            text = agent.tool_memory_compact("fold", place="-100777")
-        fn.assert_called_once_with("-100777")
-        self.assertIn("160", text)
-        self.assertIn("cmp-x", text)
-        self.assertIn("250", text)
+        prepared = {
+            "ok": True,
+            "selection": "a" * 64,
+            "shown_complete": True,
+            "sources": [{"id": "evt-x", "line": "Николай: привет"}],
+        }
+        with mock.patch.object(
+                agent.memory_life, "prepare_authored_fold",
+                return_value=prepared) as prepare:
+            out = json.loads(agent.tool_memory_compact(
+                "prepare", place="-100777", limit=7))
+        prepare.assert_called_once_with("-100777", limit=7, compact_id="")
+        self.assertEqual(out, prepared)
 
-    def test_fold_without_a_place_asks_for_one(self):
+    def test_fold_calls_authored_apply_and_reports_exact_receipt(self):
+        import agent
+        selection = "b" * 64
+        recap = "Я записываю прочитанные источники."
+        receipt = {
+            "ok": True, "folded": 2, "compact_id": "cmp-x",
+            "hot": 3, "source_ids": ["evt-1", "evt-2"], "recap": recap,
+        }
+        with mock.patch.object(
+                agent.memory_life, "apply_authored_fold",
+                return_value=receipt) as apply, \
+             mock.patch.object(agent.memory_life, "fold_now") as automatic:
+            out = json.loads(agent.tool_memory_compact(
+                "fold", place="-100777", selection=selection, text=recap))
+        apply.assert_called_once_with("-100777", selection, recap)
+        automatic.assert_not_called()
+        self.assertEqual(out, receipt)
+
+    def test_fold_without_author_text_and_selection_cannot_generate(self):
+        import agent
+        with mock.patch.object(agent.memory_life, "_model_compact") as helper:
+            out = json.loads(agent.tool_memory_compact(
+                "fold", place="-100777"))
+        self.assertFalse(out["ok"], out)
+        self.assertEqual(out["reason"], "text_and_selection_required")
+        self.assertEqual(out["folded"], 0)
+        helper.assert_not_called()
+
+    def test_prepare_and_fold_without_a_place_ask_for_one(self):
         import agent
         with mock.patch.object(agent, "_active_chat", return_value=None):
-            self.assertIn("place", agent.tool_memory_compact("fold"))
+            for action in ("prepare", "fold"):
+                with self.subTest(action=action):
+                    self.assertIn("place", agent.tool_memory_compact(action))
 
-    def test_fold_is_in_the_hand_schema(self):
+    def test_prepare_fold_and_selection_are_in_the_hand_schema(self):
         import agent
-        self.assertIn("fold", agent.MEMORY_COMPACT_TOOL["input_schema"]["properties"]["action"]["enum"])
+        props = agent.MEMORY_COMPACT_TOOL["input_schema"]["properties"]
+        self.assertIn("prepare", props["action"]["enum"])
+        self.assertIn("fold", props["action"]["enum"])
+        self.assertIn("selection", props)
+        self.assertIn("text", props)
 
 
 if __name__ == "__main__":

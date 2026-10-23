@@ -342,8 +342,8 @@ def _relay_login_generation(spec: Spec) -> tuple[int, int, bytes] | None:
 def _tree_hold(tree: Path):
     """Same exclusive Windows file/record as the native owners.
 
-    `active` survives an owner crash. The caller marks `clean` ONLY after all
-    child Jobs are measured empty; closing the handle alone proves no teardown.
+    The exclusive handle excludes live owners. Persisted words describe the
+    previous teardown; they must not turn a crash into a permanent launch ban.
     """
     tree = tree.resolve(strict=True)
     path = tree / ".desktop-owner.lock"
@@ -357,15 +357,14 @@ def _tree_hold(tree: Path):
     handle = create(str(path), 0xC0000000, 0, None, 4, 0x80 | 0x00200000, None)  # OPEN_ALWAYS, share=0
     if handle == ctypes.c_void_p(-1).value:
         raise RuntimeError(f"desktop tree owned or lock unavailable: {ctypes.WinError(ctypes.get_last_error())}")
-    fresh = ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
     try:
         fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
     except BaseException:
         kernel.CloseHandle(wintypes.HANDLE(handle))
         raise
     with os.fdopen(fd, "r+b", buffering=0) as locked:
-        if not fresh and locked.read(32) != b"clean\n":
-            raise RuntimeError("desktop tree prior ownership or record unresolved; inspect descendants before explicit recovery")
+        if os.stat(fd).st_file_attributes & 0x400:
+            raise RuntimeError("desktop tree lock is a reparse point")
         def record(word: bytes) -> None:
             locked.seek(0)
             locked.truncate()
@@ -427,9 +426,9 @@ def run(config: Path, *, stop=None, session_host: bool = False,
     def stopped():
         return wake.is_set() or owner_stop.stopped()
     with _tree_hold(tree) as mark_clean:
-        if stopped() or _port_busy(specs["main:channel"].port):
+        if stopped():
             mark_clean()  # no child was created under this hold
-            raise RuntimeError("owner stop or channel port occupied")
+            raise RuntimeError("owner stop is active")
         policy = Coordinator({key: spec.role for key, spec in specs.items()})
         active: dict[str, JobChild] = {}
         auth_seen: dict[str, tuple[int, int, bytes] | None] = {}

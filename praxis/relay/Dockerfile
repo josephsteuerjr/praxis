@@ -3,7 +3,9 @@
 # Runtime binary is renamed to a neutral name so the process doesn't advertise its purpose.
 FROM rust:1-bookworm AS builder
 ENV CARGO_TERM_COLOR=always
-ENV CARGO_BUILD_JOBS=4
+# The shared Linux build server also hosts live workloads. Keep the builder
+# within a small memory limit; a parallel Cargo burst is not a release gate.
+ENV CARGO_BUILD_JOBS=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev ca-certificates cmake perl build-essential \
     && rm -rf /var/lib/apt/lists/*

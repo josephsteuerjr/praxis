@@ -226,6 +226,8 @@ def fold_now(place: str | int) -> dict:
     как на жёстком пороге. Предложение снимается, если свёртка случилась или сворачивать
     нечего; при `state_changed` (окно сдвинулось под рукой) оно остаётся — повод не исчез."""
     out = compact_if_due(place, force=True)
+    if out.get("author_required"):
+        return out
     if str(out.get("reason") or "") != "state_changed":
         clear_fold_offer(adopt_place(place))
         clear_fold_offer(place)
@@ -1342,47 +1344,9 @@ def _anchor_self(data: dict, *, llm, user: str, inputs: list[dict], manifest: di
 
 def _model_compact(inputs: list[dict], *, tier: int, depth: int, continued: bool,
                    authors: set[str] | None = None) -> dict:
-    try:
-        import llm
-        role = _memory_role()
-        if not llm.configured(role):
-            return {}
-        system = compact_system()
-        body, manifest = _pack_compact_prompt(inputs)
-        user = (f"Target tier={tier}, depth={depth}, forced_continuation={str(continued).lower()}.\n"
-                + body)
-        # 12.09: 1600 токенов резали сводку JSON на середине фразы (186 обрывов за час
-        # свёртки под новый потолок ленты против 2 до неё): оборванный JSON не
-        # разбирается, и место сворачивалось запасной сводкой без модели.
-        resp = llm.chat(role, system=system,
-                        messages=[{"role": "user", "content": user}],
-                        max_tokens=COMPACT_MAX_TOKENS, reasoning_effort="low")
-        data = _json_obj(resp.text)
-        if isinstance(data.get("summary"), str) and data["summary"].strip():
-            data["_manifest"] = manifest
-            return _anchor_self(data, llm=llm, user=user, inputs=inputs, manifest=manifest,
-                                extra_authors=authors)
-        # ⚠ 21.09. Разбор не удался — почти всегда это обрыв потолком, а не отказ модели.
-        # Молчаливая подмена механической выжимкой (degraded) хуже второго захода: обрубок
-        # ложится в память НАВСЕГДА и наследуется вверх по ярусам. Пробуем ещё раз с
-        # большим потолком и говорим об этом вслух.
-        raw = str(getattr(resp, "text", "") or "")
-        log.warning("life compact: сводка не разобрана (%d знаков при потолке %d) — "
-                    "второй заход с потолком %d", len(raw), COMPACT_MAX_TOKENS,
-                    COMPACT_RETRY_MAX_TOKENS)
-        resp = llm.chat(role, system=system,
-                        messages=[{"role": "user", "content": user}],
-                        max_tokens=COMPACT_RETRY_MAX_TOKENS, reasoning_effort="low")
-        data = _json_obj(resp.text)
-        if isinstance(data.get("summary"), str) and data["summary"].strip():
-            data["_manifest"] = manifest
-            return _anchor_self(data, llm=llm, user=user, inputs=inputs, manifest=manifest,
-                                extra_authors=authors)
-        log.error("life compact: сводка не разобрана и со второго захода (%d знаков) — "
-                  "место уйдёт в degraded", len(str(getattr(resp, "text", "") or "")))
-    except Exception:
-        log.warning("life compact: модель недоступна/ответ не разобран", exc_info=True)
-    return {}
+    raise RuntimeError("Acting author required; auxiliary memory generation is disabled")
+
+
 
 
 def _fallback_compact(inputs: list[dict], *, continued: bool) -> dict:
@@ -1808,42 +1772,7 @@ def _frontier_input(meta: dict, chat_id: str | int) -> dict:
 
 
 def _fold_tiers(chat_id, state: dict) -> list[str]:
-    made = []
-    tier = 1
-    # A bounded loop protects a corrupt state from spinning forever.
-    for _ in range(16):
-        same = sorted([x for x in state.get("frontier", []) if int(x.get("tier") or 1) == tier],
-                      key=lambda x: (_epoch(x.get("first_ts")) or _epoch(x.get("created_at")), x.get("id", "")))
-        if len(same) < TIER_HI:
-            higher = [int(x.get("tier") or 1) for x in state.get("frontier", []) if int(x.get("tier") or 1) > tier]
-            if higher:
-                tier += 1
-                continue
-            break
-        n = min(len(same), max(1, TIER_HI - TIER_LO))
-        sources = same[:n]
-        inputs = [_frontier_input(x, chat_id) for x in sources]
-        result = _model_compact(inputs, tier=tier + 1,
-                                depth=max(int(x.get("depth") or tier) for x in sources) + 1,
-                                continued=any(bool(x.get("continued")) for x in sources))
-        if not result:
-            result = _fallback_compact(inputs, continued=any(bool(x.get("continued")) for x in sources))
-        parent = _write_compact(
-            chat_id, result, tier=tier + 1,
-            depth=max(int(x.get("depth") or tier) for x in sources) + 1,
-            source_events=[], source_compacts=[str(x.get("id")) for x in sources],
-            event_count=sum(int(x.get("event_count") or 0) for x in sources),
-            continued=any(bool(x.get("continued")) for x in sources),
-            first_ts=sources[0].get("first_ts") or "", last_ts=sources[-1].get("last_ts") or "")
-        remove = {x.get("id") for x in sources}
-        state["frontier"] = [x for x in state["frontier"] if x.get("id") not in remove] + [parent]
-        append_event("memory_compact", chat_id=chat_id, text=f"Tier {tier + 1}: {parent['id']}",
-                     source="memory_life", refs=parent["source_compact_ids"],
-                     meta={"compact_id": parent["id"], "tier": tier + 1,
-                           "degraded": parent.get("degraded", False)})
-        made.append(parent["id"])
-        tier = 1
-    return made
+    return []
 
 
 def _prefix_conflict(inputs: list[dict], provable: list[dict]) -> dict | None:
@@ -2073,66 +2002,7 @@ def _fold_tiers_transactional(chat_id: str | int) -> list[str]:
     degraded первого яруса, и обрыв модели посреди каскада молча клал
     механическую выжимку в вершину пирамиды (живой пример: 0fcb8b61).
     """
-    made: list[str] = []
-    degraded_made: list[str] = []
-    folded_runs: set[tuple[str, ...]] = set()
-    for _ in range(16):
-        with _state_write_guard(chat_id), _WRITE_LOCK:
-            state = _rebuild_state_locked(chat_id)
-            candidate = _tier_fold_candidate(chat_id, state)
-        if candidate is None:
-            break
-        # ПРЕДОХРАНИТЕЛЬ. Те же источники второй раз за проход означают одно: родитель
-        # написан, а пересборка его не приняла и вернула детей во фронтир. Дальше это
-        # вызов модели в минуту без единого сдвига памяти. Останавливаемся и говорим.
-        run_key = tuple(candidate["source_ids"])
-        if run_key in folded_runs:
-            log.error("ярус %d сворачивает те же источники повторно: родитель не "
-                      "принимается собственным разрешением, останавливаю каскад (%s)",
-                      candidate["tier"], ", ".join(candidate["source_ids"][:4]))
-            break
-        folded_runs.add(run_key)
-
-        result = _model_compact(
-            candidate["inputs"], tier=candidate["tier"] + 1,
-            depth=candidate["depth"], continued=candidate["continued"])
-        if not result:
-            result = _fallback_compact(
-                candidate["inputs"], continued=candidate["continued"])
-
-        with _state_write_guard(chat_id), _WRITE_LOCK:
-            state = _rebuild_state_locked(chat_id)
-            current = _tier_fold_candidate(chat_id, state)
-            if (current is None
-                    or current["tier"] != candidate["tier"]
-                    or current["source_ids"] != candidate["source_ids"]):
-                continue
-            sources = current["sources"]
-            first_ts, last_ts = _tier_fold_bounds(sources)
-            parent = _write_compact(
-                chat_id, result, tier=current["tier"] + 1,
-                depth=current["depth"], source_events=[],
-                source_compacts=current["source_ids"],
-                event_count=sum(int(x.get("event_count") or 0) for x in sources),
-                continued=current["continued"],
-                first_ts=first_ts, last_ts=last_ts)
-            if _discard_unprovable_compact(parent, f"верхний ярус места {chat_id}"):
-                break
-            remove = set(current["source_ids"])
-            state["frontier"] = [
-                x for x in state["frontier"] if str(x.get("id")) not in remove
-            ] + [parent]
-            append_event(
-                "memory_compact", chat_id=chat_id,
-                text=f"Tier {current['tier'] + 1}: {parent['id']}",
-                source="memory_life", refs=parent["source_compact_ids"],
-                meta={"compact_id": parent["id"], "tier": current["tier"] + 1,
-                      "degraded": parent.get("degraded", False)})
-            _save_state(state)
-            made.append(parent["id"])
-            if parent.get("degraded"):
-                degraded_made.append(parent["id"])
-    return made, degraded_made
+    return [], []
 
 
 def _subtree_event_rows(evidence: dict, compact_id: str, _seen: set | None = None) -> list[dict]:
@@ -2174,241 +2044,226 @@ def reissue_degraded_compact(chat_id: str | int, compact_id: str, *,
     Эпизоды старой свёртки не переписываются: они описывают те же события и остаются
     честными; ссылка на снесённый компакт в них — история, а не факт о настоящем.
     """
-    chat = str(chat_id)
-    place = str(place_key(chat))
-    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
-    meta = (evidence.get("compacts") or {}).get(str(compact_id))
-    if not isinstance(meta, dict):
-        return {"ok": False, "reason": "unknown_compact"}
-    if why not in ("degraded", "foreign_self"):
-        return {"ok": False, "reason": "unknown_why"}
-    if why == "degraded" and not meta.get("degraded"):
-        return {"ok": False, "reason": "not_degraded"}
-    compacts = evidence.get("compacts") or {}
-    children = [str(x) for x in (meta.get("source_compact_ids") or [])]
-    # Ярус выше собран из дочерних свёрток; перевыпустить его можно только по чужому «я»:
-    # обрубок яруса — дело `_fold_tiers`, а не этой руки.
-    if children and why != "foreign_self":
-        return {"ok": False, "reason": "not_a_leaf"}
-    parents = [cid for cid, other in compacts.items()
-               if str(compact_id) in (other.get("source_compact_ids") or ())]
-    if parents:
-        return {"ok": False, "reason": "has_parent", "parents": parents[:3]}
-    source_ids = [str(x) for x in (meta.get("source_event_ids") or [])]
-    if children:
-        # 24.09: «я (Ashe) писала» стояло в свёртке яруса 2 комнаты Уробороса. Вход — те же
-        # дочерние свёртки, как в `_fold_tiers`; авторы для ограды — из всех сообщений под
-        # ней, потому что у сводок-детей своего автора нет.
-        if any(not isinstance(compacts.get(ch), dict) for ch in children):
-            return {"ok": False, "reason": "sources_missing"}
-        inputs = [_frontier_input(dict(compacts[ch], id=ch), chat) for ch in children]
-        if any(not str(item.get("text") or "").strip() for item in inputs):
-            return {"ok": False, "reason": "sources_missing"}
-        subtree = _subtree_event_rows(evidence, str(compact_id))
-    else:
-        rows = [(evidence.get("events") or {}).get(eid) for eid in source_ids]
-        if not source_ids or any(not isinstance(row, dict) for row in rows):
-            return {"ok": False, "reason": "sources_missing"}
-        inputs = _conversation_hot_rows(rows)
-        if len(inputs) != len(source_ids):
-            # Часть источников вытеснена поздней ревизией: это работа refresh_compacts,
-            # а не перевыпуска — там другая машинерия и другие квитанции.
-            return {"ok": False, "reason": "sources_not_current"}
-        subtree = inputs
-    authors = _window_authors(subtree)
-    if why == "foreign_self":
-        try:
-            old_text = (BASE / str(meta.get("path"))).read_text(encoding="utf-8")
-        except (OSError, ValueError):
-            return {"ok": False, "reason": "compact_unreadable"}
-        if not _foreign_self(_compact_recap(old_text), authors):
-            return {"ok": False, "reason": "no_foreign_self"}
-    tier, depth = int(meta.get("tier") or 1), int(meta.get("depth") or 1)
-    continued = bool(meta.get("continued"))
-    result = _model_compact(inputs, tier=tier, depth=depth, continued=continued,
-                            authors=authors)
-    if not result:
-        return {"ok": False, "reason": "model_unavailable"}
-    with _state_write_guard(place), _WRITE_LOCK:
-        fresh = _write_compact(
-            str(meta.get("chat_id") or chat), result, tier=tier, depth=depth,
-            source_events=source_ids, source_compacts=children,
-            event_count=int(meta.get("event_count") or len(source_ids)),
-            continued=continued,
-            source_note=(f"Перевыпуск обрубка {compact_id}; те же события." if why == "degraded"
-                         else f"Перевыпуск {compact_id}: сводка называла «я» чужим именем; те же события."),
-            first_ts=str(meta.get("first_ts") or ""),
-            last_ts=str(meta.get("last_ts") or ""))
-        if fresh.get("degraded"):
-            _discard_unprovable_compact(fresh, f"перевыпуск {compact_id}")
-            try:
-                (BASE / str(fresh.get("path"))).unlink(missing_ok=True)
-            except (OSError, ValueError):
-                pass
-            return {"ok": False, "reason": "still_degraded"}
-        if _discard_unprovable_compact(fresh, f"перевыпуск {compact_id}"):
-            return {"ok": False, "reason": "reissue_not_provable"}
-        try:
-            (BASE / str(meta.get("path"))).unlink(missing_ok=True)
-        except (OSError, ValueError):
-            log.warning("перевыпуск %s: старый файл не убрался", compact_id, exc_info=True)
-            return {"ok": False, "reason": "old_not_removed", "new_id": fresh["id"]}
-        append_event(
-            "memory_compact", chat_id=str(meta.get("chat_id") or chat),
-            text=(f"Перевыпуск {'обрубка ' if why == 'degraded' else '(чужое «я») '}"
-                  f"{compact_id} → {fresh['id']}; {len(source_ids)} событий"),
-            source="memory_life", refs=source_ids,
-            meta={"compact_id": fresh["id"], "tier": tier, "degraded": False,
-                  "replaced": str(compact_id), "why": why})
-        state = _rebuild_state_locked(place)
-    return {"ok": True, "old_id": str(compact_id), "new_id": str(fresh["id"]),
-            "events": len(source_ids), "hot": len(state.get("hot") or []),
-            "frontier": len(state.get("frontier") or [])}
+    return {"ok": False, "reason": "acting_author_required"}
+
+
+def prepare_authored_fold(chat_id: str | int, *, limit: int = 50, compact_id: str = "") -> dict:
+    """Expose a complete bounded source selection; retaining it does not fold anything."""
+    chat = str(adopt_place(chat_id))
+    with _state_write_guard(chat), _WRITE_LOCK:
+        state = _rebuild_state_locked(chat)
+        hot = _drop_unprovable_inputs(list(state.get("hot") or []), chat)
+        plan = plan_hot_fold(hot, force=False, tape_chars=tape_chars_for(chat), place=chat)
+        kind = "hot"
+        rows = hot[:int(plan.get("fold") or 0)]
+        candidate = None
+        refresh = _refresh_snapshot(chat)
+        group = (_refresh_group(refresh, refresh["artifact_group"].get(compact_id, ""))
+                 if compact_id else next(iter(refresh.get("unresolved_groups") or []), None))
+        if compact_id and not group:
+            return {"ok": False, "reason": "no_refresh_group_for_target", "sources": []}
+        if group and group.get("target_error"):
+            return {"ok": False, "reason": group["target_error"], "sources": []}
+        if group and not group.get("target_error"):
+            kind = "refresh"
+            rows = [row for index, row in enumerate(group["target_rows"])
+                    if index not in group["covered_positions"]]
+            if not rows and group.get("receipt_complete"):
+                return {"ok": True, "reason": "already_refreshed", "sources": [], "hot": len(hot)}
+            if not rows and not group.get("receipt_complete"):
+                _append_refresh_receipt(chat, group, group["replacement_compact_ids"])
+                reconciled = _rebuild_state_locked(chat)
+                _complete_authored_fold_request(chat, "", 0, len(reconciled["hot"]))
+                return {"ok": True, "reason": "refresh_reconciled", "sources": [],
+                        "hot": len(reconciled["hot"])}
+        if not rows:
+            candidate = _tier_fold_candidate(chat, state)
+            if candidate:
+                kind, rows = "tier", candidate["inputs"]
+            else:
+                plan = plan_hot_fold(hot, force=True, tape_chars=tape_chars_for(chat), place=chat)
+                rows = hot[:int(plan.get("fold") or 0)]
+        selected = []
+        used = 0
+        minimum = 2 if candidate else 1
+        for row in rows[:max(minimum, min(100, int(limit or 50)))]:
+            size = len(json.dumps(row, ensure_ascii=False))
+            if len(selected) >= minimum and used + size > 48000:
+                break
+            selected.append(row)
+            used += size
+        if not selected:
+            return {"ok": True, "reason": "nothing_to_fold", "sources": [], "hot": len(hot)}
+        payload = {"place": chat, "kind": kind, "inputs": selected,
+                   "continued": bool(plan.get("continued") or len(selected) < len(rows)),
+                   "tier": 1, "depth": 1}
+        if kind == "refresh":
+            payload.update(group_id=group["group_id"], target_ids=group["target_ids"],
+                           root_ids=group["root_ids"], stale_ids=group["stale_ids"])
+        if candidate:
+            chosen = candidate["sources"][:len(selected)]
+            if len(chosen) < 2:
+                return {"ok": False, "reason": "tier_needs_two_sources", "sources": selected}
+            payload.update(tier=candidate["tier"] + 1,
+                           depth=max(int(row.get("depth") or candidate["tier"]) for row in chosen) + 1,
+                           continued=bool(len(chosen) < len(candidate["sources"]) or
+                                          any(row.get("continued") for row in chosen)),
+                           sources=chosen)
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        selection = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        path = STATE_DIR / "authored" / (selection + ".json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(raw, encoding="utf-8")
+            tmp.replace(path)
+        return {"ok": True, "selection": selection, "place": chat, "kind": kind,
+                "sources": selected, "shown_complete": True,
+                "source_chars": used, "over_size_hint": used > 48000,
+                "remaining_unselected": len(rows) - len(selected), "hot": len(hot),
+                "instruction": "Read every selected source; write your own recap in this turn, then fold with this selection and text. Only this selection is covered; surrounding whitespace is normalized. Internal memory work: do not post a recap or maintenance report to chat unless asked. Continue the original conversation or finish silently."}
+
+
+
+def _complete_authored_fold_request(chat: str, compact_id: str, folded: int, hot: int) -> None:
+    control_receipt = MEM_DIR / ".state" / "fold-receipt.json"
+    previous = {}
+    try:
+        previous = json.loads(control_receipt.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    if previous.get("room") == chat:
+        receipt = {**previous, "state": "done", "compact_id": compact_id,
+                   "folded": folded, "hot": hot, "at": _utc_iso(),
+                   "note": "Авторская выжимка записана и прочитана обратно; исходники сохранены."}
+        temporary = control_receipt.with_suffix(".tmp")
+        temporary.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(control_receipt)
+
+
+def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
+    """Commit the acting author's text against the source bytes it selected, never a replan."""
+    chat = str(adopt_place(chat_id))
+    summary = str(text or "").strip()
+    if re.search(r"^## ", summary, re.M):
+        return {"ok": False, "reason": "recap_h2_reserved_use_h3", "folded": 0,
+                "retained_text": summary}
+    if not summary or not re.fullmatch(r"[0-9a-f]{64}", str(selection or "")):
+        return {"ok": False, "reason": "text_and_selection_required", "folded": 0}
+    path = STATE_DIR / "authored" / (selection + ".json")
+    try:
+        raw = path.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, ValueError):
+        return {"ok": False, "reason": "selection_unavailable", "folded": 0}
+    if hashlib.sha256(raw.encode("utf-8")).hexdigest() != selection or payload.get("place") != chat:
+        return {"ok": False, "reason": "selection_mismatch", "folded": 0}
+    inputs = payload["inputs"]
+    ids = [str(row["id"]) for row in inputs]
+    with _state_write_guard(chat), _WRITE_LOCK:
+        state = _rebuild_state_locked(chat)
+        refresh = group = None
+        if payload["kind"] == "refresh":
+            refresh = _refresh_snapshot(chat)
+            group = _refresh_group(refresh, payload["group_id"])
+            conflict = {"kind": "changed_refresh"}
+            if group and group["target_ids"] == payload["target_ids"] and group["root_ids"] == payload["root_ids"]:
+                by_id = {str(row["id"]): row for row in group["target_rows"]}
+                live = [by_id[rid] for rid in ids if rid in by_id]
+                already = set(group["covered_positions"])
+                positions = {rid: n for n, rid in enumerate(group["target_ids"])}
+                if live == inputs and not any(positions[rid] in already for rid in ids):
+                    conflict = None
+        elif payload["kind"] == "hot":
+            live = _drop_unprovable_inputs(list(state.get("hot") or []), chat)
+            conflict = _prefix_conflict(inputs, live)
+        else:
+            frontier = {str(row["id"]): row for row in state.get("frontier", [])}
+            live = [_frontier_input(frontier[rid], chat) for rid in ids if rid in frontier]
+            conflict = None if live == inputs else {"kind": "changed_tier"}
+        if conflict:
+            return {"ok": False, "reason": "state_changed", "conflict": conflict,
+                    "folded": 0, "retained_text": summary}
+        origins = {str(row.get("chat_id") or row.get("chat")) for row in inputs
+                   if row.get("chat_id") or row.get("chat")}
+        bind_place(chat, origins)
+        result = {"summary": summary, "open_threads": [], "claims": [], "episodes": [], "degraded": False}
+        sources = payload.get("sources") or inputs
+        if payload["kind"] == "tier":
+            first_ts, last_ts = _tier_fold_bounds(sources)
+        else:
+            times = sorted(str(row.get("ts") or "") for row in sources)
+            first_ts, last_ts = times[0], times[-1]
+        meta = _write_compact(chat, result, tier=payload["tier"], depth=payload["depth"],
+                              source_events=ids if payload["kind"] in {"hot", "refresh"} else [],
+                              source_compacts=ids if payload["kind"] == "tier" else [],
+                              event_count=(len(inputs) if payload["kind"] in {"hot", "refresh"} else
+                                           sum(int(row.get("event_count") or 0) for row in sources)),
+                              continued=payload["continued"],
+                              first_ts=first_ts, last_ts=last_ts)
+        if _discard_unprovable_compact(meta, "authored fold") or compact_text(meta["id"], chat) != summary:
+            candidate = BASE / meta["path"]
+            if candidate.exists():
+                candidate.rename(candidate.with_suffix(".failed-readback"))
+            return {"ok": False, "reason": "compact_readback_failed", "folded": 0}
+        if payload["kind"] == "refresh":
+            # Existing reader validates exact replacement coverage; old immutable
+            # compacts remain as history, never deleted or passed to a helper.
+            updated = _refresh_snapshot(chat)
+            current = _refresh_group(updated, payload["group_id"])
+            if current is None:
+                return {"ok": False, "reason": "refresh_group_unavailable", "folded": 0}
+            replacements = current["replacement_compact_ids"]
+            _append_refresh_receipt(chat, current, replacements)
+            state = _rebuild_state_locked(chat)
+            clear_fold_offer(chat)
+            _complete_authored_fold_request(chat, meta["id"], len(ids), len(state["hot"]))
+            return {"ok": True, "folded": len(ids), "compact_id": meta["id"],
+                    "path": meta["path"], "source_ids": ids, "recap": summary,
+                    "hot": len(state["hot"]), "remaining_count": current["remaining_count"],
+                    "surface": "episodic_memory_not_current_tool_history"}
+        state["hot" if payload["kind"] == "hot" else "frontier"] = [
+            row for row in state["hot" if payload["kind"] == "hot" else "frontier"]
+            if str(row.get("id")) not in set(ids)]
+        state["frontier"].append(meta)
+        append_event("memory_compact", chat_id=chat, text=f"Author → {meta['id']}",
+                     source="acting_agent", refs=ids,
+                     meta={"compact_id": meta["id"], "tier": payload["tier"], "selection": selection})
+        _save_state(state)
+        clear_fold_offer(chat)
+        _complete_authored_fold_request(chat, meta["id"], len(ids), len(state["hot"]))
+        return {"ok": True, "folded": len(ids), "compact_id": meta["id"], "path": meta["path"],
+                "source_ids": ids, "hot": len(state["hot"]), "recap": summary,
+                "surface": "episodic_memory_not_current_tool_history"}
 
 
 def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
-    """Compact one hot prefix and recursively fold warm tiers. Raw events are never removed.
+    """Publish a current acting-author offer; never generate or advance coverage.
 
-    Сворачивается МЕСТО целиком: новые компакты пишутся под ключом места, а не ветки,
-    иначе один разговор продолжал бы копить по свёртке на каждую свою ветку.
-
-    Конфликт префикса (правка/удаление/конкурирующая свёртка под рукой) повторяется
-    ОДИН раз автоматически — новым планом по живому кольцу, не по протухшему. Второй
-    конфликт подряд — честный `state_changed` с причиной: дальше гонка не ловится,
-    и крутить модель по кругу было бы спином.
+    Hot and higher-tier pressure share the offer. Force/night/hard pressure changes
+    urgency, not authorship. prepare/apply binds the author's text to exact sources.
     """
-    out = _compact_once(chat_id, force=force)
-    if str(out.get("reason") or "") != "state_changed":
-        return out
-    retry = _compact_once(chat_id, force=force)
-    retry["retried"] = True
-    return retry
+    chat_id = adopt_place(chat_id)
+    with _state_write_guard(chat_id), _WRITE_LOCK:
+        state = _rebuild_state_locked(chat_id)
+        rows = _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)
+        plan = plan_hot_fold(rows, force=force, tape_chars=tape_chars_for(chat_id), place=chat_id)
+        tier_due = _tier_fold_candidate(chat_id, state) is not None
+        reminder_due = plan.get("reason") == "open_episode"
+        if plan.get("due") or reminder_due or tier_due or force:
+            _note_fold_offer(chat_id, plan, hard=bool(plan.get("hard")))
+        else:
+            clear_fold_offer(chat_id)
+        return {"ok": True, "folded": 0, "hot": len(state.get("hot") or []),
+                "offered": bool(plan.get("due") or reminder_due or tier_due or force),
+                "author_required": True, "plan": plan, "tiers": [], "degraded_tiers": []}
+
+
 
 
 def _compact_once(chat_id: str | int, *, force: bool = False) -> dict:
-    """Одна попытка свёртки: план → модель → commit с сверкой идентичности."""
-    chat_id = adopt_place(chat_id)
-    with _state_write_guard(chat_id), _WRITE_LOCK:
-        state = _load_state(chat_id, rebuild=True)
-        # Планируем по ДОКАЗУЕМОЙ подпоследовательности кольца. Помеченные строки
-        # остаются в ленте, но для свёртки их нет — иначе призрак в голове кольца
-        # запирает свёртку навсегда: план брал бы префикс из него одного, свёртка
-        # оказывалась бы пустой, и место стояло бы при полном кольце (поймано
-        # стендом test_mill_never_again_2109, а не на проде).
-        provable = _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)
-        plan = plan_hot_fold(provable, force=force, tape_chars=tape_chars_for(chat_id),
-                             place=chat_id)
-        if not plan.get("due"):
-            if fold_offer_enabled():
-                clear_fold_offer(chat_id)      # окно снова в норме — предложение снято
-            return {"ok": True, "folded": 0, "plan": plan,
-                    "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
-        if not force and fold_offer_enabled():
-            # 05.10 (ночной цикл честности памяти): и мягкий, и ЖЁСТКИЙ порог днём
-            # только предлагают свёртку — решает голос в том же ходе (рука
-            # memory_compact(fold)/ночная сборка resolve_fold_offers). Причина
-            # давления едет в оффере, чтобы решение было осмысленным.
-            # Бэкстоп (ревью D3, 05.10): жёсткое давление (token_cap/tape_chars/
-            # hard_hi), не снятое голосом дольше FOLD_OFFER_BACKSTOP_HOURS, сворачивается
-            # физикой с явной квитанцией. Потолок нужен для сломанного или молчащего
-            # голоса, а не для перебивки живого решения: reject снимает оффер, и часы
-            # стартуют заново; ночь (resolve_fold_offers) успевает первой.
-            hard = bool(plan.get("hard"))
-            if not (hard and _fold_offer_age_h(chat_id) >= FOLD_OFFER_BACKSTOP_HOURS):
-                _note_fold_offer(chat_id, plan, hard=hard)
-                return {"ok": True, "folded": 0, "offered": True, "hard": hard, "plan": plan,
-                        "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
-            append_event("fold_offer", chat_id=chat_id,
-                         text=(f"жёсткое давление {plan.get('reason')} держится "
-                               f"{_fold_offer_age_h(chat_id):.0f}ч без решения голоса — "
-                               f"сворачиваю физикой (бэкстоп, не решение)"),
-                         source="memory_life")
-        fold = int(plan["fold"])
-        inputs = provable[:fold]
-    result = _model_compact(inputs, tier=1, depth=1, continued=bool(plan.get("continued")))
-    if not result:
-        result = _fallback_compact(inputs, continued=bool(plan.get("continued")))
-    manifest = result.get("_manifest") if isinstance(result, dict) else None
-    omitted = {str(i) for i in ((manifest or {}).get("omitted") or [])}
-    continued = bool(plan.get("continued"))
-    if omitted:
-        # Свёрнутым объявляем только непрерывный старый префикс, который реально
-        # дошёл до модели. Невлезший хвост остаётся горячим и попадёт в следующую
-        # свёртку — раньше он молча объявлялся покрытым и уходил из фронтира.
-        inputs = [x for x in inputs if str(x.get("id")) not in omitted]
-        fold = len(inputs)
-        # И вместе с границей обязана переехать ПРАВДА о ней. `plan["continued"]`
-        # посчитан для СТАРОЙ границы (например, реального разрыва в разговоре).
-        # Обрезанная бюджетом свёртка по построению в этот разрыв не попадает — она
-        # кончается посреди живой нити. Оставить continued=False значило бы записать
-        # в компакт и в артефакт эпизода, что разговор закончен там, где он идёт.
-        continued = True
-        log.warning("life compact [%s]: %s событий не влезли в промпт — оставлены "
-                    "горячими; эпизод помечен продолжающимся", chat_id, len(omitted))
-    if not inputs:
-        return {"ok": True, "folded": 0, "plan": plan,
-                "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
-
-    with _state_write_guard(chat_id), _WRITE_LOCK:
-        state = _rebuild_state_locked(chat_id)
-        # Сверяемся с той же подпоследовательностью, по которой планировали — но по
-        # ИДЕНТИЧНОСТИ строк, а не позиционным срезом dict-ов. Позиционная сверка
-        # срывала commit при любом событии с ts ВНУТРИ префикса (бэклог, ревизия)
-        # и при помеченных строках между свёрнутыми: источники целы — а «нажми ещё
-        # раз» (10.10). Конфликт — только исчезновение, изменение или перестановка
-        # источника: тогда результат модели применять нельзя.
-        conflict = _prefix_conflict(
-            inputs, _drop_unprovable_inputs(list(state.get("hot") or []), chat_id))
-        if conflict is not None:
-            return {"ok": False, "reason": "state_changed", "conflict": conflict,
-                    "folded": 0,
-                    "plan": plan, "hot": len(state.get("hot") or []), "tiers": [], "degraded_tiers": []}
-        source_ids = [str(x.get("id")) for x in inputs]
-        # Привязка пишется ДО компакта: компакт, чьи события ещё никуда не привязаны,
-        # был бы неканоническим с первой секунды. Порядок здесь — не стиль, а условие
-        # того, что записанное останется читаемым.
-        origins = {str(x.get("chat")) for x in inputs if x.get("chat")}
-        if any(not x.get("chat") for x in inputs):
-            # Старое состояние без «chat» у части записей: где сказано, знает лента.
-            # ⚠ Сравнивать РАЗМЕР множества ключей с числом событий нельзя: у любой
-            # свёртки событий больше, чем веток, и полный проход по всей ленте шёл бы
-            # на каждой свёртке (адверсарка 25.07).
-            origins |= {str(item.get("chat_id")) for item in
-                        iter_events(chat_id=chat_id, kinds={"conversation_message"})
-                        if item.get("chat_id")}
-        bind_place(chat_id, origins)
-        meta = _write_compact(
-            chat_id, result, tier=1, depth=1, source_events=source_ids, source_compacts=[],
-            event_count=len(inputs), continued=continued,
-            first_ts=str(inputs[0].get("ts") or ""), last_ts=str(inputs[-1].get("ts") or ""),
-            manifest=(manifest if isinstance(manifest, dict) else None))
-        if _discard_unprovable_compact(meta, f"свёртка места {chat_id}"):
-            return {"ok": False, "folded": 0, "reason": "compact_not_provable",
-                    "plan": plan, "hot": len(state.get("hot") or []),
-                    "tiers": [], "degraded_tiers": []}
-        episodes = _write_episodes(chat_id, meta["id"], inputs,
-                                   [x for x in (result.get("episodes") or []) if isinstance(x, dict)],
-                                   continued)
-        # Срез по ИМЕНАМ, а не по длине: помеченные строки остаются в кольце, и
-        # позиционный срез унёс бы вместе со свёрнутым куском ещё и их.
-        folded_ids = {str(x.get("id")) for x in inputs}
-        state["hot"] = [row for row in state["hot"]
-                        if str(row.get("id")) not in folded_ids]
-        state["frontier"].append(meta)
-        append_event("memory_compact", chat_id=chat_id,
-                     text=f"Hot → {meta['id']}; {len(inputs)} событий; {plan.get('reason')}",
-                     source="memory_life", refs=source_ids,
-                     meta={"compact_id": meta["id"], "tier": 1, "episodes": episodes,
-                           "continued": meta["continued"], "degraded": meta["degraded"]})
-        _save_state(state)
-        hot_after = len(state["hot"])
-        if fold_offer_enabled() and clear_fold_offer(chat_id):
-            log.info("свёртка [%s] сделана (%s) — предложение снято", chat_id, plan.get("reason"))
-    higher, higher_degraded = _fold_tiers_transactional(chat_id)
-    return {"ok": True, "folded": fold, "compact_id": meta["id"], "episodes": episodes,
-            "plan": plan, "hot": hot_after, "tiers": higher, "degraded_tiers": higher_degraded,
-            "degraded": meta["degraded"],
-            "folded_lines": [str(item.get("line") or "") for item in inputs]}
+    """Compatibility entry: publish an acting-author offer, with no generation."""
+    return compact_if_due(chat_id, force=force)
 
 
 # Разбор свёрток места: пофайловый кэш по отпечатку жизни.
@@ -3280,177 +3135,7 @@ def refresh_compacts(chat_id: str | int, compact_id: str | None = None, *,
     before any replacement compact or refresh receipt is written.  Ordinary
     background refresh retains its deterministic fallback.
     """
-    try:
-        requested_chunks = int(max_chunks)
-    except (TypeError, ValueError):
-        requested_chunks = 1
-    chunk_limit = max(0, min(_REFRESH_MAX_CHUNKS, requested_chunks))
-    chat = str(place_key(chat_id))
-    initial = _refresh_snapshot(chat)
-    target = str(compact_id or "")
-    scope = "target_group" if target else "one_group"
-    if target:
-        if not _COMPACT_ID_RE.fullmatch(target) or target not in initial["coverage"]:
-            return {"ok": False, "reason": "compact_not_in_coverage", "scope": scope,
-                    "compact_id": target, "max_chunks": chunk_limit,
-                    "room_unresolved_group_count": len(initial["unresolved_groups"]),
-                    "room_needs_refresh": len(initial["unresolved_artifacts"])}
-        group_id = initial["artifact_group"].get(target)
-        if not group_id:
-            return {"ok": True, "reason": "compact_is_presentable", "scope": scope,
-                    "compact_id": target, "max_chunks": chunk_limit,
-                    "room_unresolved_group_count": len(initial["unresolved_groups"]),
-                    "room_needs_refresh": len(initial["unresolved_artifacts"])}
-        group = initial["groups"][group_id]
-    elif initial["unresolved_groups"]:
-        group = max(initial["unresolved_groups"],
-                    key=lambda item: max(item.get("root_ids") or [""]))
-        group_id = group["group_id"]
-    else:
-        return {"ok": True, "reason": "no_refresh_debt", "scope": scope,
-                "chunks_written": 0, "receipt_written": False,
-                "max_chunks": chunk_limit, "room_unresolved_group_count": 0,
-                "room_needs_refresh": 0}
-    if group["target_error"]:
-        return _refresh_api_result(initial, group, reason=group["target_error"], ok=False,
-                                   chunk_limit=chunk_limit, scope=scope)
-    if group["receipt_complete"]:
-        # A receipt is durable before the rebuildable cursor. Retrying after a crash must
-        # repair that cursor instead of returning success over a double-present hot row.
-        rebuild_state(chat)
-        reconciled = _refresh_snapshot(chat)
-        reconciled_group = _refresh_group(reconciled, group_id) or group
-        return _refresh_api_result(reconciled, reconciled_group,
-                                   reason="already_refreshed", ok=True,
-                                   chunk_limit=chunk_limit, scope=scope)
-
-    virtual_covered = set(group["covered_positions"])
-    planned: list[tuple[dict, list[dict], bool]] = []
-    for _ in range(chunk_limit):
-        remaining_rows = [row for index, row in enumerate(group["target_rows"])
-                          if index not in virtual_covered]
-        if not remaining_rows:
-            break
-        fit = budget_prefix(remaining_rows, budget=PROMPT_BUDGET_CHARS)
-        inputs = remaining_rows[:fit]
-        if not inputs:
-            break
-        continued = fit < len(remaining_rows)
-        result = _model_compact(inputs, tier=1, depth=1, continued=continued)
-        model_result_valid = (
-            isinstance(result, dict)
-            and isinstance(result.get("summary"), str)
-            and bool(result["summary"].strip())
-            and not bool(result.get("degraded"))
-        )
-        if not model_result_valid:
-            if target:
-                return _refresh_api_result(
-                    initial, group, reason="model_required", ok=False,
-                    chunk_limit=chunk_limit, scope=scope,
-                )
-            result = _fallback_compact(inputs, continued=continued)
-        planned.append((result, [dict(row) for row in inputs], continued))
-        planned_ids = {str(row.get("id") or "") for row in inputs}
-        virtual_covered.update(
-            index for index, event_id in enumerate(group["target_ids"])
-            if event_id in planned_ids)
-
-    made: list[str] = []
-    receipt = None
-    # Refresh planning/model work remains outside state transactions.  The commit must,
-    # however, share the exact per-place writer domain with ordinary hot compaction so
-    # the two paths cannot both derive and persist overlapping compacts for one event.
-    with _refresh_commit_guard(chat), _state_write_guard(chat):
-        current = _refresh_snapshot(chat)
-        current_group = _refresh_group(current, group_id)
-        if (current_group is None
-                or current_group["logical_ids"] != group["logical_ids"]
-                or current_group["target_ids"] != group["target_ids"]):
-            return _refresh_api_result(current, current_group or group,
-                                       reason="target_changed", ok=False,
-                                       chunk_limit=chunk_limit, scope=scope)
-        if current_group["receipt_complete"]:
-            rebuild_state(chat)
-            observed = _refresh_snapshot(chat)
-            observed_group = _refresh_group(observed, group_id) or current_group
-            return _refresh_api_result(observed, observed_group,
-                                       reason="already_refreshed", ok=True,
-                                       chunk_limit=chunk_limit, scope=scope)
-
-        covered_ids = {
-            current_group["target_ids"][index]
-            for index in current_group["covered_positions"]
-        }
-        for result, inputs, continued in planned:
-            source_ids = [str(item.get("id") or "") for item in inputs]
-            if any(event_id in covered_ids for event_id in source_ids):
-                continue
-            timestamps = [str(item.get("ts") or "") for item in inputs]
-            # Привязка пишется ДО компакта — как в горячем пути компакции:
-            # refresh собирает события со ВСЕХ веток места (группа строится по
-            # логическим целям, а не по ключу ветки), и событие под веточным
-            # ключом без записи в places.json делает весь свежий чанк
-            # неканоническим с первой секунды. Мельница писала чанки, которые
-            # сама же отвергала: needs_refresh стоял, refreshed_count не рос
-            # (пробка группы e0b1e8ed, 21.09: 75 целей, 0 refreshed, 10 проходов).
-            origins = {str(item.get("chat_id") or "") for item in inputs
-                       if item.get("chat_id")}
-            if origins:
-                bind_place(chat, origins)
-            with _WRITE_LOCK:
-                meta = _write_compact(
-                    chat, result, tier=1, depth=1, source_events=source_ids,
-                    source_compacts=[], event_count=len(source_ids), continued=continued,
-                    source_note=(f"Адресный refresh logical-group {group_id}; "
-                                 "только текущие события."),
-                    first_ts=min(timestamps), last_ts=max(timestamps),
-                    manifest=(result.get("_manifest") if isinstance(result, dict) else None),
-                )
-            made.append(str(meta["id"]))
-            covered_ids.update(source_ids)
-
-        written = _refresh_snapshot(chat)
-        written_group = _refresh_group(written, group_id)
-        if (written_group is None
-                or written_group["logical_ids"] != group["logical_ids"]
-                or written_group["target_ids"] != group["target_ids"]):
-            return _refresh_api_result(written, written_group or current_group,
-                                       reason="target_changed", ok=False,
-                                       chunk_limit=chunk_limit, chunks_written=len(made),
-                                       new_compact_ids=made, scope=scope)
-        replacements = list(written_group["replacement_compact_ids"])
-        prior = list((written_group.get("receipt") or {}).get(
-            "replacement_compact_ids") or ())
-        if replacements and replacements != prior:
-            receipt = _append_refresh_receipt(chat, written_group, replacements)
-
-        final = _refresh_snapshot(chat)
-        final_group = _refresh_group(final, group_id)
-        if (final_group is None
-                or final_group["logical_ids"] != group["logical_ids"]
-                or final_group["target_ids"] != group["target_ids"]):
-            return _refresh_api_result(final, final_group or written_group,
-                                       reason="target_changed", ok=False,
-                                       chunk_limit=chunk_limit, chunks_written=len(made),
-                                       new_compact_ids=made, receipt=receipt, scope=scope)
-        if made or receipt is not None:
-            rebuild_state(chat)
-        observed = _refresh_snapshot(chat)
-        observed_group = _refresh_group(observed, group_id)
-        if (observed_group is None
-                or observed_group["logical_ids"] != group["logical_ids"]
-                or observed_group["target_ids"] != group["target_ids"]):
-            return _refresh_api_result(observed, observed_group or final_group,
-                                       reason="target_changed", ok=False,
-                                       chunk_limit=chunk_limit, chunks_written=len(made),
-                                       new_compact_ids=made, receipt=receipt, scope=scope)
-
-    reason = ("target_refreshed" if observed_group["receipt_complete"]
-              else "target_progress")
-    return _refresh_api_result(observed, observed_group, reason=reason, ok=True,
-                               chunk_limit=chunk_limit, chunks_written=len(made),
-                               new_compact_ids=made, receipt=receipt, scope=scope)
+    return {"ok": False, "reason": "acting_author_required", "chunks_written": 0}
 
 
 def refresh_debt(chat_id: str | int, *, evidence: dict | None = None) -> dict:
@@ -3694,6 +3379,8 @@ def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | 
                          open_threads: list[str] | None = None, why: str = "her_word") -> dict:
     """Переписать суть свёртки на месте: тот же id, та же шапка, прежний текст — в историю."""
     summary = str(summary or "").strip()
+    if re.search(r"^## ", summary, re.M):
+        return {"ok": False, "reason": "recap_h2_reserved_use_h3"}
     if not summary:
         return {"ok": False, "reason": "empty_summary"}
     candidates = _compact_candidates(compact_id, chat_id)
@@ -3722,7 +3409,7 @@ def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | 
         tmp.write_text(new_text, encoding="utf-8")
         tmp.replace(path)
         fresh_meta, fresh_recap = _read_compact_candidate(path, chat)
-        if not fresh_meta or fresh_meta != meta or not fresh_recap:
+        if not fresh_meta or fresh_meta != meta or fresh_recap != summary:
             # Шапка обязана остаться прежней байт в байт — иначе откат, свёртка не меняется.
             path.write_text(old_text, encoding="utf-8")
             return {"ok": False, "reason": "header_changed"}
@@ -3760,43 +3447,7 @@ def refold_plan(chat_id: str | int | None = "all", *, tier: int | None = None,
 
 def refold_one(chat_id: str | int, compact_id: str) -> dict:
     """Перевыпустить одну свёртку её голосом на месте: те же входы, что у обычной свёртки."""
-    chat = str(chat_id)
-    evidence = memory_provenance.claim_evidence_index(MEM_DIR)
-    compacts = evidence.get("compacts") or {}
-    meta = compacts.get(str(compact_id))
-    if not isinstance(meta, dict):
-        return {"ok": False, "reason": "unknown_compact"}
-    children = [str(x) for x in (meta.get("source_compact_ids") or [])]
-    source_ids = [str(x) for x in (meta.get("source_event_ids") or [])]
-    if children:
-        if any(not isinstance(compacts.get(ch), dict) for ch in children):
-            return {"ok": False, "reason": "sources_missing"}
-        inputs = [_frontier_input(dict(compacts[ch], id=ch), chat) for ch in children]
-        if any(not str(item.get("text") or "").strip() for item in inputs):
-            return {"ok": False, "reason": "sources_missing"}
-        subtree = _subtree_event_rows(evidence, str(compact_id))
-    elif source_ids:
-        rows = [(evidence.get("events") or {}).get(eid) for eid in source_ids]
-        if any(not isinstance(row, dict) for row in rows):
-            return {"ok": False, "reason": "sources_missing"}
-        current_ids = set(evidence.get("current_event_ids") or ())
-        inputs = _conversation_hot_rows(rows)
-        if len(inputs) != len(source_ids) or any(eid not in current_ids for eid in source_ids):
-            # Часть источников вытеснена поздней ревизией — это работа refresh_compacts.
-            return {"ok": False, "reason": "sources_not_current"}
-        subtree = inputs
-    else:
-        return {"ok": False, "reason": "no_sources"}
-    authors = _window_authors(subtree)
-    result = _model_compact(inputs, tier=int(meta.get("tier") or 1),
-                            depth=int(meta.get("depth") or 1),
-                            continued=bool(meta.get("continued")), authors=authors)
-    summary = str((result or {}).get("summary") or "").strip()
-    if not summary or (result or {}).get("degraded"):
-        return {"ok": False, "reason": "model_unavailable"}
-    threads = result.get("open_threads") if isinstance(result.get("open_threads"), list) else None
-    return rewrite_compact_text(str(compact_id), summary, chat_id=chat,
-                                open_threads=threads, why="refold")
+    return {"ok": False, "reason": "acting_author_required"}
 
 
 def _save_refold_state() -> None:

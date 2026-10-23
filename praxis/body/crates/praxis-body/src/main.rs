@@ -2,6 +2,8 @@ mod dpi;
 mod artifact;
 mod compose;
 mod config;
+#[cfg(windows)]
+mod cu_python;
 mod desktop;
 mod element;
 mod fsops;

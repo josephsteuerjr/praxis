@@ -8,9 +8,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import core_src
+
+EDITION_EXCLUDES = frozenset({'AGENTS.md'})
 
 
 def compose(root: Path, output: Path, edits: list[str]):
@@ -22,15 +24,22 @@ def compose(root: Path, output: Path, edits: list[str]):
         meta,raw=row.split(b'\t',1);name=raw.decode('utf-8')
         prefix='helene/core/' if name.startswith('helene/core/') else 'praxis/'
         relative=name[len(prefix):]
-        if core_src._skip(relative) or core_src.mirror_only(relative):continue
+        if relative in EDITION_EXCLUDES or core_src._skip(relative) or core_src.mirror_only(relative):continue
         if prefix=='helene/core/' or relative not in selected:
             selected[relative]=(name,meta.split()[-1].decode('ascii'))
+    edited={}
     for name in edits:
-        if not name.startswith('helene/core/') or not (root/name).is_file():
-            raise ValueError('Only explicit Hélène overlay inputs are accepted: '+name)
-        relative=name.removeprefix('helene/core/')
-        if not core_src._skip(relative) and not core_src.mirror_only(relative):
-            selected[relative]=(name,None)
+        path=PurePosixPath(name)
+        prefix=next((value for value in ('helene/core/','praxis/') if name.startswith(value)),None)
+        if prefix is None or '..' in path.parts or '\\' in name or not (root/name).is_file():
+            raise ValueError('Only explicit edition/core source inputs are accepted: '+name)
+        relative=name[len(prefix):]
+        if relative in EDITION_EXCLUDES or core_src._skip(relative) or core_src.mirror_only(relative):
+            raise ValueError('Private or non-runtime edition input: '+name)
+        if relative in edited:
+            raise ValueError('Multiple selected inputs for edition path: '+relative)
+        edited[relative]=name
+        selected[relative]=(name,None)
     output.mkdir(parents=True,exist_ok=False)
     files={}
     for relative,(name,oid) in sorted(selected.items()):
@@ -38,7 +47,7 @@ def compose(root: Path, output: Path, edits: list[str]):
         destination=output/relative;destination.parent.mkdir(parents=True,exist_ok=True)
         destination.write_bytes(data)
         files[relative]={'source':name,'sha256':hashlib.sha256(data).hexdigest()}
-    return {'head':git('rev-parse','HEAD').decode().strip(),'files':files,'edits':edits}
+    return {'head':git('rev-parse','HEAD').decode().strip(),'files':files,'edits':edits,'excluded_relative_paths':sorted(EDITION_EXCLUDES)}
 
 
 def main():

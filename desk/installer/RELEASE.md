@@ -1,5 +1,48 @@
 # Как выпустить версию Hélène
 
+## Python-first Windows delivery (1.9.2)
+
+The current Windows entry is `python-launcher` plus the thin migration wizard,
+not the legacy Rust shell/service product. Keep the Cargo versions (including
+their lockfile roots), Tauri/migration configuration and frontend package roots
+coherent. Build the window with `npm --prefix desk/app run build`; compile the
+launcher with its declared Windows target and `HELENE_WINDRES`, and the wizard
+with `powershell -File desk/setup/build-migration.ps1`. The latter merges
+`migration.conf.json` for both Tauri build and codegen; the legacy setup UI is
+not the migration entry.
+
+Compose seed code with `compose_python_edition.py --output <new-edition>
+--edits <explicit-list.json> --manifest <inventory.json>`. The selection admits
+both `helene/core/` and `praxis/` runtime edits (notably `forge_worker.py`),
+rejects private/traversing inputs and duplicate destinations, and leaves
+unselected sources pinned to Git blobs. Repository `AGENTS.md` is not a runtime
+input; it is excluded and disclosed. Keep stock soul/skill seeds from the
+qualified stage; do not import the builder's agent data or correspondence.
+
+`python_app_bundle.py --stage <clean-stage> --output <new-Helene> --relay
+<helene-relay.exe> --relay-source <exact-source> --version 1.9.2` assembles the
+program. Its stage contains the selected runtime, composed `tree/`, body and
+licenses, never live configuration. `localharness/` is copied in full so new
+self-review service/worker/integration modules travel with their Forge consumer.
+Each relay binary must match its own exact source inventory: Windows uses the
+embedded desktop/control API product; Linux uses the separately declared CLI
+target. They are not interchangeable. Reuse an unchanged qualified binary only
+with its verified source pair; an old same-version executable alone is not
+evidence of a new build. The embedded
+runtime must import actual adapters and SDKs (OpenAI >=1.109.1, Anthropic >=0.115,
+Pillow >=10); qualify its own installed versions, not the host Python's.
+
+Place the newly built launcher and wizard in the stage before assembly. Include
+the byte-identical wizard as both `Helene/helene-setup.exe` inside
+`Helene-1.9.2.zip` and standalone `helene-1.9.2-setup.exe`, so the legacy update
+button and new entry reach the same migration flow. Recreate program inventories
+after all selected files are present. Verify ZIP CRC, every source/runtime hash,
+runtime imports and provider MockTransport flows, isolated migration preservation,
+and selected known-secret values before publication. Record focused qualification
+separately from the old full battery; never invent `complete:true`. Build proof
+does not prove live installation, model login, native logon autostart or macOS.
+Optional XTTS/Whisper/toolchain archives stay separately selectable and checksummed.
+
 ## Hélène 1.8 — acting-author memory and exact topic streams
 
 Compaction is episodic memory authored by the acting agent: prepare exposes an

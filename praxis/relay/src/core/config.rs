@@ -54,7 +54,9 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> anyhow::Result<Self> {
-        let codex_home = find_codex_home();
+        let codex_home = if crate::login::lib::relay_local() {
+            std::env::current_dir()?.join("local_auth")
+        } else { find_codex_home() };
 
         // Load user instructions from AGENTS.md
         let user_instructions = Self::load_instructions(Some(&codex_home));
@@ -65,11 +67,7 @@ impl Config {
         // Check if auth.json exists in ./local_auth directory (fallback)
         let local_auth_dir = std::env::current_dir()?.join("local_auth");
         let local_auth_file = local_auth_dir.join("auth.json");
-        let primary_profile = local_auth_dir
-            .join("accounts")
-            .join("primary")
-            .join("auth.json");
-        if local_auth_file.exists() || primary_profile.exists() {
+        if crate::login::lib::relay_local() || local_auth_file.exists() || has_local_profile(&local_auth_dir) {
             return Ok(Config {
                 codex_home: local_auth_dir,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/codex".to_string(),
@@ -183,4 +181,21 @@ fn find_codex_home() -> PathBuf {
 
     // Fallback to current directory
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn has_local_profile(root: &Path) -> bool {
+    super::account_router::ACCOUNT_SLOTS.iter().any(|slot| root.join("accounts").join(slot).join("auth.json").is_file())
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+    #[test]
+    fn a_secondary_only_installation_is_a_local_profile() {
+        let root=tempfile::tempdir().unwrap();
+        let home=root.path().join("accounts/secondary");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("auth.json"), "{}").unwrap();
+        assert!(has_local_profile(root.path()));
+    }
 }

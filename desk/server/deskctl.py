@@ -241,6 +241,7 @@ def brain_state() -> dict:
         if isinstance(spec, dict):
             # Адрес — да, ключ — никогда: он тут же уехал бы в окно и в журнал.
             frameworks[name] = {"base_url": spec.get("base_url", ""),
+                                "protocol": spec.get("protocol") or spec.get("transport") or name,
                                 "key_present": bool(str(spec.get("api_key") or "").strip())}
     return {"ok": True, "path": str(path), "roles": roles, "frameworks": frameworks,
             "images": image_settings(raw), "image_models": ["gpt-image-2"],
@@ -255,25 +256,59 @@ def brain_models() -> dict:
     того, чего нет. Поэтому здесь живой `/v1/models` по адресу из `llm.json`.
     """
     import urllib.request  # noqa: PLC0415 — нужен только здесь
+    import urllib.error
 
-    state = brain_state()
-    if not state.get("ok"):
-        return state
+    from urllib.parse import urlsplit
+
+    class CatalogRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, response, code, message, headers, target):
+            origin = urlsplit(request.full_url)
+            destination = urlsplit(target)
+            if (origin.scheme, origin.hostname, origin.port) != (destination.scheme, destination.hostname, destination.port):
+                raise urllib.error.HTTPError(request.full_url, code, "catalog redirect changed origin", headers, response)
+            return super().redirect_request(request, response, code, message, headers, target)
+
+    try:
+        raw = json.loads(brain_path().read_text(encoding="utf-8"))
+        frameworks = raw.get("frameworks") or {}
+        if not isinstance(frameworks, dict):
+            raise ValueError("frameworks must be an object")
+    except (OSError, ValueError, AttributeError):
+        return {"ok": False, "note": "настройки мозга не прочитались"}
     out: dict = {"ok": True, "by_framework": {}}
-    for name, spec in (state.get("frameworks") or {}).items():
+    for name, spec in frameworks.items():
+        if not isinstance(spec, dict):
+            continue
         base = str(spec.get("base_url") or "").rstrip("/")
-        if not base.startswith("http"):
+        try:
+            parsed = urlsplit(base)
+            valid = parsed.scheme in ("http", "https") and parsed.hostname and not (
+                parsed.username or parsed.password or parsed.query or parsed.fragment)
+        except ValueError:
+            valid = False
+        if not valid:
             out["by_framework"][name] = {"ok": False, "why": "адрес не похож на HTTP"}
             continue
-        url = base + ("/v1/models" if not base.endswith("/v1") else "/models")
+        protocol = spec.get("protocol") or spec.get("transport") or name
+        suffix = "/v1/models" if (protocol == "anthropic" and not base.endswith("/v1")) or not parsed.path else "/models"
+        url = base + suffix
+        key = str(spec.get("api_key") or "").strip()
+        headers = {"Accept": "application/json"}
+        if protocol == "anthropic":
+            headers["anthropic-version"] = "2023-06-01"
+            if key:
+                headers["x-api-key"] = key
+        elif key:
+            headers["Authorization"] = "Bearer " + key
         try:
-            with urllib.request.urlopen(url, timeout=15) as answer:
-                body = json.loads(answer.read().decode("utf-8", "replace"))
+            request = urllib.request.Request(url, headers=headers)
+            with urllib.request.build_opener(CatalogRedirect()).open(request, timeout=15) as answer:
+                body = json.loads(answer.read(4 * 1024 * 1024).decode("utf-8", "replace"))
             ids = [str(row.get("id")) for row in (body.get("data") or []) if row.get("id")]
-            out["by_framework"][name] = {"ok": True, "models": ids, "url": url}
-        except Exception as exc:  # noqa: BLE001 — причина важна как текст
-            out["by_framework"][name] = {"ok": False, "url": url,
-                                         "why": f"{type(exc).__name__}: {exc}"[:200]}
+            out["by_framework"][name] = {"ok": True, "models": ids}
+        except Exception as exc:
+            out["by_framework"][name] = {"ok": False,
+                                         "why": f"каталог недоступен ({type(exc).__name__})"}
     return out
 
 

@@ -52,11 +52,11 @@ class DeliveryTests(unittest.TestCase):
             put(root,'helene.json',json.dumps({'tree':str(tree)}).encode())
             record=put(tree,'.desktop-owner.lock',b'active\n')
             rows=json.dumps([{'ProcessId':123,'CommandLine':'"'+str(root/'app/python_app.py')+'" --root "'+str(root)+'"'}])
-            with patch.object(migration_windows.os,'name','nt'),patch.object(migration_windows,'powershell',side_effect=[rows,'']) as commands:
+            with patch.object(migration_windows,'request_python_exit'),patch.object(migration_windows.os,'name','nt'),patch.object(migration_windows,'powershell',side_effect=[rows,'']) as commands:
                 with self.assertRaisesRegex(RuntimeError,'child teardown'):migration_windows.close_python(root)
                 self.assertFalse(any('Stop-Process' in call.args[0] for call in commands.call_args_list))
             record.write_bytes(b'clean\n')
-            with patch.object(migration_windows.os,'name','nt'),patch.object(migration_windows,'powershell',side_effect=[rows,'']):
+            with patch.object(migration_windows,'request_python_exit'),patch.object(migration_windows.os,'name','nt'),patch.object(migration_windows,'powershell',side_effect=[rows,'']):
                 migration_windows.close_python(root)
 
     def test_prepare_failure_reopens_old_application_without_overlay(self):

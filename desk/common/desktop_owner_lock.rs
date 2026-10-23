@@ -1,17 +1,15 @@
 //! Shared Windows admission for the two native desktop process owners.
 //!
 //! Python uses the same `.desktop-owner.lock` record. A share-exclusive OS
-//! handle excludes another process while an owner is live. `active\n` remains
-//! after a crash or uncertain teardown: the next owner must refuse rather than
-//! infer descendant death from a released handle or free TCP port. Never
-//! delete the record or mark it clean on Drop. Only a measured empty child Job
-//! and a quiescent native launch seam may publish `clean`.
+//! handle excludes another process while an owner is live. Persisted words are
+//! teardown diagnostics, not a permanent launch ban after a crash. Child Jobs
+//! retain kill-on-close custody; live-owner retries still measure them empty.
 #![cfg(windows)]
 
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::windows::fs::OpenOptionsExt;
+use std::io::{Seek, SeekFrom, Write};
+use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -57,7 +55,7 @@ impl Drop for LaunchTicket {
 }
 
 /// Obtain once per tree per native owner process before *any* child spawn.
-/// Distinct trees can run independently. A stale `active` is never evicted.
+/// Distinct trees can run independently. The kernel lease owns exclusion.
 pub fn begin(tree: &Path) -> Result<LaunchTicket, String> {
     std::fs::create_dir_all(tree).map_err(|e| format!("desktop tree unavailable: {e}"))?;
     let tree = tree
@@ -71,9 +69,7 @@ pub fn begin(tree: &Path) -> Result<LaunchTicket, String> {
     }
     if !owner.leases.contains_key(&tree) {
         let path = tree.join(NAME);
-        // `create_new` distinguishes fresh empty record from torn existing.
-        // Existing-file open also denies sharing (including Python share=0).
-        let (mut file, fresh) = match OpenOptions::new()
+        let mut file = match OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
@@ -81,28 +77,24 @@ pub fn begin(tree: &Path) -> Result<LaunchTicket, String> {
             .custom_flags(OPEN_REPARSE_POINT)
             .open(&path)
         {
-            Ok(file) => (file, true),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (
-                OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .share_mode(0)
-                    .custom_flags(OPEN_REPARSE_POINT)
-                    .open(&path)
-                    .map_err(|e| format!("desktop tree owned or lock unavailable: {e}"))?,
-                false,
-            ),
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .custom_flags(OPEN_REPARSE_POINT)
+                .open(&path)
+                .map_err(|e| format!("desktop tree owned or lock unavailable: {e}"))?,
             Err(e) => return Err(format!("desktop tree lock unavailable: {e}")),
         };
-        if !fresh {
-            let mut prior = Vec::new();
-            (&mut file)
-                .take(32)
-                .read_to_end(&mut prior)
-                .map_err(|e| format!("desktop owner record unreadable: {e}"))?;
-            if prior != CLEAN {
-                return Err("desktop tree prior ownership or record unresolved; inspect descendants before explicit recovery".into());
-            }
+        if file
+            .metadata()
+            .map_err(|e| e.to_string())?
+            .file_attributes()
+            & 0x400
+            != 0
+        {
+            return Err("desktop tree lock is a reparse point".into());
         }
         record(&mut file, ACTIVE)?;
         owner.leases.insert(tree, file);

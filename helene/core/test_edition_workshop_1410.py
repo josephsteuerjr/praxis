@@ -200,7 +200,8 @@ class EditionWorkshop(unittest.TestCase):
 
     def test_package_composer_selects_edition_over_production(self):
         """The real installer selector, with a tiny source-bound manifest fixture."""
-        module_path = Path(__file__).parents[2] / "desk/installer/candidate_tree.py"
+        from test_source_root import source_root
+        module_path = source_root(__file__) / "desk/installer/candidate_tree.py"
         spec = importlib.util.spec_from_file_location("edition_candidate_tree", module_path)
         composer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(composer)

@@ -14,8 +14,8 @@ let receipt = null, interruptScope = '', voiceReads = 0, voiceInFlight = 0, maxV
 let voiceDelay = 0, voiceBusy = 'both', holdInterrupt = false;
 let detailOverride = null, pulseOverride = null;
 const sockets = new Set();
-let extraNative, extraBytes;
-export function extendFixture(native, bytes) { extraNative = native; extraBytes = bytes; }
+let extraNative, extraBytes, extraRoute;
+export function extendFixture(native, bytes, route) { extraNative = native; extraBytes = bytes; extraRoute = route; }
 const messages = Array.from({length:36}, (_, i) => ({timestamp:new Date(Date.now()-(36-i)*60000).toISOString(),
   outgoing: i%2===0, sender_name: i%2===0?'Hélène':'Егор', text: i===35?'Повтор':`Сообщение ${i+1}. Проверка стабильной прокрутки и читаемости переписки.`}));
 const stamp = () => new Date().toISOString();
@@ -61,6 +61,8 @@ async function native(cmd,a={}) {
 }
 async function route(path,method='GET',body=null) {
   const url=new URL(path,'http://fixture'), p=url.pathname;
+  const extended = await extraRoute?.(path,method,body);
+  if (extended !== undefined) return extended;
   if(p==='/__fixture/status') return {fixture:'ui-session-3009',...owner(),busy,phase,room,run,interruptScope,receipt,voiceReads,maxVoiceInFlight};
   if(p==='/__fixture/native') return native(body.cmd,body.args);
   if(p==='/__fixture/set') {

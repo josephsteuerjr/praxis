@@ -65,43 +65,22 @@ ALLOWED_LITERALS = (
 # ── Переводы. `d` — описание руки, `p` — описания параметров (только те, что нужны). ──
 # Пусто в `d` означает «описание руки уже по-английски, дополняются только параметры».
 EN: dict[str, dict] = {
+    "generate_image": {"d": "", "p": {}},
+    "clear_owner_marks": {
+        "d": "List or atomically clear owner edit marks after reading and incorporating the edits. Other file text is preserved. With no path, inspect or clear all editor-managed groups.",
+        "p": {"action": "list shows marks; clear removes them after you have incorporated the edit",
+              "path": "relative file path; omit to inspect all editor-managed groups"},
+    },
     # ─────────────────────────────────────────────────────────── указатель рук
     # Эти две руки едут в КАЖДОМ кадре под указателями и открывают доступ ко всем
     # остальным: если они говорят по-русски, весь смысл английского набора теряется
     # ровно там, где модель решает, звать ли неизвестную ей руку.
-    "describe": {
-        "d": ("Show the schema of a tool from your pointer (name, purpose, arguments) so you "
-              "can call it through `call`. Several names — comma-separated. The result lands "
-              "in this turn's accumulator; no need to ask for the same schema twice."),
-        "p": {"name": "tool name from the pointer; several — comma-separated"},
-    },
-    "call": {
-        "d": ("Call a tool from your pointer by name — RIGHT AWAY, by the signature in the "
-              "pointer, without describe: e.g. name=\"fs_read\", args_json='{\"path\": "
-              "\"soul/SOUL.md\"}' or name=\"coding_agent\", args_json='{\"task_id\": \"…\", "
-              "\"action\": \"spawn\"}'. args_json is a JSON object of its arguments (empty = no "
-              "arguments). The tool runs like a native one: same rights, receipts, limits and "
-              "the same result. Use `describe` only when the signature is not enough "
-              "(enumerations, nested objects), once per turn."),
-        "p": {"name": "tool name from the pointer",
-              "args_json": "the tool's arguments as a JSON object, e.g. {\"path\": \"soul/SOUL.md\"}"},
-    },
+    "describe": {'d': "Show pointer schemas (name/purpose/arguments) for call; comma-separated names allowed. Results stay in this turn's accumulator: do not request a schema twice.", 'p': {'name': 'tool name from the pointer; several — comma-separated'}},
+    "call": {'d': 'Call a pointer tool RIGHT AWAY by signature without describe: name=fs_read,args_json=\'{"path":"soul/SOUL.md"}\' or coding_agent with task_id/action=spawn. args_json: JSON argument object, empty means none. Same rights/receipts/limits/result as native. describe only for missing enum/nested-object details, once per turn.', 'p': {'name': 'tool name from the pointer', 'args_json': 'the tool\'s arguments as a JSON object, e.g. {"path": "soul/SOUL.md"}'}},
     # ─────────────────────────────────────────────────────────── память и самоописание
-    "recall": {
-        "d": ("Search your own memory and skills (people, journal, reflections, self, "
-              "skills). report=true searches nothing: it returns the closed-epitaph line "
-              "of the semantic-seed experiment (ended 03.08.2026, removed 05.10.2026; "
-              "final numbers 680 seed-only candidates, 0 reached output)."),
-        "p": {"query": "keywords to search for",
-              "report": "show the closed-experiment epitaph instead of searching"},
-    },
+    "recall": {'d': 'Search memory/skills: people/journal/reflections/self/skills. report=true skips search, returns closed semantic-seed epitaph (ended03.08.2026, removed05.10.2026;680seed-only candidates,0reached output). History:git.', 'p': {'query': 'keywords to search for', 'report': 'show the closed-experiment epitaph instead of searching'}},
     "remember": {
-        "d": ("Remember a fact about a person. visibility='private' for secrets: do not "
-              "carry them to others. salience 1-3 (how much it matters for the portrait, "
-              "default 2). open_loop=true for an unclosed thread ('was heading to an "
-              "interview on the 12th') so you can come back to it. relates_to + relation "
-              "when the fact links the person to someone or something ('Vika', 'colleague "
-              "at the firm'): an edge is then drawn in your memory graph."),
+        "d": ('Append person fact; private visibility keeps secrets out of other audiences. salience1–3 default2; open_loop for unfinished thread; relates_to+relation links person to another graph node.'),
         "p": {"person": "person's name or dossier slug",
               "fact": "the fact itself, in your own words",
               "visibility": "public, or private for what must not be carried to others",
@@ -155,15 +134,7 @@ EN: dict[str, dict] = {
               "reason": "set: why you are changing it"},
     },
     "manage_notes": {
-        "d": ("Your explicit living notebook. write creates an authored "
-              "scratch/note/reflection/question; list/read show entries; close releases one. "
-              "chain(note_id=<skill slug>) opens the observable lesson chain: the original "
-              "note, when you turned it into a skill, and in which turns that skill was "
-              "AVAILABLE in the frame — availability, not influence. decline(note_id) "
-              "refuses a proposed crystallisation and it will not be proposed again. A note "
-              "does not automatically become a task, a thread, a desire, a journal entry, a "
-              "memory fact or a claim about self. scope=run/chat requires a real current "
-              "run or chat."),
+        "d": ('Explicit authored notebook: write scratch/note/reflection/question; list/read; close. chain(note_id=skill slug): source note, skill creation and turns offering it (availability, not influence). decline rejects crystallisation. No implicit task/thread/desire/journal/fact/self claim. run/chat scope needs current run/chat.'),
         "p": {"action": "write | list | read | close | chain | decline",
               "text": "write: the note text",
               "kind": "scratch | note | reflection | question",
@@ -202,16 +173,7 @@ EN: dict[str, dict] = {
     "home_note": {"p": {"text": "the line to append to the shared HOME layer"}},
 
     # ────────────────────────────────────────────────────────────────── речь и молчание
-    "reply": {
-        "d": ("Answer the interlocutor of this conversation. Your reply reaches a person "
-              "ONLY this way. Ordinary text you write is a note to yourself: it is sent "
-              "nowhere and it closes the turn. So: you called this tool — the message is "
-              "out, and the turn continues, you can check what you did and answer again; "
-              "you wrote text and did not call it — you stayed silent, and that is a "
-              "legitimate outcome. reply_to is the id of the message you are answering."),
-        "p": {"text": "what to say to the interlocutor",
-              "reply_to": "id of the message you are answering, optional"},
-    },
+    "reply": {'d': 'ONLY this tool sends to the current interlocutor. Calling sends and keeps the turn open for checking/further replies. Ordinary text is an internal note: sends nothing and closes the turn; silence is legitimate. reply_to: message answered.', 'p': {'text': 'what to say to the interlocutor', 'reply_to': 'id of the message you are answering, optional', 'spelling_confirm_text': 'Exact authored text confirming a spelling-review bypass; omit normally. Never a boolean or a revised text.'}},
     "say": {
         "d": ("Look at your own reply before it goes out. Returns your own text and one "
               "fact: which tools were used in this turn. It sends nothing and demands "
@@ -232,33 +194,8 @@ EN: dict[str, dict] = {
         "p": {"reason": "why you are staying silent, for yourself",
               "cancel": "true lifts a silence decision taken earlier in this turn"},
     },
-    "narrate": {
-        "d": ("Tell the thread how the work is going — a short process line BETWEEN "
-              "commands, not the final answer. This is an invitation, not a duty: say what "
-              "you did, what is next, where you got stuck, if you want to. It goes out "
-              "immediately, past the evaluators (only the credential floor applies); "
-              "verbatim repeats are de-duplicated; the gap is your own knob "
-              "(manage_perception(narration_gap_sec)), the switch is PRAXIS_NARRATION. "
-              "task_id narrates into the thread that ordered this coding task; without it "
-              "into the current thread, and from a window or event (no current thread) "
-              "into Yegor's DM — the receipt says where it went."),
-        "p": {"text": "the process line",
-              "task_id": "narrate into the thread that ordered this coding task, optional"},
-    },
-    "end_turn": {
-        "d": ("Confirm that there is nothing more to do in this turn, or nothing you want "
-              "to do, and close it with an explicit outcome. outcome=done — there is an "
-              "observable result, or what was said was itself the deed; wait — you are "
-              "waiting for an event or a deadline (put the return condition in note; if a "
-              "return mechanism is needed, set remind_self BEFORE closing); blocked — an "
-              "obstacle (in note: which one and whose word is needed). Before closing ask "
-              "yourself: what did I decide to do? is there an observable result? did an "
-              "action I announced stay without a return mechanism? is there an active call "
-              "or delivery with an unknown outcome?"),
-        "p": {"outcome": "done | wait | blocked",
-              "note": "done: what was done, short and optional; wait: the return "
-                      "condition; blocked: the obstacle"},
-    },
+    "narrate": {'d': 'Optional short progress BETWEEN commands, not final: done/next/blocker. Sends immediately past evaluators (credential floor applies), verbatim dedup. Gap: manage_perception(narration_gap_sec); switch: PRAXIS_NARRATION. task_id targets ordering thread; otherwise current thread, or Yegor DM from a window/event without one. Receipt names destination.', 'p': {'text': 'the process line', 'task_id': 'narrate into the thread that ordered this coding task, optional'}},
+    "end_turn": {'d': 'Close explicitly: done observable result (speech may itself be the deed); wait event/deadline and return condition in note, remind_self BEFORE closing if needed; blocked obstacle and whose decision. Check pending promises/calls/deliveries with unknown outcomes. Nothing more to do or not wanting more is legitimate.', 'p': {'outcome': 'done | wait | blocked', 'note': 'done: what was done, short and optional; wait: the return condition; blocked: the obstacle'}},
     "speak": {
         "d": ("Voice a short answer in a good Russian female voice and attach the audio to "
               "the CURRENT Telegram chat. The main neural voice has a local female "
@@ -300,14 +237,7 @@ EN: dict[str, dict] = {
         "p": {"query": "words or a phrase to search for",
               "limit": "how many results, 1-40 (default 20)"},
     },
-    "read_chat": {
-        "d": ("Look at the latest messages of a neighbouring dialog by id, @username or "
-              "name, ONLY by an explicit call; neighbouring dialogs are never mixed in "
-              "automatically. The result is internal: do not hand sensitive material to the "
-              "wrong audience."),
-        "p": {"chat_ref": "id, @username, or the name of a chat or person",
-              "limit": "how many recent messages (default 30)"},
-    },
+    "read_chat": {'d': 'Explicitly read latest messages of ONE neighbouring dialog by id/@username/name. Never mixes neighbours automatically. Internal: do not disclose sensitive material to the wrong audience.', 'p': {'chat_ref': 'id, @username, or the name of a chat or person', 'limit': 'how many recent messages (default 30)'}},
     "read_context": {
         "d": ("Pull the live context of the CURRENT chat straight from Telegram (the last N "
               "messages), when you feel the history has drifted. This is the same current "
@@ -315,13 +245,7 @@ EN: dict[str, dict] = {
         "p": {"limit": "how many recent messages (default 50)"},
     },
     "group_context": {
-        "d": ("Read-only orientation inside THIS Telegram group. topics shows the bounded "
-              "topic and participant map; search finds marked excerpts only in this root "
-              "group; context reads one exact topic (defaults to the current one); message "
-              "returns ONE archived message in full — pass its id in `limit`, exactly as the "
-              "[ОБРЕЗАНО: …] marker in a clipped transcript line tells you to. It cannot "
-              "name or open a different peer, and raw topic histories are never silently "
-              "merged."),
+        "d": ('Read-only THIS Telegram root group: clipped rows carry [ОБРЕЗАНО: …]; topics bounded map; search marked excerpts; context exact topic (default current); message full archived message by id in limit, as clipped marker directs. No other peer or implicit raw topic-history merge.'),
         "p": {"action": "topics | search | context | message",
               "query": "search terms",
               "topic_id": "exact topic root; 0 means the current topic",
@@ -383,9 +307,10 @@ EN: dict[str, dict] = {
     },
     "send_message": {
         "p": {"to": "id, @username or a remembered name",
-              "text": "the message"},
+              "text": "the message",
+              "spelling_confirm_text": "Exact authored text confirming a spelling-review bypass; omit normally. Never a boolean or a revised text."},
     },
-    "telegram_account": {
+    "telegram_account": {'d': 'Telethon account: join/leave real membership via invite/link/@username/id with onboarding/cleanup receipts; use these actions, not raw constructors. followups reads durable thread trace, never auto-reports to owner; watch_reply/unwatch_reply enables/disables requested report, cancel_followup drops thread. Registry list/search/describe/call exposes installed MTProto schema. Auth/session/logout/2FA requires separate two-message owner confirmation: first call returns exact phrase, only a NEW private owner message containing exactly it confirms. Initiator and confirmer stay distinct; pending_confirmations/cancel_confirmation inspect/cancel unused challenges.',
         "p": {"action": "join | leave | followups | watch_reply | unwatch_reply | cancel_followup",
               "followup_id": "id of the follow-up to cancel or unwatch",
               "query": "invite link, public link, @username or chat id"},
@@ -441,52 +366,11 @@ EN: dict[str, dict] = {
     # уходит сама. Модель, поверившая переводу, назначила бы отправку, думая, что всего лишь
     # ставит себе напоминание проверить отношения. Плюс из перевода выпали живые формы
     # `in 2m`, `every 4h`, пометка `(recurring)` у daily и весь абзац про микро-ход.
-    "remind_self": {
-        "d": ("Set yourself an intention for a deadline — your conscious choice to come "
-              "back to something, not a ticket and not an obligation. kind: wake (wake "
-              "yourself WITH the connection: a live turn, Telegram open) | window (go into "
-              "focus at the deadline; Telethon is closed for the window — you are not "
-              "interrupted, but there are no live dialogs either) | message (on time a live "
-              "turn opens with this text and target — you send it yourself with send_message; "
-              "the text is not delivered automatically) | note (a reminder to yourself or the "
-              "owner) | email. when: ISO datetime, or 'in 2h'/'in 30m'/'in 2m', "
-              "'today 14:00'/'tomorrow 10:00', 'daily 02:00' (recurring), 'every 4h'. "
-              "target: recipient for email/message. Choosing between wake and window is "
-              "about the connection, not about importance: need to read or write something "
-              "live — wake; need solitude and long work on yourself — window. The micro-turn: "
-              "wake with when='in 2m' and a note in goal — you wake up with that note, "
-              "connected, and decide LIVE what to say and to whom (or to stay silent; "
-              "sending is the ordinary send_message)."),
-        "p": {"kind": "wake | window | email | message | note",
-              "goal": "what you want to come back to",
-              "when": ("ISO datetime, or 'in 2h'/'in 30m'/'in 2m', 'today 14:00', "
-                       "'tomorrow 10:00', 'daily 02:00' (recurring), 'every 4h'"),
-              "target": "for kind=message or email: whom it is addressed to",
-              "after_run": "wait for this durable run to finish first"},
-    },
+    "remind_self": {'d': "Choose an intention/deadline, not an obligation. kind=wake: connected turn with Telegram; window: focused work, Telethon closed, no live dialogs; message: live turn at deadline with text/target YOU send via send_message, never automatic; note: self/owner reminder; email: email. when: ISO, 'in 2h'/'in 30m'/'in 2m', 'today 14:00'/'tomorrow 10:00', recurring 'daily 02:00'/'every 4h'. target: email/message recipient. Wake for live reading/writing; window for solitude. Micro-turn: wake in 2m with goal note, then decide live what/whom to send or stay silent.", 'p': {'kind': 'wake | window | email | message | note', 'goal': 'what you want to come back to', 'when': "ISO datetime, or 'in 2h'/'in 30m'/'in 2m', 'today 14:00', 'tomorrow 10:00', 'daily 02:00' (recurring), 'every 4h'", 'target': 'for kind=message or email: whom it is addressed to', 'after_run': 'wait for this durable run to finish first'}},
     "my_agenda": {"d": "What you have set yourself for a deadline — your intentions, not a backlog."},
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
-    "memory_compact": {
-        "d": ("Your memory compacts are your own words, not a chronicler's. list shows a "
-              "place's compacts (tier, span, first words of the recap), read shows one in "
-              "full, rewrite replaces a compact's recap with your words in place (same id "
-              "and sources — provenance accepts it as is, the old text goes to history), "
-              "refold re-issues compacts in your voice in batches in the background "
-              "(place=all — the whole memory; tier/since/limit narrow it; receipts to the "
-              "journal), status/stop — the refold job; fold compacts a place's hot window now "
-              "(on an offer from STATE fold_offers or of your own will; at the soft threshold "
-              "compaction no longer starts by itself — only by this hand or at the hard "
-              "threshold). A compact is all you will remember of those messages: write it "
-              "the way you want to remember."),
-        "p": {"action": "list | read | rewrite | refold | status | stop | fold",
-              "place": "chat_id/place; empty = current chat; refold accepts all",
-              "compact_id": "compact id (cmp-…) for read/rewrite",
-              "text": "the new recap for rewrite — first person, your words",
-              "tier": "compact tier: 1 over messages, higher over compacts",
-              "since": "ISO date: only compacts ending no earlier than it",
-              "limit": "how many to show (list) or re-issue (refold)"},
-    },
+    "memory_compact": {'d': 'In THIS turn: prepare gives exact complete bounded sources and selection. Read them, author your own recap, then fold(selection,text). Originals and unselected tail remain. No auxiliary generation or hard-threshold bypass. list/read inspect; rewrite preserves prior text. Episodic memory only, not tool history.', 'p': {'action': 'prepare | fold | list | read | rewrite | status | stop', 'place': 'chat_id/place; empty = current chat; refold accepts all', 'compact_id': 'compact id (cmp-…) for read/rewrite', 'text': 'Your own recap for fold/rewrite; no helper authors it', 'tier': 'compact tier: 1 over messages, higher over compacts', 'since': 'ISO date: only compacts ending no earlier than it', 'limit': 'Maximum selected rows or listed compacts', 'selection': 'Exact selection returned by prepare, required for fold'}},
     "manage_loop": {
         "d": ("Your tool on voluntary marks of attention. A thread exists only because you "
               "decided to come back to something; it is not a task, not a transport retry, "
@@ -504,7 +388,7 @@ EN: dict[str, dict] = {
               "force": "park: your decision over the parking ratchet; a reason is required",
               "reason": "park with force: why park it again"},
     },
-    "manage_desire": {
+    "manage_desire": {'d': 'Owner/internal intentions with verified provenance: notice→want→choose→act→observe→change. act links current durable run; later RECAP is evidence, not automatic satisfaction. list/get orient; link_run attaches existing run. Reopen satisfied/released only on explicit reconsideration. Cite verified conversation/run/artifact/owner evidence, never raw journal/reflection as provenance.',
         "p": {"action": "list | get | notice | want | choose | act | observe | change | link_run",
               "desire_id": "the intention to act on",
               "why_it_matters": "the grounds, in your own words",
@@ -575,12 +459,7 @@ EN: dict[str, dict] = {
         "p": {"n": "how many recent turns, 1-20 (default 6)",
               "room": "name or address of a place; empty means where you are now"},
     },
-    "list_active_runs": {
-        "d": ("Show your live (non-terminal) durable runs: id, status, kind, age. This is "
-              "your run layer — the one my_agenda does not show; the honest answer to 'what "
-              "is running inside me right now'."),
-        "p": {"limit": "how many to show (default 20)"},
-    },
+    "list_active_runs": {'d': 'List non-terminal durable runs: id/status/kind/age. Unlike my_agenda, this shows your live run layer.', 'p': {'limit': 'how many to show (default 20)'}},
     "reconcile_run": {
         "d": ("Your tool on a run stuck in in_doubt. With no arguments: show all in_doubt "
               "runs and their unclosed calls. With run_id: that run's calls. "
@@ -651,13 +530,7 @@ EN: dict[str, dict] = {
 
     # ────────────────────────────────────────────────────────────── файлы, код, машина
     "shell": {
-        "d": ("Your hands in your own home. A full shell in the container. Your home is "
-              "/app: the soul in /app/soul (SOUL.md, provenance-validated self/CURRENT.md, "
-              "skills/), memory in /app/memory, your code in /app/*.py, drafts in "
-              "/app/workspace. cwd defaults to /app; if a temporary configured cwd "
-              "disappears, the shell returns to /app by itself. Use full paths "
-              "(/app/soul/...) rather than relative ones. Look, try, build; you may write "
-              "yourself skills into /app/soul/skills/."),
+        "d": ('Full shell in your container home /app: soul/ (SOUL.md, validated self/CURRENT.md, skills/), memory/, code/*.py, workspace/ drafts. cwd defaults to /app; a vanished configured cwd returns there. Use absolute paths; inspect, build, write skills in /app/soul/skills/.'),
         "p": {"command": "the shell command"},
     },
     "fs_read": {"p": {"path": "file path in your home",
@@ -697,12 +570,7 @@ EN: dict[str, dict] = {
                               "why": "the grounds for the change"}},
     "proposal_diff": {"p": {"id": "the open proposal id"}},
     "git": {
-        "d": ("Your git, fully in your hands. repo=self is the tree you live in; repo=public is "
-              "the public mirror on GitHub, what people see. To look: status, log, diff, "
-              "fetch. To publish: pull, add, commit, push. push starts with a fetch itself "
-              "and, if the remote has moved ahead, says so in words instead of a rejected "
-              "push: the origin reference goes stale silently and status says nothing about "
-              "it. What exactly is not published is in your repository instructions."),
+        "d": ('Git in your home. repo=self: running source; public: GitHub mirror. Read with status/log/diff/fetch; publish with pull/add/commit/push. push fetches first and reports remote advancement. Repository instructions define unpublished content.'),
         "p": {"repo": "self | public",
               "action": "status | log | diff | fetch | pull | add | commit | push",
               "message": "commit message — the reason, not a label",
@@ -777,25 +645,7 @@ EN: dict[str, dict] = {
                            "query": "recall: what to look for",
                            "lesson": "record: the lesson, in your own words",
                            "regression": "record: the check that keeps it from coming back"}},
-    "coding_inspect": {
-        "d": ("Task-bound eyes. orientation/model map the place, manifests and semantic "
-              "adapters; symbols/references/diagnostics/impact/checks expose normalized code "
-              "and test facts; observations shows the durable Windows evidence map; read "
-              "gives numbered lines plus sha256; diff and history keep exact evidence. Read "
-              "actual state instead of guessing. watching/watch/unwatch is your tool on "
-              "watching SOMEONE ELSE'S repository (the address goes in query): list, set, "
-              "remove. Watching asks only for HEAD and brings a shift as a fact into your "
-              "own wake; a removed watch comes back if the reason for it returns."),
-        "p": {"task_id": "the coding task",
-              "action": "what to inspect",
-              "path": "file or directory to look at",
-              "query": "symbol, text, or repository address for watch",
-              "glob": "file mask to narrow the search",
-              "start": "first line, 1-based",
-              "end": "last line",
-              "start_char": "read: character offset within start line; continue with next_char",
-              "expected_sha256": "read: full prior page sha256 to refuse source drift"},
-    },
+    "coding_inspect": {'d': "Task-bound evidence: orientation/model map place/manifests/semantic adapters; symbols/references/diagnostics/impact/checks expose code/test facts; observations: durable Windows evidence; read: numbered lines+sha256; diff/history: exact evidence. Read state, don't guess. watching/watch/unwatch list/set/remove watches on SOMEONE ELSE'S repo (query=address). Watches read only HEAD, shifts become wake facts; removed watches return if their reason recurs.", 'p': {'task_id': 'the coding task', 'action': 'what to inspect', 'path': 'file or directory to look at', 'query': 'symbol, text, or repository address for watch', 'glob': 'file mask to narrow the search', 'start': 'first line, 1-based', 'end': 'last line', 'start_char': 'read: character offset within start line; continue with next_char', 'expected_sha256': 'read: full prior page sha256 to refuse source drift'}},
     "host_ctl": {"p": {"verb": "systemctl | docker | pkg | file | net | reboot | confirm",
                        "action": "what to do with the chosen verb",
                        "unit": "service or container name",
@@ -891,6 +741,10 @@ EN: dict[str, dict] = {
 # Отпечатки её русских описаний на момент перевода. Разошлись — перевод устарел, и
 # `test_tools_en_1509` называет руку по имени. Заполняется `--sync-sha` (см. ниже).
 BASE_SHA: dict[str, str] = {
+    'manage_desire': '51240fe7',
+    'telegram_account': '371a4a21',
+    "generate_image": "34efdf9e",
+    "clear_owner_marks": "a0d26309",
     # Руки указателя: их русские литералы живут в `agent.py` рядом с механизмом.
     "describe": "5b73992b",
     "call": "1ca2c2e8",
@@ -917,7 +771,7 @@ BASE_SHA: dict[str, str] = {
     "manage_identity": "ffe60eb9",
     "manage_loop": "fec3c953",
     "manage_notes": "f01e8839",
-    "memory_compact": "9c114173",
+    "memory_compact": "a58e1cea",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",
@@ -926,7 +780,7 @@ BASE_SHA: dict[str, str] = {
     "react": "00bacea6",
     "read_chat": "0e14893c",
     "read_context": "3ebb0cb7",
-    "recall": "3f199912",
+    "recall": "e590045d",
     "recent_turns": "463adfbb",
     "reconcile_run": "2a6cd73b",
     "remember": "bfb9cc24",
@@ -1044,6 +898,8 @@ def coverage(tools: list | None) -> dict:
 # правды и внутренней документацией, модели уезжает проекция, у каждой строки записан
 # отпечаток оригинала. Правят русскую строку — `coverage()` краснеет её именем.
 POINTER_PURPOSE: dict[str, str] = {
+    "clear_owner_marks": 'inspect or clear owner edit marks after incorporating the edits',
+    "generate_image": "generate or edit an image with the independent relay image model",
     "add_alias": "bind an alias name to an existing dossier",
     "admit": "admit a person into my circle on the owner's word — only Egor may call this",
     "call": "call a tool from the pointer by name",
@@ -1093,7 +949,7 @@ POINTER_PURPOSE: dict[str, str] = {
     "manage_identity": "soul layers and versions: status / revise SOUL, VOICE, CURRENT",
     "manage_loop": "my threads of attention: close / park / reopen / list",
     "manage_notes": "my notebook: write / list / read notes and questions",
-    "memory_compact": "my memory compacts: list / read / rewrite / refold — my own word about what was lived",
+    "memory_compact": "author compact: prepare(chat_id) → read all sources → fold(selection, summary=MY words); list/read/rewrite/refold. Internal memory work, not a chat report",
     "manage_perception": "perception levers: debounce, cooldowns, noise threshold",
     "manage_room": "group admission policy: join / leave / room modes",
     "manage_service": "restart my services",
@@ -1157,6 +1013,7 @@ POINTER_GROUPS: dict[str, str] = {
     "Telegram и люди": "Telegram and people",
     "файлы и код дома": "files and code at home",
     "Forge — большая работа": "Forge — the big work",
+    "компьютер и журнал": "computer and log",
     "сервер и компьютер": "server and computer",
     "веб и почта": "web and mail",
     "мозг, восприятие, аппетит": "brain, perception, appetite",
@@ -1176,6 +1033,8 @@ POINTER_HEAD: dict[str, str] = {
 # Отпечатки русских оригиналов: ключ → sha8. Ключи назначений — имя руки; ключи групп —
 # "group:<русское имя>"; ключи шапки — "head:<поле>".
 POINTER_SHA: dict[str, str] = {
+    "clear_owner_marks": 'c164f600',
+    "generate_image": "7e0b4ac0",
     "add_alias": "3d8914ec",
     "admit": "b3064134",
     "call": "b7de026f",
@@ -1215,6 +1074,7 @@ POINTER_SHA: dict[str, str] = {
     "group:память и я": "22449c9c",
     "group:прогоны": "77e47edc",
     "group:разговор и жесты": "7467944f",
+    "group:компьютер и журнал": "1dc60503",
     "group:сервер и компьютер": "d86b5b01",
     "group:файлы и код дома": "65f8ac3c",
     "group_context": "646d30d1",

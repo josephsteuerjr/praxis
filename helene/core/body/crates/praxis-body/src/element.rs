@@ -34,8 +34,11 @@
 //! исполнение уходит туда. Тут разбор аргументов, отбор элемента и расписка — то есть
 //! всё, что можно проверить стендом без Windows.
 
+#[cfg(any(not(target_os = "linux"), test))]
 use anyhow::{Result, bail};
+#[cfg(any(not(target_os = "linux"), test))]
 use serde::Deserialize;
+#[cfg(any(not(target_os = "linux"), test))]
 use serde_json::{Map, Value, json};
 
 /// Глаголы модуля: сделать над элементом и найти элемент.
@@ -63,6 +66,7 @@ pub fn handles(capability: &str) -> bool {
 /// Что можно сделать над элементом. Каждое — отдельный паттерн UI Automation, и ни одно
 /// не подменяется ударом по координатам.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(not(target_os = "linux"), test))]
 pub enum Act {
     /// InvokePattern: нажать. Кнопки, пункты меню, ссылки.
     Invoke,
@@ -82,6 +86,7 @@ pub enum Act {
     Focus,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Act {
     pub fn name(self) -> &'static str {
         match self {
@@ -123,6 +128,7 @@ impl Act {
 /// Чем элемент назван. Всё, что здесь есть, переживает перерисовку окна — числовых `id`
 /// чтения здесь нет намеренно: они действуют на один ответ.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg(any(not(target_os = "linux"), test))]
 pub struct Selector {
     pub automation_id: Option<String>,
     pub role: Option<String>,
@@ -134,6 +140,7 @@ pub struct Selector {
     pub nth: Option<usize>,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Selector {
     /// Пуст ли отбор. Пустой — это «любой элемент окна», то есть промах по устройству:
     /// действовать над «чем угодно» нельзя.
@@ -211,6 +218,7 @@ impl Selector {
 /// складывает регистр ТОЛЬКО у латиницы, а надписи в этом продукте русские. «ОК» на
 /// кнопке и «ок», списанное человеком с экрана, оказывались разными строками — то есть
 /// отбор промахивался ровно в самом частом случае, ради которого написан.
+#[cfg(any(not(target_os = "linux"), test))]
 fn same_fold(left: &str, right: &str) -> bool {
     left == right || left.to_lowercase() == right.to_lowercase()
 }
@@ -218,6 +226,7 @@ fn same_fold(left: &str, right: &str) -> bool {
 /// Узел глазами отбора. Ссылки, а не копии: отбор бежит по живому обходу окна, и
 /// копировать каждую надпись ради сравнения незачем.
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg(any(not(target_os = "linux"), test))]
 pub struct NodeView<'a> {
     pub role: &'a str,
     pub name: Option<&'a str>,
@@ -227,6 +236,7 @@ pub struct NodeView<'a> {
 
 /// Кого выбрал отбор — и почему именно его.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(not(target_os = "linux"), test))]
 pub enum Choice {
     /// Ровно один подошёл (или `nth` назвал, который из многих).
     One { index: usize, total: usize },
@@ -242,6 +252,7 @@ pub enum Choice {
 /// и самый опасный вариант: у окна с тремя кнопками «OK» первая та, что первой попалась
 /// обходу, а не та, которую человек имел в виду. Молчаливый выбор из двух — это ошибка,
 /// которая проявится один раз из десяти и будет выглядеть как случайность.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn choose(matched: &[usize], nth: Option<usize>) -> Choice {
     match (matched.len(), nth) {
         (0, _) => Choice::None,
@@ -262,6 +273,7 @@ pub fn choose(matched: &[usize], nth: Option<usize>) -> Choice {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct ActArgs {
     hwnd: Option<Value>,
     #[serde(default)]
@@ -278,6 +290,7 @@ struct ActArgs {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct SelectArgs {
     automation_id: Option<String>,
     role: Option<String>,
@@ -289,6 +302,7 @@ struct SelectArgs {
 
 /// Разобранная просьба.
 #[derive(Debug, Clone)]
+#[cfg(any(not(target_os = "linux"), test))]
 pub struct Plan {
     pub hwnd: Option<u64>,
     pub select: Selector,
@@ -301,17 +315,25 @@ pub struct Plan {
 
 /// Пределы обхода. Свои, а не общие с чтением: здесь ищут ОДИН элемент, и потолок нужен
 /// другой — глубже, но у́же по надписям.
+#[cfg(any(not(target_os = "linux"), test))]
 const MAX_NODES_DEFAULT: u64 = 4_000;
+#[cfg(any(not(target_os = "linux"), test))]
 const MAX_NODES_CAP: u64 = 40_000;
+#[cfg(any(not(target_os = "linux"), test))]
 const MAX_DEPTH_DEFAULT: u64 = 40;
+#[cfg(any(not(target_os = "linux"), test))]
 const MAX_DEPTH_CAP: u64 = 120;
+#[cfg(any(not(target_os = "linux"), test))]
 const TIMEOUT_DEFAULT_MS: u64 = 3_000;
+#[cfg(any(not(target_os = "linux"), test))]
 const TIMEOUT_CAP_MS: u64 = 60_000;
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn clamp(said: Option<u64>, default: u64, cap: u64) -> u64 {
     said.unwrap_or(default).min(cap).max(1)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn reject_blank_selector(select: &SelectArgs) -> Result<()> {
     for (name, value) in [
         ("automation_id", &select.automation_id), ("role", &select.role),
@@ -325,6 +347,7 @@ fn reject_blank_selector(select: &SelectArgs) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn plan(args: Value) -> Result<Plan> {
     let args: ActArgs =
         serde_json::from_value(args).map_err(|e| anyhow::anyhow!("{CAPABILITY} arguments: {e}"))?;
@@ -373,6 +396,7 @@ pub fn plan(args: Value) -> Result<Plan> {
 /// руки; `nth` здесь бессмысленно (возвращаем всех, кто подошёл), а `limit` — нужен.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct FindArgs {
     hwnd: Option<Value>,
     #[serde(default)]
@@ -387,6 +411,7 @@ struct FindArgs {
 
 /// Разобранная просьба поиска.
 #[derive(Debug, Clone)]
+#[cfg(any(not(target_os = "linux"), test))]
 pub struct FindPlan {
     pub hwnd: Option<u64>,
     pub select: Selector,
@@ -396,9 +421,12 @@ pub struct FindPlan {
     pub max_depth: u64,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 const LIMIT_DEFAULT: u64 = 20;
+#[cfg(any(not(target_os = "linux"), test))]
 const LIMIT_CAP: u64 = 200;
 
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn find_plan(args: Value) -> Result<FindPlan> {
     let args: FindArgs = serde_json::from_value(args)
         .map_err(|e| anyhow::anyhow!("{FIND_CAPABILITY} arguments: {e}"))?;
@@ -447,6 +475,7 @@ pub fn find_plan(args: Value) -> Result<FindPlan> {
 ///
 /// `searched_whole_window` здесь по той же причине, что и у действия: «не нашлось» и
 /// «не досмотрел» — разные ответы, и путать их нельзя.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn find_receipt(
     plan: &FindPlan,
     matched: usize,
@@ -474,6 +503,7 @@ pub fn find_receipt(
 }
 
 /// Тот же разбор, что у чтения окна: и `"0x1F4"`, и `"500"`, и `500`.
+#[cfg(any(not(target_os = "linux"), test))]
 fn hwnd_of(value: &Value) -> Result<u64> {
     let parsed = match value {
         Value::Number(number) => number.as_u64(),
@@ -504,6 +534,7 @@ fn hwnd_of(value: &Value) -> Result<u64> {
 /// про кнопку, до которой обход просто не дошёл.
 ///
 /// `limit` — во что упёрся обход (`max_nodes`, `timeout`) или `None`, если дочитал окно.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn not_found(limit: Option<&str>, nth_given: bool, found_any: bool) -> (&'static str, &'static str) {
     match limit {
         Some("max_nodes") => (
@@ -534,6 +565,7 @@ pub fn not_found(limit: Option<&str>, nth_given: bool, found_any: bool) -> (&'st
 ///
 /// Список здесь не украшение: он и есть ответ на вопрос «как уточнить». Владелец (и она)
 /// видят, чем кандидаты отличаются, и дописывают отбор — или называют `nth`.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn ambiguous_error(total: usize, candidates: Vec<Value>) -> Value {
     json!({
         "ok": false,
@@ -549,6 +581,7 @@ pub fn ambiguous_error(total: usize, candidates: Vec<Value>) -> Value {
 /// ⚠ Говорит ровно то, что произошло: паттерн был вызван, и вот каким элемент стал
 /// ПОСЛЕ. Слова «получилось» здесь нет: вызов паттерна и достигнутая цель — разные
 /// вещи, и вывод делает она.
+#[cfg(any(not(target_os = "linux"), test))]
 pub fn receipt(plan: &Plan, chosen: Value, after: Value, waited_ms: u64, polls: u64) -> Value {
     json!({
         "ok": true,

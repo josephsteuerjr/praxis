@@ -4,7 +4,33 @@ import os
 from pathlib import Path
 import subprocess
 import time
-from .python_windows import powershell,shortcut
+from .python_windows import AUTOMATIC_ARGUMENTS,powershell,shortcut,shortcut_binding
+
+
+def request_python_exit(old, pid):
+    """Ask this installation's existing authenticated window, never close-to-tray."""
+    import urllib.request
+    from urllib.parse import urlsplit
+    path = old / f'.python-window-{pid}.json'
+    if not path.is_file():
+        raise RuntimeError('This running legacy window has no update exit surface; use its tray Exit, then retry')
+    value = json.loads(path.read_text(encoding='utf-8'))
+    if (value.get('schema') != 1 or value.get('pid') != pid
+            or Path(value.get('root', '')).resolve() != old.resolve()):
+        raise ValueError('Python window control identity differs from selected installation')
+    origin = value.get('origin', '')
+    parsed = urlsplit(origin)
+    if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1' or not parsed.port
+            or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment):
+        raise ValueError('Invalid local Python window origin')
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs): return None
+    http = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    body = json.dumps({'command': 'python_window', 'args': {'action': 'exit', 'relaunch': False}}).encode()
+    request = urllib.request.Request(origin + '/__python__/invoke', data=body,
+        headers={'Content-Type': 'application/json', 'X-Helene-Window': value['token']})
+    with http.open(request, timeout=3) as response:
+        return json.load(response)
 
 
 def service(old):
@@ -29,7 +55,17 @@ def close_python(old):
     owners=[row for row in rows if references_root(row.get('CommandLine',''),str(old/'app/python_app.py'))]
     for row in owners:
         env['HELENE_WINDOW_PID']=str(row['ProcessId'])
-        powershell("$ErrorActionPreference='Stop';$p=Get-Process -Id ([int]$env:HELENE_WINDOW_PID);if(-not $p.CloseMainWindow()){throw 'Python window has no graceful close surface'};if(-not $p.WaitForExit(30000)){throw 'Python window close unconfirmed'}",env)
+        # A disconnect may race successful exit. Observe the selected process
+        # independently, while an absent/invalid descriptor never authorizes kill.
+        request_error = None
+        try:
+            request_python_exit(old, int(row['ProcessId']))
+        except OSError as exc:
+            request_error = exc
+        try:
+            powershell("$ErrorActionPreference='Stop';$p=Get-Process -Id ([int]$env:HELENE_WINDOW_PID) -ErrorAction SilentlyContinue;if($p -and -not $p.WaitForExit(25000)){throw 'Python window exit unconfirmed'}",env)
+        except Exception as exc:
+            raise RuntimeError('Python window exit unconfirmed; installation retained') from (request_error or exc)
     if owners:
         from .app_migration import discover
         for agent in discover(old)['agents']:
@@ -133,20 +169,27 @@ def retire(old,new):
            _known_folder('B4BFCC3A-DB2C-424C-B029-7FE99A87C641') or Path.home()/'Desktop',
            _known_folder('0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8') or Path(os.environ['PROGRAMDATA'])/'Microsoft/Windows/Start Menu/Programs',
            _known_folder('C4AA340D-F20F-4863-AFEF-F87EF2E6BA25') or Path(os.environ.get('PUBLIC',str(Path.home())))/'Desktop']
-    env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()))
-    for folder in roots:
-        for link in folder.rglob('*.lnk') if folder.is_dir() else []:
-            env['HELENE_LINK']=str(link)
-            raw=powershell("$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:HELENE_LINK);[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();@{target=$s.TargetPath;arguments=$s.Arguments}|ConvertTo-Json -Compress",env)
-            prior=json.loads(raw)
-            target=prior['target']
-            if target and Path(target).resolve().is_relative_to(old.resolve()):
-                arguments='--panic --notify' if '--panic' in prior['arguments'].split() else ''
-                shortcut(link,new/'helene.exe',new,arguments)
-                result['shortcuts_replaced'].append(str(link))
+    result['shortcuts_replaced']=retarget_shortcuts(old,new,roots)
     if not result['shortcuts_replaced']:
         shortcut(roots[0]/'Helene Python.lnk',new/'helene.exe',new)
     return result
+
+
+def retarget_shortcuts(old,new,roots):
+    replaced=[]
+    startup_roots={folder.resolve()/'Startup' for folder in (roots[0],roots[2])}
+    for folder in roots:
+        for link in folder.rglob('*.lnk') if folder.is_dir() else []:
+            prior=shortcut_binding(link)
+            if prior is None:continue
+            target=prior['target']
+            if target and Path(target).resolve().is_relative_to(old.resolve()):
+                tokens=prior['arguments'].split()
+                automatic=link.parent.resolve() in startup_roots or prior['arguments']==AUTOMATIC_ARGUMENTS or '--launch-intent=automatic' in tokens
+                arguments='--panic --notify' if '--panic' in tokens else AUTOMATIC_ARGUMENTS if automatic else ''
+                shortcut(link,new/'helene.exe',new,arguments)
+                replaced.append(str(link))
+    return replaced
 
 
 def install_shortcuts(new,folder=None):

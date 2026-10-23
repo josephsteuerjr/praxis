@@ -56,7 +56,10 @@ class GlmEffortWireTests(unittest.TestCase):
                 import json
                 from types import SimpleNamespace
                 import anthropic
-                import httpx
+                # Use the installed SDK's transport dialect (httpx or httpx2),
+                # not the unrelated version imported by another provider.
+                import importlib
+                httpx = importlib.import_module(anthropic.DefaultHttpxClient.__mro__[1].__module__.split('.')[0])
                 import llm
 
                 self = TestCase()

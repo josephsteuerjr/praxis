@@ -4170,6 +4170,10 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
                     "and its run is terminal — the proof can never appear")
             raise agent.DurableExecutionError(
                 "direct Telegram tool entry has no exact pre-network run proof")
+    if entry.get("kind") == "file" and not await asyncio.to_thread(
+            _direct_outbox().ready, str(entry["key"])):
+        raise agent.DurableSideEffectPending(
+            str(entry["key"]), "attachment pause / retry deadline not reached")
     peer_id = int(entry["peer_id"])
     if entity is None:
         entity = await _resolve_entity(peer_id)
@@ -4606,6 +4610,9 @@ async def _direct_outbox_once() -> None:
             continue
         try:
             accepted = await _send_direct_outbox_entry(entry)
+        except agent.DurableSideEffectPending:
+            # Eligibility is a durable clock, not a failed transport attempt.
+            continue
         except Exception as exc:
             try:
                 state = await _retry_direct_outbox_entry(entry, exc)
@@ -4711,6 +4718,14 @@ async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
         spool = _media_spool()
         receipt = _MEDIA_ACCEPTED.get(item.queue_id)
         if receipt is None:
+            # A newly staged attachment survives text supersession, not an
+            # explicit owner cancellation. Check both first-send and replay.
+            if item.run_id and await asyncio.to_thread(_run_cancel_requested, item.run_id):
+                await asyncio.to_thread(spool.fail, item.queue_id,
+                                       reason="cancelled by owner before acceptance")
+                return False
+            if not await asyncio.to_thread(spool.ready, item.queue_id):
+                return False
             receipt = await _send_turn_media(
                 entity, item, ctx=ctx, reply_to=reply_to,
                 state_chat_id=state_chat_id,
@@ -4770,6 +4785,23 @@ async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
         return True
     finally:
         _MEDIA_SENDING.discard(item.queue_id)
+
+
+def _stage_authorized_media(items, *, reply_to=None) -> None:
+    """Persist authorized uploads before any cancellable text delivery.
+
+    A newer chat message supersedes its text draft, not the already authorized
+    attachment. Queue identity, bytes and original reply destination survive.
+    """
+    spool = _media_spool()
+    pending = {item.queue_id for item in spool.pending()}
+    terminal = {row.get("queue_id") for row in spool.outbox_results()}
+    for item in items:
+        if item.reply_to_message_id is None and reply_to is not None:
+            item = replace(item, reply_to_message_id=reply_to)
+        if item.queue_id not in pending and item.queue_id not in terminal:
+            spool.enqueue(item)
+            pending.add(item.queue_id)
 
 
 async def _queue_and_send_media(entity, item: media_core.OutboundMedia, *,
@@ -5240,6 +5272,8 @@ async def _run_pass(chat_id: str) -> None:
             addressed_mid if (addressed and not is_dm) else route.topic_id)
         has_text = bool(reply.strip())
         has_media = bool(envelope.outbound)
+        if has_media:
+            _stage_authorized_media(envelope.outbound, reply_to=reply_to)
         if not has_text and not has_media:
             if delivery_run_id:
                 _completed, silent_cancelled = await _await_despite_cancellation(
@@ -5310,7 +5344,16 @@ async def _run_pass(chat_id: str) -> None:
                     #     so abandoning is drop-safe only while the process lives to run it.
                     #     During shutdown we keep deployed recovery semantics (boot
                     #     text_outbox replays her authored reply) rather than risk a drop.
-                    if superseded and (is_dm or not _SHUTDOWN.is_set()):
+                    if superseded and has_media and (is_dm or not _SHUTDOWN.is_set()):
+                        retired, _late = await _await_despite_cancellation(
+                            asyncio.to_thread(
+                                agent.run_delivery_text_superseded, delivery_run_id,
+                                reason="superseded by a newer trigger before send",
+                            )
+                        )
+                        terminal = True
+                        superseded_abandon = bool(retired)
+                    elif superseded and not has_media and (is_dm or not _SHUTDOWN.is_set()):
                         abandoned, _late = await _await_despite_cancellation(
                             asyncio.to_thread(
                                 agent.run_delivery_superseded, delivery_run_id,
@@ -5327,11 +5370,13 @@ async def _run_pass(chat_id: str) -> None:
                         else:
                             # Terminalisation did not stick (rare) — keep deployed recovery
                             # semantics so her authored reply is still delivered; never drop.
-                            terminal = bool(delivery_run_id) and not has_media
+                            terminal = bool(delivery_run_id)
                     else:
-                        # No successor, or a group held for durability during shutdown:
-                        # deployed behaviour — text recovers via text_outbox, media re-arms.
-                        terminal = bool(delivery_run_id) and not has_media
+                        # Authored text and attachment now have durable recovery.
+                        # A newer trigger still owns its wake/input references.
+                        terminal = bool(delivery_run_id)
+                        if superseded and has_media:
+                            superseded_abandon = True
                     raise asyncio.CancelledError
             except Exception as exc:
                 # No Telegram call has happened.  The authored model output is
@@ -5344,13 +5389,12 @@ async def _run_pass(chat_id: str) -> None:
                 )
                 terminal = True
                 return
-        # Once a durable run owns the authored output, recovery can finish the
-        # exact delivery without asking the model again.  Hermetic/legacy
-        # callers without a run id do not have that safety net: a failure before
-        # the first accepted side effect must retain and re-arm the same wake.
+        # A durable run or the staged upload owns the authored output. Legacy
+        # text-only callers still need their wake until the first acceptance.
         if cancellation_seen and not delivery_run_id:
+            terminal = has_media
             raise asyncio.CancelledError
-        terminal = bool(delivery_run_id)
+        terminal = bool(delivery_run_id) or has_media
 
         sent_chunks: list[str] = []
         sent_ids: list[str] = []
@@ -8469,6 +8513,10 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
                 f"файл «{media_core.delivery_basename(path)}» не отправлен: ход "
                 f"отменён владельцем до приёмки; намерение закрыто без отправки "
                 f"(cancelled by owner before acceptance).")
+        if isinstance(exc, agent.DurableSideEffectPending):
+            # A durable pause is not a failed network attempt. The queued entry
+            # already owns its deadline; recording a retry here invents an attempt.
+            raise
         # ⚠ Этот путь я забыл, чиня текстовый. Аудит нашёл: для ФАЙЛА постоянный отказ
         # по-прежнему улетал исключением, уносил её ход и оставлял запись в `retry` —
         # то есть ровно тот же вечный цикл раз в 45 секунд, ради которого всё делалось,

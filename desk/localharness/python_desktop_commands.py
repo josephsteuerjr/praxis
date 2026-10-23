@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import ctypes
 import json
+import ipaddress
 import os
 from pathlib import Path
 import socket
@@ -10,9 +11,49 @@ import subprocess
 import sys
 import time
 import webbrowser
+import urllib.parse
+import urllib.request
 
 from .essential_backup import load
 from . import config_cli
+
+
+def probe_model(base_url, key="", framework="openai"):
+    from .python_updates import secure_url
+    base = str(base_url).strip().rstrip("/")
+    parsed = urllib.parse.urlsplit(base)
+    if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("Model API base must not contain a query or fragment")
+    anthropic = framework == "anthropic"
+    url = base + ("/v1/models" if not parsed.path or (anthropic and not parsed.path.rstrip("/").endswith("/v1")) else "/models")
+    headers = {"anthropic-version": "2023-06-01"} if anthropic else {}
+    if str(key).strip():
+        headers["x-api-key" if anthropic else "Authorization"] = str(key).strip() if anthropic else "Bearer " + str(key).strip()
+    host = (parsed.hostname or "").lower()
+    local = host == "localhost" or host.endswith(".local")
+    try:
+        address = ipaddress.ip_address(host)
+        local = local or address.is_loopback or address.is_private or address in ipaddress.ip_network("100.64.0.0/10")
+    except ValueError:
+        pass
+    if not (local and parsed.scheme == "http"):
+        secure_url(base)
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+    handlers = [NoRedirect()]
+    if local:
+        handlers.append(urllib.request.ProxyHandler({}))
+    http = urllib.request.build_opener(*handlers)
+    try:
+        with http.open(urllib.request.Request(url, headers=headers), timeout=15) as response:
+            got = json.load(response)
+        rows = got.get("data", []) if isinstance(got, dict) else []
+        models = sorted({row["id"] for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"].strip()}) if isinstance(rows, list) else []
+        return {"ok": bool(models), "models": models,
+                "note": "Список моделей получен; генерация и доступ к выбранной модели не проверялись" if models else "Список моделей пуст или недоступен; это не проверка генерации"}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "models": [], "note": str(exc)}
 
 
 def invoke(owner, command, args):
@@ -111,16 +152,7 @@ def invoke(owner, command, args):
         from . import carry
         return carry.export(agent.config)['archive']
     if command=='probe_model':
-        from .python_updates import request_json, secure_url
-        base=secure_url(args['baseUrl']).rstrip('/')
-        anthropic=args.get('framework')=='anthropic'
-        url=base+('/models' if base.endswith('/v1') or not anthropic else '/v1/models')
-        headers={'x-api-key':args['key'],'anthropic-version':'2023-06-01'} if anthropic else {'Authorization':'Bearer '+args['key']}
-        try:
-            got=request_json(url,headers=headers)
-            models=sorted({r['id'] for r in got.get('data',[]) if isinstance(r,dict) and isinstance(r.get('id'),str)})
-            return {'ok':bool(models),'models':models,'note':'Подключение проверено' if models else 'Список моделей пуст'}
-        except (OSError,ValueError) as exc:return {'ok':False,'models':[],'note':str(exc)}
+        return probe_model(args['baseUrl'], args.get('key', ''), args.get('framework', 'openai'))
     if command in ('autostart_get','autostart_set','service_state','admin_state','install_service','remove_service','firewall_allow','firewall_clear','notify','open_privacy_pane'):
         from . import python_windows
         return python_windows.invoke(owner,command,args)

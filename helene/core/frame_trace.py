@@ -552,7 +552,7 @@ def _containers(system, evidence: str, epoch: str = "") -> dict:
         "epoch": "messages[0]" if str(epoch or "") else "(absent)",
         # Зона «сейчас» живёт в том же последнем сообщении, между закрытым конвертом и
         # открытой репликой. Пустая зона — «(absent)», а не ноль без имени.
-        "situation": "messages[-1] · после </praxis_context_evidence>",
+        "situation": "messages[-1] · после </context_evidence>",
     }
 
 

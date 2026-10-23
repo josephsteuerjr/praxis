@@ -42,6 +42,15 @@ class Application:
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
+        self.control_file = self.root / f'.python-window-{os.getpid()}.json'
+
+    def publish_control(self):
+        """Expose the existing authenticated exit surface only after UI readiness."""
+        value = {'schema': 1, 'pid': os.getpid(), 'root': str(self.root.resolve()),
+                 'origin': self.origin, 'token': self.token}
+        temporary = self.control_file.with_suffix('.tmp')
+        temporary.write_text(json.dumps(value), encoding='utf-8')
+        os.replace(temporary, self.control_file)
 
     @staticmethod
     def _channel(script):
@@ -112,6 +121,15 @@ class Application:
             return essential_backup.listing(self.root)
         if command == "python_window":
             action = args.get("action")
+            if action == "exit":
+                self.exiting = True
+                if args.get('relaunch') is False:
+                    self.relaunch = False
+                if self.window is None:
+                    self.stopping.set()
+                else:
+                    self.window.destroy()
+                return None
             if action == "close" and self.window is None:
                 self.stopping.set()
             if self.window is not None:
@@ -282,13 +300,16 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
                 self.event("backup-error", {"error": str(exc)})
 
     def close(self):
-        self.stopping.set()
-        self.backup_thread.join()
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join()
-        if self.host:
-            self.host.close()
+        try:
+            self.stopping.set()
+            self.backup_thread.join()
+            self.server.shutdown()
+            self.server.server_close()
+            self.thread.join()
+            if self.host:
+                self.host.close()
+        finally:
+            self.control_file.unlink(missing_ok=True)
 
 
 def window_geometry(screen):
@@ -315,6 +336,7 @@ def bind_window_state(app):
             native.Invoke(Action(set_bounds))
             from python_tray import install
             install(app)
+        app.publish_control()
 
     def maximized():
         app.window_maximized = True
@@ -336,7 +358,7 @@ def migration_proof(host, root):
     return proof
 
 
-def main(argv=None):
+def _main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--program", type=Path)
@@ -345,6 +367,7 @@ def main(argv=None):
     parser.add_argument("--notify", action="store_true", help="show the emergency-stop result")
     parser.add_argument("--migration", default="", help="confirm this prepared migration after the real window loads")
     parser.add_argument("--browser", action="store_true", help="open the same Python-owned UI in the system browser")
+    parser.add_argument("--launch-intent", choices=("manual", "automatic"), default="manual")
     args = parser.parse_args(argv)
     if args.panic:
         from localharness import owner_stop
@@ -356,6 +379,9 @@ def main(argv=None):
     os.environ['PYTHONNOUSERSITE']='1'
     root = args.root.resolve()
     program = (args.program or root).resolve()
+    from localharness import owner_stop
+    if args.launch_intent == "automatic" and owner_stop.stopped():
+        return 0
     if program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
     ui = program / "app" / "static"
@@ -379,6 +405,7 @@ def main(argv=None):
     try:
         if args.browser:
             import webbrowser
+            app.publish_control()
             webbrowser.open(app.origin)
             app.stopping.wait()
         else:
@@ -412,6 +439,41 @@ def main(argv=None):
     if app.relaunch:
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
     return 0
+
+
+def main(argv=None):
+    # Console code pages may not represent the product name or a path in an
+    # error. Reporting/help must not turn into a startup failure and GUI alert.
+    # Keep the caller's encoding; only unrepresentable characters are escaped.
+    for stream in (sys.stdout, sys.stderr):
+        if callable(getattr(stream, "reconfigure", None)):
+            stream.reconfigure(errors="backslashreplace")
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    try:
+        return _main(arguments)
+    except Exception as exc:
+        import traceback
+        root = Path(__file__).resolve().parents[1]
+        if "--root" in arguments:
+            position = arguments.index("--root") + 1
+            if position < len(arguments):
+                root = Path(arguments[position]).resolve()
+        log = root / "startup-error.log"
+        detail = "".join(traceback.format_exception(exc))
+        try:
+            with log.open("a", encoding="utf-8") as output:
+                output.write(detail + "\n")
+            message = f"Hélène could not start.\n\n{exc}\n\nDetails: {log}"
+        except OSError as log_error:
+            message = f"Hélène could not start.\n\n{exc}\n\nStartup log unavailable: {log_error}"
+        print(detail, file=sys.stderr)
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, "Hélène — startup failed", 0x10)
+        elif sys.platform == "darwin":
+            import subprocess
+            subprocess.run(["osascript", "-e", 'on run argv\ndisplay alert "Hélène — startup failed" message (item 1 of argv) as critical\nend run', message], check=False)
+        return 1
 
 
 if __name__ == "__main__":

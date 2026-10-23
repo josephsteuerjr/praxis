@@ -49,9 +49,10 @@ function ownerIdOk(v: unknown): boolean {
 }
 
 function providerOf(c: Config): Provider {
-  if (c.relay?.enabled) return "chatgpt";
+  if (["api", "anthropic", "chatgpt", "local"].includes(String(c.model?.provider || ""))) return c.model!.provider as Provider;
   if (String(c.model?.framework || "") === "anthropic") return "anthropic";
   const url = c.model?.base_url || "";
+  if (c.relay?.enabled && [relayBaseUrl(Number(c.relay.port) || RELAY_PORT), relayProbeUrl(Number(c.relay.port) || RELAY_PORT)].includes(url.replace(/\/+$/, ""))) return "chatgpt";
   if (/127\.0\.0\.1|localhost/.test(url) && !c.relay?.enabled) return "local";
   return "api";
 }
@@ -141,21 +142,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     b.dataset.value = value;
     b.append(el("span", "choice-title", title), el("span", "choice-text", text));
     b.addEventListener("click", () => {
-      const before = frameworkOf(provider);
       provider = value;
       syncPick();
-      // Ярлык «усилия» зависит от провайдера — на подписке пустое поле значит
-      // «рассуждение выключено», а не «решает модель».
       syncEffort();
-      // Запасной другого провайдера — другого протокола: смена основного меняет и
-      // протокол запасного. Адрес и ключ прежнего протокола нельзя оставлять —
-      // клиент Anthropic бился бы в OpenAI-эндпойнт (ревью 25.09, A7 F7).
-      if (spare === "other" && frameworkOf(provider) !== before) {
-        spareUrl = "";
-        spareKey = frameworkOf(provider) === "anthropic" ? keyOf("api") : keyOf("anthropic");
-        setField(spareUrlField, "");
-        setField(spareKeyField, spareKey);
-      }
       syncSpare();
     });
     pick.append(b);
@@ -165,9 +154,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   // gpt-5.2 реле не знает (SUPPORTED_MODELS её не содержит) и PLAN просил её
   // убрать: подставленная вслепую, она уезжала в конфиг как имя несуществующей.
   const apiDraft = { base_url: provider === "api" ? String(draft.model.base_url || "") : "https://api.openai.com/v1", model: provider === "api" ? String(draft.model.model || "") : "gpt-5.4", key: keyOf("api") };
-  const apiModelField = field("Модель", apiDraft.model, (v) => (apiDraft.model = v), { mono: true });
+  const apiModelField = field("Модель", apiDraft.model, (v) => { apiDraft.model = v; syncEffort(); }, { mono: true });
   apiGrid.append(
-    field("Адрес", apiDraft.base_url, (v) => (apiDraft.base_url = v), { mono: true }),
+    field("Адрес", apiDraft.base_url, (v) => { apiDraft.base_url = v; syncEffort(); }, { mono: true }),
     apiModelField,
     field("Ключ", apiDraft.key, (v) => (apiDraft.key = v), { type: "password", mono: true }),
   );
@@ -201,7 +190,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const anthDraft = { base_url: provider === "anthropic" ? String(draft.model.base_url || "") : "https://api.z.ai/api/anthropic", model: provider === "anthropic" ? String(draft.model.model || "") : "glm-5.3", key: keyOf("anthropic") };
   const anthGrid = el("div", "form-grid three");
   anthGrid.style.marginTop = "14px";
-  const anthBase = field("Адрес", anthDraft.base_url, (v) => (anthDraft.base_url = v), { mono: true });
+  const anthBase = field("Адрес", anthDraft.base_url, (v) => { anthDraft.base_url = v; syncEffort(); }, { mono: true });
   const anthModelField = field("Модель", anthDraft.model, (v) => {
     anthDraft.model = v;
     // Шкала рассуждения зависит от модели (glm-* против остальных).
@@ -267,9 +256,6 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         // Ключ сюда не отдаём: /v1/models у реле авторизацию не проверяет вовсе,
         // а порт 5011 в этот момент может держать не наше реле — и боевой ключ
         // OpenAI уехал бы чужому процессу заголовком Authorization.
-        // RELAY_PROBE_URL — единственное место, где «/v1» уместно: у реле есть
-        // GET /v1/models, но НЕТ POST /v1/chat/completions. Адрес мозга берётся
-        // из RELAY_BASE_URL того же модуля, чтобы эти двое не разошлись снова.
         const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT), key: "", framework: "openai" });
         // Ответ /v1/models доказывает только то, что процесс реле жив: ни вход в
         // аккаунт, ни остаток лимита он не проверяет. Зелёное «моделей 6» при
@@ -302,11 +288,12 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   );
   panes.chatgpt.append(el("p", "field-hint", "Реле ходит в ChatGPT по подписке и поднимается само, когда подписка сохранена основным провайдером. Вход открывает браузер; после входа ключ не нужен."), chatgptGrid, chatgptProbeRow, chatgptModels);
 
-  const localGrid = el("div", "form-grid two");
+  const localGrid = el("div", "form-grid three");
   localGrid.style.marginTop = "14px";
-  const localDraft = { base_url: provider === "local" ? String(draft.model.base_url || "") : "http://127.0.0.1:11434/v1", model: provider === "local" ? String(draft.model.model || "") : "" };
-  const localModelField = field("Модель", localDraft.model, (v) => (localDraft.model = v), { mono: true, placeholder: "например, qwen3:14b" });
-  localGrid.append(field("Адрес", localDraft.base_url, (v) => (localDraft.base_url = v), { mono: true }), localModelField);
+  const localDraft = { base_url: provider === "local" ? String(draft.model.base_url || "") : "http://127.0.0.1:11434/v1", model: provider === "local" ? String(draft.model.model || "") : "", key: keyOf("local") };
+  const localModelField = field("Модель", localDraft.model, (v) => { localDraft.model = v; syncEffort(); }, { mono: true, placeholder: "например, qwen3:14b" });
+  localGrid.append(field("Адрес", localDraft.base_url, (v) => (localDraft.base_url = v), { mono: true }), localModelField,
+    field("Ключ (если требуется)", localDraft.key === "local" ? "" : localDraft.key, (v) => (localDraft.key = v), { type: "password", mono: true, placeholder: "пусто — без авторизации" }));
   const localModels = el("div", "models");
   localModels.hidden = true;
   const localProbeRow = el("div", "actions");
@@ -317,7 +304,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       localProbeOut.className = "receipt";
       localProbeOut.textContent = "спрашиваю…";
       try {
-        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: localDraft.base_url, key: "", framework: "openai" });
+        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: localDraft.base_url, key: localDraft.key === "local" ? "" : localDraft.key, framework: "openai" });
         localProbeOut.className = "receipt " + (r.ok ? "ok" : "err");
         localProbeOut.textContent = r.note;
         renderModels(localModels, r.models || [], localDraft.model, (id) => {
@@ -331,21 +318,18 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     }),
     localProbeOut,
   );
-  panes.local.append(localGrid, localProbeRow, localModels);
-  // Усилие рассуждения — шкала ЗАВИСИТ ОТ ПРОВАЙДЕРА И МОДЕЛИ (ui-kit/providers.ts):
-  // окно показывает только те ступени, которые ядро действительно передаст, и
-  // говорит, что значит пустое поле именно здесь (на подписке — «выключено»,
-  // у Z.ai — серверный max, у остальных по протоколу Anthropic — ничего).
+  panes.local.append(localGrid, localProbeRow, localModels, el("p", "field-hint", "Ollama, LM Studio или другое совместимое реле. Ключ сохраняется отдельно; пустой подходит только серверу без авторизации. Встроенное реле ChatGPT выбирается отдельной вкладкой."));
   let effort = String(draft.model.reasoning_effort || "");
+  let effortChanged = false;
   const effortRow = el("div", "models");
   effortRow.style.marginTop = "14px";
   const effortHint = el("p", "field-hint", "");
   effortHint.style.marginTop = "8px";
   const modelForEffort = () =>
     provider === "anthropic" ? anthDraft.model : provider === "api" ? apiDraft.model : provider === "local" ? localDraft.model : chatgptDraft.model;
+  const urlForEffort = () => provider === "anthropic" ? anthDraft.base_url : provider === "api" ? apiDraft.base_url : provider === "local" ? localDraft.base_url : "";
   const syncEffort = () => {
-    const plan = effortPlan(provider, modelForEffort());
-    effort = clampEffort(provider, modelForEffort(), effort);
+    const plan = effortPlan(provider, modelForEffort(), urlForEffort());
     effortRow.replaceChildren(el("span", "models-label", "Усилие рассуждения"));
     for (const { value, label } of plan.chips) {
       const chip = el("button", "model-chip", label);
@@ -353,24 +337,21 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       chip.setAttribute("aria-pressed", String(effort === value));
       chip.addEventListener("click", () => {
         effort = value;
+        effortChanged = true;
         for (const other of effortRow.querySelectorAll(".model-chip")) other.setAttribute("aria-pressed", String(other === chip));
       });
       effortRow.append(chip);
     }
-    if (!plan.chips.length) effortRow.append(el("span", "receipt", "ступень сюда не передаётся"));
-    effortHint.textContent = plan.hint;
+    if (!plan.chips.length) effortRow.append(el("span", "receipt", "шкала этого адреса не подтверждена"));
+    effortHint.textContent = plan.hint + (effort && !plan.chips.some((chip) => chip.value === effort) ? ` Сохранённое значение «${effort}» останется, пока ты его не изменишь.` : "");
   };
   // Запасная и зрячая модели — ручки того же блока `model`, общие для всех провайдеров.
   // До 09.09 их можно было задать только правкой helene.json руками (boot.py их переносил,
   // окно — нет): владелец спросил «есть ли фолбэк в интерфейсе» — не было.
   let fallbackModel = String(draft.model.fallback_model || "");
   let visionModel = String(draft.model.vision_model || "");
-  // 25.09 (C.2, баг Сергея): запасной провайдер — не только «вторая модель того же
-  // провайдера», но и ДРУГОЙ провайдер со своим адресом и ключом. Ограничение ядра —
-  // один клиент на протокол: другой провайдер возможен только другого протокола
-  // (OpenAI-совместимый ↔ Anthropic-совместимый). «Подписка → свой ключ OpenAI» этим
-  // не выразить, и окно честно не предлагает такую пару.
   const frameworkOf = (p: Provider): "openai" | "anthropic" => (p === "anthropic" ? "anthropic" : "openai");
+  let spareFramework = String(draft.model.fallback_framework || (frameworkOf(provider) === "anthropic" ? "openai" : "anthropic"));
   type Spare = "none" | "same" | "other";
   let spare: Spare = String(draft.model.fallback_key || draft.model.fallback_base_url || "").trim()
     ? "other" : fallbackModel.trim() ? "same" : "none";
@@ -383,15 +364,13 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const syncSpare = () => {
     for (const b of sparePick.querySelectorAll<HTMLButtonElement>(".choice-item")) b.setAttribute("aria-checked", String(b.dataset.value === spare));
     for (const [k, pane] of Object.entries(sparePanes)) pane.hidden = k !== spare;
-    const other = frameworkOf(provider) === "anthropic" ? "OpenAI-совместимый (ключ API, локальная модель)" : "Anthropic-совместимый (Anthropic, Z.ai, MiniMax, Kimi)";
     spareOtherHint.textContent =
-      `Другой провайдер — только другого протокола: сейчас основной ${frameworkOf(provider) === "anthropic" ? "на протоколе Anthropic" : "OpenAI-совместимый"}, ` +
-      `значит запасной — ${other}. Ключ подставится из сохранённых, если он есть.`;
+      "Запасной хранит собственный адрес, ключ и протокол независимо от основного. Можно выбрать другой сервер того же протокола.";
   };
   for (const [value, title, text] of [
     ["none", "Нет", "упала основная — ход не состоится"],
     ["same", "Модель того же провайдера", "тот же адрес и ключ, другое имя модели"],
-    ["other", "Другой провайдер", "свой адрес и ключ; другой протокол"],
+    ["other", "Другой провайдер", "свой адрес, ключ и протокол"],
   ] as Array<[Spare, string, string]>) {
     const b = el("button", "choice-item");
     b.type = "button";
@@ -401,7 +380,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     b.addEventListener("click", () => {
       spare = value;
       if (spare === "other" && !spareKey) {
-        const otherKey = frameworkOf(provider) === "anthropic" ? keyOf("api") : keyOf("anthropic");
+        const otherKey = spareFramework === "anthropic" ? keyOf("anthropic") : keyOf("api");
         if (otherKey) {
           spareKey = otherKey;
           setField(spareKeyField, otherKey);
@@ -420,7 +399,11 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const spareUrlField = field("Адрес запасного", spareUrl, (v) => (spareUrl = v), { mono: true, placeholder: "https://api.z.ai/api/anthropic" });
   const spareGridOther = el("div", "form-grid two");
   spareGridOther.append(spareUrlField, spareModelOther);
-  sparePanes.other.append(spareGridOther, spareKeyField, spareOtherHint);
+  const spareProtocol = el("div", "models");
+  const syncSpareProtocol = () => chips(spareProtocol, [{ value: "openai", label: "OpenAI-совместимый" }, { value: "anthropic", label: "Anthropic Messages" }], spareFramework,
+    (value) => { spareFramework = value; syncSpareProtocol(); }, "Протокол запасного");
+  syncSpareProtocol();
+  sparePanes.other.append(spareProtocol, spareGridOther, spareKeyField, spareOtherHint);
   const spareBox = el("div");
   spareBox.style.marginTop = "14px";
   spareBox.append(el("span", "models-label", "Запасной провайдер"), sparePick, sparePanes.none, sparePanes.same, sparePanes.other);
@@ -757,6 +740,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     note: () => noKeyNote + mode.note(),
     collect(out: Config): string {
         out.model = keepBlock(out.model, { framework: "openai" });
+        out.model.provider = provider;
         if (pinnedModel) out.model.pinned = true;
         else delete out.model.pinned;
         // Блок relay СЛИВАЕТСЯ, а не пересобирается: кроме enabled/port в нём
@@ -772,12 +756,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         } else if (provider === "local") {
           out.model.base_url = localDraft.base_url.trim();
           out.model.model = localDraft.model.trim();
-          // Заглушка, а не пустая строка: ядро без ключа не создаёт клиента
-          // вообще (live/llm.py: `if not key: return None`) и агент молчит на
-          // каждый ход. Ollama и LM Studio Authorization игнорируют. Ровно это
-          // кладёт установщик (setup/src/install.rs, ветка "local"); пустая
-          // строка здесь была третьим расхождением двух писателей одного файла.
-          out.model.key = "local";
+          out.model.key = localDraft.key.trim() || "local";
+          keys.local = localDraft.key.trim();
         } else if (provider === "anthropic") {
           out.model.framework = "anthropic";
           out.model.base_url = anthDraft.base_url.trim();
@@ -785,11 +765,6 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
           out.model.key = anthDraft.key.trim();
           keys.anthropic = out.model.key;
         } else {
-          // БЕЗ «/v1»: клиент ядра приклеивает к base_url «/chat/completions», а
-          // у реле есть именно этот маршрут — /v1/chat/completions у него нет
-          // вовсе. Установщик пишет ровно этот адрес (setup/src/install.rs, тест
-          // relay_base_url_has_no_v1); окно возвращало «/v1» обратно, и первое же
-          // «Сохранить» уводило каждый ход в 404 при зелёной кнопке «Проверить».
           // Порт — ИЗ КОНФИГА, не из константы: установщик мог выбрать не 5011
           // (см. relayBaseUrl в ../relay). Константа здесь возвращала 5011 и
           // уводила мозг в чужое реле при первом же «Сохранить».
@@ -814,6 +789,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
           if (Object.keys(relayBlock).length) out.relay = { ...relayBlock, enabled: false };
           else delete out.relay;
         }
+        if (provider !== savedProvider || out.model.base_url !== draft.model.base_url) {
+          delete out.model.provider_id;
+          delete out.model.api_mode;
+        }
         const proxyError = relayConnection.error();
         if (proxyError) return proxyError;
         out.relay = keepBlock(out.relay, { proxy: relayConnection.collect() });
@@ -825,13 +804,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         }
         // Ключи неактивных провайдеров переживают смену вкладки.
         out.model.keys = keys;
-        // Чужая ступень не уезжает: у провайдера без селектора поле снимается.
-        const effortOut = clampEffort(provider, modelForEffort(), effort);
+        const effortOut = effortChanged ? clampEffort(provider, modelForEffort(), effort, urlForEffort()) : effort;
         if (effortOut) out.model.reasoning_effort = effortOut;
         else delete out.model.reasoning_effort;
         // Запасная и зрячая модели: пустое поле — снять ручку, а не записать "".
-        // 25.09: запасной другого провайдера — со своим адресом и ключом и на другом
-        // протоколе (boot._brain_config кладёт их во второй фреймворк llm.json).
         delete out.model.fallback_framework;
         delete out.model.fallback_base_url;
         delete out.model.fallback_key;
@@ -842,15 +818,25 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         }
         if (spare === "none" || !fallbackModel.trim()) {
           delete out.model.fallback_model;
+          delete out.model.fallback_api_mode;
+          delete out.model.fallback_provider_id;
         } else {
           out.model.fallback_model = fallbackModel.trim();
+          if (spare === "same") {
+            delete out.model.fallback_api_mode;
+            delete out.model.fallback_provider_id;
+          }
           if (spare === "other") {
             if (!spareUrl.trim() || !spareKey.trim()) {
               return "Запасному провайдеру нужны и адрес, и ключ — или выбери «Модель того же провайдера».";
             }
-            out.model.fallback_framework = frameworkOf(provider) === "anthropic" ? "openai" : "anthropic";
+            out.model.fallback_framework = spareFramework;
             out.model.fallback_base_url = spareUrl.trim();
             out.model.fallback_key = spareKey.trim();
+            if (spareUrl.trim() !== String(draft.model.fallback_base_url || "").trim() || spareFramework !== draft.model.fallback_framework) {
+              delete out.model.fallback_api_mode;
+              delete out.model.fallback_provider_id;
+            }
           }
         }
         if (visionModel.trim()) out.model.vision_model = visionModel.trim();

@@ -38,16 +38,27 @@ def _reset_cache():
 
 
 class RepoBase(unittest.TestCase):
-    """Панель смотрит на НАСТОЯЩИЙ репозиторий (read-only) — живая интроспекция."""
+    """Real public modules plus synthetic owner files, never a live private soul."""
 
     def setUp(self):
         self._orig = panel.BASE
-        panel.BASE = REPO
+        self.tmp = Path(tempfile.mkdtemp(prefix="panel-source-fixture-"))
+        # Keep real AST relationships without copying private owner content.
+        for source in REPO.glob("*.py"):
+            shutil.copy2(source, self.tmp / source.name)
+        skills = self.tmp / "soul" / "skills"
+        skills.mkdir(parents=True)
+        (self.tmp / "soul" / "SOUL.md").write_text("# Synthetic test persona\n", encoding="utf-8")
+        (skills / "INDEX.md").write_text("# Skills\n- alpha.md\n", encoding="utf-8")
+        (skills / "alpha.md").write_text("# Alpha\nSynthetic test skill.\n", encoding="utf-8")
+        (self.tmp / ".env").write_text("FIXTURE_ONLY=not-a-credential\n", encoding="utf-8")
+        panel.BASE = self.tmp
         _reset_cache()
 
     def tearDown(self):
         panel.BASE = self._orig
         _reset_cache()
+        shutil.rmtree(self.tmp)
 
 
 class TestSafePaths(RepoBase):

@@ -49,6 +49,7 @@ REPO = Path(__file__).resolve().parent
 STATE_DIR = BASE / "memory" / ".forge"
 TASKS_DIR = STATE_DIR / "tasks"
 _RUNNERS: dict[int, subprocess.Popen] = {}  # reap local children; durable state itself remains on disk
+SELF_REVIEW_API = 1
 
 _SKIP_DIRS = {
     ".git", ".venv", "__pycache__", "node_modules", "target", ".pytest_cache",
@@ -1046,7 +1047,8 @@ def emit_unit_event(task_id: str, unit_id: str, result: dict | None,
         from core import notices as core_notices
         core_notices.note_node(
             task_id=str(task_id), unit_id=str(unit_id), status=str(payload.get("status") or ""),
-            goal=str(payload.get("goal") or ""), origin_chat=str(payload.get("origin_chat") or ""))
+            goal=str(payload.get("goal") or ""), origin_chat=str(payload.get("origin_chat") or ""),
+            result_ref=((payload.get('causality') or {}).get('receipts') or {}).get('result'))
     except Exception:
         log.debug("уведомление об узле %s/%s не легло", task_id, unit_id, exc_info=True)
 
@@ -3023,7 +3025,7 @@ def _unit_state(path: Path) -> dict:
     request = _read_json(path / "request.json", {}) or {}
     result = _read_json(path / "result.json")
     stop = _read_json(path / "stop.json")
-    if isinstance(stop, dict) and stop.get("state") == "unresolved":
+    if isinstance(stop, dict) and stop.get("state") in {"pending", "unresolved"}:
         # A process-stop attempt may have signalled a child without proving the
         # whole tree exited. A racing supervisor result cannot discharge that
         # uncertainty; this unit must be reconciled before finish.
@@ -3613,6 +3615,37 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
     return "action: plan | start | poll | stop | list"
 
 
+def self_review_task(task_id: str, root: str, subject_sha256: str,
+                     worker_script: str, max_active_workers: int = 1) -> dict:
+    if not re.fullmatch(r"code-[0-9a-f]{8}", task_id):
+        raise ValueError("invalid self-review task id")
+    if not re.fullmatch(r"[0-9a-f]{64}", subject_sha256):
+        raise ValueError("invalid self-review subject hash")
+    script = Path(worker_script).resolve()
+    try:
+        from localharness import self_review_worker
+    except ImportError:
+        import self_review_worker
+    if script != Path(self_review_worker.__file__).resolve() or not script.is_file():
+        raise ValueError("self-review requires the installed localharness worker adapter")
+    metadata = {"schema": 1, "root": str(Path(root).resolve()),
+                "subject_sha256": subject_sha256, "worker_script": str(script),
+                "runtime_code_dir": str(REPO.resolve())}
+    with _mutation_lock(task_id):
+        prior = get(task_id)
+        if prior:
+            if prior.get("self_review") != metadata:
+                raise ValueError("self-review task identity already has another subject")
+            return prior
+        task = {"id": task_id, "root": metadata["root"], "source_root": metadata["root"],
+                "goal": "Independent source-only self-review", "isolation": "frozen-code",
+                "status": "active", "priority": "normal", "created": _now(),
+                "max_active_workers": _worker_slots(max_active_workers),
+                "run_context": None, "self_review": metadata}
+        _save_task(task)
+        return task
+
+
 def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
           role: str = "worker", max_iters: int = 0, tail: int = 10000,
           node_id: str = "", owns: list[str] | None = None,
@@ -3637,6 +3670,8 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                           for r in rows[:30]) or "Субагентов нет."
     if action == "spawn":
         role = str(role or "worker").strip().lower()
+        if task.get("self_review") and (role != "reviewer" or parent_id):
+            return "Self-review admits root read-only critics only."
         if role not in {"scout", "worker", "reviewer"}:
             return "role: scout | worker | reviewer"
         if parent_id and parent_request.get("role") != "worker" and role == "worker":
@@ -3691,7 +3726,8 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                             "poll or reconcile uncertain units before retrying.")
                 request = {
                     "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
-                    "run_context": (parent_request.get("run_context") if parent_id else
+                    "run_context": (None if task.get("self_review") else
+                                    parent_request.get("run_context") if parent_id else
                                     task.get("run_context") or _task_run_context(task_id)),
                     "root": str(root), "proposal_id": task.get("proposal_id") or "",
                     "role": role, "brief": brief, "model": str(model or "").strip(),
@@ -3702,11 +3738,15 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     "spawned_by": str(spawned_by or ""),
                     "created": _now(), "status": "starting",
                 }
+                if task.get("self_review"):
+                    request["self_review"] = dict(task["self_review"])
                 req = d / "request.json"
                 _atomic_json(req, request)
                 try:
                     beat(lease_sec=20)
-                    pid = _spawn_runner(REPO / "forge_worker.py", req, d / "supervisor.log")
+                    script = (Path(task["self_review"]["worker_script"]) if task.get("self_review")
+                              else REPO / "forge_worker.py")
+                    pid = _spawn_runner(script, req, d / "supervisor.log")
                 except Exception as exc:
                     failure = {"status": "error", "finished": _now(),
                                "error": f"{type(exc).__name__}: {exc}", "reported_inline": True}
@@ -3734,6 +3774,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         log = _tail(d / "supervisor.log", max(500, min(int(tail or 10000), 30000)))
         result = _read_json(d / "result.json")
         body = json.dumps({**(result or {k: v for k, v in state.items() if k != "goal"}),
+                           "status": state.get("status"), "liveness": state.get("liveness"),
                            "agent_id": agent_id, "parent_unit_id": _parent_of(task_id, agent_id),
                            "result_sha256": _result_identity(d / "result.json"),
                            "dispositions": [r.get("dispositions") for r in _worker_tree(task_id)
@@ -3790,6 +3831,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         for unit in sorted(targets, key=lambda x: _worker_depth(task_id, x), reverse=True):
             directory = _unit_dir(task_id, "agents", unit)
             prior = _read_json(directory / "result.json")
+            stop_confirmed = False
             if isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
                 outcome = f"settled {prior.get('status')}; result retained (результат сохранён)"
                 # A result is not process-death evidence. The worker may still be
@@ -3806,7 +3848,10 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                                      else _pid_alive(pid, born))
                         if remaining is not False:
                             stopped = "unknown: stop acknowledged but group exit unproven"
+                    stop_confirmed = stopped == "остановлен"
                     outcome += f"; supervisor group stop: {stopped}"
+                elif pid and group_live is False:
+                    stop_confirmed = True
                 elif not pid:
                     outcome += "; group identity absent; descendant liveness unproven"
                 elif group_live is None:
@@ -3822,6 +3867,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                 if outcome == "остановлен" and _pid_alive(pid, str(current.get("supervisor_started_at") or "")):
                     outcome = "unknown: stop acknowledged but supervisor remains alive"
                 if outcome == "остановлен":
+                    stop_confirmed = True
                     with _mutation_lock(task_id):
                         result_path = directory / "result.json"
                         current_result = _read_json(result_path)
@@ -3843,11 +3889,13 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                 else:
                     outcome += " — терминальный статус НЕ записан"
             receipt = _read_json(directory / "stop.json", {}) or {}
-            receipt.update({"observed_at": _now(), "state": outcome,
+            receipt.update({"observed_at": _now(),
+                            "state": "settled" if stop_confirmed else "unresolved",
+                            "note": outcome,
                             "result_sha256": _result_identity(directory / "result.json")})
             _atomic_json(directory / "stop.json", receipt)
             receipts.append(f"{unit}: {outcome}")
-            _event(task_id, "agent_stopped" if outcome.startswith(("settled", "остановлен"))
+            _event(task_id, "agent_stopped" if stop_confirmed
                    else "agent_stop_uncertain", agent_id=unit, summary=outcome)
         return ("\n".join(receipts) + "\n[scope] stop fenced agent descendants only; "
                 "detached coding_process/coding_verify jobs remain task-scoped. "

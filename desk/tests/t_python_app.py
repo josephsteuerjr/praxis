@@ -29,6 +29,25 @@ class Host:
 
 
 class PythonApplicationTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows native error dialog')
+    def test_startup_failure_is_logged_and_shown(self):
+        from unittest.mock import patch
+        import ctypes
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(python_app, '_main', side_effect=RuntimeError('fixture startup failure')):
+                with patch.object(ctypes.windll.user32, 'MessageBoxW') as message:
+                    self.assertEqual(python_app.main(['--root', temporary]), 1)
+            self.assertIn('fixture startup failure', (Path(temporary) / 'startup-error.log').read_text(encoding='utf-8'))
+            self.assertIn('fixture startup failure', message.call_args.args[1])
+
+    def test_automatic_start_does_not_clear_stop_or_create_window(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch('localharness.owner_stop.stopped', return_value=True):
+                with patch.object(python_app, 'Application') as application:
+                    self.assertEqual(python_app.main(['--root', temporary, '--launch-intent', 'automatic']), 0)
+            application.assert_not_called()
+
     def test_close_hides_but_exit_and_relaunch_destroy(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as temporary:

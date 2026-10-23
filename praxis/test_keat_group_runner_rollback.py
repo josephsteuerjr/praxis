@@ -168,7 +168,7 @@ class RunnerRollback(unittest.IsolatedAsyncioTestCase):
             stack.enter_context(mocked)
         # Media parsing/durable spooling is orthogonal to rollback. Preserve the real
         # model_text chosen by the envelope; a non-empty ref still disables adoption.
-        def media_prompt(convo_text, refs, ctx, *, model_text=None, unavailable_refs=None):
+        def media_prompt(convo_text, refs, ctx, *, model_text=None):
             text = model_text if model_text is not None else convo_text
             return convo_text, ([{"type": "text", "text": text},
                                   {"type": "image", "path": "/offline/image.png"}]

@@ -699,23 +699,24 @@ def _block_memory_index(audience: str = "other", ctx=None) -> str:
     и в чужой личке оно рассказывает собеседнику, кого я знаю. Тогда имён нет
     вовсе — кроме его собственного, если привязка однозначна, — и вместо них не число,
     а названная граница: «ещё 45» тоже сведение о третьих людях, только арифметикой.
-    Навыки остаются: это мои способности, а не чужие данные."""
+    Навыки остаются её способностями, но одно лишь наличие файла не разрешает
+    автоматически показывать его имя чужой аудитории; это указатель без имён."""
     if audience == "owner":
         body = _read(BASE / "memory" / "INDEX.md").rstrip()
         if not body:
             body = ("(карта памяти: memory/INDEX.md не прочитался — это отказ "
                     "источника, не пустота памяти; синтетический список вместо "
                     "канона не собирается — её №8)")
+        import skill_navigation
+        skills = skill_navigation.owner_map(BASE / "soul" / "skills" / "INDEX.md")
         return (body
                 + "\n[из: memory/INDEX.md — полное каноническое тело (её №8) · "
                   "тела: не загружены — поднимаются рукой; «не загружено» не значит "
-                  "«не существует»]")
+                  "«не существует»]"
+                + "\n\n" + skills)
     people_dir = BASE / "memory" / "people"
     names = sorted(p.stem for p in people_dir.glob("*.md")
                    if not p.stem.startswith("_")) if people_dir.exists() else []
-    skills_dir = BASE / "soul" / "skills"
-    skills = sorted(p.stem for p in skills_dir.glob("*.md")
-                    if p.stem != "INDEX") if skills_dir.exists() else []
     own = _dossier_for(str(getattr(ctx, "chat_id", "") or ""))
     mine = own.stem if own is not None and own.stem in names else ""
     lines = ["указатель памяти (тела: не загружены — поднимаются рукой; перечень людей "
@@ -723,11 +724,13 @@ def _block_memory_index(audience: str = "other", ctx=None) -> str:
     lines.append("люди: " + (f"{mine} · " if mine else "")
                  + "остальные имена не приводятся вне owner-потока — ни списком, "
                    "ни числом")
-    if skills:
-        lines.append("навыки: " + " · ".join(skills))
-    lines.append("[из: memory/people/ + soul/skills/ · зачем: карта того, что у меня "
-                 "есть; «не загружено» не значит «не существует», а «не приведено» "
-                 "не значит «не помню»]")
+    # A filename's presence on disk does not make it a public name. The
+    # canonical skill map is still available to the owner; other audiences
+    # get no names or counts by default, including undescribed new skills.
+    lines.append("навыки: имена вне owner-потока не приводятся; открыть свой "
+                 "soul/skills/INDEX.md явно, когда нужен конкретный навык")
+    lines.append("[из: memory/people/ + soul/skills/ · внутренние адреса "
+                 "не означают разрешение на разглашение]")
     return "\n".join(lines)
 
 

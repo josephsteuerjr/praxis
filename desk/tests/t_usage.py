@@ -80,6 +80,24 @@ class UsageTests(unittest.TestCase):
         self.assertIn("/api/usage", deskapp._DEVICE_PATHS)
         self.assertIn("/api/allowances", deskapp._DEVICE_PATHS)
 
+    def test_only_declared_relay_or_legacy_loopback_uses_codex_limits(self):
+        configuration = {"frameworks": {
+            "voice_primary": {"protocol": "openai", "provider": "relay",
+                              "base_url": "http://127.0.0.1:5013/v1", "api_key": "test-relay"},
+            "evaluator_primary": {"protocol": "openai", "provider": "deepseek",
+                                  "base_url": "https://api.deepseek.com/v1", "api_key": "test-direct"},
+            "voice_fallback": {"protocol": "openai", "provider": "compatible",
+                               "base_url": "http://127.0.0.1:8080/v1", "api_key": "local"}}}
+        (self.tree / "memory" / "llm.json").write_text(json.dumps(configuration), encoding="utf-8")
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"rate_limit": {}}'
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(usage, "build_opener", return_value=opener), mock.patch.dict(usage._CACHE, {}, clear=True):
+            usage.allowances(self.tree)
+        self.assertEqual(opener.open.call_count, 1)
+        self.assertEqual(opener.open.call_args.args[0].full_url, "http://127.0.0.1:5013/v1/limits")
+
     def test_codex_relay_week_can_be_primary_and_null_secondary_is_absent(self):
         rows = usage.normalize_codex({"rate_limit": {
             "primary_window": {"used_percent": 68, "limit_window_seconds": 604800},

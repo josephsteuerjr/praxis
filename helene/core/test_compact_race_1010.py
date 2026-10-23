@@ -55,53 +55,32 @@ class RaceBase(Base):
             self._msg(i, f"сообщение {i}", ts=_seed_ts(i))
         return [str(r["id"]) for r in ml._load_state(ROOM)["hot"]]
 
-    def _fold_async(self, *mutators):
-        """compact_if_due(force=True) в потоке; каждый мутатор исполняется
-        в паузе СВОЕГО модельного вызова (i-й — внутри i-го вызова)."""
-        calls: list[list[str]] = []
-        holds: list[threading.Event] = []
-        wake = threading.Event()
+    def prepare(self, *, limit: int = 50) -> dict:
+        prepared = ml.prepare_authored_fold(ROOM, limit=limit)
+        self.assertTrue(prepared.get("ok"), prepared)
+        self.assertEqual(prepared.get("kind"), "hot", prepared)
+        self.assertTrue(prepared.get("shown_complete"), prepared)
+        self.assertTrue(prepared.get("sources"), prepared)
+        self.assertRegex(prepared.get("selection", ""), r"^[0-9a-f]{64}$")
+        return prepared
 
-        def fake(inputs, *, tier, depth, continued, authors=None):
-            ids = [str(x["id"]) for x in inputs]
-            calls.append(ids)
-            hold = threading.Event()
-            holds.append(hold)
-            wake.set()
-            if len(holds) <= len(mutators):
-                self.assertTrue(hold.wait(10), "пауза модели не дождалась")
-            return {"summary": f"сводка захода {len(calls)} по {len(ids)} событиям",
-                    "open_threads": [], "claims": [], "episodes": [],
-                    "_manifest": {"seen": ids, "omitted": []}}
+    @staticmethod
+    def selected_ids(prepared: dict) -> list[str]:
+        return [str(row["id"]) for row in prepared["sources"]]
 
-        box: dict = {}
+    def assert_conflict(self, result: dict, text: str):
+        self.assertFalse(result.get("ok"), result)
+        self.assertEqual(result.get("reason"), "state_changed", result)
+        self.assertEqual(result.get("folded"), 0, result)
+        self.assertTrue(result.get("conflict"), result)
+        self.assertEqual(result.get("retained_text"), text, result)
+        self.assertFalse(result.get("retried"), result)
 
-        def run():
-            try:
-                box["out"] = ml.compact_if_due(ROOM, force=True)
-            except Exception as exc:  # noqa: BLE001 — причина нужна тесту
-                box["exc"] = exc
+    def assert_coverage(self, ids):
+        counts = self.coverage_counts()
+        self.assertEqual(set(counts), set(ids), counts)
+        self.assertTrue(all(count == 1 for count in counts.values()), counts)
 
-        with mock.patch.object(ml, "_model_compact", fake):
-            t = threading.Thread(target=run, name="fold-race", daemon=True)
-            t.start()
-            try:
-                for idx, mutate in enumerate(mutators, 1):
-                    deadline = time.monotonic() + 10
-                    while len(holds) < idx:
-                        if time.monotonic() > deadline:
-                            self.fail(f"модельный вызов {idx} не начался")
-                        wake.wait(0.05)
-                    mutate()
-                    holds[idx - 1].set()
-                t.join(60)
-            finally:
-                for hold in holds:
-                    hold.set()
-                t.join(10)
-        self.assertFalse(t.is_alive(), "свёртка не вернулась из паузы")
-        self.assertIsNone(box.get("exc"), f"compact_if_due упал: {box.get('exc')!r}")
-        return box.get("out") or {}, calls
 
     # ------------------------------------------------------------- помощь
     def hot_ids(self) -> set[str]:
@@ -135,150 +114,230 @@ class RaceBase(Base):
 
 
 class CleanTailAppendKeepsCommit(RaceBase):
-    """Чистый append в хвост НЕ срывает свёртку — ни до фикса, ни после."""
+    """Приход после prepare не отменяет целые выбранные источники."""
 
     def test_tail_message_commits_and_stays_hot(self):
         ids = self.seed()
-        out, calls = self._fold_async(
-            lambda: self._msg(500, "новое в хвост", ts=_seed_ts(N_ROWS) + 60.0))
+        prepared = self.prepare()
+        selected = self.selected_ids(prepared)
+        self.assertEqual(selected, ids[:GAP_AT])
+        self.assertFalse(self.coverage_counts(), "prepare ещё ничего не покрывает")
+
+        tail = self._msg(500, "новое в хвост", ts=_seed_ts(N_ROWS) + 60.0)
+        text = "Я прочитал выбранное начало разговора; это моя выжимка."
+        out = ml.apply_authored_fold(ROOM, prepared["selection"], text)
+
         self.assertTrue(out.get("ok"), out)
         self.assertEqual(out.get("folded"), GAP_AT, out)
-        self.assertEqual(len(calls), 1, f"хвост не повод для второго захода: {calls}")
-        self.assertTrue(set(calls[0]) <= set(ids))
-        tail = [i for i in self.hot_ids() if i not in set(ids)]
-        self.assertEqual(len(tail), 1, "новое хвостовое событие должно остаться горячим")
-        counts = self.coverage_counts()
-        self.assertTrue(counts, "свёртка должна быть записана")
-        self.assertTrue(all(c == 1 for c in counts.values()), counts)
+        self.assertEqual(out.get("source_ids"), selected, out)
+        self.assertEqual(ml.compact_text(out["compact_id"], ROOM), text)
+        ml.rebuild_state(ROOM)
+        self.assertEqual(self.hot_ids(), set(ids[GAP_AT:]) | {str(tail["id"])})
+        self.assert_coverage(selected)
 
 
 class MidPrefixInsertIsNotAConflict(RaceBase):
-    """Событие с ts ВНУТРИ префикса (бэклог/перенос времени): позиционный срез
-    меняется, идентичности строк — нет. До фикса это ровно механизм живого
-    срыва 15:32:52 (HTTP 200 → state_changed при целых источниках); после — коммит."""
+    """Бэклог меняет позиции, но не идентичность уже прочитанных строк."""
 
     def test_backdated_event_commits_and_stays_hot(self):
         ids = self.seed()
-        mid_id = None
+        prepared = self.prepare()
+        selected = self.selected_ids(prepared)
+        self.assertEqual(selected, ids[:GAP_AT])
 
-        def insert_backlog():
-            nonlocal mid_id
-            mid_id = str(self._msg(501, "бэклог из середины", ts=_seed_ts(3) + 60.0)["id"])
+        backlog = self._msg(501, "бэклог из середины", ts=_seed_ts(3) + 60.0)
+        out = ml.apply_authored_fold(
+            ROOM, prepared["selection"], "Выжимка исходного выбранного окна.")
 
-        out, calls = self._fold_async(insert_backlog)
-        if out.get("reason") == "state_changed":
-            # ДО ФИКСА (репро): сверка позиции пошла по пересборке ленты (порядок
-            # событий), а план брал префикс из файла состояния (порядок прибытия).
-            provable = ml._drop_unprovable_inputs(
-                ml.rebuild_state(ROOM)["hot"], ROOM)
-            first_ids = [str(r["id"]) for r in provable[:GAP_AT]]
-            self.assertNotEqual(first_ids, calls[0],
-                                "позиционный префикс обязан был разъехаться")
-            self.assertTrue(set(calls[0]) <= {str(r["id"]) for r in provable},
-                            "источники целы — срыв ложный")
-            self.assertFalse(self.coverage_counts(), "результат модели выброшен целиком")
-            raise self.failureException(f"репро 10.10: ложный state_changed — {out}")
         self.assertTrue(out.get("ok"), out)
+        self.assertEqual(out.get("source_ids"), selected, out)
         self.assertEqual(out.get("folded"), GAP_AT, out)
-        self.assertEqual(len(calls), 1, calls)
-        self.assertEqual(set(calls[0]), set(ids[:GAP_AT]))
-        self.assertIn(mid_id, self.hot_ids(), "бэклог остаётся горячим")
-        counts = self.coverage_counts()
-        self.assertEqual(set(counts), set(calls[0]), counts)
-        self.assertTrue(all(v == 1 for v in counts.values()), counts)
+        ml.rebuild_state(ROOM)
+        self.assertEqual(self.hot_ids(), set(ids[GAP_AT:]) | {str(backlog["id"])})
+        self.assert_coverage(selected)
 
 
-class EditInPrefixConflictsOnceThenFreshPlan(RaceBase):
-    """Правка источника — реальный конфликт: результат модели нельзя применять.
-    Ровно один автоматический повтор НОВЫМ планом, без ручного нажатия."""
+class EditInPrefixRequiresFreshAuthorship(RaceBase):
+    """Правка запрещает старую выжимку; новый текст появляется только явно."""
 
-    def test_one_retry_new_plan_covers_only_living_ids(self):
+    def test_conflict_then_explicit_prepare_and_new_text(self):
         ids = self.seed()
+        prepared = self.prepare()
         old_id = ids[2]
-        out, calls = self._fold_async(
-            lambda: self._edit(2, "исправлено после плана", ts=10_000_000.0))
-        self.assertTrue(out.get("ok"), out)
-        self.assertTrue(out.get("retried"), out)
-        self.assertEqual(len(calls), 2, calls)
-        self.assertNotIn(old_id, calls[1], "повтор обязан планировать заново")
-        counts = self.coverage_counts()
-        self.assertNotIn(old_id, counts, "правленая ревизия не покрывается старым id")
-        self.assertTrue(all(v == 1 for v in counts.values()), counts)
+        stale_text = "Выжимка, написанная до правки источника."
+        changed = self._edit(2, "исправлено после плана", ts=10_000_000.0)
+
+        with mock.patch.object(ml, "_write_compact",
+                               wraps=ml._write_compact) as writer:
+            refused = ml.apply_authored_fold(
+                ROOM, prepared["selection"], stale_text)
+            self.assert_conflict(refused, stale_text)
+            writer.assert_not_called()
+
+        self.assertFalse(self.coverage_counts())
         self.assertNotIn(old_id, self.hot_ids())
-        self.assertTrue(set(calls[1]) <= set(counts))
+        self.assertIn(str(changed["id"]), self.hot_ids())
 
+        # Это новый явный акт чтения/авторства, не автоматический replan.
+        fresh = self.prepare()
+        fresh_ids = self.selected_ids(fresh)
+        self.assertNotEqual(fresh["selection"], prepared["selection"])
+        self.assertNotIn(old_id, fresh_ids)
+        fresh_text = "Новая выжимка после повторного чтения актуальных источников."
+        out = ml.apply_authored_fold(ROOM, fresh["selection"], fresh_text)
 
-class CompetingFoldConflictsOnce(RaceBase):
-    """Конкурирующая свёртка покрыла начало префикса — реальный конфликт и один
-    повтор, покрывающий только непокрытый остаток, без двойного покрытия.
-    До фикса этот же случай требовал ручного повторного нажатия."""
-
-    def test_competing_coverage_then_one_retry(self):
-        self.seed()
-
-        def mutator():
-            provable = ml._drop_unprovable_inputs(ml._load_state(ROOM)["hot"], ROOM)
-            self._compact(provable[:3])
-
-        out, calls = self._fold_async(mutator)
         self.assertTrue(out.get("ok"), out)
-        self.assertTrue(out.get("retried"), out)
-        self.assertEqual(len(calls), 2, calls)
-        self.assertFalse(set(calls[1]) & set(calls[0][:3]),
-                         "повтор не имеет права накрывать уже покрытое")
-        counts = self.coverage_counts()
-        self.assertTrue(all(v == 1 for v in counts.values()), counts)
-        first3 = {i for i in calls[0][:3]}
-        self.assertTrue(first3 <= set(counts), "конкурирующая свёртка должна остаться")
+        self.assertEqual(out.get("source_ids"), fresh_ids, out)
+        self.assertEqual(ml.compact_text(out["compact_id"], ROOM), fresh_text)
+        self.assert_coverage(fresh_ids)
+        self.assertNotIn(stale_text, ml.context_summary(ROOM))
 
 
-class NoModelAnswerFallsBackDegraded(RaceBase):
-    """Модель молчит — запасная сводка честно помечается degraded и коммитится;
-    занятость не остаётся висеть (для кнопки это проверяет файл расписок)."""
+class CompetingFoldRequiresFreshSelection(RaceBase):
+    """Два автора прочитали начало; победившее покрытие нельзя записать дважды."""
 
-    def test_degraded_commit_without_model(self):
-        self.seed()
-        with mock.patch.object(ml, "_model_compact", lambda *a, **kw: {}):
-            out = ml.compact_if_due(ROOM, force=True)
+    def test_competing_coverage_then_explicit_new_selection(self):
+        ids = self.seed()
+        first = self.prepare()
+        first_ids = self.selected_ids(first)
+        self.assertEqual(first_ids, ids[:GAP_AT])
+
+        # Другой автор явно читает и сворачивает первые три источника.
+        competitor = self.prepare(limit=3)
+        competitor_ids = self.selected_ids(competitor)
+        self.assertEqual(competitor_ids, first_ids[:3])
+        won = ml.apply_authored_fold(
+            ROOM, competitor["selection"], "Выжимка другого автора по трём строкам.")
+        self.assertTrue(won.get("ok"), won)
+        self.assert_coverage(competitor_ids)
+
+        stale_text = "Мой текст по исходному шестистрочному окну."
+        with mock.patch.object(ml, "_write_compact",
+                               wraps=ml._write_compact) as writer:
+            refused = ml.apply_authored_fold(
+                ROOM, first["selection"], stale_text)
+            self.assert_conflict(refused, stale_text)
+            writer.assert_not_called()
+        self.assert_coverage(competitor_ids)
+
+        fresh = self.prepare()
+        fresh_ids = self.selected_ids(fresh)
+        self.assertFalse(set(fresh_ids) & set(competitor_ids))
+        out = ml.apply_authored_fold(
+            ROOM, fresh["selection"], "Новая выжимка только ещё непокрытого окна.")
         self.assertTrue(out.get("ok"), out)
-        self.assertEqual(out.get("folded"), GAP_AT, out)
-        self.assertTrue(out.get("degraded"), out)
-        counts = self.coverage_counts()
-        self.assertTrue(all(v == 1 for v in counts.values()), counts)
+        self.assertEqual(out.get("source_ids"), fresh_ids, out)
+        ml.rebuild_state(ROOM)
+        self.assert_coverage(set(competitor_ids) | set(fresh_ids))
+        self.assertTrue(set(ids) - set(self.hot_ids()) ==
+                        set(competitor_ids) | set(fresh_ids))
+
+
+class NoAuthorAnswerDoesNotFold(RaceBase):
+    """Ни предложение, ни пустой ответ не создают запасную механическую сводку."""
+
+    def test_offer_and_empty_answer_leave_every_source_hot(self):
+        ids = self.seed()
+
+        with mock.patch.object(
+                ml, "_model_compact",
+                side_effect=AssertionError("скрытый автор запрещён")) as helper:
+            offer = ml.compact_if_due(ROOM, force=True)
+            self.assertTrue(offer.get("ok"), offer)
+            self.assertTrue(offer.get("author_required"), offer)
+            self.assertEqual(offer.get("folded"), 0, offer)
+            self.assertFalse(self.coverage_counts())
+
+            prepared = self.prepare()
+            for text in ("", " \n\t "):
+                with self.subTest(text=repr(text)):
+                    out = ml.apply_authored_fold(
+                        ROOM, prepared["selection"], text)
+                    self.assertFalse(out.get("ok"), out)
+                    self.assertEqual(out.get("reason"),
+                                     "text_and_selection_required", out)
+                    self.assertEqual(out.get("folded"), 0, out)
+            helper.assert_not_called()
+
+        ml.rebuild_state(ROOM)
+        self.assertEqual(self.hot_ids(), set(ids))
+        self.assertFalse(self.coverage_counts())
 
 
 class CrashBetweenCompactAndStateConverges(RaceBase):
-    """Обрыв после записи компакта, до сохранения состояния (restart-mid-fold):
-    состояние производное — первая же пересборка сходится, дублей нет."""
+    """Настоящий apply записал канон; сохранение производного state оборвалось."""
 
     def test_rebuild_after_crash_excludes_covered_exactly_once(self):
         ids = self.seed()
-        hot = {str(r["id"]): r for r in ml._load_state(ROOM)["hot"]}
-        self._compact([hot[i] for i in ids[:GAP_AT]])  # компакт есть, state_file нет
+        prepared = self.prepare()
+        selected = self.selected_ids(prepared)
+        self.assertEqual(selected, ids[:GAP_AT])
+        written = []
+        real_write = ml._write_compact
+        real_save = ml._save_state
+
+        def write_then_mark(*args, **kwargs):
+            meta = real_write(*args, **kwargs)
+            written.append(meta)
+            return meta
+
+        def save_until_compact_exists(*args, **kwargs):
+            # prepare/apply могут сохранять пересобранный state ДО записи.
+            if written:
+                raise OSError("injected failure after compact, before state save")
+            return real_save(*args, **kwargs)
+
+        with mock.patch.object(ml, "_write_compact", write_then_mark), \
+                mock.patch.object(ml, "_save_state", save_until_compact_exists):
+            with self.assertRaisesRegex(OSError, "injected failure"):
+                ml.apply_authored_fold(
+                    ROOM, prepared["selection"], "Авторская выжимка до обрыва.")
+
+        self.assertEqual(len(written), 1, written)
+        self.assertTrue((ml.BASE / written[0]["path"]).is_file())
         ml.rebuild_state(ROOM)
-        remaining = self.hot_ids()
-        self.assertEqual(remaining, set(ids[GAP_AT:]),
-                         "пересборка обязана исключить покрытое и сохранить остальное")
-        counts = self.coverage_counts()
-        self.assertEqual(set(counts), set(ids[:GAP_AT]), counts)
+        self.assertEqual(self.hot_ids(), set(ids[GAP_AT:]))
+        self.assert_coverage(selected)
+
+        # Повтор старого selection не создаёт второй канонический компакт.
+        text = "Авторская выжимка до обрыва."
+        with mock.patch.object(ml, "_write_compact",
+                               wraps=ml._write_compact) as writer:
+            refused = ml.apply_authored_fold(ROOM, prepared["selection"], text)
+            self.assert_conflict(refused, text)
+            writer.assert_not_called()
+        self.assert_coverage(selected)
 
 
-class DoubleConflictGivesUpHonestly(RaceBase):
-    """Два конфликта подряд — не спин: ровно один автоповтор, честный
-    state_changed с причиной, ничего не закоммичено по протухшему плану."""
+class RepeatedConflictsNeverReuseStaleText(RaceBase):
+    """Новый конфликт — новый отказ, без скрытого цикла и stale-text retry."""
 
-    def test_second_conflict_returns_state_changed_nothing_committed(self):
+    def test_two_explicit_conflicts_commit_nothing(self):
         ids = self.seed()
-        out, calls = self._fold_async(
-            lambda: self._edit(2, "правка раз", ts=10_000_000.0),
-            lambda: self._edit(3, "правка два", ts=10_000_100.0))
-        self.assertFalse(out.get("ok"), out)
-        self.assertEqual(out.get("reason"), "state_changed", out)
-        self.assertTrue(out.get("retried"), out)
-        self.assertEqual(len(calls), 2, calls)
-        self.assertIn("conflict", out, "причина конфликта должна быть названа")
-        self.assertFalse(self.coverage_counts(), "по протухшему плану писать нельзя")
-        self.assertIn(ids[4], self.hot_ids(), "кольцо живо")
+        first = self.prepare()
+        self.assertIn(ids[2], self.selected_ids(first))
+        self._edit(2, "правка раз", ts=10_000_000.0)
+        first_text = "Первая уже устаревшая авторская выжимка."
+        self.assert_conflict(
+            ml.apply_authored_fold(ROOM, first["selection"], first_text),
+            first_text)
+
+        second = self.prepare()
+        self.assertNotEqual(second["selection"], first["selection"])
+        self.assertIn(ids[3], self.selected_ids(second))
+        self._edit(3, "правка два", ts=10_000_100.0)
+        second_text = "Вторая выжимка после нового чтения, тоже устаревшая."
+        with mock.patch.object(ml, "_write_compact",
+                               wraps=ml._write_compact) as writer:
+            self.assert_conflict(
+                ml.apply_authored_fold(ROOM, second["selection"], second_text),
+                second_text)
+            writer.assert_not_called()
+
+        self.assertFalse(self.coverage_counts())
+        self.assertIn(ids[4], self.hot_ids(), "неизменённый источник сохранён")
+        self.assertNotIn(ids[2], self.hot_ids())
+        self.assertNotIn(ids[3], self.hot_ids())
 
 
 class PrefixConflictUnit(unittest.TestCase):
@@ -345,6 +404,7 @@ class FoldRunReceiptsAndBusy(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="fold_run_1010_"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.ns["_FOLD_BUSY"] = [False]
+        self.ns["_FOLD_ACTIVE"] = [None]
         claimed = self.tmp / "memory" / ".control" / "fold.processing.json"
         claimed.parent.mkdir(parents=True, exist_ok=True)
         claimed.write_text("{}", encoding="utf-8")

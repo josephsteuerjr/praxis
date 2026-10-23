@@ -24,7 +24,8 @@ Components under a different licence, carried here rather than relicensed:
                   repository, https://github.com/josephsteuerjr/praxis-relay .
 
 Third-party components carried by the application are listed in
-desk/installer/ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md, and the licence texts of statically
+desk/installer/THIRD-PARTY.md (shipped as ЛИЦЕНЗИИ-ТРЕТЬИХ-СТОРОН.md),
+and the licence texts of statically
 linked Rust crates travel inside the distribution under licenses/rust/.  Their
 presence in one repository does not replace any component's own notice.
 

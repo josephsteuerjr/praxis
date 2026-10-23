@@ -1676,6 +1676,32 @@ def _brain_config(cfg: dict) -> dict:
     out = {"frameworks": {"anthropic": {"base_url": "", "api_key": ""},
                           "openai": {"base_url": "", "api_key": ""}},
            "roles": {}, "limits": {}}
+    def endpoint(block, protocol, *, inherited_from=None):
+        from urllib.parse import urlsplit
+        source = inherited_from or {}
+        base = str(block.get("base_url", source.get("base_url", "")) or "").strip()
+        key = str(block.get("key", block.get("api_key", source.get("key", source.get("api_key", "")))) or "").strip()
+        host = (urlsplit(base).hostname or "").lower()
+        families = {"api.openai.com": "openai", "api.anthropic.com": "anthropic",
+                    "api.z.ai": "zai", "api.minimax.io": "minimax", "api.minimaxi.com": "minimax",
+                    "api.kimi.com": "kimi", "api.kimi.ai": "kimi", "api.moonshot.ai": "kimi",
+                    "api.moonshot.cn": "kimi", "api.deepseek.com": "deepseek"}
+        family = str(block.get("provider_id") or families.get(host) or
+                     ("qwen" if host.endswith(".aliyuncs.com") else "compatible"))
+        if block.get("provider") == "chatgpt":
+            family = "relay"
+        spec = {"base_url": base, "api_key": key, "protocol": protocol, "provider": family,
+                "api_mode": str(block.get("api_mode") or source.get("api_mode") or "")}
+        if spec["api_mode"] not in ("responses", "chat_completions"):
+            spec["api_mode"] = ""
+        return spec
+
+    def register(name, spec):
+        out["frameworks"][name] = spec
+        legacy = out["frameworks"][spec["protocol"]]
+        if not legacy["base_url"] and not legacy["api_key"]:
+            legacy.update(base_url=spec["base_url"], api_key=spec["api_key"])
+
     for role, block, default_tokens in (("voice", voice, 8192),
                                         ("evaluator", judge if judge else voice, 1024)):
         inherited = role == "evaluator" and judge is None
@@ -1687,27 +1713,36 @@ def _brain_config(cfg: dict) -> dict:
         framework = str(block.get("framework") or default_fw).strip().lower()
         if framework not in ("openai", "anthropic"):
             framework = "openai"
-        base_url = str(block.get("base_url") or "").strip()
-        key = str(block.get("key") or block.get("api_key") or "").strip()
-        if base_url:
-            out["frameworks"][framework]["base_url"] = base_url
-        if key:
-            out["frameworks"][framework]["api_key"] = key
+        primary = "voice_primary" if inherited else role + "_primary"
+        if inherited:
+            out["frameworks"]["evaluator_primary"] = dict.fromkeys(("base_url", "api_key", "protocol", "provider", "api_mode"), "")
+        if not inherited:
+            register(primary, endpoint(block, framework,
+                                      inherited_from=voice if role == "evaluator" and framework == default_fw and not block.get("base_url") else None))
         tokens = default_tokens if inherited else _int_or(
             block.get("max_tokens") or default_tokens, default_tokens,
             what=f"model.max_tokens ({role})")
-        role_cfg = {"framework": framework,
+        role_cfg = {"framework": primary,
                     "model": str(block.get("model") or ""),
                     "max_tokens": max(1, tokens),
                     "fallback_model": str(block.get("fallback_model") or "")}
         fallback_fw = str(block.get("fallback_framework") or "").strip().lower()
-        if fallback_fw in ("openai", "anthropic"):
-            role_cfg["fallback_framework"] = fallback_fw
-        elif role_cfg["fallback_model"]:
-            # Вторая модель того же реле — самый частый случай подписки
-            # (gpt-5.6-sol -> gpt-5.6-luna). Без явного слова фолбэк остаётся
-            # в том же фреймворке, где есть ключ, а не уходит в пустой.
-            role_cfg["fallback_framework"] = framework
+        if fallback_fw not in ("openai", "anthropic"):
+            fallback_fw = framework
+        fallback_name = role + "_fallback"
+        out["frameworks"][fallback_name] = dict.fromkeys(("base_url", "api_key", "protocol", "provider", "api_mode"), "")
+        if role_cfg["fallback_model"]:
+            own_endpoint = any(str(block.get(name) or "").strip() for name in
+                               ("fallback_base_url", "fallback_key", "fallback_api_mode", "fallback_provider_id"))
+            if own_endpoint:
+                fallback = {"base_url": block.get("fallback_base_url", ""),
+                            "key": block.get("fallback_key", ""),
+                            "api_mode": block.get("fallback_api_mode", ""),
+                            "provider_id": block.get("fallback_provider_id", "")}
+                register(fallback_name, endpoint(fallback, fallback_fw))
+                role_cfg["fallback_framework"] = fallback_name
+            else:
+                role_cfg["fallback_framework"] = primary if fallback_fw == framework else fallback_fw
         # 09.09: зрячая замена текстовой модели на ход с картинкой (`model.vision_model`
         # в helene.json). Пусто — ядро само берёт glm-5.3-flash для glm; оценщик без
         # своего блока наследует ручку голоса вместе с адресом и моделью.
@@ -1724,21 +1759,6 @@ def _brain_config(cfg: dict) -> dict:
             # `evaluator`; чужим провайдерам ничего не подставляется.
             role_cfg["reasoning_effort"] = "low"
         out["roles"][role] = role_cfg
-    # 25.09 (C.2, баг Сергея): запасной провайдер — на СВОЁМ эндпойнте и со своим ключом.
-    # Раньше второй фреймворк описывался пустым блоком: `fallback_framework` указывал
-    # в него, а адреса и ключа там не было — ядро молча отказывало (llm.py: без ключа
-    # клиента нет), и «запасной провайдер» в конфиге не работал никогда.
-    # Ограничение ядра остаётся: один клиент на фреймворк, поэтому запасной у ДРУГОГО
-    # протокола; «подписка → свой ключ OpenAI» этим не выразить (см. отчёт 25.09).
-    voice_fw = out["roles"]["voice"]["framework"]
-    fb_fw = str(voice.get("fallback_framework") or "").strip().lower()
-    if fb_fw in ("openai", "anthropic") and fb_fw != voice_fw:
-        fb_url = str(voice.get("fallback_base_url") or "").strip()
-        fb_key = str(voice.get("fallback_key") or "").strip()
-        if fb_url:
-            out["frameworks"][fb_fw]["base_url"] = fb_url
-        if fb_key:
-            out["frameworks"][fb_fw]["api_key"] = fb_key
     out["limits"]["max_tool_iters"] = _int_or(cfg.get("max_tool_iters") or 20, 20,
                                               what="max_tool_iters")
     pricing = cfg.get("pricing")
@@ -1899,7 +1919,51 @@ def _pin_holds(target: Path, cfg: dict, built: dict) -> bool:
     return (voice.get("framework"), voice.get("model")) == (want.get("framework"), want.get("model"))
 
 
-def project_brain(tree: Path, cfg: dict) -> str:
+def _consumer_brain_config(built, code_dir):
+    """Preserved pre-alias code keeps its two-protocol role contract."""
+    if code_dir is None:
+        return built  # callers without a selected runtime request the new schema
+    import ast
+    source = Path(code_dir) / 'llm.py'
+    try:
+        module = ast.parse(source.read_text(encoding='utf-8-sig'))
+    except (OSError, SyntaxError) as exc:
+        raise RuntimeError('Selected model consumer is unreadable; config was not projected') from exc
+    if any(isinstance(node, ast.Assign)
+           and any(isinstance(t, ast.Name) and t.id == 'LLM_ENDPOINTS_API' for t in node.targets)
+           and isinstance(node.value, ast.Constant) and node.value.value == 1
+           for node in module.body):
+        return built
+    import copy
+    legacy = copy.deepcopy(built)
+    specs = built['frameworks']
+    selected = {}
+    def resolve(alias):
+        spec = specs.get(alias) or {}
+        protocol = spec.get('protocol') or alias
+        if protocol not in ('openai', 'anthropic'):
+            raise ValueError('Selected preserved code does not support this endpoint protocol')
+        if spec.get('api_mode') == 'responses':
+            raise ValueError('Selected preserved code does not support explicit Responses mode; update its code before selecting this route')
+        identity = (spec.get('base_url') or '', spec.get('api_key') or '', spec.get('api_mode') or '')
+        if protocol in selected and selected[protocol][0] != identity:
+            raise ValueError('Selected preserved code cannot represent independent same-protocol accounts; update its code or use one account')
+        selected[protocol] = (identity, spec)
+        return protocol
+    for role in legacy['roles'].values():
+        role['framework'] = resolve(role['framework'])
+        if role.get('fallback_model'):
+            role['fallback_framework'] = resolve(role.get('fallback_framework') or
+                ('openai' if role['framework'] == 'anthropic' else 'anthropic'))
+        else:
+            role.pop('fallback_framework', None)
+    legacy['frameworks'] = {key: {'base_url': '', 'api_key': ''} for key in ('openai', 'anthropic')}
+    for protocol, (_, spec) in selected.items():
+        legacy['frameworks'][protocol] = {key: spec.get(key, '') for key in ('base_url', 'api_key')}
+    return legacy
+
+
+def project_brain(tree: Path, cfg: dict, *, code_dir: Path | None = None) -> str:
     """Положить мозг из helene.json в её `memory/llm.json` — но не затирать ЕЁ выбор.
 
     У неё есть своя рука `switch_brain`: она правит этот же файл. Переписывать его на
@@ -1921,7 +1985,7 @@ def project_brain(tree: Path, cfg: dict) -> str:
             os.replace(legacy_receipt, receipt)
         except OSError as exc:  # дальше просто спроецируем заново
             log.warning("расписка мозга не перенеслась: %s", exc)
-    built = _brain_config(cfg)
+    built = _consumer_brain_config(_brain_config(cfg), code_dir)
     # Свёртки памяти — вторая по расходу статья продукта после самих ходов, и до
     # 04.09 о ней не говорила ни одна строка: роль молча брала модель голоса.
     judge, voice_role = built["roles"]["evaluator"], built["roles"]["voice"]

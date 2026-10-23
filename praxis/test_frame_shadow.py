@@ -1720,6 +1720,20 @@ class TheNineDecisionsAreHerWord(ShadowCase):
         self.assertIn("строка канона дословно", e_text)
         self.assertIn("полное каноническое тело", e_text)
 
+    def test_owner_epoch_names_actual_skill_title_and_path_without_its_body(self):
+        skills = self.base / "soul" / "skills"
+        skills.mkdir(parents=True)
+        (skills / "INDEX.md").write_text(
+            "| [Острый глаз](verify.md) | сверить перед словом |\n", encoding="utf-8")
+        (skills / "verify.md").write_text("PRIVATE_SKILL_BODY", encoding="utf-8")
+        (skills / "new.md").write_text("SECOND_PRIVATE_BODY", encoding="utf-8")
+        self._shadow(0)
+        e_text = str(self._frozen().get("e_text"))
+        self.assertIn("Острый глаз · soul/skills/verify.md — сверить перед словом", e_text)
+        self.assertIn("new · soul/skills/new.md — назначение не написано", e_text)
+        self.assertNotIn("PRIVATE_SKILL_BODY", e_text)
+        self.assertNotIn("SECOND_PRIVATE_BODY", e_text)
+
     def test_a_missing_index_is_named_not_synthesized(self):
         (self.base / "memory" / "INDEX.md").unlink()
         self._shadow(0)

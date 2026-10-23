@@ -2632,8 +2632,9 @@ select.field-input {
 }
 
 .save-bar {
-  position: sticky;
-  bottom: 0;
+  /* Each settings card owns its controls; the whole-form action must not
+     cover self-review fields while its long independent card is being read. */
+  position: static;
   margin-top: 8px;
   padding: 12px 20px;
   border: 1px solid var(--line);

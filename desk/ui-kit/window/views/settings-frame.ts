@@ -34,6 +34,7 @@ import { relayAuthCard } from "../relay-auth-card";
 import { collectConnection } from "../server-connection";
 import { paperDialog } from "../../paper-dialog";
 import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
+import { selfReviewCard } from "./self-review-card";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -74,7 +75,7 @@ export interface Config {
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
   backup?: { every_days?: number; keep?: number; dir?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; vision_model?: string; pinned?: boolean };
+  model?: { framework?: string; provider?: string; provider_id?: string; api_mode?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; fallback_api_mode?: string; fallback_provider_id?: string; vision_model?: string; pinned?: boolean };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
   // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
@@ -244,7 +245,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // происходило, и никто не говорил, что не происходит.
     center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
     // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
-    center.append(lookCard());
+    center.append(selfReviewCard(), lookCard());
     mountSettings(container, center);
     return;
   }
@@ -314,6 +315,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   for (const box of built.cards) center.append(box);
 
+  center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
+
   center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
@@ -329,16 +332,38 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   // --- автозапуск
   const auto = el("div");
+  let autoState: boolean | null = null;
+  const readAutostart = async () => {
+    const value = await shell<boolean>("autostart_get");
+    if (typeof value !== "boolean") throw new Error("Не удалось определить состояние автозапуска");
+    autoState = value;
+    autoToggle.setAttribute("aria-checked", String(value));
+    return value;
+  };
   // На macOS это LaunchAgent при входе в систему — «Windows» в подписи был бы чужим словом.
   const autoToggle = toggle(posix ? "Запускать при входе в систему" : "Запускать при входе в Windows", false, async (v) => {
+    autoToggle.disabled = true;
+    autoToggle.setAttribute("aria-busy", "true");
+    let failure = "";
     try {
       await shell("autostart_set", { on: v });
-      toast(v ? "Автозапуск включён" : "Автозапуск выключен");
     } catch (e) {
-      toast(humanError(e).text);
+      failure = humanError(e).text;
+    }
+    try {
+      const current = await readAutostart();
+      toast(failure || (current !== v ? "Изменение автозапуска не подтверждено" : current ? "Автозапуск включён" : "Автозапуск выключен"));
+    } catch (e) {
+      autoToggle.setAttribute("aria-checked", String(autoState ?? false));
+      autoState = null;
+      toast([failure, humanError(e).text].filter(Boolean).join(" · "));
+    } finally {
+      autoToggle.disabled = autoState === null;
+      autoToggle.removeAttribute("aria-busy");
     }
   });
-  shell<boolean>("autostart_get").then((v) => autoToggle.setAttribute("aria-checked", String(v))).catch(() => {});
+  autoToggle.disabled = true;
+  readAutostart().then(() => { autoToggle.disabled = false; }).catch((e) => toast(humanError(e).text));
   auto.append(autoToggle);
   center.append(inGroup(card("Автозапуск", auto), GROUP.app));
 

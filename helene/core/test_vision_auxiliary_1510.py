@@ -162,7 +162,8 @@ class EditionVisionAuxiliary(unittest.TestCase):
             "tree_inventory_scope": "published_payload", "version": "test", "frozen_tree": "test",
             "frozen_tree_files": {"llm.py": hashlib.sha256(edition_bytes).hexdigest()},
         }), encoding="utf-8")
-        composer_path = Path(__file__).parents[2] / "desk/installer/candidate_tree.py"
+        from test_source_root import source_root
+        composer_path = source_root(__file__) / "desk/installer/candidate_tree.py"
         spec = importlib.util.spec_from_file_location("edition_vision_composer", composer_path)
         composer = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(composer)

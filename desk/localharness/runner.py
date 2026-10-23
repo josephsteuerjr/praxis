@@ -118,6 +118,7 @@ _STARTED_UTC = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 _continuity = None
 _alarms = None
 _forge_events = None
+_self_review = None
 _busy: dict = {"busy": False, "run": "", "since": 0.0, "chat_id": ""}
 _mode: dict = {}       # картина режима (modes.resolve) — едет в анатомию
 _deliver_unspoken = True   # agent.deliver_unspoken в helene.json; см. _turn_in_window
@@ -190,7 +191,7 @@ def _publish_fold_policy(tree: Path) -> None:
         log.warning("политика свёртки не передана окну", exc_info=True)
 
 
-def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], str]:
+def _dialogue(chat_id: str, sidecar: dict | None = None, *, continuation: dict | None = None) -> tuple[list[dict], str]:
     """Разговор ролями: (история, то-на-что-она-отвечает-сейчас).
 
     Правило ЕЁ раннера, дословно (`_turns_to_dialogue` в mtproto_runner): граница
@@ -207,6 +208,8 @@ def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], st
     """
     if sidecar is not None:
         sidecar.clear()
+    if continuation is not None:
+        continuation.clear()
     try:
         records = _life.hot_records(chat_id, _life.hot_bounds(chat_id)[2])
         import dialogue_continuity
@@ -268,7 +271,26 @@ def _dialogue(chat_id: str, sidecar: dict | None = None) -> tuple[list[dict], st
                 groups[-1].append(dict(ref))
             sidecar.update(history=groups,
                            current=[dict(ref) for ref in refs[last_self + 1:]])
+    if continuation is not None and globals().get('_tree') is not None:
+        # Same selected records as the renderer, not a second independently
+        # sampled history. Frontier/policy changes invalidate first-input reuse.
+        try:
+            continuation.update(chat=str(chat_id), source=str(Path(_tree).resolve()),
+                cache_root=str(Path(_tree) / 'memory/.state/frame_continuation'),
+                generation={'frontier': _life._load_state(chat_id).get('frontier', []),
+                            'bounds': _life.hot_bounds(chat_id),
+                            'chars': _life.tape_chars_for(chat_id),
+                            'profile': getattr(_life, 'helene_owner_context', {}),
+                            'renderer': 'helene-local-dialogue-v1'}, rows=admitted)
+        except (OSError, ValueError, AttributeError):
+            continuation.clear()
     return history, current
+
+
+def _continuation_snapshot(chat_id):
+    source = {}
+    _dialogue(chat_id, continuation=source)
+    return source
 
 
 def _last_n(chat_id: str = "") -> int:
@@ -616,8 +638,13 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     keat_stream = (os.environ.get("PRAXIS_KEAT_CAPTURE") == "on"
                    and bool(getattr(ctx, "is_dm", False)) and bool(getattr(ctx, "owner", False)))
     sidecar: dict | None = {} if keat_stream else None
-    history, current = (_dialogue(chat_id, sidecar) if sidecar is not None
-                        else _dialogue(chat_id))
+    continuation_api = getattr(_agent, 'frame_continuation', None)
+    source = {}
+    if continuation_api is not None and not media_refs and not keat_stream:
+        history, current = _dialogue(chat_id, sidecar, continuation=source)
+    else:
+        history, current = (_dialogue(chat_id, sidecar) if sidecar is not None
+                            else _dialogue(chat_id))
     orient = _orient(chat_id)
     if getattr(ctx, "owner", False) and getattr(ctx, "is_dm", False) and _tree is not None:
         # Distribution text is a candidate, never persona. Only the owner's
@@ -649,9 +676,13 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         turn_orient = orient
         if priority_note:
             turn_orient = str(priority_note) + "\n\n" + str(orient or "")
-        envelope = _agent.voice_turn_envelope(
-            chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
-            orient=turn_orient, **extra)
+        from contextlib import nullcontext
+        source_binding = (continuation_api.bind_source(source, lambda: _continuation_snapshot(chat_id))
+                          if continuation_api is not None else nullcontext())
+        with source_binding:
+            envelope = _agent.voice_turn_envelope(
+                chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
+                orient=turn_orient, **extra)
         return envelope
     except Exception:
         log.exception("ход упал в дереве [%s]", chat_id)
@@ -1513,7 +1544,7 @@ def _say_tree_is_busy(tree: Path, cfg: dict, holder: dict) -> None:
 _CONFIG_WATCH_SEC = float(os.getenv("HELENE_CONFIG_WATCH_SEC", "5") or 5)
 
 
-def _config_watch_forever(config_path: Path, tree: Path) -> None:
+def _config_watch_forever(config_path: Path, tree: Path, code_dir: Path) -> None:
     """helene.json — на лету (25.09, C.1): смена мозга применяется без снятия службы.
 
     Раньше мозг проецировался в её llm.json один раз на старте (`project_brain` в
@@ -1549,7 +1580,8 @@ def _config_watch_forever(config_path: Path, tree: Path) -> None:
             # агент не гадал, чья это воля (Джарвис 29.09: «конфиг стёрло обновление»).
             import brain_trail
             log.info("helene.json изменился — %s",
-                     brain_trail.project(tree, config_path, cfg, boot.project_brain))
+                     brain_trail.project(tree, config_path, cfg,
+                         lambda selected_tree, selected_cfg: boot.project_brain(selected_tree, selected_cfg, code_dir=code_dir)))
         except Exception:
             log.exception("мозг из изменённого helene.json не спроецировался")
         _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
@@ -2109,6 +2141,9 @@ def _update_report_due() -> None:
     receipt = updates.pending_report(_tree)
     if receipt is None:
         return
+    review = globals().get("_self_review")
+    if review is not None:
+        review.observe_update(receipt)
     plan_id, state = str(receipt.get("id") or ""), str(receipt.get("state") or "")
     inspect = receipt.get("kind") == "package" or state == "done"
     request = None
@@ -3143,7 +3178,8 @@ def main() -> None:
             raise SystemExit(3) from exc
     try:
         import brain_trail
-        log.info("%s", brain_trail.project(tree, config_path, cfg, boot.project_brain))
+        log.info("%s", brain_trail.project(tree, config_path, cfg,
+                 lambda selected_tree, selected_cfg: boot.project_brain(selected_tree, selected_cfg, code_dir=code_dir)))
     except vision_policy.MigrationError as exc:
         # A denied ACL is not a failed *history* write to retry through a
         # second unobserved producer. No model loads until the profile is safe.
@@ -3151,7 +3187,7 @@ def main() -> None:
         raise SystemExit(3) from exc
     except Exception:
         log.exception("след мозга на старте не записался — проецирую без него")
-        log.info("%s", boot.project_brain(tree, cfg))
+        log.info("%s", boot.project_brain(tree, cfg, code_dir=code_dir))
     try:
         vision_policy.migrate(tree, code_dir=code_dir,
                               read_dotenv=bool(cfg.get("read_dotenv")))
@@ -3212,6 +3248,14 @@ def main() -> None:
     agent.OWNER_INPUT_DRAIN = _drain_owner_inputs
     import tasks
     import forge
+    try:
+        _desk_control()
+        from localharness.self_review_integration import Integration
+        global _self_review
+        program = Path(__file__).resolve().parents[2]
+        _self_review = Integration(tree, code_dir, program, forge, config_path, agent).install()
+    except Exception:
+        log.exception("self-review unavailable; application startup remains independent")
     import perception
     from core import events as core_events
     _alarms = alarm_clock.AlarmClock(_continuity, tasks)
@@ -3386,7 +3430,7 @@ def main() -> None:
     threading.Thread(target=_retention_forever, name="retention", daemon=True).start()
     threading.Thread(target=_keat_care_forever, name="keat-care", daemon=True).start()
     threading.Thread(target=_recall_care_forever, name="recall-care", daemon=True).start()
-    threading.Thread(target=_config_watch_forever, args=(config_path, tree),
+    threading.Thread(target=_config_watch_forever, args=(config_path, tree, code_dir),
                      name="config-watch", daemon=True).start()
     # Control must run independently: the main loop is inside the model/tool turn.
     import atexit
@@ -3492,6 +3536,11 @@ def main() -> None:
             _forge_events_due()
         except Exception:
             log.exception("события Forge ждут следующего тика")
+        if _self_review is not None:
+            try:
+                _self_review.tick(paused=owner_stop.paused())
+            except Exception:
+                log.exception("self-review maintenance unavailable; owner dialogue and Stop remain active")
         # Итог обновления на сервере (27.09): исполнитель пишет его ПОСЛЕ проверок, а
         # проверки ждут, что движок уже поднят, — поэтому смотрим не раз на старте, а
         # раз в полминуты.

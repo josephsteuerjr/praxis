@@ -40,9 +40,11 @@ def _iter_events(path: Path):
                 if not line:
                     continue
                 try:
-                    yield json.loads(line)
+                    event = json.loads(line)
                 except ValueError:
                     continue
+                if isinstance(event, dict):
+                    yield event
     except OSError:
         return
 
@@ -59,7 +61,8 @@ def calls_from_run(run_dir: Path) -> list[dict]:
     """Один прогон → список вызовов модели с осями разреза. Ничего не додумывает:
     отсутствующее поле остаётся пустым, а не нулём."""
     manifest = _load_json(run_dir / "manifest.json")
-    context = manifest.get("context") or {}
+    context = manifest.get("context")
+    context = context if isinstance(context, dict) else {}
     kind = str(context.get("kind") or "")
     rows: list[dict] = []
     frame_by_call: dict[str, dict] = {}
@@ -70,7 +73,9 @@ def calls_from_run(run_dir: Path) -> list[dict]:
         if ek == "model_input":
             meta = ev.get("metadata")
             if not isinstance(meta, dict):
-                meta = ((ev.get("result") or {}).get("metadata") or {})
+                result = ev.get("result")
+                meta = result.get("metadata") if isinstance(result, dict) else None
+            meta = meta if isinstance(meta, dict) else {}
             frame_by_call[str(ev.get("call_id") or "")] = {
                 "frame": str(meta.get("frame_id") or "")[:16],
                 "frame_mode": str(meta.get("mode") or ("reused" if meta.get("reused") else "")),
@@ -78,7 +83,8 @@ def calls_from_run(run_dir: Path) -> list[dict]:
             }
         elif ek == "model_completed":
             ordinal += 1
-            usage = ev.get("usage") or {}
+            usage = ev.get("usage")
+            usage = usage if isinstance(usage, dict) else {}
             meta = frame_by_call.get(str(ev.get("call_id") or ""), {})
             current = {
                 "run": str(ev.get("run_id") or run_dir.name),
@@ -181,10 +187,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", default="", help="куда положить полный JSON (группы + строки)")
     args = parser.parse_args(argv)
     since = None
-    if args.since:
-        since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    elif args.days:
-        since = datetime.now(timezone.utc) - timedelta(days=args.days)
+    if args.days < 0:
+        parser.error("--days must be nonnegative")
+    try:
+        if args.since:
+            since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        elif args.days:
+            since = datetime.now(timezone.utc) - timedelta(days=args.days)
+    except (ValueError, OverflowError):
+        parser.error("cutoff is outside the supported datetime range or has an invalid date")
     axes = [a.strip() for a in args.by.split(",") if a.strip()]
     unknown = [a for a in axes if a not in AXES]
     if unknown:

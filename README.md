@@ -1,33 +1,25 @@
 # Praxis & Hélène
 
-Praxis is an agent runtime with persistent memory, Python tools, Telegram and
-durable coding tasks. Hélène is its desktop application for Windows, macOS Apple
-Silicon and Linux x86_64 (DEB/RPM). Agents can run locally or on a server.
+**A persistent AI agent, and a desktop home for agents you make your own.**
+
+Praxis is the agent runtime: memory, tools, Telegram, durable work and self-authorship.
+Hélène brings it to a desktop with a calm, paper-like interface, independent agents,
+voice, files and a dedicated Doctor. An agent can run locally or on your server.
 
 [Download Hélène](https://github.com/josephsteuerjr/praxis/releases/latest) ·
 [Release history](https://github.com/josephsteuerjr/praxis/releases) ·
 [Relay](https://github.com/josephsteuerjr/praxis-relay) ·
 [Build and release guide](desk/installer/RELEASE.md)
 
-## Hélène 1.7.0
+**Hélène 1.6.1** is available for Windows, macOS Apple Silicon and Linux x86_64
+(DEB/RPM). It includes server-to-Windows computer access, an X11/AT-SPI
+Linux desktop, configurable owner context, update inspection and Telegram
+recovery that retains missed messages without replying to every old mention.
+[Read the release notes](https://github.com/josephsteuerjr/praxis/releases/tag/v1.6.1).
 
-- Nested Forge tasks link workers, parent tasks and results, with separate
-  completion and acceptance records.
-- Focus reads provide addressable file pages and source fingerprints; truncated
-  output is marked explicitly.
-- System shows the available tool catalogue. Execution details distinguish direct
-  Python file operations, submitted command requests and confirmed process state.
-- Auxiliary vision can describe a screenshot through a separate model while the
-  selected main model continues the conversation.
-- Windows upgrades verify the embedded Python import policy before runtime reuse,
-  including access to the installed Forge tree.
-- Four additional default skills cover secrets, infrastructure authorization,
-  Windows paths and verification. Authored changes are preserved during upgrades.
+**Hélène 1.6.1** adds explicit Pause/Continue for the selected agent in the desktop, phone and Telegram Mini App, plus owner-only `/pause` and `/resume` in the agent’s Telegram DM. Paused agents keep receiving messages without starting replies; resuming does not replay accumulated mentions. It also repairs passive chat refresh, folding status and context-setting links. Update the server harness as well as the client when using a server agent.
 
-[Release notes, downloads and verification receipts](https://github.com/josephsteuerjr/praxis/releases/tag/v1.7.0)
-· [Python tools and Forge guide](desk/docs/PYTHON-TOOLS-1.7.0.md)
-
-## Independent agents
+## A home for several agents
 
 - **Independent agents.** Each agent has its own constitution, memory, settings, files
   and runtime. Switch agents in the window, choose the default, or open a specific one.

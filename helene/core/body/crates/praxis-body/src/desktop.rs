@@ -20,6 +20,12 @@ use serde_json::Value;
 #[cfg(any(windows, target_os = "macos", test))]
 use uuid::Uuid;
 
+// Hélène's explicit Windows opt-in moves only three OS reads to Python. The
+// protocol, identity check and journal remain in the native body runtime.
+#[cfg(windows)]
+#[path = "cu_python_read.rs"]
+mod cu_python_read;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeDesktopCapability {
     pub name: &'static str,
@@ -134,12 +140,19 @@ pub fn descriptors() -> Vec<CapabilityDescriptor> {
 }
 
 pub fn adapter_descriptor() -> AdapterDescriptor {
-    // Windows-строка не меняется; macOS — свой адаптер с теми же глаголами и формами
-    // (порт 19.09), и доступен он ровно там, где собран.
+    // An explicit Windows read opt-in changes the implementation, not the wire
+    // capabilities. Keep the native default identity; name the mixed provider
+    // honestly so body.status does not report all three reads as native.
+    #[cfg(windows)]
+    let python_reads = cu_python_read::selected_read("desktop.status");
+    #[cfg(not(windows))]
+    let python_reads = false;
     let (name, version) = if cfg!(target_os = "macos") {
         ("native-macos-desktop", "1")
     } else if cfg!(target_os = "linux") {
         ("native-linux-x11-desktop", "1")
+    } else if python_reads {
+        ("native-win32-with-python-reads", "3+python-read-1")
     } else {
         ("native-win32-desktop", "3")
     };
@@ -331,7 +344,13 @@ fn capture_name(requested: &str) -> String {
 }
 
 pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value> {
+    #[cfg(windows)]
+    let python_reads = cu_python_read::selected_read(capability);
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        #[cfg(windows)]
+        if python_reads {
+            return cu_python_read::dispatch_read(capability, args);
+        }
         return platform::dispatch(capability, args, state_dir);
     };
     if handle.runtime_flavor() != tokio::runtime::RuntimeFlavor::MultiThread {
@@ -341,7 +360,13 @@ pub fn dispatch(capability: &str, args: Value, state_dir: &Path) -> Result<Value
     let state_dir = PathBuf::from(state_dir);
     tokio::task::block_in_place(|| {
         handle.block_on(async move {
-            tokio::task::spawn_blocking(move || platform::dispatch(&capability, args, &state_dir))
+            tokio::task::spawn_blocking(move || {
+                #[cfg(windows)]
+                if python_reads {
+                    return cu_python_read::dispatch_read(&capability, args);
+                }
+                platform::dispatch(&capability, args, &state_dir)
+            })
                 .await
                 .context("native desktop worker stopped")?
         })

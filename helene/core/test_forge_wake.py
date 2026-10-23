@@ -671,7 +671,9 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
         killpg.assert_not_called()
         run.assert_not_called()
         for text in said:
-            self.assertIn("не трогаю", text, f"убийство вслепую осталось здесь: {text}")
+            self.assertIn("терминальный статус НЕ записан", text)
+        state = json.loads((forge._unit_dir("code-k", "processes", "proc-1") / "state.json").read_text())
+        self.assertEqual(state["status"], "running", "an unproved stop cannot fabricate a terminal result")
 
 
 class TestFinishTellsTheTruthAndDoesNotHoldTheLock(unittest.TestCase):
