@@ -167,20 +167,39 @@ window.__HELENE__ = {shell:'python', platform:%s,
 (function preferences(saved){
  const store=window.localStorage, originalSet=Storage.prototype.setItem, originalRemove=Storage.prototype.removeItem;
  for(const [key,value] of Object.entries(saved)) originalSet.call(store,key,value);
- let pending=Promise.resolve(), seen=%s, revision=0;
+ let pending=Promise.resolve(), seen=%s, revision=0, appearanceEpoch=0;
  const owned=['helene.look','frame.theme','frame.rail','frame.panel','frame.rail.width','frame.panel.width','helene.zoom'];
  const fail=error=>{console.error(error);window.dispatchEvent(new CustomEvent('helene:preference-error',{detail:String(error)}));};
+ // A revision is acknowledged only after its canonical values reach this renderer.
+ const accept=result=>{
+  for(const key of owned){if(key in result.values)originalSet.call(store,key,result.values[key]);else originalRemove.call(store,key);}
+  seen=result.seen;window.dispatchEvent(new CustomEvent('helene:appearance',{detail:result}));
+ };
  const persist=(key,value)=>{if(/^(frame[.]|helene[-.]|settings[.]|draft[.])/.test(key)) {
-  revision++;
+  revision++;const appearance=owned.includes(key), issuedEpoch=appearanceEpoch;
   pending=pending.then(async()=>{
-   if(seen===null) seen=(await window.__HELENE__.invoke('appearance_read')).seen;
-   const result=await window.__HELENE__.invoke('window_preferences',{key,value,seen:owned.includes(key)?seen:null});
-   if(!result.ok) {seen=null;throw new Error(result.error);} if(owned.includes(key)) seen=result.seen;
-  }).catch(fail);}};
+   if(appearance && issuedEpoch!==appearanceEpoch)return; // stale queued full-Look intent
+   try {
+    if(appearance && seen===null){
+     appearanceEpoch++;
+     const canonical=await window.__HELENE__.invoke('appearance_read');
+     appearanceEpoch++;accept(canonical); // also invalidate edits issued while recovery was awaiting I/O
+     fail('Appearance refreshed after an uncertain save; repeat your appearance edit.');return;
+    }
+    const result=await window.__HELENE__.invoke('window_preferences',{key,value,seen:appearance?seen:null});
+    if(!result.ok){
+     if(appearance){appearanceEpoch++;accept(result);}
+     fail(result.error);return;
+    }
+    if(appearance)accept(result); // unrelated draft/settings writes acknowledge no appearance
+   } catch(error) {
+    if(appearance){appearanceEpoch++;seen=null;}
+    fail(error);
+   }
+  });}};
  window.__HELENE__.syncAppearance=()=>{const at=revision;pending=pending.then(async()=>{
    const result=await window.__HELENE__.invoke('appearance_read');if(at!==revision || result.seen===seen)return;
-   for(const key of owned){if(key in result.values)originalSet.call(store,key,result.values[key]);else originalRemove.call(store,key);}
-   seen=result.seen;window.dispatchEvent(new CustomEvent('helene:appearance',{detail:result}));
+   accept(result);
  }).catch(fail);};
  Storage.prototype.setItem=function(key,value){originalSet.call(this,key,value);if(this===store)persist(String(key),String(value));};
  Storage.prototype.removeItem=function(key){originalRemove.call(this,key);if(this===store)persist(String(key),null);};
