@@ -94,22 +94,31 @@ fn package(app:&tauri::AppHandle, extensions:&[String]) -> Result<PathBuf,String
     };
     let root=if local {beside} else {staging.join("Helene")};
     let main=main_asset();
-    for asset in [main.as_str(),"Helene-components-toolchain.zip","Helene-components-xtts-model.zip","Helene-components-xtts-runtime.zip","Helene-components-whisper.zip"] {
-        let needed=if asset.contains("toolchain") {extensions.iter().any(|s|s=="toolchain")}
-            else if asset.contains("xtts") {extensions.iter().any(|s|s=="xtts")}
-            else if asset.contains("whisper") {extensions.iter().any(|s|s=="whisper")} else {true};
-        if !needed {continue}
-        if local && asset==main {continue}
-        let _=app.emit("migration-progress",serde_json::json!({"stage":"downloading","asset":asset}));
-        let archive=cached_archive(app,&downloads,asset,None)?;
-        let _=app.emit("migration-progress",serde_json::json!({"stage":"verifying","asset":asset}));
-        // A marker is not a receipt for the extracted bytes. Reuse only after
-        // comparing every member with the archive whose release SHA was checked.
-        if verify_package(&archive,&root).is_ok(){continue}
-        let _=app.emit("migration-progress",serde_json::json!({"stage":"unpacking","asset":asset}));
-        extract(app,&archive,&staging,asset)?;
+    if !local {
+        let archive=cached_archive(app,&downloads,&main,None)?;
+        if verify_package(&archive,&root).is_err(){extract(app,&archive,&staging,&main)?;}
     }
-    if !package_present(&root){return Err("Incomplete Python package".into())} Ok(root)
+    if !package_present(&root){return Err("Incomplete Python package".into())}
+    // Verified incoming Python owns the shared URL/SHA parser. No second Rust
+    // manifest dialect and no same-tag guess for optional heavyweight archives.
+    let mut command=Command::new(root.join("runtime/python.exe"));
+    command.args(["-s","-m","localharness.component_downloads","--prepare"])
+        .arg(&root).args(["--extensions",&extensions.join(",")])
+        .current_dir(&root).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(directory)=argument("--offline-dir"){command.args(["--offline",&directory]);}
+    #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
+    let mut child=command.spawn().map_err(|e|e.to_string())?;
+    let stdout=child.stdout.take().ok_or("Component progress unavailable")?;
+    let stderr=child.stderr.take().ok_or("Component errors unavailable")?;
+    let errors=std::thread::spawn(move||{use std::io::Read;let mut text=String::new();let _=stderr.take(65536).read_to_string(&mut text);text});
+    for line in BufReader::new(stdout).lines(){
+        let line=line.map_err(|e|e.to_string())?;
+        if let Ok(value)=serde_json::from_str::<serde_json::Value>(&line){let _=app.emit("migration-progress",value);}
+    }
+    let status=child.wait().map_err(|e|e.to_string())?;
+    let error=errors.join().map_err(|_|"Component error reader failed")?;
+    if !status.success(){return Err(format!("Optional components: {error}"))}
+    Ok(root)
 }
 fn argument(key:&str)->Option<String>{let a:Vec<_>=std::env::args().collect();a.windows(2).find(|w|w[0]==key).map(|w|w[1].clone())}
 fn selected_extensions(old:&std::path::Path,mode:&str)->Vec<String>{

@@ -3297,6 +3297,10 @@ def main() -> None:
         kit_proposals.install(agent, tree)
     except Exception:
         log.exception("рука review_kit не подключена: предложения остаются непринятыми")
+    window_root = os.environ.get('HELENE_WINDOW_ROOT')
+    if window_root:
+        from localharness import window_preferences
+        window_preferences.install(agent, Path(window_root))
     # Модель, закреплённая владельцем (1.2.4): пока стоит галочка, switch_brain агента
     # отказывает словами — агент Дмитрия трижды уходил на мёртвый мозг «по просьбе хозяина».
     try:

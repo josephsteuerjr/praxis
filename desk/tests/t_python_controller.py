@@ -17,7 +17,7 @@ class ControllerTests(unittest.TestCase):
             root=Path(temporary);(root/'helene.json').write_text('{"tree":"data"}')
             controller=Controller(root,lambda *args:None);order=[]
             with patch.object(controller,'refresh',side_effect=lambda:order.append('refresh')),patch('localharness.python_relay.hot_settings',side_effect=lambda agent:order.append('configure')):
-                result=controller.invoke('config_save',{'config':json.dumps({'tree':'data','relay':{'enabled':True},'model':{'model':'gpt-test','reasoning_effort':'low'}})})
+                result=controller.invoke('config_save',{'config':json.dumps({'tree':'data','code':str(Path(__file__).resolve().parents[2]/'helene/core'),'relay':{'enabled':True},'model':{'model':'gpt-test','reasoning_effort':'low'}})})
                 self.assertTrue(result['ok']);self.assertEqual(order,['refresh','configure'])
                 projected=json.loads((root/'data/memory/llm.json').read_text(encoding='utf-8'))
                 self.assertEqual(projected['roles']['voice']['model'],'gpt-test')

@@ -75,12 +75,15 @@ export function mountPanelWidths(app: HTMLElement): () => void {
     handle.addEventListener("keydown", keydown);
     handle.addEventListener("focus", apply);
     window.addEventListener("resize", apply);
+    const appearance = () => { const raw=Number(localStorage.getItem(key));desired=Number.isFinite(raw)&&raw>=220?raw:(side === "rail"?300:380);apply(); };
+    window.addEventListener("helene:appearance", appearance);
     const observer = new MutationObserver(apply);
     observer.observe(app, { attributes: true, attributeFilter: ["class"] });
     cleanup.push(() => observer.disconnect());
     apply();
     cleanup.push(() => {
       end(); window.removeEventListener("resize", apply);
+      window.removeEventListener("helene:appearance", appearance);
       handle.removeEventListener("pointerdown", down);
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", end);

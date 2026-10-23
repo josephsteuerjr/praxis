@@ -144,10 +144,15 @@ def update_download(owner,url,sha256=None,extensions=None):
     result=_download(url,folder/name,sha256 or asset_sha(url),report)
     components=[]
     cache=folder/'.helene-downloads'/name.removesuffix('.zip');cache.mkdir(parents=True,exist_ok=True)
-    # Components belong to the same release directory, not a moving latest URL.
-    for component in dict.fromkeys(n for s in selected for n in EXTENSION_ASSETS[s]):
-        component_url=urllib.parse.urlunsplit(parsed._replace(path=parsed.path.rsplit('/',1)[0]+'/'+component))
-        components.append(_download(component_url,cache/component,asset_sha(component_url),report))
+    from . import component_downloads
+    manifest=component_downloads.incoming(result['path'])
+    if manifest is not None:
+        components=component_downloads.fetch(owner.root,manifest,selected,report)
+    else:
+        # Old packages have no map. Only that legacy format uses same-tag URLs.
+        for component in dict.fromkeys(n for s in selected for n in EXTENSION_ASSETS[s]):
+            component_url=urllib.parse.urlunsplit(parsed._replace(path=parsed.path.rsplit('/',1)[0]+'/'+component))
+            components.append(_download(component_url,cache/component,asset_sha(component_url),report))
     receipt=folder/(name+'.download.json')
     receipt.write_text(json.dumps({'archive':result,'components':components,'extensions':selected},indent=2),encoding='utf-8')
     result['components']=components
@@ -192,7 +197,16 @@ def update_install(owner,path,forceExtensions=False):
         value=json.loads(receipt.read_text(encoding='utf-8'))
         rows=[value['archive'],*value['components']]
         cache=folder/'.helene-downloads'/archive.name.removesuffix('.zip')
-        if Path(rows[0]['path']).resolve()!=archive or any(Path(r['path']).resolve().parent not in (folder,cache) or Path(r['path']).name not in COMPONENTS for r in rows[1:]):
+        from . import component_downloads
+        manifest=component_downloads.incoming(archive)
+        pinned={component_downloads.cache_name(a):a for a in component_downloads.select(manifest,value['extensions'])} if manifest else {}
+        def valid_component(row):
+            candidate=Path(row['path']).resolve()
+            if manifest:
+                record=pinned.get(candidate.name)
+                return candidate.parent==component_downloads.cache_dir(owner.root).resolve() and record is not None and row.get('sha256')==record['sha256'] and row.get('bytes')==record['size']
+            return candidate.parent==cache and candidate.name in COMPONENTS
+        if Path(rows[0]['path']).resolve()!=archive or any(not valid_component(r) for r in rows[1:]):
             raise ValueError('Download receipt paths differ')
         for row in rows:
             candidate=Path(row['path'])

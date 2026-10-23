@@ -213,7 +213,12 @@ class Runtime(unittest.TestCase):
         record = self.runtime.service.status()[0]
         integration.command(self.tree, {"action": "cancel", "id": record["id"]})
         self.tick()
-        self.assertEqual(len(self.forge.stopped), 1)
+        # This fake never confirms exit. Maintenance retries the SAME unit,
+        # rather than treating a stop request as successful cancellation.
+        self.assertTrue(self.forge.stopped)
+        self.assertEqual(set(self.forge.stopped), {record['critics'][0]['unit_id']})
+        self.assertEqual(self.runtime.service.status(record['id'])['execution'], 'unknown')
+        self.assertEqual(len(self.forge.spawned), 1)
         integration.command(self.tree, {"action": "disposition", "id": record["id"],
                             "decision": "continue-with-reason", "reason": "review stopped; not a clear verdict",
                             "subject_sha256": record["subject_sha256"]})

@@ -1,7 +1,7 @@
 import { shell } from './api';
 import { button, card, el } from '../dom';
 
-type Component = { id: string; ready: boolean; installed: boolean; error?: string; source?: string; toolchain?: string };
+type Component = { id: string; ready: boolean; installed: boolean; error?: string; source?: string; toolchain?: string; download_bytes?: number };
 
 /** The startup view and Settings use the same component controls. */
 export function componentsCard(): HTMLElement {
@@ -15,10 +15,11 @@ export function componentsCard(): HTMLElement {
       rows.replaceChildren();
       for (const item of components) {
         const row = el('div', 'actions');
-        if (item.id !== 'relay') continue;
-        row.append(el('span', '', `Встроенное реле: ${item.installed ? 'установлено' : item.ready ? 'готово к установке' : 'комплект недоступен'}`));
+        const names: Record<string, string> = {relay:'Встроенное реле', toolchain:'Набор пересборки', xtts:'XTTS · CPML, некоммерческая лицензия', whisper:'Whisper · распознавание речи'};
+        row.append(el('span', '', `${names[item.id] || item.id}: ${item.installed ? 'установлено' : item.ready ? 'можно установить' : 'комплект недоступен'}`));
+        if (!item.installed && item.download_bytes) row.append(el('span', 'field-hint', `${(item.download_bytes / 1024 / 1024).toFixed(0)} МБ · проверенный кеш используется повторно`));
         if (item.ready && !item.installed) {
-          const install = button('Установить', 'quiet', async () => {
+          const install = button(item.id === 'relay' ? 'Установить' : 'Скачать и установить', 'quiet', async () => {
             install.disabled = true;
             try {
               await shell('component_install', { name: item.id });

@@ -9,6 +9,21 @@ from localharness import boot
 spec=importlib.util.spec_from_file_location('legacy_brain_consumer',ROOT/'praxis/llm.py')
 legacy=importlib.util.module_from_spec(spec);sys.modules[spec.name]=legacy;spec.loader.exec_module(legacy)
 class Preserved(unittest.TestCase):
+    def test_controller_save_projects_through_actual_retained_normalizer(self):
+        from localharness.python_controller import Controller
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);code=root/'code';code.mkdir()
+            (code/'llm.py').write_bytes((ROOT/'praxis/llm.py').read_bytes())
+            cfg={'tree':'data','code':'code','model':{'framework':'openai','key':'TEST-ONLY','model':'after-save'}}
+            (root/'helene.json').write_text(json.dumps(cfg))
+            controller=Controller(root,lambda *a:None)
+            with patch.object(controller,'refresh'):
+                result=controller.invoke('config_save',{'config':json.dumps(cfg)})
+            self.assertTrue(result['ok']);self.assertNotIn('warning',result)
+            actual=legacy._normalize(json.loads((root/'data/memory/llm.json').read_text(encoding='utf-8')))
+            self.assertEqual(actual['roles']['voice']['framework'],'openai')
+            self.assertEqual(actual['roles']['voice']['model'],'after-save')
     def test_old_openai_only_normalizer_receives_legacy_role_and_key(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);code=root/'code';code.mkdir();(code/'llm.py').write_bytes((ROOT/'praxis/llm.py').read_bytes())

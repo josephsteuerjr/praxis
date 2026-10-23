@@ -85,6 +85,7 @@ class Integration:
                                           self._config().get("self_review", {}))
         self.seen_config = None
         self.next_tick = 0.0
+        self._settled_commands = {}
 
     def _config(self):
         from localharness import boot
@@ -225,8 +226,14 @@ class Integration:
                 self.seen_config = stamp
             self.observe_updates()
             for path in sorted((_root(self.tree) / "commands").glob("command-*.json")):
+                stamp = path.stat()
+                signature = (stamp.st_mtime_ns, stamp.st_size)
+                if self._settled_commands.get(path) == signature:
+                    continue
                 asked = _read(path)
                 if asked.get("state") != "queued":
+                    if asked.get('state') in {'done','error'}:
+                        self._settled_commands[path] = signature
                     continue
                 try:
                     action = asked["action"]
@@ -245,8 +252,9 @@ class Integration:
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     asked.update(state="error", error=str(exc), at=time.time())
                 self_review._write(path, asked)
-            if not paused:
-                self.service.tick()
+                stamp = path.stat()
+                self._settled_commands[path] = (stamp.st_mtime_ns, stamp.st_size)
+            self.service.tick(paused=paused)
             self.publish()
         except (OSError, ValueError, TypeError) as exc:
             log.exception("self-review maintenance failed; startup and Stop remain independent")

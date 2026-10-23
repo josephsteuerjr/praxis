@@ -225,10 +225,10 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
         (mark ? `<span class="st-state">${esc(mark)}</span>` : "") +
         (detail.length ? `</button><div class="st-detail" hidden>${detail.join("")}</div>` : `</div>`) });
     });
-    if (it.text) {
+    if (it.text || it.text_ref) {
       rows.push({ key: "text:" + key, cls: "st st-word", html:
         `<div class="st-line">${icon("word")}<span class="st-label">Слово</span></div>` +
-        textBox("text:" + key, it.text, { truncated: !!it.text_truncated, ref: it.text_ref, run: runId }) });
+        textBox("text:" + key, it.text || "", { truncated: !it.text || !!it.text_truncated, ref: it.text_ref, run: runId }) });
     }
   });
   const term = d.manifest?.terminal || {};

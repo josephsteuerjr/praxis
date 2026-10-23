@@ -198,8 +198,11 @@ class DeliveryTests(unittest.TestCase):
             binary=put(root,'helene-relay.exe');put(source,'Cargo.toml');put(source,'src/main.rs');put(source,'target/disposable');put(source,'.git/config')
             output=root/'application'
             put(root,'LICENSE');put(desk,'installer/ЛИЦЕНЗИЯ.md');put(desk,'installer/THIRD-PARTY.md');put(desk,'installer/PYTHON-START-HERE.md')
+            downloads=(python_app_bundle.DESK/'component-downloads.json').read_bytes()
+            put(desk,'component-downloads.json',downloads)
             with patch.object(python_app_bundle,'DESK',desk):
                 python_app_bundle.assemble(stage,output,binary,source,version='1.9.1')
+            self.assertEqual((output/'app/component-downloads.json').read_bytes(),downloads)
             self.assertFalse((output/'helene-svc.exe').exists());self.assertFalse((output/'helene-host.exe').exists())
             self.assertFalse((output/'data').exists());self.assertFalse((output/'agents').exists())
             self.assertFalse((output/'helene.json').exists());self.assertFalse((output/'local-build.json').exists())

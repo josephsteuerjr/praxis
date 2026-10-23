@@ -307,6 +307,7 @@ class Service:
         self.forge = forge
         self.config = settings(config)
         self.root = self.tree / "memory" / ".self-review"
+        self._terminal_cache = {}
 
     def settings(self, config=None):
         if config is not None:
@@ -323,8 +324,29 @@ class Service:
             return _read(self._path(review_id)) or {}
         if not self.root.is_dir():
             return []
-        return sorted((_read(path) for path in self.root.glob("review-*/request.json")),
-                      key=lambda row: row["created"], reverse=True)
+        import copy
+        rows = []
+        present = set()
+        for path in self.root.glob("review-*/request.json"):
+            present.add(path)
+            info = path.stat()
+            signature = (info.st_mtime_ns, info.st_size)
+            cached = self._terminal_cache.get(path)
+            if cached and cached[0] == signature:
+                row = copy.deepcopy(cached[1])
+            else:
+                row = _read(path)
+                # Cache only history with no remaining execution/cancel duty.
+                # Reads still stat the exact file; a new disposition invalidates it.
+                if row.get('execution') not in {'queued','running','unknown'} and (
+                        not row.get('cancel_requested') or all(c.get('cancel_confirmed') for c in row.get('critics',[]))):
+                    self._terminal_cache[path] = signature, copy.deepcopy(row)
+                else:
+                    self._terminal_cache.pop(path, None)
+            rows.append(row)
+        for path in self._terminal_cache.keys() - present:
+            del self._terminal_cache[path]
+        return sorted(rows, key=lambda row: row["created"], reverse=True)
 
     def request(self, trigger="on_request", operation_id="", depth=None, intent="", criteria=None,
                 overlay=None, sources=None, retry=False):
@@ -406,7 +428,9 @@ class Service:
             for prior in earlier:
                 if prior.get("identity") == code_identity:
                     if retry:
-                        if trigger != "on_request" or prior["execution"] in {"queued", "running", "unknown"}:
+                        if (trigger != "on_request" or prior["execution"] in {"queued", "running", "unknown"}
+                                or (prior.get("cancel_requested") and not all(
+                                    c.get("cancel_confirmed") for c in prior["critics"]))):
                             raise ValueError("retry requires an explicit request and a settled previous attempt")
                         continue
                     prior["required"] = prior["required"] or required
@@ -444,11 +468,16 @@ class Service:
                 "findings:[{path,scenario,detail}], gaps:[]}. Missing evidence is insufficient, not clear. "
                 "Source-only clear is not installed/runtime verification.")
 
-    def tick(self):
+    def tick(self, paused=False):
         with _LOCK:
             changed = []
             for record in self.status():
                 if record.get("cancel_requested"):
+                    if not all(c.get("cancel_confirmed") for c in record["critics"]):
+                        self._reconcile_cancel(record)
+                        changed.append(record)
+                    continue
+                if paused:
                     continue
                 if record["execution"] not in {"queued", "running", "unknown"}:
                     continue
@@ -555,17 +584,36 @@ class Service:
     def cancel(self, review_id):
         with _LOCK:
             record = self.status(review_id)
-            record.update(cancel_requested=True, execution="cancelled", state="needs_attention")
+            # Intent is durable before any Stop effect, never a claim of exit.
+            record.update(cancel_requested=True, execution="unknown", state="needs_attention")
             _write(self._path(review_id), record)
-            uncertain = False
-            for critic in record["critics"]:
+            return self._reconcile_cancel(record)
+
+    def _reconcile_cancel(self, record):
+        """Stop existing units only; retry unresolved custody even while paused."""
+        for critic in record["critics"]:
+            if critic.get("cancel_confirmed"):
+                continue
+            critic.update(execution="unknown", cancel_confirmed=False)
+            try:
                 directory = self.forge._unit_dir(record["task_id"], "agents", critic["unit_id"])
-                if directory.exists():
+                try:
+                    directory.stat()
+                except FileNotFoundError:
+                    # A positively absent, never-admitted queued unit has no
+                    # process to stop. Loss of an admitted unit stays unknown.
+                    if "admission" not in critic:
+                        critic.update(execution="cancelled", cancel_confirmed=True)
+                    continue
+                receipt = _read(directory / "stop.json") or {}
+                if receipt.get("state") != "settled":
                     critic["stop_receipt"] = self.forge.agent(record["task_id"], "stop", agent_id=critic["unit_id"])
-                    critic["execution"] = self.forge._unit_state(directory).get("status") or "unknown"
-                    uncertain = uncertain or critic["execution"] in LIVE
-                else:
-                    critic["execution"] = "cancelled"
-            record["execution"] = "unknown" if uncertain else "cancelled"
-            _write(self._path(review_id), record)
-            return record
+                    receipt = _read(directory / "stop.json") or {}
+                confirmed = receipt.get("state") == "settled"
+                critic.update(execution="cancelled" if confirmed else "unknown", cancel_confirmed=confirmed)
+                critic.pop("stop_error", None)
+            except (OSError, ValueError, TypeError, AttributeError) as exc:
+                critic["stop_error"] = f"{type(exc).__name__}: {exc}"
+        record["execution"] = "cancelled" if all(c.get("cancel_confirmed") for c in record["critics"]) else "unknown"
+        _write(self._path(record["id"]), record)
+        return record

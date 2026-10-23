@@ -231,6 +231,11 @@ def pack_record(root: Path | None = None) -> dict:
     root=Path(root or install_root())
     application=_read(root/'python-app.json')
     if 'whisper' in (application.get('extensions') or {}):
+        if (root/'app/component-downloads.json').is_file():
+            if __package__:from . import component_downloads
+            else:import component_downloads
+            row=component_downloads.select(component_downloads.load(root),['whisper'])[0]
+            return dict(row,format='helene-component-zip.v1',version=str(application['version']))
         return {'format':'helene-component-zip.v1','name':'Helene-components-whisper.zip',
                 'version':str(application['version'])}
     passport = _read(root / "helene-build.json")
@@ -264,6 +269,7 @@ def _pack_url(root: Path, rec: dict) -> str:
     override = os.environ.get("HELENE_VOICE_PACK_URL", "").strip()
     if override:
         return override
+    if rec.get('url'):return rec['url']
     api = str((_read(root / "helene.json").get("update") or {}).get("url") or "")
     m = re.search(r"repos/([^/\s]+)/([^/\s]+)/releases", api)
     repo = f"{m.group(1)}/{m.group(2)}" if m else DEFAULT_RELEASES
@@ -306,10 +312,15 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
         if rec.get('format')=='helene-component-zip.v1':
             if __package__:from . import python_updates
             else:import python_updates
-            rec['sha256']=python_updates.asset_sha(url)
-            downloaded=python_updates._download(url,part,rec['sha256'],
+            rec['sha256']=rec.get('sha256') or python_updates.asset_sha(url)
+            if rec.get('url'):
+                if __package__:from . import component_downloads
+                else:import component_downloads
+                download_path=component_downloads.cache_dir(root)/component_downloads.cache_name(rec)
+            else:download_path=part
+            downloaded=python_updates._download(url,download_path,rec['sha256'],
                 (lambda value:on_bytes(value['bytes'],value.get('total_bytes') or 0)) if on_bytes else None)
-            got=downloaded['bytes'];python_updates._extract(part,fresh,prefix='Helene/voice/')
+            got=downloaded['bytes'];python_updates._extract(download_path,fresh,prefix='Helene/voice/')
             content=fresh/'Helene/voice'
         else:
             with urllib.request.urlopen(url, timeout=300) as src, part.open("wb") as sink:

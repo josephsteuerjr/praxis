@@ -242,7 +242,16 @@ class Controller:
             result = config_cli.save(agent.config,args['config'],args.get('mtimeNs'))
             if result.get('ok'):
                 from . import boot, brain_trail
-                brain_trail.project(agent.tree,agent.config,load(agent.config),boot.project_brain)
+                saved=load(agent.config)
+                code=Path(str(saved.get('code') or '../../live'))
+                if not code.is_absolute():code=(agent.config.parent/code).resolve()
+                try:
+                    brain_trail.project(agent.tree,agent.config,saved,
+                        lambda tree,cfg:boot.project_brain(tree,cfg,code_dir=code))
+                except (OSError,ValueError,RuntimeError) as exc:
+                    # The config save already committed. Report the un-applied
+                    # projection rather than pretending the save never happened.
+                    result['warning']='Settings saved; selected model consumer has not applied them: '+str(exc)
                 self.refresh()
                 if (load(agent.config).get('relay') or {}).get('enabled'):
                     from .python_relay import hot_settings

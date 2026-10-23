@@ -177,7 +177,8 @@ def runner_required(cfg, agent_id):
 
 
 def _specs(config: Path, *, session_host: bool = False,
-           agent_id: str = BASE_ID, port_override: int | None = None) -> tuple[Path, dict[str, Spec]]:
+           agent_id: str = BASE_ID, port_override: int | None = None,
+           window_root: Path | None = None) -> tuple[Path, dict[str, Spec]]:
     cfg = _config(config)
     installed = cfg.get("installed") or {}
     if not isinstance(installed, dict):
@@ -203,6 +204,8 @@ def _specs(config: Path, *, session_host: bool = False,
     token = _token(tree)
     common = dict(os.environ, HELENE_TREE=str(tree), PYTHONUTF8="1", PYTHONUNBUFFERED="1",
                   HELENE_TOKEN=token, HELENE_CONFIG=str(config), HELENE_BROKER_DISABLED='1')
+    common.pop('HELENE_WINDOW_ROOT', None)
+    if window_root is not None:common['HELENE_WINDOW_ROOT']=str(window_root.resolve())
     common.pop("PRAXIS_DESK_TOKEN", None)
     common.pop("RELAY_API_KEY", None)  # a sibling's ambient relay key is not this agent's authority
     phone = cfg.get("phone") or {}
@@ -283,7 +286,8 @@ def _plans(config: Path, *, session_host: bool,
     channel ports. Bad neighbor input refuses that neighbor, not the base.
     """
     base = config.parent
-    plans = {BASE_ID: _specs(config, session_host=session_host)}
+    window_root=base if desktop_roster else None
+    plans = {BASE_ID: _specs(config, session_host=session_host,window_root=window_root)}
     if not (session_host or desktop_roster):
         return plans
     occupied = {plans[BASE_ID][0].resolve(strict=True)}
@@ -298,7 +302,7 @@ def _plans(config: Path, *, session_host: bool,
                    for section in ("agent", "telegram")):
                 raise ValueError("agent/telegram settings are not objects")
             tree, specs = _specs(agent.config, session_host=session_host, agent_id=agent.id,
-                                 port_override=agent.port)
+                                 port_override=agent.port,window_root=window_root)
             physical = tree.resolve(strict=True)
             if physical in occupied:
                 raise ValueError("another agent already owns this data tree")

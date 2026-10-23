@@ -628,8 +628,21 @@ export function start(opts: WindowOptions): void {
   setCollapsed("rail", readFlag("frame.rail"));
   setCollapsed("panel", readFlag("frame.panel"));
   const disposeWidths = mountPanelWidths(app);
+  const appearanceChanged = () => scroll.preserve(() => {
+    look.apply(look.load());
+    scroll.restoreZoom();
+    for (const side of ["rail","panel"] as const) {
+      const collapsed=readFlag("frame."+side);
+      app.classList.toggle(side+"-collapsed",collapsed);
+      (side === "rail" ? railBtn : panelBtn).setAttribute("aria-pressed",String(!collapsed));
+    }
+    window.dispatchEvent(new Event("resize"));
+  });
+  const colorScheme=matchMedia("(prefers-color-scheme: dark)");
+  window.addEventListener("helene:appearance",appearanceChanged);
+  colorScheme.addEventListener("change",appearanceChanged);
   window.addEventListener("pagehide", (event: PageTransitionEvent) => {
-    if (!event.persisted) { disposeWidths(); disposeTextMenu(); }
+    if (!event.persisted) { disposeWidths(); disposeTextMenu(); window.removeEventListener("helene:appearance",appearanceChanged); colorScheme.removeEventListener("change",appearanceChanged); }
   });
   function togglePanel(which: "rail" | "panel") {
     setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);

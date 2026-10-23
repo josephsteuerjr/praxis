@@ -1,5 +1,16 @@
 @import "./paper-tokens.css";
 
+/* Optional looks preserve the paper default and all current content. */
+:root[data-look-style="clean"] { --hand: "Golos Text", "Segoe UI", system-ui, sans-serif; --grain: 0; }
+:root[data-look-style="clean"] .card { border-radius: 5px; }
+:root[data-density="compact"] .look-row { margin-block: 8px; }
+:root[data-density="compact"] #rail-nav button { padding-block: 6px; }
+:root[data-density="compact"] .card { padding: 14px; }
+.look-customization select { max-width: 100%; min-width: 0; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px; }
+.look-customization input[type="range"] { max-width: 240px; min-width: 100px; accent-color: var(--accent); }
+.look-customization input[type="color"] { width: 44px; height: 30px; border: 1px solid var(--line); background: transparent; }
+.look-color-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+
 /* Меню — небольшой лист той же бумаги, с общей линией и почерком окна. */
 .menu {
   background: var(--surface);

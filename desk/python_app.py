@@ -72,31 +72,26 @@ class Application:
     def invoke(self, command, args):
         if not isinstance(command, str) or command.startswith("host_"):
             raise ValueError("Недоступный вызов оболочки")
-        if command == "window_preferences":
-            key, value = args.get("key"), args.get("value")
-            if not isinstance(key, str) or len(key) > 512 or not self.preference_key(key):
-                raise ValueError("Invalid window preference key")
-            if value is not None and (not isinstance(value, str) or len(value) > 1024 * 1024):
-                raise ValueError("Invalid window preference value")
-            with self.lock:
-                values = self.preferences()
-                if value is None:
-                    values.pop(key, None)
-                else:
-                    values[key] = value
-                self.root.mkdir(parents=True, exist_ok=True)
-                temporary = self.root / 'window-preferences.json.tmp'
-                temporary.write_text(json.dumps(values, ensure_ascii=False), encoding='utf-8')
-                os.replace(temporary, self.root / 'window-preferences.json')
-            return {"ok": True}
+        if command in ('window_preferences','appearance_read','appearance_patch','appearance_reset'):
+            from localharness import window_preferences as preferences
+            if command == 'appearance_read':return preferences.read(self.root)
+            if command == 'appearance_reset':return preferences.reset(self.root,args.get('seen'))
+            if command == 'appearance_patch':return preferences.change(self.root,args.get('patch'),args.get('seen'),appearance_only=True)
+            return preferences.change(self.root,{args.get('key'):args.get('value')},args.get('seen'))
         if command == "components_status":
-            from localharness import app_components
-            return app_components.status(self.program, self.root)
+            from localharness import app_components, component_downloads
+            return app_components.status(self.program, self.root)+component_downloads.status(self.program)
         if command == "restart_self":
             self.relaunch = True
             self.event("exit", {})
             return None
         if command == "component_install":
+            name=str(args.get('name',''))
+            if name in ('toolchain','xtts','whisper'):
+                from localharness import component_downloads
+                if self.host is None:raise RuntimeError('Select an agent before installing an optional component')
+                tree=self.host.current().tree
+                return component_downloads.install(self.program,[name],lambda value:self.event('package-progress',value),tree=tree)
             from localharness import app_components
             if self.host is not None:
                 self.host.close()
@@ -152,19 +147,16 @@ class Application:
 
     @staticmethod
     def preference_key(key):
-        return key.startswith(('frame.', 'helene-', 'helene.', 'settings.', 'draft.'))
+        from localharness.window_preferences import preference_key
+        return preference_key(key)
 
     def preferences(self):
-        path = self.root / 'window-preferences.json'
-        if not path.exists():
-            return {}
-        values = json.loads(path.read_text(encoding='utf-8'))
-        if not isinstance(values, dict):
-            raise ValueError('Invalid saved window preferences')
-        return {key: value for key, value in values.items()
-                if self.preference_key(key) and isinstance(value, str)}
+        from localharness.window_preferences import storage
+        return storage(self.root)
 
     def bridge(self):
+        from localharness.window_preferences import bootstrap
+        saved, seen = bootstrap(self.root)
         return """window.DESK_CONFIG_OVERRIDE = %s;
 window.__HELENE__ = {shell:'python', platform:%s,
  invoke: async (command,args={}) => {
@@ -175,24 +167,36 @@ window.__HELENE__ = {shell:'python', platform:%s,
 (function preferences(saved){
  const store=window.localStorage, originalSet=Storage.prototype.setItem, originalRemove=Storage.prototype.removeItem;
  for(const [key,value] of Object.entries(saved)) originalSet.call(store,key,value);
- let pending=Promise.resolve();
- const persist=(key,value)=>{if(/^(frame[.]|helene[-.]|settings[.]|draft[.])/.test(key))
-  pending=pending.then(()=>window.__HELENE__.invoke('window_preferences',{key,value})).catch(error=>{
-   console.error(error);window.dispatchEvent(new CustomEvent('helene:preference-error',{detail:String(error)}));});};
+ let pending=Promise.resolve(), seen=%s, revision=0;
+ const owned=['helene.look','frame.theme','frame.rail','frame.panel','frame.rail.width','frame.panel.width','helene.zoom'];
+ const fail=error=>{console.error(error);window.dispatchEvent(new CustomEvent('helene:preference-error',{detail:String(error)}));};
+ const persist=(key,value)=>{if(/^(frame[.]|helene[-.]|settings[.]|draft[.])/.test(key)) {
+  revision++;
+  pending=pending.then(async()=>{
+   if(seen===null) seen=(await window.__HELENE__.invoke('appearance_read')).seen;
+   const result=await window.__HELENE__.invoke('window_preferences',{key,value,seen:owned.includes(key)?seen:null});
+   if(!result.ok) {seen=null;throw new Error(result.error);} if(owned.includes(key)) seen=result.seen;
+  }).catch(fail);}};
+ window.__HELENE__.syncAppearance=()=>{const at=revision;pending=pending.then(async()=>{
+   const result=await window.__HELENE__.invoke('appearance_read');if(at!==revision || result.seen===seen)return;
+   for(const key of owned){if(key in result.values)originalSet.call(store,key,result.values[key]);else originalRemove.call(store,key);}
+   seen=result.seen;window.dispatchEvent(new CustomEvent('helene:appearance',{detail:result}));
+ }).catch(fail);};
  Storage.prototype.setItem=function(key,value){originalSet.call(this,key,value);if(this===store)persist(String(key),String(value));};
  Storage.prototype.removeItem=function(key){originalRemove.call(this,key);if(this===store)persist(String(key),null);};
 })(%s);
 (async function events(){try {
  const r=await fetch('/__python__/events',{headers:{'X-Helene-Window':%s}});
  if(r.ok) for(const e of await r.json()) {
-  if(e.name==='replace-window') location.replace('/');
+  if(e.name==='window-preferences') window.__HELENE__.syncAppearance();
+  else if(e.name==='replace-window') location.replace('/');
   else if(e.name==='retire-window') location.replace('/__python__/retired?id='+encodeURIComponent(e.data.id));
   else if(e.name==='exit') window.__HELENE__.win('exit');
   else window.dispatchEvent(new CustomEvent('helene:'+e.name,{detail:e.data}));
  }
 } catch(e){console.error(e)} setTimeout(events,500)})();
 """ % (json.dumps(self.channel, ensure_ascii=False), json.dumps('windows' if sys.platform=='win32' else sys.platform),
-       json.dumps(self.token), json.dumps(self.preferences(), ensure_ascii=False), json.dumps(self.token))
+       json.dumps(self.token), json.dumps(seen), json.dumps(saved, ensure_ascii=False), json.dumps(self.token))
 
     def _handler(self):
         app = self
@@ -252,6 +256,7 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
                         return self.reply(403, {"error": "window token required"})
                     with app.lock:
                         items, app.events = app.events, []
+                    items.append({'name':'window-preferences','data':{}})
                     return self.reply(200, items)
                 target = (app.ui / unquote(path).lstrip("/")).resolve()
                 if path == "/":

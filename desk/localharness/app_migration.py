@@ -290,6 +290,8 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         for name in ('window-preferences.json','agent-default.json'):
             preferences=old_root/name
             if preferences.is_file():shutil.copy2(preferences,new_root/name)
+        from .component_downloads import preserve_cache
+        preserve_cache(old_root,new_root)
         from .xtts_install import runtime_for
         legacy_voice=runtime_for(old_root)
         if preserve_voice and legacy_voice.is_dir() and not runtime_for(new_root).is_dir():

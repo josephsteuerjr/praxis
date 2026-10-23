@@ -83,6 +83,10 @@ def assemble(stage, output, relay, relay_source, *, version, toolchain=None, run
                 for path in site.glob(pattern):
                     if path.is_dir():shutil.rmtree(path)
     app=output/'app';app.mkdir(exist_ok=True)
+    from localharness.component_downloads import parse as parse_downloads
+    downloads=(DESK/'component-downloads.json').read_bytes()
+    parse_downloads(downloads)
+    (app/'component-downloads.json').write_bytes(downloads)
     if runtime_wheels:install_runtime_dependencies(output/'runtime',runtime_wheels)
     for pth in (output/'runtime').glob('python*._pth'):
         text=pth.read_text(encoding='utf-8')
@@ -127,6 +131,10 @@ def assemble(stage, output, relay, relay_source, *, version, toolchain=None, run
                       'whisper':{'default':False,'assets':['Helene-components-whisper.zip']},
                       'toolchain':{'default':False,'assets':['Helene-components-toolchain.zip']}}}
     (output/'python-app.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+    from localharness.component_downloads import parse as parse_downloads
+    downloads = (DESK/'component-downloads.json').read_bytes()
+    parse_downloads(downloads)
+    (app/'component-downloads.json').write_bytes(downloads)
     (output/'helene-build.json').write_text(json.dumps({'format':'helene-python-version.v1','product':'Hélène','version':version,
         'platform':'windows','version_source':'python-app.json'},indent=2),encoding='utf-8')
     files={p.relative_to(output).as_posix():app_components.digest(p) for p in output.rglob('*')
