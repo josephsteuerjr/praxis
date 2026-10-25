@@ -30,7 +30,7 @@ On Debian and Fedora, the portable migration flow preserves the profile, working
 
 ### Optional voice components, independent relay
 
-**Whisper and XTTS are the only optional large component downloads.** Their platform-specific runtime/model archives are pinned by size and SHA-256 and reused from existing release storage. They are downloaded when selected; unchanged voice archives are not duplicated for every application release. The native rebuild kit is no longer offered as a new component download. Existing optional installations are preserved during migration and updates.
+**Whisper and XTTS are the only optional large component downloads.** Their platform-specific runtime/model archives are pinned by size and SHA-256 and are attached to this release. They are downloaded only when selected. Existing Linux/macOS component asset objects were retained; the unchanged Windows components were consolidated here so retiring earlier tags cannot break voice installation. The native rebuild kit is no longer offered as a new component download. Existing optional installations are preserved during migration and updates.
 
 The subscription relay is a separate product: [praxis-relay 1.1.0](https://github.com/josephsteuerjr/praxis-relay/releases/tag/v1.1.0). Hélène can use its independently distributed executable without installing a compiler. XTTS model use remains subject to the model's CPML non-commercial terms; bundled third-party notices and license files remain included.
 
@@ -45,7 +45,7 @@ The subscription relay is a separate product: [praxis-relay 1.1.0](https://githu
 
 Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
 
-There is no new Windows setup executable or DEB/RPM in this release. Each application archive has a `.sha256` sidecar; `SHA256SUMS` covers the attached delivery files. `voice-components.json` lists the reused optional downloads, and `release-evidence.json` records the exact application bytes and source snapshots.
+There is no new Windows setup executable or DEB/RPM in this release. Each application archive has a `.sha256` sidecar; `SHA256SUMS` covers the attached delivery files. `voice-components.json` lists the pinned optional downloads, and `release-evidence.json` records the exact application bytes and source snapshots.
 
 ## Verification and remaining platform limits
 

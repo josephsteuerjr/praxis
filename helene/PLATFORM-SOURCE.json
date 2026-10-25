@@ -2,32 +2,36 @@
   "version": "2.1.0",
   "platforms": {
     "windows": {
-      "commit": "f12eeb144861f062926d84b9a486386a6c05a1cd",
+      "commit": "971c61de72ec4c2ab773fbc7706443de1be4e74b",
       "branch": "source/helene-2.1.0-windows",
       "artifact": "Helene-2.1.0.zip",
-      "sha256": "da4014bde00d1ed17c7eac51c6d154abdfd74a983e980ce29922e8f6a0a48dfc",
-      "bytes": 133436271
+      "sha256": "d7cf57b8d09d8e7cf753061334bd4b21c402d86ec415322d137e2f9f013f519a",
+      "bytes": 133426790,
+      "parent": "f12eeb144861f062926d84b9a486386a6c05a1cd"
     },
     "debian": {
-      "commit": "d399ece629557d035df49799614bbe0019d18a12",
+      "commit": "d8a4fa72df8c98408ece456e61fb626efaca0aec",
       "branch": "source/helene-2.1.0-debian",
       "artifact": "Helene-2.1.0-linux-x86_64.zip",
-      "sha256": "0801346243e13df2d8e886f7fcd4293c876d1debfaf7c2d2aa59e1984d21cfe4",
-      "bytes": 659701487
+      "sha256": "5504b9418f145d204e0fceb790fd6b881df6d9f84ab1281b4fd2905a91766413",
+      "bytes": 659604392,
+      "parent": "d399ece629557d035df49799614bbe0019d18a12"
     },
     "fedora": {
-      "commit": "e1f6029ff323234a354a431ea2c7d33639f71d4c",
+      "commit": "314c8318c632dadaf4c1e774ca0970e545773c1d",
       "branch": "source/helene-2.1.0-fedora",
       "artifact": "Helene-2.1.0-fedora-x86_64.zip",
-      "sha256": "b1df91abe5b260dd5d30bb1cca320ba1152e1882868359f17430756b3ae29efb",
-      "bytes": 674427207
+      "sha256": "e545ec48122491f0a8263d7ff7c6721cfdb79ca3926afc38885946281e245f9b",
+      "bytes": 674397273,
+      "parent": "e1f6029ff323234a354a431ea2c7d33639f71d4c"
     },
     "macos": {
-      "commit": "6756f4d5c4be9d6e44cc4cc3bc528c52439c5750",
+      "commit": "db005741064ab75466bd7be831b9e63f8e154aaf",
       "branch": "source/helene-2.1.0-macos",
       "artifact": "Helene-2.1.0-macos-arm64.zip",
-      "sha256": "5e4fe949b0ed44c95d9cdd8dbd20885e3ac2f887eaf41901cdbda8b46ec5a921",
-      "bytes": 117324311
+      "sha256": "e0b97b6ddfe3097c055db0875d85abdb1d1bb14edff41fb09a3415fce0ab3585",
+      "bytes": 117258592,
+      "parent": "6756f4d5c4be9d6e44cc4cc3bc528c52439c5750"
     }
   },
   "main_desktop": "windows",
