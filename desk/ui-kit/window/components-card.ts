@@ -6,7 +6,7 @@ type Component = { id: string; ready: boolean; installed: boolean; error?: strin
 /** The startup view and Settings use the same component controls. */
 export function componentsCard(): HTMLElement {
   const body = el('div');
-  const note = el('p', 'field-hint', 'Python и окно обновляются отдельно. Доступность реле, исходников и наборов показана ниже для этой платформы. Набор пересборки не нужен для обычного запуска уже установленного компонента.');
+  const note = el('p', 'field-hint', 'Голосовые компоненты устанавливаются по желанию. praxis-relay — отдельный продукт под лицензией MIT; скачивается только когда нужен. Инструменты сборки не требуются.');
   const rows = el('div');
   const receipt = el('p', 'receipt');
   const render = async () => {
@@ -15,7 +15,7 @@ export function componentsCard(): HTMLElement {
       rows.replaceChildren();
       for (const item of components) {
         const row = el('div', 'actions');
-        const names: Record<string, string> = {relay:'Встроенное реле', toolchain:'Набор пересборки', xtts:'XTTS · CPML, некоммерческая лицензия', whisper:'Whisper · распознавание речи'};
+        const names: Record<string, string> = {relay:'praxis-relay · MIT', xtts:'XTTS · CPML, некоммерческая лицензия', whisper:'Whisper · распознавание речи'};
         row.append(el('span', '', `${names[item.id] || item.id}: ${item.installed ? 'установлено' : item.ready ? 'можно установить' : 'комплект недоступен'}`));
         if (!item.installed && item.download_bytes) row.append(el('span', 'field-hint', `${(item.download_bytes / 1024 / 1024).toFixed(0)} МБ · проверенный кеш используется повторно`));
         if (item.ready && !item.installed) {

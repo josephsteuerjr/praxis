@@ -1,0 +1,35 @@
+{
+  "version": "2.1.0",
+  "platforms": {
+    "windows": {
+      "commit": "f12eeb144861f062926d84b9a486386a6c05a1cd",
+      "branch": "source/helene-2.1.0-windows",
+      "artifact": "Helene-2.1.0.zip",
+      "sha256": "da4014bde00d1ed17c7eac51c6d154abdfd74a983e980ce29922e8f6a0a48dfc",
+      "bytes": 133436271
+    },
+    "debian": {
+      "commit": "d399ece629557d035df49799614bbe0019d18a12",
+      "branch": "source/helene-2.1.0-debian",
+      "artifact": "Helene-2.1.0-linux-x86_64.zip",
+      "sha256": "0801346243e13df2d8e886f7fcd4293c876d1debfaf7c2d2aa59e1984d21cfe4",
+      "bytes": 659701487
+    },
+    "fedora": {
+      "commit": "e1f6029ff323234a354a431ea2c7d33639f71d4c",
+      "branch": "source/helene-2.1.0-fedora",
+      "artifact": "Helene-2.1.0-fedora-x86_64.zip",
+      "sha256": "b1df91abe5b260dd5d30bb1cca320ba1152e1882868359f17430756b3ae29efb",
+      "bytes": 674427207
+    },
+    "macos": {
+      "commit": "6756f4d5c4be9d6e44cc4cc3bc528c52439c5750",
+      "branch": "source/helene-2.1.0-macos",
+      "artifact": "Helene-2.1.0-macos-arm64.zip",
+      "sha256": "5e4fe949b0ed44c95d9cdd8dbd20885e3ac2f887eaf41901cdbda8b46ec5a921",
+      "bytes": 117324311
+    }
+  },
+  "main_desktop": "windows",
+  "native_runtime_rebuilt": false
+}

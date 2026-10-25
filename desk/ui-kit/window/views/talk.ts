@@ -1,3 +1,6 @@
+import { VoiceArrivals } from "../voice-arrivals";
+import { voicePreferences } from "../voice-preferences";
+const voiceArrivals = new VoiceArrivals();
 // Чат: переписка комнаты в центре — слово агента текстом, как документ, слово
 // владельца пузырём справа; ошибки хода на месте, человеческим словом и с
 // действием. Ход агента — в панели справа (../panel).
@@ -509,6 +512,11 @@ export async function render(container: HTMLElement): Promise<void> {
   if (doms.get(container) !== dom || S.room !== peer) return; // комната сменилась, пока читали
   // Подтверждённые лентой пузыри «отправляется…» снимаем — и их строки ленты встают
   // на место пузыря без роста: подмена одного на другое не должна мигать.
+  const freshVoice = voiceArrivals.observe(S.agent+'|'+peer,rows.filter(m=>mediaDescriptor(m)?.kind==='audio').map(m=>({key:String(m.media_path),at:m.timestamp||''})),voicePreferences().autoplay);
+  for(const m of rows) {
+    const foreign=!isWindowRoom(peer) && !!S.agentState?.owner && m.sender_name!==S.agentState.owner;
+    if(!m.system && (m.outgoing || foreign) && freshVoice.has(String(m.media_path)))dispatchEvent(new CustomEvent('helene:voice-incoming',{detail:mediaDescriptor(m)}));
+  }
   const own = rows.filter((m) => !m.outgoing);
   const confirmed = new Set<string>();
   if (S.pending.length) {

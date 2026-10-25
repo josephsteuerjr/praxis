@@ -1,66 +1,54 @@
-# Praxis & Hélène
+# Hélène 2.1 — a portable Python home for your agent
 
-**A persistent agent runtime, and a desktop home for agents you make your own.**
+Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
-Praxis is the agent runtime: inspectable memory, tools, Telegram conversations,
-long-running work and self-authored code. Hélène is its desktop distribution, with
-independent agents, a Python-owned application and process supervisor, a shared
-chat interface, files and optional local voice.
+The agent can develop its own working code, while ordinary application updates keep using the same directory. Changes that belong in the shared product can be reviewed and included in later Hélène releases. The migration tools preserve authored code and Git state; publishing an application release does not publish an agent's personal memory or credentials.
 
-[Download Hélène](https://github.com/josephsteuerjr/praxis/releases/latest) ·
-[Release history](https://github.com/josephsteuerjr/praxis/releases) ·
-[Standalone Relay](https://github.com/josephsteuerjr/praxis-relay)
+This release completes the move to an archive-first desktop on Windows x64, Apple Silicon, Debian and Fedora x86_64. Python owns the window, agent lifecycle, migration and update coordination. Platform runtimes and the existing native tools for operating-system access are included where needed.
 
-## Hélène 2.0.0
+## What changed in 2.1
 
-This release brings the Python desktop to **Windows x64, macOS Apple Silicon,
-Debian and Fedora x86_64**. Choose the package for your operating system; the
-runtimes and optional components are platform-specific, not interchangeable.
-See the release notes for the exact tested platform, installation route and limits.
+### A simpler voice conversation
 
-- **Python owns the application.** The window, agent lifecycle, process tree,
-  Stop, update preparation and recovery are handled by Python. Native bodies and
-  the embedded model relay remain separate, inspectable components.
-- **A migration wizard, not a memory reset.** Keep the old application until the
-  new one starts successfully. Migration retains configuration, memory, authored
-  code and Git changes. Stop the old application before copying its profile.
-- **Ordinary updates stay in the application.** After the initial transition,
-  the Python updater prepares a checked package, hands over to a helper and can
-  roll back a failed start. Do not manually overlay a running installation.
-- **Voice is optional.** Whisper recognition is independent of text-to-speech.
-  A voice message enters the agent conversation only after successful
-  transcription; failed recognition has an explicit retry state. Inline audio
-  controls support seeking, volume and playback speed.
-- **Download components when needed.** Whisper, XTTS and the native rebuild kit
-  are separate archives. The bundled component map pins each archive's URL,
-  size and SHA-256, can reuse cached bytes and may reference an older release.
-  Keep those older releases when they supply a component.
+- Voice messages appear as compact waveform strips in the composer and conversation, with playback controls alongside the message.
+- Hold the configured shortcut to record. Releasing it while Hélène is focused pauses the draft so you can listen, continue recording or send it. Releasing it while another application is focused sends the recording.
+- Hold **Shift when releasing** to keep a background recording as a draft. The next hold continues it. **Esc** cancels recording and prevents the subsequent release from sending it.
+- Shortcut configuration and automatic playback live in **Settings**. A small hint beside the composer links to a help popup explaining voice controls.
+- The separate “live mode” flow has been removed. Recording and playback use the same conversation controls, with saved preferences and protection against replaying the same automatic audio twice.
 
-### Installation
+### A refreshed first run and appearance
 
-**Windows:** run the `helene-2.0.0-setup.exe` migration/setup wizard. The small
-wizard downloads `Helene-2.0.0.zip` and the selected optional components. For a
-migration from the older native edition, use this new wizard rather than its
-old Update button. Windows executables are unsigned.
+The onboarding page has been refreshed, and voice help follows the same visual style. Appearance settings include Studio, Glass and Terminal treatments, typography, shape and background choices. The Windows migration window uses Hélène's custom chrome, branded content typography, a small regular title/version label and a sharper window/taskbar icon.
 
-**Apple Silicon Mac:** unpack the macOS archive into a separate folder. Open
-`Migrate Helene.app` to transfer an existing profile, or use `Helene.app` for the
-application. Quit the old app and disable its old launch-at-login integration
-before migration. The old folder is retained. macOS may ask for local-network,
-microphone or accessibility permission; those decisions remain yours. This is
-not a notarized/Gatekeeper-qualified distribution.
+### Unpack once; migrate into that folder
 
-**Debian / Fedora:** install the matching DEB/RPM with your normal package
-manager, or use the matching portable archive and its `helene` entry point.
-The package owns an immutable bootstrap seed; first launch copies it into a
-writable per-user application directory. Removing the package does not erase
-that profile. The graphical migration wizard can preserve an older profile;
-fresh setup configures the current program. Linux desktop computer access uses
-X11 and AT-SPI; Wayland and headless sessions have explicit limits.
+The Windows archive now contains **Start Helene.vbs** and **Migrate Helene.vbs**. They launch the bundled Python application and migrator directly. Migration copies the previous profile and authored source into this unpacked application; it does not extract and copy the whole program into a second installation directory.
 
-Each main archive has an individual `.sha256` sidecar. `SHA256SUMS` and the
-release evidence describe the published files. The platform source archives
-are build inputs, not your agent's private profile.
+The previous installation is stopped before its final profile snapshot. The new window must confirm its own profile before retirement begins. Where the supported Windows native package is registered, its own uninstaller is invoked with `--uninstall --quiet`, without the data-purge switch. The command is bound to the selected installation, and a service belonging to another installation blocks that removal. Remaining shortcuts are retargeted to the new Python entry. Old Python windows are asked to exit through their authenticated control channel; a stale lock-file label alone is not treated as proof of a live owner.
+
+On Debian and Fedora, the portable migration flow preserves the profile, working source and Git state before removing the identified native package. On macOS, use the bundled migration application to copy an existing profile; the previous application folder is retained. Ordinary updates then operate in the same portable folder, with recovery when the replacement fails to start.
+
+### Optional voice components, independent relay
+
+**Whisper and XTTS are the only optional large component downloads.** Their platform-specific runtime/model archives are pinned by size and SHA-256 and reused from existing release storage. They are downloaded when selected; unchanged voice archives are not duplicated for every application release. The native rebuild kit is no longer offered as a new component download. Existing optional installations are preserved during migration and updates.
+
+The subscription relay is a separate product: [praxis-relay 1.1.0](https://github.com/josephsteuerjr/praxis-relay/releases/tag/v1.1.0). Hélène can use its independently distributed executable without installing a compiler. XTTS model use remains subject to the model's CPML non-commercial terms; bundled third-party notices and license files remain included.
+
+## Downloads and first launch
+
+| Platform | Archive | Entry after extracting the whole folder |
+| --- | --- | --- |
+| Windows x64 | [Helene-2.1.0.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
+| macOS Apple Silicon | [Helene-2.1.0-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
+| Debian x86_64 | [Helene-2.1.0-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Fedora x86_64 | [Helene-2.1.0-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+
+Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
+
+There is no new Windows setup executable or DEB/RPM in this release. Each application archive has a `.sha256` sidecar; `SHA256SUMS` covers the attached delivery files. `voice-components.json` lists the reused optional downloads, and `release-evidence.json` records the exact application bytes and source snapshots.
+
+
+## More about Hélène and Praxis
 
 ## A home for independent agents
 

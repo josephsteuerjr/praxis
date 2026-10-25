@@ -1,10 +1,62 @@
-"""Narrow legacy Windows retirement: no recursive product/data uninstaller."""
+"""Retire the identified legacy Windows package after proving the new owner."""
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
 from .python_windows import AUTOMATIC_ARGUMENTS,powershell,shortcut,shortcut_binding
+
+def registered_uninstall(old):
+    """Use the old installation's registered quiet command, never a name match."""
+    if os.name!='nt':return None
+    import ctypes,winreg
+    from ctypes import wintypes
+    old=Path(old).resolve();base=r'Software\Microsoft\Windows\CurrentVersion\Uninstall'
+    for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_64KEY,winreg.KEY_WOW64_32KEY):
+            try:
+                with winreg.OpenKey(hive,base,0,winreg.KEY_READ|view) as parent:
+                    names=[winreg.EnumKey(parent,i) for i in range(winreg.QueryInfoKey(parent)[0])]
+                for name in names:
+                    with winreg.OpenKey(hive,base+'\\'+name,0,winreg.KEY_READ|view) as key:
+                        try:location=winreg.QueryValueEx(key,'InstallLocation')[0]
+                        except FileNotFoundError:continue
+                        if Path(location).resolve()!=old:continue
+                        try:command=winreg.QueryValueEx(key,'QuietUninstallString')[0]
+                        except FileNotFoundError:command=winreg.QueryValueEx(key,'UninstallString')[0]
+                    shell=ctypes.WinDLL('shell32');kernel=ctypes.WinDLL('kernel32')
+                    shell.CommandLineToArgvW.argtypes=[wintypes.LPCWSTR,ctypes.POINTER(ctypes.c_int)]
+                    shell.CommandLineToArgvW.restype=ctypes.POINTER(wintypes.LPWSTR)
+                    count=ctypes.c_int();array=shell.CommandLineToArgvW(command,ctypes.byref(count))
+                    if not array:raise ValueError('Invalid registered uninstaller command')
+                    try:argv=[array[i] for i in range(count.value)]
+                    finally:kernel.LocalFree.argtypes=[ctypes.c_void_p];kernel.LocalFree(array)
+                    executable=Path(argv[0]).resolve()
+                    if executable.parent!=old or not executable.is_file():raise ValueError('Registered uninstaller leaves the selected old installation')
+                    if executable.name.lower()=='helene-setup.exe':
+                        if '--uninstall' not in argv or any(a not in ('--uninstall','--quiet') for a in argv[1:]):raise ValueError('Unsupported legacy removal switches')
+                        if '--quiet' not in argv:argv.append('--quiet')
+                    elif executable.name.lower()=='uninstall.exe':
+                        if any(a.lower()!='/s' for a in argv[1:]):raise ValueError('Unsupported registered removal switches')
+                        if len(argv)==1:argv.append('/S')
+                    else:raise ValueError('Unrecognized registered Helene uninstaller')
+                    return argv
+            except FileNotFoundError:continue
+    return None
+
+def uninstall_registered(old,argv):
+    """Called only after the new Python window and preserved profile are proven."""
+    current=service()
+    if current and not service_belongs_to(old,current):
+        raise RuntimeError('The Helene service belongs to another installation; old package retained')
+    result=subprocess.run(argv,cwd=old,capture_output=True,timeout=180,creationflags=0x08000000)
+    if result.returncode:raise RuntimeError('The old uninstaller failed; the new application remains available')
+    deadline=time.monotonic()+15
+    while time.monotonic()<deadline:
+        if registered_uninstall(old) is None and service(old) is None:
+            return {'ok':True,'method':'registered_uninstaller','purge':False}
+        time.sleep(.25)
+    raise RuntimeError('Old installation removal has not yet been confirmed')
 
 
 def request_python_exit(old, pid):
@@ -33,23 +85,24 @@ def request_python_exit(old, pid):
         return json.load(response)
 
 
-def service(old):
-    env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()))
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();$s=Get-CimInstance Win32_Service -Filter \"Name='Helene'\"; if($s){$s|Select-Object Name,State,PathName|ConvertTo-Json -Compress}",env)
+def service(old=None):
+    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();$s=Get-CimInstance Win32_Service -Filter \"Name='Helene'\"; if($s){$s|Select-Object Name,State,PathName|ConvertTo-Json -Compress}",dict(os.environ))
     if not raw:return None
     value=json.loads(raw)
+    return value if old is None or service_belongs_to(old,value) else None
+
+
+def service_belongs_to(old,value):
     command=str(value.get('PathName','')).replace('/','\\').lower()
     root=str(old.resolve()).replace('/','\\').lower()
     # Exact quoted executable/config root component, not a product-name guess.
-    if ('"'+root+'\\') not in command and not command.startswith(root+'\\'):
-        return None  # another installation is not this transaction's service
-    return value
+    return ('"'+root+'\\') in command or command.startswith(root+'\\')
 
 
 def close_python(old):
     if os.name!='nt':return
     env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()))
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @((Get-CimInstance Win32_Process)|Where-Object {$_.ExecutablePath -and $_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\python.exe',[StringComparison]::OrdinalIgnoreCase)}|Select-Object ProcessId,CommandLine)|ConvertTo-Json -Compress",env)
+    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @((Get-CimInstance Win32_Process)|Where-Object {$_.ExecutablePath -and ($_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\python.exe',[StringComparison]::OrdinalIgnoreCase) -or $_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\pythonw.exe',[StringComparison]::OrdinalIgnoreCase))}|Select-Object ProcessId,CommandLine)|ConvertTo-Json -Compress",env)
     rows=json.loads(raw or '[]')
     if isinstance(rows,dict):rows=[rows]
     owners=[row for row in rows if references_root(row.get('CommandLine',''),str(old/'app/python_app.py'))]
@@ -72,8 +125,35 @@ def close_python(old):
             value=agent['value']
             if value.get('mode')=='remote':continue
             record=Path(agent['tree'])/'.desktop-owner.lock'
-            if record.exists() and record.read_bytes()!=b'clean\n':
-                raise RuntimeError('Python owner exited without confirmed child teardown; previous installation retained')
+            if not owner_lease_available(record):
+                raise RuntimeError('Previous Python owner still holds its data lease; previous installation retained')
+
+
+def owner_lease_available(path):
+    """Probe the real lease without deleting or rewriting its diagnostic record."""
+    if not path.exists():return True
+    if os.name!='nt':
+        import fcntl
+        with path.open('rb') as reader:
+            try:fcntl.flock(reader.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:return False
+            fcntl.flock(reader.fileno(),fcntl.LOCK_UN);return True
+    import ctypes as c
+    from ctypes import wintypes as w
+    import msvcrt
+    kernel=c.WinDLL('kernel32',use_last_error=True)
+    create=kernel.CreateFileW;create.argtypes=[w.LPCWSTR,w.DWORD,w.DWORD,c.c_void_p,w.DWORD,w.DWORD,w.HANDLE];create.restype=w.HANDLE
+    handle=create(str(path),0x80000000,0,None,3,0x00200080,None)
+    if handle==c.c_void_p(-1).value:
+        code=c.get_last_error()
+        if code in (32,33):return False
+        raise c.WinError(code)
+    try:descriptor=msvcrt.open_osfhandle(handle,os.O_RDONLY|os.O_BINARY)
+    except Exception:
+        kernel.CloseHandle.argtypes=[w.HANDLE];kernel.CloseHandle(handle);raise
+    with os.fdopen(descriptor,'rb') as reader:
+        if os.fstat(reader.fileno()).st_file_attributes&0x400:raise ValueError('Owner lease is a reparse point')
+        return True
 
 
 def stop(old):
@@ -168,7 +248,9 @@ def retire(old,new):
     roots=[_known_folder('A77F5D77-2E2B-44C3-A6A2-ABA601054A51') or Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs',
            _known_folder('B4BFCC3A-DB2C-424C-B029-7FE99A87C641') or Path.home()/'Desktop',
            _known_folder('0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8') or Path(os.environ['PROGRAMDATA'])/'Microsoft/Windows/Start Menu/Programs',
-           _known_folder('C4AA340D-F20F-4863-AFEF-F87EF2E6BA25') or Path(os.environ.get('PUBLIC',str(Path.home())))/'Desktop']
+           _known_folder('C4AA340D-F20F-4863-AFEF-F87EF2E6BA25') or Path(os.environ.get('PUBLIC',str(Path.home())))/'Desktop',
+           Path(os.environ['APPDATA'])/'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar',
+           Path(os.environ['APPDATA'])/'Microsoft/Internet Explorer/Quick Launch/User Pinned/StartMenu']
     result['shortcuts_replaced']=retarget_shortcuts(old,new,roots)
     if not result['shortcuts_replaced']:
         shortcut(roots[0]/'Helene Python.lnk',new/'helene.exe',new)

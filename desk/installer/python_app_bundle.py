@@ -1,7 +1,7 @@
 """Build the broker-free Python application from a clean distribution stage.
 
-The permanent application contains Python, UI, seed agent code, and relay binary
-plus source. Models and the native rebuild toolchain are optional components;
+The permanent application contains Python, UI and seed agent code. The MIT
+praxis-relay downloads separately; voice models are optional components;
 none is needed to launch the window. This builder neither installs nor publishes.
 """
 from __future__ import annotations
@@ -55,20 +55,20 @@ def install_runtime_dependencies(runtime, wheels):
     (Path(runtime)/'runtime-additions.json').write_text(json.dumps(record,indent=2),encoding='utf-8')
 
 
-def assemble(stage, output, relay, relay_source, *, version, toolchain=None, runtime_wheels=None):
-    stage,output,relay,relay_source=map(Path,(stage,output,relay,relay_source))
+def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain=None, runtime_wheels=None):
+    stage,output=map(Path,(stage,output))
+    if relay or relay_source or toolchain:raise ValueError("Relay is a separate product; compilers are not packaged")
     if not re.fullmatch(r'\d+\.\d+\.\d+',version):raise ValueError('Expected a numeric release version')
     if output.exists():raise FileExistsError(output)
     if output.resolve().is_relative_to(stage.resolve()) or stage.resolve().is_relative_to(output.resolve()):
         raise ValueError('Package source and output must be separate')
-    if relay.name.lower()!='helene-relay.exe':raise ValueError('Expected the Hélène relay executable')
     def available(module):return any((stage/'runtime'/base/module).exists() for base in ('','Lib/site-packages'))
     if runtime_wheels is None and not (available('psutil/__init__.py') and available('socks.py')):
         raise ValueError('Runtime needs psutil and PySocks; provide --runtime-wheels with its hash inventory')
     def ignored(directory,names):
         path=Path(directory)
         omitted={'.git','__pycache__','local_auth'}
-        if path==stage:omitted|={'data','agents','backups','helene-host.exe','helene-svc.exe','owner-stop.json','python-migration.json','migration-start.log','install.log','helene.json','helene.json.bak','agent-default.json','local-build.json','.env'}
+        if path==stage:omitted|={'relay-product','helene-relay.exe','data','agents','backups','helene-host.exe','helene-svc.exe','owner-stop.json','python-migration.json','migration-start.log','install.log','helene.json','helene.json.bak','agent-default.json','local-build.json','.env'}
         if path==stage/'components':omitted|={'broker','relay','toolchain','xtts','whisper'}
         return [name for name in names if name in omitted or name.endswith('.pyc')]
     shutil.copytree(stage,output,ignore=ignored)
@@ -117,19 +117,13 @@ def assemble(stage, output, relay, relay_source, *, version, toolchain=None, run
             if p.is_file() and p.relative_to(stage).parts[0] not in ('data','agents','backups','tree','components','.git')
             and p.name not in ('helene.json','helene.json.bak','owner-stop.json')}
     (migration/'legacy-package-files.json').write_text(json.dumps({'files':legacy},indent=2),encoding='utf-8')
-    entry=component(output,relay,relay_source)
-    shutil.copy2(relay,output/'helene-relay.exe')
-    if toolchain:
-        shared=output/'components/toolchain';shutil.copytree(toolchain,shared)
-        inventory={p.relative_to(shared).as_posix():app_components.digest(p) for p in shared.rglob('*') if p.is_file()}
-        (shared/'files.json').write_text(json.dumps(inventory,indent=2),encoding='utf-8')
-    (output/'components/components.json').write_text(json.dumps({'format':'helene-components.v1','components':{'relay':entry}},indent=2),encoding='utf-8')
+    (output/'components').mkdir(exist_ok=True)
+    (output/'components/components.json').write_text(json.dumps({'format':'helene-components.v1','components':{}}),encoding='utf-8')
     (output/'Start Hélène.cmd').write_text('@echo off\r\ncd /d "%~dp0"\r\n"runtime\\python.exe" -s "app\\python_app.py" --root "%~dp0." %*\r\n',encoding='utf-8')
     manifest={'format':'helene-python-app.v1','version':version,'entry':'app/python_app.py','window':'pywebview',
         'data':'resolved from helene.json tree','components':'components/components.json',
-        'extensions':{'xtts':{'default':True,'license':'CPML non-commercial','assets':['Helene-components-xtts-runtime.zip','Helene-components-xtts-model.zip']},
-                      'whisper':{'default':False,'assets':['Helene-components-whisper.zip']},
-                      'toolchain':{'default':False,'assets':['Helene-components-toolchain.zip']}}}
+        'extensions':{'xtts':{'default':False,'license':'CPML non-commercial','assets':['Helene-components-xtts-runtime.zip','Helene-components-xtts-model.zip']},
+                      'whisper':{'default':False,'assets':['Helene-components-whisper.zip']}}}
     (output/'python-app.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     from localharness.component_downloads import parse as parse_downloads
     downloads = (DESK/'component-downloads.json').read_bytes()
@@ -146,10 +140,9 @@ def assemble(stage, output, relay, relay_source, *, version, toolchain=None, run
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    for name in ('stage','output','relay','relay-source'):parser.add_argument('--'+name,type=Path,required=True)
-    parser.add_argument('--toolchain',type=Path,help='Optional offline compiler, never required by the app')
+    for name in ('stage','output'):parser.add_argument('--'+name,type=Path,required=True)
     parser.add_argument('--version',required=True)
     parser.add_argument('--runtime-wheels',type=Path,help='Hash-pinned private-target runtime additions')
     args=parser.parse_args()
-    assemble(args.stage,args.output,args.relay,args.relay_source,version=args.version,toolchain=args.toolchain,runtime_wheels=args.runtime_wheels)
+    assemble(args.stage,args.output,version=args.version,runtime_wheels=args.runtime_wheels)
 if __name__=='__main__':main()

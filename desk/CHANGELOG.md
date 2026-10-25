@@ -1,3 +1,7 @@
+# 2.1.0 — Portable Python, refreshed onboarding and voice
+
+Archive-first Windows launch and migration; in-place updates; custom migration chrome and sharper icon; inline waveform messages; configurable hold-to-record shortcuts, Shift draft parking, Esc cancellation and automatic playback; refreshed onboarding/help and appearance settings; independent relay and only Whisper/XTTS optional downloads. See the English release notes for exact platform checks and limits.
+
 # Изменения
 
 ## 1.9.4 — конфликт оформления и очередь

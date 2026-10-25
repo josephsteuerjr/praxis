@@ -22,6 +22,7 @@
 // не там.
 import { api, cfg, electron, inTauri, post, shell } from "../api";
 import { componentsCard } from "../components-card";
+import { updateError } from "../../update-error";
 import { keepBlock } from "../config";
 import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
@@ -410,6 +411,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const pythonUpdate = electron?.shell === 'python';
   const legacyLinux = linux && !pythonUpdate;
   let updateHandedOff = false;
+  const manualUpdate = button('Открыть выпуск и помощник', 'quiet', async () => {
+    await shell('open_path', { path: 'https://github.com/josephsteuerjr/praxis/releases/latest' });
+  });
+  manualUpdate.hidden = true;
   const dlBtn = button(legacyLinux ? "Открыть выпуск Linux" : pythonUpdate ? 'Обновить Hélène' : "Скачать и установить", "primary", async () => {
     if (!updUrl) return;
     if (legacyLinux) {
@@ -420,6 +425,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     dlBtn.disabled = true;
     updOut.className = "receipt";
     updOut.textContent = pythonUpdate ? 'Скачиваю и проверяю обновление рядом с рабочей папкой…' : "Скачиваю в «Загрузки»…";
+    let updateStage: 'download' | 'install' = 'download';
     try {
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
       const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
@@ -428,6 +434,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       // версией и без явного слова не подменяет папки, если хоть одно не грузится.
       // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
       // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
+      updateStage = 'install';
       await shell("update_install", { path: got.path, forceExtensions: forceExt });
       updateHandedOff = true;
       updOut.textContent = pythonUpdate ? 'Обновление передано Python. Программа перезапустится; неудачный запуск откатится. Установщик не нужен.' : 'Установщик запущен; программа закроется для обновления.';
@@ -440,13 +447,15 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         void shell("open_path", { path: updUrl }).catch((e2) => toast(humanError(e2).text));
       } else {
         updOut.className = "receipt err";
-        updOut.textContent = humanError(e).text;
+        updOut.textContent = updateError(updateStage, e);
       }
+      manualUpdate.hidden = false;
     } finally {
       dlBtn.disabled = updateHandedOff;
     }
   });
   dlBtn.hidden = true;
+  about.append(manualUpdate);
   forceToggle.hidden = true;
   aboutRow.append(
     ver,

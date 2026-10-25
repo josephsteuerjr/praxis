@@ -37,14 +37,14 @@ fn cached_archive(app:&tauri::AppHandle,downloads:&std::path::Path,asset:&str,ex
     let response=ureq::get(&format!("{}/{asset}",release())).call().map_err(|e|format!("Download {asset}: {e}"))?;
     let mut file=std::fs::File::create(&part).map_err(|e|e.to_string())?;
     let total=response.header("Content-Length").and_then(|s|s.parse::<u64>().ok());
-    let mut reader=response.into_reader();let mut bytes=0u64;let mut buffer=[0u8;262144];
+    let mut hash=Sha256::new();let mut reader=response.into_reader();let mut bytes=0u64;let mut buffer=[0u8;262144];
     let mut reported=std::time::Instant::now();
     loop {let n=reader.read(&mut buffer).map_err(|e|format!("Download {asset}: {e}"))?;if n==0{break}
-        std::io::Write::write_all(&mut file,&buffer[..n]).map_err(|e|e.to_string())?;bytes+=n as u64;
+        hash.update(&buffer[..n]);std::io::Write::write_all(&mut file,&buffer[..n]).map_err(|e|e.to_string())?;bytes+=n as u64;
         if reported.elapsed().as_millis()>=200 {let _=app.emit("migration-progress",serde_json::json!({"stage":"downloading","asset":asset,"bytes":bytes,"total_bytes":total}));reported=std::time::Instant::now();}
     }
     let _=app.emit("migration-progress",serde_json::json!({"stage":"downloading","asset":asset,"bytes":bytes,"total_bytes":total}));drop(file);
-    if !matches(&part)?{return Err(format!("Archive hash mismatch: {asset}"))}
+    if format!("{:x}",hash.finalize())!=expected{return Err(format!("Archive hash mismatch: {asset}"))}
     if archive.exists(){let previous=archive.with_file_name(format!("{asset}.previous-{}",std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));std::fs::rename(&archive,previous).map_err(|e|e.to_string())?;}
     std::fs::rename(&part,&archive).map_err(|e|e.to_string())?;Ok(archive)
 }
@@ -59,25 +59,14 @@ fn verify_package(archive:&std::path::Path,root:&std::path::Path)->Result<(),Str
         if hash(&mut entry)?!=hash(file)?{return Err(format!("Unpacked package changed: {}",rel.display()))}
     }Ok(())
 }
+#[path = "../migration_archive.rs"]
+mod migration_archive;
 fn extract(app:&tauri::AppHandle,archive:&std::path::Path,staging:&std::path::Path,asset:&str)->Result<(),String>{
-    let mut zip=zip::ZipArchive::new(std::fs::File::open(archive).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
-    let total=(0..zip.len()).try_fold(0u64,|sum,i|zip.by_index(i).map(|e|sum.saturating_add(e.size()))).map_err(|e|e.to_string())?;
-    let count=zip.len();let mut done=0u64;let mut reported=std::time::Instant::now();
-    for i in 0..count {let mut entry=zip.by_index(i).map_err(|e|e.to_string())?;
-        let relative=entry.enclosed_name().ok_or("Invalid archive path")?.to_path_buf();
-        if !relative.starts_with("Helene"){return Err("Unexpected archive root".into())}
-        if entry.unix_mode().is_some_and(|m|m&0o170000==0o120000){return Err("Archive symlink is unsupported".into())}
-        let destination=staging.join(&relative);
-        if entry.is_dir(){std::fs::create_dir_all(&destination).map_err(|e|e.to_string())?;continue}
-        std::fs::create_dir_all(destination.parent().ok_or("No destination parent")?).map_err(|e|e.to_string())?;
-        let temporary=destination.with_extension("migration-part");
-        let mut output=std::fs::File::create(&temporary).map_err(|e|e.to_string())?;
-        done+=std::io::copy(&mut entry,&mut output).map_err(|e|format!("Extract {asset}: {e}"))?;drop(output);
-        if destination.exists(){std::fs::remove_file(&destination).map_err(|e|e.to_string())?;}
-        std::fs::rename(&temporary,&destination).map_err(|e|e.to_string())?;
-        if reported.elapsed().as_millis()>=200 || i+1==count {let _=app.emit("migration-progress",serde_json::json!({"stage":"unpacking","asset":asset,"bytes":done,"total_bytes":total,"files":i+1,"total_files":count}));reported=std::time::Instant::now();}
-    }Ok(())
+    migration_archive::extract(archive,staging,|bytes,total,files,count|{
+        let _=app.emit("migration-progress",serde_json::json!({"stage":"unpacking","asset":asset,"bytes":bytes,"total_bytes":total,"files":files,"total_files":count}));
+    })
 }
+
 fn package(app:&tauri::AppHandle, extensions:&[String]) -> Result<PathBuf,String> {
     let downloads=PathBuf::from(std::env::var_os("USERPROFILE").ok_or("USERPROFILE unavailable")?).join("Downloads").join("Helene-downloads").join(env!("CARGO_PKG_VERSION"));
     std::fs::create_dir_all(&downloads).map_err(|e|e.to_string())?;
@@ -121,13 +110,10 @@ fn package(app:&tauri::AppHandle, extensions:&[String]) -> Result<PathBuf,String
     Ok(root)
 }
 fn argument(key:&str)->Option<String>{let a:Vec<_>=std::env::args().collect();a.windows(2).find(|w|w[0]==key).map(|w|w[1].clone())}
-fn selected_extensions(old:&std::path::Path,mode:&str)->Vec<String>{
-    if mode=="fresh" {return vec!["xtts".into()]}
-    let mut selected=Vec::new();
-    for (name,path) in [("xtts","components/xtts"),("xtts","voice-xtts"),("toolchain","components/toolchain"),("whisper","voice/site-packages"),("whisper","runtime/faster_whisper"),("whisper","runtime/Lib/site-packages/faster_whisper")] {
-        if old.join(path).is_dir() && !selected.iter().any(|value|value==name){selected.push(name.to_owned());}
-    }
-    selected
+fn selected_extensions(_old:&std::path::Path,_mode:&str)->Vec<String>{
+    // The first window never depends on multi-GB optional downloads. Existing
+    // working payload is preserved by migration/update; additions are explicit.
+    Vec::new()
 }
 #[tauri::command]
 async fn migration_pick_path(current:String)->Result<Option<String>,String>{
@@ -163,6 +149,7 @@ fn migration_command(root:&std::path::Path,old:&str,target:&str,extensions:&[Str
     if mode=="fresh"{command.arg("--fresh");}
     if mode=="update"{command.arg("--in-place");}
     if let Some(directory)=resume{command.arg("--resume-copy").arg(PathBuf::from(directory).join("python-migration.json"));}
+    for flag in ["--data-home","--shortcut-dir"]{if let Some(path)=argument(flag){command.arg(flag).arg(path);}}
     #[cfg(windows)] {use std::os::windows::process::CommandExt;command.creation_flags(0x08000000);}
     command
 }
@@ -193,7 +180,7 @@ async fn migration_run(app:tauri::AppHandle,old:String,target:String,extensions:
     if !matches!(mode.as_str(),"fresh"|"migrate"|"update"){RUNNING.store(false,Ordering::SeqCst);return Err("Unknown installation mode".into())}
     if mode!="fresh" && !old_path.join("helene.json").is_file(){RUNNING.store(false,Ordering::SeqCst);return Err("No Hélène configuration in selected installation".into())}
     let extensions=extensions.unwrap_or_else(||selected_extensions(&old_path,&mode));
-    if extensions.iter().any(|s|!matches!(s.as_str(),"xtts"|"toolchain"|"whisper")) {
+    if extensions.iter().any(|s|!matches!(s.as_str(),"xtts"|"whisper")) {
         RUNNING.store(false,Ordering::SeqCst);return Err("Unknown extension selection".into());
     }
     #[cfg(windows)]
@@ -232,13 +219,13 @@ async fn migration_run(app:tauri::AppHandle,old:String,target:String,extensions:
 mod command_tests {
     use super::*;
     #[test]
-    fn extension_defaults_preserve_existing_choices_instead_of_fresh_defaults() {
+    fn extension_defaults_never_start_implicit_downloads() {
         let home=std::env::temp_dir().join(format!("helene-defaults-{}",std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         assert!(selected_extensions(&home,"update").is_empty());
-        assert_eq!(selected_extensions(&home,"fresh"),vec!["xtts"]);
+        assert!(selected_extensions(&home,"fresh").is_empty());
         std::fs::create_dir_all(home.join("voice-xtts")).unwrap();
-        assert_eq!(selected_extensions(&home,"migrate"),vec!["xtts"]);
+        assert!(selected_extensions(&home,"migrate").is_empty());
         std::fs::remove_dir_all(home).unwrap();
     }
     #[test]
@@ -276,14 +263,27 @@ fn main(){
     tauri::Builder::default().invoke_handler(tauri::generate_handler![migration_defaults,migration_run,migration_pick_path])
     .setup(|app|{
         // Monitor work areas are physical pixels; Tauri sizes below are logical.
-        // Leave room for the native title bar/borders and taskbar at 150–200% DPI.
+        // Keep the custom title bar and all controls inside the work area at high DPI.
         let (width,height)=app.primary_monitor()?.map(|monitor|{
             let area=monitor.work_area();let scale=monitor.scale_factor();
             ((area.size.width as f64/scale-32.0).clamp(1.0,660.0),
              (area.size.height as f64/scale-80.0).clamp(1.0,660.0))
         }).unwrap_or((600.0,480.0));
-        tauri::WebviewWindowBuilder::new(app,"main",tauri::WebviewUrl::App("index.html".into()))
-            .title("Hélène · переход на Python").inner_size(width,height)
-            .min_inner_size(width.min(360.0),height.min(320.0)).center().resizable(true).build()?;Ok(())})
+        let window=tauri::WebviewWindowBuilder::new(app,"main",tauri::WebviewUrl::App("index.html".into()))
+            .title("Hélène · установка").inner_size(width,height).decorations(false)
+            // A full-size source also supplies the taskbar icon. Do not stretch the
+            // small HICON chosen by the default Windows resource loader.
+            .icon(tauri::include_image!("../shell/icons/icon.png"))?
+            .min_inner_size(width.min(360.0),height.min(320.0)).center().resizable(true).build()?;
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW,WM_GETICON,WM_SETICON,ICON_SMALL,ICON_BIG};
+            // Tauri sets only ICON_SMALL. The taskbar/Alt-Tab need ICON_BIG too;
+            // both borrow the 256px image owned for the window's whole lifetime.
+            let hwnd=window.hwnd()?.0 as _;
+            let icon=SendMessageW(hwnd,WM_GETICON,ICON_SMALL as usize,0);
+            if icon!=0 {SendMessageW(hwnd,WM_SETICON,ICON_BIG as usize,icon);}
+        }
+        Ok(())})
     .run(tauri::generate_context!("migration.conf.json")).expect("Migration window failed");
 }

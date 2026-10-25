@@ -18,7 +18,6 @@ import zipfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import app_components,component_downloads,python_platform
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from python_app_bundle import component
 import deskpkg
 DESK=Path(__file__).resolve().parents[1]
 
@@ -53,10 +52,7 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     if target!=python_platform.runtime_target():raise ValueError('Assembly must run on the selected native OS/architecture')
     if output.exists():raise FileExistsError(output)
     if not re.fullmatch(r'\d+\.\d+\.\d+',version):raise ValueError('Expected numeric version')
-    if without_relay:
-        if relay or relay_source:raise ValueError('Explicit relay-unavailable assembly cannot contain relay inputs')
-    elif relay is None or relay.name!='helene-relay' or not relay.is_file() or relay_source is None:
-        raise ValueError('Expected exact POSIX relay input, or explicit --without-relay')
+    if relay or relay_source:raise ValueError('praxis-relay downloads separately; do not embed it in the base application')
     for source in (runtime,edition,*((relay_source,) if relay_source else ())):
         if not source.is_dir() or output.resolve().is_relative_to(source.resolve()):raise ValueError('Invalid or overlapping package input')
     if not (edition/'agent.py').is_file() or not (edition/'llm.py').is_file():raise ValueError('Selected agent source is incomplete')
@@ -106,12 +102,8 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
                   'artifacts':{},'unavailable':{n:reason for n in sorted(component_downloads.EXTENSIONS)}}
         component_downloads.validate(manifest)
     (app/'component-downloads.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    components={'relay':{'unavailable':'No target-qualified native relay input was supplied; direct API mode only'}}
+    components={}
     (output/'components').mkdir(exist_ok=True)
-    if relay:
-        components['relay']=component(output,relay,relay_source)
-        shutil.copy2(relay,output/'helene-relay');(output/'helene-relay').chmod(0o755)
-        (output/'components/relay/binary/helene-relay').chmod(0o755)
     (output/'components/components.json').write_text(json.dumps({'format':'helene-components.v1','components':components},indent=2),encoding='utf-8')
     for binary,name in ((body,'helene-body'),(bridge,'helene-bridge')):
         if binary:
@@ -151,7 +143,7 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('runtime','edition','output'):p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--relay',type=Path);p.add_argument('--relay-source',type=Path)
-    p.add_argument('--without-relay',action='store_true',help='Explicit direct-provider candidate; no bundled relay capability')
+    p.add_argument('--without-relay',action='store_true',help='Compatibility flag: relay is always downloaded separately')
     p.add_argument('--version',required=True);p.add_argument('--target',required=True)
     p.add_argument('--downloads',type=Path);p.add_argument('--body',type=Path);p.add_argument('--bridge',type=Path)
     a=p.parse_args();print(assemble(a.runtime,a.edition,a.relay,a.relay_source,a.output,version=a.version,target=a.target,downloads=a.downloads,body=a.body,bridge=a.bridge,without_relay=a.without_relay))

@@ -19,6 +19,21 @@ def git(path,*args):
 
 
 class MigrationTests(unittest.TestCase):
+    def test_portable_archive_migrates_profile_without_copying_program(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);old=root/'old';(old/'data/memory').mkdir(parents=True)
+            (old/'data/memory/history.txt').write_text('authored memory')
+            (old/'helene.json').write_text(json.dumps({'tree':'data','code':'data','runner':''}))
+            new=root/'portable'
+            for rel in ('python-app.json','app/python_app.py','runtime/python.exe'):
+                p=new/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('prepared program')
+            with patch.object(python_migrate,'copy_program',side_effect=AssertionError('Portable program must not be copied')),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(python_migrate.migration_windows,'service',return_value=None):
+                note=python_migrate.migrate(old,new,new,new/'profile',prepared=True,launch=False)
+            self.assertEqual(note['state'],'prepared')
+            self.assertEqual((new/'app/python_app.py').read_text(),'prepared program')
+            self.assertTrue(list((new/'profile').rglob('history.txt')))
+            self.assertEqual((old/'data/memory/history.txt').read_text(),'authored memory')
+
     def test_migration_preserves_default_agent_preferences_and_legacy_voice_runtime(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);old=root/'old';(old/'data').mkdir(parents=True)
