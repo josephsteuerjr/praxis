@@ -16,19 +16,19 @@
       "name": "Helene-fedora-whisper-abi314.zip",
       "size": 148437958,
       "sha256": "8645447de9eb69e420f7477ffce7b192778d5afa810e1406dc19c5d317680f0b",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.0.0/Helene-fedora-whisper-abi314.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-fedora-whisper-abi314.zip"
     },
     "xtts_runtime": {
       "name": "Helene-fedora-xtts-runtime.zip",
       "size": 663095360,
       "sha256": "cc25b1bf8ab03d0d6c745658bf38b3fed756c6f484f84a05c9479d1584111e70",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.0.0/Helene-fedora-xtts-runtime.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-fedora-xtts-runtime.zip"
     },
     "xtts_model": {
       "name": "Helene-fedora-xtts-model.zip",
       "size": 1740278163,
       "sha256": "9b6328bc607413af6f933ce170830cadc628a0e53e7f5217c14f9ccc59b86b8a",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.0.0/Helene-fedora-xtts-model.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-fedora-xtts-model.zip"
     }
   }
 }
