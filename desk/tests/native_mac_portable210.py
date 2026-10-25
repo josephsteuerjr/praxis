@@ -74,6 +74,8 @@ try:
     assert result['steps']['repeat_live_windows']==1,'Repeated launch created more than one native window'
     from native_portable_update210 import run as native_update
     result['native_update']=native_update(root,evidence/'update');save()
+    from native_mac_migration210 import run as native_migration
+    result['native_migration']=native_migration(root,archive,repo,evidence/'migration');save()
 except BaseException as exc:
     result['error']=type(exc).__name__+': '+str(exc);save()
     subprocess.run(['screencapture','-x',str(evidence/'failure.png')],check=False)

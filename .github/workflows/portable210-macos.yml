@@ -16,4 +16,6 @@ jobs:
         if: always()
         with:
           name: mac-portable210-evidence
-          path: evidence210/
+          path: |
+            evidence210/
+            !evidence210/**/test-key.pem

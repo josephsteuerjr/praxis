@@ -23,7 +23,12 @@ def run(root,evidence):
         for p in root.glob('.python-window-*.json'):
             try:
                 v=json.loads(p.read_text());os.kill(v['pid'],0)
-                if Path(v['root']).resolve()==root:return v
+                if sys.platform.startswith('linux'):
+                    state=Path('/proc')/str(v['pid'])/'stat'
+                    if state.read_text().split(') ',1)[1].startswith('Z'):continue
+                if Path(v['root']).resolve()==root:
+                    with urllib.request.urlopen(v['origin']+'/config.js',timeout=1) as response:
+                        if response.status==200:return v
             except (ValueError,OSError):pass
     def invoke(name,args=None):
         v=wait(control)
@@ -47,7 +52,7 @@ def run(root,evidence):
     # Finder doesn't inherit shell env. launchctl affects only this disposable
     # GitHub runner user and is restored in finally.
     if sys.platform=='darwin':command(['launchctl','setenv','SSL_CERT_FILE',cert])
-    serve=evidence/'serve';serve.mkdir(exist_ok=True)
+    serve=root.parent/('update-fixtures-'+str(time.time_ns()));serve.mkdir()
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self,*a,**kw):super().__init__(*a,directory=str(serve),**kw)
         def log_message(self,*a):pass
@@ -111,6 +116,7 @@ def run(root,evidence):
                 wait(lambda:'previous program restored' in Path(response['log']).read_text(errors='replace'),200)
             else:
                 def complete():
+                    if not (root/'python-migration.json').is_file():return False
                     n=json.loads((root/'python-migration.json').read_text())
                     return n.get('state')=='completed' and Path(n.get('update_source',''))==Path(response['staging'])/'Helene'
                 wait(complete,200);prior=version
@@ -122,7 +128,11 @@ def run(root,evidence):
             save()
         close()
     except BaseException as exc:
-        result['error']=type(exc).__name__+': '+str(exc);save();raise
+        result['error']=type(exc).__name__+': '+str(exc);save()
+        for p in root.parent.glob('helene-update-*.log'):shutil.copy2(p,evidence/p.name)
+        for name in ('python-update-start.log','startup-error.log'):
+            if (root/name).is_file():shutil.copy2(root/name,evidence/name)
+        raise
     finally:
         server.shutdown()
         if sys.platform=='darwin':command(['launchctl','unsetenv','SSL_CERT_FILE'])
