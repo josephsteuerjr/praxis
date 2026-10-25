@@ -81,7 +81,7 @@ class Components(unittest.TestCase):
         with patch.object(hashlib,'file_digest',side_effect=digest),patch.object(shutil,'copy2',side_effect=copy):
             cd.prepare(self.root,['toolchain'])
         self.assertEqual((self.root/'components/toolchain/fixture').read_text(),'toolchain')
-        self.assertEqual(hashed,[cd.cache_dir(self.root)/cd.cache_name(self.manifest['artifacts']['toolchain'])])
+        self.assertEqual(hashed,[(cd.cache_dir(self.root)/cd.cache_name(self.manifest['artifacts']['toolchain'])).resolve()])
         self.assertEqual(len(self.calls),1)
 
     def test_ordinary_update_preserves_unchanged_pin_but_changed_pin_is_fetched(self):

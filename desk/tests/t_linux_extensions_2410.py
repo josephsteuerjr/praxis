@@ -73,7 +73,7 @@ class ABI(unittest.TestCase):
    info={'python':'3.13','sites':[str(site)],'markers':{'python_version':'3.13','sys_platform':'linux'}}
    with patch.object(whisper.subprocess,'check_output',return_value=json.dumps(info)):
     got=whisper.runtime_info(root)
-   self.assertEqual(got['python'],'3.13');self.assertIn(site,got['sites'])
+   self.assertEqual(got['python'],'3.13');self.assertIn(site.resolve(),got['sites'])
  def test_foreign_runtime_site_refused(self):
   with tempfile.TemporaryDirectory() as tmp,patch.object(whisper.subprocess,'check_output',return_value=json.dumps({'sites':['/outside']})):
    with self.assertRaisesRegex(ValueError,'outside'):whisper.runtime_info(Path(tmp))

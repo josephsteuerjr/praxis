@@ -50,6 +50,7 @@ def wait_owner(pid):
 
 def apply_files(source, target, recovery, *, consume=False, verified=None):
     """Overlay package files only; retain overwritten bytes and a rollback map."""
+    source,target,recovery=(Path(p).resolve() for p in (source,target,recovery))
     written=[]
     recovery.mkdir()
     def digest(path):
