@@ -19,7 +19,7 @@ import keat_readiness
 import keat_runtime
 import mtproto_runner as runner
 
-ROOT = '-100999999999999999'
+ROOT = '-1001240718803'
 
 
 class OrdinaryRootGroupCanary(unittest.TestCase):
@@ -34,11 +34,10 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
         self.policy.write_text(json.dumps(dict(
             schema='keat.capture-policy.v1', namespace='abstractdl-offline',
             root=root, enrollments=[self.row])), encoding='utf-8')
-        self.env = dict(PRAXIS_ABSTRACTDL_ROOT_CHAT_ID=ROOT,
-                        PRAXIS_KEAT_CAPTURE='on',
+        self.env = dict(PRAXIS_KEAT_CAPTURE='on',
                         PRAXIS_KEAT_CAPTURE_POLICY=str(self.policy),
                         PRAXIS_KEAT_ROOT=root, PRAXIS_KEAT='serve',
-                        PRAXIS_KEAT_PAIRS='[["group","-100999999999999999"]]')
+                        PRAXIS_KEAT_PAIRS='[["group","-1001240718803"]]')
 
     def capture(self, mid, role, text, principal):
         return keat_live.capture_ingress(
@@ -148,7 +147,7 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
                                     ('_build_prompt_parts', ('persona', 'dynamic', ''))):
                     stack.enter_context(patch.object(agent, name, return_value=value))
                 stack.enter_context(patch.object(agent, '_media_prompt',
-                    side_effect=lambda convo, refs, ctx, model_text=None: (convo, model_text or convo)))
+                    side_effect=lambda convo, refs, ctx, model_text=None, unavailable_refs=None: (convo, model_text or convo)))
                 stack.enter_context(patch.object(agent.turns, 'begin', return_value={}))
                 stack.enter_context(patch.object(agent.llm, 'configured', return_value=True))
                 stack.enter_context(patch.object(agent.frame_shadow, 'enabled', return_value=False))
@@ -190,7 +189,7 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
         with patch.dict(os.environ, self.env, clear=False):
             baseline = dict(role='user', content='Member: x', actor='Member')
             for kwargs in (
-                dict(chat_id='100999999999999999', root_chat_id='100999999999999999', principal_id='2', ordinary_root=True),
+                dict(chat_id='1001240718803', root_chat_id='1001240718803', principal_id='2', ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id=None, ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id='-2', ordinary_root=True),
                 dict(chat_id=ROOT, root_chat_id=ROOT, principal_id='2', ordinary_root=False),

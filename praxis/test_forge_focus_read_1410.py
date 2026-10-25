@@ -146,7 +146,6 @@ class PagedRead(unittest.TestCase):
         req = {"task_id": "code-read", "role": "scout", "id": "agent-test", "brief": "read", "max_iters": 2}
         with mock.patch.object(forge_worker, "_system", return_value="system"), \
              mock.patch.object(forge_worker, "_chat_with_transport_retry", side_effect=chat), \
-             mock.patch.object(forge_worker, "_publish_result", return_value=True), \
              mock.patch.object(forge_worker.forge, "_event"), \
              mock.patch.object(forge_worker.forge, "emit_unit_event"):
             self.assertEqual(forge_worker._run_request(self.root / "request.json", req), 0)
@@ -164,3 +163,34 @@ class PagedRead(unittest.TestCase):
         self.assertIn("NOT a complete result", result)
         omitted = int(re.search(r"OMITTED: (\d+) characters", result).group(1))
         self.assertEqual(omitted, 20000 - result.count("x"))
+
+    def test_small_explicit_page_and_invalid_offsets(self):
+        raw = b"alpha\nbeta\n"
+        (self.root / "source.txt").write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        page = json.loads(self.read(expected_sha256=digest))
+        self.assertEqual(page["text"].encode("utf-8"), raw)
+        self.assertTrue(page["complete"])
+        self.assertIn("Конфликт версии", self.read(expected_sha256=digest[:16]))
+        self.assertIn("start_char >= 0", self.read(start_char=-1))
+        self.assertIn("вне строки", self.read(start_char=100, expected_sha256=digest))
+        self.assertIn("вне файла", self.read(start=99, start_char=1, expected_sha256=digest))
+
+    def test_remote_refuses_cursor_or_revision_without_reading(self):
+        remote = mock.Mock()
+        with mock.patch.object(forge, "_remote_client", return_value=remote):
+            for cursor in ({"start_char": 1}, {"expected_sha256": "a" * 64}):
+                out = self.read(**cursor)
+                self.assertIn("does not support paged reads", out)
+                self.assertIn("No read was performed", out)
+            remote.workspace_inspect.assert_not_called()
+
+    def test_remote_legacy_read_still_forwards(self):
+        remote = mock.Mock()
+        remote.workspace_inspect.return_value = "legacy remote result"
+        with mock.patch.object(forge, "_remote_client", return_value=remote), \
+             mock.patch.object(forge, "_remote_observations"):
+            self.assertEqual(self.read(start=2, end=3), "legacy remote result")
+        remote.workspace_inspect.assert_called_once_with(
+            str(self.root), "read", path="source.txt", query="", glob="**/*",
+            start=2, end=3, base="")

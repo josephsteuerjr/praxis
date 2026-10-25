@@ -161,7 +161,7 @@ class TheIntentRemembersWhatKindItWas(unittest.IsolatedAsyncioTestCase):
         source.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
         entry = runner._direct_outbox().prepare_file(
             "telegram-outbox:run-p:tool:call-p",
-            peer_id=-100999999999999999,
+            peer_id=-1001240718803,
             topic_id=98591,
             reply_to=98591,
             source=source,
@@ -175,7 +175,7 @@ class TheIntentRemembersWhatKindItWas(unittest.IsolatedAsyncioTestCase):
         )
         accepted = runner._direct_outbox().mark_accepted(entry["key"], message_id=2049)
         receipt = accepted["receipt"]
-        self.assertEqual(receipt["peer_id"], -100999999999999999)
+        self.assertEqual(receipt["peer_id"], -1001240718803)
         self.assertEqual(receipt["topic_id"], 98591)
         self.assertEqual(receipt["media_kind"], "photo")
         self.assertEqual(receipt["sha256"], entry["payload"]["sha256"])

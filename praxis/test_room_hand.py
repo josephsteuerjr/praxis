@@ -22,9 +22,9 @@ import agent
 META = {
     "809306689": {"name": "Yegor Kosyrev (@tatarskiy_e4pochmak)",
                   "last_ts": 300.0, "is_dm": True},
-    "-100999999999999999__topic__96256": {"name": "AbstractDL Chat · topic #96256",
+    "-1001240718803__topic__96256": {"name": "AbstractDL Chat · topic #96256",
                                      "last_ts": 200.0},
-    "-100999999999999999__topic__96051": {"name": "AbstractDL Chat · topic #96051",
+    "-1001240718803__topic__96051": {"name": "AbstractDL Chat · topic #96051",
                                      "last_ts": 100.0},
     "-1004301095307__topic__726": {"name": "mycelium · Курилка", "last_ts": 50.0},
 }
@@ -52,7 +52,7 @@ class Base(unittest.TestCase):
     @staticmethod
     def _group_ctx():
         return agent.ChannelContext.from_legacy(
-            chat_id=-100999999999999999, is_dm=False, owner=False, known=True)
+            chat_id=-1001240718803, is_dm=False, owner=False, known=True)
 
 
 class RoomsResolveWithoutGuessing(Base):
@@ -62,8 +62,8 @@ class RoomsResolveWithoutGuessing(Base):
         self.assertEqual(why, "")
 
     def test_the_address_itself_is_accepted(self):
-        key, _ = agent.resolve_room("-100999999999999999__topic__96051")
-        self.assertEqual(key, "-100999999999999999__topic__96051")
+        key, _ = agent.resolve_room("-1001240718803__topic__96051")
+        self.assertEqual(key, "-1001240718803__topic__96051")
 
     def test_she_may_call_the_owner_by_his_name(self):
         """В реестре место подписано display-именем Telegram, а она ищет «Егора»."""

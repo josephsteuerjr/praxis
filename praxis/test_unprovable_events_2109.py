@@ -1,17 +1,8 @@
 """Недоказуемое событие не попадает в свёртку, а новое пишется уже каноничным.
 
-Корень мельницы, найденный 21.09 на живом дереве. Индекс доказательств принимает строку
-жизни только пока её текст равен `text.strip()` (`_nonempty_string`). Сообщение с
-пробелом по краям — агенты щедры на `\\xa0` в конце — в индекс не попадает ВООБЩЕ. Дальше
-по цепочке: свёртка, куда такое событие попало, не разрешается никогда
-(`_resolve_compact` отказывает на первом же неизвестном событии), значит её события не
-считаются покрытыми, значит они остаются в горячем кольце, значит следующая свёртка
-берёт тот же самый блок. Замер: во всей жизни таких строк шестнадцать, и шести из них
-хватило, чтобы кольцо комнаты Ouroboros не двигалось совсем — один блок из 152 событий
-сворачивался заново каждую минуту.
-
-Лечится с двух сторон: писать текст сразу каноничным и не класть в свёртку то, что
-провенанс всё равно не примет.
+Conversation text сохраняет исходные пробелы и принимается индексом без потери
+разделителей native chunks. Неидентифицируемые или malformed события остаются
+видимыми ghosts, но не идут в свёртку; остальные поля проверяются как прежде.
 
 Запуск:  python praxis_test.py test_unprovable_events_2109 -v
 """
@@ -38,9 +29,19 @@ def event_row(text: str, *, event_id: str = "evt-20260921T070000000000Z-1189e90c
 
 
 class TheIndexIsAskedBeforeTheModel(unittest.TestCase):
-    def test_a_trailing_space_makes_the_row_invisible(self):
-        self.assertFalse(mp.event_row_indexable(event_row("привет" + NBSP + " \n")))
+    def test_conversation_whitespace_is_exact_content_not_an_identifier(self):
+        raw = " привет" + NBSP + " \n"
+        row = event_row(raw)
+        self.assertTrue(mp.event_row_indexable(row))
+        self.assertEqual(row['text'], raw)
         self.assertTrue(mp.event_row_indexable(event_row("привет")))
+
+    def test_other_fields_and_event_kinds_remain_canonical(self):
+        for field, value in (('actor', ' Dmitry'), ('chat_id', ' -100370'),
+                             ('id', 'bad'), ('meta', []), ('text', ' \n\u00a0')):
+            with self.subTest(field=field):
+                self.assertFalse(mp.event_row_indexable(dict(event_row('valid'), **{field: value})))
+        self.assertFalse(mp.event_row_indexable(dict(event_row(' valid '), kind='run_episode')))
 
     def test_an_empty_or_broken_row_is_not_indexable(self):
         self.assertFalse(mp.event_row_indexable(event_row("")))
@@ -61,6 +62,7 @@ class TheHotRingKeepsOnlyProvableRows(unittest.TestCase):
         ghost = event_row("хвост с пробелом ",
                           event_id="evt-20260921T070001000000Z-6c3d18d5",
                           ts="2026-09-21T07:00:01.000Z")
+        ghost['actor'] = ' invalid actor '
         foldable, unprovable = ml._foldable_hot_rows(
             [good, ghost], {good["id"], ghost["id"]}, set())
         self.assertEqual([r["id"] for r in foldable], [good["id"]])

@@ -1,43 +1,22 @@
-"""Эпоха комнаты E и лента A с якоря свёртки — K|E|A|T, шаги 2–3 (15.09.2026).
+"""Frozen group epoch E and source-complete append tape, selected per wake.
 
-Рычаг `PRAXIS_FRAME_EPOCH` (умолчание ВЫКЛЮЧЕНО: кадр байт-в-байт прежний) и список комнат
-`PRAXIS_FRAME_EPOCH_ROOMS` через запятую (`*` — все комнаты; личка и свои окна — никогда).
-Пока комнаты нет в списке, для неё не меняется ни байта — это и есть staged (её §5.4 14.09:
-«сначала личка, затем одна группа/canary»; Егор 15.09: абстракт — лучший живой тест).
+PRAXIS_FRAME_EPOCH and PRAXIS_FRAME_EPOCH_ROOMS select the existing rollout
+(default off; '*' all groups, never DMs). ARCHITECTURE.md owns the source
+contract: canonical current uncovered life + exact residuals, not a numeric
+anchor or a replay of the entire historical raw archive. Producer-stamped live
+archive receipts preserve failed life writes; backfill is archival evidence.
 
-Что делает, одной строкой: стабильный материал конверта (сводка, карта памяти, желания,
-профиль комнаты, визитка, досье завсегдатаев, локаторы почты и адреса) замораживается
-ФАЙЛОМ на границе свёртки memory_life и едет ПЕРВЫМ сообщением кадра байт-в-байт до
-следующей границы; лента комнаты идёт с якоря свёртки в порядке архива, каждая запись
-рендерится один раз, правки и удаления дописываются новыми строками; живое (STATE,
-приватное владельца, поиск, досье того, кого нет в эпохе, справка «что изменилось после
-заморозки») остаётся в последнем сообщении, как и сейчас.
-
-Замер 15.09 (после шага 1, `desk-notes/frames/after-headstable-1509.txt`): голова кадра
-группы стала одной на всех (1 отпечаток вместо 7), но первый вызов хода по-прежнему платил
-~48k свежих токенов из ~70k — ленту и конверт, потому что окно ленты скользило и первое
-сообщение менялось на 157-м байте. Голова — 20k из 70k; всё остальное лежало ПОЗАДИ
-подвижного. Здесь порядок переворачивается: неизменное — впереди, подвижное — сзади.
-
-Якорь = message_id первой записи горячего окна memory_life (`hot_records`): всё до него
-уже свёрнуто её компактором в сводку, всё после — лента. Переворот эпохи = ЕЁ свёртка
-(граница эпизода на паузе EPISODE_GAP_SEC или потолок горячего окна) — «одно холодное
-вместо двух» из плана 17.08; на паузе кэш и так холоден. Ручной переворот той же комнаты —
-`flip(chat_id, reason)`: следующий ход заморозит эпоху заново под номером n+1.
-
-Эпоха НЕ замораживает полномочия: право проверяется при вызове руки, как и раньше;
-`[private]` в эпоху не входит никогда (ярус «Приватное из досье» — живой хвост владельца).
-Сводка в E — та, что была на границе; свёртка посреди эпохи E не трогает: лента с якоря и
-есть канон разговора (её слово 09.08), а новая сводка приедет со следующей эпохой.
-
-Приборы: расписка эпохи в frame_trace (зона `epoch`, первое сообщение), поля в снимке
-`frame_layout` (epoch_n/anchor/drift) и живой ярус-справка в конверте; леджер llm_calls
-показывает cached/in как раньше — им и мерить.
+E, summary, tape, source boundary and cursor travel together in GroupWake.
+The existing epoch JSON is the sole durable store, with one writer lock for
+prepare/serve/flip. Selected text is never silently shortened or replaced by a
+sliding window. Oversized/incomplete sources remain on disk with an explicit
+operational outcome; no model is called by this module and no compactor added.
 """
 from __future__ import annotations
 
 import contextlib
 import contextvars
+import copy
 import hashlib
 import json
 import logging
@@ -45,6 +24,8 @@ import os
 import re
 import sys
 import time
+import threading
+import uuid
 from pathlib import Path
 
 log = logging.getLogger("praxis-epoch")
@@ -54,10 +35,8 @@ STORE = BASE / "memory" / ".state" / "epoch"
 SCHEMA = 1
 LEVER = "PRAXIS_FRAME_EPOCH"
 ROOMS = "PRAXIS_FRAME_EPOCH_ROOMS"
-# Физический предохранитель ленты эпохи в знаках (0 = нет). Не режет молча: при превышении
-# лента этого хода собирается прежним скользящим окном, и это НАЗЫВАЕТСЯ в логе и в строке
-# ленты. Горячее окно memory_life само держит эпоху в 100–125 записей / 24k токенов, так что
-# сюда попадает только расхождение архива с горячим слоем.
+# Existing source-capacity setting (0 = unlimited). Preserve full material and
+# raise EpochUnavailable on overflow, never substitute the old sliding window.
 MAX_CHARS_ENV = "PRAXIS_FRAME_EPOCH_MAX_CHARS"
 DEFAULT_MAX_CHARS = 400_000
 
@@ -90,6 +69,192 @@ LIVE_TIER = ("Эпоха этой комнаты — живая справка (
 _BOUND: contextvars.ContextVar = contextvars.ContextVar("praxis_epoch_anchor", default=None)
 _TAKEN: contextvars.ContextVar = contextvars.ContextVar("praxis_epoch_message", default=None)
 _ACTIVE: contextvars.ContextVar = contextvars.ContextVar("praxis_epoch_active", default=False)
+_TAPE: contextvars.ContextVar = contextvars.ContextVar("praxis_epoch_tape", default=None)
+_STORE_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def tape_store_guard(chat_id):
+    """All writers of the existing epoch JSON share this transaction."""
+    from self_model import FileLock
+    with _STORE_LOCK, FileLock(path_for(chat_id).with_suffix(".lock"),
+                               timeout=30.0, stale_after=300.0, heartbeat=5.0):
+        yield
+
+
+class EpochUnavailable(RuntimeError):
+    """Full source is retained, but cannot honestly be served as an ordinary pass."""
+
+
+def require_servable(selection):
+    capacity = selection["capacity"]
+    if not selection["complete"] or not capacity["within"]:
+        raise EpochUnavailable(
+            f"epoch_source_unavailable: chat={selection['chat']} n={selection['n']} "
+            f"chars={capacity['chars']} cap={capacity['cap']} gaps={len(selection['gaps'])}; "
+            "full tape retained in epoch JSON; no sliding fallback. "
+            "Inspect residual sources/coverage or explicitly revise the source capacity setting.")
+
+
+def _hot_key(row):
+    return hashlib.sha256(json.dumps(
+        [row.get("id"), row.get("source_id"), row.get("direction"), row.get("line")],
+        ensure_ascii=False).encode()).hexdigest()
+
+
+def _hot_row(row):
+    line, actor = row["line"], row.get("actor") or ""
+    own = row["direction"] == "out"
+    prefix = actor + ": "
+    return {"self": own, "line": line,
+            "role_line": line[len(prefix):] if own and actor and line.startswith(prefix) else line,
+            "logical_send": copy.deepcopy((row.get("meta") or {}).get("logical_send")),
+            "source": {key: row.get(key) for key in
+                       ("id", "source_id", "chat", "unprovable", "state_residual")}}
+
+
+def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
+                 members=None, thread_word=None, summary_max_chars=7000):
+    """Current canonical life baseline + append-only archive after bootstrap.
+
+    Prebaseline archive is retained raw evidence, NOT assumed covered or selected.
+    The cursor precedes the coherent life read, so neither ingestion write order
+    loses a message between the two. Future orphan archive occurrences survive
+    subsequent authored folds until exact source coverage can account for them.
+    """
+    import group_context
+    import memory_life
+    import memory_provenance
+
+    scope = dict(peer_id=str(peer_id), topic_id=topic_id, whole_room=bool(whole_room),
+                 members=sorted(members, key=lambda item: (item is not None, item))
+                 if members is not None else None,
+                 thread_word=thread_word)
+    with tape_store_guard(chat_id):
+        bootstrap = group_context.archive_cursor(peer_id)
+        initial = None
+        record = load(chat_id) or {}
+        old = record.get("tape") or {}
+        if old.get("v") != 4:
+            # Only new producer-stamped live evidence can recover a failed life
+            # write before bootstrap. Legacy/backfill is not inferred live.
+            initial = group_context.archive_occurrences(peer_id)
+        snapshot = memory_life.epoch_snapshot(chat_id, summary_max_chars=summary_max_chars)
+        summary_policy = dict(max_chars=summary_max_chars, sha256=hashlib.sha256(
+            snapshot["summary"].encode("utf-8")).hexdigest())
+        same = (old.get("v") == 4 and old.get("boundary") == snapshot["boundary"]
+                and old.get("scope") == scope and old.get("flip_id") == record.get("pending_id")
+                and old.get("summary_policy") == summary_policy)
+        if same:
+            tape = copy.deepcopy(old)
+        else:
+            n = max(int(record.get("n") or 0), int(old.get("n") or 0)) + 1
+            anchor = next((int(str(r.get("source_id") or "").split(":", 1)[0])
+                           for r in snapshot["hot"]
+                           if str(r.get("source_id") or "").split(":", 1)[0].isdigit()), 0)
+            tape = dict(v=4, n=n, anchor=anchor, boundary=snapshot["boundary"],
+                        scope=scope, flip_id=record.get("pending_id"), summary=snapshot["summary"],
+                        summary_policy=summary_policy,
+                        frozen_at=_stamp(), reason=("flip: " + str(record["pending"])
+                                                   if record.get("pending") else "source_boundary"),
+                        rows=[], cursor=old.get("cursor") if old.get("v") == 4 else bootstrap,
+                        bootstrap_cursor=old.get("bootstrap_cursor", bootstrap),
+                        selection="canonical_current_uncovered_plus_future_archive",
+                        prebaseline_archive="retained_archival_evidence_not_claimed_covered",
+                        seen_hot=[], residuals=[], gaps=[])
+        covered = set(snapshot["covered_event_ids"])
+        current_ids = set(snapshot.get("current_event_ids", [r["id"] for r in snapshot["hot"]]))
+        events = {}
+        for event in snapshot["events"]:
+            key = memory_provenance.telegram_message_key(event)
+            if key and str(key[0]) == str(peer_id):
+                signature = (str(event.get("source_id") or ""),
+                             str(event.get("direction") or ""), str(event.get("text", "")))
+                events.setdefault(signature, []).append(str(event.get("id")))
+        hot = {str(r["id"]): r for r in snapshot["hot"] if not r.get("state_residual")}
+        seen = set(tape["seen_hot"])
+
+        def emit(row):
+            identity = _hot_key(row)
+            if identity not in seen:
+                tape["rows"].append(_hot_row(row))
+                seen.add(identity)
+
+        def identities(occurrence):
+            signature = group_context.epoch_life_signature(occurrence["row"])
+            return events.get(signature, []) if signature else []
+
+        if same:
+            # A life write can finish AFTER its archive occurrence was already
+            # selected. Keep the frozen archive bytes, but do not append it twice.
+            archived_rows = {(r["archive_occurrence"]["offset"], r["archive_occurrence"]["sha256"]): r
+                             for r in tape["rows"] if "archive_occurrence" in r}
+            for occurrence in tape["residuals"]:
+                if "row" in occurrence:
+                    for eid in identities(occurrence):
+                        if eid in hot:
+                            seen.add(_hot_key(hot[eid]))
+                            archived = archived_rows.get((occurrence["offset"], occurrence["sha256"]))
+                            if archived is not None and (hot[eid].get("meta") or {}).get("logical_send"):
+                                archived["logical_send"] = copy.deepcopy(
+                                    (hot[eid].get("meta") or {}).get("logical_send"))
+        if not same:
+            for row in snapshot["hot"]:
+                emit(row)
+        batch = initial if initial is not None else group_context.archive_occurrences(peer_id, cursor=tape["cursor"])
+        pending = ([] if same else old.get("residuals", [])) + batch["occurrences"]
+        for occurrence in pending:
+            if "gap" in occurrence:
+                if initial is not None and occurrence["end"] <= bootstrap["offset"]:
+                    continue  # undecodable legacy archive is not asserted live
+                tape["gaps"].append({k: occurrence[k] for k in ("offset", "end", "sha256", "gap")})
+                tape["rows"].append(group_context.epoch_occurrence_row(occurrence))
+                tape["residuals"].append(occurrence)
+                continue
+            raw = occurrence["row"]
+            if raw.get("origin") != "live":
+                continue
+            in_scope = (whole_room or raw.get("topic_id") == topic_id
+                        or members is not None and raw.get("topic_id") in members
+                        or topic_id is not None and topic_id in
+                        (raw.get("message_id"), raw.get("reply_to_message_id")))
+            if raw["kind"] not in ("message", "deletion"):
+                continue
+            ids = identities(occurrence)
+            if (initial is not None and occurrence["end"] <= bootstrap["offset"]
+                    and ids and all(eid not in current_ids for eid in ids)):
+                continue  # exact superseded historical revision, not coverage
+            if not in_scope:
+                # The cursor advances across all topics. Retain live receipts
+                # without selecting their text, so a later scope expansion can
+                # recover failed life writes (including exact edit revisions).
+                tape["residuals"].append(occurrence)
+                continue
+            if ids and any(eid in hot for eid in ids):
+                for eid in ids:
+                    if eid in hot:
+                        emit(hot[eid])
+                continue
+            if ids and all(eid in covered for eid in ids):
+                continue
+            tape["rows"].append(group_context.epoch_occurrence_row(occurrence))
+            tape["residuals"].append(occurrence)
+        for row in snapshot["hot"]:
+            emit(row)
+        tape["cursor"], tape["seen_hot"] = batch["cursor"], sorted(seen)
+        tape["incomplete_tail_bytes"] = batch.get("incomplete_tail_bytes", 0)
+        record["tape"] = tape
+        _write_atomic(path_for(chat_id), json.dumps(record, ensure_ascii=False, indent=1))
+        chars = max(sum(len(row[k]) + 1 for row in tape["rows"])
+                    for k in ("line", "role_line")) + len(tape["summary"])
+        cap = max_chars()
+        selected = dict(tape, chat=str(chat_id), complete=not tape["gaps"]
+                        and not tape["incomplete_tail_bytes"],
+                        capacity=dict(chars=chars, cap=cap, within=cap <= 0 or chars <= cap))
+        if record.get("envelope_key") == [tape["n"], tape["boundary"]]:
+            selected["envelope"] = {k: record[k] for k in
+                                    ("blocks", "n", "anchor", "frozen_at", "reason", "chars")}
+        return copy.deepcopy(selected)
 
 
 # ------------------------------------------------------------------------------ рычаги
@@ -157,7 +322,7 @@ def anchor_for(chat_id) -> int | None:
 
 
 @contextlib.contextmanager
-def bind(chat_id, anchor, *, refused: bool = False):
+def bind(chat_id, anchor, *, refused: bool = False, tape: dict | None = None):
     """Привязать якорь, с которого раннер собрал ленту, к ходу: сборщик кадра читает его
     отсюда, а не считает заново (между снимком и ходом могла пройти свёртка).
 
@@ -171,10 +336,19 @@ def bind(chat_id, anchor, *, refused: bool = False):
     else:
         value = (str(chat_id), int(anchor)) if anchor is not None else None
     token = _BOUND.set(value)
+    tape_token = _TAPE.set((str(chat_id), copy.deepcopy(tape))
+                           if tape is not None and not refused else None)
     try:
         yield
     finally:
+        _TAPE.reset(tape_token)
         _BOUND.reset(token)
+
+
+def bound_tape(chat_id) -> dict | None:
+    """The exact detached tape selected for this wake, not later room state."""
+    value = _TAPE.get()
+    return value[1] if value is not None and value[0] == str(chat_id) else None
 
 
 def bound_anchor(chat_id) -> int | None:
@@ -228,6 +402,43 @@ def _sha8(text: str) -> str:
 
 
 def serve(chat_id, anchor: int, blocks: list[tuple[str, str, str]]) -> tuple[list[tuple[str, str, str]], dict]:
+    with tape_store_guard(chat_id):
+        selected = bound_tape(chat_id)
+        if selected is None:
+            return _serve_legacy(chat_id, anchor, blocks)
+        require_servable(selected)
+        saved = load(chat_id) or {}
+        envelope = selected.get("envelope")
+        key = [selected["n"], selected["boundary"]]
+        if envelope is None and saved.get("envelope_key") == key:
+            envelope = {k: copy.deepcopy(saved[k]) for k in
+                        ("blocks", "n", "anchor", "frozen_at", "reason", "chars")}
+        if envelope is None:
+            envelope = dict(blocks=[list(b) for b in blocks], n=selected["n"],
+                            anchor=selected["anchor"], frozen_at=selected["frozen_at"],
+                            reason=selected["reason"], chars=sum(len(b) for _t, _k, b in blocks))
+            # A delayed older wake may serve itself, never roll room storage back.
+            current = saved.get("tape") or {}
+            if [current.get("n"), current.get("boundary")] == key:
+                saved.update(envelope, envelope_key=key)
+                if saved.get("pending_id") == selected.get("flip_id"):
+                    saved.pop("pending", None)
+                _write_atomic(path_for(chat_id), json.dumps(saved, ensure_ascii=False, indent=1))
+        selected["envelope"] = copy.deepcopy(envelope)
+        frozen = [tuple(item) for item in envelope["blocks"]]
+        old = {t: b for t, _k, b in frozen}
+        now = {t: b for t, _k, b in blocks}
+        drift = {t: dict(frozen_chars=len(old.get(t, "")), current_chars=len(now.get(t, "")))
+                 for t in sorted(set(old) | set(now)) if old.get(t) != now.get(t)}
+        receipt = {k: envelope[k] for k in ("n", "anchor", "frozen_at", "chars")}
+        receipt.update(reason="reused", frozen_reason=envelope["reason"], drift=drift,
+                       boundary=selected["boundary"], cursor=copy.deepcopy(selected["cursor"]),
+                       selection=selected["selection"],
+                       bootstrap_cursor=copy.deepcopy(selected["bootstrap_cursor"]))
+        return frozen, receipt
+
+
+def _serve_legacy(chat_id, anchor: int, blocks: list[tuple[str, str, str]]) -> tuple[list[tuple[str, str, str]], dict]:
     """Замороженные блоки E для (комната, якорь) и расписка.
 
     `blocks` — (ярлык, kind, текст блока) такими, какими они собрались бы СЕЙЧАС. Если для
@@ -260,13 +471,15 @@ def serve(chat_id, anchor: int, blocks: list[tuple[str, str, str]]) -> tuple[lis
         reason = "flip: " + str(saved.get("pending"))
     else:
         reason = f"anchor_moved: #{saved.get('anchor')} → #{anchor}"
-    record = {
+    record = dict(saved or {})
+    record.update({
         "v": SCHEMA, "chat": str(chat_id), "n": n, "anchor": int(anchor),
         "frozen_at": _stamp(), "reason": reason,
         "blocks": [[t, k, b] for t, k, b in blocks],
         "sha": {t: s for t, s in now_sha.items()},
         "chars": sum(now_chars.values()),
-    }
+    })
+    record.pop("pending", None)
     try:
         _write_atomic(path_for(chat_id), json.dumps(record, ensure_ascii=False, indent=1))
     except Exception:
@@ -282,12 +495,12 @@ def serve(chat_id, anchor: int, blocks: list[tuple[str, str, str]]) -> tuple[lis
 def flip(chat_id, reason: str = "её слово") -> int:
     """Ручная граница: следующий ход заморозит эпоху заново под номером n+1.
     Возвращает номер будущей эпохи."""
-    saved = load(chat_id) or {}
-    saved = dict(saved, pending=str(reason or "её слово"))
-    if "n" not in saved:
-        saved["n"] = 0
-    _write_atomic(path_for(chat_id), json.dumps(saved, ensure_ascii=False, indent=1))
-    return int(saved.get("n") or 0) + 1
+    with tape_store_guard(chat_id):
+        saved = load(chat_id) or {}
+        saved.update(pending=str(reason or "её слово"), pending_id=uuid.uuid4().hex)
+        saved.setdefault("n", 0)
+        _write_atomic(path_for(chat_id), json.dumps(saved, ensure_ascii=False, indent=1))
+        return max(int(saved["n"]), int((saved.get("tape") or {}).get("n") or 0)) + 1
 
 
 # --------------------------------------------------------------------------- кадр: тексты
@@ -318,6 +531,13 @@ def live_note(receipt: dict) -> str:
     lines = [f"эпоха {int(receipt.get('n') or 0)} · заморожена {receipt.get('frozen_at') or '?'} UTC · "
              f"лента с сообщения #{int(receipt.get('anchor') or 0)} · "
              f"причина заморозки: {receipt.get('frozen_reason') or receipt.get('reason') or '?'}"]
+    if receipt.get("selection"):
+        lines[0] = (f"эпоха {receipt['n']} · заморожена {receipt['frozen_at']} UTC · "
+                    "полный текущий непокрытый канон жизни (ghosts сохранены), затем "
+                    "архивные occurrences после bootstrap; старый raw archive сохранён "
+                    "для адресного чтения, не объявлен покрытым и автоматически не выбран. "
+                    f"cursor={(receipt.get('cursor') or {}).get('offset', 0)} bytes; "
+                    "message anchor — только ориентир, не фильтр.")
     drift = receipt.get("drift") or {}
     if drift:
         import frame_layout  # noqa: PLC0415

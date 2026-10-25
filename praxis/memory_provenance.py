@@ -483,13 +483,19 @@ def _valid_event(row: dict[str, Any], path: Path) -> bool:
             or not _id_matches_timestamp(event_id, timestamp, _EVENT_ID_RE)
             or path.name != f"{timestamp[:10]}.jsonl"):
         return False
+    text = row.get("text")
+    # Conversation bytes are producer evidence, not an identifier: native
+    # Telegram chunks require their exact separators, including trailing NBSP.
+    # Keep every other field/kind's canonical validation unchanged.
+    text_valid = (type(text) is str and bool(text.strip()) and len(text) <= 20_000
+                  if row.get("kind") == "conversation_message" else _nonempty_string(text))
     if (row.get("schema") != "praxis.life.event.v1"
             or not _nonempty_string(row.get("kind"), limit=100)
             or not re.fullmatch(r"[a-z][a-z0-9_]{0,99}", row["kind"])
             or not _nonempty_string(row.get("stream"), limit=300)
             or not _nonempty_string(row.get("actor"), limit=1000)
             or row.get("direction") not in {"in", "out", "internal"}
-            or not _nonempty_string(row.get("text"))
+            or not text_valid
             or not _nonempty_string(row.get("source"), limit=200)
             or not re.fullmatch(r"[a-z][a-z0-9_.:-]{0,199}", row["source"])
             or type(row.get("salience")) is not int
@@ -623,9 +629,9 @@ def event_row_indexable(row: dict[str, Any]) -> bool:
     Строка, которую индекс не принял, в журнале есть, а для провенанса её НЕТ:
     `_resolve_compact` отказывает сразу, значит свёртка с таким событием невалидна
     навсегда, её события не считаются покрытыми и сворачиваются снова и снова.
-    Замер 21.09: во всей жизни таких строк шестнадцать, все по одной причине —
-    текст с пробелом по краям (агенты шлют `\xa0` в конце), — и шести из них
-    хватило, чтобы горячее кольцо комнаты Ouroboros не двигалось совсем.
+    Текст conversation_message проверяется как непустое содержимое, без требования
+    text == text.strip(): Telegram chunks сохраняют исходные разделители. Пустые
+    и malformed события остаются недоказуемыми; идентификаторы не ослаблены.
 
     Спрашивается ДО вызова модели, поэтому берёт только правила строки: место файла
     проверяет сам индекс при сборке.

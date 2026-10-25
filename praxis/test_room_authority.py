@@ -42,7 +42,7 @@ LIVE_NORMAL = (
     "_(контекст этой группы — заполняется по ходу)_\n"
 )
 LIVE_OPEN = (
-    "# Комната -100999999999999999\n\n"
+    "# Комната -1001240718803\n\n"
     "mode: normal\nmode_reason: вернулась\nmode_set_by: owner\n"
     "disclosure: open\nengagement: addressed\n"
 )
@@ -271,14 +271,14 @@ class TestHerDisclosureLever(RoomsHarness):
 
 class TestLiveProfilesStillWork(RoomsHarness):
     def test_the_live_normal_rooms_keep_everything_but_the_false_author(self):
-        for cid, raw in (("-1003843005958", LIVE_NORMAL), ("-100999999999999999", LIVE_OPEN)):
+        for cid, raw in (("-1003843005958", LIVE_NORMAL), ("-1001240718803", LIVE_OPEN)):
             self._write(cid, raw)
             state = rooms.profile_read(cid)
             self.assertEqual(state["mode"], "normal", cid)
             self.assertEqual(state["engagement"], "addressed", cid)
             self.assertEqual(state["mode_set_by"], "", cid)
             self.assertEqual(rooms.membership_state(cid)["state"], "active", cid)
-        self.assertEqual(rooms.disclosure_of("-100999999999999999"), "open",
+        self.assertEqual(rooms.disclosure_of("-1001240718803"), "open",
                          "открытая комната обязана остаться открытой")
 
     def test_a_dead_room_keeps_its_true_author_and_its_answer(self):

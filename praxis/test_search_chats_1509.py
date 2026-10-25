@@ -29,7 +29,7 @@ import agent  # noqa: E402
 import rooms  # noqa: E402
 
 OUROBOROS = "-1003701205730"
-ABSTRACT = "-100999999999999999"
+ABSTRACT = "-1001240718803"
 
 
 class LatinFold(unittest.TestCase):

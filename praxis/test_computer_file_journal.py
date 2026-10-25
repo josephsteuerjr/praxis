@@ -16,7 +16,7 @@ from unittest import mock
 import agent
 
 
-SUCCESS = ("Отправила файл → AbstractDL Chat (chat_id=-100999999999999999, "
+SUCCESS = ("Отправила файл → AbstractDL Chat (chat_id=-1001240718803, "
            "message_id=94520): praxis-paper-round-001-prereg.zip")
 FAILURES = [
     "Не отправился: DurableExecutionError: send_file has no matching durable run/call identity",

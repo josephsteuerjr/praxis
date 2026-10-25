@@ -19,7 +19,6 @@ import time
 from pathlib import Path
 
 import process_liveness
-from forge_process import _terminate_tree
 
 
 # Общий срок матрицы: он применяется к КАЖДОЙ проверке, которая пришла без своего.
@@ -40,11 +39,6 @@ if MATRIX_DEADLINE_SEC <= 0:
 # владельца). Убрать вместе с той ссылкой — своей роли у него больше нет.
 DETACHED_HOST_DEADLINE_SEC = MATRIX_DEADLINE_SEC
 
-# SIGTERM is a request to stop each separately supervised check, not a reason
-# to exit while private check groups are still running. A parent can also write
-# stop-request.json to avoid a signal race before check processes are registered.
-_STOP = threading.Event()
-
 
 def _now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
@@ -62,44 +56,11 @@ def _safe_id(value: str, fallback: str) -> str:
     return clean.strip("-.")[:80] or fallback
 
 
-def _stop_requested(directory: Path) -> bool:
-    return _STOP.is_set() or (directory / "stop-request.json").exists()
-
-
-def _wait_local(proc: subprocess.Popen, timeout: int, directory: Path) -> tuple[int, str, str]:
-    """Poll a local command so SIGTERM and the durable stop request can be obeyed.
-
-    Returning unknown deliberately leaves a stop.json receipt to block finish.
-    """
-    deadline = time.monotonic() + timeout if timeout else None
-    while True:
-        if _stop_requested(directory):
-            stopped, reason = _terminate_tree(proc)
-            return -1, "stopped" if stopped else "unknown", reason
-        wait_for = .1 if deadline is None else min(.1, max(0, deadline - time.monotonic()))
-        try:
-            code = proc.wait(timeout=wait_for)
-            return code, "passed" if code == 0 else "failed", ""
-        except subprocess.TimeoutExpired:
-            if deadline is None or time.monotonic() < deadline:
-                continue
-            stopped, reason = _terminate_tree(proc)
-            return -1, "timed_out" if stopped else "unknown", reason
-
-
 def _run_one(index: int, check: dict, root: Path, directory: Path, default_timeout: int,
              state: dict, lock: threading.Lock, scope: str = "self", matrix_id: str = "",
              observation: dict | None = None) -> dict:
     cid = _safe_id(check.get("id", ""), f"check-{index + 1}")
     command = str(check.get("command") or "").strip()
-    if _stop_requested(directory):
-        result = {"id": cid, "status": "stopped", "exit": -1, "duration_s": 0,
-                  "command": command, "custody": {"spawned": False,
-                                                   "group_exit_verified": True}}
-        with lock:
-            state["checks"][cid] = result
-            _write(directory / "state.json", state)
-        return result
     # 06.10, дедуп (PR oro/forge-contract-0610): forge.verify уже пометил команду зелёной
     # НА ЭТОМ ЖЕ ДЕРЕВЕ — запускать её повторно значит платить за то же доказательство.
     # Пишем расписку со ссылкой на прежний юнит, процесс не спавним.
@@ -133,8 +94,6 @@ def _run_one(index: int, check: dict, root: Path, directory: Path, default_timeo
         state["checks"][cid] = {"status": "running", "command": command, "started": _now(),
                                 "log": str(log_path)}
         _write(directory / "state.json", state)
-    unresolved_note = ""
-    custody: dict = {}
     try:
         if scope == "host":
             import serverd_client
@@ -180,20 +139,25 @@ def _run_one(index: int, check: dict, root: Path, directory: Path, default_timeo
                 if os.name == "nt":
                     kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
                 else:
-                    # Each check owns a group: never kill sibling checks with the supervisor.
-                    kwargs["start_new_session"] = True
+                    kwargs["start_new_session"] = False  # supervisor group; one stop kills all
                 proc = subprocess.Popen(command, **kwargs)
-                custody = {"spawned": True, "child_pid": proc.pid,
-                           "child_started_at": process_liveness.process_started_at(proc.pid),
-                           "group_exit_verified": False}
-                with lock:
-                    state["checks"][cid].update(custody)
-                    _write(directory / "state.json", state)
-                code, status, reason = _wait_local(proc, timeout, directory)
-                if status in {"timed_out", "stopped", "unknown"}:
-                    custody.update(group_exit_verified=(status != "unknown"), note=reason)
-                if status == "unknown":
-                    unresolved_note = f"check {cid} stop/timeout unconfirmed; {reason}"
+                try:
+                    code = proc.wait(timeout=(timeout or None))
+                    status = "passed" if code == 0 else "failed"
+                except subprocess.TimeoutExpired:
+                    try:
+                        if os.name == "nt":
+                            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                           capture_output=True, timeout=15)
+                        else:
+                            proc.terminate()
+                            proc.wait(timeout=2)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    code, status = -1, "timed_out"
         result = {"id": cid, "status": status, "exit": code,
                   "duration_s": round(time.monotonic() - started, 3), "command": command,
                   "kind": check.get("kind", "check"), "source": check.get("source", ""),
@@ -202,24 +166,10 @@ def _run_one(index: int, check: dict, root: Path, directory: Path, default_timeo
                   # `timed_out` в отчёте не отличить от «упало само».
                   "deadline_s": deadline_s,
                   "remote_log": remote_log}
-        if unresolved_note:
-            result["liveness"] = unresolved_note
-        if custody:
-            result["custody"] = custody
     except Exception as exc:  # noqa: BLE001
         result = {"id": cid, "status": "error", "exit": -1,
                   "duration_s": round(time.monotonic() - started, 3), "command": command,
                   "error": f"{type(exc).__name__}: {exc}", "log": str(log_path)}
-        if custody.get("spawned"):
-            try:
-                stopped, note = _terminate_tree(proc)
-            except Exception as stop_exc:  # do not turn an unproven kill into error/terminal
-                stopped, note = False, f"{type(stop_exc).__name__}: {stop_exc}"
-            custody.update(group_exit_verified=stopped, note=note)
-            result["custody"] = custody
-            if not stopped:
-                result.update(status="unknown", liveness=(
-                    f"check {cid} supervisor error after spawn; group stop unconfirmed: {note}"))
     with lock:
         state["checks"][cid] = result
         _write(directory / "state.json", state)
@@ -229,7 +179,6 @@ def _run_one(index: int, check: dict, root: Path, directory: Path, default_timeo
 def run(request_path: Path) -> int:
     request = json.loads(request_path.read_text(encoding="utf-8"))
     directory = request_path.parent
-    _STOP.clear()
     scope = str(request.get("scope") or "self")
     root = Path(request["root"]) if scope == "windows" else Path(request["root"]).resolve()
     checks = [row for row in (request.get("checks") or []) if str(row.get("command") or "").strip()]
@@ -254,7 +203,6 @@ def run(request_path: Path) -> int:
                        for i, row in enumerate(checks)]
             results = [future.result() for future in futures]
         failed = [row for row in results if row.get("status") in {"failed", "error"}]
-        unknown = [row for row in results if row.get("status") == "unknown"]
         skipped = [row for row in results if row.get("status") == "timed_out"]
         passed = [row for row in results if row.get("status") == "passed"]
         # 06.10, дедуп: зелёное-на-том-же-дереве из прошлой матрицы — это зелёное,
@@ -262,58 +210,18 @@ def run(request_path: Path) -> int:
         # полностью дедупнутыми проверками выглядела бы «с пропусками» при нуле гонявших.
         deduped = [row for row in results if row.get("status") == "skipped_already_green"]
         final_status = "failed" if failed else ("passed_with_skips" if skipped else "passed")
-        if unknown:
-            # _unit_state checks unresolved stop before result. A timed-out
-            # check without proven tree exit cannot become terminal matrix evidence.
-            note = "; ".join(str(row.get("liveness") or row.get("id")) for row in unknown)
-            _write(directory / "stop.json", {"state": "unresolved", "note": note, "at": _now()})
-            with lock:
-                state["status"] = "unknown"
-                state["liveness"] = note
-                _write(directory / "state.json", state)
-            return 2
-        if _stop_requested(directory):
-            final_status = "stopped"
-        # The request's HEAD tree is a reuse key only if the same clean worktree
-        # still exists after all checks. A check (or another worker) may edit
-        # source while it runs. Do not publish green reusable evidence for a
-        # candidate that moved during the matrix.
-        tree_sha = str(request.get("tree_sha") or "")
-        if tree_sha and scope == "self" and final_status != "stopped":
-            import forge
-
-            if forge._task_tree_sha(root) != tree_sha:
-                final_status = "stale"
         final = {"status": final_status, "finished": _now(),
                  "duration_s": round(time.monotonic() - started, 3), "checks": results,
                  "passed": len(passed) + len(deduped), "skipped": len(skipped),
                  "failed": len(failed),
-                 "tree_sha": tree_sha if final_status != "stale" else "",
-                 "tree_changed_during_checks": final_status == "stale",
                  # Срок виден в самом отчёте, а не только в логах отдельных проверок:
                  # `timed_out` без названного предела читается как «упало само».
                  "matrix_deadline_s": timeout,
                  "supervisor_pid": os.getpid(),
                  "supervisor_started_at": state.get("supervisor_started_at", "")}
         _write(directory / "result.json", final)
-        if final_status == "stopped":
-            # A parent can have written stop.json unresolved while its bounded
-            # wait elapsed. This producer owns the final readback: only after
-            # every check has returned without unknown custody may it heal it.
-            _write(directory / "stop.json", {"state": "settled", "at": _now(),
-                                             "note": "all checks settled after stop request",
-                                             "result_status": "stopped"})
-        return 0 if final_status in {"passed", "passed_with_skips"} else 1
+        return 1 if failed else 0
     except BaseException as exc:  # noqa: BLE001
-        live = [cid for cid, row in state["checks"].items()
-                if row.get("status") in {"starting", "running", "unknown"}]
-        if live:
-            note = f"supervisor aborted with {type(exc).__name__}: {exc}; check custody unknown: {live}"
-            _write(directory / "stop.json", {"state": "unresolved", "note": note, "at": _now()})
-            state["status"] = "unknown"
-            state["liveness"] = note
-            _write(directory / "state.json", state)
-            return 2
         final = {"status": "error", "finished": _now(),
                  "duration_s": round(time.monotonic() - started, 3),
                  "error": f"{type(exc).__name__}: {exc}"}
@@ -325,5 +233,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--request", required=True)
     args = parser.parse_args()
-    signal.signal(signal.SIGTERM, lambda *_: _STOP.set())
+    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(143)))
     raise SystemExit(run(Path(args.request)))

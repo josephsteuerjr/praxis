@@ -49,7 +49,7 @@ class TestOrdinarySupergroup(unittest.TestCase):
             _msg(103, top=100, parent=102),
             _msg(104, top=100, parent=103),
         ]
-        r = tt.measure_split("-100999999999999999", msgs)
+        r = tt.measure_split("-1001240718803", msgs)
         self.assertEqual(r["messages"], 5)
         self.assertEqual(r["keys_live"], 1,
                          "«не знаю» минтит фантомы?? — починки не было")

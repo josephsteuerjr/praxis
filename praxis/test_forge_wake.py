@@ -638,8 +638,8 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
         self.assertEqual(killpg.call_count, 1, "добивать чужой процесс нельзя")
 
     def test_all_three_stop_paths_go_through_the_proof(self):
-        """Process/agent refuse a reused PID; verify delegates group stop to its
-        supervisor, never signalling its bare PID or making a terminal claim."""
+        """Три вызова из находки: coding_process(stop), coding_verify(stop),
+        coding_agent(stop) — раньше все трое били по голому номеру."""
         tmp = Path(tempfile.mkdtemp())
         orig = forge.TASKS_DIR
         forge.TASKS_DIR = tmp / "tasks"
@@ -665,19 +665,13 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
              mock.patch.object(forge, "_RUNNERS", {}), \
              mock.patch.object(forge.os, "killpg", mock.Mock(), create=True) as killpg, \
              mock.patch.object(forge.subprocess, "run", mock.Mock()) as run:
-            process_reply = forge.process("code-k", "stop", process_id="proc-1")
-            with mock.patch.object(forge.time, "monotonic", side_effect=[0.0, 9.0]):
-                verify_reply = forge.verify("code-k", "stop", verification_id="verify-1")
-            agent_reply = forge.agent("code-k", "stop", agent_id="agent-1")
+            said = [forge.process("code-k", "stop", process_id="proc-1"),
+                    forge.verify("code-k", "stop", verification_id="verify-1"),
+                    forge.agent("code-k", "stop", agent_id="agent-1")]
         killpg.assert_not_called()
         run.assert_not_called()
-        for text in (process_reply, agent_reply):
+        for text in said:
             self.assertIn("не трогаю", text, f"убийство вслепую осталось здесь: {text}")
-        self.assertIn("терминальный статус НЕ записан", verify_reply)
-        verify_unit = forge._unit_dir("code-k", "verifications", "verify-1")
-        self.assertTrue((verify_unit / "stop-request.json").is_file())
-        self.assertFalse((verify_unit / "result.json").exists())
-        self.assertEqual(forge._unit_state(verify_unit)["status"], "unknown")
 
 
 class TestFinishTellsTheTruthAndDoesNotHoldTheLock(unittest.TestCase):

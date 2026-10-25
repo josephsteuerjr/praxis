@@ -31,7 +31,7 @@ OFF = {"PRAXIS_TOOLS_EN": "off"}
 
 
 def room_ctx(owner: bool = True) -> agent.ChannelContext:
-    return agent.ChannelContext(chat_id="-100999999999999999", room_id="-100999999999999999",
+    return agent.ChannelContext(chat_id="-1001240718803", room_id="-1001240718803",
                                 is_dm=False, owner=owner, known=True)
 
 

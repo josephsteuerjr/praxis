@@ -8,11 +8,7 @@ from pathlib import Path
 import threading
 import time
 
-from room_identity import root_peer_id
-
-# Compatibility for callers that inspect this module at import time. Guards use the
-# current env so .env loaded after import cannot leave a stale authorization.
-TARGET_PEER_ID = root_peer_id()
+TARGET_PEER_ID = -1001240718803
 ACTIONS = {"delete", "delete_and_ban"}
 BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 LEDGER = BASE / "memory" / ".state" / "telegram_moderation.jsonl"
@@ -31,7 +27,7 @@ def validate(peer_id: int, message_id: int, sender_id: int, action: str) -> str:
     if not isinstance(action, str):
         raise TypeError("action must be an exact string")
     action = action.strip()
-    if root_peer_id() is None or peer_id != root_peer_id():
+    if peer_id != TARGET_PEER_ID:
         raise PermissionError("moderation actuator is scoped only to AbstractDL")
     if message_id <= 0 or sender_id <= 0:
         raise ValueError("positive message_id and sender_id are required")

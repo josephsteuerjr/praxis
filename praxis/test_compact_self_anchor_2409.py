@@ -10,9 +10,7 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -29,12 +27,6 @@ MINE = {"id": "evt-3", "actor": "Praxis", "direction": "out",
 
 BAD = "За два часа 50 сообщений. Я — Hope (@ai_sapience_bot). Vik поймал меня на ошибке."
 GOOD = "За два часа 50 сообщений. Hope признала ошибку чтения; я сказала дважды — про автогенератор."
-
-
-def _resp(summary: str):
-    return types.SimpleNamespace(text=json.dumps({"summary": summary, "open_threads": [],
-                                                  "claims": [], "episodes": []},
-                                                 ensure_ascii=False))
 
 
 class OwnLinesAreMarkedTests(unittest.TestCase):
@@ -83,125 +75,106 @@ class ForeignSelfIsCaughtTests(unittest.TestCase):
             self.assertIsNone(ml._foreign_self(text, self.authors), text)
 
 
-class ModelCompactRewritesForeignSelfTests(unittest.TestCase):
-    def _run(self, *responses):
-        chat = mock.Mock(side_effect=list(responses))
-        with mock.patch.object(llm, "configured", return_value=True), \
-                mock.patch.object(llm, "chat", chat):
-            out = ml._model_compact([HOPE, TORV, MINE], tier=1, depth=1, continued=False)
-        return out, chat
-
-    def test_second_try_with_a_correction_replaces_the_foreign_self(self):
-        out, chat = self._run(_resp(BAD), _resp(GOOD))
-        self.assertEqual(out["summary"], GOOD)
-        self.assertEqual(chat.call_count, 2)
-        retry_user = chat.call_args_list[1].kwargs["messages"][0]["content"]
-        self.assertIn("«я» от имени Hope", retry_user)
-        self.assertIn("_manifest", out)
-
-    def test_two_foreign_selves_write_nothing(self):
-        out, chat = self._run(_resp(BAD), _resp(BAD))
-        self.assertEqual(out, {})
-        self.assertEqual(chat.call_count, 2)
-
-    def test_clean_summary_goes_through_in_one_call(self):
-        out, chat = self._run(_resp(GOOD))
-        self.assertEqual(out["summary"], GOOD)
-        self.assertEqual(chat.call_count, 1)
-
-
-class ReissueForForeignSelfTests(unittest.TestCase):
-    def _reissue(self, summary: str, *, why: str = "foreign_self"):
+class AuxiliaryCompactRequiresTheActingAuthorTests(unittest.TestCase):
+    def test_no_summary_or_tier_can_start_an_auxiliary_writer(self):
+        cases = [
+            ([HOPE, TORV, MINE], 1, 1, None),
+            ([{"id": "cmp-c", "text": "детская сводка"}], 2, 2, {"ashe"}),
+            ([], 1, 1, None),
+        ]
         with tempfile.TemporaryDirectory() as tmp:
-            rel = "memory/life/compacts/-100/cmp-x.md"
-            path = Path(tmp) / rel
-            path.parent.mkdir(parents=True)
-            path.write_text(f"# Compact cmp-x\n\n## Суть\n{summary}\n\n## Открытые нити\n",
-                            encoding="utf-8")
-            evidence = {"compacts": {"cmp-x": {"path": rel, "tier": 1, "depth": 1,
-                                               "source_event_ids": ["evt-1", "evt-2", "evt-3"]}},
-                        "events": {"evt-1": HOPE, "evt-2": TORV, "evt-3": MINE}}
-            with mock.patch.object(ml, "BASE", Path(tmp)), \
-                    mock.patch.object(ml.memory_provenance, "claim_evidence_index",
-                                      return_value=evidence), \
-                    mock.patch.object(ml, "_conversation_hot_rows",
-                                      return_value=[HOPE, TORV, MINE]), \
-                    mock.patch.object(ml, "place_key", return_value="-100"), \
-                    mock.patch.object(ml, "_model_compact", return_value={}) as model:
-                return ml.reissue_degraded_compact("-100", "cmp-x", why=why), model
+            root = Path(tmp)
+            with mock.patch.object(ml, "BASE", root), \
+                    mock.patch.object(llm, "configured") as configured, \
+                    mock.patch.object(llm, "chat") as chat, \
+                    mock.patch.object(ml, "_write_compact") as write_compact, \
+                    mock.patch.object(ml, "append_event") as append_event, \
+                    mock.patch.object(Path, "write_text") as write_text:
+                for rows, tier, depth, authors in cases:
+                    with self.subTest(tier=tier, rows=rows):
+                        with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                            ml._model_compact(
+                                rows, tier=tier, depth=depth, continued=False,
+                                authors=authors,
+                            )
 
-    def test_clean_compact_is_not_reissued(self):
-        out, model = self._reissue(GOOD)
-        self.assertEqual(out["reason"], "no_foreign_self")
-        model.assert_not_called()
-
-    def test_foreign_self_compact_goes_to_the_model(self):
-        out, model = self._reissue(BAD)
-        self.assertEqual(out["reason"], "model_unavailable")
-        model.assert_called_once()
-
-    def test_old_path_still_demands_a_degraded_stub(self):
-        out, model = self._reissue(BAD, why="degraded")
-        self.assertEqual(out["reason"], "not_degraded")
-        model.assert_not_called()
-
-    def test_unknown_reason_is_refused(self):
-        out, _ = self._reissue(BAD, why="because")
-        self.assertEqual(out["reason"], "unknown_why")
+                configured.assert_not_called()
+                chat.assert_not_called()
+                write_compact.assert_not_called()
+                append_event.assert_not_called()
+                write_text.assert_not_called()
+            self.assertEqual(list(root.iterdir()), [])
 
 
-class ReissueTierCompactTests(unittest.TestCase):
-    """Ярус 2 («я (Ashe) писала» в комнате Уробороса): вход — дочерние свёртки, авторы — из-под них."""
-
-    ASHE = {"id": "evt-a", "actor": "Ashe (@ashe_rain)", "direction": "in",
-            "text": "Ashe (@ashe_rain): Добро пожаловать новым друзьям!"}
-
-    def _reissue(self, summary: str, *, why: str = "foreign_self", degraded: bool = False):
+class LegacyReissueRequiresTheActingAuthorTests(unittest.TestCase):
+    def test_old_reissue_reasons_never_generate_or_write(self):
+        # The legacy entry point refuses before old reason/content validation.
         with tempfile.TemporaryDirectory() as tmp:
-            rel = "memory/life/compacts/-200/cmp-p.md"
-            path = Path(tmp) / rel
-            path.parent.mkdir(parents=True)
-            path.write_text(f"# Compact cmp-p\n\n## Суть\n{summary}\n", encoding="utf-8")
-            evidence = {"compacts": {
-                "cmp-p": {"path": rel, "tier": 2, "depth": 2, "source_compact_ids": ["cmp-c"],
-                          "event_count": 1, "degraded": degraded},
-                "cmp-c": {"path": "x", "tier": 1, "depth": 1, "source_event_ids": ["evt-a"]}},
-                "events": {"evt-a": self.ASHE}}
-            with mock.patch.object(ml, "BASE", Path(tmp)), \
-                    mock.patch.object(ml.memory_provenance, "claim_evidence_index",
-                                      return_value=evidence), \
-                    mock.patch.object(ml, "compact_text", return_value="детская сводка"), \
-                    mock.patch.object(ml, "place_key", return_value="-200"), \
-                    mock.patch.object(ml, "_model_compact", return_value={}) as model:
-                return ml.reissue_degraded_compact("-200", "cmp-p", why=why), model
+            root = Path(tmp)
+            with mock.patch.object(ml, "BASE", root), \
+                    mock.patch.object(llm, "configured") as configured, \
+                    mock.patch.object(llm, "chat") as chat, \
+                    mock.patch.object(ml, "_model_compact") as model, \
+                    mock.patch.object(ml, "_write_compact") as write_compact, \
+                    mock.patch.object(ml, "rewrite_compact_text") as rewrite, \
+                    mock.patch.object(ml, "append_event") as append_event, \
+                    mock.patch.object(Path, "write_text") as write_text:
+                for why in ("degraded", "foreign_self", "because"):
+                    with self.subTest(why=why):
+                        out = ml.reissue_degraded_compact("-100", "cmp-x", why=why)
+                        self.assertFalse(out["ok"], out)
+                        self.assertEqual(out["reason"], "acting_author_required")
 
-    def test_tier_compact_needs_the_foreign_self_reason(self):
-        out, model = self._reissue("я (Ashe) писала", why="degraded", degraded=True)
-        self.assertEqual(out["reason"], "not_a_leaf")
-        model.assert_not_called()
-
-    def test_foreign_self_found_through_the_subtree_goes_to_the_model(self):
-        out, model = self._reissue("Ночь 5–6 сентября: я (Ashe, @ashe_rain) писала «Добро пожаловать»")
-        self.assertEqual(out["reason"], "model_unavailable")
-        inputs = model.call_args.args[0]
-        self.assertEqual([x["id"] for x in inputs], ["cmp-c"])
-        self.assertIn("ashe", model.call_args.kwargs["authors"])
-
-    def test_clean_tier_compact_is_left_alone(self):
-        out, model = self._reissue("Ashe писала «Добро пожаловать», я ответила коротко")
-        self.assertEqual(out["reason"], "no_foreign_self")
-        model.assert_not_called()
+                configured.assert_not_called()
+                chat.assert_not_called()
+                model.assert_not_called()
+                write_compact.assert_not_called()
+                rewrite.assert_not_called()
+                append_event.assert_not_called()
+                write_text.assert_not_called()
+            self.assertEqual(list(root.iterdir()), [])
 
 
-class ExtraAuthorsReachTheGuardTests(unittest.TestCase):
-    def test_name_known_only_from_the_subtree_is_caught(self):
-        chat = mock.Mock(side_effect=[_resp("я (Ashe) писала приветствие"), _resp(GOOD)])
-        rows = [{"id": "cmp-c", "text": "детская сводка без авторов"}]
-        with mock.patch.object(llm, "configured", return_value=True), \
-                mock.patch.object(llm, "chat", chat):
-            out = ml._model_compact(rows, tier=2, depth=2, continued=False, authors={"ashe"})
-        self.assertEqual(out["summary"], GOOD)
-        self.assertEqual(chat.call_count, 2)
+class SourceAuthorsRemainAvailableTests(unittest.TestCase):
+    """Disabling auxiliary generation does not discard source-author evidence."""
+
+    ASHE = {
+        "id": "evt-a",
+        "actor": "Ashe (@ashe_rain)",
+        "direction": "in",
+        "text": "Ashe (@ashe_rain): Добро пожаловать новым друзьям!",
+    }
+
+    def test_tier_authors_are_recovered_through_the_source_subtree(self):
+        evidence = {
+            "compacts": {
+                "cmp-p": {"source_event_ids": [], "source_compact_ids": ["cmp-c"]},
+                "cmp-c": {"source_event_ids": ["evt-a"], "source_compact_ids": []},
+            },
+            "events": {"evt-a": self.ASHE},
+        }
+        rows = ml._subtree_event_rows(evidence, "cmp-p")
+        self.assertEqual([row["id"] for row in rows], ["evt-a"])
+        authors = ml._window_authors(rows)
+        self.assertEqual(authors, {"ashe", "ashe_rain"})
+        self.assertEqual(
+            ml._foreign_self(
+                "Ночь 5–6 сентября: я (Ashe, @ashe_rain) писала «Добро пожаловать»",
+                authors,
+            ),
+            "Ashe",
+        )
+        self.assertIsNone(
+            ml._foreign_self(
+                "Ashe писала «Добро пожаловать», я ответила коротко",
+                authors,
+            )
+        )
+
+    def test_extra_source_author_can_be_checked_without_a_model(self):
+        authors = ml._window_authors([HOPE, TORV, MINE]) | {"ashe"}
+        self.assertEqual(ml._foreign_self("я (Ashe) писала приветствие", authors), "Ashe")
+        self.assertIsNone(ml._foreign_self(GOOD, authors))
 
 
 if __name__ == "__main__":

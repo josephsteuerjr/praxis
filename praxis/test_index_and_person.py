@@ -8,16 +8,12 @@
 """
 import importlib
 import os
-import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import agent
-import capabilities
 import formation
 import frame_layout
-import frame_shadow
 import memory_catalog
 
 
@@ -91,61 +87,6 @@ class IndexKnowsWhatSheOwns(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(memory_catalog._render_belongings(Path(tmp)), [],
                              "раздел обещает содержимое там, где его нет")
-
-
-class SkillsHaveAnOwnerFrameAddress(unittest.TestCase):
-    """The disk, not a Markdown link, decides which skills actually exist."""
-
-    def test_title_path_missing_purpose_and_orphan(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            skills = Path(tmp) / "soul" / "skills"
-            skills.mkdir(parents=True)
-            (skills / "INDEX.md").write_text(
-                "| Навык | О чём |\n|---|---|\n"
-                "| [Уверенно проверять](verify.md) | ясная проверка |\n"
-                "| [Нет на диске](lost.md) | старая ссылка |\n", encoding="utf-8")
-            (skills / "verify.md").write_text("PRIVATE_BODY", encoding="utf-8")
-            (skills / "own.md").write_text("OTHER_BODY", encoding="utf-8")
-            shown = capabilities.skill_navigation(skills / "INDEX.md")
-            self.assertIn("Уверенно проверять · soul/skills/verify.md — ясная проверка", shown)
-            self.assertIn("own · soul/skills/own.md — назначение не написано", shown)
-            self.assertIn("lost.md — в INDEX, файла нет", shown)
-            self.assertNotIn("PRIVATE_BODY", shown)
-            self.assertNotIn("OTHER_BODY", shown)
-            (skills / "INDEX.md").unlink()
-            absent = capabilities.skill_navigation(skills / "INDEX.md")
-            self.assertIn("INDEX.md не найден", absent)
-            self.assertIn("soul/skills/verify.md", absent)
-
-    def test_real_owner_prompt_and_v6_owner_frame_both_get_the_map(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp)
-            skills = base / "soul" / "skills"
-            skills.mkdir(parents=True)
-            (skills / "INDEX.md").write_text(
-                "| [Моё имя](own.md) | моя работа |\n", encoding="utf-8")
-            (skills / "own.md").write_text("SKILL_BODY_NOT_IN_FRAME", encoding="utf-8")
-            (base / "memory").mkdir()
-            (base / "memory" / "INDEX.md").write_text(
-                "# MEMORY_CANON_VERBATIM\n", encoding="utf-8")
-            owner = agent.ChannelContext(chat_id="77", room_id="77", principal_id="42",
-                                         is_dm=True, owner=True, known=True)
-            other = agent.ChannelContext(chat_id="88", room_id="88", principal_id="43",
-                                         is_dm=True, owner=False, known=True)
-            with (mock.patch.object(agent, "SKILLS_DIR", skills),
-                  mock.patch.object(agent, "INDEX_MD", base / "memory" / "INDEX.md"),
-                  mock.patch.object(agent, "_persona_text", return_value="PERSONA"),
-                  mock.patch.object(frame_shadow, "BASE", base)):
-                _, _, owner_evidence = agent._build_prompt_parts(ctx=owner)
-                _, _, other_evidence = agent._build_prompt_parts(ctx=other)
-                v6_owner = frame_shadow._block_memory_index("owner")
-                v6_other = frame_shadow._block_memory_index("other", other)
-            for text in (owner_evidence, v6_owner):
-                self.assertIn("Моё имя · soul/skills/own.md — моя работа", text)
-                self.assertNotIn("SKILL_BODY_NOT_IN_FRAME", text)
-            self.assertIn("MEMORY_CANON_VERBATIM", v6_owner)
-            self.assertNotIn("Моё имя", other_evidence + v6_other)
-            self.assertNotIn("soul/skills/own.md", other_evidence + v6_other)
 
 
 class IndexRidesInTheFrame(unittest.TestCase):

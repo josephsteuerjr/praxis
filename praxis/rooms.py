@@ -282,6 +282,7 @@ HEADER_KEYS = ("mode", "mode_reason", "mode_until", "mode_set_by",
                "membership", "left_at",
                "greeted",                  # 10.7: one-shot приветствие уже было (yes|)
                # Deep-room policy belongs to the root peer, never to a topic state key.
+               "compaction_policy", "compaction_set_by",
                "engagement", "context_hot", "context_summary_chars",
                "cross_topics", "backfill_limit",
                # Реестр переноса — durable-дом ЕЁ слов о границе переноса (19.08):
@@ -302,7 +303,7 @@ _HEADER_RE = re.compile(
     # и «disclosure» съело бы префикс более длинного ключа.
     r"^(mode|mode_reason|mode_until|mode_set_by|last_verified|disclosure_set_by|disclosure|"
     r"membership|left_at|drift|drift_seen|drift_sig|greeted|"
-    r"engagement|context_hot|context_summary_chars|cross_topics|backfill_limit|"
+    r"compaction_policy|compaction_set_by|engagement|context_hot|context_summary_chars|cross_topics|backfill_limit|"
     # transfer_set_by/transfer_at раньше transfer — то же правило префикса, что у
     # disclosure_set_by выше: короткий ключ съел бы начало длинного.
     r"transfer_set_by|transfer_at|transfer|presence_hidden):"

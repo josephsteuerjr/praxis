@@ -463,7 +463,7 @@ def _fingerprint() -> str:
 NO_PURPOSE = "назначение не написано"
 
 
-def _skills_list(index_path: Path | None = None) -> list[dict]:
+def _skills_list() -> list[dict]:
     """Список навыков = ДИСК. INDEX.md даёт только описания, и только там, где совпал адрес.
 
     ЕЁ РЕШЕНИЕ 13.08.2026, дословно: «Ни один навык не должен исчезать из capability
@@ -486,63 +486,33 @@ def _skills_list(index_path: Path | None = None) -> list[dict]:
     `orphans` в снимке. Врать в обе стороны одинаково нельзя.
     """
     import re
-    index = Path(index_path) if index_path is not None else SKILLS_INDEX
     described: dict[str, str] = {}
-    titles: dict[str, str] = {}
     named: set[str] = set()
     try:
-        text = index.read_text(encoding="utf-8", errors="ignore")
+        text = SKILLS_INDEX.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         text = ""
     # Обе прежние формы остаются понятными, но ключ теперь — файл, а не подпись.
-    for pattern in (r"^\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|\s*([^|]+)\|",
-                    r"^-\s*\[([^\]]+)\]\(([^)]+)\)(?:\s*[—–-]\s*(.*))?$"):
+    for pattern in (r"^\|\s*\[[^\]]+\]\(([^)]+)\)\s*\|\s*([^|]+)\|",
+                    r"^-\s*\[[^\]]+\]\(([^)]+)\)(?:\s*[—–-]\s*(.*))?$"):
         for m in re.finditer(pattern, text, re.M):
-            slug = str(m.group(2) or "").rsplit("/", 1)[-1].removesuffix(".md").strip()
+            slug = str(m.group(1) or "").rsplit("/", 1)[-1].removesuffix(".md").strip()
             if not slug:
                 continue
             named.add(slug)
-            title = str(m.group(1) or "").strip()
-            if title and slug not in titles:
-                titles[slug] = title
-            line = (m.group(3) or "").strip()
+            line = (m.group(2) or "").strip()
             if line and slug not in described:
                 described[slug] = line
     try:
-        on_disk = sorted(p.stem for p in index.parent.glob("*.md")
-                         if p.name != index.name)
+        on_disk = sorted(p.stem for p in SKILLS_INDEX.parent.glob("*.md")
+                         if p.name != SKILLS_INDEX.name)
     except OSError:
         on_disk = []
-    out = [{"name": slug, "title": titles.get(slug, slug),
-            "line": described.get(slug) or NO_PURPOSE} for slug in on_disk]
+    out = [{"name": slug, "line": described.get(slug) or NO_PURPOSE} for slug in on_disk]
     for slug in sorted(named - set(on_disk)):
-        out.append({"name": slug, "title": titles.get(slug, slug),
-                    "line": "⚠ назван в индексе, но файла нет",
+        out.append({"name": slug, "line": "⚠ назван в индексе, но файла нет",
                     "orphan": True})
     return out
-
-
-def skill_navigation(index_path: Path) -> str:
-    """Owner-only locator over the actual files; INDEX supplies titles, never existence.
-
-    This is an internal map, not the body of a skill or an outbound disclosure.
-    The caller owns the audience check. Missing index text cannot erase disk paths.
-    """
-    index = Path(index_path)
-    if not index.parent.is_dir():
-        return "soul/skills/ не прочитался — список навыков неизвестен"
-    rows = _skills_list(index)
-    header = ("soul/skills/INDEX.md не найден — назначения неизвестны; пути с диска:"
-              if not index.is_file() else "Навыки с диска (тела не загружены; открыть fs_read):")
-    lines = [header]
-    for row in rows:
-        slug = row["name"]
-        path = f"soul/skills/{slug}.md"
-        if row.get("orphan"):
-            lines.append(f"- {row['title']} · {path} — в INDEX, файла нет")
-        else:
-            lines.append(f"- {row['title']} · {path} — {row['line']}")
-    return "\n".join(lines)
 
 
 def snapshot() -> dict:

@@ -117,10 +117,6 @@ fn default_parents() -> bool {
 }
 
 pub fn dispatch(capability: &str, args: Value) -> Result<Value> {
-    #[cfg(windows)]
-    if crate::cu_python::selected_fs(capability) {
-        return crate::cu_python::dispatch_fs(capability, args);
-    }
     match capability {
         "fs.stat" => stat(serde_json::from_value(args)?),
         "fs.list" => list(serde_json::from_value(args)?),
@@ -387,21 +383,13 @@ impl Budget {
 
     /// Оплатить один узел. `false` — бюджет исчерпан, причина уже записана.
     fn spend(&mut self) -> bool {
-        if !self.time_available() {
+        if self.stopped.is_some() {
             return false;
         }
         if self.entries >= MAX_TREE_ENTRIES {
             self.stopped = Some(format!(
                 "entry limit reached: {MAX_TREE_ENTRIES} nodes visited"
             ));
-            return false;
-        }
-        self.entries += 1;
-        true
-    }
-
-    fn time_available(&mut self) -> bool {
-        if self.stopped.is_some() {
             return false;
         }
         let elapsed = self.started.elapsed().as_secs();
@@ -411,6 +399,7 @@ impl Budget {
             ));
             return false;
         }
+        self.entries += 1;
         true
     }
 
@@ -484,45 +473,6 @@ fn is_directory_like(file_type: &fs::FileType) -> bool {
     }
 }
 
-/// Windows junctions and mount points are reparse points even when FileType::is_symlink
-/// does not classify them as symbolic links.
-fn is_reparse(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
-    }
-    #[cfg(not(windows))]
-    {
-        false
-    }
-}
-
-/// Inspect every existing component: create_dir_all and fs::copy otherwise follow
-/// a pre-existing junction inside the destination tree.
-fn check_copy_destination(path: &Path) -> std::io::Result<()> {
-    for component in path.ancestors() {
-        match fs::symlink_metadata(component) {
-            Ok(metadata) if is_reparse(&metadata) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "destination reparse point is not followed: {}",
-                        component.display()
-                    ),
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(())
-}
-
 /// Снять «только чтение» и повторить. Возвращает true, если атрибут действительно сняли.
 ///
 /// ⚠ Живой случай: любой клон гита — файлы в `.git/objects` на Windows лежат read-only.
@@ -532,7 +482,6 @@ fn check_copy_destination(path: &Path) -> std::io::Result<()> {
 /// ответе он значит ровно «сколько раз атрибут снимали МЫ», а не «сколько было read-only».
 /// Спрашивать её «снять атрибут?» было бы забором на ровном месте: она сказала «скопируй»,
 /// права у неё полные. Наше дело — не спрятать, что атрибут пришлось снять.
-#[cfg(windows)]
 fn clear_readonly(path: &Path) -> bool {
     let Ok(metadata) = fs::symlink_metadata(path) else {
         return false;
@@ -543,13 +492,6 @@ fn clear_readonly(path: &Path) -> bool {
     }
     permissions.set_readonly(false);
     fs::set_permissions(path, permissions).is_ok()
-}
-
-// Unix has no Windows read-only attribute. Clearing its readonly bit grants
-// write access to every class, not just the owner: preserve the original error.
-#[cfg(not(windows))]
-fn clear_readonly(_path: &Path) -> bool {
-    false
 }
 
 fn remove_entry(path: &Path, as_directory: bool, tally: &mut Tally) -> std::io::Result<()> {
@@ -864,13 +806,6 @@ fn is_cross_volume(error: &std::io::Error) -> bool {
 }
 
 fn move_path(args: MoveArgs) -> Result<Value> {
-    move_path_with_rename(args, |source, destination| fs::rename(source, destination))
-}
-
-fn move_path_with_rename(
-    args: MoveArgs,
-    rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
-) -> Result<Value> {
     let mut budget = Budget::new();
     let mut tally = Tally::default();
     let source = fs::symlink_metadata(&args.from)
@@ -915,7 +850,7 @@ fn move_path_with_rename(
     let strategy;
     let mut cross_volume = false;
     let mut source_removed = true;
-    match rename(&args.from, &destination) {
+    match fs::rename(&args.from, &destination) {
         Ok(()) => {
             strategy = "rename";
             budget.spend();
@@ -932,38 +867,50 @@ fn move_path_with_rename(
             // копирование 40 ГБ выглядит как сбой связи, а не как честная работа.
             strategy = "copy_and_delete";
             cross_volume = true;
-            source_removed = copy_then_remove_source(
+            copy_tree(
                 &args.from,
                 &destination,
-                &source,
                 args.overwrite,
                 &mut budget,
                 &mut tally,
             );
+            if tally.failed_total == 0 && budget.stopped.is_none() {
+                let mut removal = Tally::default();
+                delete_source_after_copy(&args.from, &source, &mut budget, &mut removal);
+                tally.cleared_readonly += removal.cleared_readonly;
+                source_removed = removal.failed_total == 0;
+                tally.failed_total += removal.failed_total;
+                for failure in removal.failed {
+                    if tally.failed.len() < MAX_FAILURES_REPORTED {
+                        tally.failed.push(failure);
+                    }
+                }
+            } else {
+                // Копия не удалась целиком — источник не трогаем. Половина данных на
+                // новом месте плюс снесённый оригинал — единственный по-настоящему
+                // невозвратный исход, и его мы не устраиваем.
+                source_removed = false;
+            }
         }
         Err(error) => {
             return Err(anyhow::Error::new(error)).with_context(|| {
-                format!("move {} -> {}", args.from.display(), destination.display())
+                format!(
+                    "move {} -> {}",
+                    args.from.display(),
+                    destination.display()
+                )
             });
         }
     }
-    let complete = budget.stopped.is_none()
-        && tally.failed_total == 0
-        && tally.skipped_reparse == 0
-        && tally.skipped_existing == 0
-        && source_removed;
+    let complete = budget.stopped.is_none() && tally.failed_total == 0 && source_removed;
     let mut summary = if cross_volume {
         format!(
-            "move {} to {} ACROSS VOLUMES: copied {} file(s) ({} byte(s)); {}",
+            "moved {} to {} ACROSS VOLUMES: this was a copy of {} file(s) ({} byte(s)) \
+             followed by deleting the source, not an instant rename",
             args.from.display(),
             destination.display(),
             tally.files,
-            tally.bytes,
-            if source_removed {
-                "source removed after complete copy"
-            } else {
-                "source removal not confirmed (copy incomplete or removal failed)"
-            }
+            tally.bytes
         )
     } else {
         format!(
@@ -981,14 +928,8 @@ fn move_path_with_rename(
     }
     if tally.skipped_reparse > 0 {
         summary.push_str(&format!(
-            "; {} reparse point(s) (junction/symlink) were not copied",
+            "; {} reparse point(s) (junction/symlink) were not followed and were left behind",
             tally.skipped_reparse
-        ));
-    }
-    if tally.skipped_existing > 0 {
-        summary.push_str(&format!(
-            "; {} existing destination file(s) were not replaced",
-            tally.skipped_existing
         ));
     }
     if !complete {
@@ -998,7 +939,7 @@ fn move_path_with_rename(
             if source_removed {
                 ""
             } else {
-                "; source removal NOT CONFIRMED"
+                "; the source is STILL THERE"
             },
             budget
                 .stopped
@@ -1023,7 +964,6 @@ fn move_path_with_rename(
         "moved_links": tally.links,
         "bytes": tally.bytes,
         "skipped_reparse": tally.skipped_reparse,
-        "skipped_existing": tally.skipped_existing,
         "cleared_readonly": tally.cleared_readonly,
         "source_removed": source_removed,
         "complete": complete,
@@ -1038,254 +978,18 @@ fn move_path_with_rename(
     }))
 }
 
-/// Tests exercise the actual cross-volume decision with a same-volume fixture.
-fn copy_then_remove_source(
-    from: &Path,
-    to: &Path,
-    source: &fs::Metadata,
-    overwrite: bool,
-    budget: &mut Budget,
-    tally: &mut Tally,
-) -> bool {
-    copy_then_remove_source_with_hook(from, to, source, overwrite, budget, tally, || {})
-}
-
-fn copy_then_remove_source_with_hook(
-    from: &Path,
-    to: &Path,
-    source: &fs::Metadata,
-    overwrite: bool,
-    budget: &mut Budget,
-    tally: &mut Tally,
-    after_copy: impl FnOnce(),
-) -> bool {
-    copy_tree(from, to, overwrite, budget, tally);
-    after_copy();
-    // A deliberate skip during fs.copy is NOT permission to delete the original
-    // during fs.move. This includes overwrite=false as well as links/junctions.
-    if tally.failed_total != 0
-        || tally.skipped_reparse != 0
-        || tally.skipped_existing != 0
-        || budget.stopped.is_some()
-    {
-        return false;
-    }
-    let mut removal = Tally::default();
-    // A live source is not a snapshot. Never give delete_tree a source whose
-    // children can change after traversal: it would delete un-copied files.
-    let mut manifest = Vec::new();
-    if let Err(error) = copied_source_manifest(from, to, source, budget, &mut manifest) {
-        tally.fail(from, error);
-        return false;
-    }
-    delete_checked_source(from, &manifest, budget, &mut removal);
-    tally.cleared_readonly += removal.cleared_readonly;
-    tally.failed_total += removal.failed_total;
-    for failure in removal.failed {
-        if tally.failed.len() < MAX_FAILURES_REPORTED {
-            tally.failed.push(failure);
-        }
-    }
-    budget.stopped.is_none()
-        && tally.failed_total == 0
-        && fs::symlink_metadata(from).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-}
-
-/// Bottom-up manifest of exact source/destination pairs. A late source child
-/// missing from the destination aborts before removing any original bytes.
-fn copied_source_manifest(
-    from: &Path,
-    to: &Path,
-    original: &fs::Metadata,
-    budget: &mut Budget,
-    manifest: &mut Vec<(PathBuf, PathBuf, fs::Metadata)>,
-) -> Result<()> {
-    let mut stack = vec![(from.to_path_buf(), to.to_path_buf(), false)];
-    while let Some((source, target, visited)) = stack.pop() {
-        if !budget.spend() {
-            anyhow::bail!("cross-volume source comparison exceeded traversal budget");
-        }
-        if visited {
-            let meta = fs::symlink_metadata(&source)?;
-            if !meta.is_dir() || is_reparse(&meta) {
-                anyhow::bail!("source directory changed during move: {}", source.display());
-            }
-            manifest.push((source, target, meta));
-            continue;
-        }
-        let meta = fs::symlink_metadata(&source)?;
-        let dest = fs::symlink_metadata(&target)?;
-        if is_reparse(&meta) || is_reparse(&dest) {
-            anyhow::bail!(
-                "reparse point appeared during cross-volume move: {}",
-                source.display()
-            );
-        }
-        if source == from
-            && (!same_source_identity(original, &meta)
-                || meta.is_dir() != original.is_dir()
-                || meta.len() != original.len())
-        {
-            anyhow::bail!(
-                "source changed during cross-volume move: {}",
-                source.display()
-            );
-        }
-        if meta.is_dir() && dest.is_dir() {
-            stack.push((source.clone(), target.clone(), true));
-            for entry in fs::read_dir(&source)? {
-                let entry = entry?;
-                stack.push((entry.path(), target.join(entry.file_name()), false));
-            }
-        } else if meta.is_file() && dest.is_file() {
-            if !files_equal(&source, &target, budget)? {
-                anyhow::bail!(
-                    "source differs from copied destination: {}",
-                    source.display()
-                );
-            }
-            manifest.push((source, target, meta));
-        } else {
-            anyhow::bail!(
-                "source/destination kind changed during move: {}",
-                source.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-/// Detect a changed source identity before unlink. Unix supplies inode+device;
-/// stable Windows MetadataExt only supplies creation time, not file index, so
-/// this is a weaker signal there. An unavailable timestamp declines removal.
-fn same_source_identity(expected: &fs::Metadata, current: &fs::Metadata) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        expected.dev() == current.dev() && expected.ino() == current.ino()
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        expected.creation_time() != 0 && expected.creation_time() == current.creation_time()
-    }
-}
-
-fn files_equal(source: &Path, target: &Path, budget: &mut Budget) -> Result<bool> {
-    let before = fs::symlink_metadata(source)?;
-    let dest = fs::symlink_metadata(target)?;
-    if is_reparse(&before)
-        || is_reparse(&dest)
-        || !before.is_file()
-        || !dest.is_file()
-        || before.len() != dest.len()
-    {
-        return Ok(false);
-    }
-    let mut left = File::open(source)?;
-    let mut right = File::open(target)?;
-    let mut a = [0u8; 64 * 1024];
-    let mut b = [0u8; 64 * 1024];
-    loop {
-        if !budget.time_available() {
-            anyhow::bail!("cross-volume source comparison exceeded time budget");
-        }
-        let n = left.read(&mut a)?;
-        right.read_exact(&mut b[..n])?;
-        if a[..n] != b[..n] {
-            return Ok(false);
-        }
-        if n == 0 {
-            break;
-        }
-    }
-    let after = fs::symlink_metadata(source)?;
-    let dest_after = fs::symlink_metadata(target)?;
-    Ok(before.len() == after.len()
-        && before.modified().ok() == after.modified().ok()
-        && !is_reparse(&after)
-        && same_source_identity(&before, &after)
-        && dest.len() == dest_after.len()
-        && dest.modified().ok() == dest_after.modified().ok()
-        && !is_reparse(&dest_after)
-        && same_source_identity(&dest, &dest_after))
-}
-
-fn delete_checked_source(
-    root: &Path,
-    manifest: &[(PathBuf, PathBuf, fs::Metadata)],
+fn delete_source_after_copy(
+    source: &Path,
+    metadata: &fs::Metadata,
     budget: &mut Budget,
     tally: &mut Tally,
 ) {
-    let directories: std::collections::HashMap<&Path, &fs::Metadata> = manifest
-        .iter()
-        .filter(|(_, _, meta)| meta.is_dir())
-        .map(|(path, _, meta)| (path.as_path(), meta))
-        .collect();
-    for (source, target, expected) in manifest {
-        if !budget.spend() {
-            return;
-        }
-        // Never traverse a parent replaced by a junction after manifesting.
-        let mut ancestor = source.parent();
-        let mut unsafe_parent = false;
-        while let Some(path) = ancestor {
-            if !path.starts_with(root) {
-                break;
-            }
-            match (directories.get(path), fs::symlink_metadata(path)) {
-                (Some(expected), Ok(meta))
-                    if meta.is_dir()
-                        && !is_reparse(&meta)
-                        && same_source_identity(expected, &meta) => {}
-                _ => unsafe_parent = true,
-            }
-            ancestor = path.parent();
-        }
-        if unsafe_parent {
-            tally.fail(
-                source,
-                "source parent changed to reparse/non-directory before removal",
-            );
-            continue;
-        }
-        if expected.is_dir() {
-            // remove_dir refuses a new, unlisted child; never remove_dir_all.
-            match fs::symlink_metadata(source) {
-                Ok(meta)
-                    if meta.is_dir()
-                        && !is_reparse(&meta)
-                        && same_source_identity(expected, &meta) =>
-                {
-                    match fs::remove_dir(source) {
-                        Ok(()) => tally.dirs += 1,
-                        Err(error) => tally.fail(source, error),
-                    }
-                }
-                _ => tally.fail(source, "source directory changed before removal"),
-            }
-        } else if files_equal(source, target, budget).unwrap_or(false) {
-            match fs::symlink_metadata(source) {
-                Ok(meta)
-                    if meta.is_file()
-                        && !is_reparse(&meta)
-                        && same_source_identity(expected, &meta) =>
-                {
-                    match remove_entry(source, false, tally) {
-                        Ok(()) => {
-                            tally.files += 1;
-                            tally.bytes += meta.len();
-                        }
-                        Err(error) => tally.fail(source, error),
-                    }
-                }
-                _ => tally.fail(source, "source kind changed before removal"),
-            }
-        } else {
-            tally.fail(
-                source,
-                "source changed after copy; retained instead of removing",
-            );
+    if metadata.file_type().is_dir() {
+        delete_tree(source, budget, tally);
+    } else {
+        match remove_entry(source, is_directory_like(&metadata.file_type()), tally) {
+            Ok(()) => {}
+            Err(error) => tally.fail(source, error),
         }
     }
 }
@@ -1319,8 +1023,7 @@ fn copy(args: CopyArgs) -> Result<Value> {
         &mut budget,
         &mut tally,
     );
-    let complete =
-        budget.stopped.is_none() && tally.failed_total == 0 && tally.skipped_reparse == 0;
+    let complete = budget.stopped.is_none() && tally.failed_total == 0;
     let mut summary = format!(
         "copied {} file(s), {} new directory(ies), {} byte(s) from {} to {}",
         tally.files,
@@ -1396,10 +1099,6 @@ fn copy_tree(from: &Path, to: &Path, overwrite: bool, budget: &mut Budget, tally
         if !budget.spend() {
             return;
         }
-        if let Err(error) = check_copy_destination(&target) {
-            tally.fail(&target, error);
-            continue;
-        }
         let metadata = match fs::symlink_metadata(&source) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -1408,27 +1107,15 @@ fn copy_tree(from: &Path, to: &Path, overwrite: bool, budget: &mut Budget, tally
             }
         };
         let file_type = metadata.file_type();
-        if is_reparse(&metadata) {
+        if file_type.is_symlink() {
             // ⚠ Связь не разворачиваем. Скопировать ЦЕЛЬ вместо связи — подмена смысла:
             // на месте ярлыка окажется его содержимое, и она об этом не узнает. Считаем
             // и называем в ответе (`skipped_reparse`), а не делаем вид, что скопировали.
             tally.skipped_reparse += 1;
-            tally.fail(&source, "source reparse point was not copied");
             continue;
         }
         if file_type.is_dir() {
-            let target_existed = match fs::symlink_metadata(&target) {
-                Ok(existing) if existing.is_dir() => true,
-                Ok(_) => {
-                    tally.fail(&target, "destination is not a directory");
-                    continue;
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                Err(error) => {
-                    tally.fail(&target, error);
-                    continue;
-                }
-            };
+            let target_existed = fs::metadata(&target).map(|x| x.is_dir()).unwrap_or(false);
             if let Err(error) = fs::create_dir_all(&target) {
                 tally.fail(&target, error);
                 continue;
@@ -1440,7 +1127,9 @@ fn copy_tree(from: &Path, to: &Path, overwrite: bool, budget: &mut Budget, tally
                 Ok(entries) => {
                     for entry in entries {
                         match entry {
-                            Ok(entry) => stack.push((entry.path(), target.join(entry.file_name()))),
+                            Ok(entry) => {
+                                stack.push((entry.path(), target.join(entry.file_name())))
+                            }
                             Err(error) => tally.fail(&source, error),
                         }
                     }
@@ -1776,11 +1465,8 @@ mod tests {
         permissions.set_readonly(true);
         fs::set_permissions(&to, permissions).unwrap();
 
-        let value = dispatch(
-            "fs.copy",
-            json!({"from": &from, "to": &to, "overwrite": true}),
-        )
-        .unwrap();
+        let value =
+            dispatch("fs.copy", json!({"from": &from, "to": &to, "overwrite": true})).unwrap();
         assert_eq!(value["copied_files"], 1, "{value}");
         assert_eq!(value["overwritten_files"], 1, "{value}");
         assert_eq!(value["cleared_readonly"], 1, "{value}");
@@ -1846,11 +1532,8 @@ mod tests {
             .to_string();
         assert!(error.contains("overwrite=true"), "{error}");
         assert_eq!(fs::read_to_string(&to).unwrap(), "old");
-        let value = dispatch(
-            "fs.move",
-            json!({"from": &from, "to": &to, "overwrite": true}),
-        )
-        .unwrap();
+        let value =
+            dispatch("fs.move", json!({"from": &from, "to": &to, "overwrite": true})).unwrap();
         assert_eq!(value["overwritten"], true, "{value}");
         assert_eq!(value["strategy"], "rename", "{value}");
         assert_eq!(value["cross_volume"], false, "{value}");
@@ -1868,10 +1551,7 @@ mod tests {
         fs::write(&from, "a").unwrap();
         fs::create_dir(&box_dir).unwrap();
         let value = dispatch("fs.move", json!({"from": &from, "to": &box_dir})).unwrap();
-        assert_eq!(
-            value["destination_resolved_into_directory"], true,
-            "{value}"
-        );
+        assert_eq!(value["destination_resolved_into_directory"], true, "{value}");
         assert_eq!(value["to"], json!(box_dir.join("a.txt")), "{value}");
         assert!(box_dir.join("a.txt").exists());
         let _ = fs::remove_dir_all(dir);
@@ -1896,283 +1576,15 @@ mod tests {
         fs::write(from.join("sub").join("b.txt"), "de").unwrap();
         let mut budget = Budget::new();
         let mut tally = Tally::default();
-        let metadata = fs::symlink_metadata(&from).unwrap();
-        let removed =
-            copy_then_remove_source(&from, &to, &metadata, false, &mut budget, &mut tally);
-        assert!(removed, "{:?}", tally.failure_report());
+        copy_tree(&from, &to, false, &mut budget, &mut tally);
         assert_eq!(tally.files, 2);
         assert_eq!(tally.bytes, 5);
-        assert_eq!(tally.failed_total, 0);
+        let metadata = fs::symlink_metadata(&from).unwrap();
+        let mut removal = Tally::default();
+        delete_source_after_copy(&from, &metadata, &mut budget, &mut removal);
+        assert_eq!(removal.failed_total, 0);
         assert!(!from.exists(), "источник обязан исчезнуть после копии");
-        assert_eq!(
-            fs::read_to_string(to.join("sub").join("b.txt")).unwrap(),
-            "de"
-        );
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn complete_cross_volume_copy_reports_source_removed_only_after_copy() {
-        let dir = scratch("move-xvol-complete");
-        let from = dir.join("source");
-        let to = dir.join("target");
-        fs::create_dir(&from).unwrap();
-        fs::write(from.join("important"), b"original").unwrap();
-        let result = move_path_with_rename(
-            MoveArgs {
-                from: from.clone(),
-                to: to.clone(),
-                overwrite: false,
-                extra: Map::new(),
-            },
-            |_, _| {
-                Err(std::io::Error::from_raw_os_error(if cfg!(windows) {
-                    17
-                } else {
-                    18
-                }))
-            },
-        )
-        .unwrap();
-        assert_eq!(result["complete"], true, "{result}");
-        assert_eq!(result["source_removed"], true, "{result}");
-        assert!(!from.exists());
-        assert_eq!(fs::read(to.join("important")).unwrap(), b"original");
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn cross_volume_move_keeps_new_source_child_created_after_copy() {
-        let dir = scratch("move-xvol-late-child");
-        let from = dir.join("source");
-        let to = dir.join("target");
-        fs::create_dir(&from).unwrap();
-        fs::write(from.join("original"), b"before").unwrap();
-        let meta = fs::symlink_metadata(&from).unwrap();
-        let mut budget = Budget::new();
-        let mut tally = Tally::default();
-        let removed = copy_then_remove_source_with_hook(
-            &from,
-            &to,
-            &meta,
-            false,
-            &mut budget,
-            &mut tally,
-            || fs::write(from.join("late"), b"must survive").unwrap(),
-        );
-        assert!(!removed);
-        assert!(tally.failed_total > 0);
-        assert_eq!(fs::read(from.join("late")).unwrap(), b"must survive");
-        assert_eq!(fs::read(from.join("original")).unwrap(), b"before");
-        assert_eq!(fs::read(to.join("original")).unwrap(), b"before");
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn cross_volume_move_keeps_source_file_rewritten_after_copy() {
-        let dir = scratch("move-xvol-late-edit");
-        let from = dir.join("source");
-        let to = dir.join("target");
-        fs::write(&from, b"before").unwrap();
-        let meta = fs::symlink_metadata(&from).unwrap();
-        let mut budget = Budget::new();
-        let mut tally = Tally::default();
-        let removed = copy_then_remove_source_with_hook(
-            &from,
-            &to,
-            &meta,
-            false,
-            &mut budget,
-            &mut tally,
-            || fs::write(&from, b"changed").unwrap(),
-        );
-        assert!(!removed);
-        assert!(tally.failed_total > 0);
-        assert_eq!(fs::read(&from).unwrap(), b"changed");
-        assert_eq!(fs::read(&to).unwrap(), b"before");
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn cross_volume_move_retains_source_when_destination_keeps_an_existing_file() {
-        let dir = scratch("move-xvol-existing");
-        let from = dir.join("source");
-        let to = dir.join("target");
-        fs::create_dir(&from).unwrap();
-        fs::write(from.join("important"), b"original").unwrap();
-        let result = move_path_with_rename(
-            MoveArgs {
-                from: from.clone(),
-                to: to.clone(),
-                overwrite: false,
-                extra: Map::new(),
-            },
-            |_, target| {
-                // Destination changes after initial admission but before the EXDEV fallback.
-                fs::create_dir(target)?;
-                fs::write(target.join("important"), b"older")?;
-                Err(std::io::Error::from_raw_os_error(if cfg!(windows) {
-                    17
-                } else {
-                    18
-                }))
-            },
-        )
-        .unwrap();
-        assert_eq!(result["complete"], false, "{result}");
-        assert_eq!(result["source_removed"], false, "{result}");
-        assert_eq!(result["skipped_existing"], 1, "{result}");
-        assert!(text(&result, "summary").starts_with("PARTIAL:"), "{result}");
-        assert_eq!(fs::read(from.join("important")).unwrap(), b"original");
-        assert_eq!(fs::read(to.join("important")).unwrap(), b"older");
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn cross_volume_move_keeps_late_link_and_its_external_target() {
-        let dir = scratch("move-xvol-late-link");
-        let from = dir.join("source");
-        let to = dir.join("target");
-        let outside = dir.join("outside");
-        fs::create_dir(&from).unwrap();
-        fs::create_dir(&outside).unwrap();
-        fs::write(outside.join("sentinel"), b"untouched").unwrap();
-        let meta = fs::symlink_metadata(&from).unwrap();
-        let mut budget = Budget::new();
-        let mut tally = Tally::default();
-        let removed = copy_then_remove_source_with_hook(
-            &from,
-            &to,
-            &meta,
-            false,
-            &mut budget,
-            &mut tally,
-            || {
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&outside, from.join("late")).unwrap();
-                #[cfg(windows)]
-                junction(&from.join("late"), &outside);
-            },
-        );
-        assert!(!removed);
-        assert!(tally.failed_total > 0);
-        assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
-        assert!(fs::symlink_metadata(from.join("late")).is_ok());
-        #[cfg(windows)]
-        fs::remove_dir(from.join("late")).unwrap();
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[cfg(windows)]
-    fn junction(link: &Path, target: &Path) {
-        // mklink /J needs no developer-mode symlink privilege. Both paths are
-        // under this test's unique disposable temporary fixture.
-        let output = std::process::Command::new("cmd.exe")
-            .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "junction creation failed: {:?}",
-            output.status
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn cross_volume_copy_with_a_source_junction_never_deletes_the_original() {
-        let dir = scratch("move-xvol-junction");
-        let outside = dir.join("outside");
-        let from = dir.join("source");
-        let to = dir.join("target");
-        fs::create_dir_all(&outside).unwrap();
-        fs::create_dir_all(&from).unwrap();
-        fs::write(outside.join("sentinel"), b"untouched").unwrap();
-        fs::write(from.join("ordinary"), b"retained").unwrap();
-        junction(&from.join("link"), &outside);
-        let result = move_path_with_rename(
-            MoveArgs {
-                from: from.clone(),
-                to: to.clone(),
-                overwrite: false,
-                extra: Map::new(),
-            },
-            |_, _| Err(std::io::Error::from_raw_os_error(17)),
-        )
-        .unwrap();
-        assert_eq!(result["complete"], false, "{result}");
-        assert_eq!(result["source_removed"], false, "{result}");
-        assert_eq!(result["skipped_reparse"], 1, "{result}");
-        assert_eq!(result["failed_count"], 1, "{result}");
-        assert!(text(&result, "summary").starts_with("PARTIAL:"), "{result}");
-        assert_eq!(fs::read(from.join("ordinary")).unwrap(), b"retained");
-        assert!(fs::symlink_metadata(from.join("link")).is_ok());
-        assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
-        fs::remove_dir(from.join("link")).unwrap();
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn cross_volume_move_of_a_junction_itself_retains_the_link() {
-        let dir = scratch("move-xvol-root-junction");
-        let outside = dir.join("outside");
-        fs::create_dir(&outside).unwrap();
-        fs::write(outside.join("sentinel"), b"untouched").unwrap();
-        let from = dir.join("link");
-        junction(&from, &outside);
-        let result = move_path_with_rename(
-            MoveArgs {
-                from: from.clone(),
-                to: dir.join("target"),
-                overwrite: false,
-                extra: Map::new(),
-            },
-            |_, _| Err(std::io::Error::from_raw_os_error(17)),
-        )
-        .unwrap();
-        assert_eq!(result["complete"], false, "{result}");
-        assert_eq!(result["source_removed"], false, "{result}");
-        assert_eq!(result["skipped_reparse"], 1, "{result}");
-        assert_eq!(result["failed_count"], 1, "{result}");
-        assert!(fs::symlink_metadata(&from).is_ok());
-        assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
-        fs::remove_dir(from).unwrap();
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn recursive_copy_refuses_destination_child_junction_without_touching_external_sentinel() {
-        let dir = scratch("copy-destination-junction");
-        let outside = dir.join("outside");
-        let from = dir.join("source");
-        let into = dir.join("destination");
-        fs::create_dir_all(from.join("nested")).unwrap();
-        fs::create_dir_all(into.join("source")).unwrap();
-        fs::create_dir_all(&outside).unwrap();
-        fs::write(from.join("nested").join("sentinel"), b"replacement").unwrap();
-        fs::write(from.join("nested").join("fresh"), b"new").unwrap();
-        fs::write(outside.join("sentinel"), b"untouched").unwrap();
-        let link = into.join("source").join("nested");
-        junction(&link, &outside);
-        let result = dispatch(
-            "fs.copy",
-            json!({"from": from, "to": into, "recursive": true, "overwrite": true}),
-        )
-        .unwrap();
-        assert_eq!(result["complete"], false, "{result}");
-        assert_eq!(result["failed_count"], 1, "{result}");
-        assert!(text(&result, "summary").starts_with("PARTIAL:"), "{result}");
-        assert!(
-            text(&result["failed"][0], "error").contains("reparse"),
-            "{result}"
-        );
-        assert_eq!(fs::read(outside.join("sentinel")).unwrap(), b"untouched");
-        assert!(!outside.join("fresh").exists());
-        fs::remove_dir(link).unwrap();
+        assert_eq!(fs::read_to_string(to.join("sub").join("b.txt")).unwrap(), "de");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -2294,7 +1706,11 @@ mod tests {
         assert!(error.contains("parents=true"), "{error}");
         assert!(!dir.join("a").exists(), "отказ не должен ничего создавать");
         // Граница: один уровень без parents проходит.
-        let value = dispatch("fs.mkdir", json!({"path": dir.join("a"), "parents": false})).unwrap();
+        let value = dispatch(
+            "fs.mkdir",
+            json!({"path": dir.join("a"), "parents": false}),
+        )
+        .unwrap();
         assert_eq!(value["created_count"], 1, "{value}");
         let _ = fs::remove_dir_all(dir);
     }

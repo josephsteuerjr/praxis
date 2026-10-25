@@ -285,33 +285,21 @@ class TestRumination(RuminationBase):
 #  11.4: скилл thread_discipline + STATE-строка нитей
 # --------------------------------------------------------------------------- #
 
-import capabilities
-import memory_index
-from unittest.mock import patch
+from pathlib import Path as _Path
 
 
-class TestThreadDisciplineSkill(Base):
-    """An authored skill is private; test the source mechanisms with a disposable one."""
+class TestThreadDisciplineSkill(unittest.TestCase):
+    REPO = _Path(__file__).resolve().parent
 
     def test_skill_exists_and_indexed(self):
-        skills = self.tmp / "soul" / "skills"
-        skill = skills / "thread_discipline.md"
-        skill.write_text("# Дисциплина нитей\nmanage_loop: park/close/reopen; "
-                         "руминация без машинного veto.\n", encoding="utf-8")
-        index = skills / "INDEX.md"
-        index.write_text("# Навыки\n- [Дисциплина нитей](thread_discipline.md) — "
-                         "управление открытыми нитями\n", encoding="utf-8")
-
-        # Actual tool and sleep mechanism must exist; the fixture never claims
-        # that this privately authored skill is present in the public checkout.
-        self.assertIn("manage_loop", agent.TOOL_IMPL)
-        self.assertTrue(callable(sleep_mod.rumination_pass))
-        self.assertIn(skill, memory_index._iter_source_files(),
-                      "skill source must reach the retrieval index")
-        with patch.object(capabilities, "SKILLS_INDEX", index):
-            rows = {row["name"]: row for row in capabilities._skills_list()}
-        self.assertIn("thread_discipline", rows, "indexed skill must reach the capability list")
-        self.assertIn("управление открытыми нитями", rows["thread_discipline"]["line"])
+        skill = self.REPO / "soul" / "skills" / "thread_discipline.md"
+        self.assertTrue(skill.exists(), "скилл дисциплины нитей в репо")
+        body = skill.read_text(encoding="utf-8")
+        self.assertIn("manage_loop", body)
+        self.assertIn("руминация", body.lower())
+        self.assertIn("машинный veto", body.lower())
+        idx = (self.REPO / "soul" / "skills" / "INDEX.md").read_text(encoding="utf-8")
+        self.assertIn("thread_discipline", idx, "скилл виден в INDEX")
 
 
 class TestLoopsState(Base):

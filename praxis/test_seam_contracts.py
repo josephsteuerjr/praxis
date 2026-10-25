@@ -244,7 +244,7 @@ class TestA1A2SelfReport(SeamBase):
 
     def test_capabilities_do_not_deny_hands_offered_this_turn(self):
         """В owner-адресованном ходе в группе руки предложены — значит они есть."""
-        ctx = self._ctx(is_dm=False, chat_id="-100999999999999999")
+        ctx = self._ctx(is_dm=False, chat_id="-1001240718803")
         token = agent._TURN_CHANNEL.set(ctx)
         try:
             text = agent.tool_my_capabilities()

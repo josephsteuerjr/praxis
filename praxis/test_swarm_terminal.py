@@ -26,22 +26,11 @@ class SwarmTerminal(unittest.TestCase):
             ], max_parallel=1)
             plan["nodes"][0].update(status="running", agent_id="agent-aaa")
             forge_swarm.save(root, plan)
-            def reserved_spawn(_task, _action, **kwargs):
-                # The real admission path persists a request before reporting success.
-                path = root / "agents" / kwargs["agent_id"]
-                path.mkdir(parents=True)
-                (path / "request.json").write_text(json.dumps({
-                    "id": kwargs["agent_id"], "task_id": "task", "node_id": kwargs["node_id"],
-                    "status": "running", "supervisor_pid": 42,
-                }), encoding="utf-8")
-                return f"Порождён {kwargs['agent_id']}"
             with patch.object(forge, "_task_root", return_value=({}, root, "")), \
                     patch.object(forge, "_task_dir", return_value=root), \
-                    patch.object(forge, "_unit_dir", side_effect=lambda _task, _kind, aid:
-                                 unit if aid == "agent-aaa" else root / "agents" / aid), \
-                    patch.object(forge, "_pid_alive", return_value=True), \
+                    patch.object(forge, "_unit_dir", return_value=unit), \
                     patch.object(forge, "_event"), \
-                    patch.object(forge, "agent", side_effect=reserved_spawn) as spawn:
+                    patch.object(forge, "agent", return_value="agent-bbb") as spawn:
                 out = forge.swarm("task", action="tick")
                 self.assertIn("stalled", out)
                 self.assertEqual(spawn.call_count, 1)
@@ -49,9 +38,7 @@ class SwarmTerminal(unittest.TestCase):
                 loaded = forge_swarm.load(root)
                 self.assertEqual([n["status"] for n in loaded["nodes"]], ["stalled", "blocked", "running"])
                 # Поздний повтор наблюдения не воскрешает завершённый узел.
-                reserved = loaded["nodes"][2]["agent_id"]
-                (root / "agents" / reserved / "result.json").write_text(
-                    json.dumps({"status": "done"}), encoding="utf-8")
+                (unit / "result.json").write_text(json.dumps({"status": "done"}), encoding="utf-8")
                 forge.swarm("task", action="tick")
                 self.assertEqual(spawn.call_count, 1)
                 self.assertEqual([n["status"] for n in forge_swarm.load(root)["nodes"]], ["stalled", "blocked", "done"])

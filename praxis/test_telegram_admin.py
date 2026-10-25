@@ -46,7 +46,7 @@ class TheFenceIsTheSameFenceAsModeration(unittest.TestCase):
             telegram_admin.normalize(-1001111111111, "slow_mode", {"seconds": 30})
 
     def test_a_peer_that_is_not_an_exact_integer_is_refused(self):
-        for bogus in ("-100999999999999999", True, 1.0, None):
+        for bogus in ("-1001240718803", True, 1.0, None):
             with self.assertRaises(TypeError):
                 telegram_admin.normalize(bogus, "slow_mode", {"seconds": 30})
 

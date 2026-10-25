@@ -133,3 +133,5 @@ upgrading the agent already living on your machine.
 Created by Yegor Kosyrev. Original and third-party attribution is retained in
 LICENSE and NOTICE. Contributions should state what changed, which consumer
 was exercised and what remains unverified.
+
+Source code: [current Praxis and per-platform Helene snapshots](SOURCE-SNAPSHOTS.md).

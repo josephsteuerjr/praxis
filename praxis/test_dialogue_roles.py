@@ -257,7 +257,7 @@ class HerWorkDoesNotDieSilently(unittest.TestCase):
 
     def test_the_refused_file_stays_in_front_of_her(self):
         agent.note_undelivered_media(
-            run_id="run-x", queue_id="q1", chat_id="-100999999999999999",
+            run_id="run-x", queue_id="q1", chat_id="-1001240718803",
             path="/app/workspace/media/outbound/o2-services-review.md",
             caption="Собрала цельный review для Claude Code",
             reason="ForbiddenError: CHAT_SEND_DOCS_FORBIDDEN")

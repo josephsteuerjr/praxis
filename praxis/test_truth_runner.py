@@ -219,7 +219,7 @@ class ResolveEntityCandidateTests(unittest.IsolatedAsyncioTestCase):
         # полная выгрузка адресной книги, и раньше ДВАЖДЫ за вызов.
         self.assertEqual(await self._calls_for("-100500"), [-100500])
         self.assertEqual(await self._calls_for(-100500), [-100500])
-        self.assertEqual(await self._calls_for("-100999999999999999"), [-100999999999999999])
+        self.assertEqual(await self._calls_for("-1001240718803"), [-1001240718803])
 
     async def test_positive_digits_keep_the_phone_book_hand_but_number_first(self):
         # Телефон в её адресной книге по-прежнему резолвится строкой — но только ПОСЛЕ
@@ -760,7 +760,7 @@ class _DirectSendTraceHarness(unittest.TestCase):
     """Стенд прямой отправки: свои архив, записка, буфер и леджер — живая память не тронута."""
 
     OWNER = 555000100
-    GROUP = -100999999999999999
+    GROUP = -1001240718803
     SAID = ("Поправка к моей реплике выше: я неточно сказала «у меня на Opus 5». "
             "Мой рабочий движок — gpt-5.6-sol, а Opus 5 у меня в терминале.")
 
@@ -834,7 +834,7 @@ class DirectSendLeavesTheSameTraceAsVoiceTests(_DirectSendTraceHarness):
     отправка оставляла один след из четырёх — буфер комнаты, который живёт только внутри
     хода по этой комнате. Пульс в комнату не заходит. На проде 22 из 22 её прямых
     сообщений в группы отсутствуют в `memory/groups/*/archive.jsonl` (у голоса там 591),
-    а в `.scratch/-100999999999999999.md` того дня стоят 17:20 и 18:45 — и дырка на 18:44.
+    а в `.scratch/-1001240718803.md` того дня стоят 17:20 и 18:45 — и дырка на 18:44.
     """
 
     def test_direct_group_send_leaves_note_archive_and_buffer(self):
@@ -951,7 +951,7 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
         p = patch.object(runner.telegram_followups, "LEDGER", self.ledger)
         p.start()
         self.addCleanup(p.stop)
-        self.addCleanup(runner._buf.pop, "-100999999999999999", None)
+        self.addCleanup(runner._buf.pop, "-1001240718803", None)
 
     def _restore(self):
         (agent._RUN_MANAGER, agent._MEDIA_SPOOL, runner._DIRECT_OUTBOX,
@@ -985,7 +985,7 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
                                 {"to": "@abstractDL", "text": text},
                                 side_effect=True, idempotency_key=key)
         entry = self.outbox.prepare_text(
-            key, peer_id=-100999999999999999, text=text, run_id=run_id, call_id=call_id,
+            key, peer_id=-1001240718803, text=text, run_id=run_id, call_id=call_id,
             purpose="tool:send_message")
         agent.run_direct_outbox_prepared(
             entry, target_label="AbstractDL Chat", target_user_id=None,
@@ -995,7 +995,7 @@ class DirectSendTraceIdempotencyTests(unittest.TestCase):
         self.assertTrue(agent.project_direct_outbox_acceptance(entry))
         self.assertTrue(agent.project_direct_outbox_acceptance(entry))
 
-        scratch = notes.path_for("-100999999999999999").read_text(encoding="utf-8")
+        scratch = notes.path_for("-1001240718803").read_text(encoding="utf-8")
         self.assertEqual(scratch.count("сказала (голос)"), 1, scratch)
         self.assertEqual(len(self.ledger.list()), 1)
 
@@ -1085,7 +1085,6 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
     owner-записей прода явную просьбу не содержит НИ ОДНА."""
 
     OWNER = 555000100
-    ROOM = "-100" + str(1240718803)  # synthetic; must match resolved Entity.id
 
     def setUp(self):
         self._temp = tempfile.TemporaryDirectory(prefix="praxis-truth-order-")
@@ -1111,7 +1110,7 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
         execution = {"run_id": "run-order", "call_id": call_id, "tool": "send_message"}
         key = f"telegram-outbox:run-order:tool:{call_id}"
         prepared = self.outbox.prepare_text(
-            key, peer_id=int(self.ROOM), text=text, run_id="run-order",
+            key, peer_id=-1001240718803, text=text, run_id="run-order",
             call_id=call_id, purpose="tool:send_message")
         accepted = dict(prepared, state="accepted",
                         receipt={"message_id": 94243,
@@ -1138,7 +1137,7 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
             patch.object(runner.social_pulse, "allow_outbound", return_value=(True, "")),
             patch.object(runner, "_threadsafe_result", side_effect=_threadsafe),
         ):
-            runner._sync_send_message(self.ROOM, text)
+            runner._sync_send_message("-1001240718803", text)
         return captured
 
     def test_a_plain_owner_line_does_not_order_a_report(self):
@@ -1165,7 +1164,7 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
     def test_a_turn_that_is_not_in_his_dm_orders_nothing_either(self):
         projection = self._projection_for(
             owner_lines=["Егор: спроси у Арета и сообщи, когда он ответит"],
-            active_chat=self.ROOM)
+            active_chat="-1001240718803")
         self.assertEqual(projection.get("followup_request"), "")
 
 
@@ -1297,7 +1296,7 @@ class FollowUpLetterNamesThePersonTests(unittest.IsolatedAsyncioTestCase):
     def _item(self, **response):
         return {"id": "tgfu_x", "target_label": "AbstractDL Chat (@abstractdl_chat, id 1240718803)",
                 "target_user_id": None, "sent_message_id": 94243,
-                "response": dict({"peer_id": "-100999999999999999", "message_id": 94244,
+                "response": dict({"peer_id": "-1001240718803", "message_id": 94244,
                                   "text": "принял"}, **response)}
 
     async def test_a_group_answer_names_the_human_and_the_room(self):
@@ -1345,8 +1344,8 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.item = self.ledger.create(
-            target_ref="-100999999999999999", target_label="AbstractDL Chat",
-            target_peer_id=-100999999999999999, target_user_id=None,
+            target_ref="-1001240718803", target_label="AbstractDL Chat",
+            target_peer_id=-1001240718803, target_user_id=None,
             sent_message_id=94243, request_text="", sent_excerpt="Поправка…",
             idempotency_key="k1")
 
@@ -1354,7 +1353,7 @@ class SheCanAskForTheReportHerselfTests(unittest.TestCase):
         answer = runner._sync_followups("watch", self.item["id"])
         self.assertIn("включила", answer)
         self.ledger.observe_incoming(
-            peer_id=-100999999999999999, sender_id=1240, message_id=94244, text="принял",
+            peer_id=-1001240718803, sender_id=1240, message_id=94244, text="принял",
             reply_to_message_id=94243, sender_name="Арет")
         self.assertEqual([x["id"] for x in self.ledger.pending_notifications()],
                          [self.item["id"]])

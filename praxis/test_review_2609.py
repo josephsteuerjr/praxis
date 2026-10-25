@@ -224,12 +224,13 @@ class FoldOffers(unittest.TestCase):
             ml.fold_now("-1001")
         self.assertIn("-1001", ml.fold_offers())
 
-    def test_done_fold_clears_the_offer(self):
-        with (mock.patch.object(ml, "compact_if_due",
-                                return_value={"ok": True, "folded": 3, "hot": 2}),
-              mock.patch.object(ml, "adopt_place", side_effect=lambda p: p)):
-            ml.fold_now("-1001")
-        self.assertNotIn("-1001", ml.fold_offers())
+    def test_owner_force_cannot_clear_an_unwritten_offer(self):
+        with mock.patch.object(ml, "compact_if_due") as automatic:
+            out = ml.fold_now("-1001")
+        self.assertTrue(out["author_required"], out)
+        self.assertEqual(out["folded"], 0)
+        automatic.assert_not_called()
+        self.assertIn("-1001", ml.fold_offers())
 
     def test_tmp_names_differ_between_writes(self):
         seen = []

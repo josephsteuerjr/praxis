@@ -10,7 +10,7 @@ from unittest import mock
 import telegram_followups as followups
 
 
-ABSTRACT_DL = -100999999999999999
+ABSTRACT_DL = -1001240718803
 OWNER_ID = 555000100
 VIKA_ID = 555000333
 

@@ -237,7 +237,7 @@ class TestTopicContract(unittest.TestCase):
 
         Telegram не ставит ``reply_to_top_id`` на первый ответ, поэтому корень цепочки и
         первый ответ на него уходили на голый peer, а всё остальное — на
-        ``__topic__<корень>``. Итог в живом -100999999999999999: 164 буфера на один чат и её
+        ``__topic__<корень>``. Итог в живом -1001240718803: 164 буфера на один чат и её
         собственная реплика «у меня в топик попал только твой ответ, без сообщения #93708».
         """
 
@@ -249,10 +249,10 @@ class TestTopicContract(unittest.TestCase):
 
         keys = {
             telegram_topics.route_for_message(
-                -100999999999999999, message, is_forum=False).conversation_id
+                -1001240718803, message, is_forum=False).conversation_id
             for message in (opener, first_reply, deep_reply)
         }
-        self.assertEqual(keys, {"-100999999999999999"})
+        self.assertEqual(keys, {"-1001240718803"})
 
     def test_real_forum_keeps_its_topics_only_by_catalogue(self):
         """Грибница — настоящий форум: тема остаётся местом ТОЛЬКО по каталогу.

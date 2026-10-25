@@ -19,7 +19,7 @@ import notes
 import telegram_routes as tr
 import turns
 
-PEER = "-100999999999999999"
+PEER = "-1001240718803"
 A = f"{PEER}__topic__93707"
 B = f"{PEER}__topic__92488"
 FORUM = "-1004301095307"

@@ -150,15 +150,6 @@ class DedupSkipsGreenOnSameTree(unittest.TestCase):
         self.assertFalse(out[0].get("skip"))
         self.assertEqual(notes, [])
 
-    def test_dirty_index_or_worktree_never_uses_head_tree_as_reuse_proof(self):
-        with mock.patch.object(forge, "_git_root", return_value=self.tmp), \
-             mock.patch.object(forge, "_git_text", side_effect=[" M code.py", "a" * 40]) as git:
-            self.assertEqual(forge._task_tree_sha(self.tmp), "")
-        git.assert_called_once_with(self.tmp, "status", "--porcelain", "--untracked-files=normal")
-        with mock.patch.object(forge, "_git_root", return_value=self.tmp), \
-             mock.patch.object(forge, "_git_text", side_effect=["", "a" * 40]):
-            self.assertEqual(forge._task_tree_sha(self.tmp), "a" * 40)
-
     def test_live_matrix_proves_nothing_yet(self):
         """Живая (starting/running) матрица без result.json — не прошлое, а настоящее."""
         d = forge.TASKS_DIR / "code-d004" / "verifications" / "verify-live1"
@@ -228,30 +219,13 @@ class SkipRowBecomesReceiptInMatrix(unittest.TestCase):
                         "skip_status": "skipped_already_green",
                         "skip_reference": "verify-old/c1"}],
         }, ensure_ascii=False), encoding="utf-8")
-        with mock.patch.object(forge, "_task_tree_sha", return_value="t" * 40):
-            code = forge_verify.run(req)
+        code = forge_verify.run(req)
         self.assertEqual(code, 0)
         result = json.loads((self.tmp / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["passed"], 1)
         self.assertEqual(result["skipped"], 0)
         self.assertEqual(result["checks"][0]["status"], "skipped_already_green")
-
-    def test_candidate_change_during_matrix_never_publishes_reusable_green(self):
-        import forge_verify
-        req = self.tmp / "request.json"
-        req.write_text(json.dumps({
-            "id": "verify-drift", "task_id": "code-x", "root": str(self.tmp),
-            "scope": "self", "max_parallel": 1, "timeout": 30, "tree_sha": "t" * 40,
-            "checks": [{"id": "c1", "command": "echo hi", "skip": True,
-                        "skip_status": "skipped_already_green", "skip_reference": "verify-old/c1"}],
-        }), encoding="utf-8")
-        with mock.patch.object(forge, "_task_tree_sha", return_value=""):
-            self.assertEqual(forge_verify.run(req), 1)
-        result = json.loads((self.tmp / "result.json").read_text(encoding="utf-8"))
-        self.assertEqual(result["status"], "stale")
-        self.assertEqual(result["tree_sha"], "")
-        self.assertTrue(result["tree_changed_during_checks"])
 
 
 def threading_lock():

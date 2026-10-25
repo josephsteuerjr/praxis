@@ -193,8 +193,8 @@ class SweepOlderThreadsTests(unittest.TestCase):
 
     def test_other_addressee_and_group_peer_unaffected(self):
         group = self.ledger.create(
-            target_ref="-100999999999999999", target_label="AbstractDL",
-            target_peer_id=-100999999999999999, target_user_id=None,
+            target_ref="-1001240718803", target_label="AbstractDL",
+            target_peer_id=-1001240718803, target_user_id=None,
             sent_message_id=55, request_text="", sent_at=self.clock() - 100,
             sent_excerpt="вопрос в группу")
         other_person = self.ledger.create(

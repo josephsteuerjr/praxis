@@ -23,11 +23,11 @@ class TestRecallOrigin(Base):
         token = agent._TURN_CHANNEL.set(ctx)
         try:
             label = agent._recall_origin(
-                self._row("memory/groups/-100999999999999999/archive.jsonl"),
-                "memory/groups/-100999999999999999/archive.jsonl")
+                self._row("memory/groups/-1001240718803/archive.jsonl"),
+                "memory/groups/-1001240718803/archive.jsonl")
         finally:
             agent._TURN_CHANNEL.reset(token)
-        self.assertIn("-100999999999999999", label,
+        self.assertIn("-1001240718803", label,
                       "чужая комната обязана быть названа — иначе реплика оттуда "
                       "неотличима от реплики отсюда")
         self.assertIn("Николай", label, "автор при этом не теряется")
@@ -37,21 +37,21 @@ class TestRecallOrigin(Base):
         token = agent._TURN_CHANNEL.set(ctx)
         try:
             label = agent._recall_origin(
-                self._row("memory/self/rooms/-100999999999999999/turns-2026-07.jsonl"),
-                "memory/self/rooms/-100999999999999999/turns-2026-07.jsonl")
+                self._row("memory/self/rooms/-1001240718803/turns-2026-07.jsonl"),
+                "memory/self/rooms/-1001240718803/turns-2026-07.jsonl")
         finally:
             agent._TURN_CHANNEL.reset(token)
-        self.assertIn("-100999999999999999", label)
+        self.assertIn("-1001240718803", label)
 
     def test_current_room_is_not_labelled(self):
         """Метка на каждой строке своего же чата обесценила бы саму метку."""
-        ctx = agent.ChannelContext(chat_id="-100999999999999999", room_id="-100999999999999999",
+        ctx = agent.ChannelContext(chat_id="-1001240718803", room_id="-1001240718803",
                                    is_dm=False)
         token = agent._TURN_CHANNEL.set(ctx)
         try:
             label = agent._recall_origin(
-                self._row("memory/groups/-100999999999999999/archive.jsonl"),
-                "memory/groups/-100999999999999999/archive.jsonl")
+                self._row("memory/groups/-1001240718803/archive.jsonl"),
+                "memory/groups/-1001240718803/archive.jsonl")
         finally:
             agent._TURN_CHANNEL.reset(token)
         self.assertEqual(label, "Николай")
@@ -68,7 +68,7 @@ class TestRoomTurnsAreFindableButNotSilent(Base):
         import memory_fts
         from pathlib import Path
         mem = self.tmp / "memory"
-        p = mem / "self" / "rooms" / "-100999999999999999" / "turns-2026-07.jsonl"
+        p = mem / "self" / "rooms" / "-1001240718803" / "turns-2026-07.jsonl"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("{}\n", encoding="utf-8")
         selected = memory_fts._selected_jsonl(Path(p), mem)
@@ -79,5 +79,5 @@ class TestRoomTurnsAreFindableButNotSilent(Base):
         import memory_provenance
         self.assertFalse(memory_provenance.automatic_recall_allowed(
             source_type="room_turn",
-            path="memory/self/rooms/-100999999999999999/turns-2026-07.jsonl",
+            path="memory/self/rooms/-1001240718803/turns-2026-07.jsonl",
             text="что-то", memory_dir=self.tmp / "memory"))

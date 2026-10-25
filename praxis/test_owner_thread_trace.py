@@ -160,18 +160,7 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         self._orig = fu.LEDGER.path
         fu.LEDGER.path = Path(self.tmp.name) / "followups.json"
         self.addCleanup(lambda: setattr(fu.LEDGER, "path", self._orig))
-        # The digest compares the sent timestamp with the agent's local *day*.
-        # A real now-300s fixture crosses midnight during the full Linux battery:
-        # choose midday in that same local day and freeze its clock while this
-        # test runs, without changing the production date/zone conversion.
-        import notes
-        from unittest import mock
-
-        noon = notes._local_now().replace(hour=12, minute=0, second=0, microsecond=0)
-        self.now = noon.timestamp()
-        now_patch = mock.patch.object(notes, "_local_now", return_value=noon)
-        now_patch.start()
-        self.addCleanup(now_patch.stop)
+        self.now = time.time()
         # ⚠ ВТОРОЙ ИСТОЧНИК, КОТОРЫЙ ЗДЕСЬ НЕ ИЗОЛИРОВАЛСЯ, И ЭТО СТОИЛО КРАСНОГО ГЕЙТА.
         #
         # `my_sends_today_digest()` читает ДВА источника: след нитей (он изолирован строкой
@@ -207,7 +196,7 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
     def test_a_tool_send_reaches_the_digest(self):
         import agent
 
-        self._sent("-100999999999999999", "Поправка про рабочий движок.")
+        self._sent("-1001240718803", "Поправка про рабочий движок.")
         digest = agent.my_sends_today_digest()
         self.assertIn("Поправка про рабочий движок", digest,
                       "отправка туром снова не видна в обзоре «кому я уже писала»")
@@ -217,8 +206,8 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         права вытеснить настоящее сообщение: в обзоре одна строка на место."""
         import agent
 
-        self._sent("-100999999999999999", "Настоящее сообщение.", at=self.now - 600)
-        self._sent("-100999999999999999", "чиню тест, вернусь через минуту",
+        self._sent("-1001240718803", "Настоящее сообщение.", at=self.now - 600)
+        self._sent("-1001240718803", "чиню тест, вернусь через минуту",
                    purpose="tool:narrate", at=self.now - 60)
         digest = agent.my_sends_today_digest()
         self.assertIn("Настоящее сообщение", digest)
@@ -227,7 +216,7 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
     def test_yesterday_stays_out(self):
         import agent
 
-        self._sent("-100999999999999999", "вчерашнее", at=self.now - 36 * 3600)
+        self._sent("-1001240718803", "вчерашнее", at=self.now - 36 * 3600)
         self.assertNotIn("вчерашнее", agent.my_sends_today_digest())
 
     def test_one_place_one_line_and_the_freshest_wins(self):
@@ -235,8 +224,8 @@ class SendsDigestSeesHerAutonomousVoiceTests(unittest.TestCase):
         последнее сказанное. Иначе восемь строк заняла бы одна оживлённая комната."""
         import agent
 
-        self._sent("-100999999999999999", "первое", at=self.now - 900)
-        self._sent("-100999999999999999", "последнее", at=self.now - 120)
+        self._sent("-1001240718803", "первое", at=self.now - 900)
+        self._sent("-1001240718803", "последнее", at=self.now - 120)
         digest = agent.my_sends_today_digest()
         self.assertEqual(len([ln for ln in digest.splitlines() if ln.startswith("- ")]), 1)
         self.assertIn("последнее", digest)

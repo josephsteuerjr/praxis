@@ -111,22 +111,7 @@ def tracked_files() -> list[str]:
         if (rel := line.strip()) and (BASE / rel).is_file()
     ]
     if files:
-        # The installed soul is intentionally not a Git asset. A checkout can
-        # still be live: reporting only ls-files makes its real SOUL and skills
-        # vanish from tree(), graph(), and skills_map(). Add that ONE known
-        # private Markdown shelf; never walk env, sessions, or runtime state.
-        soul = BASE / "soul"
-        if soul.is_dir() and not soul.is_symlink():
-            root = BASE.resolve()
-            for path in soul.rglob("*.md"):
-                if path.is_symlink() or not path.is_file():
-                    continue
-                try:
-                    rel = path.resolve().relative_to(root).as_posix()
-                except ValueError:
-                    continue
-                files.append(rel)
-        return sorted(set(files))
+        return files
     # фолбэк без git: walk по известным местам
     out = []
     for pat in ("*.py", "*.md", "*.html", "*.yml", "*.txt"):

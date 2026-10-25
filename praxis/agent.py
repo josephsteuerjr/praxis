@@ -56,6 +56,7 @@ import capabilities
 import computer_memory
 import context_envelope
 import desires
+import frame_continuation
 import frame_epoch
 import frame_layout
 import frame_shadow
@@ -1535,12 +1536,15 @@ def _notices_block(*, mid_turn: bool = False) -> str:
 
 
 def build_state_evidence_block(*, hide_identity_load: bool = False,
-                               self_only: bool = False) -> str:
+                               self_only: bool = False,
+                               include_deployment_notice: bool = False) -> str:
     """Mutable state continuity at lower prompt priority, never SYSTEM authority.
 
     `self_only` — комната не владельческая: молчит только то, что описывает ДРУГИХ
     (`NOT_HERS_LABELS`). Всё, что про неё, едет в любую комнату.
     """
+    # Opt in only at the real prompt construction call; status/debug probes do not
+    # consume the durable one-time deployment construction receipt.
     records: list[dict] = []
 
     def add(label: str, content) -> None:
@@ -1586,10 +1590,12 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         offers = memory_life.fold_offers() if hasattr(memory_life, "fold_offers") else {}
         if offers:
             add("fold_offers", {
-                "note": ("горячее окно этих мест перешло мягкий порог; свёртка не запускается "
-                         "сама — рука memory_compact(action=fold, place=<место>) или ночное "
-                         "решение голоса; жёсткое давление, не снятое голосом дольше "
-                         "FOLD_OFFER_BACKSTOP_HOURS, сворачивается физикой с квитанцией"),
+                "note": ("СТРОГОЕ НАПОМИНАНИЕ: горячая память требует твоей авторской свёртки. "
+                         "memory_compact(prepare,place) → прочитай точные источники → "
+                         "fold(selection,text) своими словами в этом ходе. Ни часы, ни другой "
+                         "автор не пишут за тебя. Это внутренняя память: не отправляй выжимку "
+                         "и отчёт о компакте в чат без просьбы. keep — сколько оставить; hi — "
+                         "порог напоминания; hard_hi — усиленное давление, не автосвёртка."),
                 "places": [{"place": k, "hot": v.get("count"), "keep": v.get("keep"),
                             "hi": v.get("hi"), "hard_hi": v.get("hard_hi"),
                             "hard": bool(v.get("hard")),
@@ -1659,10 +1665,20 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
             add("self_git_recent_commits", selfgit.recent(3))
     except Exception:
         pass
-    return "".join(
-        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-        for record in records
-    )
+    def render(deployment_notice: str = "") -> str:
+        rows = records + ([{"label": "compaction_deployment_change",
+                            "content": deployment_notice}] if deployment_notice else [])
+        return "".join(
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for record in rows
+        )
+
+    if include_deployment_notice:
+        import compaction_migration
+        # A serialization error leaves the receipt pending. The ledger acknowledges
+        # only construction, never inference/transport or inclusion after tier pruning.
+        return compaction_migration.context_once(BASE, render=render)
+    return render()
 
 
 # --------------------------------------------------------------------------- #
@@ -1948,28 +1964,26 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     return "Записала в дневник."
 
 
+# Normal and resumed tool execution both persist a 4000-character inline view.
+# Keep the complete read response (metadata included) inside that view so the
+# continuation never skips bytes that were externalized out of the model's sight.
+_MEMORY_COMPACT_READ_INLINE_CHARS = 4000
+
+
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
-                        tier: int | None = None, since: str = "", limit: int = 0) -> str:
-    """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop / fold."""
+                        tier: int | None = None, since: str = "", limit: int = 0, selection: str = "",
+                        start_char: int = 0, expected_sha256: str = "") -> str:
+    """Acting-author prepare/fold; inspect, rewrite or stop episodic recap work."""
     op = str(action or "").strip().casefold()
     where = str(place or "").strip() or str(_active_chat() or "")
-    if op == "fold":
-        # 25.09, слово Егора: свёртка на мягком пороге ПРЕДЛАГАЕТСЯ (STATE: fold_offers), а
-        # делает её она — этой рукой. Принудительно, как на жёстком пороге.
+    if op != "read" and (start_char != 0 or expected_sha256):
+        return json.dumps({"ok": False, "reason": "paging_only_for_read"})
+    if op in {"prepare", "fold"}:
         if not where:
-            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
-        fold_fn = getattr(memory_life, "fold_now", None)
-        out = fold_fn(where) if fold_fn else memory_life.compact_if_due(where, force=True)
-        if out.get("folded"):
-            tiers = ", ".join(str(x) for x in (out.get("tiers") or [])) or "нет"
-            return (f"Свернула {out['folded']} событий у {where} → {out.get('compact_id')}; "
-                    f"горячих осталось {out.get('hot')}; верхние ярусы: {tiers}.")
-        if str(out.get("reason") or "") == "state_changed":
-            # 26.09 (ревью W1 S7): это не «нечего», а окно, сдвинувшееся под рукой.
-            return (f"Не свернулось у {where}: окно сдвинулось, пока шла свёртка "
-                    f"(горячих {out.get('hot')}). Предложение осталось — повтори руку.")
-        return (f"Сворачивать нечего у {where}: {out.get('reason') or 'окно в норме'} "
-                f"(горячих {out.get('hot')}).")
+            return "Не вижу места: укажи place (chat_id)."
+        out = (memory_life.prepare_authored_fold(where, limit=int(limit or 50), compact_id=compact_id)
+               if op == "prepare" else memory_life.apply_authored_fold(where, selection, text))
+        return json.dumps(out, ensure_ascii=False)
     if op == "list":
         if not where:
             return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
@@ -1981,20 +1995,45 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             mark = " · обрубок" if r.get("degraded") else ""
             lines.append(f"- {r['id']} · tier {r['tier']} · {r['first_ts'][:16]} → {r['last_ts'][:16]} "
                          f"· {r['events']} соб. · {r['chars']} зн.{mark}\n  «{r['head']}»")
-        lines.append("read — одну целиком; rewrite — переписать суть; refold — перевыпустить пачкой.")
+        lines.append("read — одну; rewrite — твоя новая суть; prepare → fold — выбрать источники и свернуть самой.")
         return "\n".join(lines)
     if op == "read":
         if not compact_id:
             return "Для read нужен compact_id."
+        if type(start_char) is not int or start_char < 0:
+            return json.dumps({"ok": False, "reason": "invalid_start_char"})
+        expected = str(expected_sha256 or "").strip().lower()
+        if expected and not re.fullmatch(r"[0-9a-f]{64}", expected):
+            return json.dumps({"ok": False, "reason": "invalid_expected_sha256"})
+        if start_char and not expected:
+            return json.dumps({"ok": False, "reason": "expected_sha256_required",
+                               "instruction": "Continue with sha256 from the first page."})
         out = memory_life.read_compact(compact_id, where or None)
         if not out.get("ok"):
             return f"Свёртку {compact_id} не нашла ({out.get('reason')})."
         m = out["meta"]
         body = str(out.get("text") or "")
-        if len(body) > 12000:
-            body = body[:12000] + "\n…[обрезано]"
-        return (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n\n"
-                + body)
+        digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if expected and expected != digest:
+            return json.dumps({"ok": False, "reason": "version_conflict", "sha256": digest,
+                               "instruction": "Compact text changed; restart read at start_char=0."})
+        total = len(body)
+        if start_char > total:
+            return json.dumps({"ok": False, "reason": "start_char_out_of_range",
+                               "total_chars": total})
+        header = (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n")
+        end = min(total, start_char + _MEMORY_COMPACT_READ_INLINE_CHARS)
+        while True:
+            page = {"ok": True, "compact_id": m["id"], "sha256": digest,
+                    "start_char": start_char, "end_char": end, "total_chars": total,
+                    "next_start_char": end if end < total else None, "eof": end == total}
+            prefix = header + json.dumps(page, ensure_ascii=False) + "\n\n"
+            overflow = len(prefix) + end - start_char - _MEMORY_COMPACT_READ_INLINE_CHARS
+            if overflow <= 0:
+                return prefix + body[start_char:end]
+            end -= overflow
+            if end <= start_char:
+                return json.dumps({"ok": False, "reason": "read_metadata_too_large"})
     if op == "rewrite":
         if not compact_id or not str(text or "").strip():
             return "Для rewrite нужны compact_id и text — новая суть твоими словами."
@@ -2009,23 +2048,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
         return (f"Переписала {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
                 f"({out.get('history')}). Источники и границы те же.")
     if op == "refold":
-        scope = where if where and where.casefold() != "all" else "all"
-        if scope == "all" and not (place or "").strip():
-            return ("Для refold назови place: chat_id одного места или all — всю память "
-                    "(это много вызовов модели; можно сузить tier/since/limit).")
-        out = memory_life.refold_start(scope, tier=tier, since=since, limit=int(limit or 0))
-        if not out.get("ok"):
-            return (f"Перевыпуск уже идёт: {out.get('done')}/{out.get('planned')} сделано, "
-                    f"{out.get('failed')} не вышло — status/stop.")
-        if not out.get("planned"):
-            return "Перевыпускать нечего: под условия не попала ни одна свёртка."
-        try:
-            tool_journal(f"[память] запустила перевыпуск свёрток своим голосом: {out['planned']} шт., "
-                         f"место {scope}, tier {tier or 'все'}, since {since or '—'}", salience=2)
-        except Exception:
-            log.debug("журнал о перевыпуске не записался", exc_info=True)
-        return (f"Запустила перевыпуск: {out['planned']} свёрток ({out.get('first')} … {out.get('last')}), "
-                f"в фоне, с паузами. status — ход, stop — остановить.")
+        return "Фоновое сочинение выключено. prepare → прочитай источники → fold(selection,text); rewrite — твоя новая суть."
     if op == "status":
         st = memory_life.refold_status()
         if not st.get("planned"):
@@ -2223,16 +2246,19 @@ def _summary_budget(chat_id: str | int) -> int:
     return 7_000
 
 
+def _summary_context_budget(chat_id: str | int) -> int:
+    """Effective ROOM recap cap, shared by ordinary reads and frozen epochs."""
+    budget = _summary_budget(chat_id)
+    if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
+        budget = min(budget, SUMMARY_FRAME_CHARS)
+    return budget
+
+
 def read_summary(chat_id: str | int) -> str:
     """PASS 19 frontier; плоская сводка — только fallback холодной миграции."""
     try:
         modern = memory_life.has_life_memory(chat_id)
-        budget = _summary_budget(chat_id)
-        if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
-            # 25.09: потолок кадра применяется здесь, ЦЕЛЫМИ блоками, — срез хвоста в
-            # сборке тиров резал по знакам и первым терял верхний ярус.
-            budget = min(budget, SUMMARY_FRAME_CHARS)
-        current = memory_life.context_summary(chat_id, max_chars=budget)
+        current = memory_life.context_summary(chat_id, max_chars=_summary_context_budget(chat_id))
         if current or modern:
             return current
     except Exception:
@@ -4421,30 +4447,24 @@ def tool_connections(name: str, depth: int = 1, to: str = "") -> str:
 # --- PASS 8.5: мастерская (workshop.py) — обёртки с автокоммитом её правок дома --- #
 
 def tool_fs_write(path: str, content: str, proposal_id: str = "",
-                  overwrite: bool = False, force: bool = False,
-                  expected_sha256: str | None = None) -> str:
+                  overwrite: bool = False, force: bool = False) -> str:
     denied = stewardship.check(path=path, op="write")
     if denied:
         return denied
     pre_dirt = _pre_shell_dirt()  # чужая грязь не приписывается ей (как у shell)
-    outcome = workshop.fs_write_result(path, content, proposal_id, overwrite=overwrite,
-                                       force=force, expected_sha256=expected_sha256)
-    if outcome["status"] == "confirmed":
-        _autocommit_self_edit(pre_dirt)  # только подтверждённая правка дома
-    return outcome["message"] + "\n" + json.dumps(outcome, ensure_ascii=False, sort_keys=True)
+    out = workshop.fs_write(path, content, proposal_id, overwrite=overwrite, force=force)
+    _autocommit_self_edit(pre_dirt)  # правки soul/memory коммитятся как у shell; workspace — свой git
+    return out
 
 
-def tool_fs_edit(path: str, old: str, new: str, proposal_id: str = "",
-                 expected_sha256: str | None = None) -> str:
+def tool_fs_edit(path: str, old: str, new: str, proposal_id: str = "") -> str:
     denied = stewardship.check(path=path, op="edit")
     if denied:
         return denied
     pre_dirt = _pre_shell_dirt()
-    outcome = workshop.fs_edit_result(path, old, new, proposal_id,
-                                      expected_sha256=expected_sha256)
-    if outcome["status"] == "confirmed":
-        _autocommit_self_edit(pre_dirt)
-    return outcome["message"] + "\n" + json.dumps(outcome, ensure_ascii=False, sort_keys=True)
+    out = workshop.fs_edit(path, old, new, proposal_id)
+    _autocommit_self_edit(pre_dirt)
+    return out
 
 
 # --- PASS 23: Forge — задача/место/процессы/субагенты как один coding runtime --- #
@@ -4464,8 +4484,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         title: str = "", review: str = "", checked: str = "",
                         submit: bool = True, reviewer: str = "",
                         success_criteria: list[str] | None = None,
-                        verify_commands: list[str] | None = None,
-                        max_active_workers: int = 8) -> str:
+                        verify_commands: list[str] | None = None) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4476,14 +4495,12 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         # хинты копятся в её истории и подталкивают. Тул в её руках, рамки
         # окна/события приглашают — а делает пусть так, как хочет.
         if str(scope or "").strip().lower() == "host":
-            out = forge.start_host(goal, target, priority=priority, origin_chat=origin,
-                                   max_active_workers=max_active_workers)
+            out = forge.start_host(goal, target, priority=priority, origin_chat=origin)
             if out.startswith("coding-задача hcode-"):
                 tool_journal(f"[serverd] host-задача (root): {goal[:180]}", salience=2)
             return out
         if str(scope or "").strip().lower() == "windows":
-            out = forge.start_windows(goal, target, priority=priority, origin_chat=origin,
-                                      max_active_workers=max_active_workers)
+            out = forge.start_windows(goal, target, priority=priority, origin_chat=origin)
             if out.startswith("coding-задача wcode-"):
                 tool_journal(f"[windows-body] Windows-задача: {goal[:180]}", salience=2)
                 # PASS 30 Этап 3: мягкая депрекация — предупреждение ПОСЛЕ канонической
@@ -4499,8 +4516,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
                           origin_chat=origin,
-                          success_criteria=success_criteria, verify_commands=verify_commands,
-                          max_active_workers=max_active_workers)
+                          success_criteria=success_criteria, verify_commands=verify_commands)
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыла coding-задачу: {goal[:180]}", salience=2)
         return out
@@ -5167,9 +5183,22 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
 
 def tool_coding_inspect(task_id: str, action: str = "status", path: str = "",
                         query: str = "", glob: str = "**/*", start: int = 1,
-                        end: int = 0) -> str:
-    return forge.inspect(task_id, action=action, path=path, query=query, glob=glob,
-                         start=start, end=end)
+                        end: int = 0, start_char: int = 0,
+                        expected_sha256: str = "") -> str:
+    kwargs = dict(action=action, path=path, query=query, glob=glob,
+                  start=start, end=end)
+    # Older Forge deployments do not implement the paging extension. Keep their
+    # ordinary status/read calls usable, but never silently ignore a requested
+    # continuation or revision guard (nor retry an internal TypeError).
+    if start_char or expected_sha256:
+        parameters = inspect.signature(forge.inspect).parameters
+        if not ({"start_char", "expected_sha256"} <= parameters.keys()
+                or any(p.kind == inspect.Parameter.VAR_KEYWORD
+                       for p in parameters.values())):
+            return ("Forge backend does not support paged reads: start_char/expected_sha256 "
+                    "require the paging backend prerequisite. No read was performed.")
+        kwargs.update(start_char=start_char, expected_sha256=expected_sha256)
+    return forge.inspect(task_id, **kwargs)
 
 
 def tool_coding_edit(task_id: str, action: str, path: str = "", content: str = "",
@@ -5192,11 +5221,9 @@ def tool_coding_process(task_id: str, action: str, process_id: str = "",
 
 def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                       role: str = "worker", max_iters: int = 0, tail: int = 10000,
-                      model: str = "", result_sha256: str = "",
-                      disposition: str = "") -> str:
+                      model: str = "") -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
-                       model=model, max_iters=max_iters, tail=tail,
-                       result_sha256=result_sha256, disposition=disposition)
+                       model=model, max_iters=max_iters, tail=tail)
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -7589,32 +7616,31 @@ WORKSHOP_TOOLS = [
      "description": "Project status: git status + disk size vs quota.",
      "input_schema": _obj({"name": {"type": "string"}}, ["name"])},
     {"name": "fs_read",
-     "description": ("Paged numbered text read in your home; start/end are 1-based. "
-                     "The footer carries the whole raw-file sha256 for expected_sha256 edits "
-                     "and labels text decoded with replacement as lossy. "
-                     "Images (PNG/JPEG/WebP/GIF, ≤8MB) attach as pixels to the next step."),
+     "description": ("Read a file with line numbers (paged). Reads anywhere in your home except "
+                     "including .env/session/llm.json. start/end — 1-based line range. An IMAGE "
+                     "file (PNG/JPEG/WebP/GIF, ≤8MB) is attached as real pixels to your next "
+                     "step instead of text — your direct eyes on frames, stickers and photos."),
      "input_schema": _obj({"path": {"type": "string"}, "start": {"type": "integer"},
                            "end": {"type": "integer"}}, ["path"])},
     {"name": "fs_write",
-     "description": ("Create a file; existing requires overwrite=true, shrink below 70% "
-                     "requires force=true. Optional expected_sha256 guards its preimage. "
-                     "Returns confirmed/refused/in_doubt plus readback SHA. Write zones: "
-                     "workspace/, soul/, memory/; core needs proposal_id."),
+     "description": ("Create a file. An EXISTING file is refused unless overwrite=true, and a "
+                     "rewrite shrinking it below 70% is refused unless force=true (accidental "
+                     "truncation guard). Prefer fs_edit for changes. Write zones: workspace/, "
+                     "soul/, memory/. Core code files need proposal_id (worktree of that proposal)."),
      "input_schema": _obj({"path": {"type": "string"}, "content": {"type": "string"},
                            "proposal_id": {"type": "string"},
-                           "expected_sha256": {"type": "string"},
                            "overwrite": {"type": "boolean",
                                          "description": "rewrite an existing file wholesale"},
                            "force": {"type": "boolean",
                                      "description": "confirm an intentional big shrink"}},
                           ["path", "content"])},
     {"name": "fs_edit",
-     "description": ("Replace exactly one `old` with `new`; 0 or many refuse with hints. "
-                     "Optional expected_sha256 guards the preimage. Result includes status "
-                     "and readback SHA; core files need proposal_id."),
+     "description": ("Precise edit: replaces `old` with `new` when `old` occurs EXACTLY once "
+                     "(0 matches → refusal; many → refusal naming the line numbers, widen `old`). "
+                     "This is your main editing hand — never heredoc code through shell. "
+                     "Core files need proposal_id (worktree)."),
      "input_schema": _obj({"path": {"type": "string"}, "old": {"type": "string"},
-                           "new": {"type": "string"}, "proposal_id": {"type": "string"},
-                           "expected_sha256": {"type": "string"}},
+                           "new": {"type": "string"}, "proposal_id": {"type": "string"}},
                           ["path", "old", "new"])},
     {"name": "code_outline",
      "description": ("Skeleton of ONE python file: classes/functions with line numbers. Cheap "
@@ -7675,9 +7701,11 @@ WORKSHOP_TOOLS = [
 FORGE_TOOLS = [
     {"name": "coding_session",
      "description": (
-         "Durable coding task: start binds goal/root (normally isolated Git worktree); "
-         "status/list survive restarts. finish reviews evidence and may submit; abandon "
-         "closes without integrating and needs a reason in review."),
+         "Control a durable coding task. start binds a goal to a directory, normally an "
+         "isolated git worktree (target=self or a visible directory). status/list survive "
+         "restarts; finish assembles evidence, runs the reviewer gate and for self-code "
+         "submits the proposal after own diff review. abandon closes WITHOUT integrating; "
+         "needs `review` as the reason."),
      "input_schema": _obj({
          "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon"]},
          "task_id": {"type": "string"}, "goal": {"type": "string"},
@@ -7686,7 +7714,6 @@ FORGE_TOOLS = [
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
          "success_criteria": {"type": "array", "items": {"type": "string"}},
          "verify_commands": {"type": "array", "items": {"type": "string"}},
-         "max_active_workers": {"type": "integer", "description": "Concurrent Forge agents across the whole task tree (default 8); does not limit useful nesting over time."},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
                    "description": "self = container repo; host = server root via praxis-serverd; windows = DEPRECATED (use computer.* directly); all in the same Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
@@ -7696,8 +7723,11 @@ FORGE_TOOLS = [
      }, ["action"])} ,
     {"name": "coding_inspect",
      "description": (
-         "Task-bound read map: symbols/references/impact/checks, numbered lines+hash, "
-         "diff/history. watch/unwatch observes another repo's HEAD and reports changes."),
+         "Task-bound eyes: orientation/model map the place; symbols/references/diagnostics/"
+         "impact/checks give code and test facts; observations — Windows evidence map; read — "
+         "numbered lines + sha256; diff/history — exact evidence. Read state, don't guess. "
+         "watching/watch/unwatch — наблюдение за ЧУЖИМ репозиторием (адрес в query): поставить/"
+         "снимать; спрашивает только HEAD, сдвиг приходит фактом в пробуждение."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
@@ -7706,6 +7736,10 @@ FORGE_TOOLS = [
                                                       "diff", "history", "watching", "watch", "unwatch"]},
          "path": {"type": "string"}, "query": {"type": "string"},
          "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
+         "start_char": {"type": "integer", "minimum": 0,
+                        "description": "Read continuation character cursor from the preceding page; Unicode characters, not bytes."},
+         "expected_sha256": {"type": "string",
+                             "description": "Pin continuation to the file hash returned by the first read; changed bytes return conflict."},
      }, ["task_id", "action"])} ,
     {"name": "coding_edit",
      "description": (
@@ -7729,8 +7763,10 @@ FORGE_TOOLS = [
                            "cwd": {"type": "string"}, "timeout": {"type": "integer"}},
                           ["task_id", "command"])} ,
     {"name": "coding_process",
-     "description": ("Long-running process: start returns immediately, keeps full logs and "
-                     "survives the turn; poll/stop/list later. timeout=0 is unbounded."),
+     "description": (
+         "Long-running process supervisor: start returns immediately, preserves the full log and "
+         "survives the Telegram turn; poll/stop/list later. Use for dev servers, watchers, long tests "
+         "and experiments. timeout=0 is unbounded."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["start", "poll", "stop", "list"]},
@@ -7740,16 +7776,14 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "coding_agent",
      "description": (
-        "Fresh-context workers of one Praxis: spawn scout/worker/reviewer, poll/list "
-         "durable results, stop agent descendants (not detached process/verify jobs). "
-         "Workers may delegate. disposition binds "
-         "an exact result SHA without rewriting it."),
+        "Create independent fresh-context coding subprocesses. spawn returns immediately: "
+         "launch several scouts/workers/reviewers in one turn; poll/list gathers results. "
+         "worker edits and tests the shared isolated task tree, scout maps, reviewer attacks the diff. "
+         "Workers themselves can delegate further specialists."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
-         "action": {"type": "string", "enum": ["spawn", "poll", "stop", "list", "disposition"]},
+         "action": {"type": "string", "enum": ["spawn", "poll", "stop", "list"]},
          "agent_id": {"type": "string"}, "brief": {"type": "string"},
-         "result_sha256": {"type": "string"},
-         "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
          "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
          "model": {"type": "string", "description": "Optional per-agent model from the live/configured catalogue; omitted keeps the voice-role default."},
          "max_iters": {"type": "integer"}, "tail": {"type": "integer"},
@@ -7772,9 +7806,9 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "coding_swarm",
      "description": (
-         "Forge DAG: plan JSON nodes [{id,role,brief,deps,owns}]; start/tick launches "
-         "ready workers; status/compare show results, signal/mailbox exchange findings. "
-         "File claims are advisory."),
+         "PASS 23.1 swarm coordinator. plan accepts JSON nodes [{id,role,brief,deps,owns}], start/tick "
+         "launches ready workers up to max_parallel, status shows the DAG, signal/mailbox carry findings/"
+         "contracts/blockers, compare assembles worker results. File ownership is advisory, never a veto."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["plan", "start", "tick", "status", "signal",
@@ -7890,11 +7924,9 @@ COMPUTER_TOOL = {
         "hwnd": {"type": "string", "description": "hex native handle returned by action=windows"},
         "events": {"type": "array", "description": (
             "ordered native input events: text; hotkey(keys); key(key,action); mouse(x,y,relative); "
-            "click(button,x,y,count); wheel(delta,horizontal,x,y); "
-            "mouse_down/mouse_up(button,x,y); drag(button,x,y,to_x,to_y,steps,hold_ms,step_delay_ms,settle_ms)"
+            "click(button,x,y,count); wheel(delta,horizontal,x,y)"
         ), "items": _obj({
-            "type": {"type": "string", "enum": ["text", "hotkey", "key", "mouse", "click", "wheel",
-                                                 "mouse_down", "mouse_up", "drag"]},
+            "type": {"type": "string", "enum": ["text", "hotkey", "key", "mouse", "click", "wheel"]},
             "text": {"type": "string"}, "keys": {"type": "array", "items": {
                 "anyOf": [{"type": "string"}, {"type": "integer"}]}},
             "key": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
@@ -7903,10 +7935,6 @@ COMPUTER_TOOL = {
             "count": {"type": "integer"}, "delta": {"type": "integer"},
             "horizontal": {"type": "boolean"}, "relative": {"type": "boolean"},
             "x": {"type": "integer"}, "y": {"type": "integer"},
-            "to_x": {"type": "integer"}, "to_y": {"type": "integer"},
-            "steps": {"type": "integer", "description": "drag: interpolation steps"},
-            "hold_ms": {"type": "integer"}, "step_delay_ms": {"type": "integer"},
-            "settle_ms": {"type": "integer"},
         }, ["type"])},
         "text": {"type": "string", "description": "text for clipboard_write or type_text"},
         "keys": {"type": "array", "items": {"type": "string"},
@@ -7995,30 +8023,29 @@ MANAGE_NOTES_TOOL = {
 MEMORY_COMPACT_TOOL = {
     "name": "memory_compact",
     "description": (
-        "Твои свёртки памяти — твоё слово, не хроникёра. list показывает свёртки места "
-        "(ярус, обхват, первые слова сути), read — одну целиком, rewrite переписывает суть "
-        "свёртки твоими словами на месте (тот же id и те же источники — разрешение принимает "
-        "без спора, прежний текст уходит в историю), refold перевыпускает свёртки твоим голосом "
-        "пачкой в фоне (place=all — всю память; tier/since/limit сужают; расписки в дневник), "
-        "status/stop — ход перевыпуска; fold сворачивает горячее окно места сейчас (по "
-        "предложению из STATE fold_offers или по своей воле; на мягком пороге свёртка сама не "
-        "запускается — только по этой руке или на жёстком пороге). Свёртка — единственное, что "
-        "ты будешь помнить о тех сообщениях: пиши её так, как хочешь помнить."
+        "Авторская свёртка эпизодической памяти, не очистка текущей истории тулов. "
+        "prepare возвращает точные источники и selection: прочитай их целиком и напиши свою "
+        "выжимку в этом ходе. fold(selection,text) сохраняет только твои слова против этих "
+        "источников. При state_changed сохрани текст и перечитай источники. list/read — "
+        "существующие свёртки. read возвращает полную страницу и next_start_char; продолжай "
+        "с этим start_char и expected_sha256=sha256 первой страницы до eof=true. Курсор — "
+        "символы Unicode, хеш — полный UTF-8 текст. При version_conflict начни чтение заново. "
+        "rewrite — новая суть при тех же источниках с сохранением старой. "
+        "Не вызывай вспомогательную модель, не выдавай текст выжимки как сообщение людям и "
+        "не отчитывайся о компакте в чат без просьбы. Порог напоминает, но сам ничего не пишет."
     ),
     "input_schema": _obj({
-        "action": {"type": "string",
-                   "enum": ["list", "read", "rewrite", "refold", "status", "stop", "fold"]},
-        "place": {"type": "string",
-                  "description": "chat_id/место; пусто = текущий чат; для refold можно all"},
-        "compact_id": {"type": "string", "description": "id свёртки (cmp-…) для read/rewrite"},
-        "text": {"type": "string",
-                 "description": "новая суть свёртки для rewrite — от первого лица, твоими словами"},
-        "tier": {"type": "integer",
-                 "description": "ярус свёрток: 1 — над сообщениями, выше — над свёртками"},
-        "since": {"type": "string",
-                  "description": "ISO-дата: только свёртки, чей конец не раньше неё"},
-        "limit": {"type": "integer",
-                  "description": "сколько показать (list) или перевыпустить (refold)"},
+        "action": {"type": "string", "enum": ["prepare", "fold", "list", "read", "rewrite", "refold", "status", "stop"]},
+        "place": {"type": "string", "description": "chat_id/место; пусто = текущий чат"},
+        "compact_id": {"type": "string", "description": "id для read/rewrite или адресного prepare"},
+        "selection": {"type": "string", "description": "Точный selection из prepare для fold"},
+        "text": {"type": "string", "description": "Твои собственные слова для fold/rewrite"},
+        "tier": {"type": "integer"}, "since": {"type": "string"},
+        "limit": {"type": "integer", "description": "Число источников prepare или строк list"},
+        "start_char": {"type": "integer", "minimum": 0,
+                       "description": "Только read: курсор next_start_char предыдущей страницы, в символах Unicode; первая страница 0"},
+        "expected_sha256": {"type": "string",
+                            "description": "Только read: sha256 полного UTF-8 текста из первой страницы; обязателен при start_char > 0"},
     }, ["action"]),
 }
 
@@ -9710,10 +9737,8 @@ def _scheduled_target_moderation_block(ctx: "ChannelContext") -> str:
         return ""
     try:
         import telegram_moderation
-        peer_id = telegram_moderation.root_peer_id()
-        if peer_id is None:
-            raise RuntimeError("moderation room identity unavailable")
-        moderation = telegram_moderation.history_for_sender(peer_id, int(target))
+        moderation = telegram_moderation.history_for_sender(
+            telegram_moderation.TARGET_PEER_ID, int(target))
         moderation_state: object = moderation
     except Exception as exc:
         moderation_state = {"unavailable": type(exc).__name__}
@@ -10359,6 +10384,8 @@ def _build_prompt_parts(
     is_dm: bool = True,
     scope: str | None = None,
     ctx: "ChannelContext | None" = None,
+    *,
+    include_deployment_notice: bool = False,
 ) -> tuple[str, str, str]:
     """Return cacheable persona, typed system context and full lower-role evidence.
 
@@ -10368,6 +10395,9 @@ def _build_prompt_parts(
     every pass; raw neighbouring chats remain opt-in tools, and one outbound advisor prevents
     personal/cross-chat disclosure to the wrong audience.
     ctx (ChannelContext) — единый источник правды; старые скаляры оставлены для совместимости.
+    Only intended model-input construction opts into the deployment notice. Epoch
+    prefreeze and system-only callers discard live evidence and must leave it pending.
+    This acknowledges construction, not inference, transport or survival of pruning.
     """
     if ctx is None:
         ctx = ChannelContext.from_legacy(chat_id, is_dm=is_dm, owner=owner, known=known, scope=scope)
@@ -10711,6 +10741,7 @@ def _build_prompt_parts(
         state_evidence = build_state_evidence_block(
             hide_identity_load=ctx.hide_identity_load,
             self_only=not owner_context,
+            include_deployment_notice=include_deployment_notice,
         )
     if state_evidence:
         tiers.append(("Mutable operational continuity",
@@ -10730,7 +10761,9 @@ def _build_prompt_parts(
     # остаётся, тело не печатается, подпись называет причину. Список закрыт намеренно, и
     # пустота печатается только там, где решение о тире вообще принималось.
     with pre_model_timing.span("old_context.summary"):
-        summary = read_summary(chat_id) if chat_id is not None else ""
+        selected_epoch = frame_epoch.bound_tape(chat_id) if room_epoch else None
+        summary = (selected_epoch["summary"] if selected_epoch is not None
+                   else read_summary(chat_id) if chat_id is not None else "")
     if chat_id is not None:
         # ⚑ ЕЁ ПЯТЫЙ ПУНКТ 09.08: «compact-recap не должен постоянно ехать всем архивом.
         # Живая лента остаётся каноном текущего разговора; старые recap доступны
@@ -10740,7 +10773,8 @@ def _build_prompt_parts(
         # понятный указатель на продолжение истории». Поэтому сводка не выбрасывается —
         # она ОБРЕЗАЕТСЯ с головы (свежее важнее давнего) и обрыв называется вслух,
         # вместе с рукой, которой достаётся остальное.
-        if summary and dossier_contract_enabled() and len(summary) > SUMMARY_FRAME_CHARS:
+        if (selected_epoch is None and summary and dossier_contract_enabled()
+                and len(summary) > SUMMARY_FRAME_CHARS):
             kept = summary[-SUMMARY_FRAME_CHARS:]
             summary = (f"[сводка обрезана: показано {len(kept)} знаков из {len(summary)}, "
                        f"давнее осталось за кадром и достаётся рукой `recall` или "
@@ -10782,13 +10816,6 @@ def _build_prompt_parts(
         index_map = _memory_navigation_hint()
     if index_map:
         tiers.append(("Карта памяти — ВНУТРЕННЯЯ, не разрешение на раскрытие", index_map))
-    if owner_audience:
-        # Skill INDEX is not memory/INDEX.md. Give the owner-facing model a
-        # source-labelled map of actual files, without making authored skill
-        # bodies into system instructions or leaking names to another audience.
-        import capabilities
-        tiers.append(("Навыки — файловый указатель, не тела и не публичный ответ",
-                      capabilities.skill_navigation(SKILLS_DIR / "INDEX.md")))
     if scope in ("owner", "family"):
         # 10.10: общий «домашний» слой — быт/планы/нити семьи; ведёт она сама (home_note)
         home = _read(HOME_MD).strip()
@@ -10954,7 +10981,8 @@ def _build_prompt_parts(
         # undroppable exception (the positive-budget counter still stays at or below its limit).
         charge = (0 if state_moved and owner_context and title == _STATE_NOW_TIER
                   else len(block))
-        if budget > 0 and used + charge > budget:
+        if (budget > 0 and used + charge > budget
+                and not (selected_epoch is not None and title.startswith("Ранее в этом диалоге"))):
             dropped.append(title)
             frame_trace.absent("evidence.tier", "evidence", tier_kind, "context_budget",
                                label=title, chars=len(block), cause=cause)
@@ -11036,7 +11064,7 @@ def build_system_parts(
     """System prompt parts only; mutable memory is returned by ``_build_prompt_parts``."""
     persona, dynamic, _evidence = _build_prompt_parts(
         speaker, chat_id, owner=owner, known=known, query=query,
-        is_dm=is_dm, scope=scope, ctx=ctx,
+        is_dm=is_dm, scope=scope, ctx=ctx, include_deployment_notice=False,
     )
     return persona, dynamic
 
@@ -11979,11 +12007,6 @@ _READ_ONLY_TOOLS = frozenset({
 
 def _tool_has_side_effect(name: str, call_input: dict) -> bool:
     """Conservative recovery classification; reads never become uncertain mutations."""
-    if name == "coding_inspect":
-        # watch/unwatch enter the upstream observation ledger even though the
-        # same tool's read/diff/symbols actions are passive. An unknown result
-        # must not be replayed as though no registration had occurred.
-        return str(call_input.get("action") or "").lower() in {"watch", "unwatch"}
     if name == "computer":
         # PASS 30 Этап 3: read/hash — чтения; write/replace НАМЕРЕННО отсутствуют
         # (side effect без idempotency-ключа = консервативный recovery-маршрут).
@@ -12425,6 +12448,9 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         if keat_receipt.get("served") and keat_live.economy_measurement() is not None:
             frame_meta["keat_economy"] = keat_live.economy_measurement()
     pre_model_timing.mark(phase_timer, "canary")
+    continuation_receipt = frame_continuation.receipt()
+    if continuation_receipt is not None:
+        frame_meta = dict(frame_meta or {}, frame_continuation=continuation_receipt)
     rollback_input = ({"frame_v6_live_system": _scrub_critical_value(live_system, prior_secrets)}
                       if served is not None and served["status"] == "served" else {})
     if provider_messages is not messages:
@@ -12517,6 +12543,8 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         # ту же реплику заново — четыре копии за две минуты. Под опущенным рычагом
         # spoken() пуст всегда, и поведение байт-в-байт прежнее.
         response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
+        frame_continuation.observe(system=system, messages=provider_messages,
+                                   tools=tools, critical=bool(prior_secrets))
     except Exception as exc:
         if current is not None:
             try:
@@ -17492,12 +17520,16 @@ def _voice_impl(
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
     chat_id, is_dm, is_owner, known, scope = ctx.chat_id, ctx.is_dm, ctx.owner, ctx.known, ctx.scope
+    # A selected epoch is already a complete frozen conversation. Legacy turn
+    # windows must not slide it again after the runner's source selection.
+    epoch_history = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
+    selected_history = history if epoch_history else history[-HISTORY_TURNS:]
     # Issue only the delivered original; history has opaque references, not lookup.
     capture_state = _KEAT_CAPTURE_STATE.get()
     if capture_state is _KEAT_CAPTURE_UNSET and _KEAT_ORIGINAL_INGRESS.get():
         try:
             capture_state = keat_live.capture_turn(
-                ctx=ctx, user_msg=user_msg, history=history[-HISTORY_TURNS:],
+                ctx=ctx, user_msg=user_msg, history=selected_history,
             )
         except Exception:
             pass
@@ -17505,16 +17537,16 @@ def _voice_impl(
         try:
             sidecar = _KEAT_PROJECTION.get()
             projection = dict(
-                history=sidecar['history'][-HISTORY_TURNS:],
+                history=(sidecar['history'] if epoch_history else sidecar['history'][-HISTORY_TURNS:]),
                 current=sidecar['current'],
             )
             if 'projection_history' in sidecar:
                 projection.update(
-                    projection_history=sidecar['projection_history'][-HISTORY_TURNS:],
+                    projection_history=(sidecar['projection_history'] if epoch_history else sidecar['projection_history'][-HISTORY_TURNS:]),
                     projection_current=sidecar['projection_current'],
                 )
             capture_state = keat_live.adopt_projection(
-                ctx, history[-HISTORY_TURNS:], user_msg, projection)
+                ctx, selected_history, user_msg, projection)
         except Exception:
             pass
     if capture_state is _KEAT_CAPTURE_UNSET: capture_state = None
@@ -17532,7 +17564,7 @@ def _voice_impl(
     recall_query = str(getattr(ctx, "origin_text", "") or "").strip() or query_text
     with keat_economy.collect() as economy_sources:
         persona, dynamic, memory_evidence = _build_prompt_parts(
-            speaker, query=recall_query, ctx=ctx,
+            speaker, query=recall_query, ctx=ctx, include_deployment_notice=True,
         )
     pre_model_timing.mark(preparation_timer, "old_context")
     evidence_parts = [memory_evidence.strip()] if memory_evidence.strip() else []
@@ -17563,8 +17595,8 @@ def _voice_impl(
     # сообщений, граница выборки, источник и ЯВНАЯ пометка об обрезке. Считается ровно
     # здесь, где обе величины ещё видны: `history` — всё, что дал источник, срез — то, что
     # вправду уедет. Число тиров на этот вопрос не отвечает и отвечать не имеет права.
-    frame_layout.stash(tape_delivered=len(history[-HISTORY_TURNS:]),
-                       tape_available=len(history), tape_limit=HISTORY_TURNS,
+    frame_layout.stash(tape_delivered=len(selected_history),
+                       tape_available=len(history), tape_limit=(0 if epoch_history else HISTORY_TURNS),
                        tape_source=("ролевая лента разговора" if history else ""))
     # Пятая зона кадра. Строится ЗДЕСЬ: только отсюда видно, есть ли у неё дом (конверт
     # evidence) и предложены ли руки — от второго зависит, вправе ли прибор сказать «последней».
@@ -17577,7 +17609,7 @@ def _voice_impl(
     # `memory_life`, кольцо ходов и расписки держат дословный текст без единого «>».
     role_history = [{key: value for key, value in row.items()
                      if key != "_keat_occurrence"}
-                    for row in history[-HISTORY_TURNS:]]
+                    for row in selected_history]
     # 15.09, эпоха комнаты (frame_epoch): замороженный документ E — ПЕРВЫМ сообщением, до
     # ленты; лента с якоря — ролями как раньше; живой конверт — последним. Нет эпохи — список
     # прежний байт-в-байт. Порядок и есть смысл: ничто, что меняется чаще, не стоит выше того,
@@ -17644,6 +17676,17 @@ def _voice_impl(
                 getattr(capture_state, 'provider_current', user_msg),
                 "\n\n".join(evidence_parts), situation),
         }]
+    continuation = None
+    if os.getenv("PRAXIS_FRAME_CONTINUATION") == "on":
+        continuation = frame_continuation.prepare(
+            ctx=ctx, selection=frame_epoch.bound_tape(ctx.chat_id) if epoch_history else None,
+            history=role_history, user_msg=user_msg, messages=messages, system=system,
+            tools=tools, kind=_current_run_kind(), capture_state=capture_state,
+            model_key=[llm.role_model("voice"), llm._config_stamp()],
+            prefix_messages=epoch_messages,
+        )
+    if continuation is not None:
+        messages = continuation.messages
     if legacy_current is None:
         binding = (keat_live.bind_turn(
             capture_state, messages=messages, candidate_messages=candidate_messages)
@@ -17657,7 +17700,8 @@ def _voice_impl(
          _bind_tool_catalog(ctx), \
          frame_measure.bind(system=system, ctx=ctx, live_sections=frame_trace.sections), \
          frame_serve.bind(system=system, ctx=ctx, dynamic=dynamic), \
-         keat_economy.bind(ctx, current_user, "\n\n".join(evidence_parts), economy_sources), binding:
+         keat_economy.bind(ctx, current_user, "\n\n".join(evidence_parts), economy_sources), \
+         frame_continuation.bind(continuation), binding:
         return _terminal_tool_loop(
             system=system, messages=messages, tools=tools,
             max_iters=max_iters, tool_trace=tool_trace,
@@ -18464,7 +18508,8 @@ _MODEL_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                   ctx: "ChannelContext",
-                  model_text: str | None = None) -> tuple[str, str | list[dict]]:
+                  model_text: str | None = None,
+                  unavailable_refs: list | None = None) -> tuple[str, str | list[dict]]:
     """Проверить вложения, расшифровать аудио и собрать канонический multimodal user content.
 
     Возвращает ДВА разных текста, и это намеренно:
@@ -18475,15 +18520,24 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
     показать его дважды. Расшифровка аудио при этом снимается ОДИН раз и приклеивается к
     обоим: платить за STT дважды нельзя, а терять расшифровку в расписке — тем более."""
     spool = _media_spool()
-    refs = tuple(media_refs or ())[-spool.max_turn_media:]
+    refs = tuple(media_refs or ())
+    selected_start = max(0, len(refs) - spool.max_turn_media)
     photos: list[dict] = []
     additions: list[str] = []
     audio_n = photo_n = 0
-    for ref in refs:
+    for index, ref in enumerate(refs):
         try:
             spool.validate_ref(ref, expected_scope=ctx.scope, expected_chat_id=ctx.chat_id)
-        except media.MediaError:
-            log.warning("отброшено чужое/испорченное медиа [%s]", ctx.chat_id, exc_info=True)
+        except media.MediaMissingError:
+            # Missing bytes are not evidence of what the attachment contained.
+            # Binding checks above must succeed even for this text-only fallback.
+            additions.append(
+                f"[Вложение #{index + 1} ({ref.kind}) недоступно: локальный файл "
+                "отсутствует; содержимое не просмотрено и не восстановлено.]")
+            if unavailable_refs is not None:
+                unavailable_refs.append(ref)
+            continue
+        if index < selected_start:
             continue
         if ref.kind == "photo":
             photo_n += 1
@@ -18507,10 +18561,12 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                 f"[Аудио #{audio_n}, расшифровка]: {transcript}"
                 if transcript else f"[Аудио #{audio_n}: речь не распознана]")
     def _with_additions(text: str) -> str:
-        base = (text or "").strip()
+        selected_epoch = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
+        base = (text or "") if selected_epoch else (text or "").strip()
         if not additions:
             return base
-        return (base + "\n\n" + "\n".join(additions)).strip() if base else "\n".join(additions)
+        combined = base + "\n\n" + "\n".join(additions) if base else "\n".join(additions)
+        return combined if selected_epoch else combined.strip()
 
     augmented = _with_additions(convo_text)
     for_model = augmented if model_text is None else _with_additions(model_text)
@@ -18900,14 +18956,17 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
         ctx = ChannelContext.from_legacy(chat_id, is_dm=is_dm, owner=is_owner, known=known, scope=scope)
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
+    selected_epoch = frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
     dialogue = [dict(item) for item in (history or [])
                 if isinstance(item, dict) and item.get("role") in ("user", "assistant")
-                and str(item.get("content") or "").strip()]
+                and (selected_epoch or str(item.get("content") or "").strip())]
     if dialogue and not str(current_text or "").strip():
         dialogue = []           # без «сейчас» роли собрать нечестно — идём старым путём
+    unavailable_inbound: list[media.MediaRef] = []
     grounded_text, user_content = _media_prompt(
         convo_text, tuple(media_refs or ()), ctx,
-        model_text=(current_text if dialogue else None))
+        model_text=(current_text if dialogue else None),
+        unavailable_refs=unavailable_inbound)
     grounding_images = tuple(
         block for block in user_content
         if isinstance(user_content, list) and isinstance(block, dict)
@@ -18941,8 +19000,17 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     # проставлялся, поэтому связать намерение с транспортом было нечем.
     turn["run_id"] = durable_id
     try:
+        if unavailable_inbound and durable_id:
+            _runs().append_event(
+                durable_id, "inbound_media_unavailable", reason="local_file_missing",
+                attachments=[{
+                    "kind": ref.kind, "message_id": ref.message_id,
+                    "sha256": ref.sha256, "size": ref.size,
+                } for ref in unavailable_inbound],
+            )
         archived_inbound = _archive_run_media(
-            durable_id, media_refs, prefix="inbound", strict=True)
+            durable_id, tuple(ref for ref in media_refs if ref not in unavailable_inbound),
+            prefix="inbound", strict=True)
     except Exception as exc:
         turn["held"] = "error"
         turns.record(turn)

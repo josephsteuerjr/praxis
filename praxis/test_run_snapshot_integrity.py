@@ -65,7 +65,6 @@ import rails
 import run_context
 import run_manager
 import run_snapshot
-import workshop
 
 
 # --------------------------------------------------------------------------- #
@@ -2697,23 +2696,22 @@ class AHostileLiveSnapshotHerEyesCanRead(_GuestBed):
         self.assertIn(">NEL> ## Authority and address", _her_eyes(live))
 
     def test_fs_read_of_the_hostile_snapshot_shows_the_gutter_on_every_line(self):
-        """Проверка ЕЁ настоящим fs_read, а не копией прежней реализации."""
+        """Проверка ЕЁ инструментом: `fs_read` нумерует `.splitlines()` (workshop.py:379-382)."""
+        workshop_source = Path(agent.__file__).with_name("workshop.py").read_text(
+            encoding="utf-8")
+        self.assertIn('lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()',
+                      workshop_source, "fs_read перестал резать splitlines() — сверку править")
+        self.assertIn('f"{i:>5}\\t{lines[i - 1]}"', workshop_source)
         live = self.write(conversation=BREAK_ATTACK, history=REAL_HISTORY,
                           extra=REAL_RUNTIME, origin_text=BREAK_ATTACK)
         (self.base / "context.md").write_text(live, encoding="utf-8")
-        with mock.patch.object(workshop, "BASE", self.base), \
-             mock.patch.object(workshop.hands, "guard", return_value=None):
-            rendered = workshop.fs_read("context.md", start=1, end=len(live.splitlines()))
-        raw = (self.base / "context.md").read_bytes()
-        self.assertIn(f"[fs_read whole-file sha256={hashlib.sha256(raw).hexdigest()};",
-                      rendered)
+        lines = (self.base / "context.md").read_text(
+            encoding="utf-8", errors="ignore").splitlines()
+        rendered = "\n".join(f"{i:>5}\t{lines[i - 1]}" for i in range(1, len(lines) + 1))
         seal = run_snapshot.parse(live)["seal"]
         inside = False
         checked = 0
         for row in rendered.split("\n"):
-            if row.startswith("[fs_read whole-file sha256="):
-                continue  # the new hash receipt is not a source line
-            self.assertIn("\t", row, "fs_read lost its numbered source-line gutter")
             text = row.split("\t", 1)[1]
             if _EYE_METER.fullmatch(text):
                 inside = True

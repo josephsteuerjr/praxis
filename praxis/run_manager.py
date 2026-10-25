@@ -566,7 +566,16 @@ class RunManager:
         cached = self._paths.get(run_id)
         if cached is not None and (cached / "manifest.json").is_file():
             return cached
-        hits = list(self.root.glob(f"*/{run_id}/manifest.json")) if self.root.exists() else []
+        # Only the month component is a wildcard. Path.glob in Python 3.12
+        # enumerates every run directory while resolving the literal next part:
+        # a cold lookup (including a retained-away run) becomes O(all runs).
+        # Probe the exact child in each bucket instead; still inspect every bucket
+        # so duplicate identifiers keep failing closed. Do not infer the month
+        # from the identifier: imported/custom ids need not encode created_at.
+        hits = [bucket / run_id / "manifest.json"
+                for bucket in self.root.iterdir()
+                if bucket.is_dir() and (bucket / run_id / "manifest.json").exists()
+                ] if self.root.exists() else []
         if not hits:
             raise RunNotFound(run_id)
         if len(hits) != 1:

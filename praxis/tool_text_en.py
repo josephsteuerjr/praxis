@@ -424,24 +424,23 @@ EN: dict[str, dict] = {
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
     "memory_compact": {
-        "d": ("Your memory compacts are your own words, not a chronicler's. list shows a "
-              "place's compacts (tier, span, first words of the recap), read shows one in "
-              "full, rewrite replaces a compact's recap with your words in place (same id "
-              "and sources — provenance accepts it as is, the old text goes to history), "
-              "refold re-issues compacts in your voice in batches in the background "
-              "(place=all — the whole memory; tier/since/limit narrow it; receipts to the "
-              "journal), status/stop — the refold job; fold compacts a place's hot window now "
-              "(on an offer from STATE fold_offers or of your own will; at the soft threshold "
-              "compaction no longer starts by itself — only by this hand or at the hard "
-              "threshold). A compact is all you will remember of those messages: write it "
-              "the way you want to remember."),
-        "p": {"action": "list | read | rewrite | refold | status | stop | fold",
-              "place": "chat_id/place; empty = current chat; refold accepts all",
-              "compact_id": "compact id (cmp-…) for read/rewrite",
-              "text": "the new recap for rewrite — first person, your words",
-              "tier": "compact tier: 1 over messages, higher over compacts",
-              "since": "ISO date: only compacts ending no earlier than it",
-              "limit": "how many to show (list) or re-issue (refold)"},
+        "d": ("Acting-author episodic memory, not current tool-history clearing. prepare returns exact "
+              "sources and selection; read every source and write your own recap in this turn. "
+              "fold(selection,text) saves your words against those sources. On state_changed retain "
+              "your text and reread. list/read inspect existing compacts. read returns a complete "
+              "page and next_start_char; continue with that start_char and expected_sha256=sha256 "
+              "from the first page until eof=true. Cursors count Unicode characters; the hash "
+              "covers the full UTF-8 text. On version_conflict restart at start_char=0. rewrite preserves their "
+              "sources and prior text. No helper model writes for you. Thresholds remind, never "
+              "auto-fold. Do not send the recap or a compaction report to chat unless asked."),
+        "p": {"action": "prepare | fold | list | read | rewrite | refold | status | stop",
+              "place": "chat_id/place; empty = current chat",
+              "compact_id": "compact id for read/rewrite or targeted prepare",
+              "selection": "exact selection returned by prepare, required for fold",
+              "text": "your own recap for fold/rewrite", "tier": "compact tier",
+              "since": "ISO date for list", "limit": "sources for prepare or rows for list",
+              "start_char": "read only: next_start_char of the preceding page in Unicode characters; first page 0",
+              "expected_sha256": "read only: sha256 of the full UTF-8 text from the first page; required when start_char > 0"},
     },
     "manage_loop": {
         "d": ("Voluntary marks of attention: a thread exists because you decided to come "
@@ -617,13 +616,11 @@ EN: dict[str, dict] = {
                       "start": "first line, 1-based", "end": "last line"}},
     "fs_write": {"p": {"path": "file path to create",
                        "content": "the full file content",
-                       "proposal_id": "write inside this proposal's working copy",
-                       "expected_sha256": "optional exact SHA-256 of existing bytes; mismatch refuses before writing"}},
+                       "proposal_id": "write inside this proposal's working copy"}},
     "fs_edit": {"p": {"path": "file to edit",
                       "old": "exact existing text, must occur exactly once",
                       "new": "replacement text",
-                      "proposal_id": "edit inside this proposal's working copy",
-                      "expected_sha256": "optional exact SHA-256 of existing bytes; mismatch refuses before editing"}},
+                      "proposal_id": "edit inside this proposal's working copy"}},
     "fs_search": {"p": {"pattern": "regular expression to search for",
                         "glob": "file mask, for example **/*.py",
                         "root": "folder to search under; narrows and speeds up the search"}},
@@ -667,7 +664,6 @@ EN: dict[str, dict] = {
               "task_id": "the task to act on",
               "goal": "what the task is for",
               "isolation": "auto | worktree | direct",
-              "max_active_workers": "start: concurrent agents across this task's whole worker tree (default 8)",
               "success_criteria": "start: readiness criteria (advisory)",
               "verify_commands": "start: check commands, not auto-run",
               "title": "finish: what the change does",
@@ -698,12 +694,10 @@ EN: dict[str, dict] = {
                              "timeout": "seconds; 0 means unbounded",
                              "tail": "how many trailing log lines to return"}},
     "coding_agent": {"p": {"task_id": "the coding task",
-                           "action": "spawn | poll | stop | list | disposition",
-                           "agent_id": "the worker to poll, stop or disposition",
+                           "action": "spawn | poll | stop | list",
+                           "agent_id": "the subprocess to poll or stop",
                            "brief": "what the subprocess must do",
                            "role": "scout | worker | reviewer",
-                           "result_sha256": "disposition: exact SHA-256 of the completed worker result",
-                           "disposition": "integrated | irrelevant | deferred; separate from the worker result",
                            "max_iters": "iteration ceiling for the subprocess",
                            "tail": "trailing output lines to return"}},
     "coding_checkpoint": {"p": {"task_id": "the coding task",
@@ -730,15 +724,21 @@ EN: dict[str, dict] = {
                            "lesson": "record: the lesson, in your own words",
                            "regression": "record: the check that keeps it from coming back"}},
     "coding_inspect": {
-        "d": ("Task-bound read map: symbols/references/impact/checks, numbered lines+hash, "
-              "diff/history. watch/unwatch observes another repo's HEAD and reports changes."),
+        "d": ("Task-bound eyes: orientation/model map the place; symbols/references/"
+              "diagnostics/impact/checks give code and test facts; observations — Windows "
+              "evidence map; read — numbered lines + sha256; diff/history — exact evidence. "
+              "Read state, don't guess. watching/watch/unwatch — watching SOMEONE ELSE'S "
+              "repository (address in query): set/remove; asks only HEAD, a shift arrives "
+              "as a fact in your wake."),
         "p": {"task_id": "the coding task",
               "action": "what to inspect",
               "path": "file or directory to look at",
               "query": "symbol, text, or repository address for watch",
               "glob": "file mask to narrow the search",
               "start": "first line, 1-based",
-              "end": "last line"},
+              "end": "last line",
+              "start_char": "Unicode character offset within start line; use next_char from the preceding page",
+              "expected_sha256": "file hash from the preceding page; changed bytes return a conflict"},
     },
     "host_ctl": {"p": {"verb": "systemctl | docker | pkg | file | net | reboot | confirm",
                        "action": "what to do with the chosen verb",
@@ -837,7 +837,7 @@ EN: dict[str, dict] = {
 BASE_SHA: dict[str, str] = {
     "add_alias": "1429a0d6",
     "admit": "443ccc94",
-    "coding_inspect": "d24b8fbb",
+    "coding_inspect": "97a39a27",
     "consolidate_context": "1724d641",
     "end_turn": "8fb868c8",
     "focus": "f066613b",
@@ -858,7 +858,7 @@ BASE_SHA: dict[str, str] = {
     "manage_identity": "ffe60eb9",
     "manage_loop": "e6a256b9",
     "manage_notes": "861b97e0",
-    "memory_compact": "9c114173",
+    "memory_compact": "7382ee55",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",

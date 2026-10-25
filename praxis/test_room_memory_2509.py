@@ -44,7 +44,7 @@ def _rows(n: int, *, gap_sec: int = 3600) -> list[dict]:
 
 class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
     def test_room_bounds_are_wider_than_the_dm_ones(self):
-        lo, hi, hard, cap = ml.hot_bounds("-100999999999999999")
+        lo, hi, hard, cap = ml.hot_bounds("-1001240718803")
         self.assertEqual((lo, hi, hard, cap),
                          (ml.GROUP_HOT_LO, ml.GROUP_HOT_HI, ml.GROUP_HOT_HARD_HI, ml.GROUP_HOT_TOKEN_CAP))
         self.assertGreater(lo, ml.HOT_LO)
@@ -81,11 +81,11 @@ class GroupHotWindowHasItsOwnBounds(unittest.TestCase):
         rows = _rows(n)
         dm = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("809306689"), place="809306689")
         self.assertTrue(dm["due"], dm)
-        group = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("-100999999999999999"),
-                                 place="-100999999999999999")
+        group = ml.plan_hot_fold(rows, tape_chars=ml.tape_chars_for("-1001240718803"),
+                                 place="-1001240718803")
         self.assertFalse(group["due"], group)
         self.assertEqual(group["reason"], "within_window")
-        big = ml.plan_hot_fold(_rows(ml.GROUP_HOT_HI + 10), tape_chars=0, place="-100999999999999999")
+        big = ml.plan_hot_fold(_rows(ml.GROUP_HOT_HI + 10), tape_chars=0, place="-1001240718803")
         self.assertTrue(big["due"], big)
         # сколько остаётся горячим после свёртки комнаты — по GROUP_HOT_LO, не по HOT_LO
         self.assertGreaterEqual((ml.GROUP_HOT_HI + 10) - big["fold"], ml.GROUP_HOT_LO - 1)
@@ -336,7 +336,8 @@ class FoldIsOfferedNotForced(unittest.TestCase):
         import contextlib
         return (mock.patch.object(ml, "adopt_place", lambda cid: str(cid)),
                 mock.patch.object(ml, "_state_write_guard", lambda place: contextlib.nullcontext()),
-                mock.patch.object(ml, "_load_state", lambda cid, rebuild=True: {"hot": list(rows)}),
+                mock.patch.object(ml, "_rebuild_state_locked", lambda cid: {"hot": list(rows)}),
+                mock.patch.object(ml, "_tier_fold_candidate", return_value=None),
                 mock.patch.object(ml, "_drop_unprovable_inputs", lambda rows_, cid: list(rows_)))
 
     def test_soft_threshold_offers_instead_of_folding(self):
@@ -359,13 +360,14 @@ class FoldIsOfferedNotForced(unittest.TestCase):
                 ml.compact_if_due("-100777")
         self.assertNotIn("-100777", ml.fold_offers())
 
-    def test_lever_off_folds_as_before(self):
+    def test_old_lever_off_cannot_restore_auxiliary_authorship(self):
         rows = _rows(ml.GROUP_HOT_HI + 10)
         with mock.patch.dict(os.environ, {"PRAXIS_FOLD_OFFER": "off"}):
             with contextlib_all(self._patches(rows)):
-                with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("свернула сама")):
-                    with self.assertRaises(AssertionError):
-                        ml.compact_if_due("-100777")
+                with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("helper forbidden")):
+                    out = ml.compact_if_due("-100777")
+        self.assertTrue(out["offered"])
+        self.assertEqual(out["folded"], 0)
 
     def test_hard_threshold_offers_too_since_night_cycle(self):
         # 05.10 (ночной цикл честности памяти): жёсткий порог днём тоже ПРЕДЛАГАЕТСЯ —
@@ -377,25 +379,24 @@ class FoldIsOfferedNotForced(unittest.TestCase):
                 with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("свернула сама")):
                     out = ml.compact_if_due("-100777")
         self.assertTrue(out.get("offered"), out)
-        self.assertTrue(out.get("hard"), out)
+        self.assertTrue(out["plan"].get("hard"), out)
         self.assertEqual(out.get("folded"), 0)
         self.assertIn("-100777", ml.fold_offers())
 
-    def test_fold_now_is_forced_and_clears_the_offer(self):
+    def test_fold_now_requires_author_and_keeps_the_offer(self):
         ml._note_fold_offer("-100777", {"count": 410, "tokens": 5, "fold": 160})
-        self.assertIn("-100777", ml.fold_offers())
-        with mock.patch.object(ml, "compact_if_due", return_value={"ok": True, "folded": 160}) as cid:
+        with mock.patch.object(ml, "compact_if_due", side_effect=AssertionError("no forced fold")):
             out = ml.fold_now("-100777")
-        cid.assert_called_once_with("-100777", force=True)
-        self.assertEqual(out["folded"], 160)
-        self.assertNotIn("-100777", ml.fold_offers())
+        self.assertTrue(out["author_required"])
+        self.assertEqual(out["folded"], 0)
+        self.assertIn("-100777", ml.fold_offers())
 
     def test_state_evidence_shows_the_offer(self):
         ml._note_fold_offer("-100777", {"count": 410, "tokens": 5, "fold": 160})
         block = agent.build_state_evidence_block(self_only=True)
         self.assertIn("fold_offers", block)
         self.assertIn("-100777", block)
-        self.assertIn("memory_compact(action=fold", block)
+        self.assertIn("fold(selection,text)", block)
 
 
 def contextlib_all(patches):

@@ -56,7 +56,6 @@ import telegram_topics
 import history_scan
 import unanswered
 import workshop
-from room_identity import root_chat_id
 
 try:  # герметичность: любой тест-запуск (unittest/pytest/PRAXIS_TEST) не читает боевой .env
     from _sandbox import _looks_like_test_run as _looks_like_test_run_now
@@ -306,13 +305,12 @@ class GroupWake:
     turns_snapshot: tuple = ()
     # Native refs are frozen with the wake; later room traffic cannot enter KEAT.
     occurrence_sidecar: dict | None = None
+    # Tape, coverage boundary, summary and E belong to this wake, not a room map.
+    epoch_snapshot: dict | None = None
 
 
 _group_wakes: dict[str, GroupWake] = {}
 _seen_ids: dict[str, deque] = defaultdict(lambda: deque(maxlen=SEEN_IDS_KEEP))  # 9.0: дедуп catch_up
-# 15.09, эпоха комнаты: якорь свёртки, с которого собран последний снимок ленты комнаты.
-# Ход читает его через frame_epoch.bind, чтобы E и лента говорили об одной границе.
-_EPOCH_ANCHORS: dict[str, int] = {}
 _recent_msgs: dict[str, deque] = defaultdict(lambda: deque(maxlen=12))  # 15: (msg_id, автор, гист) для ОТВЕТ->#id
 # PASS 16.2: недавние отправители на чат — (ts, имя, id). Честный источник для get_id
 # в классе «айди спамера»: отправитель БЫЛ в апдейте, но резолв по диалогам/участникам
@@ -665,13 +663,13 @@ def _buf_push(chat_id: str, line: str, *, author: str = "",
 
 def _group_native_persistence_enabled(chat_id: str) -> bool:
     """Select split native persistence only for the fully ready exact canary pair."""
-    if str(chat_id) != root_chat_id():
+    if str(chat_id) != '-1001240718803':
         return False
     try:
         import keat_readiness
         import keat_runtime
         return bool(
-            keat_runtime.staged('group', root_chat_id()) and
+            keat_runtime.staged('group', '-1001240718803') and
             keat_readiness.receipt()['serve_ready'])
     except Exception:
         return False
@@ -692,7 +690,7 @@ def _keat_group_user_principal(sender, sender_id):
 
 
 def _persist_sent_reply(chat_id, chunks, message_ids, *, is_dm):
-    """Keep the legacy buffer entry, but persist each native receipt separately.
+    """Keep the legacy buffer entry, with exact per-message epoch/native life.
 
     The accepted prefix is the logical send (including on partial failure). A
     different send gets a different batch even if its text happens to be equal.
@@ -702,20 +700,22 @@ def _persist_sent_reply(chat_id, chunks, message_ids, *, is_dm):
             if message_ids else {})
     native = (len(message_ids) == len(chunks) and
               (is_dm or _group_native_persistence_enabled(str(chat_id))))
+    split_life = (native or (not is_dm and frame_epoch.room_enabled(chat_id)
+                            and len(message_ids) == len(chunks)))
     _buf_push(chat_id, f"Praxis: {sent_reply}", author="Praxis", is_dm=is_dm,
-              record_life=not native, **meta)
-    if native and not _under_tests():
+              record_life=not split_life, **meta)
+    if split_life and not _under_tests():
         import uuid
         batch_id = uuid.uuid4().hex
         for index, (chunk, mid) in enumerate(zip(chunks, message_ids)):
             _record_life_message(
                 chat_id, f"Praxis: {chunk}", actor="Praxis", direction="out",
                 source_id=mid, is_dm=is_dm, ts=time.time(),
-                dedupe_key=f"telegram:{chat_id}:{mid}:out", capture_live=True,
+                dedupe_key=f"telegram:{chat_id}:{mid}:out", capture_live=native,
                 logical_send=dict(id=batch_id, index=index, count=len(chunks)),
                 root_chat_id=(chat_id if not is_dm else None),
                 principal_id=(_self_id if not is_dm else None),
-                ordinary_root=(not is_dm and str(chat_id) == root_chat_id()))
+                ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
 
 
 def _telegram_handle(entity) -> str | None:
@@ -987,52 +987,19 @@ def _strip_author_prefix(line: str, actor: str) -> str:
     return line[len(head):] if actor and line.startswith(head) else line
 
 
-def _turns_to_dialogue(turns) -> tuple[list[dict], str]:
-    """Лента с авторством -> (история ролями, то-на-что-она-отвечает-сейчас).
-
-    Одно правило на личку и на группу: граница проходит по ЕЁ ПОСЛЕДНЕЙ реплике.
-    Всё до неё включительно — разговор, всё после — то, что пришло и ждёт ответа.
-    Если она здесь ещё не говорила либо последней говорила она сама — ролей нет и
-    вызывающий идёт прежним путём: пустое user-сообщение хуже сплошного текста.
-    """
-    rows = [(bool(is_self), str(text)) for is_self, text in turns if str(text).strip()]
-    if not rows:
-        return [], ""
-    last_self = -1
-    for i, (is_self, _text) in enumerate(rows):
-        if is_self:
-            last_self = i
-    if last_self < 0:
-        return [], ""
-    history: list[dict] = []
-    run_role, run_lines = "", []
-
-    def flush() -> None:
-        if run_lines:
-            history.append({"role": run_role, "content": "\n\n".join(run_lines).strip()})
-
-    for is_self, text in rows[:last_self + 1]:
-        role = "assistant" if is_self else "user"
-        if role != run_role:
-            flush()
-            run_role, run_lines = role, []
-        run_lines.append(text)
-    flush()
-    if not history:
-        return [], ""
-    current = "\n".join(text for _is_self, text in rows[last_self + 1:])
-    if not current.strip():
-        return [], ""
-    return history, current
+def _turns_to_dialogue(turns, *, exact: bool = False) -> tuple[list[dict], str]:
+    from dialogue_projection import turns_to_dialogue
+    return turns_to_dialogue(turns, exact=exact)
 
 
-def _group_dialogue(turns) -> tuple[list[dict], str]:
+def _group_dialogue(turns, *, exact: bool = False) -> tuple[list[dict], str]:
     """Групповая лента ролями. Пустой снимок авторства -> прежний путь."""
     if not _dialogue_roles_on() or not turns:
         return [], ""
     try:
+        selected = turns if exact else _tape_cut_turns(turns)
         return _turns_to_dialogue([(is_self, role_line)
-                                   for is_self, _line, role_line in _tape_cut_turns(turns)])
+                                   for is_self, _line, role_line in selected], exact=exact)
     except Exception:
         log.warning("роли группового разговора не собрались — иду сплошным текстом",
                     exc_info=True)
@@ -1624,6 +1591,7 @@ async def _backfill_group_context(peer_id: str, entity, *, limit: int) -> dict:
                 text=getattr(msg, "message", "") or "",
                 topic_title=topic_title, media=_media_tag(msg),
                 outgoing=bool(getattr(msg, "out", False)),
+                origin="backfill",
             )
         except (TypeError, ValueError):
             continue
@@ -1734,42 +1702,11 @@ def _group_context_snapshot(chat_id: str, policy: dict) -> str:
 
 
 def _fold_service_rows(rows) -> tuple:
-    """Служебные строки ленты едут в кадр ВНУТРИ соседней реплики — не ходами и не в никуда.
-
-    История в два шага. Сначала пометка обреза стояла нулевой строкой с живыми
-    числами и рвала кэш-префикс комнаты (числа увезены в хвост, голова стала
-    постоянной). Потом c82f38c8 чинил границу ролей — хвостовые числа фабриковали
-    «реплику человека» после её ответа — и вырезал из ролевого пути ВСЕ службы
-    разом. Цену замерила адверсарка 28.08: модель не видела ни «лента обрезана»,
-    ни темы ветки — отвечала на срез как на целую ветку и не знала, в какой теме
-    находится.
-
-    Оба требования держатся одновременно: службы НЕ становятся ходами (граница
-    ролей цела), но доезжают до модели. Головные — корень ветки, пометка обреза —
-    приклеиваются ПЕРЕД первой репликой ленты; хвостовые — точные числа обреза —
-    ПОСЛЕ последней, внутри её role_line. `line` не трогается: на нём стоят
-    расписки и дифф продолжения разговора. Лента из одних служб отдаёт пустой
-    кортеж — ходов не было и нет, прежняя граница дословно."""
-    turns: list[tuple[bool, str, str]] = []
-    pending_head: list[str] = []
-    for row in rows:
-        if bool(row.get("service")):
-            text = str(row["role_line"])
-            if turns:
-                is_self, line, role_line = turns[-1]
-                turns[-1] = (is_self, line, role_line + "\n" + text)
-            else:
-                pending_head.append(text)
-            continue
-        role_line = str(row["role_line"])
-        if pending_head:
-            role_line = "\n".join((*pending_head, role_line))
-            pending_head.clear()
-        turns.append((bool(row["self"]), str(row["line"]), role_line))
-    return tuple(turns)
+    from dialogue_projection import fold_service_rows
+    return fold_service_rows(rows)
 
 
-def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
+def _group_context_frozen(chat_id: str, policy: dict, *, epoch_sink=None) -> tuple[str, tuple]:
     """Тот же снимок ленты, но ВМЕСТЕ с авторством: (текст, строки-записи).
 
     Текст — байт в байт прежний: на нём стоят расписки, прожитый ход и исходящая
@@ -1782,6 +1719,23 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
     таком проходе не собираются вовсе, и ход идёт как раньше.
     """
     limit = int(policy.get("context_hot") or 0)
+    if frame_epoch.room_enabled(chat_id):
+        route = _route_from_state(chat_id)
+        scope = telegram_routes.read_scope(route.peer_id, route.topic_id)
+        selection = frame_epoch.prepare_tape(
+            chat_id, peer_id=route.peer_id, topic_id=route.topic_id,
+            whole_room=scope.whole_room, members=scope.members, thread_word=scope.thread_word,
+            summary_max_chars=agent._summary_context_budget(chat_id))
+        frame_epoch.require_servable(selection)
+        if epoch_sink is not None:
+            epoch_sink.update(selection)
+        rows = selection["rows"]
+        # Complete producer batches alone concatenate without injecting paragraph
+        # separators into a split Telegram answer. Missing/reordered receipts stay
+        # separate; never infer a batch from neighbouring IDs or equal text.
+        from dialogue_projection import epoch_rows
+        logical_rows = epoch_rows(rows)
+        return "\n".join(row["line"] for row in logical_rows), _fold_service_rows(logical_rows)
     if limit > 0 and _group_archive_enabled():
         route = _route_from_state(chat_id)
         # Слой B: спрашиваем реестр и читаем комнату целиком там, где Telegram ПРЯМО
@@ -1809,35 +1763,6 @@ def _group_context_frozen(chat_id: str, policy: dict) -> tuple[str, tuple]:
         # разговор. Замер до того: архивный снимок 70+ тыс. знаков, ход 46 тыс. токенов.
         if memory_life.GROUP_TAPE_CHARS > 0:
             max_chars = min(max_chars, memory_life.GROUP_TAPE_CHARS)
-        # 15.09: ЛЕНТА ЭПОХИ (frame_epoch, рычаг PRAXIS_FRAME_EPOCH + список комнат). Окно не
-        # скользит: начало — якорь свёртки memory_life, конец — последняя запись архива, каждая
-        # запись отрисована один раз, правки и удаления дописаны там, где пришли. Замер 15.09:
-        # под стабильной головой первый вызов хода всё равно платил ~48k свежих токенов —
-        # ленту, потому что окно уезжало на первом же сообщении. Потолок в знаках здесь не
-        # применяется (слово Егора 15.09: «больше никаких лимитов контекста, только
-        # дописывание»); физический предохранитель — frame_epoch.max_chars, и при его
-        # срабатывании ход идёт прежним окном, а причина называется в логе.
-        if frame_epoch.room_enabled(chat_id):
-            anchor = frame_epoch.anchor_for(chat_id)
-            if anchor is None:
-                log.info("эпоха [%s]: якоря нет (горячее окно пусто) — лента прежним окном", chat_id)
-            else:
-                try:
-                    rows = group_context.epoch_rows(
-                        route.peer_id, since_message_id=anchor, topic_id=route.topic_id,
-                        whole_room=scope.whole_room, members=scope.members,
-                        thread_word=scope.thread_word)
-                    size = sum(len(row["line"]) + 1 for row in rows)
-                    cap = frame_epoch.max_chars()
-                    if rows and (cap <= 0 or size <= cap):
-                        _EPOCH_ANCHORS[chat_id] = int(anchor)
-                        return "\n".join(row["line"] for row in rows), _fold_service_rows(rows)
-                    log.warning("эпоха [%s]: лента с якоря #%s %s — лента прежним окном", chat_id,
-                                anchor, ("пуста" if not rows else
-                                         f"превысила предохранитель ({size} зн. > {cap})"))
-                except Exception:
-                    log.exception("эпоха [%s]: лента с якоря не собралась — прежнее окно", chat_id)
-            _EPOCH_ANCHORS.pop(chat_id, None)
         try:
             rows = group_context.context_rows(
                 route.peer_id, topic_id=route.topic_id, limit=limit,
@@ -1889,9 +1814,12 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
     policy = _room_policy_for_state(chat_id)
     # Авторство замораживается ВМЕСТЕ с лентой, одним чтением архива: пробуждение может
     # ждать в кулдауне минуты, и второй проход показал бы модели уже другой разговор.
-    frozen_text, frozen_turns = _group_context_frozen(chat_id, policy)
-    native_history, native_current, native_sidecar = _group_native_projection(chat_id, mid)
-    return GroupWake(
+    selected = {}
+    frozen_text, frozen_turns = _group_context_frozen(chat_id, policy, epoch_sink=selected)
+    # KEAT's legacy hot-window sidecar is not the selected epoch projection.
+    native_history, native_current, native_sidecar = (
+        ([], "", {}) if selected else _group_native_projection(chat_id, mid))
+    wake = GroupWake(
         message_id=int(mid) if mid is not None else None,
         message_ts=float(message_ts),
         kind=str(kind),
@@ -1904,12 +1832,31 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
         family=bool(family),
         context_snapshot=frozen_text,
         turns_snapshot=frozen_turns,
+        epoch_snapshot=selected or None,
         occurrence_sidecar=(dict(native_sidecar, projection_history=native_history,
                                  projection_current=native_current)
                             if native_sidecar else None),
         media_snapshot=tuple(_pending_media.get(chat_id, ())),
         reply_targets_snapshot=tuple(_recent_msgs[chat_id]),
     )
+    return _freeze_group_wake_epoch(chat_id, wake)
+
+
+def _freeze_group_wake_epoch(chat_id: str, wake: GroupWake) -> GroupWake:
+    """Freeze E against the same detached selection as this wake's tape."""
+    selected = wake.epoch_snapshot
+    if selected and "envelope" not in selected:
+        # Freeze E now, before a delayed wake can observe a new compact/boundary.
+        # This is ordinary prompt assembly only: no model/tool generation.
+        route = _route_from_state(chat_id)
+        ctx = agent.ChannelContext(chat_id=chat_id, room_id=route.peer_id, is_dm=False,
+                                   owner=wake.owner, known=wake.known, family=wake.family,
+                                   principal_id=wake.sender_id)
+        with frame_epoch.bind(chat_id, selected["anchor"], tape=selected):
+            agent._build_prompt_parts(speaker=wake.speaker, ctx=ctx, query=wake.query)
+            selected = dict(frame_epoch.bound_tape(chat_id))
+        return replace(wake, epoch_snapshot=selected)
+    return wake
 
 
 def _addressed_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
@@ -2196,8 +2143,9 @@ def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
     if wake is None:
         return False
     try:
+        selected = {}
         frozen_text, frozen_turns = _group_context_frozen(
-            chat_id, _room_policy_for_state(chat_id),
+            chat_id, _room_policy_for_state(chat_id), epoch_sink=selected,
         )
     except Exception:
         log.exception("group wake revision refresh failed [%s]", chat_id)
@@ -2215,6 +2163,7 @@ def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
     changes = {
         "context_snapshot": frozen_text,
         "turns_snapshot": frozen_turns,
+        "epoch_snapshot": selected or None,
         "reply_targets_snapshot": targets,
     }
     if media_snapshot is not None:
@@ -2224,7 +2173,14 @@ def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
             changes["query"] = str(query)[:4000]
         if author is not None:
             changes["speaker"] = str(author)
-    _group_wakes[chat_id] = replace(wake, **changes)
+    try:
+        refreshed = _freeze_group_wake_epoch(chat_id, replace(wake, **changes))
+    except Exception:
+        log.exception("group wake epoch refresh failed [%s]", chat_id)
+        return False
+    if _group_wakes.get(chat_id) is not wake:
+        return False
+    _group_wakes[chat_id] = refreshed
     return True
 
 
@@ -2281,23 +2237,20 @@ async def on_edited(event) -> None:
     msg = getattr(event, "message", None)
     mid = getattr(msg, "id", None)
     peer_id = str(getattr(event, "chat_id", None))
-    # Old captured group coordinates remain revocable during a private binding
-    # or capture-switch outage. This supplies no room-serving authority.
-    import keat_live
-    group_enrolled = (not is_private and
-                      await asyncio.to_thread(keat_live.enrolled_native_group, peer_id))
     try:
         # Telethon message ids are exact positive ``int`` values.  Do not
         # normalize any other shape (including bools or numeric strings) into
         # authority for one occurrence: at the enrolled root it instead means
         # the entire coordinate space must fail closed.
         if type(mid) is not int or mid <= 0:
-            if group_enrolled:
+            if peer_id == '-1001240718803':
+                import keat_live
                 await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
             return
         message_id = mid
     except (TypeError, ValueError, OverflowError):
-        if group_enrolled:
+        if peer_id == '-1001240718803':
+            import keat_live
             await asyncio.to_thread(keat_live.invalidate_native, peer_id, None)
         return
 
@@ -2305,7 +2258,8 @@ async def on_edited(event) -> None:
     # immutable native occurrence. In particular, edit_date is not authority to
     # keep old bytes alive: some edit update shapes omit it, and such an update
     # must fail closed for KEAT while retaining the legacy handler's old no-op.
-    if group_enrolled:
+    if peer_id == '-1001240718803':
+        import keat_live
         await asyncio.to_thread(keat_live.invalidate_native, peer_id, message_id)
 
     edited_at = getattr(msg, "edit_date", None)
@@ -2329,7 +2283,7 @@ async def on_edited(event) -> None:
     # Persist/revoke before ANY revision effects or duplicate/self short circuit.
     # Failure propagates: an update must not be acknowledged as safely projected.
     # Exact peer evidence exists on edits for both DMs and the one canonical root
-    # group; invalidate_native remains enrollment-scoped even with new capture off.
+    # group; invalidate_native itself remains default-off and enrollment-scoped.
     if is_private:
         import keat_live
         await asyncio.to_thread(keat_live.invalidate_native, peer_id, int(mid))
@@ -2503,7 +2457,7 @@ async def on_edited(event) -> None:
             sender_id=sender_id, sender_name=name,
             reply_to_message_id=reply_to_mid, timestamp=message_ts,
             edited_at=edited_at, text=text, topic_title=raw_topic_title,
-            media=media, revision_order=reception_order,
+            media=media, revision_order=reception_order, origin="live",
         )
     except Exception:
         added = False
@@ -2659,7 +2613,7 @@ async def on_deleted(event) -> None:
         try:
             added = await asyncio.to_thread(
                 group_context.append_deletion_retry,
-                peer_id=peer_id, message_id=mid, timestamp=deleted_ts,
+                peer_id=peer_id, message_id=mid, timestamp=deleted_ts, origin="live",
             )
         except Exception:
             added = False
@@ -2769,7 +2723,7 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
     ⚑ ЗАЧЕМ ЭТА ФУНКЦИЯ ВООБЩЕ ПОЯВИЛАСЬ.
     `route_for_message` умеет главное с 25.07: `is_forum is False` → обычная супергруппа
     это ОДНА комната, и цепочка ответов не становится ключом хранения. Там же записан
-    живой случай ровно из этой комнаты: «observed 23.07.2026 in <private-root-room>: „у меня в
+    живой случай ровно из этой комнаты: «observed 23.07.2026 in -1001240718803: „у меня в
     топик попал только твой ответ, без сообщения #93708"».
 
     Но знание в эту функцию не доезжало. Раннер копил свидетельства о природе комнаты в
@@ -2780,7 +2734,7 @@ def _known_forum(peer_id, message, chat_obj=None) -> bool | None:
 
     Цена этого разрыва, живьём 16.08: лента комнаты в кадре была ПОЛНОЙ (53 упоминания
     Арета, 47 корневых строк, 182 тредовых), а адрес хода говорил
-    `origin_chat_id: "<private-root-room>__topic__98994"` — псевдоветка из одного сообщения.
+    `origin_chat_id: "-1001240718803__topic__98994"` — псевдоветка из одного сообщения.
     Она ответила про ветку и сказала «контекста до этого сообщения в ветке нет»: для
     ветки это правда, для комнаты — нет.
 
@@ -3473,6 +3427,9 @@ async def on_new(event) -> None:
                         reply_to_message_id=reply_to_mid, timestamp=message_ts,
                         edited_at=getattr(msg, "edit_date", None),
                         text=text, topic_title=raw_topic_title, media=media,
+                        origin="live", life_source=dict(source_id=str(mid), direction="in",
+                                                       line=memory_life.canonical_event_text(
+                                                           f"{name}{reply_mark}: {body}", "in")),
                     )
             except Exception:
                 log.exception("late original current-state check failed [%s] #%s", chat_id, mid)
@@ -3550,7 +3507,7 @@ async def on_new(event) -> None:
               name=buffer_name,
               source_id=mid, ts=message_ts,
               capture_live=(not bool(media or ref) and
-                            (is_private or (peer_id == root_chat_id() and
+                            (is_private or (peer_id == '-1001240718803' and
                              chat_id == peer_id and room_nature is False and
                              keat_group_principal is not None))),
               root_chat_id=(peer_id if not is_private else None),
@@ -3590,6 +3547,9 @@ async def on_new(event) -> None:
                 reply_to_message_id=reply_to_mid, timestamp=message_ts,
                 edited_at=getattr(msg, "edit_date", None),
                 text=text, topic_title=raw_topic_title, media=media,
+                origin="live", life_source=dict(source_id=str(mid), direction="in",
+                                               line=memory_life.canonical_event_text(
+                                                   f"{name}{reply_mark}: {body}", "in")),
             )
         except Exception:
             log.exception("group archive не записал [%s] #%s", chat_id, mid)
@@ -5067,8 +5027,12 @@ async def _run_pass(chat_id: str) -> None:
         else:
             # Кулдаун может длиться минуты: исходный wake остаётся неизменным, но новый
             # разговор после него виден отдельно для свежего решения об актуальности.
-            current_context, current_turns = _group_context_frozen(
-                chat_id, meta.get("room_policy") or _room_policy_for_state(chat_id))
+            if wake.epoch_snapshot is not None:
+                # A later room snapshot must not lend its E/cursor to this wake.
+                current_context, current_turns = wake.context_snapshot, wake.turns_snapshot
+            else:
+                current_context, current_turns = _group_context_frozen(
+                    chat_id, meta.get("room_policy") or _room_policy_for_state(chat_id))
             last_n = wake.context_snapshot
             group_turns = tuple(wake.turns_snapshot)
             if current_context and current_context != wake.context_snapshot:
@@ -5097,7 +5061,8 @@ async def _run_pass(chat_id: str) -> None:
                     last_n += note + addition.lstrip("\n")
                     if group_turns and extra:
                         group_turns = group_turns + ((False, note.strip(), note.strip()),) + extra
-            turn_history, turn_current = _group_dialogue(group_turns)
+            turn_history, turn_current = _group_dialogue(
+                group_turns, exact=wake.epoch_snapshot is not None)
             turn_occurrences = (dict(wake.occurrence_sidecar)
                                 if isinstance(wake.occurrence_sidecar, dict) else {})
             # Preserve the complete legacy dialogue, including traffic after the
@@ -5162,8 +5127,7 @@ async def _run_pass(chat_id: str) -> None:
             reply_targets=reply_targets,  # 15: карта адресных ответов на момент триггера
             envelope=_envelope,           # пункт 4: теневой замер, никем не читается
             telegram_root_group=bool(not is_dm and route.topic_id is None and
-                                     root_chat_id() is not None and
-                                     route.peer_id == root_chat_id() and
+                                     route.peer_id == '-1001240718803' and
                                      chat_id == route.peer_id and
                                      meta.get('room_nature') is False),
         )
@@ -5228,8 +5192,9 @@ async def _run_pass(chat_id: str) -> None:
                 # контекста и не считает заново — между снимком и ходом могла пройти свёртка.
                 # 26.09 (ревью W1 S6): нет якоря у раннера — лента собрана прежним окном,
                 # и сборщик кадра не смеет подать эпоху, посчитав якорь сам.
-                with frame_epoch.bind(chat_id, _EPOCH_ANCHORS.get(chat_id),
-                                      refused=_EPOCH_ANCHORS.get(chat_id) is None):
+                selected_epoch = wake.epoch_snapshot
+                with frame_epoch.bind(chat_id, (selected_epoch or {}).get("anchor"),
+                                      tape=selected_epoch, refused=selected_epoch is None):
                     envelope, cancellation_seen = await _await_despite_cancellation(
                         _voice_turn_offloaded(
                             chat_id, last_n, speaker,
@@ -5446,6 +5411,8 @@ async def _run_pass(chat_id: str) -> None:
                             (route.peer_id, int(route.topic_id)), ""
                         ) if route.topic_id is not None else "",
                         outgoing=True,
+                        origin="live", life_source=dict(source_id=str(sent.id), direction="out",
+                                                       line="Praxis: " + chunk),
                     )
                 except Exception:
                     log.exception("group archive не записал исходящее [%s] #%s",
@@ -5624,17 +5591,10 @@ async def _in_refresh_executor(fn, *args):
 
 
 async def _maybe_pay_refresh_debt(place: str) -> None:
-    """Погасить одну группу долга обновления. Не чаще раза в `PRAXIS_REFRESH_COOLDOWN_SEC`.
+    """Expose refresh debt to the acting author, at the existing cooldown.
 
-    Протокол погашения (`refresh_debt` / `refresh_compacts`) написан целиком и покрыт
-    тестами, но в проде его не звал НИКТО: замер 21.09 нашёл `refresh_debt` только в
-    `test_coverage_vs_current.py`. Свёртка, чьё сообщение потом правили, годна как
-    покрытие и не годна для показа, поэтому фронтир комнаты Ouroboros стоял с 08.09, а
-    долг копился месяцами. Плательщик обязан быть внутри жизни, а не в руках того, кто
-    однажды вспомнит про ручной дренаж.
-
-    Одна группа за проход и потолок по времени — чтобы это никогда не превращалось в
-    вызов модели в минуту: именно так выглядели все три мельницы этой ночи.
+    The runner offers work; only memory_compact prepare/fold with the author's
+    own text may replace stale coverage. No background model writes a recap.
     """
     if _REFRESH_COOLDOWN_SEC <= 0:
         return
@@ -5650,15 +5610,14 @@ async def _maybe_pay_refresh_debt(place: str) -> None:
     groups = int(debt.get("unresolved_group_count") or 0)
     if not groups:
         return
-    log.info("refresh [%s]: групп с долгом %d, гашу одну", place, groups)
+    # Refresh requires the acting author's source selection and own recap.
+    # Keep this work visible in the existing offer, never spawn a helper writer.
     try:
-        out = await _in_refresh_executor(memory_life.refresh_compacts, place)
+        await _in_refresh_executor(lambda: memory_life.compact_if_due(place, force=True))
     except Exception:
-        log.warning("refresh [%s]: погашение упало", place, exc_info=True)
+        log.warning("refresh [%s]: authored offer could not be published", place, exc_info=True)
         return
-    log.info("refresh [%s]: %s, целей %s/%s, групп осталось %s", place,
-             out.get("reason"), out.get("refreshed_count"), out.get("target_count"),
-             out.get("room_unresolved_group_count"))
+    log.info("refresh [%s]: %d groups await authored prepare/fold", place, groups)
 
 
 async def _maybe_compact(chat_id: str) -> None:
@@ -6241,8 +6200,8 @@ async def _resolve_entity(ref):
         # Кандидаты строятся ОДИН раз, числом вперёд и без дублей.
         # Числовая СТРОКА, отданная Telethon как есть, до всякого поиска чата уходит в
         # `utils.parse_phone` — и там она НОМЕР ТЕЛЕФОНА. Проверено на прод-интерпретаторе
-        # 26.07: parse_phone('-100500') -> '100500', parse_phone(root_chat_id()) ->
-        # '<root-room-digits>'. Дальше `_get_entity_from_string` делает
+        # 26.07: parse_phone('-100500') -> '100500', parse_phone('-1001240718803') ->
+        # '1001240718803'. Дальше `_get_entity_from_string` делает
         # `contacts.GetContactsRequest(0)` — ПОЛНУЮ выгрузку адресной книги, и так на
         # каждый промах. Хуже: `for cand in (ref, ref_s)` при уже-строковом `ref` давал
         # два одинаковых кандидата, то есть две выгрузки за вызов; третий заход
@@ -7872,6 +7831,8 @@ def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
                         (route.peer_id, int(route.topic_id)), ""
                     ) if route.topic_id is not None else "",
                     outgoing=True,
+                    origin="live", life_source=dict(source_id=str(message_id), direction="out",
+                                                   line="Praxis: " + said),
                 )
             except Exception:
                 log.exception("архив комнаты не принял её прямое сообщение [%s] #%s",
@@ -10881,6 +10842,24 @@ async def _start_shared_stt():
         return None
 
 
+async def _startup_memory_maintenance(chat_ids: tuple[str, ...]) -> None:
+    """Check restored places one at a time after transport recovery is ready.
+
+    Hydration has already restored the hot buffers. Fan-out over every saved
+    conversation here competes with startup delivery recovery for the worker
+    pool, GIL and the global evidence index. Keep the ordinary maintenance
+    semantics, but only one startup check in flight and no gate on readiness.
+    """
+    for chat_id in chat_ids:
+        try:
+            await _maybe_compact(chat_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("startup memory check failed [%s]", chat_id)
+        await asyncio.sleep(0)
+
+
 def _restored_buffer_partition(restored: dict[str, list[str]]) -> tuple[dict[str, list[str]], tuple[tuple[str, str], ...]]:
     """Keep absorbed legacy aliases on disk, but never rehydrate them as live routes.
 
@@ -10908,6 +10887,7 @@ def _restored_buffer_partition(restored: dict[str, list[str]]) -> tuple[dict[str
 
 async def main() -> None:
     global _LOOP
+    startup_started = time.monotonic()
     _LOOP = asyncio.get_running_loop()  # единственный живой луп — для sync-обёрток тулов
     try:
         import goals as _legacy_goals
@@ -10987,12 +10967,15 @@ async def main() -> None:
     # Replay append-only run WAL before accepting new work. Interrupted read-only work becomes
     # paused; unversioned side effects stay in_doubt. Versioned Telegram text plans are retried
     # below only with their persisted route/chunks and stable MTProto random-id keys.
+    phase_started = time.monotonic()
     recovered_runs = await asyncio.to_thread(agent.recover_durable_state)
+    log.info("startup phase=durable_recovery seconds=%.3f", time.monotonic() - phase_started)
     if recovered_runs:
         log.warning("восстановлено durable runs: %d", len(recovered_runs))
     # §1: восстановить только канонические буферы переписки с диска. Поглощённые
     # legacy aliases остаются файлами-свидетельствами, но больше не становятся живыми
     # маршрутами, не получают place-wide hot ring и не участвуют в deletion fanout.
+    phase_started = time.monotonic()
     restored_all = bufstore.load_all()
     # Управление владельца не должно быть заложником догоняющих проверок ниже.
     asyncio.create_task(_early_control_watch())
@@ -11016,13 +10999,16 @@ async def main() -> None:
             log.exception("PASS19 bootstrap не удался [%s]", cid)
     if restored:
         log.info("восстановлено буферов: %d (%s)", len(restored), ", ".join(list(restored)[:5]))
-        for cid in restored:
-            asyncio.create_task(_maybe_compact(cid))
+    log.info("startup phase=buffer_restore seconds=%.3f places=%d",
+             time.monotonic() - phase_started, len(restored))
     # Reconcile accepted/in-doubt account membership before accepting fresh turns.
     await _membership_reconcile_once()
     # Direct tool and scheduled sends own immutable intents.  Replay them with
     # their original MTProto random ids before accepting fresh model work.
+    phase_started = time.monotonic()
     await _direct_outbox_once()
+    log.info("startup phase=direct_outbox seconds=%.3f reconciled=%d",
+             time.monotonic() - phase_started, len(_DIRECT_OUTBOX_RECONCILED))
     # Project delivered media tombstones and retry already-owned transport only
     # after Telegram routes/buffers are hydrated, before any model continuation.
     await _media_cleanup_once()
@@ -11041,7 +11027,9 @@ async def main() -> None:
                  me.username, me.id, llm.state_line() or "не настроен",
                  OWNER_ID or "—", len(rooms.allowed_chats()), LAST_N, DEBOUNCE_SEC, COOLDOWN_DM, COOLDOWN_GROUP)
         _install_dead_room_filter()  # 10.8: banned/private-каналы → mode=dead, лог не спамится
+        log.info("startup phase=ready seconds=%.3f", time.monotonic() - startup_started)
         _CLOCK_ALIVE[0] = True   # ранний надзор за управлением своё отслужил
+        asyncio.create_task(_startup_memory_maintenance(tuple(restored)))
         asyncio.create_task(_clock())  # PASS 4: буферы/расписание/«сон»/сердцебиение — один тик
         asyncio.create_task(_missed_dm_sweep())  # PASS 9.0: догнать ЛС, оборванные рестартом
         # Separate observer: a callback queued from another thread can expose a stalled

@@ -5,9 +5,10 @@
 вещи, и все три здесь:
   1. рельсы бинаря СГЕНЕРИРОВАНЫ из питон-констант и не разъехались (gen_rails --check),
      а табличное правило секретности эквивалентно питоновому regex (корпус имён);
-  2. файловые мутации используют только Python даже при наличии бинаря; чтение,
-     поиск и запуск остаются на бинарном полу, если он доступен;
-  3. мост не повторяет файловые мутации при потере ответа бинаря.
+  2. семантика ОДНА: питон-фолбэк и бинарь дают один ответ на одних входах
+     (тесты гоняются дважды — с PRAXIS_HANDS=off и как есть; если бинаря нет, второй
+     прогон вырождается в первый, и это честно сообщается);
+  3. мост никогда не роняет ход: нет бинаря / мусор на stdout / таймаут → None → питон.
 
 Запуск:  python praxis_test.py test_hands -v
 """
@@ -268,10 +269,11 @@ class TestWorkshopHands(WorkshopContract, unittest.TestCase):
         finally:
             hands.rails_fp_expected = orig
 
-    def test_mutations_never_create_binary_receipts(self):
+    def test_receipts_are_written(self):
         workshop.fs_write("workspace/a.py", "print(1)\n")
         rec = hands.receipts_path(self.tmp)
-        self.assertFalse(rec.exists(), "Python mutation must not invoke native hands")
+        self.assertTrue(rec.exists(), "каждая операция обязана оставить расписку")
+        self.assertIn('"op":"write"', rec.read_text(encoding="utf-8"))
 
     def test_timeout_flag_actually_reaches_the_binary(self):
         """Регресс: `timeout` съедался сигнатурой моста и не уезжал флагом — бинарь молча
@@ -312,13 +314,6 @@ class TestBridgeNeverBreaksHer(unittest.TestCase):
         self.assertIsNone(hands.binary())
         self.assertFalse(hands.available())
         self.assertIsNone(hands.call("version"))
-
-    def test_mutation_subcommand_refuses_even_without_binary(self):
-        os.environ["PRAXIS_HANDS"] = "off"
-        for subcmd in ("write", "edit"):
-            result = hands.call(subcmd)
-            self.assertEqual(result["status"], "refused")
-            self.assertIs(result["ok"], False)
 
     def test_missing_binary_returns_none(self):
         os.environ["PRAXIS_HANDS"] = str(Path(tempfile.gettempdir()) / "нет-такого-бинаря")

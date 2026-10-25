@@ -11,11 +11,7 @@ import threading
 import time
 import unicodedata
 
-from room_identity import root_peer_id
-
-# Compatibility for callers that inspect this module at import time. Guards use the
-# current env so .env loaded after import cannot leave a stale authorization.
-TARGET_PEER_ID = root_peer_id()
+TARGET_PEER_ID = -1001240718803
 BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 STATE_PATH = BASE / "memory" / ".state" / "moderation_shadow.json"
 _STATE_LOCK = threading.Lock()
@@ -67,7 +63,7 @@ def detect_message(*, peer_id: int, text: str, first_message: bool,
     """Threshold rule (2026-09-18, torvn77 false positive): a lone `repeat`
     feature is explainable but not sufficient for senders with channel history;
     any second independent feature, or any repeat by a fresh sender, still flags."""
-    if root_peer_id() is None or int(peer_id) != root_peer_id():
+    if int(peer_id) != TARGET_PEER_ID:
         return Detection("pass", ())
     matched = _features(text, first_message=bool(first_message),
                         repeated_within_hour=bool(repeated_within_hour))
@@ -84,7 +80,7 @@ def _history_seed() -> dict:
         import group_context
         senders: dict[str, dict] = {}
         messages: dict[str, float] = {}
-        for row in group_context.iter_records(str(root_peer_id())):
+        for row in group_context.iter_records(str(TARGET_PEER_ID)):
             if row.get("kind") != "message":
                 continue
             sender = row.get("sender_id")
@@ -131,7 +127,7 @@ def observe_message(*, peer_id: int, message_id: int, sender_id: int,
     """Persist ids/timestamps/text digest locally; emit only privacy-minimal review facts."""
     if not text:
         return None
-    if root_peer_id() is None or int(peer_id) != root_peer_id() or not message_id or not sender_id:
+    if int(peer_id) != TARGET_PEER_ID or not message_id or not sender_id:
         return None
     now = float(observed_at or time.time())
     digest = hashlib.sha256(normalize_text(text).encode("utf-8")).hexdigest()

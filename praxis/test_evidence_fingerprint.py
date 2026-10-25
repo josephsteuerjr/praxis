@@ -30,7 +30,7 @@ import memory_life as ml
 import memory_provenance as mp
 import telegram_routes as tr
 
-ROOM = "-100999999999999999"
+ROOM = "-1001240718803"
 
 
 class Base(unittest.TestCase):

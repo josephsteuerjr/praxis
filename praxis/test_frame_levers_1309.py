@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import importlib
 import os
 import unittest
@@ -52,19 +53,42 @@ class TapeLevers(unittest.TestCase):
 
         def fake_plan(hot, *, force=False, tape_chars=None, place=None):
             seen["tape_chars"] = tape_chars
-            seen["place"] = place          # 25.09: план знает, чьё окно (hot_bounds)
-            return {"due": False, "reason": "within_window", "count": len(hot), "tokens": 0}
+            seen["place"] = place
+            return {
+                "due": False, "reason": "within_window",
+                "count": len(hot), "tokens": 0,
+            }
+
         with mock.patch.object(memory_life, "plan_hot_fold", fake_plan), \
-                mock.patch.object(memory_life, "_load_state", lambda cid, rebuild=True: {"hot": []}), \
+                mock.patch.object(
+                    memory_life, "_rebuild_state_locked",
+                    return_value={"hot": [], "frontier": []},
+                ) as rebuild, \
+                mock.patch.object(
+                    memory_life, "_state_write_guard",
+                    side_effect=lambda cid: contextlib.nullcontext(),
+                ), \
                 mock.patch.object(memory_life, "adopt_place", lambda cid: str(cid)), \
+                mock.patch.object(memory_life, "clear_fold_offer") as clear_offer, \
+                mock.patch.object(memory_life, "_note_fold_offer") as note_offer, \
+                mock.patch.object(memory_life, "_model_compact") as model, \
                 mock.patch.object(memory_life, "GROUP_TAPE_CHARS", 0), \
                 mock.patch.object(memory_life, "TAPE_CHARS", 5500):
-            memory_life.compact_if_due("-100999999999999999")
-            self.assertEqual(seen["tape_chars"], 0)
-            self.assertEqual(seen["place"], "-100999999999999999")
-            memory_life.compact_if_due("809306689")
-            self.assertEqual(seen["tape_chars"], 5500)
-            self.assertEqual(seen["place"], "809306689")
+            group = "-100999999999999999"
+            dm = "809306689"
+            for place, expected_tape in ((group, 0), (dm, 5500)):
+                with self.subTest(place=place):
+                    out = memory_life.compact_if_due(place)
+                    self.assertEqual(seen["tape_chars"], expected_tape)
+                    self.assertEqual(seen["place"], place)
+                    self.assertEqual(out["folded"], 0)
+                    self.assertTrue(out["author_required"])
+                    self.assertFalse(out["offered"])
+                    rebuild.assert_called_with(place)
+                    clear_offer.assert_called_with(place)
+
+            note_offer.assert_not_called()
+            model.assert_not_called()
 
     def test_group_tape_lever_defaults_to_room_budget(self):
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -97,37 +121,21 @@ class Chronicler(unittest.TestCase):
         self.assertNotIn("4-10 concise lines", p, "старая просьба о протоколе снята")
         self.assertIn("1 500–3 000 знаков", p, "объём задан, а не «коротко»")
 
-    def test_model_compact_sends_the_chronicler_prompt(self):
-        captured = {}
+    def test_prompt_content_does_not_authorize_an_auxiliary_model_call(self):
+        import llm
 
-        class _Resp:
-            text = '{"summary": "Я — хроника.", "open_threads": [], "claims": [], "episodes": []}'
-
-        class _LLM:
-            @staticmethod
-            def configured(role):
-                return True
-
-            @staticmethod
-            def chat(role, system, messages, max_tokens, **kw):  # 05.10: терпит новые kwargs живого llm.chat (reasoning_effort и проч.)
-                captured.update(role=role, system=system, max_tokens=max_tokens)
-                return _Resp()
-        import sys
-        had = sys.modules.get("llm")
-        sys.modules["llm"] = _LLM()
-        try:
-            out = memory_life._model_compact(_rows(3, 50), tier=1, depth=1, continued=False)
-        finally:
-            if had is None:
-                sys.modules.pop("llm", None)
-            else:
-                sys.modules["llm"] = had
-        self.assertEqual(out.get("summary"), "Я — хроника.")
-        # 25.09: свёртку пишет она — роль memory/voice (не evaluator), персона в system.
-        self.assertIn(captured["role"], ("memory", "voice"))
-        self.assertNotIn("Ты — память Praxis", captured["system"], "хроникёр снят")
-        self.assertIn("Это моя память", captured["system"])
-        self.assertGreaterEqual(captured["max_tokens"], 4000, "хронике нужен потолок ответа не ниже 4000")
+        with mock.patch.object(llm, "configured") as configured, \
+                mock.patch.object(llm, "chat") as chat, \
+                mock.patch.object(memory_life, "_write_compact") as write_compact, \
+                mock.patch.object(memory_life, "append_event") as append_event:
+            with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                memory_life._model_compact(
+                    _rows(3, 50), tier=1, depth=1, continued=False,
+                )
+            configured.assert_not_called()
+            chat.assert_not_called()
+            write_compact.assert_not_called()
+            append_event.assert_not_called()
 
 
 if __name__ == "__main__":

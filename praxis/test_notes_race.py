@@ -35,7 +35,7 @@ from pathlib import Path
 
 import notes  # noqa: E402
 
-CHAT = "-100999999999999999"
+CHAT = "-1001240718803"
 REPO = Path(notes.__file__).resolve().parent
 
 # Две вещи из этого файла проверяемы только там, где она живёт, — и молчать об этом нельзя.

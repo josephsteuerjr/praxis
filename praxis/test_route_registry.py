@@ -185,8 +185,8 @@ class TestItIsShadowOnly(Base):
             "реестр не должен попадать в её recall")
 
     def test_describe_is_human_readable(self):
-        tr.observe("-100999999999999999", kind="channel_forum_missing", message_id=1)
-        self.assertIn("обычная супергруппа", tr.describe("-100999999999999999"))
+        tr.observe("-1001240718803", kind="channel_forum_missing", message_id=1)
+        self.assertIn("обычная супергруппа", tr.describe("-1001240718803"))
         tr.observe("-1004301095307", kind="topic_opener_seen", message_id=5)
         self.assertIn("форум", tr.describe("-1004301095307"))
 
