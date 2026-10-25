@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 
@@ -33,7 +34,9 @@ def preserve_source(source: Path, destination: Path, progress=None):
     ephemeral = {'.desktop-owner.lock', '.python-desktop-status'}
     def ignore(directory, names):
         return [n for n in names if n in ephemeral or n.startswith(('.python-desktop-status.', '.python-window-'))]
+    from .parallel_files import copytree
     copied = 0
+    progress_lock=threading.Lock()
     def copy_file(src, dst):
         nonlocal copied
         path=Path(src)
@@ -48,8 +51,9 @@ def preserve_source(source: Path, destination: Path, progress=None):
             os.link(src,dst);result=str(dst)
         else:
             result = shutil.copy2(src, dst)
-        copied += Path(src).stat().st_size
-        if progress: progress({'stage':'preserving', 'bytes':copied, 'source':str(source)})
+        with progress_lock:
+            copied += Path(src).stat().st_size
+            if progress: progress({'stage':'preserving', 'bytes':copied, 'source':str(source)})
         return result
     if (source / '.git').is_file():
         def git(*args):
@@ -74,13 +78,13 @@ def preserve_source(source: Path, destination: Path, progress=None):
                 continue
             target = destination / path.name
             if path.is_dir() and not path.is_symlink():
-                shutil.copytree(path, target, symlinks=True, ignore=ignore, copy_function=copy_file)
+                copytree(path, target, symlinks=True, ignore=ignore, copy_function=copy_file)
             elif path.is_symlink():
                 target.symlink_to(os.readlink(path), target_is_directory=path.is_dir())
             else:
                 copy_file(path, target)
     else:
-        shutil.copytree(source, destination, symlinks=True, ignore=ignore, copy_function=copy_file)
+        copytree(source, destination, symlinks=True, ignore=ignore, copy_function=copy_file)
     return destination
 
 
@@ -121,8 +125,13 @@ def discover(root: Path, *, path_aliases=None):
 def write_note(root, note):
     path=Path(root)/'python-migration.json'
     temporary=path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(note,indent=2),encoding='utf-8')
+    with temporary.open('w',encoding='utf-8') as stream:
+        stream.write(json.dumps(note,indent=2));stream.flush();os.fsync(stream.fileno())
     temporary.replace(path)
+    if os.name != 'nt':
+        directory=os.open(path.parent,os.O_RDONLY | os.O_DIRECTORY)
+        try:os.fsync(directory)
+        finally:os.close(directory)
 
 
 def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
@@ -206,17 +215,27 @@ def preservation_roots(found, old_root, *, copy_external=False):
     return roots
 
 
-def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,copy_external=False):
+def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None,independent=False,copy_external=False):
     old_root, new_root, data_home = (p.resolve() for p in (old_root, new_root, data_home))
     if new_root == old_root or new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
         raise ValueError("New and old program directories must be separate")
-    if data_home.is_relative_to(old_root) or data_home.is_relative_to(new_root):
+    if data_home.is_relative_to(old_root) or (data_home.is_relative_to(new_root) and not independent):
         raise ValueError("Migrated data must live outside both program directories")
+    if independent and data_home != new_root/'profile':
+        raise ValueError('Portable profile must be inside the new application profile directory')
     found = discover(old_root, path_aliases=path_aliases)
     had_service = any((r["value"].get("installed") or {}).get("service") is True for r in found["agents"])
     if had_service and not old_service_stopped:
         raise ValueError("Stop the old installed service before preparing the desktop-owner migration")
-    if (new_root / "helene.json").exists():
+    template = new_root / 'helene.json'
+    # Offline callers hold the destination installation lock and pass the exact
+    # validated template. Keep it through backup: an uncatchable exit before the
+    # journal must still enter the fresh-install wizard on ordinary startup.
+    if fresh_template is not None:
+        if (reuse or json.loads(fresh_template).get('setup_complete') is not False
+                or not template.is_file() or template.read_bytes() != fresh_template):
+            raise ValueError('Fresh destination template changed before migration')
+    elif template.exists():
         raise FileExistsError("New owner directory already contains configuration")
     operation = uuid.uuid4().hex
     data_home.mkdir(parents=True, exist_ok=True)
@@ -236,9 +255,13 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         previous.update((Path(a).resolve(),Path(b).resolve()) for a,b in reuse.get('preserved_roots',{}).items())
     try:
         # Copy enclosing roots first so shared/nested data and code stay shared.
-        roots=preservation_roots(found,old_root,copy_external=copy_external)
+        roots=preservation_roots(found,old_root,copy_external=copy_external or independent)
+        if independent:
+            for source in roots:
+                if not source.is_dir() or source == Path(source.anchor) or new_root.is_relative_to(source):
+                    raise ValueError('Configured profile/code is missing or contains the new program: '+str(source))
         for source in sorted(roots,key=lambda p:len(p.parts)):
-            if source == new_root or new_root.is_relative_to(source) or data_home == source or data_home.is_relative_to(source):
+            if source==new_root or new_root.is_relative_to(source) or data_home==source or data_home.is_relative_to(source):
                 raise ValueError('Preserved source overlaps the new program or data destination')
             if any(source.is_relative_to(parent) for parent in relocated):continue
             destination=previous.get(source)
@@ -262,10 +285,20 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
                  'copied_data':copied,'preserved_roots':{str(a):str(b) for a,b in relocated.items()},
                  'data_home':str(data_home),'path_aliases':path_aliases}
         new_root.mkdir(parents=True,exist_ok=True);write_note(new_root,pending)
+        if fresh_template is not None:
+            if template.read_bytes() != fresh_template:
+                raise ValueError('Fresh destination template changed during backup')
+            template.unlink()  # the existing preserving journal now owns recovery
         for index,(source,destination) in enumerate(relocated.items()):
             if destination.exists():
                 refresh_preserved(source,destination,data_home/operation/('previous-delta-'+str(index)),progress)
             else:preserve_source(source,destination,progress)
+            if independent:
+                from .portable_profile import detach_links, verify_copy
+                detach_links(source,destination,relocated)
+        if independent:
+            for source,destination in relocated.items():
+                verify_copy(source,destination,progress)
         for row in found["agents"]:
             source = Path(row["tree"])
             destination = selected(source)
@@ -276,7 +309,7 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
             # Match the runner's actual default, not a guessed stock tree.
             old_code = row['code']
             value['code']=str(selected(old_code))
-            if path_aliases is not None:
+            if path_aliases is not None or independent:
                 value['backup']=dict(value.get('backup') or {},dir=str(data_home/'backups'/Path(row['relative']).parent))
             source_paths.append({"old": str(old_code), "selected": value["code"]})
             value['python']=str(new_root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'))
@@ -303,6 +336,13 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         note['source_paths'] = source_paths
         note['preserved_roots']=pending['preserved_roots']
         note['data_home']=str(data_home);note['path_aliases']=path_aliases
+        if independent:
+            note['portable']=True
+            from .portable_profile import relative_config
+            for config in configs(staged):
+                if config.is_file():
+                    value=relative_config(load(config),new_root/config.relative_to(staged),new_root)
+                    config.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
         if reuse:note['resumed_copy']=reuse['id']
         (staged / "python-migration.json").write_text(json.dumps(note, indent=2), encoding="utf-8")
         new_root.mkdir(parents=True, exist_ok=True)

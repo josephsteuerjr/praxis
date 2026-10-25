@@ -40,6 +40,10 @@ def wait_owner(pid):
         while time.monotonic()<deadline:
             try:os.kill(pid,0)
             except ProcessLookupError:return
+            import psutil
+            try:
+                if psutil.Process(pid).status()==psutil.STATUS_ZOMBIE:return
+            except psutil.NoSuchProcess:return
             time.sleep(.2)
         raise TimeoutError('Old Python owner did not exit; no update applied')
 
@@ -126,7 +130,12 @@ def install(old, new):
         if config.is_file():config.unlink()
     # Existing migration moves internal data/source to independent preserved paths
     # and keeps external paths selected. Do this before replacing program bytes.
-    note=app_migration.prepare(old,new,old.parent/'Helene-update-data',preserve_voice=False)
+    metadata=json.loads((new/'python-app.json').read_text(encoding='utf-8')) if (new/'python-app.json').is_file() else {}
+    portable=metadata.get('delivery')=='portable'
+    note=app_migration.prepare(old,new,new/'profile' if portable else old.parent/'Helene-update-data',
+                               preserve_voice=False,independent=portable)
+    from localharness.code_transition import prepare as prepare_code
+    prepare_code(old,new,note)
     def relocate(value):
         if isinstance(value,str):
             path=Path(value)
@@ -136,10 +145,18 @@ def install(old, new):
     for config in configs(new):
         if not config.is_file():continue
         value=json.loads(config.read_text(encoding='utf-8'))
-        for key in ('python','app','runner'): 
+        for key in ('python','app','runner','tree','code'):
             if key in value:value[key]=relocate(value[key])
+        if isinstance(value.get('backup'),dict) and 'dir' in value['backup']:
+            value['backup']['dir']=relocate(value['backup']['dir'])
         config.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
     note['new_root']=str(old)
+    if portable:
+        for key in ('data_paths','copied_data'):
+            note[key]=[relocate(value) for value in note[key]]
+        for row in note['source_paths']:row['selected']=relocate(row['selected'])
+        for key in ('data_home','backup'):note[key]=relocate(note[key])
+        note['preserved_roots']={a:relocate(b) for a,b in note.get('preserved_roots',{}).items()}
     note['update_source']=str(new)
     app_migration.write_note(new,note)
     recovery=old.parent/('.helene-recovery-'+note['id'])

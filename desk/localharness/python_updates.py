@@ -170,31 +170,8 @@ def update_download(owner,url,sha256=None,extensions=None):
 
 
 def _extract(archive, destination, progress=None, prefix='Helene/'):
-    destination=Path(destination).resolve()
-    with zipfile.ZipFile(archive) as reader:
-        for entry in reader.infolist():
-            out=(destination/entry.filename).resolve()
-            if (not out.is_relative_to(destination) or '\\' in entry.filename or ':' in entry.filename
-                    or '..' in Path(entry.filename).parts
-                    or not (entry.filename.startswith(prefix) or entry.filename.rstrip('/')==prefix.rstrip('/'))
-                    or (entry.external_attr >> 16) & 0o170000 == 0o120000):
-                raise ValueError('Invalid archive path (expected Helene/ root)')
-        total=sum(e.file_size for e in reader.infolist());done=0;reported=0.0
-        for index,entry in enumerate(reader.infolist(),1):
-            if entry.is_dir():continue
-            target=destination/entry.filename;target.parent.mkdir(parents=True,exist_ok=True)
-            temporary=target.with_name('.'+target.name+'.'+uuid.uuid4().hex+'.part')
-            try:
-                with reader.open(entry) as source,temporary.open('xb') as output:
-                    while chunk:=source.read(262144):
-                        output.write(chunk);done+=len(chunk)
-                        if progress and (time.monotonic()-reported>=.2 or done==total):
-                            progress({'stage':'unpacking','asset':Path(archive).name,'bytes':done,'total_bytes':total,'files':index,'total_files':len(reader.infolist()),'file':entry.filename});reported=time.monotonic()
-                if os.name != 'nt':
-                    mode=(entry.external_attr >> 16) & 0o777
-                    temporary.chmod(mode or 0o644)
-                temporary.replace(target)
-            finally:temporary.unlink(missing_ok=True)
+    from .parallel_files import extract
+    return extract(archive,destination,progress,prefix)
 
 
 def update_install(owner,path,forceExtensions=False):

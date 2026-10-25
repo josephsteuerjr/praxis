@@ -20,9 +20,12 @@ with zipfile.ZipFile(archive) as z:
         with z.open(item) as a,path.open('wb') as b:shutil.copyfileobj(a,b)
         path.chmod((item.external_attr>>16)&0o777 or 0o644)
 root=work/'Helene';runtime=root/'runtime/bin/python3'
-for relative in ('python_app.py','python_migrate.py','localharness/python_source_updater.py'):
+for relative in ('python_app.py','python_migrate.py','mac_migrate.py','resources/mac-migration.html',
+                 'localharness/python_source_updater.py','localharness/python_updates.py',
+                 'localharness/app_migration.py','localharness/portable_profile.py',
+                 'localharness/parallel_files.py','localharness/code_transition.py'):
     shutil.copy2(repo/'desk'/relative,root/'app'/relative)
-metadata=json.loads((root/'python-app.json').read_text());metadata['version']='2.1.0'
+metadata=json.loads((root/'python-app.json').read_text());metadata.update(version='2.1.0',delivery='portable')
 (root/'python-app.json').write_text(json.dumps(metadata,indent=2))
 result={'public_sha256':sha,'platform':os.uname().machine,'root':str(root),'steps':{}}
 def save():(evidence/'native.json').write_text(json.dumps(result,indent=2))
@@ -69,6 +72,8 @@ try:
     invoke('python_window',{'action':'exit','relaunch':False});wait(lambda:control() is None,40)
     assert done.returncode==0,'Focused test failure; see unit.log'
     assert result['steps']['repeat_live_windows']==1,'Repeated launch created more than one native window'
+    from native_portable_update210 import run as native_update
+    result['native_update']=native_update(root,evidence/'update');save()
 except BaseException as exc:
     result['error']=type(exc).__name__+': '+str(exc);save()
     subprocess.run(['screencapture','-x',str(evidence/'failure.png')],check=False)
