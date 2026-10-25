@@ -157,7 +157,8 @@ def update_download(owner,url,sha256=None,extensions=None):
     from . import component_downloads
     manifest=component_downloads.incoming(result['path'])
     if manifest is not None:
-        components=component_downloads.fetch(owner.root,manifest,selected,report)
+        changed=component_downloads.changed_extensions(owner.root,manifest,selected) if extensions is None else selected
+        components=component_downloads.fetch(owner.root,manifest,changed,report)
     else:
         # Old packages have no map. Only that legacy format uses same-tag URLs.
         for component in dict.fromkeys(n for s in selected for n in EXTENSION_ASSETS[s]):

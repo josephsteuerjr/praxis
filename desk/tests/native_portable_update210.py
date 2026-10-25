@@ -69,6 +69,7 @@ def run(root,evidence):
         if '/site-packages/' in rel and not rel.split('/site-packages/',1)[1].startswith(('psutil/','socks.py','socksipy')):continue
         selected.append((rel,p))
     meta=json.loads((root/'python-app.json').read_text());target=meta['target']
+    asset_target='fedora-x86_64' if target=='linux-x86_64' and (meta.get('distribution')=='fedora' or (root/'FEDORA-BUILD.json').exists()) else target
     archives=[]
     for version,broken in [('2.1.1',False),('2.1.2',True)]:
         changes={'python-app.json':json.dumps(dict(meta,version=version,delivery='portable',synthetic_update_fixture=True)).encode(),
@@ -79,7 +80,7 @@ def run(root,evidence):
         changes['shipped-code.json']=json.dumps(shipped).encode()
         inventory={rel:hashlib.sha256(changes.get(rel,p.read_bytes())).hexdigest() for rel,p in selected if not rel.startswith('tree/') and rel not in ('helene.json','python-package-files.json')}
         changes['python-package-files.json']=json.dumps({'format':'helene-python-program-files.v1','version':version,'files':inventory}).encode()
-        archive=serve/('Helene-'+version+'-'+target+'.zip');assert not archive.exists()
+        archive=serve/('Helene-'+version+'-'+asset_target+'.zip');assert not archive.exists()
         with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED,compresslevel=1) as z:
             added=set()
             for rel,p in selected:
@@ -103,7 +104,7 @@ def run(root,evidence):
     expected=facts();save()
     try:
         launch();prior=invoke('app_info')['version']
-        bad=serve/('Helene-9.9.7-'+target+'.zip');bad.write_bytes(b'Invalid bytes')
+        bad=serve/('Helene-9.9.7-'+asset_target+'.zip');bad.write_bytes(b'Invalid bytes')
         try:invoke('update_download',{'url':url+'/'+bad.name,'sha256':'0'*64,'extensions':[]})
         except urllib.error.HTTPError:result['steps']['wrong_sha_refused']=True
         else:raise AssertionError('Wrong SHA accepted')

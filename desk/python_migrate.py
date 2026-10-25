@@ -75,7 +75,12 @@ def copy_program(package, new, progress, extensions=None):
            '__pycache__' not in p.relative_to(package).parts and
            p.name not in ('helene.json','python-migration.json','owner-stop.json','install.log') and not p.name.endswith('.pyc')]
     total=sum(p.stat().st_size for p in files);done=0
-    for item in files:
+    from concurrent.futures import ThreadPoolExecutor
+    from localharness.parallel_files import WORKERS
+    import threading
+    lock=threading.Lock()
+    def copy(item):
+        nonlocal done
         if item.is_symlink():raise ValueError('Package symlink is unsupported: '+str(item))
         relative=item.relative_to(package);target=new/relative
         if not target.resolve().is_relative_to(new):raise ValueError('Program destination leaves target')
@@ -97,8 +102,19 @@ def copy_program(package, new, progress, extensions=None):
             else:shutil.copy2(item,temporary)
             if not temporary.samefile(item) and hash_file(temporary)!=expected:raise IOError('Program copy verification failed: '+str(relative))
             temporary.replace(target)
-        done+=item.stat().st_size
-        progress({'stage':'unpacking','bytes':done,'total_bytes':total,'file':relative.as_posix(),'reused':equal})
+        with lock:
+            done+=item.stat().st_size
+            progress({'stage':'unpacking','bytes':done,'total_bytes':total,'file':relative.as_posix(),'reused':equal})
+
+    # Resolve and validate every target before independent copy workers start.
+    for item in files:
+        if item.is_symlink() or not (new/item.relative_to(package)).resolve().is_relative_to(new):
+            raise ValueError('Invalid program copy path')
+    with ThreadPoolExecutor(max_workers=max(1,WORKERS-1)) as pool:
+        pending=[pool.submit(copy,p) for p in files if p.stat().st_size>=256*1024]
+        for item in files:
+            if item.stat().st_size<256*1024:copy(item)
+        for future in pending:future.result()
 
 
 def retain_attempt_configs(new, note):
@@ -317,7 +333,7 @@ def main():
     p.add_argument('--in-place',action='store_true',help='Update an existing Python application in its current folder')
     p.add_argument('--resume-copy',type=Path,help='Explicit journal of an earlier failed, unstarted copy of the same installation')
     p.add_argument('--shortcut-dir',type=Path,help='Optional per-user/portable shortcut folder for a fresh installation')
-    p.add_argument('--extensions',default='xtts',help='Optional downloads selected by the owner: xtts,whisper,toolchain')
+    p.add_argument('--extensions',default='',help='Optional downloads selected by the owner: xtts,whisper,toolchain')
     a=p.parse_args()
     if not a.confirmed:raise ValueError('Open the migration wizard and confirm the switch')
     package=Path(__file__).resolve().parent.parent

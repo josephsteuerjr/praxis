@@ -215,7 +215,7 @@ def preservation_roots(found, old_root, *, copy_external=False):
     return roots
 
 
-def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None,independent=False,copy_external=False):
+def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None,independent=False,copy_external=False,preserve_downloads=True):
     old_root, new_root, data_home = (p.resolve() for p in (old_root, new_root, data_home))
     if new_root == old_root or new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
         raise ValueError("New and old program directories must be separate")
@@ -357,12 +357,9 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         for name in ('window-preferences.json','agent-default.json'):
             preferences=old_root/name
             if preferences.is_file():shutil.copy2(preferences,new_root/name)
-        from .component_downloads import preserve_cache
-        preserve_cache(old_root,new_root)
-        from .xtts_install import runtime_for
-        legacy_voice=runtime_for(old_root)
-        if preserve_voice and legacy_voice.is_dir() and not runtime_for(new_root).is_dir():
-            shutil.copytree(legacy_voice,new_root/'voice-xtts',dirs_exist_ok=True)
+        from .component_downloads import preserve_cache,preserve_installed
+        if preserve_downloads:preserve_cache(old_root,new_root)
+        if preserve_voice:preserve_installed(old_root,new_root)
         write_note(new_root,note)
         return note
     finally:

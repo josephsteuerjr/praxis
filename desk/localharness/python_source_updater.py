@@ -48,9 +48,8 @@ def wait_owner(pid):
         raise TimeoutError('Old Python owner did not exit; no update applied')
 
 
-def apply_files(source, target, recovery):
+def apply_files(source, target, recovery, *, consume=False, verified=None):
     """Overlay package files only; retain overwritten bytes and a rollback map."""
-    source,target,recovery=(Path(p).resolve() for p in (source,target,recovery))
     written=[]
     recovery.mkdir()
     def digest(path):
@@ -78,7 +77,7 @@ def apply_files(source, target, recovery):
             if destination.is_symlink():raise ValueError('Update destination is a symlink')
             previous=recovery/relative
             existed=destination.exists()
-            incoming=digest(item)
+            incoming=(verified or {}).get(str(item)) or digest(item)
             if (existed and destination.stat().st_size==item.stat().st_size and digest(destination)==incoming
                     and (os.name == 'nt' or destination.stat().st_mode & 0o777 == item.stat().st_mode & 0o777)):
                 continue
@@ -87,10 +86,19 @@ def apply_files(source, target, recovery):
                 shutil.copy2(destination,previous)
             destination.parent.mkdir(parents=True,exist_ok=True)
             written.append({'path':relative.as_posix(),'existed':existed,'incoming':incoming})
-            record()  # recovery is durable before the first changed program byte
+        # Retain every preimage and the complete intent before changing program
+        # bytes. Rewriting an ever-growing JSON map after each dependency made
+        # large optional runtime installs quadratic in serialized journal size.
+        record()
+        for row in written:
+            relative=Path(row['path'])
+            item=source/relative
+            destination=target/relative
             temporary=destination.with_name('.'+destination.name+'.update-part')
             try:
-                if relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth' and item.stat().st_dev==destination.parent.stat().st_dev:
+                if consume:
+                    item.replace(temporary)
+                elif relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth' and item.stat().st_dev==destination.parent.stat().st_dev:
                     temporary.unlink(missing_ok=True);os.link(item,temporary)
                 else:shutil.copy2(item,temporary)
                 temporary.replace(destination)
@@ -133,7 +141,7 @@ def install(old, new):
     metadata=json.loads((new/'python-app.json').read_text(encoding='utf-8')) if (new/'python-app.json').is_file() else {}
     portable=metadata.get('delivery')=='portable'
     note=app_migration.prepare(old,new,new/'profile' if portable else old.parent/'Helene-update-data',
-                               preserve_voice=False,independent=portable)
+                               preserve_voice=False,preserve_downloads=False,independent=portable)
     from localharness.code_transition import prepare as prepare_code
     prepare_code(old,new,note)
     def relocate(value):

@@ -68,4 +68,37 @@ class Components(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'SHA256'):cd.install(self.root,['toolchain'])
         self.assertFalse((self.root/'components/toolchain').exists())
 
+    def test_cached_prepare_reads_archive_hash_once_and_moves_extracted_payload(self):
+        cd.fetch(self.root,self.manifest,['toolchain'])
+        hashed=[];original=hashlib.file_digest
+        def digest(stream,*args,**kwargs):
+            hashed.append(Path(stream.name));return original(stream,*args,**kwargs)
+        import shutil
+        original_copy=shutil.copy2
+        def copy(source,*args,**kwargs):
+            if '.component-stage-' in str(source):raise AssertionError('Second full payload copy')
+            return original_copy(source,*args,**kwargs)
+        with patch.object(hashlib,'file_digest',side_effect=digest),patch.object(shutil,'copy2',side_effect=copy):
+            cd.prepare(self.root,['toolchain'])
+        self.assertEqual((self.root/'components/toolchain/fixture').read_text(),'toolchain')
+        self.assertEqual(hashed,[cd.cache_dir(self.root)/cd.cache_name(self.manifest['artifacts']['toolchain'])])
+        self.assertEqual(len(self.calls),1)
+
+    def test_ordinary_update_preserves_unchanged_pin_but_changed_pin_is_fetched(self):
+        payload=self.root/'components/toolchain/compiler';payload.parent.mkdir(parents=True);payload.write_text('installed owner copy')
+        self.assertEqual(cd.changed_extensions(self.root,self.manifest,['toolchain']),[])
+        changed=json.loads(json.dumps(self.manifest));changed['artifacts']['toolchain']['sha256']='a'*64
+        self.assertEqual(cd.changed_extensions(self.root,changed,['toolchain']),['toolchain'])
+        self.assertEqual(cd.changed_extensions(self.root,self.manifest,['whisper']),['whisper'])
+        self.assertEqual(payload.read_text(),'installed owner copy')
+
+    def test_first_migration_keeps_installed_components_without_network(self):
+        for name in ('components/toolchain/compiler','voice/site-packages/engine.py','voice-xtts/python.exe'):
+            path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(name)
+        target=self.root.parent/'Migrated'
+        cd.preserve_installed(self.root,target)
+        for path in self.root.rglob('*'):
+            if path.is_file() and path.parts[-2]!='app':self.assertEqual((target/path.relative_to(self.root)).read_bytes(),path.read_bytes())
+        self.assertEqual(self.calls,[])
+
 if __name__=='__main__':unittest.main()

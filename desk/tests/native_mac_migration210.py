@@ -17,6 +17,12 @@ def run(old,archive,repo,evidence):
                 'localharness/app_migration.py','localharness/mac_migration.py','localharness/parallel_files.py',
                 'localharness/portable_profile.py','localharness/python_source_updater.py','localharness/code_transition.py'):
         shutil.copy2(repo/'desk'/rel,root/'app'/rel)
+    for rel in ('localharness/component_downloads.py','localharness/xtts_install.py'):
+        shutil.copy2(repo/'desk'/rel,root/'app'/rel)
+    subprocess.run([str(root/'runtime/bin/python3'),str(repo/'desk/installer/python_mac_bundles.py'),str(root),'2.1.0'],check=True)
+    shutil.copytree(repo/'desk/app/dist',root/'app/static',dirs_exist_ok=True)
+    from native_mac_privacy210 import instrument,deny_network_prompts
+    instrument(root,evidence)
     meta=json.loads((root/'python-app.json').read_text());meta.update(version='2.1.0',delivery='portable')
     (root/'python-app.json').write_text(json.dumps(meta))
     result={'root':str(root),'old':str(old),'steps':{}}
@@ -50,6 +56,7 @@ def run(old,archive,repo,evidence):
     save();before=facts(old)
     try:
         subprocess.run(['open','-n',root/'Migrate Helene.app'],check=True);wait(control);time.sleep(2)
+        deny_network_prompts(evidence)
         screen('migration-offer.png');result['steps']['native_migration_window']=True;save()
         prepared=invoke('migration_prepare',{'old':str(old),'data':str(workspace/'Preserved profile'),'closed':True})
         assert prepared['state']=='prepared';assert facts(root)==before

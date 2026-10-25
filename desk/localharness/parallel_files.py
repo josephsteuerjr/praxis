@@ -31,7 +31,9 @@ def copytree(source,destination,*,symlinks=True,ignore=None,copy_function=shutil
                     target.symlink_to(os.readlink(path),target_is_directory=path.is_dir())
                     shutil.copystat(path,target,follow_symlinks=False)
                 elif path.is_dir():walk(path,target)
-                else:futures.append(pool.submit(copy_function,path,target))
+                elif workers>1 and path.stat().st_size>=256*1024:
+                    futures.append(pool.submit(copy_function,path,target))
+                else:copy_function(path,target)
         walk(source,destination)
         for future in futures:future.result()
     for src,dst in reversed(directories):shutil.copystat(src,dst)
@@ -80,7 +82,7 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
         if any(seen.get(os.path.normcase(str(parent))) is False for parent in Path(name).parents):
             raise ValueError('Archive file/directory collision')
     total=sum(e.file_size for e in entries);total_files=sum(not e.is_dir() for e in entries);done=0;files=0;last=0.0
-    lock=threading.Lock();local=threading.local();readers=[]
+    lock=threading.Lock();local=threading.local();readers=[];verified={}
     def init():
         local.reader=zipfile.ZipFile(archive)
         with lock:readers.append(local.reader)
@@ -101,11 +103,13 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
         try:
             # Each worker has an independent reader, avoiding ZipFile's shared
             # seek lock. Reading to EOF checks CRC for every single member.
+            digest=hashlib.sha256()
             with local.reader.open(entry) as source,temporary.open('xb') as output:
                 while chunk:=source.read(1024*1024):
-                    output.write(chunk);report(len(chunk),entry.filename)
+                    digest.update(chunk);output.write(chunk);report(len(chunk),entry.filename)
             if os.name!='nt':temporary.chmod((entry.external_attr>>16)&0o777 or 0o644)
             temporary.replace(target);report(0,entry.filename,True)
+            with lock:verified[str(target)]=digest.hexdigest()
         finally:temporary.unlink(missing_ok=True)
     try:
         if workers==1:
@@ -123,3 +127,4 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
                 for future in pending:future.result()
     finally:
         for reader in readers:reader.close()
+    return verified
