@@ -46,6 +46,7 @@ def wait_owner(pid):
 
 def apply_files(source, target, recovery):
     """Overlay package files only; retain overwritten bytes and a rollback map."""
+    source,target,recovery=(Path(p).resolve() for p in (source,target,recovery))
     written=[]
     recovery.mkdir()
     def digest(path):
@@ -101,6 +102,7 @@ def apply_files(source, target, recovery):
 
 def rollback(target,recovery):
     """Restore only this update's changed files, retaining any later self-edit."""
+    target,recovery=Path(target).resolve(),Path(recovery).resolve()
     rows=json.loads((recovery/'update-files.json').read_text(encoding='utf-8'))
     for row in reversed(rows):
         relative=Path(row['path'])
@@ -160,10 +162,12 @@ def install(old, new):
 
 
 def active_update(old):
+    old=Path(old).resolve()
     return old.parent/('.helene-update-active-'+hashlib.sha256(str(old).encode()).hexdigest()[:16]+'.json')
 
 
 def recover_interrupted(old):
+    old=Path(old).resolve()
     pending=active_update(old)
     if pending.is_file():
         value=json.loads(pending.read_text(encoding='utf-8'))

@@ -45,7 +45,7 @@ from localharness.python_platform import desktop_identity
 
 class Application:
     def __init__(self, root: Path, ui: Path, host=None, program: Path | None = None):
-        self.root, self.ui, self.host = root, ui.resolve(), host
+        self.root, self.ui, self.host = root.resolve(), ui.resolve(), host
         self.program = program or root
         self.window = None
         self.window_maximized = False

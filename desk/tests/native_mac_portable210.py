@@ -20,6 +20,10 @@ with zipfile.ZipFile(archive) as z:
         with z.open(item) as a,path.open('wb') as b:shutil.copyfileobj(a,b)
         path.chmod((item.external_attr>>16)&0o777 or 0o644)
 root=work/'Helene';runtime=root/'runtime/bin/python3'
+for relative in ('python_app.py','python_migrate.py','localharness/python_source_updater.py'):
+    shutil.copy2(repo/'desk'/relative,root/'app'/relative)
+metadata=json.loads((root/'python-app.json').read_text());metadata['version']='2.1.0'
+(root/'python-app.json').write_text(json.dumps(metadata,indent=2))
 result={'public_sha256':sha,'platform':os.uname().machine,'root':str(root),'steps':{}}
 def save():(evidence/'native.json').write_text(json.dumps(result,indent=2))
 def wait(fn,seconds=100):

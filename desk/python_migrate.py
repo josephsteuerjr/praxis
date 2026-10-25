@@ -26,6 +26,8 @@ def transaction(old, new):
     The native Stop latch predates the application and shares its known folder;
     it must survive installation, not make that folder permanently unusable.
     """
+    old=Path(old).resolve() if old is not None else None
+    new=Path(new).resolve()
     receipt = new/'python-migration.json'
     if receipt.is_file():
         note = json.loads(receipt.read_text(encoding='utf-8'))
@@ -53,6 +55,7 @@ def copy_program(package, new, progress, extensions=None):
     Only the publisher's named files are replaced. Existing prior program bytes
     are retained on change, including a partially extracted previous version.
     """
+    package,new=Path(package).resolve(),Path(new).resolve()
     def hash_file(path):
         h=hashlib.sha256()
         with path.open('rb') as stream:
