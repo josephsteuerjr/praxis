@@ -2,8 +2,8 @@
   "version": "2.1.0",
   "platform": "debian",
   "artifact": "Helene-2.1.0-linux-x86_64.zip",
-  "sha256": "0801346243e13df2d8e886f7fcd4293c876d1debfaf7c2d2aa59e1984d21cfe4",
-  "bytes": 659701487,
+  "sha256": "5504b9418f145d204e0fceb790fd6b881df6d9f84ab1281b4fd2905a91766413",
+  "bytes": 659604392,
   "source_files": {
     "python_app.py": "b5168ae4924f04e6922a0e835306c4e9cf99caadc76a9106cad91347c42bf929",
     "python_migrate.py": "20502db37899ee90c71baf08e5d4f4c883bb3b55a1140de189355ccbd209a025",
@@ -284,5 +284,9 @@
     "app/dist/assets/ZenKurenaido-cyrillic-D6syFLfV.woff2": "b143e4d89cc07a5c6e4bb56d6a6962ca5e32b7ed885fddb6d0c30b0e435fac9c",
     "app/dist/assets/ZenKurenaido-latin-Cm0i6hix.woff2": "8f6d05dfd2ac95edf905676a2b2edf5d797aa7d1a365974475c84b781fe6ef8c"
   },
-  "source_scope": "Platform desktop source; compiled frontend and dependency/native runtime bytes are verified separately. No new native runtime rebuild claimed."
+  "source_scope": "Platform desktop source; compiled frontend and dependency/native runtime bytes are verified separately. No new native runtime rebuild claimed.",
+  "metadata_only_changes": [
+    "Helene/app/component-downloads.json",
+    "Helene/python-package-files.json"
+  ]
 }
