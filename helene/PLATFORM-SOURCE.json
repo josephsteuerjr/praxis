@@ -2,8 +2,8 @@
   "version": "2.1.0",
   "platform": "macos",
   "artifact": "Helene-2.1.0-macos-arm64.zip",
-  "sha256": "5e4fe949b0ed44c95d9cdd8dbd20885e3ac2f887eaf41901cdbda8b46ec5a921",
-  "bytes": 117324311,
+  "sha256": "e0b97b6ddfe3097c055db0875d85abdb1d1bb14edff41fb09a3415fce0ab3585",
+  "bytes": 117258592,
   "source_files": {
     "python_app.py": "bd42ba2be28560ceeda277a493f9e3e674111fa5a9112abbe65cdf4cba4e1e11",
     "python_migrate.py": "ac937e5020b37bee9930ede1e826111036886e6460fe6840ac65f8a13298250a",
@@ -282,5 +282,9 @@
     "app/dist/assets/tray-DZo4vSOG.js": "6666b9bf7755741587c49e70b3cb60a8bede94cbcac462d56ce296da3bd0ad38",
     "mac_migrate.py": "af63988175eb5982fa95a912e947206134c46746643e9acdcc769531ab62cd2b"
   },
-  "source_scope": "Platform desktop source; compiled frontend and dependency/native runtime bytes are verified separately. No new native runtime rebuild claimed."
+  "source_scope": "Platform desktop source; compiled frontend and dependency/native runtime bytes are verified separately. No new native runtime rebuild claimed.",
+  "metadata_only_changes": [
+    "Helene/app/component-downloads.json",
+    "Helene/python-package-files.json"
+  ]
 }
