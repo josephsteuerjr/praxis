@@ -1,42 +1,34 @@
 {
   "format": "helene-component-downloads.v1",
-  "app_version": "1.9.3",
+  "target": "linux-x86_64",
+  "app_version": "2.1.0",
   "extensions": {
-    "toolchain": [
-      "toolchain"
+    "whisper": [
+      "whisper"
     ],
     "xtts": [
       "xtts_runtime",
       "xtts_model"
-    ],
-    "whisper": [
-      "whisper"
     ]
   },
   "artifacts": {
-    "toolchain": {
-      "name": "Helene-components-toolchain.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v1.9.2/Helene-components-toolchain.zip",
-      "sha256": "230025210a0b34225f0cfde74db04780145648813d9b8c8ad6fc395c2d479934",
-      "size": 683294180
-    },
-    "xtts_model": {
-      "name": "Helene-components-xtts-model.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v1.9.2/Helene-components-xtts-model.zip",
-      "sha256": "4d1165ceb9d10fe503324bc777b0bcdbe56b73970cc29ce319c0c966b393b8ce",
-      "size": 1740279196
+    "whisper": {
+      "name": "Helene-fedora-whisper-abi314.zip",
+      "size": 148437958,
+      "sha256": "8645447de9eb69e420f7477ffce7b192778d5afa810e1406dc19c5d317680f0b",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.0.0/Helene-fedora-whisper-abi314.zip"
     },
     "xtts_runtime": {
-      "name": "Helene-components-xtts-runtime.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v1.9.2/Helene-components-xtts-runtime.zip",
-      "sha256": "7eb174f3f7e825e9ed316be8b38da664f7bb154100d3ff25b65c95bb79b88b06",
-      "size": 445699527
+      "name": "Helene-fedora-xtts-runtime.zip",
+      "size": 663095360,
+      "sha256": "cc25b1bf8ab03d0d6c745658bf38b3fed756c6f484f84a05c9479d1584111e70",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.0.0/Helene-fedora-xtts-runtime.zip"
     },
-    "whisper": {
-      "name": "Helene-components-whisper.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v1.9.2/Helene-components-whisper.zip",
-      "sha256": "ef435231303937fa4f49fbf865915fbc1a8d9625022a2fbab36d3b6924580c93",
-      "size": 111474754
+    "xtts_model": {
+      "name": "Helene-fedora-xtts-model.zip",
+      "size": 1740278163,
+      "sha256": "9b6328bc607413af6f933ce170830cadc628a0e53e7f5217c14f9ccc59b86b8a",
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.0.0/Helene-fedora-xtts-model.zip"
     }
   }
 }
