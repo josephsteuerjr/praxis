@@ -34,29 +34,12 @@ def stage_file(source, target):
 
 
 LAUNCHER = r'''#!/usr/lib/helene-python/seed/runtime/bin/python3
-import fcntl,json,os,shutil,sys,uuid
+import sys
 from pathlib import Path
 seed=Path('/usr/lib/helene-python/seed')
-home=Path(os.environ.get('XDG_DATA_HOME') or Path.home()/'.local/share')/'helene-python'
-home.mkdir(parents=True,exist_ok=True)
-target=home/'program'
-with (home/'.seed.lock').open('a+b') as lock:
- fcntl.flock(lock,fcntl.LOCK_EX)
- if not target.exists():
-  stage=home/('.seed-'+uuid.uuid4().hex)
-  try:
-   shutil.copytree(seed,stage,symlinks=False)
-   (stage/'bootstrap-seed.json').write_text(json.dumps({'seed':str(seed),'version':json.loads((seed/'python-app.json').read_text())['version']}))
-   stage.replace(target)
-  except BaseException:
-   if stage.exists():shutil.rmtree(stage)
-   raise
- if not (target/'app/python_app.py').is_file() or not (target/'runtime/bin/python3').is_file():
-  raise RuntimeError('Existing Hélène working folder is incomplete; retained without seed overwrite: '+str(target))
- if not os.access(target,os.W_OK) or not os.access(home,os.W_OK):
-  raise PermissionError('Hélène program and update directory must be writable by this user')
-python=target/'runtime/bin/python3'
-os.execv(str(python),[str(python),'-s',str(target/'app/python_app.py'),'--root',str(target),*sys.argv[1:]])
+sys.path.insert(0,str(seed/'app'))
+from localharness.package_bootstrap import main
+raise SystemExit(main(seed,sys.argv[1:]))
 '''
 DEBIAN = ('libxcb-shape0','libxfixes3','libfontconfig1','ca-certificates','git','bubblewrap','procps','libstdc++6','libglib2.0-0','libegl1','libopengl0','libnss3','libasound2','libxcb-cursor0','libxcb-icccm4','libxcb-image0','libxcb-keysyms1','libxcb-render-util0','libxcb-xinerama0','libxcb-xkb1','libxkbcommon-x11-0','libdbus-1-3','libxdamage1','libxcomposite1','libxrandr2','libgbm1','xdotool','x11-utils','xclip','libxtst6','libatspi2.0-0','at-spi2-core','ffmpeg')
 FEDORA = ('libXfixes','fontconfig','ca-certificates','git-core','bubblewrap','procps-ng','libstdc++','glib2','mesa-libEGL','libglvnd-opengl','nss','alsa-lib','xcb-util-cursor','xcb-util-wm','xcb-util-image','xcb-util-keysyms','xcb-util-renderutil','libxcb','libxkbcommon-x11','dbus-libs','libXdamage','libXcomposite','libXrandr','mesa-libgbm','xdotool','/usr/bin/xprop','/usr/bin/xdpyinfo','/usr/bin/xwininfo','xclip','libXtst','at-spi2-core')
@@ -94,6 +77,18 @@ def glibc_floor(seed):
     return '.'.join(map(str,max(versions)))
 
 
+def deb_control(version, abi):
+    # The native package used this exact command path through the 1.x series.
+    # A bounded package transition lets apt retire it before installing ours;
+    # neither force-overwrite nor removal of per-user profiles is necessary.
+    return ('Package: helene-python\nVersion: '+version+'+local\nArchitecture: amd64\n'
+            'Maintainer: Hélène local candidate\n'
+            'Conflicts: helene (<< 2.0.0)\nReplaces: helene (<< 2.0.0)\n'
+            'Depends: '+', '.join(('libc6 (>= '+abi+')',*DEBIAN))+'\n'
+            'Description: Broker-free Python Hélène desktop local candidate\n'
+            ' Immutable bootstrap seed; writable per-user application and native updates.\n')
+
+
 def build(seed,output,*,formats=('deb','rpm')):
     if not formats or any(f not in ('deb','rpm') for f in formats) or len(set(formats))!=len(formats):
         raise ValueError('Expected distinct deb/rpm formats')
@@ -106,7 +101,7 @@ def build(seed,output,*,formats=('deb','rpm')):
         built=[]
         if 'deb' in formats:
             control=payload/'DEBIAN';control.mkdir()
-            (control/'control').write_text('Package: helene-python\nVersion: '+version+'+local\nArchitecture: amd64\nMaintainer: Hélène local candidate\nDepends: '+', '.join(('libc6 (>= '+abi+')',*DEBIAN))+'\nDescription: Broker-free Python Hélène desktop local candidate\n Immutable bootstrap seed; writable per-user application and native updates.\n',encoding='utf-8')
+            (control/'control').write_text(deb_control(version,abi),encoding='utf-8')
             deb=output/('helene-python_'+version+'+local_amd64.deb')
             if deb.exists():raise FileExistsError(deb)
             subprocess.run(['dpkg-deb','--build','--root-owner-group','-Zzstd','-z3','--threads-max=1',str(payload),str(deb)],check=True)

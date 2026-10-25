@@ -16,8 +16,7 @@ import threading
 _update_guard = threading.Lock()
 _update_targets = set()
 
-EXTENSION_ASSETS = {'toolchain':('Helene-components-toolchain.zip',),
-                    'xtts':('Helene-components-xtts-model.zip','Helene-components-xtts-runtime.zip'),
+EXTENSION_ASSETS = {'xtts':('Helene-components-xtts-model.zip','Helene-components-xtts-runtime.zip'),
                     'whisper':('Helene-components-whisper.zip',)}
 COMPONENTS = tuple(name for names in EXTENSION_ASSETS.values() for name in names)
 
@@ -25,8 +24,7 @@ COMPONENTS = tuple(name for names in EXTENSION_ASSETS.values() for name in names
 def installed_extensions(root):
     """Keep the owner's current choices on update; wizard defaults apply only once."""
     root=Path(root)
-    return [name for name,path in (('toolchain',root/'components/toolchain'),
-                                  ('xtts',root/'components/xtts'),('whisper',root/'voice/site-packages'))
+    return [name for name,path in (('xtts',root/'components/xtts'),('whisper',root/'voice/site-packages'))
             if path.is_dir() or (name=='xtts' and (root/'voice-xtts').is_dir()) or (name=='whisper' and any((root/'runtime'/site/'faster_whisper').is_dir() for site in ('','Lib/site-packages')))]
 
 
@@ -86,8 +84,8 @@ def update_check(owner,url):
     latest=value.get('version') or value.get('tag_name','')
     current=version(owner.root)
     assets=value.get('assets',[])
-    from .python_platform import asset_name, target
-    name=asset_name(latest.lstrip('vV'),target(owner.root))
+    from .python_platform import asset_name, target, distribution
+    name=asset_name(latest.lstrip('vV'),target(owner.root),distribution(owner.root))
     candidates=[a for a in assets if a.get('name')==name]
     asset=candidates[0] if len(candidates)==1 else {}
     address=value.get('url') if value.get('version') else asset.get('browser_download_url',value.get('html_url',''))
@@ -140,12 +138,12 @@ def _download(url, target, expected='', progress=None):
 def update_download(owner,url,sha256=None,extensions=None):
     parsed=urllib.parse.urlsplit(url)
     name=Path(urllib.parse.unquote(parsed.path)).name
-    from .python_platform import asset_name, target
+    from .python_platform import asset_name, target, distribution
     selected=target(owner.root)
-    suffix='' if selected=='windows-x86_64' else '-'+selected
-    ending=suffix+'.zip'
+    flavor=distribution(owner.root)
+    ending=asset_name('',selected,flavor).removeprefix('Helene-')
     release=name[len('Helene-'):-len(ending)] if name.startswith('Helene-') and name.endswith(ending) else ''
-    if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',release) or name != asset_name(release,selected):
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',release) or name != asset_name(release,selected,flavor):
         raise ValueError('Expected an update archive for this application target')
     folder=owner.root.resolve().parent
     report=lambda value:owner.event('package-progress',value)
@@ -157,7 +155,8 @@ def update_download(owner,url,sha256=None,extensions=None):
     from . import component_downloads
     manifest=component_downloads.incoming(result['path'])
     if manifest is not None:
-        components=component_downloads.fetch(owner.root,manifest,selected,report)
+        changed=component_downloads.changed_extensions(owner.root,manifest,selected) if extensions is None else selected
+        components=component_downloads.fetch(owner.root,manifest,changed,report)
     else:
         # Old packages have no map. Only that legacy format uses same-tag URLs.
         for component in dict.fromkeys(n for s in selected for n in EXTENSION_ASSETS[s]):
@@ -169,32 +168,9 @@ def update_download(owner,url,sha256=None,extensions=None):
     return result
 
 
-def _extract(archive, destination, progress=None, prefix='Helene/'):
-    destination=Path(destination).resolve()
-    with zipfile.ZipFile(archive) as reader:
-        for entry in reader.infolist():
-            out=(destination/entry.filename).resolve()
-            if (not out.is_relative_to(destination) or '\\' in entry.filename or ':' in entry.filename
-                    or '..' in Path(entry.filename).parts
-                    or not (entry.filename.startswith(prefix) or entry.filename.rstrip('/')==prefix.rstrip('/'))
-                    or (entry.external_attr >> 16) & 0o170000 == 0o120000):
-                raise ValueError('Invalid archive path (expected Helene/ root)')
-        total=sum(e.file_size for e in reader.infolist());done=0;reported=0.0
-        for index,entry in enumerate(reader.infolist(),1):
-            if entry.is_dir():continue
-            target=destination/entry.filename;target.parent.mkdir(parents=True,exist_ok=True)
-            temporary=target.with_name('.'+target.name+'.'+uuid.uuid4().hex+'.part')
-            try:
-                with reader.open(entry) as source,temporary.open('xb') as output:
-                    while chunk:=source.read(262144):
-                        output.write(chunk);done+=len(chunk)
-                        if progress and (time.monotonic()-reported>=.2 or done==total):
-                            progress({'stage':'unpacking','asset':Path(archive).name,'bytes':done,'total_bytes':total,'files':index,'total_files':len(reader.infolist()),'file':entry.filename});reported=time.monotonic()
-                if os.name != 'nt':
-                    mode=(entry.external_attr >> 16) & 0o777
-                    temporary.chmod((mode or 0o644) & 0o755)
-                temporary.replace(target)
-            finally:temporary.unlink(missing_ok=True)
+def _extract(archive, destination, progress=None, prefix='Helene/', reuse_from=None):
+    from .parallel_files import extract
+    return extract(archive,destination,progress,prefix)
 
 
 def update_install(owner,path,forceExtensions=False):
@@ -264,12 +240,12 @@ def _update_install(owner,path,forceExtensions=False):
         # A manually downloaded base ZIP is a complete application. Optional
         # components already installed in the working root remain there.
         pass
-    for item in archives:_extract(item,destination,lambda value:owner.event('package-progress',value))
+    for item in archives:_extract(item,destination,lambda value:owner.event('package-progress',value),reuse_from=owner.root if item==archive else None)
     new_root=destination/'Helene'
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
     from .python_platform import require_runtime
-    require_runtime(new_root)
+    require_runtime(new_root,owner.root)
     interpreter=new_root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
     if not interpreter.is_file():raise ValueError('Python application runtime is missing')
     import shutil

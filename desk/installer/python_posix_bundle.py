@@ -18,7 +18,6 @@ import zipfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import app_components,component_downloads,python_platform
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from python_app_bundle import component
 import deskpkg
 DESK=Path(__file__).resolve().parents[1]
 
@@ -53,10 +52,7 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     if target!=python_platform.runtime_target():raise ValueError('Assembly must run on the selected native OS/architecture')
     if output.exists():raise FileExistsError(output)
     if not re.fullmatch(r'\d+\.\d+\.\d+',version):raise ValueError('Expected numeric version')
-    if without_relay:
-        if relay or relay_source:raise ValueError('Explicit relay-unavailable assembly cannot contain relay inputs')
-    elif relay is None or relay.name!='helene-relay' or not relay.is_file() or relay_source is None:
-        raise ValueError('Expected exact POSIX relay input, or explicit --without-relay')
+    if relay or relay_source:raise ValueError('praxis-relay downloads separately; do not embed it in the base application')
     for source in (runtime,edition,*((relay_source,) if relay_source else ())):
         if not source.is_dir() or output.resolve().is_relative_to(source.resolve()):raise ValueError('Invalid or overlapping package input')
     if not (edition/'agent.py').is_file() or not (edition/'llm.py').is_file():raise ValueError('Selected agent source is incomplete')
@@ -95,6 +91,9 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
                 omitted.add(name)  # import-created empty directories are not payload
         return omitted
     shutil.copytree(edition,output/'tree',ignore=code_inputs)
+    (output/'shipped-code.json').write_text(json.dumps({'format':'helene-shipped-code.v1',
+        'files':{p.relative_to(output/'tree').as_posix():app_components.digest(p)
+                 for p in (output/'tree').rglob('*') if p.is_file()}},indent=2),encoding='utf-8')
     for forbidden in ('soul','memory','workspace','data','.env','AGENTS.md'):
         path=output/'tree'/forbidden
         if path.exists():raise ValueError('Private/identity material in code input: '+forbidden)
@@ -106,18 +105,14 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
                   'artifacts':{},'unavailable':{n:reason for n in sorted(component_downloads.EXTENSIONS)}}
         component_downloads.validate(manifest)
     (app/'component-downloads.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
-    components={'relay':{'unavailable':'No target-qualified native relay input was supplied; direct API mode only'}}
+    components={}
     (output/'components').mkdir(exist_ok=True)
-    if relay:
-        components['relay']=component(output,relay,relay_source)
-        shutil.copy2(relay,output/'helene-relay');(output/'helene-relay').chmod(0o755)
-        (output/'components/relay/binary/helene-relay').chmod(0o755)
     (output/'components/components.json').write_text(json.dumps({'format':'helene-components.v1','components':components},indent=2),encoding='utf-8')
     for binary,name in ((body,'helene-body'),(bridge,'helene-bridge')):
         if binary:
             shutil.copy2(binary,output/name);(output/name).chmod(0o755)
     (output/'python-app.json').write_text(json.dumps({'format':'helene-python-app.v1','version':version,
-        'entry':'app/python_app.py','window':'pywebview','target':target,'local_candidate':True,
+        'entry':'app/python_app.py','window':'pywebview','target':target,'local_candidate':True,'delivery':'portable',
         'native_inputs':{'relay':bool(relay),'body':bool(body),'bridge':bool(bridge)},
         'qualification':'Private candidate; native GUI/custody/update require platform consumer evidence',
         'extensions':{n:{'default':False,'available':n not in manifest.get('unavailable',{})} for n in sorted(component_downloads.EXTENSIONS)}},indent=2),encoding='utf-8')
@@ -125,12 +120,20 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     cfg={'mode':'local','tree':'data','code':'tree','python':'runtime/bin/python3','app':'app/deskapp.py',
          'runner':'app/localharness/runner.py','setup_complete':False,'port':8094,'relay':{'enabled':False},'voice':{'speak':False}}
     (output/'helene.json').write_text(json.dumps(cfg,indent=2),encoding='utf-8')
-    launcher='#!/bin/sh\nset -eu\nhere=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$here/runtime/bin/python3" -s "$here/app/python_app.py" --root "$here" "$@"\n'
+    entry='app/localharness/desktop_entry.py' if target.startswith('linux-') else 'app/python_app.py'
+    launcher='#!/bin/sh\nset -eu\nhere=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$here/runtime/bin/python3" -s "$here/'+entry+'" --root "$here" "$@"\n'
     (output/'helene').write_text(launcher,encoding='utf-8');(output/'helene').chmod(0o755)
+    menu=output/'Add Helene to Applications.sh'
+    menu.write_text('#!/bin/sh\nset -eu\nhere=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$here/helene" --install-desktop --notify\n',encoding='utf-8');menu.chmod(0o755)
     shutil.copy2(DESK.parent/'LICENSE',output/'LICENSE')
     shutil.copy2(DESK.parent/'NOTICE',output/'NOTICE')
     shutil.copy2(DESK/'installer/THIRD-PARTY.md',output/'THIRD-PARTY.md')
     shutil.copy2(DESK/'installer/PYTHON-START-HERE.md',output/'START-HERE.md')
+    if target.startswith('linux-'):
+        from linux_archive_entry import write as write_linux_entry
+        write_linux_entry(output)
+        from linux_libraries import bundle as bundle_libraries
+        bundle_libraries(output)
     # Use the same byte inventory the updater preserves. Mutable configuration,
     # user data, component overlays and this inventory itself are not retired.
     files={p.relative_to(output).as_posix():app_components.digest(p) for p in output.rglob('*')
@@ -151,7 +154,7 @@ if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('runtime','edition','output'):p.add_argument('--'+name,type=Path,required=True)
     p.add_argument('--relay',type=Path);p.add_argument('--relay-source',type=Path)
-    p.add_argument('--without-relay',action='store_true',help='Explicit direct-provider candidate; no bundled relay capability')
+    p.add_argument('--without-relay',action='store_true',help='Compatibility flag: relay is always downloaded separately')
     p.add_argument('--version',required=True);p.add_argument('--target',required=True)
     p.add_argument('--downloads',type=Path);p.add_argument('--body',type=Path);p.add_argument('--bridge',type=Path)
     a=p.parse_args();print(assemble(a.runtime,a.edition,a.relay,a.relay_source,a.output,version=a.version,target=a.target,downloads=a.downloads,body=a.body,bridge=a.bridge,without_relay=a.without_relay))

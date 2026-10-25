@@ -40,12 +40,17 @@ def wait_owner(pid):
         while time.monotonic()<deadline:
             try:os.kill(pid,0)
             except ProcessLookupError:return
+            import psutil
+            try:
+                if psutil.Process(pid).status()==psutil.STATUS_ZOMBIE:return
+            except psutil.NoSuchProcess:return
             time.sleep(.2)
         raise TimeoutError('Old Python owner did not exit; no update applied')
 
 
-def apply_files(source, target, recovery):
+def apply_files(source, target, recovery, *, consume=False, verified=None):
     """Overlay package files only; retain overwritten bytes and a rollback map."""
+    source,target,recovery=(Path(p).resolve() for p in (source,target,recovery))
     written=[]
     recovery.mkdir()
     def digest(path):
@@ -73,7 +78,7 @@ def apply_files(source, target, recovery):
             if destination.is_symlink():raise ValueError('Update destination is a symlink')
             previous=recovery/relative
             existed=destination.exists()
-            incoming=digest(item)
+            incoming=(verified or {}).get(str(item)) or digest(item)
             if (existed and destination.stat().st_size==item.stat().st_size and digest(destination)==incoming
                     and (os.name == 'nt' or destination.stat().st_mode & 0o777 == item.stat().st_mode & 0o777)):
                 continue
@@ -92,7 +97,9 @@ def apply_files(source, target, recovery):
             destination=target/relative
             temporary=destination.with_name('.'+destination.name+'.update-part')
             try:
-                if relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth' and item.stat().st_dev==destination.parent.stat().st_dev:
+                if consume:
+                    item.replace(temporary)
+                elif relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth' and item.stat().st_dev==destination.parent.stat().st_dev:
                     temporary.unlink(missing_ok=True);os.link(item,temporary)
                 else:shutil.copy2(item,temporary)
                 temporary.replace(destination)
@@ -131,7 +138,12 @@ def install(old, new):
         if config.is_file():config.unlink()
     # Existing migration moves internal data/source to independent preserved paths
     # and keeps external paths selected. Do this before replacing program bytes.
-    note=app_migration.prepare(old,new,old.parent/'Helene-update-data',preserve_voice=False)
+    metadata=json.loads((new/'python-app.json').read_text(encoding='utf-8')) if (new/'python-app.json').is_file() else {}
+    portable=metadata.get('delivery')=='portable'
+    note=app_migration.prepare(old,new,new/'profile' if portable else old.parent/'Helene-update-data',
+                               preserve_voice=False,preserve_downloads=False,independent=portable)
+    from localharness.code_transition import prepare as prepare_code
+    prepare_code(old,new,note)
     def relocate(value):
         if isinstance(value,str):
             path=Path(value)
@@ -141,10 +153,18 @@ def install(old, new):
     for config in configs(new):
         if not config.is_file():continue
         value=json.loads(config.read_text(encoding='utf-8'))
-        for key in ('python','app','runner'): 
+        for key in ('python','app','runner','tree','code'):
             if key in value:value[key]=relocate(value[key])
+        if isinstance(value.get('backup'),dict) and 'dir' in value['backup']:
+            value['backup']['dir']=relocate(value['backup']['dir'])
         config.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
     note['new_root']=str(old)
+    if portable:
+        for key in ('data_paths','copied_data'):
+            note[key]=[relocate(value) for value in note[key]]
+        for row in note['source_paths']:row['selected']=relocate(row['selected'])
+        for key in ('data_home','backup'):note[key]=relocate(note[key])
+        note['preserved_roots']={a:relocate(b) for a,b in note.get('preserved_roots',{}).items()}
     note['update_source']=str(new)
     app_migration.write_note(new,note)
     recovery=old.parent/('.helene-recovery-'+note['id'])
@@ -258,7 +278,14 @@ def perform(args):
         for archive in args.archive:archive.unlink(missing_ok=True)
         return 0
     try:
-        note,recovery=install(old,new)
+        from contextlib import ExitStack
+        from localharness.app_migration import discover
+        from localharness.desktop_supervisor import _tree_hold
+        with ExitStack() as holds:
+            profiles=discover(old)['agents'] if (old/'helene.json').is_file() else []
+            for tree in sorted({Path(row['tree']) for row in profiles}):
+                holds.enter_context(_tree_hold(tree))
+            note,recovery=install(old,new)
     except BaseException:
         reopen_previous()
         raise
@@ -267,7 +294,9 @@ def perform(args):
     child=None
     try:
         from localharness.desktop_supervisor import JobChild
-        child=JobChild.spawn([str(executable),str(old/'app/python_app.py'),'--root',str(old),'--migration',note['id'],*presentation],
+        entry=old/'app/localharness/desktop_entry.py'
+        launch=([str(entry),'--worker','--log',str(log)] if os.name!='nt' and entry.is_file() else [str(old/'app/python_app.py')])
+        child=JobChild.spawn([str(executable),*launch,'--root',str(old),'--migration',note['id'],*presentation],
                              cwd=old,env=dict(os.environ),log=log,stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:

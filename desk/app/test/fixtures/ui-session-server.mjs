@@ -142,7 +142,7 @@ const server=http.createServer(async(req,res)=>{
       const themeScript = theme==='dark'||theme==='light' ? `<script>addEventListener('load',()=>{document.documentElement.dataset.theme=${JSON.stringify(theme)}})</script>` : '';
       bytes=Buffer.from(bytes.toString().replace('</head>',injection+themeScript+'</head>'));
     }
-    res.writeHead(200,{'Content-Type':mime[extname(path)]||'application/octet-stream','Cache-Control':'no-store', ...(extraBytes?{'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-src 'none'"}:{})});res.end(bytes);
+    res.writeHead(200,{'Content-Type':mime[extname(path)]||'application/octet-stream','Cache-Control':'no-store', ...(extraBytes?{'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' blob:; font-src 'self'; object-src 'none'; frame-src 'none'"}:{})});res.end(bytes);
   }catch(e){res.writeHead(e.status||500,{'Content-Type':'text/plain'});res.end(String(e.message));}
 });
 server.on('upgrade',(req,socket)=>{

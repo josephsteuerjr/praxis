@@ -42,7 +42,7 @@ def install(tree: Path, bundle: Path | None = None, *, program: Path | None = No
             raise ValueError('XTTS bundle changed: '+relative)
         destination=(runtime if rel.parts[0]=='runtime' else model).joinpath(*rel.parts[1:])
         if destination.exists():
-            if destination.is_symlink() or not destination.is_file() or digest(destination)!=expected:
+            if destination.is_symlink() or not destination.is_file() or (not source.samefile(destination) and digest(destination)!=expected):
                 raise FileExistsError('XTTS destination differs; retained: '+str(destination))
         else:missing.append((source,destination,expected,rel.parts[0]))
     program.mkdir(parents=True,exist_ok=True)
@@ -53,7 +53,7 @@ def install(tree: Path, bundle: Path | None = None, *, program: Path | None = No
             if kind=='model' and source.suffix=='.pth' and source.stat().st_dev==temporary.stat().st_dev:
                 temporary.unlink();os.link(source,temporary)
             else:shutil.copy2(source,temporary)
-            if digest(temporary)!=expected:raise ValueError('XTTS copy changed')
+            if not source.samefile(temporary) and digest(temporary)!=expected:raise ValueError('XTTS copy changed')
             # Never overwrite a racing file; a retry verifies it before reuse.
             os.link(temporary,destination)
         finally:temporary.unlink(missing_ok=True)

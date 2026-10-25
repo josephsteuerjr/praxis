@@ -55,6 +55,7 @@ class Application:
         self.confirmed_ui = False
         self.browser_mode = False
         self.tray = None
+        self.voice_keys = None
         self.exiting = False
         self.token = secrets.token_urlsafe(32)
         self.events: list[dict] = []
@@ -97,6 +98,15 @@ class Application:
     def invoke(self, command, args):
         if not isinstance(command, str) or command.startswith("host_"):
             raise ValueError("Недоступный вызов оболочки")
+        if command == 'voice_shortcuts':
+            if self.browser_mode:return {'active':False,'error':'В браузере сочетание работает только внутри окна.'}
+            if self.voice_keys is None:
+                from localharness.voice_hotkeys import GlobalVoiceKeys
+                self.voice_keys=GlobalVoiceKeys(self)
+            return self.voice_keys.configure(args)
+        if command == 'voice_status':
+            if self.voice_keys:self.voice_keys.show(args)
+            return {'ok':True}
         if command in ('window_preferences','appearance_read','appearance_patch','appearance_reset'):
             from localharness import window_preferences as preferences
             if command == 'appearance_read':return preferences.read(self.root)
@@ -104,8 +114,8 @@ class Application:
             if command == 'appearance_patch':return preferences.change(self.root,args.get('patch'),args.get('seen'),appearance_only=True)
             return preferences.change(self.root,{args.get('key'):args.get('value')},args.get('seen'))
         if command == "components_status":
-            from localharness import app_components, component_downloads
-            return app_components.status(self.program, self.root)+component_downloads.status(self.program)
+            from localharness import standalone_relay, component_downloads
+            return [standalone_relay.status(self.program)]+component_downloads.status(self.program)
         if command == 'python_ready':
             return self.confirm_ui()
         if command == 'migration_wizard':
@@ -121,7 +131,11 @@ class Application:
             return None
         if command == "component_install":
             name=str(args.get('name',''))
-            if name in ('toolchain','xtts','whisper'):
+            if name == 'relay':
+                from localharness import standalone_relay
+                return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
+            if name == 'toolchain':raise ValueError('Инструменты сборки больше не поставляются с Hélène')
+            if name in ('xtts','whisper'):
                 from localharness import component_downloads
                 if self.host is None:raise RuntimeError('Select an agent before installing an optional component')
                 tree=self.host.current().tree
@@ -186,8 +200,18 @@ class Application:
                 from localharness import app_migration, owner_stop
                 proof=({'stopped':True,'root':str(self.root)} if owner_stop.stopped()
                        else migration_proof(self.host,self.root))
-                app_migration.confirm_started(self.root,self.migration_id,proof=proof)
+                migration=app_migration.confirm_started(self.root,self.migration_id,proof=proof) or {}
                 self.confirmed_ui=True
+                if migration.get('installed_package') and not migration.get('package_removed'):
+                    def finish_package():
+                        try:
+                            from localharness import installed_packages
+                            note=installed_packages.retire(self.root)
+                        except Exception as exc:
+                            note={'retirement_error':str(exc)}
+                        self.event('package-transition',{'removed':bool(note.get('package_removed')),
+                            'error':note.get('retirement_error','')})
+                    threading.Thread(target=finish_package,daemon=True).start()
         return {'confirmed':True,'migration_id':self.migration_id}
 
     @staticmethod
@@ -283,6 +307,14 @@ window.addEventListener('helene:ui-ready',()=>window.__HELENE__.invoke('python_r
   else if(e.name==='replace-window') location.replace('/');
   else if(e.name==='retire-window') location.replace('/__python__/retired?id='+encodeURIComponent(e.data.id));
   else if(e.name==='exit') window.__HELENE__.win('exit');
+  else if(e.name==='package-transition') {
+   let note=document.getElementById('package-transition-notice');
+   if(!note){note=document.createElement('div');note.id='package-transition-notice';note.setAttribute('role','status');
+    note.style.cssText='position:fixed;bottom:16px;left:16px;right:16px;z-index:10000;padding:16px;background:#f4efe6;color:#302c26;border:1px solid #a99f8d;border-radius:8px;white-space:pre-wrap';document.body.append(note);}
+   note.textContent=e.data.removed?'Переезд завершён. Прежний пакет удалён.':
+    'Новая Hélène работает. Удаление прежнего пакета пока не завершено: '+e.data.error+'\\nПовторим при следующем запуске.';
+   const close=document.createElement('button');close.textContent='Понятно';close.style.marginLeft='12px';close.onclick=()=>note.remove();note.append(close);
+  }
   else window.dispatchEvent(new CustomEvent('helene:'+e.name,{detail:e.data}));
  }
 } catch(e){console.error(e)} setTimeout(events,500)})();
@@ -327,9 +359,9 @@ window.addEventListener('helene:ui-ready',()=>window.__HELENE__.invoke('python_r
                 if path == "/" and app.host is None:
                     content = '''<!doctype html><html><head><meta charset="utf-8"><title>Hélène</title></head>
 <body style="background:#1d1914;color:#e5d7b8;font:18px system-ui;max-width:760px;margin:10vh auto;padding:24px">
-<h1>Hélène · Python</h1><p>Install the native components from the included offline bundle.
-Their exact source and toolchain stay beside the application. Your agent data is not replaced.</p>
-<div id="components"></div><button id="start">Start Hélène</button><pre id="status"></pre>
+<h1>Hélène · Python</h1><p>Дополнительные голосовые компоненты и praxis-relay можно установить здесь.
+Реле — отдельный продукт под лицензией MIT. Для запуска инструменты сборки не нужны.</p>
+<div id="components"></div><button id="start">Запустить Hélène</button><pre id="status"></pre>
 <script>
 async function paint(){const rows=await window.__HELENE__.invoke('components_status');
 const box=document.getElementById('components');box.replaceChildren();
@@ -398,6 +430,7 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
     def close(self):
         try:
             self.stopping.set()
+            if self.voice_keys:self.voice_keys.close()
             self.backup_thread.join()
             self.server.shutdown()
             self.server.server_close()
@@ -543,6 +576,10 @@ def _main(argv=None):
             ctypes.windll.user32.MessageBoxW(None, 'Emergency Stop requested. Automatic starts remain paused.', 'Hélène', 0)
         return 0
     os.environ['PYTHONNOUSERSITE']='1'
+    if sys.platform.startswith('linux'):
+        # Qt's GLib dispatcher can stall Chromium HTTP delivery on Debian 12.
+        # Use Qt's own event dispatcher; GPU and Chromium sandbox stay enabled.
+        os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
     from localharness import owner_stop
@@ -557,14 +594,22 @@ def _main(argv=None):
     interrupted=pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving'
     from localharness.essential_backup import load
     fresh=(root/'helene.json').is_file() and load(root/'helene.json').get('setup_complete') is False and not pending.exists()
-    if sys.platform.startswith('linux') and (args.migration_wizard or interrupted or (fresh and not args.browser)):
+    if sys.platform.startswith('linux') and not args.browser and (fresh or (root/'installed-package.json').is_file()):
+        from localharness.package_wizard import run as package_entry
+        if not package_entry(root):return 0
+        interrupted=pending.is_file() and load(pending).get('state')=='preserving'
+    if sys.platform.startswith('linux') and (args.migration_wizard or interrupted):
         from localharness.migration_wizard import run
         if not run(root):return 0
     elif interrupted:
         raise RuntimeError('Interrupted profile copy: resume migration before starting the application')
     if pending.is_file() and not args.migration:
         migrated=json.loads(pending.read_text(encoding='utf-8'))
-        if migrated.get('state')=='prepared':args.migration=migrated['id']
+        if migrated.get('state') in ('prepared','new_app_started','retirement_incomplete'):
+            args.migration=migrated['id']
+            if not migrated.get('update_source') and (root/'installed-package.json').is_file() and not migrated.get('installed_package'):
+                from localharness.app_migration import write_note
+                migrated['installed_package']=load(root/'installed-package.json');write_note(root,migrated)
     app = Application(root, ui, None, program)
     app.migration_id=args.migration
     app.browser_mode=args.browser
@@ -602,7 +647,7 @@ def _main(argv=None):
             # writer for native and browser windows alike.
             icon=program/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')
             webview.start(gui='qt' if sys.platform.startswith('linux') else None,
-                          private_mode=False,icon=str(icon) if icon.is_file() else None)
+                          private_mode=False,storage_path=str(root/'.webview'),icon=str(icon) if icon.is_file() else None)
     except KeyboardInterrupt:
         pass
     finally:

@@ -12,13 +12,16 @@ export function customizationCard(look: Look, rebuild: () => void): HTMLElement 
     for(const [id,label] of options){const o=document.createElement('option');o.value=id;o.textContent=label;input.append(o);}
     input.value=value;input.addEventListener('change',()=>change(input.value));row.append(input);return row;
   };
-  box.append(select('Готовый вид',[['paper','Бумага'],['clean','Чистый лист'],['compact','Рабочий стол']],look.density==='compact'?'compact':look.style,v=>{
-    Object.assign(look,load(),{style:v==='clean'?'clean':'paper',density:v==='compact'?'compact':'comfortable',grain:v==='paper'?'soft':'none'});save(look);apply(look);rebuild();
+  box.append(select('Готовый вид',[['paper','Бумага'],['clean','Чистый лист'],['compact','Рабочий стол'],['studio','Студия'],['glass','Стекло'],['terminal','Терминал']],look.density==='compact'&&look.style==='paper'?'compact':look.style,v=>{
+    Object.assign(look,load(),{style:v==='compact'?'paper':v,density:v==='compact'||v==='terminal'?'compact':'comfortable',grain:v==='paper'?'soft':'none',font:v==='terminal'?'mono':v==='paper'?'hand':'sans',shape:v==='terminal'?'square':v==='glass'?'round':'default',backdrop:v==='glass'?'glow':v==='studio'?'grid':'plain'});save(look);apply(look);rebuild();
   }));
   box.append(select('Тема',[['system','Системная'],['light','Светлая'],['dark','Тёмная']],readTheme(),v=>{saveTheme(v as Theme);Object.assign(look,load());apply(look);}));
   const size=el('label','look-row');size.append(el('span','look-label','Масштаб всего окна'));
   const slider=document.createElement('input');slider.type='range';slider.min='70';slider.max='150';slider.step='5';slider.value=String(Math.round(look.uiScale*100));slider.setAttribute('aria-label','Масштаб всего окна');
   const percent=el('output','look-name',slider.value+'%');slider.addEventListener('input',()=>{set('uiScale',Number(slider.value)/100);percent.textContent=slider.value+'%';window.dispatchEvent(new Event('resize'));});size.append(slider,percent);box.append(size);
+  box.append(select('Шрифт',[['hand','Почерк Hélène'],['sans','Современный'],['serif','Книжный'],['mono','Моноширинный']],look.font,v=>set('font',v as Look['font'])));
+  box.append(select('Форма',[['default','Стандартная'],['round','Мягкая'],['square','Прямые углы']],look.shape,v=>set('shape',v as Look['shape'])));
+  box.append(select('Фон',[['plain','Ровный'],['grid','Сетка'],['glow','Световые пятна']],look.backdrop,v=>set('backdrop',v as Look['backdrop'])));
   box.append(select('Плотность',[['comfortable','Свободно'],['compact','Компактно']],look.density,v=>set('density',v as Look['density'])));
   for(const side of ['rail','panel'] as const) {
     box.append(select(side==='rail'?'Список чатов':'История ходов',[['0','Показывать'],['1','Свернуть']],localStorage.getItem('frame.'+side)||'0',v=>{localStorage.setItem('frame.'+side,v);window.dispatchEvent(new CustomEvent('helene:appearance'));}));
