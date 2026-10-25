@@ -9,6 +9,7 @@
 // Состояние спрашивается у КАНАЛА (`/api/voice`, тот же `localharness/voice.py`,
 // которым голос поднимает раннер), а не считается здесь: вторая правда о том,
 // скачана ли модель, разъехалась бы с первой молча.
+import { voicePreferencesFields } from "../../ui-kit/window/voice-preferences";
 import { api, shell, channelURL } from "../../ui-kit/window/api";
 import { el, humanError } from "../../ui-kit/window/lib";
 import { button, card, choice, toggle } from "../../ui-kit/dom";
@@ -382,14 +383,14 @@ export function voiceCard(draft: Config): VoiceCard {
     }
   };
 
-  box.append(onOff, status, pickBox, actions, keepOff,
+  box.append(voicePreferencesFields(), onOff, status, pickBox, actions, keepOff,
     el("p", "field-hint",
       "Модель держится в памяти около 1,5 ГБ. Дома это дорого за несколько голосовых в день, поэтому по умолчанию " +
       "она загружается на время расшифровки и отпускается; на сервере наоборот. Применяется перезапуском."),
     el("hr", "card-split"),
     speakOff, speechStatus, speechPickBox, speechFields, speechActions,
     el("p", "field-hint",
-      "XTTS местный, без Piper и сетевого fallback. Модель XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License). Whisper — входящий голос; вместе готовятся к live-режиму. Настройки применяются перезапуском."));
+      "XTTS местный, без Piper и сетевого fallback. Модель XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License). Whisper распознаёт твои голосовые, XTTS озвучивает ответы. Настройки применяются перезапуском."));
 
   const onSection = (event: Event) => {
     if (!box.closest(".page")) {
@@ -405,7 +406,7 @@ export function voiceCard(draft: Config): VoiceCard {
 
   return {
     el: card("Голос", box,
-      "Обе половины — ЗДЕСЬ, на процессоре: ни запись, ни текст ответа никуда не отправляются. Движок, модель и голос качаются один раз, когда нужны."),
+      "Распознавание и синтез речи работают локально. Распознанный текст получает выбранная модель агента. Голосовые компоненты можно подготовить, когда они понадобятся."),
     enabled: () => enabled,
     model: () => model,
     keepLoaded: () => keep,

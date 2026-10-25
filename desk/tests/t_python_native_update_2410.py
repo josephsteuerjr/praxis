@@ -22,6 +22,15 @@ def put(root,name,data):
     p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data);return p
 
 class NativeUpdate(unittest.TestCase):
+    def test_local_window_does_not_resolve_network_hostname(self):
+        with tempfile.TemporaryDirectory() as temp, patch('socket.getfqdn',side_effect=AssertionError('Unexpected network lookup')):
+            app=python_app.Application(Path(temp),Path(temp))
+            try:
+                self.assertEqual(app.server.server_address[0],'127.0.0.1')
+                self.assertEqual(app.server.server_name,'localhost')
+                self.assertGreater(app.server.server_port,0)
+            finally:app.server.server_close()
+
     def test_duplicate_http_install_request_cannot_launch_two_helpers(self):
         with tempfile.TemporaryDirectory() as tmp:
             owner=SimpleNamespace(root=Path(tmp));entered=threading.Event();release=threading.Event();got=[]

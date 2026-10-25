@@ -1,0 +1,30 @@
+name: Portable 2.1 macOS qualification
+on:
+  push:
+    branches: [ci/portable210-macos]
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desk/app/package-lock.json
+      - name: Build current window
+        run: npm ci --prefix desk/remote && npm ci --prefix desk/app && npm run build --prefix desk/app
+      - name: Inspect published native baseline
+        run: python3 desk/tests/native_mac_portable210.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-portable210-evidence
+          path: |
+            evidence210/
+            !evidence210/**/test-key.pem
+            !evidence210/update/serve/**
+            !evidence210/migration/backup/**

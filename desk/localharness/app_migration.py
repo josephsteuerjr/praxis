@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 
@@ -33,7 +34,9 @@ def preserve_source(source: Path, destination: Path, progress=None):
     ephemeral = {'.desktop-owner.lock', '.python-desktop-status'}
     def ignore(directory, names):
         return [n for n in names if n in ephemeral or n.startswith(('.python-desktop-status.', '.python-window-'))]
+    from .parallel_files import copytree
     copied = 0
+    progress_lock=threading.Lock()
     def copy_file(src, dst):
         nonlocal copied
         path=Path(src)
@@ -48,8 +51,9 @@ def preserve_source(source: Path, destination: Path, progress=None):
             os.link(src,dst);result=str(dst)
         else:
             result = shutil.copy2(src, dst)
-        copied += Path(src).stat().st_size
-        if progress: progress({'stage':'preserving', 'bytes':copied, 'source':str(source)})
+        with progress_lock:
+            copied += Path(src).stat().st_size
+            if progress: progress({'stage':'preserving', 'bytes':copied, 'source':str(source)})
         return result
     if (source / '.git').is_file():
         def git(*args):
@@ -74,13 +78,13 @@ def preserve_source(source: Path, destination: Path, progress=None):
                 continue
             target = destination / path.name
             if path.is_dir() and not path.is_symlink():
-                shutil.copytree(path, target, symlinks=True, ignore=ignore, copy_function=copy_file)
+                copytree(path, target, symlinks=True, ignore=ignore, copy_function=copy_file)
             elif path.is_symlink():
                 target.symlink_to(os.readlink(path), target_is_directory=path.is_dir())
             else:
                 copy_file(path, target)
     else:
-        shutil.copytree(source, destination, symlinks=True, ignore=ignore, copy_function=copy_file)
+        copytree(source, destination, symlinks=True, ignore=ignore, copy_function=copy_file)
     return destination
 
 
@@ -189,12 +193,36 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
     return {'reused_files':reused,'copied_files':copied,'prior_delta':str(delta)}
 
 
-def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None):
+def preservation_roots(found, old_root, *, copy_external=False):
+    """One inventory for preservation and platform migration admission."""
+    roots=set()
+    for row in found['agents']:
+        roots.update(p for p in (Path(row['tree']),row['code']) if copy_external or p.is_relative_to(old_root))
+        for key in ('app','runner'):
+            if not row['value'].get(key):continue
+            script=Path(str(row['value'][key]))
+            script=(script if script.is_absolute() else Path(row['config']).parent/script).resolve()
+            stock={'app':('deskapp.py','app/deskapp.py'),
+                   'runner':('localharness/runner.py','app/localharness/runner.py')}[key]
+            if ((copy_external or script.is_relative_to(old_root)) and script.is_file()
+                    and not any(script==(old_root/p).resolve() for p in stock)):
+                roots.add(script.parent)
+    for source in list(roots):
+        for parent in (source,*source.parents):
+            if not copy_external and not parent.is_relative_to(old_root):break
+            if (parent/'.git').exists():
+                roots.add(parent);break
+    return roots
+
+
+def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None,independent=False,copy_external=False,preserve_downloads=True):
     old_root, new_root, data_home = (p.resolve() for p in (old_root, new_root, data_home))
     if new_root == old_root or new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
         raise ValueError("New and old program directories must be separate")
-    if data_home.is_relative_to(old_root) or data_home.is_relative_to(new_root):
+    if data_home.is_relative_to(old_root) or (data_home.is_relative_to(new_root) and not independent):
         raise ValueError("Migrated data must live outside both program directories")
+    if independent and data_home != new_root/'profile':
+        raise ValueError('Portable profile must be inside the new application profile directory')
     found = discover(old_root, path_aliases=path_aliases)
     had_service = any((r["value"].get("installed") or {}).get("service") is True for r in found["agents"])
     if had_service and not old_service_stopped:
@@ -227,27 +255,14 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         previous.update((Path(a).resolve(),Path(b).resolve()) for a,b in reuse.get('preserved_roots',{}).items())
     try:
         # Copy enclosing roots first so shared/nested data and code stay shared.
-        roots=set()
-        for row in found['agents']:
-            code=row['code']
-            roots.update(p for p in (Path(row['tree']),code) if p.is_relative_to(old_root))
-            for key in ('app','runner'):
-                if not row['value'].get(key):continue
-                script=Path(str(row['value'][key]))
-                script=(script if script.is_absolute() else Path(row['config']).parent/script).resolve()
-                stock={'app':('deskapp.py','app/deskapp.py'),
-                       'runner':('localharness/runner.py','app/localharness/runner.py')}[key]
-                if (script.is_relative_to(old_root) and script.is_file()
-                        and not any(script==(old_root/p).resolve() for p in stock)):
-                    roots.add(script.parent)
-        # A configured code subfolder can belong to an enclosing Git repository.
-        # Preserve that repository, not just source bytes stripped of history.
-        for source in list(roots):
-            for parent in (source,*source.parents):
-                if not parent.is_relative_to(old_root):break
-                if (parent/'.git').exists():
-                    roots.add(parent);break
+        roots=preservation_roots(found,old_root,copy_external=copy_external or independent)
+        if independent:
+            for source in roots:
+                if not source.is_dir() or source == Path(source.anchor) or new_root.is_relative_to(source):
+                    raise ValueError('Configured profile/code is missing or contains the new program: '+str(source))
         for source in sorted(roots,key=lambda p:len(p.parts)):
+            if source==new_root or new_root.is_relative_to(source) or data_home==source or data_home.is_relative_to(source):
+                raise ValueError('Preserved source overlaps the new program or data destination')
             if any(source.is_relative_to(parent) for parent in relocated):continue
             destination=previous.get(source)
             if destination is not None and not (source/'.git').is_file():
@@ -278,6 +293,12 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
             if destination.exists():
                 refresh_preserved(source,destination,data_home/operation/('previous-delta-'+str(index)),progress)
             else:preserve_source(source,destination,progress)
+            if independent:
+                from .portable_profile import detach_links, verify_copy
+                detach_links(source,destination,relocated)
+        if independent:
+            for source,destination in relocated.items():
+                verify_copy(source,destination,progress)
         for row in found["agents"]:
             source = Path(row["tree"])
             destination = selected(source)
@@ -288,7 +309,7 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
             # Match the runner's actual default, not a guessed stock tree.
             old_code = row['code']
             value['code']=str(selected(old_code))
-            if path_aliases is not None:
+            if path_aliases is not None or independent:
                 value['backup']=dict(value.get('backup') or {},dir=str(data_home/'backups'/Path(row['relative']).parent))
             source_paths.append({"old": str(old_code), "selected": value["code"]})
             value['python']=str(new_root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'))
@@ -315,6 +336,13 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         note['source_paths'] = source_paths
         note['preserved_roots']=pending['preserved_roots']
         note['data_home']=str(data_home);note['path_aliases']=path_aliases
+        if independent:
+            note['portable']=True
+            from .portable_profile import relative_config
+            for config in configs(staged):
+                if config.is_file():
+                    value=relative_config(load(config),new_root/config.relative_to(staged),new_root)
+                    config.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
         if reuse:note['resumed_copy']=reuse['id']
         (staged / "python-migration.json").write_text(json.dumps(note, indent=2), encoding="utf-8")
         new_root.mkdir(parents=True, exist_ok=True)
@@ -329,12 +357,9 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         for name in ('window-preferences.json','agent-default.json'):
             preferences=old_root/name
             if preferences.is_file():shutil.copy2(preferences,new_root/name)
-        from .component_downloads import preserve_cache
-        preserve_cache(old_root,new_root)
-        from .xtts_install import runtime_for
-        legacy_voice=runtime_for(old_root)
-        if preserve_voice and legacy_voice.is_dir() and not runtime_for(new_root).is_dir():
-            shutil.copytree(legacy_voice,new_root/'voice-xtts',dirs_exist_ok=True)
+        from .component_downloads import preserve_cache,preserve_installed
+        if preserve_downloads:preserve_cache(old_root,new_root)
+        if preserve_voice:preserve_installed(old_root,new_root)
         write_note(new_root,note)
         return note
     finally:

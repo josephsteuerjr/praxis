@@ -27,6 +27,8 @@
 // Кегли ≥ 12px и ничего бледнее `--ink-2` в тексте: `--muted` на белом даёт 2,75:1
 // при норме 4,5. Движение — только CSS и один requestAnimationFrame по кнопке
 // «Проиграть ход»; при `prefers-reduced-motion` ход проигрывается шагами, без полёта.
+import { voiceHelp } from "../voice-preferences";
+import { cfg } from "../api";
 import { api } from "../api";
 import { esc } from "../lib";
 import { LOCAL_AGENT, S, foreignHarness, type Run, type View } from "../state";
@@ -780,7 +782,6 @@ const svgIcon = (paths: string, cls = "lrn-ico") =>
   `<svg class="${cls}" viewBox="0 0 20 20" aria-hidden="true">${paths}</svg>`;
 
 function hero(): string {
-  const name = (S.agent || "Агент").trim();
   const st = S.agentState;
   // Чужой харнесс (Praxis на сервере) сердцебиения раннера не шлёт: там «на связи» —
   // это живой канал, а не пульс, которого нет по построению.
@@ -794,24 +795,15 @@ function hero(): string {
     ? `<span class="hero-pill${alive ? " is-live" : ""}"><i></i>${alive ? "на связи" : "не на связи"}</span>` +
       (model ? `<span class="hero-pill">думает моделью <b>${esc(model)}</b></span>` : "")
     : "";
-  return `<header class="lrn-hero reveal" id="lrn-top">
-    <div class="lrn-hero-text">
-      <p class="lrn-kicker">Онбординг</p>
-      <h2 class="lrn-hero-title">Знакомься: <span class="lrn-name">${esc(name)}<svg class="lrn-underline" viewBox="0 0 200 14" preserveAspectRatio="none" aria-hidden="true"><path pathLength="1" d="M3 9 C 40 3, 70 12, 104 7 S 170 4, 197 8"/></svg></span></h2>
+  return `<header class="lrn-hero lrn-welcome" id="lrn-top">
+    <div class="lrn-hero-text"><p class="lrn-kicker">Hélène · твой агент</p>
+      <h2 class="lrn-hero-title">Начнём с того,<br>что важно тебе.</h2>
       <p class="lrn-lead">${esc(lead)}</p>
-      ${status ? `<div class="hero-pills">${status}</div>` : ""}
+      <div class="lrn-welcome-actions"><button class="btn btn-primary" type="button" data-onboarding-done>${cfg.needs_local_setup ? 'Подключить модель' : 'Начать разговор'}</button><button class="btn btn-quiet" type="button" data-voice-help>Можно голосом</button></div>
+      ${status ? `<div class="hero-pills">${status}</div>` : ''}
     </div>
-    <svg class="lrn-orbit" viewBox="0 0 240 240" aria-hidden="true">
-      <circle class="orbit orbit-1" cx="120" cy="120" r="46"/>
-      <circle class="orbit orbit-2" cx="120" cy="120" r="78"/>
-      <circle class="orbit orbit-3" cx="120" cy="120" r="108"/>
-      <g class="spin spin-1"><circle class="moon" cx="166" cy="120" r="5"/></g>
-      <g class="spin spin-2"><circle class="moon moon-soft" cx="120" cy="42" r="6.5"/></g>
-      <g class="spin spin-3"><circle class="moon" cx="12" cy="120" r="4"/><circle class="moon moon-soft" cx="228" cy="120" r="3"/></g>
-      <circle class="core" cx="120" cy="120" r="18"/>
-      <circle class="core-ring" cx="120" cy="120" r="26"/>
-    </svg>
-  </header>`;
+    <aside class="lrn-welcome-note"><span class="lrn-kicker">С чего начинается помощь</span><p>«Помоги разобраться с…»</p><p>«Посмотри этот файл…»</p><p>«Давай закончим…»</p><span>Добавь своё дело. Дальше разберётесь вместе.</span></aside>
+  </header><div class="lrn-start-cards"><article><span>01</span><h3>Подключись</h3><p>Выбери модель в настройках. Реле устанавливается отдельно; инструменты для сборки не нужны.</p><button class="flow-go" data-go="settings">Открыть настройки →</button></article><article><span>02</span><h3>Скажи, что нужно</h3><p>Текстом или голосом. Приложи файл, укажи желаемый результат — и начни разговор.</p><button class="flow-go" data-voice-help>Как записать голосовое →</button></article><article><span>03</span><h3>Продолжай с того же места</h3><p>Переписка, память и проекты остаются с агентом. Его действия видны рядом с разговором.</p><button class="flow-go" data-go="talk">Перейти в чат →</button></article></div>`;
 }
 
 function toc(): string {
@@ -1030,6 +1022,11 @@ export async function render(container: HTMLElement): Promise<void> {
     </section>
   </div>`;
 
+  container.querySelectorAll('[data-voice-help]').forEach(button=>button.addEventListener('click',voiceHelp));
+  container.querySelector('[data-onboarding-done]')?.addEventListener('click',()=>{
+    if(!cfg.needs_local_setup)localStorage.setItem('helene.onboarding.210','done');
+    dispatchEvent(new CustomEvent('frame-go',{detail:cfg.needs_local_setup?'settings':'talk'}));
+  });
   const root = container.querySelector<HTMLElement>(".learn");
   if (!root) return;
   const byId = new Map(list.map((s) => [s.id, s]));
