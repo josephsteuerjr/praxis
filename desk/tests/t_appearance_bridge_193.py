@@ -13,7 +13,7 @@ const vm=require('node:vm'),assert=require('node:assert/strict'),fs=require('nod
 const bridge=JSON.parse(fs.readFileSync(0,'utf8'));
 class Storage {constructor(){this.items={}}setItem(k,v){this.items[k]=String(v)}removeItem(k){delete this.items[k]}getItem(k){return this.items[k]??null}}
 const store=new Storage(),events=[];let current={seen:'agent-new',values:{'helene.look':'{"uiScale":0.8,"dayColor":"#ccddff"}'}};
-const context={Storage,console,Promise,setTimeout:()=>0,CustomEvent:class{constructor(name,data){this.type=name;this.detail=data?.detail}},window:{localStorage:store,dispatchEvent:e=>events.push(e)},location:{replace:()=>{}},encodeURIComponent};
+const context={Storage,console,Promise,setTimeout:()=>0,CustomEvent:class{constructor(name,data){this.type=name;this.detail=data?.detail}},window:{addEventListener:()=>{},localStorage:store,dispatchEvent:e=>events.push(e)},location:{replace:()=>{}},encodeURIComponent};
 context.fetch=async(url,opts)=>({ok:true,json:async()=>{
  if(url.endsWith('/events'))return [];
  const request=JSON.parse(opts.body);

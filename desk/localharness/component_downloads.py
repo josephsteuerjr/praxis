@@ -20,7 +20,8 @@ if not __package__:
 
 FORMAT = 'helene-component-downloads.v1'
 MANIFEST = 'component-downloads.json'
-EXTENSIONS = {'toolchain', 'xtts', 'whisper'}
+EXTENSIONS = {'xtts', 'whisper'}
+LEGACY_EXTENSIONS = EXTENSIONS | {'toolchain'}
 MAX_MANIFEST = 65536
 
 
@@ -28,10 +29,10 @@ def validate(value):
     if not isinstance(value, dict) or value.get('format') != FORMAT:
         raise ValueError('Unsupported component download manifest')
     groups, artifacts = value.get('extensions'), value.get('artifacts')
-    if not isinstance(groups, dict) or set(groups) != EXTENSIONS or not isinstance(artifacts, dict):
+    if not isinstance(groups, dict) or not EXTENSIONS <= set(groups) <= LEGACY_EXTENSIONS or not isinstance(artifacts, dict):
         raise ValueError('Incomplete component download manifest')
     unavailable=value.get('unavailable',{})
-    if (not isinstance(unavailable,dict) or any(k not in EXTENSIONS or not isinstance(v,str) or not v.strip() for k,v in unavailable.items())):
+    if (not isinstance(unavailable,dict) or any(k not in LEGACY_EXTENSIONS or not isinstance(v,str) or not v.strip() for k,v in unavailable.items())):
         raise ValueError('Invalid unavailable-component reasons')
     names = set()
     for key, row in artifacts.items():
@@ -207,6 +208,8 @@ def preserve_installed(previous, current):
     """First migration retains optional payloads without fetching them again."""
     from .parallel_files import copytree
     previous,current=Path(previous),Path(current)
+    from .standalone_relay import preserve
+    preserve(previous,current)
     for relative in ('components/toolchain','components/xtts','components/whisper','voice','voice-xtts'):
         source=previous/relative;target=current/relative
         if source.is_dir() and not target.exists():
@@ -265,9 +268,9 @@ def status(program):
                   'error':manifest['unavailable'][name]} if name in manifest.get('unavailable',{}) else
                  {'id':name,'ready':True,'installed':name in installed,
                   'download_bytes':sum(row['size'] for row in select(manifest,[name]))})
-                for name in ('toolchain','xtts','whisper')]
+                for name in ('xtts','whisper')]
     except (OSError,ValueError,KeyError) as error:
-        return [{'id':name,'ready':False,'installed':False,'error':str(error)} for name in ('toolchain','xtts','whisper')]
+        return [{'id':name,'ready':False,'installed':False,'error':str(error)} for name in ('xtts','whisper')]
 
 
 def prepare(program, extensions, *, offline=None, progress=None):

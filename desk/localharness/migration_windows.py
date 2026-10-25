@@ -49,7 +49,7 @@ def service(old):
 def close_python(old):
     if os.name!='nt':return
     env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()))
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @((Get-CimInstance Win32_Process)|Where-Object {$_.ExecutablePath -and $_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\python.exe',[StringComparison]::OrdinalIgnoreCase)}|Select-Object ProcessId,CommandLine)|ConvertTo-Json -Compress",env)
+    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @((Get-CimInstance Win32_Process)|Where-Object {$_.ExecutablePath -and ($_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\python.exe',[StringComparison]::OrdinalIgnoreCase) -or $_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\pythonw.exe',[StringComparison]::OrdinalIgnoreCase))}|Select-Object ProcessId,CommandLine)|ConvertTo-Json -Compress",env)
     rows=json.loads(raw or '[]')
     if isinstance(rows,dict):rows=[rows]
     owners=[row for row in rows if references_root(row.get('CommandLine',''),str(old/'app/python_app.py'))]
@@ -72,8 +72,35 @@ def close_python(old):
             value=agent['value']
             if value.get('mode')=='remote':continue
             record=Path(agent['tree'])/'.desktop-owner.lock'
-            if record.exists() and record.read_bytes()!=b'clean\n':
-                raise RuntimeError('Python owner exited without confirmed child teardown; previous installation retained')
+            if not owner_lease_available(record):
+                raise RuntimeError('Previous Python owner still holds its data lease; previous installation retained')
+
+
+def owner_lease_available(path):
+    """Probe the real lease without deleting or rewriting its diagnostic record."""
+    if not path.exists():return True
+    if os.name!='nt':
+        import fcntl
+        with path.open('rb') as reader:
+            try:fcntl.flock(reader.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:return False
+            fcntl.flock(reader.fileno(),fcntl.LOCK_UN);return True
+    import ctypes as c
+    from ctypes import wintypes as w
+    import msvcrt
+    kernel=c.WinDLL('kernel32',use_last_error=True)
+    create=kernel.CreateFileW;create.argtypes=[w.LPCWSTR,w.DWORD,w.DWORD,c.c_void_p,w.DWORD,w.DWORD,w.HANDLE];create.restype=w.HANDLE
+    handle=create(str(path),0x80000000,0,None,3,0x00200080,None)
+    if handle==c.c_void_p(-1).value:
+        code=c.get_last_error()
+        if code in (32,33):return False
+        raise c.WinError(code)
+    try:descriptor=msvcrt.open_osfhandle(handle,os.O_RDONLY|os.O_BINARY)
+    except Exception:
+        kernel.CloseHandle.argtypes=[w.HANDLE];kernel.CloseHandle(handle);raise
+    with os.fdopen(descriptor,'rb') as reader:
+        if os.fstat(reader.fileno()).st_file_attributes&0x400:raise ValueError('Owner lease is a reparse point')
+        return True
 
 
 def stop(old):
@@ -168,7 +195,9 @@ def retire(old,new):
     roots=[_known_folder('A77F5D77-2E2B-44C3-A6A2-ABA601054A51') or Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs',
            _known_folder('B4BFCC3A-DB2C-424C-B029-7FE99A87C641') or Path.home()/'Desktop',
            _known_folder('0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8') or Path(os.environ['PROGRAMDATA'])/'Microsoft/Windows/Start Menu/Programs',
-           _known_folder('C4AA340D-F20F-4863-AFEF-F87EF2E6BA25') or Path(os.environ.get('PUBLIC',str(Path.home())))/'Desktop']
+           _known_folder('C4AA340D-F20F-4863-AFEF-F87EF2E6BA25') or Path(os.environ.get('PUBLIC',str(Path.home())))/'Desktop',
+           Path(os.environ['APPDATA'])/'Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar',
+           Path(os.environ['APPDATA'])/'Microsoft/Internet Explorer/Quick Launch/User Pinned/StartMenu']
     result['shortcuts_replaced']=retarget_shortcuts(old,new,roots)
     if not result['shortcuts_replaced']:
         shortcut(roots[0]/'Helene Python.lnk',new/'helene.exe',new)

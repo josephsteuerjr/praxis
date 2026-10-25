@@ -1,10 +1,7 @@
 {
   "format": "helene-component-downloads.v1",
-  "app_version": "1.9.3",
+  "app_version": "2.1.0",
   "extensions": {
-    "toolchain": [
-      "toolchain"
-    ],
     "xtts": [
       "xtts_runtime",
       "xtts_model"
@@ -14,12 +11,6 @@
     ]
   },
   "artifacts": {
-    "toolchain": {
-      "name": "Helene-components-toolchain.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v1.9.2/Helene-components-toolchain.zip",
-      "sha256": "230025210a0b34225f0cfde74db04780145648813d9b8c8ad6fc395c2d479934",
-      "size": 683294180
-    },
     "xtts_model": {
       "name": "Helene-components-xtts-model.zip",
       "url": "https://github.com/josephsteuerjr/praxis/releases/download/v1.9.2/Helene-components-xtts-model.zip",

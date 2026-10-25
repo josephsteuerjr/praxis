@@ -66,7 +66,7 @@ def copy_program(package, new, progress, extensions=None):
     xtts_files=set(json.loads(bundle.read_text(encoding='utf-8'))['files'])|{'xtts-bundle.json'} if bundle.is_file() else None
     def selected(path):
         parts=path.relative_to(package).parts
-        if parts[:2]==('components','toolchain'):return 'toolchain' in extensions
+        if parts[:2]==('components','toolchain'):return False
         if parts[:2]==('components','xtts'):return 'xtts' in extensions and (xtts_files is None or Path(*parts[2:]).as_posix() in xtts_files)
         if parts[0]=='voice' or parts[:2]==('components','whisper'):return 'whisper' in extensions
         return True
@@ -315,9 +315,24 @@ def installation_lock(target, *, timeout_sec=0):
     from localharness.phone_tunnel.platform_support import acquire_file_lock,release_file_lock
     target=Path(target).resolve();target.parent.mkdir(parents=True,exist_ok=True)
     identity=hashlib.sha256(os.path.normcase(str(target)).encode()).hexdigest()[:24]
-    lock=acquire_file_lock(target.parent/('.helene-install-'+identity+'.lock'),timeout_sec=timeout_sec)
-    try:yield
-    finally:release_file_lock(lock)
+    if os.name=='nt':state=Path(os.environ.get('LOCALAPPDATA') or Path.home()/'AppData/Local')/'Helene'
+    elif sys.platform=='darwin':state=Path.home()/'Library/Application Support/Helene'
+    else:state=Path(os.environ.get('XDG_STATE_HOME') or Path.home()/'.local/state')/'helene'
+    directory=state/'installation-locks';directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+    lock=acquire_file_lock(directory/(identity+'.lock'),timeout_sec=timeout_sec)
+    legacy=None
+    try:
+        # Also fence older helpers whenever their historical parent lock is
+        # writable. A root-owned /opt parent cannot host that old lock; all new
+        # fresh/update/recovery consumers still share the same user-state lock.
+        try:legacy=acquire_file_lock(target.parent/('.helene-install-'+identity+'.lock'),timeout_sec=timeout_sec)
+        except Exception as exc:
+            import errno
+            cause=exc.__cause__
+            if not isinstance(cause,OSError) or cause.errno not in (errno.EACCES,errno.EPERM,errno.EROFS):raise
+        yield
+    finally:
+        release_file_lock(legacy);release_file_lock(lock)
 
 
 def main():

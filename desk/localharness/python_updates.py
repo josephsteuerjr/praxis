@@ -16,8 +16,7 @@ import threading
 _update_guard = threading.Lock()
 _update_targets = set()
 
-EXTENSION_ASSETS = {'toolchain':('Helene-components-toolchain.zip',),
-                    'xtts':('Helene-components-xtts-model.zip','Helene-components-xtts-runtime.zip'),
+EXTENSION_ASSETS = {'xtts':('Helene-components-xtts-model.zip','Helene-components-xtts-runtime.zip'),
                     'whisper':('Helene-components-whisper.zip',)}
 COMPONENTS = tuple(name for names in EXTENSION_ASSETS.values() for name in names)
 
@@ -25,8 +24,7 @@ COMPONENTS = tuple(name for names in EXTENSION_ASSETS.values() for name in names
 def installed_extensions(root):
     """Keep the owner's current choices on update; wizard defaults apply only once."""
     root=Path(root)
-    return [name for name,path in (('toolchain',root/'components/toolchain'),
-                                  ('xtts',root/'components/xtts'),('whisper',root/'voice/site-packages'))
+    return [name for name,path in (('xtts',root/'components/xtts'),('whisper',root/'voice/site-packages'))
             if path.is_dir() or (name=='xtts' and (root/'voice-xtts').is_dir()) or (name=='whisper' and any((root/'runtime'/site/'faster_whisper').is_dir() for site in ('','Lib/site-packages')))]
 
 

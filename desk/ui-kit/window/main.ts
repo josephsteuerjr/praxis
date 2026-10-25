@@ -13,7 +13,7 @@ import "./styles/app.css";
 import "./styles/paper.css";
 // Колонка ходов справа (28.09, переделана целиком).
 import "./styles/turns.css";
-import { ApiError, api, cfg, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
+import { ApiError, api, cfg, channelURL, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { mountAutonomy, type AutonomyState } from "../autonomy";
 import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
@@ -23,7 +23,7 @@ import { activityWords, engineOperationObserved, engineWords, type EngineOperati
 import { watchShellVersion } from "../../ui-kit/version";
 import { setResultFetcher } from "../../ui-kit/steps";
 import { bindFail, esc, failHTML, fmtAge, fmtDur, fmtK, fmtTs, humanError, q, toast } from "../../ui-kit/window/lib";
-import { LEGACY_WINDOW_KEY, PRODUCT_NAME, S, setLocalAgent, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
+import { LOCAL_AGENT, LEGACY_WINDOW_KEY, PRODUCT_NAME, S, setLocalAgent, setProductName, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type AgentState, type Pending, type Room, type View } from "../../ui-kit/window/state";
 import { hostInfo } from "../../ui-kit/window/host";
 import { clientIsMac, kbdLabel, platformOf } from "../../ui-kit/platform";
 import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../../ui-kit/window/rooms";
@@ -39,6 +39,7 @@ import * as frame from "../../ui-kit/window/views/frame";
 import * as files from "../../ui-kit/window/views/files";
 import * as journal from "../../ui-kit/window/views/journal";
 import * as anatomy from "../../ui-kit/window/views/anatomy";
+import { mountVoiceComposer, mountVoiceAttachment } from "./voice-composer";
 import * as learn from "../../ui-kit/window/views/learn";
 import * as settings from "../../ui-kit/window/views/settings-frame";
 
@@ -76,6 +77,7 @@ export interface WindowOptions {
 export function start(opts: WindowOptions): void {
   setProductName(opts.productName);
   setLocalAgent(opts.localAgent !== false && cfg.local_agent !== false);
+  if (LOCAL_AGENT && localStorage.getItem('helene.onboarding.210') !== 'done') S.view = 'learn';
 
 
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
@@ -321,13 +323,16 @@ export function start(opts: WindowOptions): void {
     paintActivity();
   }
 
+  let voiceAttachmentCleanup: Array<() => void> = [];
   function paintFiles() {
+    for(const dispose of voiceAttachmentCleanup)dispose();voiceAttachmentCleanup=[];
     composerFiles.hidden = attachments.length === 0;
     composerFiles.innerHTML = attachments
       .map((a, i) => a.kind === "audio"
-        ? `<span class="chip chip-voice"><span class="chip-ico" aria-hidden="true">🎤</span><span>голосовое${a.seconds ? " · " + fmtDur(a.seconds) : ""}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`
+        ? `<div class="voice-attachment" data-voice-attachment="${i}"><button type="button" class="voice-round" data-voice-play aria-label="Прослушать">▶</button><div><canvas width="384" height="36" aria-label="Звуковая волна"></canvas><span data-voice-time>${a.seconds ? fmtDur(a.seconds) : 'Голосовое сообщение'}</span></div><button type="button" class="voice-round" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></div>`
         : `<span class="chip">${a.kind === "image" ? `<img src="${a.url}" alt="">` : `<span class="chip-ico" aria-hidden="true">📄</span>`}<span>${esc(a.name)}</span> <span class="muted">${fmtK(a.size)}</span><button type="button" data-i="${i}" title="Убрать" aria-label="Убрать">×</button></span>`)
       .join("");
+    composerFiles.querySelectorAll<HTMLElement>('[data-voice-attachment]').forEach(node=>{voiceAttachmentCleanup.push(mountVoiceAttachment(node,attachments[Number(node.dataset.voiceAttachment)].url));});
     composerFiles.querySelectorAll<HTMLButtonElement>("button[data-i]").forEach((b) => {
       b.addEventListener("click", () => dropFile(Number(b.dataset.i)));
     });
@@ -351,118 +356,24 @@ export function start(opts: WindowOptions): void {
     attachInput.value = "";
   });
 
-  // ---------------------------------------------------------------- голосовое (0.6.0)
-  // Кнопка микрофона есть только в окне Элен (app/index.html): у издания к серверу
-  // нет раннера, расшифровывать некому. Запись — MediaRecorder в webm/opus, до
-  // пяти минут; вторая кнопка — стоп; результат ложится вложением рядом с текстом.
-  // Готовность слуха спрашивается у канала (`/api/voice`) ДО записи: записывать то,
-  // что некому расшифровать, — обещание без исполнения, и владелец узнал бы об
-  // этом уже из ответа агента.
+  // Shared recording owner: mouse/local hold pauses, global release sends.
   const micBtn = document.querySelector<HTMLButtonElement>("#mic");
-  const MIC_MAX_SEC = 300;
-  let rec: MediaRecorder | null = null;
-  let recStream: MediaStream | null = null;
-  let recTick = 0;
-  let micStarting = false;
-  function micCanStart() {
-    return S.view === "talk" && !S.rooms.find(r => r.key === S.room)?.stub
-      && !ownerState?.stopped && !engineOperation;
-  }
-  function syncMicButton() {
-    // Остановить уже начатую запись можно и после остановки движка.
-    // У серверного издания этой кнопки вообще нет.
-    if (micBtn) micBtn.disabled = micStarting || (!rec && !micCanStart());
-  }
-  const micIdle = () => {
-    micBtn?.classList.remove("recording");
-    if (micBtn) {
-      micBtn.title = "Записать голосовое · Alt+Enter";
-      micBtn.setAttribute("aria-label", "Записать голосовое");
-    }
-    if (recTick) { clearInterval(recTick); recTick = 0; }
-    rec = null;
-    if (recStream) { for (const t of recStream.getTracks()) t.stop(); recStream = null; }
-    syncMicButton();
-  };
-  async function micToggle() {
-    if (!micBtn) return;
-    if (rec) {
-      if (rec.state !== "inactive") rec.stop();
-      return;
-    }
-    if (micStarting || !micCanStart()) return;
-    const room = S.room;
-    micStarting = true;
-    micBtn.title = "Подготовка записи…";
-    micBtn.setAttribute("aria-label", "Подготовка записи");
-    syncMicButton();
-    try {
-      try {
-        const v = await api<{ ready?: boolean; why?: string }>("/api/voice");
-        if (!v.ready) { toast(`Голосовое некому расшифровать: ${v.why || "слух не поднят"}. Настройки → Голос.`); return; }
-      } catch {
-        // Канал не ответил — причину, если что, назовёт раннер в реплике.
-      }
-      if (!micCanStart() || S.room !== room) return;
-      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-        toast("В этом окне нет доступа к микрофону");
-        return;
-      }
-      try { recStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-      catch (e) { toast("Микрофон не дали: " + humanError(e).text); return; }
-      // Пока открыто системное разрешение, можно уйти в другой чат/раздел.
-      if (!micCanStart() || S.room !== room) return;
-      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"].find((m) => MediaRecorder.isTypeSupported(m)) || "";
-      const recorder = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
-      const chunks: Blob[] = [];
-      const started = Date.now();
-      rec = recorder;
-      recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-      recorder.onerror = () => {
-        if (rec !== recorder) return;
-        toast("Запись оборвалась");
-        micIdle();
-      };
-      recorder.onstop = () => {
-        // Позднее завершение сломанного рекордера не трогает новую запись.
-        if (rec !== recorder) return;
-        const seconds = Math.max(1, Math.round((Date.now() - started) / 1000));
-        const type = baseMime(recorder.mimeType || mime || "audio/webm") || "audio/webm";
-        const blob = new Blob(chunks, { type });
-        micIdle();
-        if (blob.size < 1024) { toast("Запись слишком короткая"); return; }
-        const ext = type === "audio/ogg" ? "ogg" : type === "audio/mp4" ? "m4a" : "webm";
-        const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
-        void addFiles([new File([blob], `voice-${stamp}.${ext}`, { type })], seconds);
-      };
-      recorder.start(250);
-      micBtn.classList.add("recording");
-      const paintRecording = () => {
-        const s = Math.round((Date.now() - started) / 1000);
-        micBtn.title = `Идёт запись · ${fmtDur(s)} · Alt+Enter или нажми, чтобы закончить`;
-        micBtn.setAttribute("aria-label", micBtn.title);
-        if (s >= MIC_MAX_SEC && recorder.state !== "inactive") { toast("Пять минут — предел одного голосового"); recorder.stop(); }
-      };
-      paintRecording();
-      recTick = window.setInterval(paintRecording, 500);
-    } catch (e) {
-      toast("Запись не началась: " + humanError(e).text);
-      micIdle();
-    } finally {
-      micStarting = false;
-      if (!rec) micIdle();
-      else syncMicButton();
-    }
-  }
-  function micShortcut(e: KeyboardEvent) {
-    if (e.key !== "Enter" || !e.altKey || e.ctrlKey || e.metaKey || e.shiftKey
-      || e.isComposing || e.defaultPrevented || S.view !== "talk" || !micBtn) return;
-    e.preventDefault();
-    // Удержание клавиш не переключает запись туда-обратно.
-    if (!e.repeat && !micBtn.disabled) void micToggle();
-  }
-  micBtn?.addEventListener("click", () => void micToggle());
-  document.addEventListener("keydown", micShortcut);
+  const voiceComposer = micBtn ? mountVoiceComposer({mic: micBtn, composer: composerBox,
+    target: () => ownerState?.stopped || engineOperation || S.rooms.find(r=>r.key===S.room)?.stub ? null
+      : {agent:S.agent,room:S.room,name:S.roomName || S.agent,route:channelURL('/api/say')},
+    send: async (blob,target) => {
+      if(S.agent!==target.agent || ownerState?.stopped || engineOperation) throw Error('Агент сменился или остановлен. Запись сохранена.');
+      const mime=baseMime(blob.type), ext=mime==='audio/mp4'?'m4a':mime==='audio/ogg'?'ogg':'webm';
+      const file=new File([blob],`voice-${Date.now()}.${ext}`,{type:mime});
+      const payload:Record<string,unknown>={text:'',attachments:[{name:file.name,mime,data:await fileToBase64(file)}]};
+      if(target.room!==WINDOW_ROOM)payload.chat=target.room;
+      if(target.route!==channelURL('/api/say'))throw Error('Получатель сменился. Запись сохранена для прежнего чата.');
+      const response=await fetch(target.route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+      if(!response.ok)throw Error('Не удалось отправить голосовое ('+response.status+'). Запись сохранена.');
+      talk.afterSend();
+    },
+  }) : null;
+  function syncMicButton(){voiceComposer?.sync();}
   say.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -645,11 +556,15 @@ export function start(opts: WindowOptions): void {
     if (!event.persisted) { disposeWidths(); disposeMedia(); disposeTextMenu(); window.removeEventListener("helene:appearance",appearanceChanged); colorScheme.removeEventListener("change",appearanceChanged); }
   });
   function togglePanel(which: "rail" | "panel") {
+    if(which==='rail' && matchMedia('(max-width:760px)').matches){
+      const open=app.classList.toggle('narrow-navigation');railBtn.setAttribute('aria-pressed',String(open));return;
+    }
     setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
     // Focus without scrolling the history or changing the draft/selection.
     if (S.view === "talk") say.focus({ preventScroll: true });
   }
   railBtn.addEventListener("click", () => togglePanel("rail"));
+  document.getElementById('rail')?.addEventListener('click',e=>{if((e.target as Element).closest('button'))app.classList.remove('narrow-navigation');});
   panelBtn.addEventListener("click", () => togglePanel("panel"));
   addEventListener("frame-live-action", (event) => {
     const button = document.querySelector("[data-live-runs]");
@@ -862,7 +777,7 @@ export function start(opts: WindowOptions): void {
       if (!talking && mounting && !opts.quiet) scroll.view()?.scrollTo(homeScroll(id), false);
       // Chat physics owns the bottom/anchor while rendering. The owner may also
       // have scrolled during await: a measurement from before it is obsolete.
-      else if (!talking && opts.quiet && wasAtEnd) scroll.view()?.scrollTo(view.scrollHeight, false);
+      else if (!talking && opts.quiet && !blank && !mounting && wasAtEnd) scroll.view()?.scrollTo(view.scrollHeight, false);
       announce(section?.label ?? "");
     } catch (e) {
       if (gen !== showSeq) return;
@@ -1397,7 +1312,7 @@ export function start(opts: WindowOptions): void {
   function onComposerKeydown(e: KeyboardEvent) {
     // sending и isComposing: без них два быстрых Enter давали два хода агента по
     // одному тексту, а Enter подтверждения IME при кириллице отправлял недописанное.
-    if (e.key === "Enter" && !e.altKey && !e.shiftKey && !e.isComposing && !sending) {
+    if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !e.isComposing && !e.repeat && !e.defaultPrevented && !sending) {
       e.preventDefault();
       void doSend();
     }
@@ -1443,6 +1358,7 @@ export function start(opts: WindowOptions): void {
 
   async function doSend() {
     if (sending || ownerState?.stopped || engineOperation) return;
+    if(voiceComposer && voiceComposer.session.state!=="idle" && !say.value.trim() && !attachments.length){await voiceComposer.session.send();return String(voiceComposer.session.state)==="idle";}
     const typedText = say.value.trim();
     const files = attachments.slice();
     if (!typedText && !files.length) return;
@@ -1674,7 +1590,7 @@ export function start(opts: WindowOptions): void {
   if (cfg.needs_local_setup) {
     // The local engine intentionally waits for a configured provider/model.
     // Native settings remain available without a running agent or API channel.
-    void show("settings");
+    void show("learn");
     stateText.textContent = "Нужна настройка модели";
     statePill.dataset.level = "warn";
     stateAction.hidden = true;
@@ -1692,7 +1608,7 @@ export function start(opts: WindowOptions): void {
   const openFirst = (): void => {
     if (showSeq !== firstShowSeq) return;
     loadRooms()
-      .then(() => { if (showSeq === firstShowSeq) return show("now"); })
+      .then(() => { if (showSeq === firstShowSeq) return show(LOCAL_AGENT && localStorage.getItem("helene.onboarding.210")!=="done" ? "learn" : "now"); })
       .catch(() => {
         if (showSeq !== firstShowSeq) return;
         viewInner.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;

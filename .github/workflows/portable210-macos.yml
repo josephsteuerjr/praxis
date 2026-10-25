@@ -26,3 +26,5 @@ jobs:
           path: |
             evidence210/
             !evidence210/**/test-key.pem
+            !evidence210/update/serve/**
+            !evidence210/migration/backup/**

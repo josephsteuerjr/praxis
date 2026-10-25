@@ -19,19 +19,12 @@ with zipfile.ZipFile(archive) as z:
         path.parent.mkdir(parents=True,exist_ok=True)
         with z.open(item) as a,path.open('wb') as b:shutil.copyfileobj(a,b)
         path.chmod((item.external_attr>>16)&0o777 or 0o644)
-root=work/'Helene';runtime=root/'runtime/bin/python3'
-for relative in ('python_app.py','python_migrate.py','mac_migrate.py','resources/mac-migration.html',
-                 'localharness/python_source_updater.py','localharness/python_updates.py',
-                 'localharness/app_migration.py','localharness/portable_profile.py',
-                 'localharness/parallel_files.py','localharness/code_transition.py',
-                 'localharness/component_downloads.py','localharness/xtts_install.py'):
-    shutil.copy2(repo/'desk'/relative,root/'app'/relative)
-metadata=json.loads((root/'python-app.json').read_text());metadata.update(version='2.1.0',delivery='portable')
-(root/'python-app.json').write_text(json.dumps(metadata,indent=2))
-subprocess.run([sys.executable,str(repo/'desk/installer/python_mac_bundles.py'),str(root),'2.1.0'],check=True)
-shutil.copytree(repo/'desk/app/dist',root/'app/static',dirs_exist_ok=True)
-from native_mac_privacy210 import instrument,deny_network_prompts
-instrument(root,evidence)
+sys.path.insert(0,str(repo/'desk/installer'))
+from portable_refresh import refresh,archive as pack
+root=refresh(work/'Helene',work/'candidate/Helene','2.1.0')
+runtime=root/'runtime/bin/python3'
+final=evidence/'Helene-2.1.0-macos-arm64.zip';pack(root,final)
+from native_mac_privacy210 import deny_network_prompts
 result={'public_sha256':sha,'platform':os.uname().machine,'root':str(root),'steps':{}}
 def save():(evidence/'native.json').write_text(json.dumps(result,indent=2))
 def wait(fn,seconds=100):
@@ -53,13 +46,13 @@ def invoke(name,args=None):
     with urllib.request.urlopen(req,timeout=60) as response:return json.load(response)['result']
 save()
 try:
-    tests=['tests.t_python_native_update_2410','tests.t_python_migration','tests.t_posix_owner_2410','tests.t_component_downloads_193','tests.t_linux_extensions_2410']
+    tests=['tests.t_python_native_update_2410','tests.t_python_migration','tests.t_posix_owner_2410','tests.t_component_downloads_193','tests.t_linux_extensions_2410','tests.t_voice_hotkeys_210','tests.t_window_appearance_193','tests.t_appearance_bridge_193']
     with (evidence/'unit.log').open('w') as log:
         done=subprocess.run([str(runtime),'-m','unittest',*tests,'-v'],cwd=repo/'desk',stdout=log,stderr=subprocess.STDOUT,timeout=600)
     result['steps']['focused_tests']=done.returncode;save()
     subprocess.run(['open','-n',str(root/'Helene.app')],check=True)
     row=wait(control);result['steps']['native_window']=True
-    result['app_info']=invoke('app_info');save()
+    result['app_info']=invoke('app_info');result['voice_keys']=invoke('voice_shortcuts',{'hotkey':'Ctrl+Alt+F20','global':True});invoke('voice_shortcuts',{'global':False});save()
     time.sleep(4)
     deny_network_prompts(evidence)
     subprocess.run(['screencapture','-x',str(evidence/'fresh-window.png')],check=True)

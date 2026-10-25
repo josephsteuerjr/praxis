@@ -271,9 +271,10 @@ def _specs(config: Path, *, session_host: bool = False,
         # Neighbor configs live under agents/<id>/, but the one packaged
         # relay executable belongs to the installation, not each data tree.
         install_base = base if agent_id == BASE_ID else base.parent.parent
-        exe = install_base / ("helene-relay.exe" if os.name == "nt" else "helene-relay")
+        from localharness.standalone_relay import executable as relay_executable
+        exe = relay_executable(install_base,cfg)
         if not exe.is_file():
-            raise ValueError("relay requested but executable missing")
+            raise ValueError("Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле")
         relay_port = relay.get("port") or 5011
         if type(relay_port) is not int or not 1 <= relay_port <= 65535:
             raise ValueError("invalid relay port")
@@ -297,7 +298,7 @@ def _specs(config: Path, *, session_host: bool = False,
         relay_env["RELAY_PYTHON"] = str(python)
         relay_env.update(relay_environment(relay))
         relay_argv = ((str(exe), "--minimized", "--start-api", "--config", str(config.resolve()))
-                      if os.name=='nt' else (str(exe),'serve','--headless'))
+                      if os.name=='nt' and exe.name.lower()=='helene-relay.exe' else (str(exe),'serve','--headless'))
         specs[f"{agent_id}:relay"] = Spec("relay", relay_argv, home,
                                    relay_env, home / "logs/relay-console.log", relay_port)
     # XTTS is a sibling owned by this same process tree, not an agent-spawned

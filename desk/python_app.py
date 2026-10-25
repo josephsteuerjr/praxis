@@ -55,6 +55,7 @@ class Application:
         self.confirmed_ui = False
         self.browser_mode = False
         self.tray = None
+        self.voice_keys = None
         self.exiting = False
         self.token = secrets.token_urlsafe(32)
         self.events: list[dict] = []
@@ -97,6 +98,15 @@ class Application:
     def invoke(self, command, args):
         if not isinstance(command, str) or command.startswith("host_"):
             raise ValueError("Недоступный вызов оболочки")
+        if command == 'voice_shortcuts':
+            if self.browser_mode:return {'active':False,'error':'В браузере сочетание работает только внутри окна.'}
+            if self.voice_keys is None:
+                from localharness.voice_hotkeys import GlobalVoiceKeys
+                self.voice_keys=GlobalVoiceKeys(self)
+            return self.voice_keys.configure(args)
+        if command == 'voice_status':
+            if self.voice_keys:self.voice_keys.show(args)
+            return {'ok':True}
         if command in ('window_preferences','appearance_read','appearance_patch','appearance_reset'):
             from localharness import window_preferences as preferences
             if command == 'appearance_read':return preferences.read(self.root)
@@ -104,8 +114,8 @@ class Application:
             if command == 'appearance_patch':return preferences.change(self.root,args.get('patch'),args.get('seen'),appearance_only=True)
             return preferences.change(self.root,{args.get('key'):args.get('value')},args.get('seen'))
         if command == "components_status":
-            from localharness import app_components, component_downloads
-            return app_components.status(self.program, self.root)+component_downloads.status(self.program)
+            from localharness import standalone_relay, component_downloads
+            return [standalone_relay.status(self.program)]+component_downloads.status(self.program)
         if command == 'python_ready':
             return self.confirm_ui()
         if command == "restart_self":
@@ -114,7 +124,11 @@ class Application:
             return None
         if command == "component_install":
             name=str(args.get('name',''))
-            if name in ('toolchain','xtts','whisper'):
+            if name == 'relay':
+                from localharness import standalone_relay
+                return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
+            if name == 'toolchain':raise ValueError('Инструменты сборки больше не поставляются с Hélène')
+            if name in ('xtts','whisper'):
                 from localharness import component_downloads
                 if self.host is None:raise RuntimeError('Select an agent before installing an optional component')
                 tree=self.host.current().tree
@@ -320,9 +334,9 @@ window.addEventListener('helene:ui-ready',()=>window.__HELENE__.invoke('python_r
                 if path == "/" and app.host is None:
                     content = '''<!doctype html><html><head><meta charset="utf-8"><title>Hélène</title></head>
 <body style="background:#1d1914;color:#e5d7b8;font:18px system-ui;max-width:760px;margin:10vh auto;padding:24px">
-<h1>Hélène · Python</h1><p>Install the native components from the included offline bundle.
-Their exact source and toolchain stay beside the application. Your agent data is not replaced.</p>
-<div id="components"></div><button id="start">Start Hélène</button><pre id="status"></pre>
+<h1>Hélène · Python</h1><p>Дополнительные голосовые компоненты и praxis-relay можно установить здесь.
+Реле — отдельный продукт под лицензией MIT. Для запуска инструменты сборки не нужны.</p>
+<div id="components"></div><button id="start">Запустить Hélène</button><pre id="status"></pre>
 <script>
 async function paint(){const rows=await window.__HELENE__.invoke('components_status');
 const box=document.getElementById('components');box.replaceChildren();
@@ -391,6 +405,7 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
     def close(self):
         try:
             self.stopping.set()
+            if self.voice_keys:self.voice_keys.close()
             self.backup_thread.join()
             self.server.shutdown()
             self.server.server_close()

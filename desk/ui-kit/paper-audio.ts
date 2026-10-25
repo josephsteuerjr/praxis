@@ -6,10 +6,12 @@ interface WaveModule { create(options: {container: HTMLElement; media: HTMLMedia
 let loader: (() => Promise<WaveModule>) | undefined;
 export function setAudioPlayer(load: () => Promise<WaveModule>) { loader = load; }
 const activePlayers = new Set<HTMLAudioElement>();
+export function pausePaperAudio() { for (const player of activePlayers) player.pause(); }
 const clock = (n: number) => { n = Number.isFinite(n) ? Math.max(0, n) : 0; return `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`; };
+const title = (media: PaperMedia) => /^(?:voice[-_]|audio[-_]|voice$)/i.test(media.name) ? 'Голосовое сообщение' : media.name;
 
 export function audioHTML(m: PaperMedia, data: string) {
-  return `<figure class="paper-media paper-audio" ${data}><button type="button" class="paper-audio-toggle" data-audio-toggle aria-label="Воспроизвести">▶</button><div class="paper-audio-main"><div class="paper-audio-name">${esc(m.name)}</div><div class="paper-wave" aria-hidden="true"></div><input class="paper-audio-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция воспроизведения"><div class="paper-audio-meta"><span data-audio-time>0:00</span><span data-audio-status role="status">Голосовая запись</span><button type="button" class="paper-link" data-paper-save>Сохранить…</button></div><div class="paper-transcription" data-voice-state hidden></div><button type="button" class="paper-link" data-voice-retry hidden>Повторить расшифровку</button></div></figure>`;
+  return `<figure class="paper-media paper-audio" ${data}><button type="button" class="paper-audio-toggle" data-audio-toggle aria-label="Воспроизвести">▶</button><div class="paper-audio-main"><div class="paper-audio-name">${esc(title(m))}</div><div class="paper-wave" aria-hidden="true"></div><input class="paper-audio-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция воспроизведения"><div class="paper-audio-meta"><span data-audio-time>0:00</span><span data-audio-status role="status">Голосовая запись</span><button type="button" class="paper-link" data-paper-save>Сохранить…</button></div><div class="paper-transcription" data-voice-state hidden></div><button type="button" class="paper-link" data-voice-retry hidden>Повторить расшифровку</button></div></figure>`;
 }
 
 /** Audio belongs to the mounted conversation, not its scrolling/virtualized row. */
@@ -49,10 +51,14 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       const slot = node.querySelector<HTMLElement>('.paper-wave')!;
       if (track.waveform.parentElement !== slot) slot.replaceChildren(track.waveform);
     }
-    bar.hidden = !active;
+    const visibleActive = active && nodes().some(node => {
+      if(key(node)!==client.key(active!.media))return false;
+      const rect=node.getBoundingClientRect();return rect.bottom>0 && rect.top<innerHeight;
+    });
+    bar.hidden = !active || !!visibleActive || !root.classList.contains('with-panel');
     if (active) {
       const a = active.audio;
-      bar.querySelector('[data-audio-title]')!.textContent = active.media.name;
+      bar.querySelector('[data-audio-title]')!.textContent = title(active.media);
       bar.querySelector('[data-audio-bar-time]')!.textContent = `${clock(a.currentTime)} / ${clock(a.duration)}`;
       const b = bar.querySelector<HTMLButtonElement>('[data-audio-bar-play]')!; b.textContent = a.paused ? '▶' : 'Ⅱ'; b.setAttribute('aria-label', a.paused ? 'Воспроизвести' : 'Пауза');
       const queue = nodes(), i = queue.findIndex(n => key(n) === client.key(active!.media));
@@ -72,6 +78,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     const kept = new Set(nodes().map(key));
     for (const [k,t] of tracks) if (!kept.has(k) && t !== active) drop(k,t);
     paint(); void pollVoice();
+    for (const node of nodes()) waveObserver.observe(node);
   }
   async function pollVoice() {
     if(disposed || polling || !client.voice || document.hidden) return;
@@ -87,8 +94,8 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       paint();
     } finally { polling=false; }
   }
-  function trackFor(node: HTMLElement) {
-    const m = media(node), k = client.key(m); let t = tracks.get(k);
+  function trackForMedia(m: PaperMedia) {
+    const k = client.key(m); let t = tracks.get(k);
     if (!t) {
       const audio = new Audio(); audio.preload = 'metadata'; audio.volume = volume; audio.playbackRate = speed;
       t = {media:m, audio, waveform:document.createElement('div'), listeners:[]}; tracks.set(k,t);
@@ -99,6 +106,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     }
     return t;
   }
+  const trackFor = (node: HTMLElement) => trackForMedia(media(node));
   async function load(t: Track) {
     if (t.blob) return;
     if (t.loading) return t.loading;
@@ -164,10 +172,33 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     if(input.hasAttribute('data-audio-speed')) speed=Number(input.value);
     for(const t of tracks.values()) { t.audio.volume=volume; t.audio.playbackRate=speed; }
   }
+  const waveObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) if (entry.isIntersecting) {
+      const node=entry.target as HTMLElement; waveObserver.unobserve(node);
+      const t=trackFor(node); void load(t).catch(()=>{});
+    }
+  }, {rootMargin:'200px'});
+  const autoplay: PaperMedia[]=[];
+  let autoRunning=false, recording=false;
+  async function playNext() {
+    if(autoRunning||recording||disposed||!autoplay.length)return;
+    autoRunning=true;
+    const t=trackForMedia(autoplay.shift()!);
+    await play(t);
+    if(disposed)return;
+    if(t.audio.paused){autoRunning=false;return;}
+    const done=()=>{t.audio.removeEventListener('ended',done);t.audio.removeEventListener('error',done);autoRunning=false;void playNext();};
+    t.audio.addEventListener('ended',done,{once:true});t.audio.addEventListener('error',done,{once:true});
+  }
+  const incoming=(event:Event)=>{autoplay.push((event as CustomEvent<PaperMedia>).detail);void playNext();};
+  const hush=()=>{recording=true;pausePaperAudio();autoplay.length=0;autoRunning=false;};
+  const quietEnd=()=>{recording=false;};
+  addEventListener('helene:voice-incoming',incoming);addEventListener('helene:recording',hush);addEventListener('helene:recording-ended',quietEnd);
   root.addEventListener('click',onClick); root.addEventListener('input',onSeek);
   bar.addEventListener('click',onBar); bar.addEventListener('input',onSettings); bar.addEventListener('change',onSettings);
   const containsAudio = (n: Node) => n instanceof Element && (n.matches('.paper-audio') || !!n.querySelector('.paper-audio'));
   const observer=new MutationObserver(records => { if(records.some(r => [...r.addedNodes,...r.removedNodes].some(containsAudio))) reconcile(); }); observer.observe(root,{childList:true,subtree:true});
   const pollTimer=setInterval(()=>void pollVoice(),2500); void pollVoice();
-  return () => { disposed=true; clearInterval(pollTimer); ++generation; observer.disconnect(); root.removeEventListener('click',onClick); root.removeEventListener('input',onSeek); bar.removeEventListener('click',onBar); bar.removeEventListener('input',onSettings); bar.removeEventListener('change',onSettings); for(const [k,t] of tracks) drop(k,t); active=undefined; bar.remove(); };
+  reconcile();
+  return () => { disposed=true; clearInterval(pollTimer); ++generation; observer.disconnect(); waveObserver.disconnect();removeEventListener('helene:voice-incoming',incoming);removeEventListener('helene:recording',hush);removeEventListener('helene:recording-ended',quietEnd);root.removeEventListener('click',onClick); root.removeEventListener('input',onSeek); bar.removeEventListener('click',onBar); bar.removeEventListener('input',onSettings); bar.removeEventListener('change',onSettings); for(const [k,t] of tracks) drop(k,t); active=undefined; bar.remove(); };
 }
