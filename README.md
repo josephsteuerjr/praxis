@@ -1,166 +1,135 @@
 # Praxis & Hélène
 
-**Praxis** is an agent runtime with persistent memory, Python tools, Telegram
-integration and durable coding tasks.
+**A persistent agent runtime, and a desktop home for agents you make your own.**
 
-**Hélène** is the desktop application built around that runtime. It provides
-conversations, agent management, settings and a window into ongoing work.
+Praxis is the agent runtime: inspectable memory, tools, Telegram conversations,
+long-running work and self-authored code. Hélène is its desktop distribution, with
+independent agents, a Python-owned application and process supervisor, a shared
+chat interface, files and optional local voice.
 
-The project is designed for long-lived, self-authored agents, not only disposable
-chat sessions. An agent's code, memory and settings remain inspectable.
+[Download Hélène](https://github.com/josephsteuerjr/praxis/releases/latest) ·
+[Release history](https://github.com/josephsteuerjr/praxis/releases) ·
+[Standalone Relay](https://github.com/josephsteuerjr/praxis-relay)
 
-The runtime source, the packaged desktop edition and a running installation are
-different things. Publishing source does not deploy an agent, and a desktop
-release does not necessarily contain every change in the current runtime mirror.
+## Hélène 2.0.0
 
-[Current Windows release](https://github.com/josephsteuerjr/praxis/releases/tag/v1.9.4) |
-[Release history](https://github.com/josephsteuerjr/praxis/releases) |
-[Praxis Relay](https://github.com/josephsteuerjr/praxis-relay)
+This release brings the Python desktop to **Windows x64, macOS Apple Silicon,
+Debian and Fedora x86_64**. Choose the package for your operating system; the
+runtimes and optional components are platform-specific, not interchangeable.
+See the release notes for the exact tested platform, installation route and limits.
 
-## Current desktop release: Hélène 1.9.4
+- **Python owns the application.** The window, agent lifecycle, process tree,
+  Stop, update preparation and recovery are handled by Python. Native bodies and
+  the embedded model relay remain separate, inspectable components.
+- **A migration wizard, not a memory reset.** Keep the old application until the
+  new one starts successfully. Migration retains configuration, memory, authored
+  code and Git changes. Stop the old application before copying its profile.
+- **Ordinary updates stay in the application.** After the initial transition,
+  the Python updater prepares a checked package, hands over to a helper and can
+  roll back a failed start. Do not manually overlay a running installation.
+- **Voice is optional.** Whisper recognition is independent of text-to-speech.
+  A voice message enters the agent conversation only after successful
+  transcription; failed recognition has an explicit retry state. Inline audio
+  controls support seeking, volume and playback speed.
+- **Download components when needed.** Whisper, XTTS and the native rebuild kit
+  are separate archives. The bundled component map pins each archive's URL,
+  size and SHA-256, can reuse cached bytes and may reference an older release.
+  Keep those older releases when they supply a component.
 
-Hélène 1.9.4 is the Windows Python distribution. It includes the application,
-its own Python runtime, the UI and bundled relay source.
+### Installation
 
-The 1.9.3 release introduced a shared component-download map, startup recovery,
-additional appearance controls and component installation from the application.
-Version 1.9.4 fixes appearance-conflict recovery and prevents delayed manual
-changes from overwriting a newer appearance selection.
+**Windows:** run the `helene-2.0.0-setup.exe` migration/setup wizard. The small
+wizard downloads `Helene-2.0.0.zip` and the selected optional components. For a
+migration from the older native edition, use this new wizard rather than its
+old Update button. Windows executables are unsigned.
 
-### Install or make the first upgrade from Python 1.9.1
+**Apple Silicon Mac:** unpack the macOS archive into a separate folder. Open
+`Migrate Helene.app` to transfer an existing profile, or use `Helene.app` for the
+application. Quit the old app and disable its old launch-at-login integration
+before migration. The old folder is retained. macOS may ask for local-network,
+microphone or accessibility permission; those decisions remain yours. This is
+not a notarized/Gatekeeper-qualified distribution.
 
-1. Open the [1.9.4 release page](https://github.com/josephsteuerjr/praxis/releases/tag/v1.9.4).
-2. Download `Helene-1.9.4.zip`, extract it and run the new `helene-setup.exe`
-   inside, or use the separate `helene-1.9.4-setup.exe`.
-3. Keep a backup of an existing installation before upgrading.
+**Debian / Fedora:** install the matching DEB/RPM with your normal package
+manager, or use the matching portable archive and its `helene` entry point.
+The package owns an immutable bootstrap seed; first launch copies it into a
+writable per-user application directory. Removing the package does not erase
+that profile. The graphical migration wizard can preserve an older profile;
+fresh setup configures the current program. Linux desktop computer access uses
+X11 and AT-SPI; Wayland and headless sessions have explicit limits.
 
-**For the first transition from the old Python 1.9.1 application, use the new
-setup wizard, not the old Update button.** That old updater looks for component
-archives in the new release before loading the new code and does not understand
-the cross-release component map.
+Each main archive has an individual `.sha256` sidecar. `SHA256SUMS` and the
+release evidence describe the published files. The platform source archives
+are build inputs, not your agent's private profile.
 
-The newer Python updater uses the shared map, but that does not retroactively
-repair the old updater. The published 1.9.4 package does not include later,
-unpublished updater repairs.
+## A home for independent agents
 
-### Optional components
+Each agent has its own constitution, memory, settings, files and runtime.
+Choose a default, switch agents, or open one specifically. Creation can use a
+provided constitution, an inherited one or your own text. A dedicated Doctor
+agent can inspect an installation and propose repairs; it is not an invisible
+background repair service.
 
-Whisper, XTTS and the rebuild toolchain are separate downloads. The toolchain
-is not required for ordinary application use.
+The chat interface includes remembered drafts and reading position, files,
+images, work and context views, explicit Pause/Continue and emergency Stop.
+A paired phone/web interface and Telegram Mini App provide additional surfaces
+while the host is online. Availability depends on the configured transport and
+network; no public tunnel or server is supplied by downloading the desktop.
 
-The component map supplies URLs, SHA-256 hashes and sizes. Versions 1.9.3 and
-1.9.4 reuse unchanged large archives hosted in release 1.9.2; those older assets
-remain dependencies and must not be removed.
+## Telegram, memory and tools
 
-XTTS has separate CPML/non-commercial licensing conditions. Do not assume that
-the repository's Apache-2.0 license grants unrestricted use of third-party models.
+Telegram can use a Bot API token or a separate MTProto/Telethon account.
+Their capabilities differ. Incoming events are retained before attention and
+admission decisions; room/topic routing, explicit replies, staged media and
+outgoing receipts preserve what actually happened. Account tools act only
+within the account's real rights.
 
-## The desktop home
+Markdown and JSONL are the inspectable memory canon; SQLite/FTS accelerates
+lookup. Journals, room memory, projects, skills, authored identity and retained
+runs support continuity. Authored code and character changes are not permission
+for an installer to silently reset a living agent's files.
 
-- **Conversations and materials:** a paper-like chat, remembered drafts, images
-  and file attachments, with visible ongoing work.
-- **Independent agents:** switch between separate identities, constitutions,
-  memories and settings; start or stop an agent individually.
-- **Voice and remote access:** optional Whisper recognition and XTTS synthesis,
-  paired mobile access and a Telegram Mini App. Availability depends on setup
-  and transport; the host computer must remain online for its remote interfaces.
-- **Appearance:** presets, day/night/accent colors, density, panels, 70-150%
-  window scale and system reset. Manual and owner-authorized agent changes use
-  a shared writer.
-- **Inspectable self-development:** source self-review and retained findings,
-  with author decisions kept separate from independent review.
+Forge records engineering work with a goal, source directory, workers,
+checkpoints and results. File search, exact edits, shell commands and computer
+tools are separate capabilities. A recorded action or a green unit test does
+not by itself prove that an entire task succeeded.
 
-These are edition features, not a promise that every provider, voice model,
-phone or desktop permission has been qualified on every machine.
+## Models, relay and local voice
 
-## What Praxis provides
+Use your configured provider or supported subscription relay. Credentials,
+account access, quotas and provider charges are separate from the application.
+The embedded Hélène relay is an adaptation for this desktop; the standalone
+`praxis-relay` repository is a different distribution.
 
-- **Persistent, inspectable memory:** conversations, facts, journals, projects,
-  authored skills and ongoing intentions. Markdown and JSONL are canonical;
-  SQLite/FTS accelerates retrieval.
-- **Python tools and durable engineering work:** file operations, code inspection,
-  commands, verification and Forge tasks with goals, source directories,
-  checkpoints and retained results.
-- **Independent agents:** separate constitutions, memory, settings and runtimes,
-  with individual start/stop controls.
-- **Telegram integration:** Bot API or a separate account through
-  MTProto/Telethon, subject to the transport's capabilities and the account's
-  actual rights.
-- **Provider configuration:** model and endpoint/account choices, with
-  compatibility limits reported explicitly.
-- **Source self-review:** code-only snapshots, read-only reviewers and separate
-  records for findings and author decisions.
+Whisper and XTTS run locally when installed. CPU synthesis can be slow and is
+not advertised as real-time conversation. XTTS model weights are governed by
+the **Coqui Public Model License**, including its non-commercial conditions;
+that is separate from the licenses of the application and code dependencies.
+The rebuild kit carries the selected native source and offline build inputs,
+not a promise that every third-party toolchain is freely redistributable on
+every platform. Consult the supplied LICENSE, NOTICE and third-party notices.
 
-Available tools and integrations depend on the edition, configuration, platform
-and granted authority. A submitted operation, a completed process and a verified
-result are distinct facts.
+## What the qualification does — and does not — establish
 
-## Platform status
+Platform work exercised real packaged consumers: native windows, controlled
+migration and failure/retry paths, profile/Git preservation, selected local
+speech inference and native rebuilds. These are scoped tests on disposable
+profiles, not a claim of universal compatibility or production account testing.
 
-| Product or edition | Status |
-|---|---|
-| Current Hélène Python distribution | Windows release 1.9.4 |
-| New Python macOS/Linux port | Development work; not a released, real-machine-qualified desktop distribution |
-| Older native desktop editions | Historical Windows, macOS Apple Silicon and Linux packaging; not the current 1.9.x assets |
-| Praxis server runtime | Separate deployment sources and configuration; not installed merely by downloading this repository |
+Physical microphone, sign-in, all authenticated model providers, all computer
+permissions, arbitrary large-profile performance and every desktop environment
+are not a completed full-QA matrix. In particular, macOS permission dialogs
+were observed without granting the user's permissions. The release notes keep
+platform-specific exceptions next to the download instructions.
 
-Older native editions have different packaging, computer-access integrations and
-service/broker behavior. Their capabilities must not be assumed to exist in the
-current Python application. In particular, the current Python product does not
-include the older privileged broker.
+## Source and contribution
 
-For an older macOS or Linux edition, use that release's own assets and
-instructions. Do not assume that an installer attached to an older release is
-available under the latest Windows release.
+This repository contains the Praxis runtime and Hélène source. Release assets
+carry platform-specific source snapshots and their provenance where builders
+use different qualified inputs. Private conversations, credentials and live
+profiles are not publication inputs. Development is a separate activity from
+upgrading the agent already living on your machine.
 
-## Verification and known limits
-
-Each release describes its own checks and remaining gaps. The 1.9.4 record
-includes focused source, packaged-runtime, installer, appearance and component
-consumer checks; unchanged mechanisms retain their dated 1.9.3 evidence.
-
-These records are not a claim of a complete legacy test run, all-provider
-qualification, a physical phone or Windows sign-in test, a live installed-agent
-migration, or native macOS/Linux acceptance. No full-panel PASS on the final
-repaired bytes is claimed.
-
-Checksums identify delivered bytes. They do not, by themselves, prove successful
-installation or acceptance on a person's machine.
-
-## Source and release provenance
-
-| Path | Purpose |
-|---|---|
-| [`praxis/`](praxis) | Sanitized production-runtime mirror; no private identity or live memory |
-| [`helene/`](helene) | Declared packaged-edition layer and frozen core |
-| [`desk/`](desk) | Desktop, harness, installers, mobile interfaces and platform-build sources |
-| [`remote/`](remote) | Remote-hosting components |
-| [`CORE-SOURCE.json`](CORE-SOURCE.json) | Praxis source provenance |
-| [`HELENE-SOURCE.json`](HELENE-SOURCE.json) | Packaged-edition source provenance |
-
-The runtime mirror and packaged edition have separate revision records.
-Published release archives, checksums and evidence files describe their own
-delivered contents; later source synchronization does not replace those bytes.
-
-For development, use a single Git checkout at the repository root. Keep changes
-to the runtime mirror and packaged edition explicit. Preserve the repository's
-source allowlist and ignore rules; do not force-add private runtime data,
-credentials, sessions, dependencies or build outputs.
-
-Useful references:
-
-- [Build and release guide](desk/installer/RELEASE.md)
-- [Python tools and Forge guide for 1.7.0](desk/docs/PYTHON-TOOLS-1.7.0.md)
-- [Praxis deployment guide](praxis/DEPLOY.md)
-- [Standalone Compose bundle](praxis/docker-compose.bundle.yml)
-- [Production Compose recipe](praxis/docker-compose.deploy.yml)
-- [Server installation sources](desk/server/)
-
-Deployment credentials and machine-specific state belong outside Git.
-
-## License
-
-Repository code is licensed under Apache-2.0; see `LICENSE` and `NOTICE`.
-Praxis Relay under `praxis/relay/` retains its MIT notice. Third-party
-applications, dependencies and model weights retain their own terms, including
-the separate XTTS CPML/non-commercial conditions.
+Created by Yegor Kosyrev. Original and third-party attribution is retained in
+LICENSE and NOTICE. Contributions should state what changed, which consumer
+was exercised and what remains unverified.

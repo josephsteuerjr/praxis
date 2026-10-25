@@ -7,6 +7,10 @@ exact message bytes; unrelated rooms and unsealed bytes never enter the turn.
 from pathlib import Path
 import json
 import os
+if __package__:
+    from .voice_admission import VoicePending
+else:
+    from voice_admission import VoicePending
 
 
 def _message(runner, name, text, messages, *, replay, current):
@@ -23,6 +27,8 @@ def _message(runner, name, text, messages, *, replay, current):
             if message.get('role') == 'user' and head.startswith(prefix):
                 return message, head[len(prefix):]
     body, attached = runner._split_attachments(text)
+    if attached:
+        runner._archive_inputs(attached,str(current.delivery_chat_id),'note:'+Path(name).stem)
     heard, remaining = runner._hear_attachments(attached) if attached else ([], [])
     if heard:
         body = (body + '\n' + '\n'.join(heard)).strip()
@@ -77,7 +83,8 @@ def collect(runner, current, messages):
             if valid is not True:
                 continue
             text = runner._message_text(blob)
-            message, _archive = _message(runner, path.name, text, messages, replay=True, current=current)
+            try:message, _archive = _message(runner, path.name, text, messages, replay=True, current=current)
+            except VoicePending:continue
             if path.parent == inbox: os.replace(path, target)
         else:
             blob = runner._note_bytes(path)
@@ -85,7 +92,8 @@ def collect(runner, current, messages):
             if valid is not True:
                 continue
             text = runner._message_text(blob)
-            message, archive = _message(runner, path.name, text, messages, replay=False, current=current)
+            try:message, archive = _message(runner, path.name, text, messages, replay=False, current=current)
+            except VoicePending:continue
             # Exact source is durable before rename; attachment paths remain in source.
             record = {'run_id': current.run_id, 'message': message}
             temp = Path(str(binding) + '.tmp')

@@ -43,10 +43,13 @@ compile_error!(
      и метит бинарь как dev; собирай `cargo build --release --features custom-protocol` или `tauri build`"
 );
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 #[path = "../../common/relay_policy.rs"]
 mod relay_policy;
+#[cfg(windows)]
+#[path = "../../common/desktop_owner_lock.rs"]
+mod desktop_owner_lock;
 mod relay_transfer;
 mod local_files;
 #[cfg(feature = "desktop")]
@@ -155,6 +158,11 @@ fn toast_id() -> &'static str {
 /// Владелец уже убирал окно в трей: отложенный показ окна не должен вытаскивать
 /// его обратно поверх всего, чем человек занят.
 static HIDDEN_BY_OWNER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Installing or removing the service is not a handoff from a live Python
+/// owner. This process keeps its choice even after a child exits.
+#[cfg(windows)]
+static PYTHON_DESKTOP_SELECTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Окно открылось с экраном «порт держит чужая установка»: адрес харнесса в
 /// вебвью не подставлен вовсе. Если чужая копия закроется и надзор поднимет
@@ -529,6 +537,7 @@ impl ChildSpec {
                     "порт реле {port} держит другая копия (служба или прежнее окно) — своё реле \
                      не поднимаю и подниму, когда он освободится"
                 )),
+                RelaySpawn::WaitingOwner(why) => SpawnOutcome::Waiting(why),
                 RelaySpawn::Unavailable(why) => {
                     log_line(&why);
                     SpawnOutcome::Failed
@@ -609,9 +618,175 @@ impl SpawnPlan {
 struct LocalHarness {
     children: Mutex<Vec<Managed>>,
     stopping: std::sync::atomic::AtomicBool,
+    #[cfg(windows)]
+    python: Mutex<Option<PythonDesktopOwner>>,
+    #[cfg(windows)]
+    python_selected: bool,
     /// Локальный режим: планы подъёма для повторных попыток, по одному на
     /// агента. Пусто — удалённый режим либо ничего не настроено.
     plans: Mutex<Vec<SpawnPlan>>,
+}
+
+#[cfg(windows)]
+struct PythonDesktopOwner {
+    child: Child,
+    input: std::process::ChildStdin,
+    nonce: String,
+    tree: PathBuf,
+}
+
+#[cfg(windows)]
+impl PythonDesktopOwner {
+    fn observation(&mut self) -> Result<serde_json::Value, String> {
+        if self.child.try_wait().map_err(|e| e.to_string())?.is_some() {
+            return Err("Python desktop owner exited; no native fallback".into());
+        }
+        let path = self.tree.join(".python-desktop-status");
+        // Windows can briefly refuse an open during os.replace. Bind the
+        // bytes and mtime to ONE descriptor; retry only this known publication
+        // race, for at most 250 ms. Persistent denial remains a real refusal.
+        let until = Instant::now() + Duration::from_millis(250);
+        let (modified, bytes) = loop {
+            let read = (|| -> std::io::Result<_> {
+                let mut file = std::fs::File::open(&path)?;
+                let modified = file.metadata()?.modified()?;
+                let mut bytes = Vec::new();
+                (&mut file).take(32769).read_to_end(&mut bytes)?;
+                Ok((modified, bytes))
+            })();
+            match read {
+                Ok(value) => break value,
+                Err(error) if matches!(error.kind(), std::io::ErrorKind::PermissionDenied |
+                                    std::io::ErrorKind::NotFound) && Instant::now() < until => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => return Err(format!("Python owner status unavailable: {error}")),
+            }
+        };
+        let age = modified.elapsed().map_err(|e| format!("Python owner status time invalid: {e}"))?;
+        if age > Duration::from_secs(3) {
+            return Err("Python owner status stale; refusal instead of Rust child inference".into());
+        }
+        if bytes.len() > 32768 { return Err("Python owner status oversized".into()); }
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+        if value.get("schema").and_then(|v| v.as_u64()) != Some(1)
+            || value.get("nonce").and_then(|v| v.as_str()) != Some(self.nonce.as_str())
+            || value.get("seq").and_then(|v| v.as_u64()).is_none()
+            || value.get("agents").and_then(|v| v.as_object()).is_none() {
+            return Err("Python owner status has wrong generation or shape".into());
+        }
+        Ok(value)
+    }
+
+    fn refresh(&mut self, agent: &str, raised: bool, port: u16, tree: &Path, token: &str) -> Result<serde_json::Value, String> {
+        let id = random_hex(16).ok_or("Python command nonce unavailable")?;
+        let command = serde_json::json!({"action":"refresh", "id":id, "nonce":self.nonce});
+        writeln!(self.input, "{command}").map_err(|e| format!("Python command delivery unknown: {e}"))?;
+        self.input.flush().map_err(|e| format!("Python command delivery unknown: {e}"))?;
+        let until = Instant::now() + Duration::from_secs(6);
+        let mut acknowledged = false;
+        while Instant::now() < until {
+            let status = self.observation()?;
+            if status.get("ack").and_then(|v| v.as_str()) == Some(id.as_str()) {
+                acknowledged = true;
+            }
+            if acknowledged {
+                let actual = status.pointer(&format!("/agents/{agent}/raised"))
+                    .and_then(|v| v.as_bool()).unwrap_or(false);
+                // An acknowledged refresh precedes the channel's own bind.
+                // Wait for the verified endpoint, not merely its live process.
+                if actual == raised && (!raised || python_channel_verified(&status, agent, port, tree, token)) {
+                    return Ok(status);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err("Python owner refresh or channel identity unconfirmed; config may already have changed".into())
+    }
+
+    fn stop(&mut self) {
+        let _ = writeln!(self.input, "stop");
+        let _ = self.input.flush();
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            if matches!(self.child.try_wait(), Ok(Some(_))) { return; }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Outer kill-on-close Job remains the backstop for the entire tree.
+        if let Some(job) = JOB.get().and_then(Option::as_ref) { job.terminate(); }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        log_line("Python owner did not finish Stop in grace; outer Job terminated");
+    }
+}
+
+#[cfg(windows)]
+fn python_channel_live(status: &serde_json::Value, id: &str) -> bool {
+    status.pointer(&format!("/agents/{id}/roles"))
+        .and_then(|roles| roles.as_array())
+        .is_some_and(|roles| roles.iter().any(|role| role.as_str() == Some("channel")))
+}
+
+/// A live Python Job is not proof that its channel owns the port. Reuse the
+/// anonymous-first native holder check before displaying any channel URL.
+#[cfg(windows)]
+fn python_channel_verified(status: &serde_json::Value, id: &str, port: u16, tree: &Path, token: &str) -> bool {
+    python_channel_live(status, id) && harness_alive(port)
+        && matches!(harness_verdict(port, tree, token), Verdict::Ours)
+}
+
+/// Refuse incompatible owners before build_plans writes a token or any child
+/// is admitted. Python repeats this check against its live roster.
+#[cfg(windows)]
+fn python_desktop_preflight(base: &Path, cfg: &serde_json::Value) -> Result<(), String> {
+    if cfg.pointer("/installed/service").and_then(|v| v.as_bool()) == Some(true) || service_owns_harness() {
+        return Err("installed service owns this installation; desktop Python opt-in refused".into());
+    }
+    if cfg.get("mode").and_then(|v| v.as_str()) != Some("local") {
+        return Err("desktop Python opt-in requires root local mode".into());
+    }
+    for entry in raisable(base) {
+        if entry.base { continue; }
+        if let ConfigRead::Ok(agent_cfg) = read_config(&entry.config) {
+            if agent_cfg.get("mode").and_then(|v| v.as_str()) == Some("remote") {
+                return Err(format!("remote agent {} owns a separate computer bridge; desktop Python opt-in refused", entry.id));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn launch_python_desktop(base: &Path, cfg: &serde_json::Value, tree: &Path) -> Result<PythonDesktopOwner, String> {
+    python_desktop_preflight(base, cfg)?;
+    if owner_stopped() { return Err("owner Stop prevents Python owner launch".into()); }
+    let app = resolve(base, cfg.get("app").and_then(|v| v.as_str()).unwrap_or("deskapp.py"));
+    let script = app.parent().unwrap_or(base).join("localharness/desktop_supervisor.py");
+    if !script.is_file() { return Err(format!("Python desktop owner missing: {}", script.display())); }
+    let nonce = random_hex(16).ok_or("Python generation nonce unavailable")?;
+    let owner_log = std::fs::OpenOptions::new().create(true).append(true).open(base.join("python-owner.log"))
+        .map_err(|e| format!("Python owner log: {e}"))?;
+    let mut command = Command::new(python_path(base, cfg));
+    command.arg("-u").arg(&script).arg("--config").arg(base.join(CONFIG_NAME))
+        .arg("--control-stdin").arg("--desktop-roster").arg("--status-nonce").arg(&nonce)
+        .current_dir(script.parent().unwrap_or(base))
+        .stdin(Stdio::piped()).stdout(Stdio::from(owner_log.try_clone().map_err(|e| e.to_string())?))
+        .stderr(Stdio::from(owner_log))
+        .creation_flags(CREATE_NO_WINDOW | 0x4);
+    let mut child = command.spawn().map_err(|e| format!("Python desktop owner launch: {e}"))?;
+    adopt_suspended(&mut child).map_err(|e| format!("Python desktop owner Job admission: {e}"))?;
+    let input = child.stdin.take().ok_or("Python desktop owner pipe missing")?;
+    let mut owner = PythonDesktopOwner { child, input, nonce, tree: tree.to_path_buf() };
+    let until = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < until {
+        match owner.observation() {
+            Ok(_) => return Ok(owner),
+            Err(reason) if reason.contains("exited") => { owner.stop(); return Err(reason); }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    owner.stop();
+    Err("Python desktop owner did not produce generation-bound status; no native fallback".into())
 }
 
 /// Папка САМОГО exe. Это не корень установки: на macOS бинарь лежит в
@@ -1064,6 +1239,18 @@ mod job {
                 super::log_line("owner stop: Job termination unconfirmed");
             }
         }
+        pub fn empty(&self) -> bool {
+            use windows_sys::Win32::System::JobObjects::{
+                QueryInformationJobObject, JobObjectBasicAccountingInformation,
+                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+            };
+            let mut info: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
+            unsafe {
+                QueryInformationJobObject(self.0, JobObjectBasicAccountingInformation,
+                    &mut info as *mut _ as *mut _, std::mem::size_of_val(&info) as u32,
+                    std::ptr::null_mut()) != 0 && info.ActiveProcesses == 0
+            }
+        }
     }
 }
 
@@ -1193,7 +1380,8 @@ fn current_id() -> String {
 
 /// Кого открывать при старте, когда ярлык молчит: файл установки
 /// `agent-default.json` вида {"id": "..."}. Пишет его ТОЛЬКО команда
-/// `agent_default_set` — переключатель окна (`switch_agent`) его не трогает:
+/// `agent_default_set`, а Python remove условно убирает выбор удалённого id;
+/// переключатель окна (`switch_agent`) его не трогает:
 /// «открыл руками» и «открывать всегда» — два разных выбора владельца.
 fn agent_default_path() -> PathBuf {
     install_root().join("agent-default.json")
@@ -1210,20 +1398,6 @@ fn agent_default_id_from(path: &Path) -> Option<String> {
 
 fn agent_default_id() -> Option<String> {
     agent_default_id_from(&agent_default_path())
-}
-
-/// Чистая половина записи: атомарно (tmp + rename), как config_save_at.
-fn agent_default_write_at(path: &Path, id: &str) -> Result<(), String> {
-    let pretty = serde_json::to_string_pretty(&serde_json::json!({ "id": id }))
-        .map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, pretty).map_err(|e| format!("не записалось: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| format!("не подменилось: {e}"))?;
-    Ok(())
-}
-
-fn agent_default_write(id: &str) -> Result<(), String> {
-    agent_default_write_at(&agent_default_path(), id)
 }
 
 /// Чистая половина выбора при старте: ярлык сильнее сохранённого выбора, а
@@ -1303,6 +1477,19 @@ fn ensure_desk_token(tree: &Path) -> Option<String> {
 
 fn spawn_child(python: &Path, script: &Path, args: &[String], tree: &Path, host: &str,
                token: &str, config: &Path) -> Option<Child> {
+    #[cfg(windows)]
+    if JOB.get_or_init(job::Job::new).is_none() {
+        log_line("Windows Job unavailable; no desktop owner record or child launch");
+        return None;
+    }
+    #[cfg(windows)]
+    let _launch = match desktop_owner_lock::begin(tree) {
+        Ok(ticket) => ticket,
+        Err(why) => {
+            log_line(&format!("{}: child admission refused: {why}", tree.display()));
+            return None;
+        }
+    };
     let mut cmd = Command::new(python);
     // -u: без него вывод питона в файл буферизован блоками, и аварийное
     // завершение теряло ровно те килобайты, где причина. Служба (svc) делает
@@ -1700,6 +1887,9 @@ enum RelaySpawn {
     Started(Child),
     /// Порт держит кто-то другой (служба, прежняя копия): ждём, падением не считаем.
     WaitingPort(u16),
+    /// A competing tree owner or unresolved prior generation is a wait/refusal,
+    /// never a crash of the relay executable or the channel.
+    WaitingOwner(String),
     /// Нет exe или spawn упал — причина словами.
     Unavailable(String),
 }
@@ -1978,6 +2168,15 @@ fn spawn_relay(base: &Path, cfg: &serde_json::Value, tree: &Path) -> RelaySpawn 
         }
         return RelaySpawn::WaitingPort(port);
     }
+    #[cfg(windows)]
+    if JOB.get_or_init(job::Job::new).is_none() {
+        return RelaySpawn::Unavailable("Windows Job unavailable; no desktop owner record or relay launch".into());
+    }
+    #[cfg(windows)]
+    let _launch = match desktop_owner_lock::begin(tree) {
+        Ok(ticket) => ticket,
+        Err(why) => return RelaySpawn::WaitingOwner(format!("реле ждёт допуск дерева: {why}")),
+    };
     let home = tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
     let python = bundled_python(base);
@@ -2269,7 +2468,8 @@ fn file_mtime_ns(path: &Path) -> Option<String> {
     Some(nanos.to_string())
 }
 
-/// Записать конфиг целиком (экран настроек). Атомарно: tmp + rename.
+/// Записать конфиг целиком (экран настроек). Python владеет записью; Rust
+/// сохраняет только адрес текущего агента, квитанцию UI и локальное реле.
 ///
 /// `mtime_ns` — отпечаток, который окно получило от `config_load`. Не совпал с
 /// файлом на диске — файл менял кто-то ещё (руннер чинил `agent_mode`,
@@ -2278,7 +2478,7 @@ fn file_mtime_ns(path: &Path) -> Option<String> {
 /// пишем, как `safe_write_md` у маркдаунов (ревью 06.09, §3, решение 3).
 /// Старое окно без отпечатка пишет как раньше.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn config_save(app: ShellHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
+async fn config_save(app: ShellHandle, config: String, mtime_ns: Option<String>) -> Result<serde_json::Value, String> {
     // Файл ТОГО агента, которого показывает окно: у корневого — рядом с
     // программой, у соседа — его собственный. Иначе настройки второго агента
     // молча уезжали бы в конфиг первого.
@@ -2287,24 +2487,28 @@ fn config_save(app: ShellHandle, config: String, mtime_ns: Option<String>) -> Re
         ConfigRead::Ok(v) => Some(v),
         _ => None,
     };
-    let mut out = config_save_at(&target, &config, mtime_ns.as_deref())?;
+    let base = install_root();
+    let python = python_path(&base, &config_value().unwrap_or(serde_json::json!({})));
+    let script = base.join("app").join("localharness").join("config_cli.py");
+    if !script.is_file() {
+        return Err(format!("в этой сборке нет {}", script.display()));
+    }
+    let proposed = config.clone();
+    let root_config = target == base.join(CONFIG_NAME);
+    let target_for_writer = target.clone();
+    let mut out = shell_adapter::async_runtime::spawn_blocking(move || {
+        run_config_writer(&python, &script, &target_for_writer, &proposed, mtime_ns.as_deref())
+    }).await.map_err(|e| e.to_string())??;
     // 25.09 (C.1): настройки реле применяются сразу, без перезапуска окна. Реле одно
     // на установку и живёт у корневого агента — сверяем только корневой конфиг.
     // Мозг (модель, ключ, адрес) движок перечитывает сам: он следит за helene.json.
-    let saved = out.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
-    if saved && target == install_root().join(CONFIG_NAME) {
+    let saved = out.get("ok").and_then(|v| v.as_bool()) == Some(true);
+    if saved && root_config {
         if let Ok(after) = serde_json::from_str::<serde_json::Value>(&config) {
             // Ревью 25.09 (A4 F8): отпечаток сравнивается только когда реле было или стало
             // включено — владелец без реле, сменивший ключ GLM, не получает в расписке
             // «настройки реле изменились — своего реле не было и не нужно».
-            let relay_involved = relay_enabled(&after)
-                || before.as_ref().map(relay_enabled).unwrap_or(false);
-            let changed = relay_involved
-                && before
-                    .as_ref()
-                    .map(|b| relay_fingerprint(b) != relay_fingerprint(&after))
-                    .unwrap_or(true);
-            if changed {
+            if relay_change_after_save(&out, root_config, before.as_ref(), &after) {
                 let state = app.state::<LocalHarness>();
                 let said = reconcile_relay(&state, &after, "настройки реле изменились");
                 if let Some(obj) = out.as_object_mut() {
@@ -2314,6 +2518,55 @@ fn config_save(app: ShellHandle, config: String, mtime_ns: Option<String>) -> Re
         }
     }
     Ok(out)
+}
+
+fn relay_change_after_save(receipt: &serde_json::Value, root: bool, before: Option<&serde_json::Value>, after: &serde_json::Value) -> bool {
+    root && config_writer_receipt_valid(receipt) && receipt.get("ok").and_then(|v| v.as_bool()) == Some(true)
+        && (relay_enabled(after) || before.map(relay_enabled).unwrap_or(false))
+        && before.map(|b| relay_fingerprint(b) != relay_fingerprint(after)).unwrap_or(true)
+}
+
+/// The writer's successful replacement is not confirmed without a usable
+/// revision. A false success (or malformed stale response) cannot authorize
+/// the UI to advance its revision or the shell to reconcile the relay.
+fn config_writer_receipt_valid(receipt: &serde_json::Value) -> bool {
+    let Some(stamp) = receipt.get("mtime_ns").and_then(|v| v.as_str()) else { return false; };
+    if stamp.is_empty() || !stamp.bytes().all(|b| b.is_ascii_digit()) { return false; }
+    match receipt.get("ok").and_then(|v| v.as_bool()) {
+        Some(true) => receipt.get("code").is_none() && receipt.get("error").is_none(),
+        Some(false) => receipt.get("code").and_then(|v| v.as_str()) == Some("stale")
+            && receipt.get("error").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty()),
+        None => false,
+    }
+}
+
+/// Only a complete, shape-checked Python receipt licenses immediate relay
+/// reconciliation. Once started, an error/empty reply may follow a real write:
+/// tell the owner to reload, never resend or claim the relay was applied.
+fn run_config_writer(python: &Path, script: &Path, target: &Path, config: &str, mtime_ns: Option<&str>) -> Result<serde_json::Value, String> {
+    let mut cmd = Command::new(python);
+    cmd.arg("-u").arg(script).arg("--path").arg(target)
+        .env("PYTHONUTF8", "1")
+        .env("HELENE_PARENT_PID", std::process::id().to_string())
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    if let Some(seen) = mtime_ns { cmd.arg("--mtime-ns").arg(seen); }
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let mut child = cmd.spawn().map_err(|e| format!("Python не запустился, настройки не переданы: {e}"))?;
+    let sent = match child.stdin.take() {
+        Some(mut stdin) => stdin.write_all(config.as_bytes()),
+        None => Err(std::io::Error::other("Python не принял stdin")),
+    };
+    // Even a failed stdin write must be joined: the child may have received a
+    // complete document and committed before its pipe failed.
+    let output = child.wait_with_output().map_err(|e| format!("исход записи неизвестен: {e}"))?;
+    if sent.is_err() || !output.status.success() {
+        return Err("Python не подтвердил запись: файл мог измениться. Перечитай настройки и проверь реле перед повтором.".into());
+    }
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "Python не вернул квитанцию: файл мог измениться. Перечитай настройки и проверь реле перед повтором.".to_string())?;
+    if config_writer_receipt_valid(&receipt) { Ok(receipt) }
+    else { Err("Python вернул неполную квитанцию: файл мог измениться. Перечитай настройки и проверь реле перед повтором.".into()) }
 }
 
 fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result<serde_json::Value, String> {
@@ -2338,6 +2591,13 @@ fn config_save_at(target: &Path, config: &str, mtime_ns: Option<&str>) -> Result
     Ok(serde_json::json!({ "ok": true, "mtime_ns": file_mtime_ns(target) }))
 }
 
+#[cfg(windows)]
+fn restart_windows_command(dir: &Path, exe: &Path, python_selected: bool) -> String {
+    let owner = if python_selected { " --python-supervisor" } else { "" };
+    format!("ping 127.0.0.1 -n 3 >nul & start \"\" /D \"{}\" \"{}\"{}",
+            dir.display(), exe.display(), owner)
+}
+
 /// Перезапуск начисто — единственный способ применить настройки, поэтому он
 /// не имеет права быть гонкой. Себя из себя больше не спавним: новый процесс
 /// заставал живого (single-instance) и выходил сам, либо успевал увидеть ещё
@@ -2357,6 +2617,20 @@ fn restart_self(app: ShellHandle) {
     if service_owns_harness() && !ask_engine_restart(&current_tree(), "window") {
         log_line("перезапуск: просьба движку под службой не записалась");
     }
+    #[cfg(windows)]
+    if state.python_selected {
+        // A restart cannot stop Python first while an old renderer still
+        // holds the channel URL. This is a user action, not Panic: wait for
+        // the actual WebView destruction before releasing the Job tree.
+        SWITCHING.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(window) = app.get_webview_window("main") {
+            if let Err(error) = window.destroy() {
+                SWITCHING.store(false, std::sync::atomic::Ordering::Relaxed);
+                log_line(&format!("restart refused: window destruction unconfirmed: {error}"));
+                return;
+            }
+        }
+    }
     kill_children(&state);
     relay_abort();
     #[cfg(windows)]
@@ -2367,17 +2641,15 @@ fn restart_self(app: ShellHandle) {
         // Командную строку отдаём сырой: std экранирует кавычки как \", чего
         // cmd не понимает. Пауза — чтобы старый процесс успел умереть и
         // отпустить порт до того, как новый решит судьбу детей.
-        cmd.raw_arg(format!(
-            "ping 127.0.0.1 -n 3 >nul & start \"\" /D \"{}\" \"{}\"",
-            dir.display(),
-            exe.display()
-        ));
+        cmd.raw_arg(restart_windows_command(&dir, &exe, state.python_selected));
         cmd.creation_flags(CREATE_NO_WINDOW);
         if let Err(err) = cmd.spawn() {
-            // Не выходим: лучше живое окно без применённых настроек, чем
-            // тишина после нажатия «Перезапустить сейчас».
+            // Native path keeps its old window. In Python mode the renderer
+            // was retired first; exit with a failure rather than pretend an
+            // invisible, stopped installation is still usable.
             log_line(&format!("перезапуск не запустился: {err}"));
             toast(product_ui(), "Перезапуск не запустился — закрой и открой программу сам.");
+            if state.python_selected { app.exit(1); } // old renderer is already gone
             return;
         }
     }
@@ -2418,6 +2690,16 @@ fn restart_self(app: ShellHandle) {
 fn restart_self(app: ShellHandle) {
     let state = app.state::<LocalHarness>();
     if service_owns_harness() { let _ = ask_engine_restart(&current_tree(), "window"); }
+    #[cfg(windows)]
+    if state.python_selected {
+        if let Some(window) = app.get_webview_window("main") {
+            if let Err(error) = window.destroy() {
+                log_line(&format!("restart refused: Electron window destruction unconfirmed: {error}"));
+                app.exit(1);
+                return;
+            }
+        }
+    }
     kill_children(&state);
     relay_abort();
     shell_adapter::event("relaunch", serde_json::Value::Null);
@@ -3041,6 +3323,9 @@ fn mac_port_of(root: &Path) -> Option<u16> {
 /// Поднятая операция со службой из окна: расписка — по SCM, не по «запустил».
 #[cfg(windows)]
 fn service_op_from_window(op: &str) -> Result<String, String> {
+    if PYTHON_DESKTOP_SELECTED.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Python desktop owner is selected; stop this window and verify its Job trees before changing the service".into());
+    }
     let script_name = if op == "install" { "install-service.ps1" } else { "uninstall-service.ps1" };
     let script = install_root().join(script_name);
     if !script.exists() {
@@ -6419,6 +6704,17 @@ fn blocked_script(port: u16, theirs: Option<&Path>, agent: &str) -> String {
     )
 }
 
+fn python_refused_script(reason: &str) -> String {
+    let title = serde_json::json!("Python owner did not start");
+    let body = serde_json::json!(reason);
+    format!(r#"window.DESK_CONFIG_OVERRIDE = {{"base":"","key":""}};
+(function() {{ let box=document.createElement('pre'); box.id='python-owner-refused';
+box.style='position:fixed;inset:0;z-index:2147483647;background:#15171b;color:#e9e9ec;padding:48px;white-space:pre-wrap';
+box.textContent={title}+'\n\n'+{body};
+function show() {{ (document.body||document.documentElement).appendChild(box); }}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',show); else show(); }})();"#)
+}
+
 fn bootstrap() -> Option<Boot> {
     if let Some(action) = std::env::args().find_map(|a| match a.as_str() {
         "--panic" => Some("panic"), "--resume" => Some("resume"), _ => None,
@@ -6458,11 +6754,17 @@ fn bootstrap() -> Option<Boot> {
         ConfigRead::Ok(v) => Some(v),
         _ => None,
     };
+    #[cfg(windows)]
+    let python_selected = std::env::args().any(|a| a == "--python-supervisor");
+    #[cfg(windows)]
+    PYTHON_DESKTOP_SELECTED.store(python_selected, std::sync::atomic::Ordering::Release);
+    #[cfg(not(windows))]
+    let python_selected = false;
     let agent = agent_name(cfg.as_ref());
     // К установщику — когда продукт не настроен, но файл при этом ЦЕЛ
     // (его нет вовсе или он читается): поставка приезжает с шаблоном
     // helene.json, и первый запуск обязан открывать визард.
-    if !broken && unconfigured(&cfg) && hand_over_to_setup(&base) {
+    if !python_selected && !broken && unconfigured(&cfg) && hand_over_to_setup(&base) {
         return None;
     }
     let configured = !unconfigured(&cfg);
@@ -6472,6 +6774,11 @@ fn bootstrap() -> Option<Boot> {
     let mut window_key: Option<String> = None;
     let mut tree: Option<PathBuf> = None;
     let mut plans: Vec<SpawnPlan> = Vec::new();
+    #[cfg(windows)]
+    let mut python: Option<PythonDesktopOwner> = None;
+    let mut python_refusal: Option<String> = if python_selected && !configured {
+        Some("Python desktop owner needs a configured local root; no setup or native fallback started".into())
+    } else { None };
     let notify_text = cfg
         .as_ref()
         .and_then(|c| c.get("notifications"))
@@ -6516,14 +6823,22 @@ fn bootstrap() -> Option<Boot> {
         // Настройки ТЕКУЩЕГО агента: у корневого это тот же файл, у соседа —
         // его собственный. Всё, что ниже смотрит в `cfg` (режим, уведомления,
         // адрес удалённого), обязано смотреть в его файл, а не в чужой.
+        let root_cfg = cfg;
         let own = current
             .as_ref()
             .filter(|a| !a.base)
             .map(|a| agent_config(&a.config));
-        let cfg = own.as_ref().unwrap_or(cfg);
+        let cfg = own.as_ref().unwrap_or(root_cfg);
         match cfg.get("mode").and_then(|v| v.as_str()).unwrap_or("") {
             "local" => {
-                plans = build_plans(&base);
+                if python_selected {
+                    #[cfg(windows)]
+                    if let Err(why) = python_desktop_preflight(&base, root_cfg) {
+                        log_line(&format!("Python desktop owner refused before plan/token creation: {why}"));
+                        python_refusal = Some(why);
+                    }
+                }
+                if python_refusal.is_none() { plans = build_plans(&base); }
                 // Секрет трубы заводится ДО подъёма детей: он уходит им в
                 // окружение и он же предъявляется трубе из окна. У каждого
                 // агента он свой и лежит в его дереве.
@@ -6557,7 +6872,43 @@ fn bootstrap() -> Option<Boot> {
                 // тот и держал порт (реле 5011 спорило со службой), а закрытое окно
                 // уносило реле с собой. Отсутствующая регистрация требует ремонта,
                 // а не запасного движка окна; watch_children соблюдает тот же контракт.
-                if service_owns_harness() {
+                if python_selected {
+                    #[cfg(windows)]
+                    if python_refusal.is_none() { match launch_python_desktop(&base, root_cfg, &plans.iter()
+                            .find(|p| p.agent == BASE_AGENT_ID)
+                            .map(|p| p.tree.clone()).unwrap_or_else(|| base.join("data"))) {
+                        Ok(mut owner) => {
+                            // A JobChild enters Python's active map before its socket is
+                            // bound. Never expose a URL on that observation alone: a
+                            // rival may take the port between Python's bind probe and
+                            // the actual channel bind.
+                            let until = Instant::now() + Duration::from_secs(8);
+                            let verified = loop {
+                                let yes = mine.as_ref().is_some_and(|plan| {
+                                    owner.observation().is_ok_and(|status|
+                                        python_channel_verified(&status, &here, plan.port,
+                                                                &plan.tree, &plan.token))
+                                });
+                                if yes { break true; }
+                                if Instant::now() >= until || owner.child.try_wait().ok().flatten().is_some() {
+                                    break false;
+                                }
+                                std::thread::sleep(Duration::from_millis(100));
+                            };
+                            if verified {
+                                python = Some(owner);
+                                log_line("Python desktop owner and selected channel identity verified before native child launch");
+                            } else {
+                                owner.stop();
+                                python_refusal = Some(format!("Python owner did not serve selected agent {here} from its own tree and port; restart after inspecting the owner and port"));
+                            }
+                        }
+                        Err(why) => {
+                            log_line(&format!("Python desktop owner refused: {why}; native launch disabled"));
+                            python_refusal = Some(why);
+                        }
+                    }}
+                } else if service_owns_harness() {
                     log_line("запуск агента закреплён за службой в настройках; окно своих детей не поднимает, доступность движка проверяется по каналу");
                 } else {
                     for plan in &plans {
@@ -6573,7 +6924,9 @@ fn bootstrap() -> Option<Boot> {
                 if let Some(cur) = current.as_mut() {
                     cur.port = port;
                 }
-                match verdict {
+                if let Some(why) = &python_refusal {
+                    init_script = python_refused_script(why);
+                } else { match verdict {
                     // ЧУЖАЯ установка на нашем порту. Адрес вебвью на неё не
                     // строим вовсе: иначе окно показывало бы чужую переписку,
                     // писало в чужой desk_inbox и правило чужой soul/SOUL.md
@@ -6585,16 +6938,20 @@ fn bootstrap() -> Option<Boot> {
                     _ => {
                         init_script = channel_script(&base, port, &desk_token(), &agent, &here);
                     }
-                }
+                }}
             }
             "remote" => {
                 #[cfg(windows)]
-                {
+                if !python_selected {
                     plans = build_plans(&base);
                     for plan in &plans {
                         let (mut lifted, _) = start_children(plan, false);
                         children.append(&mut lifted);
                     }
+                }
+                if python_selected {
+                    python_refusal = Some("Python desktop owner requires local root; remote mode refused, no native child launch".into());
+                    log_line(python_refusal.as_deref().unwrap_or("Python owner refused"));
                 }
                 let base_url = cfg.get("base").and_then(|v| v.as_str()).unwrap_or("");
                 let key = cfg.get("key").and_then(|v| v.as_str()).unwrap_or("");
@@ -6617,11 +6974,16 @@ fn bootstrap() -> Option<Boot> {
                                            "product": product_ui(), "needs_remote": true})
                     );
                 }
+                if let Some(why) = &python_refusal { init_script = python_refused_script(why); }
             }
             _ => {}
         }
     }
 
+    if python_selected && init_script.is_empty() {
+        init_script = python_refused_script(python_refusal.as_deref()
+            .unwrap_or("Python desktop owner requires a configured local root"));
+    }
     // Кто сейчас в окне. Не `State<T>` Tauri, а глобал: переключатель агентов
     // меняет это на живом процессе, а состояние Tauri неизменяемо по замыслу.
     set_current(CurrentAgent {
@@ -6640,12 +7002,16 @@ fn bootstrap() -> Option<Boot> {
             "base": "", "key": "", "agent": agent, "product": product_ui(), "needs_local_setup": !configured,
         }));
     }
-    Some(Boot { base, children, plans, init_script, window_key, tree, notify_text })
+    Some(Boot { base, children, plans, init_script, window_key, tree, notify_text,
+                #[cfg(windows)] python, python_selected })
 }
 
 struct Boot {
     base: PathBuf, children: Vec<Managed>, plans: Vec<SpawnPlan>,
     init_script: String, window_key: Option<String>, tree: Option<PathBuf>, notify_text: bool,
+    #[cfg(windows)]
+    python: Option<PythonDesktopOwner>,
+    python_selected: bool,
 }
 
 #[cfg(feature = "desktop")]
@@ -6685,7 +7051,8 @@ fn main() {
         if let Err(error) = result { eprintln!("{error}"); std::process::exit(1); }
         return;
     }
-    let Some(Boot { base, children, plans, init_script, window_key, tree, notify_text }) = bootstrap() else { return };
+    let Some(Boot { base, children, plans, init_script, window_key, tree, notify_text,
+                    #[cfg(windows)] python, python_selected }) = bootstrap() else { return };
     let builder = tauri::Builder::default()
         // Один экземпляр — ПЕРВЫМ плагином: повторный запуск не доходит до
         // окна, а поднимает и фокусирует уже живое.
@@ -6710,6 +7077,10 @@ fn main() {
             children: Mutex::new(children),
             stopping: std::sync::atomic::AtomicBool::new(false),
             plans: Mutex::new(plans),
+            #[cfg(windows)]
+            python: Mutex::new(python),
+            #[cfg(windows)]
+            python_selected,
         })
         // Статика окна — с диска (app/static), см. serve_static.
         .register_uri_scheme_protocol("helene", |ctx, request| serve_static(ctx, request))
@@ -7117,6 +7488,13 @@ fn show_main(app: &ShellHandle) {
 
 fn kill_children(state: &ShellState<LocalHarness>) {
     state.stopping.store(true, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(windows)]
+    if state.python_selected {
+        if let Ok(mut owner) = state.python.lock() {
+            if let Some(owner) = owner.as_mut() { owner.stop(); }
+            owner.take();
+        }
+    }
     if let Ok(mut guard) = state.children.lock() {
         for m in guard.iter_mut() {
             if let Some(child) = m.child.as_mut() {
@@ -7132,6 +7510,60 @@ fn kill_children(state: &ShellState<LocalHarness>) {
     // окна, а тело обязано уйти вместе с окном — владелец закрыл программу.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     stop_service_body();
+    #[cfg(windows)]
+    if let Some(job) = JOB.get().and_then(Option::as_ref) {
+        job.terminate();
+        let until = Instant::now() + Duration::from_secs(5);
+        while !job.empty() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    // Only measured Job emptiness authorizes a clean handoff; shell death or
+    // an unreadable Job leaves the persistent active marker for inspection.
+    #[cfg(windows)]
+    if JOB.get().and_then(Option::as_ref).is_some_and(job::Job::empty) {
+        if let Err(why) = desktop_owner_lock::mark_clean_after_teardown() {
+            log_line(&format!("desktop owner record remains active: {why}"));
+        }
+    }
+}
+
+/// An already-open window must not keep its old channel URL after the Python
+/// owner or its verified channel disappears. Close that WebView, then reopen
+/// only an inert refusal screen. This is an observed rail, not OS-level
+/// per-request interposition.
+#[cfg(windows)]
+fn refuse_python_window(app: &ShellHandle, why: &str) {
+    let script = python_refused_script(why);
+    SWITCHING.store(true, std::sync::atomic::Ordering::Relaxed);
+    let destroyed = app.get_webview_window("main")
+        .is_none_or(|window| window.destroy().is_ok());
+    kill_children(&app.state::<LocalHarness>());
+    if !destroyed {
+        log_line("Python channel lost but the old window could not be destroyed; exiting rather than retaining its URL");
+        app.exit(1);
+        return;
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        for _ in 0..60 {
+            if handle.get_webview_window("main").is_none() { break; }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if handle.get_webview_window("main").is_some() {
+            log_line("Python channel lost but the old window remained registered; exiting rather than retaining its URL");
+            handle.exit(1);
+            return;
+        }
+        let made = replace_main(&handle, &script);
+        SWITCHING.store(false, std::sync::atomic::Ordering::Relaxed);
+        if let Err(error) = made {
+            log_line(&format!("Python refusal screen unavailable: {error}; exiting"));
+            handle.exit(1);
+            return;
+        }
+        show_main(&handle);
+    });
 }
 
 /// Надзор: упавший ребёнок поднимается снова с растущей паузой; шестое падение
@@ -7163,6 +7595,39 @@ fn watch_children(app: ShellHandle) {
         let state = app.state::<LocalHarness>();
         if state.stopping.load(Ordering::Relaxed) {
             return;
+        }
+        #[cfg(windows)]
+        if state.python_selected {
+            if owner_stopped() {
+                // Emergency Stop never waits for a renderer acknowledgement.
+                // The owning Job teardown and shell exit close this window.
+                kill_children(&state);
+                app.exit(0);
+                return;
+            }
+            let observed = state.python.lock().ok().and_then(|mut locked| {
+                locked.as_mut().map(PythonDesktopOwner::observation)
+            });
+            let refusal = match observed {
+                Some(Ok(status)) => {
+                    let current = current_id();
+                    match find_agent(&install_root(), &current) {
+                        Some(agent) if python_channel_verified(&status, &current, agent.port,
+                            &agent.tree, &read_desk_token(&agent.tree).unwrap_or_default()) => None,
+                        _ => Some(format!("Python desktop channel for {current} lost its verified port or tree")),
+                    }
+                }
+                Some(Err(why)) => Some(format!("Python desktop owner status unavailable: {why}")),
+                None => Some("Python desktop owner absent".into()),
+            };
+            if let Some(why) = refusal {
+                // No native retry and no retained WebView URL after a measured
+                // owner/channel loss. A live process alone is not a port identity.
+                log_line(&format!("{why}; blocking the window instead of using a native fallback"));
+                refuse_python_window(&app, &why);
+                return;
+            }
+            continue;
         }
         if owner_stopped() {
             saw_owner_stop = true;
@@ -7526,6 +7991,34 @@ fn restart_agent_children(state: &ShellState<LocalHarness>, agent: &str) {
 #[cfg_attr(feature = "desktop", tauri::command)]
 fn agents_list(state: ShellState<LocalHarness>) -> serde_json::Value {
     let base = install_root();
+    #[cfg(windows)]
+    if state.python_selected {
+        let observed = state.python.lock().map_err(|e| e.to_string())
+            .and_then(|mut locked| locked.as_mut().ok_or("Python desktop owner absent".into())
+                      .and_then(PythonDesktopOwner::observation));
+        let Ok(status) = observed else {
+            return serde_json::json!({"agents":[], "current":current_id(),
+                                      "error":observed.err().unwrap_or_default()});
+        };
+        let default_id = agent_default_id();
+        let mut list: Vec<serde_json::Value> = Vec::new();
+        for agent in roster(&base) {
+            let mut row = agent.as_json();
+            let running = status.pointer(&format!("/agents/{}/raised", agent.id))
+                .and_then(|value| value.as_bool()).unwrap_or(false);
+            if running && !python_channel_verified(&status, &agent.id, agent.port, &agent.tree,
+                                                    &read_desk_token(&agent.tree).unwrap_or_default()) {
+                return serde_json::json!({"agents":[], "current":current_id(),
+                    "error":format!("Python channel identity for {} is unconfirmed", agent.id)});
+            }
+            row["raised"] = serde_json::Value::Bool(running);
+            row["current"] = serde_json::Value::Bool(agent.id == current_id());
+            row["default"] = serde_json::Value::Bool(default_id.as_deref() == Some(agent.id.as_str()));
+            list.push(row);
+        }
+        return serde_json::json!({"agents":list,"current":current_id(),
+                                  "owner":"python", "seq":status["seq"]});
+    }
     let raised: Vec<String> = state
         .children
         .lock()
@@ -7577,6 +8070,16 @@ fn switch_agent(app: ShellHandle, id: String) -> Result<serde_json::Value, Strin
             "у агента «{}» тот же порт {}, что у «{}» — окно к нему не пойдёт, пока порт не разведён",
             agent.name, agent.port, agent.conflict
         ));
+    }
+    #[cfg(windows)]
+    if app.state::<LocalHarness>().python_selected {
+        let status = app.state::<LocalHarness>().python.lock().map_err(|e| e.to_string())?
+            .as_mut().ok_or("Python desktop owner absent; switch refused")?
+            .observation()?;
+        if !python_channel_verified(&status, &agent.id, agent.port, &agent.tree,
+                                    &read_desk_token(&agent.tree).unwrap_or_default()) {
+            return Err(format!("Python desktop owner has no verified channel for {}; refusing another process's port", agent.id));
+        }
     }
     let token = ensure_desk_token(&agent.tree).unwrap_or_default();
     set_desk_token(&token);
@@ -7780,27 +8283,26 @@ async fn run_agents_cli(args: &[String]) -> Result<serde_json::Value, String> {
 }
 
 /// Сохранённый выбор «открывать всегда»: agent-default.json у установки.
-/// Пишется ТОЛЬКО здесь — переключатель окна его не трогает, поэтому файл и
-/// есть воля владельца, а не след последнего просмотра.
+/// Пишет Python-ростер через уже используемый async CLI; при старте Rust лишь
+/// читает файл. Переключатель окна его не трогает: это воля владельца, а не
+/// след последнего просмотра.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn agent_default_set(id: String) -> Result<serde_json::Value, String> {
-    let base = install_root();
-    let wanted = id.trim().to_lowercase();
-    let Some(agent) = find_agent(&base, &wanted) else {
-        return Err(format!("агента «{wanted}» в этой установке нет"));
-    };
-    if !agent.enabled {
-        return Err(format!(
-            "агент «{}» снят в настройках — его нельзя назначать тем, кто откроется при старте",
-            agent.name
-        ));
+async fn agent_default_set(id: String) -> Result<serde_json::Value, String> {
+    let requested = id.trim().to_lowercase();
+    let saved = run_agents_cli(&["set-default".into(), "--id".into(), id]).await?;
+    let chosen = saved.get("id").and_then(|value| value.as_str())
+        .filter(|value| *value == requested)
+        .ok_or_else(|| "Python-CLI не подтвердил сохранённого агента".to_string())?;
+    let name = saved.get("name").and_then(|value| value.as_str())
+        .ok_or_else(|| "Python-CLI не назвал сохранённого агента".to_string())?;
+    if saved.get("ok").and_then(|value| value.as_bool()) != Some(true) {
+        return Err("Python-CLI не подтвердил запись выбора".into());
     }
-    agent_default_write(&agent.id)?;
     log_line(&format!(
         "при старте теперь открывается «{}» ({})",
-        agent.name, agent.id
+        name, chosen
     ));
-    Ok(serde_json::json!({ "ok": true, "id": agent.id, "name": agent.name }))
+    Ok(saved)
 }
 
 /// Погасить или поднять ОДНОГО агента. Флаг в его конфиге пишет питон
@@ -7820,6 +8322,35 @@ async fn agent_enabled_set(
     };
     if let Some(why) = agent_enabled_refusal(agent.base, enabled) {
         return Err(why);
+    }
+    #[cfg(windows)]
+    if app.state::<LocalHarness>().python_selected {
+        // First prove the selected owner is alive and current, before the
+        // Python config writer can make any persistent change.
+        let state = app.state::<LocalHarness>();
+        let before = state.python.lock().map_err(|e| e.to_string())?
+            .as_mut().ok_or("Python desktop owner absent; refusing config mutation")?
+            .observation()?;
+        if before.pointer(&format!("/agents/{}/raised", agent.id)).is_none() && agent.enabled {
+            return Err("Python owner has not admitted this enabled agent; refusing mutation".into());
+        }
+        if agent.enabled != enabled {
+            run_agents_cli(&[
+                "set-enabled".into(), "--id".into(), agent.id.clone(),
+                "--enabled".into(), if enabled { "true".into() } else { "false".into() },
+            ]).await?;
+        }
+        // Config write may have succeeded even if refresh/teardown fails.
+        // Never report completion or silently start Rust children in that case.
+        let result = state.python.lock().map_err(|e| format!("config may already have changed; Python status unknown: {e}"))?
+            .as_mut().ok_or("config may already have changed; Python owner disappeared")?
+            .refresh(&agent.id, enabled, agent.port, &agent.tree,
+                     &read_desk_token(&agent.tree).unwrap_or_default())
+            .map_err(|e| format!("config may already have changed; Python owner completion unconfirmed: {e}"))?;
+        log_line(&format!("Python desktop owner confirmed agent {} raised={} at seq {}",
+                          agent.id, enabled, result["seq"]));
+        return Ok(serde_json::json!({"ok":true,"id":agent.id,"enabled":enabled,
+                                     "owner":"python","seq":result["seq"]}));
     }
     let name = agent.name.clone();
     if agent.enabled == enabled {
@@ -7921,6 +8452,41 @@ async fn agent_remove(app: ShellHandle, id: String) -> Result<serde_json::Value,
         return Err(format!("агента «{wanted}» в этой установке нет"));
     };
     let state = app.state::<LocalHarness>();
+    #[cfg(windows)]
+    if state.python_selected {
+        if agent.enabled {
+            return Err(format!("«{}»: disable this agent and await Python Job teardown before removal", agent.name));
+        }
+        if let Some(why) = agent_remove_refusal(agent.base, false, agent.id == current_id()) {
+            return Err(format!("«{}»: {why}", agent.name));
+        }
+        // The config may have been edited outside this window while a runner
+        // or relay Job survived its channel. Force the Python owner to retire
+        // this disabled agent and acknowledge the resulting observed state.
+        let observed = state.python.lock().map_err(|e| e.to_string())?
+            .as_mut().ok_or("Python desktop owner absent; removal refused")?
+            .refresh(&agent.id, false, agent.port, &agent.tree,
+                     &read_desk_token(&agent.tree).unwrap_or_default())?;
+        if let Some(row) = observed.pointer(&format!("/agents/{}", agent.id)) {
+            let roles = row.get("roles").and_then(|value| value.as_array())
+                .ok_or("Python owner roles unreadable; removal refused")?;
+            if !roles.is_empty() || row.get("raised").and_then(|v| v.as_bool()) != Some(false) {
+                return Err("Python owner still holds this agent's Jobs; removal refused".into());
+            }
+        }
+        let lease = agent.tree.join(".desktop-owner.lock");
+        match std::fs::read(&lease) {
+            Ok(bytes) if bytes == b"clean\n" => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            _ => return Err(format!("agent tree lease is not proven clean ({}); removal refused", lease.display())),
+        }
+        // The Python owner has retired every Job and its per-tree lease.
+        // Archiving the config will be observed on its next roster refresh.
+        let attic = base.join("agents-attic");
+        let made = run_agents_cli(&["remove".into(), "--id".into(), agent.id.clone(),
+                                    "--attic".into(), attic.to_string_lossy().into_owned()]).await?;
+        return Ok(made);
+    }
     let raised_here = state
         .children
         .lock()
@@ -7952,11 +8518,10 @@ async fn agent_remove(app: ShellHandle, id: String) -> Result<serde_json::Value,
         attic.display()
     ));
     toast(product_ui(), &format!("«{name}» удалён; его папка — на чердаке agents-attic, если что-то забыто."));
-    // Сохранённый «открывать всегда» не может звать удалённого: откат к корневому,
-    // молча — потому что окно уже сказало своё слово удалением.
-    if agent_default_id().as_deref() == Some(agent.id.as_str()) {
-        let _ = std::fs::remove_file(agent_default_path());
-    }
+    // Python remove под тем же межпроцессным замком, что set-default, условно
+    // убирает выбор удалённого id; отдельный Rust unlink здесь стёр бы более
+    // новый выбор при одновременной команде. Ошибка Python (включая частичный
+    // перенос в чердак) возвращается выше из run_agents_cli, не маскируется.
     Ok(made)
 }
 
@@ -8015,9 +8580,14 @@ async fn agent_add(
     if named.is_empty() {
         return Err("у агента должно быть имя — им он подписывает свои слова".into());
     }
-    if roster(&base).len() >= 16 {
-        return Err("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол".into());
+    #[cfg(windows)]
+    if app.state::<LocalHarness>().python_selected {
+        app.state::<LocalHarness>().python.lock().map_err(|e| e.to_string())?
+            .as_mut().ok_or("Python desktop owner absent; cannot add an agent")?
+            .observation()?;
     }
+    // The Python roster writer owns the admission ceiling under its OS lock.
+    // A Rust pre-read would race a concurrent CLI create/remove.
     // Конституция (договор с волной A и B1): один проход — (флаги питона,
     // временный файл). «inherit» С текстом — это «text»: владелец уже прошёл
     // редактор наследования и прислал то, что хочет видеть. Текст НЕ едет
@@ -8091,6 +8661,18 @@ async fn agent_add(
         result?
     };
     let id = made.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    #[cfg(windows)]
+    if app.state::<LocalHarness>().python_selected {
+        let created = find_agent(&base, &id)
+            .ok_or_else(|| format!("agent {id} was created, but its new roster entry is unavailable"))?;
+        app.state::<LocalHarness>().python.lock().map_err(|e| format!("agent {id} was created; Python status unknown: {e}"))?
+            .as_mut().ok_or_else(|| format!("agent {id} was created; Python owner disappeared"))?
+            .refresh(&id, true, created.port, &created.tree,
+                     &read_desk_token(&created.tree).unwrap_or_default())
+            .map_err(|e| format!("agent {id} was created, but Python launch is unconfirmed: {e}"))?;
+        log_line(&format!("agent {id} created and admitted by Python desktop owner"));
+        return Ok(made);
+    }
     log_line(&format!("заведён агент «{named}» ({id}) — поднимется после перезапуска"));
     // Поднимать его прямо сейчас нечем: детей заводит план, а план строится на
     // старте. Перезапуск оболочки — то же, что владелец делает после правки
@@ -9252,6 +9834,46 @@ fn logs_bundle_blocking(tree: PathBuf) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[cfg(windows)]
+    fn restart_preserves_the_selected_process_owner() {
+        use super::restart_windows_command;
+        use std::path::Path;
+        let dir = Path::new(r"C:\\Fixture");
+        let exe = dir.join("helene.exe");
+        let python = restart_windows_command(dir, &exe, true);
+        assert!(python.ends_with("\" --python-supervisor"), "{python}");
+        let native = restart_windows_command(dir, &exe, false);
+        assert!(native.ends_with("helene.exe\""), "{native}");
+        assert!(!native.contains("--python-supervisor"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn competing_tree_owner_makes_relay_wait_not_fail() {
+        use super::{ChildSpec, RelaySpawn, SpawnOutcome};
+        use std::io::Write;
+        use std::os::windows::fs::OpenOptionsExt;
+        let dir = std::env::temp_dir().join(format!("helene-relay-owner-{}-{:?}",
+            std::process::id(), std::thread::current().id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("helene-relay.exe"), b"fixture").unwrap();
+        let tree = dir.join("data");
+        std::fs::create_dir_all(&tree).unwrap();
+        let mut held = std::fs::OpenOptions::new().read(true).write(true).create(true)
+            .share_mode(0).open(tree.join(".desktop-owner.lock")).unwrap();
+        held.write_all(b"active\n").unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let cfg = serde_json::json!({"relay":{"enabled":true,"port":port}});
+        assert!(matches!(super::spawn_relay(&dir, &cfg, &tree), RelaySpawn::WaitingOwner(_)));
+        assert!(matches!(ChildSpec::Relay { base: dir.clone(), cfg, tree: tree.clone() }.spawn(),
+                         SpawnOutcome::Waiting(_)));
+        drop(held);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn login_marker_needs_success_and_a_changed_auth_json() {
         use std::time::{Duration, SystemTime};
         let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
@@ -9302,6 +9924,63 @@ mod tests {
         // Пустой отпечаток — старое окно, пишем без проверки.
         assert_eq!(config_save_at(&target, r#"{"a":4}"#, Some(""))
             .unwrap()["ok"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Settings save crosses a real Rust→Python writer, with no relay
+    /// authority from a missing receipt after a possible physical write.
+    #[test]
+    fn python_full_config_writer_receipts_and_relay_boundary() {
+        use super::{config_writer_receipt_valid, file_mtime_ns, relay_change_after_save, run_config_writer};
+        let dir = std::env::temp_dir().join(format!("helene-python-config-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("helene.json");
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().join("localharness/config_cli.py");
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let initial = r#"{"relay":{"enabled":false},"mode":"local"}"#;
+        let first = run_config_writer(std::path::Path::new(python), &script, &target, initial, None).unwrap();
+        assert_eq!(first["ok"], true);
+        let seen = first["mtime_ns"].as_str().unwrap().to_string();
+        assert_eq!(Some(seen), file_mtime_ns(&target));
+        let proposed = r#"{"relay":{"enabled":true},"mode":"remote"}"#;
+        let before: serde_json::Value = serde_json::from_str(initial).unwrap();
+        let after: serde_json::Value = serde_json::from_str(proposed).unwrap();
+        std::fs::write(&target, r#"{"other":"writer"}"#).unwrap();
+        let stale = run_config_writer(std::path::Path::new(python), &script, &target, proposed, Some("1")).unwrap();
+        assert_eq!(stale["code"], "stale");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), r#"{"other":"writer"}"#);
+        assert!(!relay_change_after_save(&stale, true, Some(&before), &after));
+        let fresh = stale["mtime_ns"].as_str().unwrap().to_string();
+        let saved = run_config_writer(std::path::Path::new(python), &script, &target, proposed, Some(&fresh)).unwrap();
+        assert_eq!(saved["ok"], true);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&target).unwrap()).unwrap(), after);
+        assert!(relay_change_after_save(&saved, true, Some(&before), &after));
+        assert!(!relay_change_after_save(&saved, false, Some(&before), &after));
+        assert!(!relay_change_after_save(&saved, true, Some(&after), &after));
+        let no_relay = serde_json::json!({"relay":{"enabled":false},"model":{"key":"a"}});
+        let model_only = serde_json::json!({"relay":{"enabled":false},"model":{"key":"b"}});
+        assert!(!relay_change_after_save(&saved, true, Some(&no_relay), &model_only));
+
+        // A fabricated success without a usable revision must never license
+        // immediate relay reconciliation (even if the JSON shape looks close).
+        for stamp in ["", "invalid", "-1", " 123"] {
+            let bogus = serde_json::json!({"ok": true, "mtime_ns": stamp});
+            assert!(!config_writer_receipt_valid(&bogus));
+            assert!(!relay_change_after_save(&bogus, true, Some(&before), &after));
+        }
+        assert!(!config_writer_receipt_valid(&serde_json::json!({"ok": true, "mtime_ns": 123})));
+        assert!(!config_writer_receipt_valid(&serde_json::json!({"ok": true, "mtime_ns": "123", "error": "failed"})));
+        assert!(!config_writer_receipt_valid(&serde_json::json!({"ok": false, "mtime_ns": "123", "code": "stale"})));
+        assert!(config_writer_receipt_valid(&stale));
+        assert!(config_writer_receipt_valid(&saved));
+
+        let stub = dir.join("no-receipt.py");
+        std::fs::write(&stub, "import pathlib,sys\npathlib.Path(sys.argv[2]).write_text(sys.stdin.read(),encoding='utf-8')\n").unwrap();
+        let unknown = run_config_writer(std::path::Path::new(python), &stub, &target, initial, None).unwrap_err();
+        assert!(unknown.contains("файл мог измениться"));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&target).unwrap()).unwrap(), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -9444,18 +10123,80 @@ mod tests {
         assert_eq!(f.as_deref(), Some("main"));
     }
 
-    /// agent-default.json: чтение терпимо к браку, запись атомарна и читается
-    /// обратно ровно тем же кодом, что и старт.
+    /// The Python writer admits agent 16, and the Rust startup reader sees
+    /// exactly that roster. Agent 17 must not leave a birth receipt behind.
+    #[test]
+    fn python_create_ceiling_reaches_the_rust_roster_reader() {
+        let root = std::env::temp_dir().join(format!("helene-create-{}-{}", std::process::id(), line!()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("agents")).unwrap();
+        std::fs::write(root.join("helene.json"), "{}").unwrap();
+        for i in 0..14 {
+            let dir = root.join("agents").join(format!("agent-{i:02}"));
+            std::fs::create_dir(&dir).unwrap();
+            std::fs::write(dir.join("helene.json"), format!(r#"{{"port":{}}}"#, 8200 + i)).unwrap();
+        }
+        assert_eq!(super::roster(&root).len(), 15);
+        let cli = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().join("localharness/agents_cli.py");
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let add = |name: &str| std::process::Command::new(python)
+            .arg(&cli).args(["add", "--name", name, "--base"])
+            .arg(&root).env("PYTHONUTF8", "1").output().unwrap();
+        let last = add("sixteenth");
+        assert!(last.status.success(), "{}", String::from_utf8_lossy(&last.stderr));
+        assert_eq!(super::roster(&root).len(), 16);
+        let refused = add("seventeenth");
+        assert_eq!(refused.status.code(), Some(2), "{}", String::from_utf8_lossy(&refused.stderr));
+        assert!(refused.stdout.is_empty());
+        assert!(!root.join("agents/seventeenth").exists());
+        assert_eq!(super::roster(&root).len(), 16);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// agent-default.json: реальный Python CLI пишет его, Rust-старт читает.
+    /// Не заменять этот шов Rust-only фикстурой: иначе сериализаторы разойдутся.
     #[test]
     fn agent_default_file_roundtrip_and_garbage() {
         let dir = std::env::temp_dir().join(format!("helene-def-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        use super::{agent_default_id_from, agent_default_write_at};
+        std::fs::create_dir_all(dir.join("agents/mira")).unwrap();
+        std::fs::write(dir.join("helene.json"), r#"{"agent":{"name":"Hélène"}}"#).unwrap();
+        std::fs::write(dir.join("agents/mira/helene.json"),
+                       r#"{"agent":{"name":"Мира"}}"#).unwrap();
+        use super::agent_default_id_from;
         let path = dir.join("agent-default.json");
         assert_eq!(agent_default_id_from(&path), None, "файла нет — None, не отказ");
-        agent_default_write_at(&path, "Mira ").unwrap(); // регистр и хвост — терпимы
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().join("localharness/agents_cli.py");
+        let python = if cfg!(windows) { "python" } else { "python3" };
+        let out = std::process::Command::new(python)
+            .arg(&script).args(["set-default", "--id", "Mira ", "--base"])
+            .arg(&dir).env("PYTHONUTF8", "1").output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let receipt: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(receipt["id"], "mira");
         assert_eq!(agent_default_id_from(&path).as_deref(), Some("mira"));
+        std::fs::write(dir.join("agents/mira/helene.json"), r#"{"enabled":false}"#).unwrap();
+        let refused = std::process::Command::new(python)
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                 .parent().unwrap().join("localharness/agents_cli.py"))
+            .args(["set-default", "--id", "mira", "--base"])
+            .arg(&dir).env("PYTHONUTF8", "1").output().unwrap();
+        assert!(!refused.status.success(), "disabled agent was stored");
+        assert_eq!(agent_default_id_from(&path).as_deref(), Some("mira"),
+                   "refusal must not mutate the preference");
+        // The same Python CLI owns removal and conditional preference cleanup;
+        // Rust only reads the resulting startup state (no second unlink).
+        let removed = std::process::Command::new(python)
+            .arg(&script).args(["remove", "--id", "mira", "--attic"])
+            .arg(dir.join("agents-attic"))
+            .arg("--base").arg(&dir).env("PYTHONUTF8", "1").output().unwrap();
+        assert!(removed.status.success(), "{}", String::from_utf8_lossy(&removed.stderr));
+        assert!(serde_json::from_slice::<serde_json::Value>(&removed.stdout).unwrap()["attic"]
+            .as_str().is_some());
+        assert_eq!(agent_default_id_from(&path), None);
+        assert!(!dir.join("agents/mira").exists());
         // Брак — это «выбора нет», а не ошибка старта.
         std::fs::write(&path, "{ не json").unwrap();
         assert_eq!(agent_default_id_from(&path), None);

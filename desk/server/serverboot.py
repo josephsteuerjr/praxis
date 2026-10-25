@@ -65,6 +65,8 @@ import sys
 import time
 from pathlib import Path
 
+from supervisor_policy import decide_exit
+
 
 def _utc() -> str:
     return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -336,6 +338,7 @@ def child_env(base: dict, tree: Path, token: str) -> dict:
                PYTHONUNBUFFERED="1", HELENE_HOST=base.get("HELENE_HOST", "0.0.0.0"),
                HELENE_SUPERVISOR="serverboot")
     env.pop("PRAXIS_DESK_TOKEN", None)
+    env.pop("RELAY_API_KEY", None)
     return env
 
 
@@ -349,24 +352,17 @@ def settle(child: Child, now: float) -> str:
     """
     code = child.proc.poll() if child.proc is not None else None
     child.proc = None
-    if child.key == "runner" and code == RESTART_EXIT_CODE:
-        child.falls, child.retry_at = [], 0.0
-        said = f"раннер попросил перезапуска (код {code}) — поднимаю"
-    elif child.key == "runner" and code in (2, 3):
-        child.halted = ("конфиг или раскладка папки данных" if code == 3
-                        else "нет папки с кодом агента (tree/)")
-        said = (f"раннер вышел с кодом {code}: {child.halted} — перезапуск не поможет, "
-                f"правь и перезапусти контейнер")
-    else:
-        child.falls = [t for t in child.falls if now - t < 600] + [now]
-        pause = min(60.0, 2.0 ** min(len(child.falls), 6))
-        child.retry_at = now + pause
-        said = f"{child.name} завершился (код {code}) — снова через {pause:.0f} с"
-    print(f"[serverboot] {said}", flush=True)
-    return said
+    decision = decide_exit(key=child.key, name=child.name, code=code, now=now,
+                           falls=tuple(child.falls), retry_at=child.retry_at,
+                           halted=child.halted, restart_code=RESTART_EXIT_CODE)
+    child.falls = list(decision.falls)
+    child.retry_at = decision.retry_at
+    child.halted = decision.halted
+    print(f"[serverboot] {decision.note}", flush=True)
+    return decision.note
 
 
-def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
+def relay_child(base: Path, cfg: dict, tree: Path, env: dict, *, check_port: bool = True) -> "Child | None":
     """Реле подписки ChatGPT третьим ребёнком — то же, что делает оболочка.
 
     Молчания здесь быть не должно ни в одном исходе: агент с провайдером
@@ -386,7 +382,7 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
               "(installer/build_dist.py) и пересобери образ", flush=True)
         return None
     port = _relay_port(cfg)
-    if _port_busy(port):
+    if check_port and _port_busy(port):
         # Своё реле в петлю перезапусков, а весь мозг — в ЧУЖОЕ реле: ровно то,
         # от чего оболочка отказывается на Windows.
         print(f"[serverboot] ⚠ порт реле {port} уже занят — своё реле не поднимаю; "
@@ -395,9 +391,21 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
     home = tree / "relay"
     home.mkdir(parents=True, exist_ok=True)
     relay_env = dict(env)
+    for secret in ("RELAY_API_KEY", "HELENE_TOKEN", "PRAXIS_DESK_TOKEN"):
+        relay_env.pop(secret, None)
     relay_env["RELAY_PORT"] = str(port)
     relay_env["RELAY_LOG_DIR"] = str(home / "logs")
     relay_env["RELAY_LOCAL"] = "1"
+    relay_env["RELAY_AUTH_DIR"] = str(home / "local_auth")
+    relay_env["RELAY_TYPED_TERMINAL"] = "field"
+    app = base / str(cfg.get("app") or "app/deskapp.py")
+    harness = app.parent / "localharness"
+    if not harness.is_dir():
+        harness = Path(__file__).resolve().parent.parent / "localharness"
+    if str(harness) not in sys.path:
+        sys.path.insert(0, str(harness))
+    from relay_network import environment
+    relay_env.update(environment(_relay_block(cfg)))
     # Инструкции: без этого реле кладёт перед конституцией агента 23 КБ чужого
     # системного промпта («ты кодинг-агент Codex CLI») — то же значение, что
     # ставит оболочка (shell/src/main.rs::spawn_relay).
@@ -408,6 +416,30 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict) -> "Child | None":
         # Ключ мозга = ключ петли: реле требует его Bearer-ом на /chat/completions.
         relay_env["RELAY_API_KEY"] = key
     return Child("relay", "реле", [str(exe), "serve"], relay_env, home, tree / "relay.log")
+
+
+def xtts_child(base: Path, cfg: dict, tree: Path, env: dict,
+               user: int | None = None, group: int | None = None) -> "Child | None":
+    voice = cfg.get("voice") or {}
+    if not isinstance(voice, dict) or voice.get("speak") is not True:
+        return None
+    python = Path(env.get("HELENE_XTTS_PYTHON") or "/opt/helene-xtts/bin/python3")
+    code = Path(str(cfg.get("code") or "tree"))
+    if not code.is_absolute():
+        code = base / code
+    worker = code / "xtts_tts_worker.py"
+    model = tree / "models" / "xtts"
+    if not python.is_file() or not worker.is_file() or not all(
+            (model / name).is_file() for name in ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth")):
+        print("[serverboot] XTTS включён, но Linux runtime, worker или модель не установлены; "
+              "голос недоступен, другие дети продолжают работать", flush=True)
+        return None
+    worker_env = {key: env[key] for key in ("PATH", "HOME", "LANG", "HELENE_XTTS_PYTHON") if key in env}
+    worker_env.update(PYTHONUTF8="1", PYTHONUNBUFFERED="1")
+    return Child("xtts", "XTTS", [str(python), "-u", str(worker), "--home",
+                 str(tree / "memory/.state/xtts"), "--model", str(model), "--device",
+                 str(voice.get("tts_device") or "cpu")], worker_env, tree, tree / "xtts.log",
+                 user=user, group=group)
 
 
 def main() -> int:
@@ -442,6 +474,7 @@ def main() -> int:
         except OSError as exc:
             print(f"[serverboot] замок дерева не снят ({exc}) — раннер может отказаться", flush=True)
     env = child_env(os.environ, tree, token)
+    env["HELENE_CONFIG"] = str(config)
     code = base / str(cfg.get("code") or "tree")
     who = accounts()
     if who is not None:
@@ -477,6 +510,9 @@ def main() -> int:
             seal_relay(tree / "relay", who["gid"])
             relay.umask = 0o027
         children.append(relay)
+    speech = xtts_child(base, cfg, tree, runner_env, user=runner_user, group=group)
+    if speech is not None:
+        children.append(speech)
     children += [
         Child("channel", "канал", [sys.executable, "-u", str(app), str(port)], channel_env, app.parent,
               tree / "deskapp.log", user=channel_user, group=group),
@@ -500,13 +536,21 @@ def main() -> int:
     started_utc = _utc()
     stopping = False
 
-    def restart(child: Child) -> str:
+    def restart(child: Child) -> tuple[bool, str]:
         """Поднять ребёнка заново по просьбе владельца, забыв прежние падения.
 
         Счётчик падений обнуляется намеренно: пауза перед подъёмом растёт,
         чтобы не молотить упавшего в петле, а нажатая кнопка — это новое
         обстоятельство, и ждать минуту после неё было бы враньём про «сейчас».
         """
+        if child.key == "relay":
+            try:
+                fresh = relay_child(base, _read_config(config), tree, env, check_port=False)
+            except (OSError, ValueError):
+                return False, "настройки реле не применены: конфиг или исходящий маршрут некорректен"
+            if fresh is None:
+                return False, "настройки реле не применены: реле выключено или бинарь отсутствует"
+            child.argv, child.env, child.cwd = fresh.argv, fresh.env, fresh.cwd
         child.stop()
         child.proc = None
         child.falls = []
@@ -514,10 +558,10 @@ def main() -> int:
         child.retry_at = 0.0
         try:
             child.spawn()
-            return f"{child.name} перезапущен, pid {child.proc.pid}"
+            return True, f"{child.name} перезапущен, pid {child.proc.pid}"
         except OSError as exc:
             child.retry_at = time.monotonic() + 10
-            return f"{child.name} не поднялся: {exc}"
+            return False, f"{child.name} не поднялся: {exc}"
 
     def serve_request(request: dict) -> bool:
         """Исполнить просьбу окна. True — надзору пора выйти (перезапуск всего)."""
@@ -535,10 +579,10 @@ def main() -> int:
                 print("[serverboot] просьба владельца: перезапустить всё — выхожу, "
                       "контейнер поднимется сам", flush=True)
                 return True
-            notes = [restart(child) for child in children]
-            control.receipt(tree, request, True,
+            results = [restart(child) for child in children]
+            control.receipt(tree, request, all(ok for ok, _ in results),
                             "надзор запущен не в контейнере, выходить некуда — "
-                            "перезапустил детей на месте: " + "; ".join(notes))
+                            "перезапустил детей на месте: " + "; ".join(note for _, note in results))
             return False
         picked = next((child for child in children if child.key == target), None)
         if picked is None:
@@ -546,9 +590,9 @@ def main() -> int:
                             f"здесь нет такого ребёнка: {target} "
                             f"(есть: {', '.join(child.key for child in children)})")
             return False
-        note = restart(picked)
+        ok, note = restart(picked)
         print(f"[serverboot] просьба владельца: {note}", flush=True)
-        control.receipt(tree, request, True, note)
+        control.receipt(tree, request, ok, note)
         return False
 
     def _stop(*_):

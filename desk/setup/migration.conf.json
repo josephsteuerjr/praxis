@@ -1,0 +1,9 @@
+{
+  "$schema":"https://schema.tauri.app/config/2",
+  "productName":"Hélène Migration",
+  "version":"2.0.0",
+  "identifier":"app.helene.migration",
+  "build":{"frontendDist":"migration-ui","devUrl":null,"beforeDevCommand":null,"beforeBuildCommand":null},
+  "app":{"withGlobalTauri":true,"windows":[],"security":{"csp":"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"}},
+  "bundle":{"active":false,"icon":["../shell/icons/icon.ico"]}
+}

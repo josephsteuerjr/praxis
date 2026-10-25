@@ -1,5 +1,73 @@
 # Как выпустить версию Hélène
 
+## Python-first Windows delivery (1.9.2)
+
+The current Windows entry is `python-launcher` plus the thin migration wizard,
+not the legacy Rust shell/service product. Keep the Cargo versions (including
+their lockfile roots), Tauri/migration configuration and frontend package roots
+coherent. Build the window with `npm --prefix desk/app run build`; compile the
+launcher with its declared Windows target and `HELENE_WINDRES`, and the wizard
+with `powershell -File desk/setup/build-migration.ps1`. The latter merges
+`migration.conf.json` for both Tauri build and codegen; the legacy setup UI is
+not the migration entry.
+
+Compose seed code with `compose_python_edition.py --output <new-edition>
+--edits <explicit-list.json> --manifest <inventory.json>`. The selection admits
+both `helene/core/` and `praxis/` runtime edits (notably `forge_worker.py`),
+rejects private/traversing inputs and duplicate destinations, and leaves
+unselected sources pinned to Git blobs. Repository `AGENTS.md` is not a runtime
+input; it is excluded and disclosed. Keep stock soul/skill seeds from the
+qualified stage; do not import the builder's agent data or correspondence.
+
+`python_app_bundle.py --stage <clean-stage> --output <new-Helene> --relay
+<helene-relay.exe> --relay-source <exact-source> --version 1.9.2` assembles the
+program. Its stage contains the selected runtime, composed `tree/`, body and
+licenses, never live configuration. `localharness/` is copied in full so new
+self-review service/worker/integration modules travel with their Forge consumer.
+Each relay binary must match its own exact source inventory: Windows uses the
+embedded desktop/control API product; Linux uses the separately declared CLI
+target. They are not interchangeable. Reuse an unchanged qualified binary only
+with its verified source pair; an old same-version executable alone is not
+evidence of a new build. The embedded
+runtime must import actual adapters and SDKs (OpenAI >=1.109.1, Anthropic >=0.115,
+Pillow >=10); qualify its own installed versions, not the host Python's.
+
+Place the newly built launcher and wizard in the stage before assembly. Include
+the byte-identical wizard as both `Helene/helene-setup.exe` inside
+`Helene-1.9.2.zip` and standalone `helene-1.9.2-setup.exe`, so the legacy update
+button and new entry reach the same migration flow. Recreate program inventories
+after all selected files are present. Verify ZIP CRC, every source/runtime hash,
+runtime imports and provider MockTransport flows, isolated migration preservation,
+and selected known-secret values before publication. Record focused qualification
+separately from the old full battery; never invent `complete:true`. Build proof
+does not prove live installation, model login, native logon autostart or macOS.
+Optional XTTS/Whisper/toolchain archives stay separately selectable and checksummed.
+
+## Hélène 1.8 — acting-author memory and exact topic streams
+
+Compaction is episodic memory authored by the acting agent: prepare exposes an
+exact retained selection; fold accepts that agent's text and selection. Hot,
+higher-tier and revision refresh use the same source/readback contract. Hard
+pressure and the UI request never invoke an auxiliary summary writer. Raw events
+remain available; this does not replace the current turn's tool transcript.
+The fold button is handled at the normal serial runner boundary, not a concurrent
+agent turn. Telegram group rate-limit deadlines are visible with a two-second
+send margin; unknown send outcomes are never retried as confirmed rejections.
+Window and phone read the exact topic stream, with legacy archive fallback and
+visible catalogue failures. A complete build passport is not installed
+SCM/update/rollback qualification; those require a separately isolated host.
+
+## Explicit embedded relay candidate (source-only)
+
+`vnext_dist.py --relay-kind embedded --embedded-source <exact-source>` selects
+`embedded-relay.json` from the integration HEAD and adds the separately pinned
+`embedded-relay.Dockerfile`. It is not the universal CLI or an offline rebuild
+kit. Use a clean integration checkout; do not include unrelated dirty relay
+changes. Pass `--relay-kind embedded --relay-root <staged-relay>` through
+`build_win.py`/`build_dist.py`. Both target build receipts and final package
+verification remain required. Selected LICENSE/NOTICE and Cargo attribution
+ship with the package. Source tests alone do not qualify an installer.
+
 1. **Поднять версию.** Обязательные — три `Cargo.toml`: `shell`, `setup`, `svc`.
    Они должны совпадать: сборка сверяет их и падает при расхождении, потому что
    иначе поставка была бы смесью версий. Из `shell/Cargo.toml` версию читает
@@ -31,8 +99,16 @@
    (`HELENE_TREE_SRC`); сохранять команду, хэши и результат в квитанции выпуска.
    Windows-крейты собрать нативно, изменённые безопасные unit-тесты прогнать
    отдельно. После успешного внешнего полного прогона упаковщик можно вызвать
-   с `--skip-tests`, чтобы он не повторил запрещённый запуск. Это перенос
-   прогона через Linux boundary, а не замена полного прогона выборочным.
+   с `--skip-tests --external-tests <bundle>/tests.json`, чтобы он не повторил
+   запрещённый запуск. Для `build_win.py` это `--full-dist --external-tests ...`.
+   `installer/test_receipt.py` проверяет точный HEAD, Git-опись исходников,
+   составленное edition и выбранный relay, полный roster команд, нулевые коды
+   завершения и SHA непустых логов рядом с квитанцией. Два core/edition прогона,
+   desk/Rust/clippy и отдельные безопасные Windows/setup-consumer lanes обязательны;
+   пропуски сохраняются с именем и причиной. Неверная/неполная квитанция отказывает,
+   голый `--skip-tests` по-прежнему даёт `complete:false`. Это перенос прогона
+   через Linux boundary, а не замена полного прогона выборочным. Квитанция —
+   локальное доказательство сборки, не подпись и не installed update/rollback PASS.
 
 3. **Собрать всё.** Интерфейсы: `npm --prefix app run build`,
    `npm --prefix mobile run build`, `npm --prefix miniapp run build`,
@@ -41,8 +117,10 @@
    Затем `cargo build --release --features custom-protocol` в `shell` и `setup`,
    `cargo build --release` в `svc`.
 
-   Реле — отдельным шагом, потому что его исходник лежит ВНЕ репозиториев
-   (`_relay_prod_src/` — копия живого `/opt/relay/current`, указателя на immutable release):
+   Исторический путь реле — отдельным шагом из `_relay_prod_src/`, копии
+   конкретного `/opt/relay/current`. Он НЕ единственный исходник продукта:
+   tracked `praxis/relay` — отдельная MIT-адаптация для новой сборки. Эти две
+   редакции нельзя объявлять побайтово одинаковыми без отдельного сравнения.
 
        python installer/relay_src.py --check --host <адрес>   # зеркало = живой?
        python installer/relay_src.py --pull  --host <адрес>   # если разошлось
@@ -63,6 +141,102 @@
    вычисленные отпечатки источника и бинаря и число файлов. Адрес, коммит,
    время и произвольная заметка остаются локально. Старый замороженный
    источник не доказывает свежесть живого реле.
+
+   **Опытный rebuild-комплект для Windows, не выпуск (18.10).** Егор разрешил
+   оставить модельное реле на Rust, если вместе с ним едет точный исходник и
+   действительно замкнутый офлайн-инструментарий. Отдельный
+   `installer/relay_rebuild_kit.py stage --mirror <частное зеркало> --vendor
+   <cargo vendor> --rust <точный toolchain> --native <линкер+SDK> --out <новый каталог>`
+   требует читаемого `RELAY-SOURCE.json`, прежней сборочной расписки и exe,
+   но выпускной exe создаёт заново **из копии полного byte-inventory**:
+   build.rs, Cargo config, lock, ресурсы, crate source. Старый LF-нормализованный
+   digest оставлен для прежней истории и *не* доказывает полноту новых входов.
+   Native closure описывается `native/layout.json` с target, относительными
+   списками path/lib/include и путями linker/cc внутри native/; абсолютные и
+   внешние пути отвергаются. Crates
+   собираются с `--locked --offline` из переданного vendor. Вынутый комплект
+   проверяется `relay_rebuild_kit.py verify --kit <каталог>`; правка копии
+   исходников создаёт отдельный binary+receipt через `candidate --kit <каталог>
+   --source <правленная копия> --out <новый каталог>`, оригинал остаётся.
+   `build_dist.py --relay-rebuild-kit <каталог> --allow-partial` копирует ровно
+   этот exe и комплект и проверяет их хэши. Без флага старый путь не называется
+   пересобираемым. Даже с флагом паспорт остаётся `complete:false`: сетевой
+   запрет build.rs, сборка на чистом отключённом Windows, право на распространение
+   MSVC/SDK, лицензии зависимостей и установленный Stop/rollback не доказаны.
+   `--allow-partial` не превращает это в приёмку. На 18.10 историческая сборочная
+   копия пуста в этом checkout; сборка tracked `praxis/relay` с локальным кэшем
+   не подтверждает исходник **прежнего** поставленного бинаря. Реальный updater должен
+   сохранять **пару** исходник+exe+receipt при замене и откате, не только exe;
+   эта утилита живую установку не трогает. Mac/Linux требуют своего toolchain
+   и отдельно проверенного бинаря, Windows-комплект их не покрывает.
+   Перед любой выдачей комплекта отдельно прочитать **каждый выбранный вход**:
+   сканер сборки проверяет текст source/, rebuild.py и manifest, но не доказывает
+   отсутствие произвольных частных записок, и не проверяет текст vendor/native/rust
+   как доверенное содержание. Совпадение хэша защищает от дрейфа байтов, не от
+   сознательно включённого чужого секрета. Лицензии vendored crates и инструментария
+   также проверяются отдельно до распространения.
+   В паспорте опытного комплекта `relay.digest` — прежний LF-нормализованный
+   локатор; `relay.built.digest` помечен `digest_kind=byte_exact_relay_source_inputs`
+   и относится к полному source-inventory, который дал новый exe. Это два
+   разных отпечатка; сравнивать их как одинаковые нельзя.
+
+   **Новый vNext поставочный путь (18.10; не installed acceptance).** Сначала
+   выбрать конкретный чистый Git HEAD и приготовить две отдельные копии ВНЕ
+   репозитория, не меняя frozen `HELENE-SOURCE.json`:
+
+       python installer/vnext_dist.py stage --head <40-hex HEAD> --out <новый-временный-каталог>
+       python installer/vnext_dist.py check --head <тот же HEAD> --out <каталог>
+
+   `edition/` содержит 669+ файлов с происхождением каждого, `relay/` —
+   **явно выбранную новую** адаптацию `praxis/relay`, не мнимую копию старого
+   бинаря. Количество файлов меняется с коммитом; доверять описи, не этому
+   примеру. Windows и Linux реле строятся ОТДЕЛЬНО в relay/ через
+   `relay_src.py --mirror <каталог>/relay --build` (Windows на ноутбуке) и
+   `relay_src.py --mirror <серверный-временный-каталог>/relay --build-linux
+   --docker-memory 1536m` (Linux только на сервере). Серверный binary и
+   RELAY-BUILD-LINUX.json возвращаются в выбранный локальный relay/ после
+   сверки полного byte-inventory; `build_win.py --build-relay` собирает лишь
+   Windows target и **не** запускает локальный Docker. Лимит памяти является
+   заявленным аргументом Docker builder; действительное применение проверять
+   по серверному build-логу, а не выводить из этого текста. Обе
+   расписки теперь содержат `byte_exact_relay_build_inputs_v1`: полный
+   byte-inventory, включая Dockerfile, build.rs и .cargo, а не только
+   исторический LF-normalized digest. Отсутствие или расхождение ЛЮБОЙ
+   расписки отказывает полному пакету; debug-пакет остаётся `complete:false`.
+   Windows cargo использует явный MSVC target и фиксированное место вывода:
+   старый exe при переадресованном `CARGO_TARGET_DIR` не может получить новую
+   квитанцию. Linux Docker вынимает бинарь по immutable image ID конкретного
+   прогона, не по общей изменяемой метке контейнера.
+   Проверка совместимости новой адаптации с серверным потребителем отдельна.
+
+   `build_win.py --tree <каталог>/edition --vnext-head <HEAD> --relay-root
+   <каталог>/relay --dry` показывает порядок и ничего не строит. Обычный
+   `build_win.py` по-прежнему повторно использует runtime и пропускает тесты;
+   получаемый ZIP/setup.exe помечается **неполным**. `--full-dist` требует
+   фронты, три крейта, body и обе relay-расписки и передаёт полные runtime/test
+   gates в `build_dist.py`. После успешной сборки фронтов и трёх крейтов
+   оркестратор пишет `installer/build/DESK-BUILT.json`: SHA всех desk-входов
+   (включая сгенерированные dist-фронты) и трёх exe. Прямой вызов
+   `build_dist.py --vnext-head ...` обязан дополнительно передать
+   `--desk-build-receipt <этот файл>`; одинаковая версия трёх старых exe
+   уже не даёт `complete:true`. Упаковщик сверяет входы, exe и их копии
+   ещё раз после сборки поставки. Windows `run_all.py --rust` создаёт
+   маленький setup.exe через Python-пакер и вызывает Rust-читатель хвоста
+   и раскладку без запуска установщика; пропуск этого шва красит полный gate.
+   На этом Windows-хосте полный Forge-стенд НЕ
+   запускать: выполнить его на точном SHA внутри Linux Docker/WSL, сохранить
+   отдельную квитанцию и не выдавать debug `--skip-tests` за этот полный gate.
+   `build_dist.py --tree ... --vnext-head ... --relay-root ... --desk-build-receipt ...` повторяет
+   проверку и при прямом вызове, до скачивания большого runtime проверяет
+   наличие всех семи бинарных входов. Его паспорт связывает исходный состав,
+   фактически скопированное дерево и итоговый `tree/` после LICENSE/NOTICE;
+   ZIP и хвост setup.exe остаются прежним форматом установщика. Поле
+   `complete` описывает полноту локального сборочного контракта, а НЕ успешное
+   обновление живого Джарвиса; `skip-runtime/tests/smokes`, partial, dirty и
+   `skip-setup-exe` делают его false с конкретным `partial_reason`.
+   Python pip-набор пока не запиннен по хэшам, время сборки входит в архив:
+   одинаковый исходник не гарантирует побитово одинаковый дистрибутив. Реальная
+   установка/Stop/rollback требуют отдельной изолированной Windows-пробы.
 
    Ядро и слой издания — тем же приёмом:
 

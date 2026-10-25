@@ -56,7 +56,7 @@ def stopped():
 
 def client_file():
     """Writable user latch; use the same Known Folder as the native client."""
-    if os.name != 'nt': return None
+    if os.name != 'nt': return seed_file()
     buf = ctypes.create_unicode_buffer(32768)
     fn = ctypes.WinDLL('shell32').SHGetFolderPathW
     fn.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p]

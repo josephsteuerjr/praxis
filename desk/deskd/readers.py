@@ -675,16 +675,19 @@ def _title_for(chat_id, titles: dict[str, str]) -> str:
         # комнат, у комнаты по умолчанию — имя агента.
         return rooms.title(tree(), rooms.ROOM_DEFAULT if key == rooms.ROOM_LEGACY else key,
                            product_config().get("agent_name") or "")
-    if key in titles:
-        return titles[key]
+    saved = _load_json(tree() / "memory/.state/group_context" / (key + ".json"))
+    if saved.get("title"):
+        return str(saved["title"])
     base, _, topic = key.partition("__topic__")
+    if not topic and key in titles:
+        return titles[key]
     stable = _room_titles()
     name = titles.get(base) or stable.get(base) or ""
     if not name and not base.startswith("-"):
         name = _last_foreign_sender(base)
     if topic and name:
         sub = _topic_title(base, topic)
-        return f"{name} · {sub}" if sub else name
+        return f"{name} · {sub or ('тема ' + topic)}"
     return name
 
 
@@ -1134,7 +1137,7 @@ def forge_tasks(limit: int = 30) -> list[dict]:
     Never send raw worker output, logs, process command lines or workspace paths
     to the owner-facing endpoint (which also reaches the phone).
     """
-    root = tree() / "memory" / "work" / "tasks"
+    root = tree() / "memory" / ".forge" / "tasks"
     if not root.is_dir():
         return []
     try:
@@ -1222,6 +1225,44 @@ def forge_tasks(limit: int = 30) -> list[dict]:
             "priority": task.get("priority"),
             "agents": agents,
         })
+    return out
+
+
+_FORGE_DEVICE_STATUSES = frozenset({
+    "active", "pending", "scheduled", "running", "done", "completed",
+    "cancelled", "canceled", "failed", "error", "paused", "stopped",
+    "blocked", "waiting", "unknown", "closed", "lost",
+})
+
+
+def forge_device_tasks(limit: int = 30) -> list[dict]:
+    """Paired-device projection: structural counts and closed states only.
+
+    Goals, roles, raw IDs and timestamps are authored text: even a truncated
+    goal may contain a credential. Ordinal labels are local to this response.
+    """
+    out = []
+    for index, task in enumerate(forge_tasks(limit), 1):
+        agents = task["agents"]
+        labels = {row["id"]: f"unit-{n}" for n, row in enumerate(agents, 1)}
+        projected = []
+        for n, row in enumerate(agents, 1):
+            state = row.get("status")
+            parent = row.get("parent_unit_id")
+            projected.append({
+                "id": f"unit-{n}",
+                "status": state if isinstance(state, str) and state in _FORGE_DEVICE_STATUSES else "unknown",
+                "custody": row["custody"] if row.get("custody") in
+                    {"result", "unknown", "unresolved_stop"} else "unknown",
+                "parent_unit_id": labels.get(parent, "") if isinstance(parent, str) else "",
+                "depth": min(max(row.get("depth", 0), 0), 8),
+                "ancestry_unknown": bool(row.get("ancestry_unknown") or
+                                         (parent and parent not in labels)),
+            })
+        status = task.get("status")
+        out.append({"id": f"task-{index}",
+                    "status": status if isinstance(status, str) and status in _FORGE_DEVICE_STATUSES else "unknown",
+                    "agents": projected})
     return out
 
 
@@ -1403,12 +1444,20 @@ def chats() -> list[dict]:
 
 
 def chat_tail(peer_id: str, n: int = 200) -> list[dict]:
-    for row in chats():
+    catalog = chats()
+    for row in catalog:
         if row["peer_id"] == str(peer_id):
             rel = row["archive"].replace("\\", "/").lstrip("/")
             if ".." in rel.split("/") or not rel.startswith("memory/groups/"):
                 return []
             return [item for item in tail_jsonl(tree() / rel, n) if not item.get('deleted')]
+    # Product transport stores topic streams separately. Older archives instead
+    # kept topic_id on parent rows; use that layout only if no exact stream exists.
+    match = re.fullmatch(r"(.+)__topic__(\d+)", str(peer_id))
+    if match:
+        parent, topic = match.groups()
+        return [item for item in chat_tail(parent, max(n, 600))
+                if str(item.get("topic_id", "")) == topic][-n:]
     return []
 
 

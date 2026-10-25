@@ -29,9 +29,15 @@ def version(value):
     return text if re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?', text) else ''
 
 def observe(tree: Path, program: Path, config: dict):
-    passport=read(program/'helene-build.json')
+    manifest=read(program/'python-app.json')
+    if manifest.get('format')=='helene-python-app.v1' and version(manifest.get('version')):
+        # Python delivery records its identity without a legacy QA passport.
+        passport={**manifest,'platform':'windows'}
+    else:
+        passport=read(program/'helene-build.json')
+        if passport.get('complete') is not True: return
     current=version(passport.get('version'))
-    if not current or passport.get('complete') is not True: return
+    if not current: return
     state=Path(tree)/'memory/.state'
     scope=hashlib.sha256(str(program.resolve()).encode()).hexdigest()
     previous=read(state/'package-version.json')

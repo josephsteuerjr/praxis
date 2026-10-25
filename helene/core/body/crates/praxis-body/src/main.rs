@@ -4,6 +4,8 @@ mod dpi;
 mod artifact;
 mod compose;
 mod config;
+#[cfg(windows)]
+mod cu_python;
 mod desktop;
 #[cfg(target_os = "linux")]
 mod linux;

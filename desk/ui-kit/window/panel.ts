@@ -225,10 +225,10 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
         (mark ? `<span class="st-state">${esc(mark)}</span>` : "") +
         (detail.length ? `</button><div class="st-detail" hidden>${detail.join("")}</div>` : `</div>`) });
     });
-    if (it.text) {
+    if (it.text || it.text_ref) {
       rows.push({ key: "text:" + key, cls: "st st-word", html:
         `<div class="st-line">${icon("word")}<span class="st-label">Слово</span></div>` +
-        textBox("text:" + key, it.text, { truncated: !!it.text_truncated, ref: it.text_ref, run: runId }) });
+        textBox("text:" + key, it.text || "", { truncated: !it.text || !!it.text_truncated, ref: it.text_ref, run: runId }) });
     }
   });
   const term = d.manifest?.terminal || {};
@@ -348,9 +348,21 @@ function fillTurn(el: HTMLElement, r: TurnRow) {
   el.querySelector(".turn-dot")!.setAttribute("title", { live: "идёт сейчас", done: "завершён", failed: "не дошёл до конца", silent: "промолчала" }[r.status]);
 }
 
+function liveTurnCause(id: string, detail?: RunDetail): string {
+  return detail?.id === id ? clean(detail.origin?.text || "") : "";
+}
+
 function setMeta(el: HTMLElement, d: RunDetail) {
+  if (d.id !== el.dataset.run) return;
   const m = el.querySelector<HTMLElement>(".turn-meta");
   if (m) m.textContent = metaOf(d);
+  if (el.dataset.status === "live") {
+    const cause = el.querySelector<HTMLElement>(".turn-cause");
+    if (cause) {
+      cause.textContent = liveTurnCause(el.dataset.run || "", d);
+      cause.hidden = !cause.textContent;
+    }
+  }
 }
 
 async function runDetail(runId: string, fresh = false): Promise<RunDetail | undefined> {
@@ -559,7 +571,7 @@ export async function render(): Promise<void> {
   // Идущий ход, которого ещё нет в chat-turns (слово не сказано), — сверху.
   if (liveId && !rows.some((r) => r.id === liveId)) {
     const run = byRun.get(liveId);
-    rows.unshift({ id: liveId, status: "live", at: run?.created_at || new Date().toISOString(), title: "Работает…", cause: clean(run?.goal_head || ""), live: true });
+    rows.unshift({ id: liveId, status: "live", at: run?.created_at || new Date().toISOString(), title: "Работает…", cause: liveTurnCause(liveId, S.evCache.get(liveId) as RunDetail | undefined), live: true });
   }
   c.head.querySelector(".turns-n")!.textContent = rows.length ? String(rows.length) : "";
   c.empty.hidden = rows.length > 0;
@@ -608,10 +620,12 @@ async function refreshLive() {
   liveBusy = true;
   try {
     const d = await runDetail(id, true);
+    const detail = d?.id === id ? d : undefined;
+    if (detail && el.isConnected) setMeta(el, detail);
     const meta = el.querySelector<HTMLElement>(".turn-meta");
-    if (meta) meta.textContent = [liveSince(id), metaOf(d)].filter(Boolean).join(" · ");
+    if (meta) meta.textContent = [liveSince(id), metaOf(detail)].filter(Boolean).join(" · ");
     const steps = openSteps.get(id);
-    if (d && el.isConnected) {
+    if (d?.id === id && el.isConnected) {
       col.scroller.preserve(() => {
         if (steps) steps.set(stepRows(d, false), { animate: true });
         const full = el.querySelector<HTMLDetailsElement>(".turn-full");

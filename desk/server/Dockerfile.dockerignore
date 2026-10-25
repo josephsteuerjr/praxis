@@ -9,3 +9,5 @@ helene.json
 runtime
 *.exe
 *.zip
+server/models
+server/xtts-runtime

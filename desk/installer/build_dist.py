@@ -104,7 +104,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import layout  # noqa: E402 — где на диске лежат соседи раскладки
 import deskpkg  # noqa: E402 — объявление пакета desk живёт в репозитории, а не в сборке
 import relay_src  # noqa: E402 — происхождение исходника реле
+import relay_rebuild_kit  # noqa: E402 — optional source-bound Windows rebuild kit
 import core_src  # noqa: E402 — ядро, слой издания и расхождение между ними
+import vnext_dist  # noqa: E402 — exact source join for the separate vNext route
 
 # Зависимости ДЕРЕВА: то, что импортирует ход (agent/llm/webtool).
 # Dependencies of the agent tree; desktop SSH transfer is declared by deskpkg.
@@ -126,7 +128,7 @@ TREE_DEPS = [
 # faster-whisper 1.2.1 передаёт metadata_errors в av.open; PyAV 19 убрал
 # этот аргумент. Под CPython 3.14 нет колёс av<15 из requirements ядра:
 # совместимые колёса 15–18 поддерживают прежний API.
-VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19", "PyYAML"]
+VOICE_DEPS = ["faster-whisper", "av<19", "PyYAML"]
 
 # Зависимости ПОСТАВКИ = дерево + пакет desk (канал просит aiohttp, раннер —
 # telethon). Свой список desk объявляет сам (deskpkg.DEPS_*), и сервер ставит
@@ -135,7 +137,7 @@ VOICE_DEPS = ["faster-whisper", "piper-tts", "av<19", "PyYAML"]
 DEPS = TREE_DEPS + VOICE_DEPS + deskpkg.requirements(deskpkg.WINDOWS)
 
 # Дымовой тест рантайма: ровно то, что продукт импортирует на своём пути.
-SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL", "piper", "yaml",
+SMOKE_IMPORTS = ("anthropic", "openai", "httpx", "dotenv", "PIL", "yaml",
                  "aiohttp", "pypdf", "trafilatura", "telethon", "paramiko", "faster_whisper")
 
 APP_DIST = DESK / "app" / "dist"     # UI окна — сборка Vite (npm --prefix app run build)
@@ -161,6 +163,7 @@ def live_root(cli: str | None) -> Path:
 
 # Пути от корня дерева: данные и чужие сборки, которых в продукте быть не должно.
 TREE_EXCLUDE_PATHS = [
+    ".vnext-source.json",  # source-only locator; the passport records its verified identity
     "body/target", "hands/target",
     "memory", "workspace", "soul", "private", "runs", "shadow_traffic", "1500",
     "_archive",
@@ -548,7 +551,7 @@ def smoke_embedded_forge_worker(out: Path) -> None:
 # ⚠ Имя архива — НЕ .zip: окна 1.1.x/1.2.0 берут из выпуска первый «helene-*.zip»
 # (shell::pick_update_zip), и голосовой набор перехватил бы у них кнопку «Обновить».
 
-VOICE_IMPORTS = ("faster_whisper", "piper")
+VOICE_IMPORTS = ("faster_whisper",)
 # Чем ещё голос должен импортироваться из набора (дымовой тест): тяжёлые двоичные части.
 VOICE_SMOKE_EXTRA = ("ctranslate2", "onnxruntime", "av", "numpy", "yaml")
 VOICE_PTH = "helene-voice.pth"
@@ -759,7 +762,12 @@ def _credential_floor(live: Path):
         raise SystemExit(f"нет кред-пола {src} — сканировать поставку нечем, сборка остановлена")
     spec = importlib.util.spec_from_file_location("_helene_secrets", src)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)   # модуль на голой стандартной библиотеке (re)
+    previous = sys.dont_write_bytecode
+    try:
+        sys.dont_write_bytecode = True
+        spec.loader.exec_module(mod)   # модуль на голой стандартной библиотеке (re)
+    finally:
+        sys.dont_write_bytecode = previous
     return mod.credential_floor
 
 
@@ -893,11 +901,17 @@ def scan_for_secrets(out: Path, live: Path, scan_runtime: bool) -> int:
     # сборка создаёт заново. Если однажды в ней что-то окажется — это увидят.
     # 25.09 (ревью V1-8): `server/` — серверные конфиги и compose; правка «для себя» уезжала
     # бы незамеченной.
-    for rel in ("tree", "app", "licenses", "data", "server"):
+    # The optional relay kit carries private-mirror source. Scanning only the
+    # old tree/app roots would leave that new copy entirely invisible here.
+    # Vendor/toolchain bytes have a separate licence/provenance qualification;
+    # their generic fixtures cannot be judged by the source assignment regex.
+    for rel in ("tree", "app", "licenses", "data", "server", "relay-rebuild/source"):
         d = out / rel
         if d.is_dir():
             targets += [p for p in d.rglob("*") if p.is_file()]
     targets += [p for p in out.iterdir() if p.is_file()]
+    targets += [p for name in ("rebuild.py", "bundle-manifest.json")
+                if (p := out / "relay-rebuild" / name).is_file()]
     hits: list[str] = []
     for p in targets:
         text = _file_text(p)
@@ -979,6 +993,7 @@ def _lock_crates(lock: Path) -> list[tuple[str, str]]:
 def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = None,
                           *, parts: tuple[str, ...] = ("shell", "setup", "svc"),
                           include_body: bool = True,
+                          relay_lock: Path | None = None,
                           exes: str = ("helene.exe, helene-setup.exe, helene-svc.exe, "
                                        "helene-bridge.exe и helene-body.exe")) -> int:
     """Тексты лицензий крейтов, статически влинкованных в наши exe.
@@ -1007,6 +1022,11 @@ def collect_rust_licenses(out: Path, allow_partial: bool, live: Path | None = No
             raise SystemExit(msg)
         print("  ⚠ " + msg)
     crates.update(body_crates)
+    if relay_lock is not None:
+        relay_crates = _lock_crates(relay_lock)
+        if not relay_crates:
+            raise SystemExit(f"selected relay Cargo.lock unreadable: {relay_lock}")
+        crates.update(relay_crates)
     registry = _cargo_registry_src()
     if registry is None:
         msg = ("нет локального реестра cargo (~/.cargo/registry/src) — "
@@ -1494,13 +1514,18 @@ def _public_relay_build(made: dict) -> dict | None:
     if not made:
         return None
     result = {}
-    for key in ("digest", "exe_sha256"):
+    for key in ("digest", "exe_sha256", "input_sha256"):
         value = made.get(key)
         result[key] = value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else None
+    if made.get("input_digest_kind") == relay_src.INPUT_DIGEST_KIND:
+        result["input_digest_kind"] = relay_src.INPUT_DIGEST_KIND
+        result["input_files"] = made.get("input_files") if isinstance(made.get("input_files"), int) else None
+    if made.get("build_method") in (relay_src.WINDOWS_BUILD_METHOD, relay_src.LINUX_BUILD_METHOD):
+        result["build_method"] = made["build_method"]
     return result
 
 
-def relay_provenance(exe: Path, allow_partial: bool) -> dict:
+def relay_provenance(exe: Path, allow_partial: bool, source: Path | None = None) -> dict:
     """Из чего собран `helene-relay.exe` в этой поставке.
 
     Реле — единственный бинарь поставки, исходник которого лежит ВНЕ обоих
@@ -1514,9 +1539,10 @@ def relay_provenance(exe: Path, allow_partial: bool) -> dict:
     не по времени файлов: обновление зеркала переписывает mtime, ничего не
     меняя по существу, и такая проверка кричала бы всегда.
     """
-    total, files = relay_src.digest(relay_src.MIRROR)
-    note = relay_src.stamp(relay_src.MIRROR)
-    made = relay_src.built(relay_src.MIRROR)
+    source = source or relay_src.MIRROR
+    total, files = relay_src.digest(source)
+    note = relay_src.stamp(source)
+    made = relay_src.built(source)
     # Keep full source provenance in the private mirror. The distributable
     # carries only computed hashes/counts, never free text from local receipts.
     if note and (note.get("digest") != total or note.get("files") != len(files)):
@@ -1532,24 +1558,72 @@ def relay_provenance(exe: Path, allow_partial: bool) -> dict:
               "installer/relay_src.py --pull --host <адрес>")
 
     if not made:
-        print(f"  ⚠ чем собран helene-relay.exe — неизвестно ({relay_src.BUILT} нет): "
-              "installer/relay_src.py --build")
+        line = (f"чем собран helene-relay.exe — неизвестно ({relay_src.BUILT} нет): "
+                "installer/relay_src.py --build")
+        if not allow_partial:
+            raise SystemExit(line)
+        print(f"  ⚠ {line}")
+        info["stale"] = True
         return info
     same_exe = (exe.is_file()
                 and hashlib.sha256(exe.read_bytes()).hexdigest() == made.get("exe_sha256"))
-    if made.get("digest") != total or not same_exe:
+    try:
+        inputs = relay_src.build_inputs(source)
+    except (OSError, ValueError) as exc:
+        inputs = ("", 0)
+        print(f"  ⚠ relay build inputs unavailable: {exc}")
+    same_inputs = (made.get("input_digest_kind") == relay_src.INPUT_DIGEST_KIND
+                   and made.get("input_sha256") == inputs[0]
+                   and made.get("input_files") == inputs[1] and inputs[1] > 0
+                   and made.get("build_method") == relay_src.WINDOWS_BUILD_METHOD
+                   and made.get("target") == "x86_64-pc-windows-msvc")
+    if made.get("digest") != total or not same_exe or not same_inputs:
         line = ("helene-relay.exe собран не из этого исходника — пересобрать: "
-                f"installer/relay_src.py --build (бинарь не соответствует исходнику {total[:12]})")
+                f"installer/relay_src.py --build (legacy {total[:12]}, exact build inputs/receipt required)")
         if not allow_partial:
             raise SystemExit(line)
         print(f"  ⚠ {line}")
         info["stale"] = True
     else:
+        info["built"] = _public_relay_build(made)
         print("  бинарь совпадает с отпечатком источника")
     return info
 
 
-def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
+def relay_kit_provenance(kit: Path, exe: Path) -> dict:
+    """Bind the exact packaged executable to the kit's complete input inventory.
+
+    `relay.digest` remains the historical LF-normalized source locator; only
+    `built.digest` with its named kind claims the byte-exact build input identity.
+    """
+    note = relay_rebuild_kit.verify(kit)
+    if relay_rebuild_kit._sha(exe) != note["binary_sha256"]:
+        raise SystemExit("relay kit binary differs from the selected package executable")
+    origin = note["origin"]
+    return {"digest": origin["legacy_source_digest"], "files": origin["legacy_file_count"],
+            "source": {"digest": origin["legacy_source_digest"],
+                       "files": origin["legacy_file_count"]},
+            "built": {"digest": note["components"]["source"]["sha256"],
+                      "digest_kind": "byte_exact_relay_source_inputs",
+                      "exe_sha256": note["binary_sha256"]},
+            "rebuild_kit": {"state": note["qualification"],
+                            "source_inputs_sha256": note["components"]["source"]["sha256"],
+                            "binary_sha256": note["binary_sha256"],
+                            "network_isolation": note["build"]["network_isolation"],
+                            "native_redistribution": note["build"]["native_redistribution"]}}
+
+
+def copy_relay_kit(kit: Path, out: Path) -> dict:
+    """Copy selected kit to package and verify the *copied* source and exe."""
+    relay_rebuild_kit.verify(kit)
+    shutil.copytree(kit, out / "relay-rebuild")
+    shipped = relay_rebuild_kit.verify(out / "relay-rebuild")
+    if not (out / "helene-relay.exe").is_file() or relay_rebuild_kit._sha(out / "helene-relay.exe") != shipped["binary_sha256"]:
+        raise SystemExit("copied relay kit and helene-relay.exe do not match")
+    return shipped
+
+
+def relay_linux_provenance(binary: Path, allow_partial: bool, source: Path | None = None) -> dict:
     """Из чего собран Linux-бинарь реле, который едет в поставку для сервера.
 
     Тот же вопрос и тот же ответ, что у `helene-relay.exe`, только цель другая.
@@ -1558,8 +1632,9 @@ def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
     дело, а разъехавшийся Linux-бинарь виден только на сервере и только тем,
     что агент молчит.
     """
-    total, _files = relay_src.digest(relay_src.MIRROR)
-    made = relay_src.built_linux(relay_src.MIRROR)
+    source = source or relay_src.MIRROR
+    total, _files = relay_src.digest(source)
+    made = relay_src.built_linux(source)
     if not made:
         line = (f"чем собран Linux-бинарь реле — неизвестно ({relay_src.LINUX_BUILT} нет): "
                 "installer/relay_src.py --build-linux")
@@ -1570,7 +1645,18 @@ def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
     public_made = _public_relay_build(made)
     same = (binary.is_file()
             and hashlib.sha256(binary.read_bytes()).hexdigest() == made.get("exe_sha256"))
-    if made.get("digest") != total or not same:
+    try:
+        inputs = relay_src.build_inputs(source)
+    except (OSError, ValueError) as exc:
+        inputs = ("", 0)
+        print(f"  ⚠ relay build inputs unavailable: {exc}")
+    same_inputs = (made.get("input_digest_kind") == relay_src.INPUT_DIGEST_KIND
+                   and made.get("input_sha256") == inputs[0]
+                   and made.get("input_files") == inputs[1] and inputs[1] > 0
+                   and made.get("build_method") == relay_src.LINUX_BUILD_METHOD
+                   and isinstance(made.get("image_id"), str)
+                   and re.fullmatch(r"sha256:[0-9a-f]{64}", made["image_id"]) is not None)
+    if made.get("digest") != total or not same or not same_inputs:
         line = ("Linux-бинарь реле собран не из этого исходника — пересобрать: "
                 f"installer/relay_src.py --build-linux (бинарь не соответствует исходнику {total[:12]})")
         if not allow_partial:
@@ -1579,6 +1665,41 @@ def relay_linux_provenance(binary: Path, allow_partial: bool) -> dict:
         return dict(public_made, stale=True)
     print("  Linux-бинарь реле совпадает с отпечатком источника")
     return public_made
+
+
+def qualification_reasons(args, missing: list[str], staged: dict, desk_dirty: bool,
+                          tree_dirty: bool, body: dict | None, relay: dict,
+                          relay_linux: dict, kit_path: Path | None,
+                          desk_note: dict | None = None) -> list[str]:
+    """One explanation of why a produced archive is not a full setup candidate.
+
+    This is not installed acceptance; independent tests, protocol compatibility,
+    toolchain/license closure and the owner's update choice remain outside it.
+    """
+    return (missing + ([] if staged["phone"] else ["телефон (mobile/dist)"]) +
+            (["relay rebuild kit: disconnected-host, native redistribution and installed "
+              "rollback unverified"] if kit_path else []) +
+            [name for name, enabled in (("allow_partial", args.allow_partial),
+                                       ("runtime_reused", args.skip_runtime),
+                                       ("tests_skipped", args.skip_tests and not getattr(args, "verified_tests", None)),
+                                       ("smokes_skipped", args.skip_smokes),
+                                       ("setup_skipped", args.skip_setup_exe),
+                                       ("desk_dirty", desk_dirty),
+                                       ("tree_dirty", tree_dirty),
+                                       ("body_stale", (body or {}).get("stale")),
+                                       ("relay_stale", (relay or {}).get("stale")),
+                                       ("relay_unverified", not relay or not relay_linux),
+                                       ("desk_build_unverified", bool(getattr(args, "vnext_head", ""))
+                                        and not desk_note),
+                                       ("desk_parts_skipped", bool(staged["desk"]["skipped"])))
+             if enabled])
+
+
+def copy_checked_binary(src: Path, dst: Path) -> None:
+    """The file the owner receives must match the one this build validated."""
+    shutil.copy2(src, dst)
+    if sha256(src) != sha256(dst):
+        raise SystemExit(f"binary changed during package copy: {dst.name}")
 
 
 def build_praxis_app(args) -> None:
@@ -1717,7 +1838,9 @@ def run_stands(skip: bool, tree: Path | None = None) -> None:
     # ⚠ 29.09: стенды звались без HELENE_TREE_SRC и проверяли дерево ПО УМОЛЧАНИЮ — соседний
     # `live`, стоявший на ветке 19.09, — а в поставку уезжало `--tree` (port-2409). Выпуски
     # 1.2.x проверялись не на том дереве, что уходило людям. Теперь — ровно на нём.
-    env = dict(os.environ, HELENE_TREE_SRC=str(tree)) if tree else None
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    if tree:
+        env["HELENE_TREE_SRC"] = str(tree)
     done = subprocess.run([sys.executable, str(runner), "--rust"], cwd=str(DESK), env=env)
     if done.returncode != 0:
         raise SystemExit("стенды красные — сборка остановлена. "
@@ -1731,8 +1854,18 @@ def main() -> None:
                         help="не пересобирать runtime (он уже в out) — только для отладки")
     parser.add_argument("--allow-partial", action="store_true",
                         help="разрешить неполную поставку (отладка); попадёт в паспорт сборки")
+    parser.add_argument("--relay-rebuild-kit", default="",
+                        help="явный каталог проверяемого Windows Rust-комплекта; до офлайн/лицензионной "
+                             "квалификации допустим только с --allow-partial")
     parser.add_argument("--tree", default="",
                         help="путь к дереву агента (по умолчанию ../live или HELENE_TREE_SRC)")
+    parser.add_argument("--vnext-head", default="",
+                        help="exact committed HEAD for a separately composed vNext --tree; never the frozen 1.7 payload")
+    parser.add_argument("--relay-root", default="",
+                        help="explicit staged NEW tracked relay adaptation with source and both build receipts")
+    parser.add_argument("--relay-kind", choices=("tracked", "embedded"), default="tracked")
+    parser.add_argument("--desk-build-receipt", default="",
+                        help="source/output receipt from build_win after fronts and shell/svc/setup build")
     parser.add_argument("--variant", choices=("helene", "praxis"), default="helene",
                         help="helene — полная поставка Hélène (по умолчанию); praxis — издание "
                              "к серверу: то же окно в режиме remote, без ядра, рантайма и тела")
@@ -1740,6 +1873,8 @@ def main() -> None:
                         help="не собирать <Продукт>-<версия>-setup.exe (отладка)")
     parser.add_argument("--skip-tests", action="store_true",
                         help="не гонять стенды перед сборкой (отладка); в выпуске — никогда")
+    parser.add_argument("--external-tests", default="",
+                        help="exact-source external Linux + safe Windows test receipt bundle")
     parser.add_argument("--skip-smokes", action="store_true",
                         help="пропустить импортные смоуки рантайма/голоса; записать это в паспорт")
     parser.add_argument("--from-core", action="store_true",
@@ -1747,18 +1882,91 @@ def main() -> None:
                              "а не из рабочей копии. Откажется, пока слой не описывает "
                              "издание целиком — см. installer/core_src.py --check")
     args = parser.parse_args()
+    if args.relay_kind == "embedded" and not (args.relay_root and args.vnext_head):
+        raise SystemExit("embedded relay requires --relay-root and --vnext-head")
     if args.variant == "praxis":
+        if args.relay_rebuild_kit or args.vnext_head or args.relay_root:
+            raise SystemExit("vNext source and relay selections belong only to the Helene package")
         build_praxis_app(args)
         return
+    kit_path = Path(args.relay_rebuild_kit).resolve() if args.relay_rebuild_kit else None
+    if kit_path and args.relay_root:
+        raise SystemExit("select either historical relay rebuild kit or new tracked relay source")
+    if args.relay_root and not args.vnext_head:
+        raise SystemExit("a new tracked relay needs the pinned vNext HEAD")
+    if args.vnext_head and not (args.relay_root or kit_path):
+        raise SystemExit("pinned vNext distribution requires an explicit relay selection")
+    if args.from_core and args.vnext_head:
+        raise SystemExit("frozen --from-core and exact vNext source are separate editions")
+    if args.desk_build_receipt and not args.vnext_head:
+        raise SystemExit("desk build receipt applies only to a pinned vNext distribution")
+    if kit_path:
+        if not args.allow_partial:
+            raise SystemExit("relay rebuild kit has no network-isolated clean-host/redistribution "
+                             "proof; package it only as --allow-partial")
+        output_root = Path(args.out).resolve()
+        if kit_path.is_relative_to(output_root) or output_root.is_relative_to(kit_path):
+            raise SystemExit("relay rebuild kit and output tree must not contain each other")
+        try:
+            relay_rebuild_kit.verify(kit_path)
+        except relay_rebuild_kit.KitError as exc:
+            raise SystemExit("relay rebuild kit is incomplete: " + str(exc)) from exc
     out = Path(args.out).resolve() / "Helene"   # имя папки — латиницей
     cache = Path(args.out).resolve() / "cache"
     live = live_root(args.tree)
+    relay_root = Path(args.relay_root).resolve() if args.relay_root else relay_src.MIRROR
+    if args.vnext_head:
+        output_root = Path(args.out).resolve()
+        # Both trees are destructively cleared by the packer: Helene at the
+        # start and voice-stage when rebuilding runtime. No source may live in
+        # either, even if a prior build left an apparently valid manifest.
+        for cleanup_target in (output_root / "Helene", output_root / "voice-stage"):
+            for label, selected in (("edition", live), ("relay", relay_root),
+                                    ("body binaries", BODY_TARGET)):
+                selected = selected.resolve()
+                if (cleanup_target == selected or cleanup_target.is_relative_to(selected)
+                        or selected.is_relative_to(cleanup_target)):
+                    raise SystemExit(f"vNext output cleanup overlaps {label}: {cleanup_target}")
+            # The ordinary build directory lives under desk/; only a cleanup
+            # target enclosing the source directory itself is forbidden.
+            if DESK.resolve() == cleanup_target or DESK.resolve().is_relative_to(cleanup_target):
+                raise SystemExit("vNext output cleanup overlaps desk source")
     version, declared = product_version()
 
     if not live.is_dir():
         raise SystemExit(
             f"нет дерева агента: {live}\n"
             "оно лежит в СОСЕДНЕМ репозитории. Укажи путь: --tree PATH или HELENE_TREE_SRC")
+
+    vnext = vnext_dist.verify_edition(ROOT, args.vnext_head, live) if args.vnext_head else None
+    relay_choice = (vnext_dist.verify_relay(ROOT, args.vnext_head, relay_root, kind=args.relay_kind)
+                    if args.relay_root else None)
+    if vnext and not args.allow_partial:
+        # Do not download/build a Python runtime for minutes only to discover
+        # that this candidate lacks the binary products needed by the packer.
+        needs = {
+            "helene.exe": DESK / "shell" / "target" / "release" / "helene.exe",
+            "helene-svc.exe": DESK / "svc" / "target" / "release" / "helene-svc.exe",
+            "helene-setup.exe": DESK / "setup" / "target" / "release" / "helene-setup.exe",
+            "helene-body.exe": BODY_TARGET / "praxis-body.exe",
+            "helene-bridge.exe": BODY_TARGET / "praxis-bridge.exe",
+            "relay Windows": relay_root / "target" / "release" / "codex-proxy-server.exe",
+            "relay Linux": relay_src.linux_binary(relay_root),
+        }
+        absent = [name for name, path in needs.items() if not path.is_file()]
+        if absent:
+            raise SystemExit("vNext distribution binary inputs absent before downloads: " + ", ".join(absent))
+
+    desk_note = None
+    if vnext:
+        try:
+            if not args.desk_build_receipt:
+                raise vnext_dist.SourceMismatch("no --desk-build-receipt selected")
+            desk_note = vnext_dist.verify_desk_build(DESK, Path(args.desk_build_receipt))
+        except vnext_dist.SourceMismatch as exc:
+            if not args.allow_partial:
+                raise SystemExit("vNext desk executables/fronts lack a current build receipt: " + str(exc)) from exc
+            print("  ⚠ incomplete desk build receipt: " + str(exc))
 
     if args.from_core:
         # Дерево собирается из объявленной раскладки, а не берётся с диска.
@@ -1770,7 +1978,19 @@ def main() -> None:
         print(f"дерево собрано из ядра и слоя: {n} файлов -> {staged_tree}")
         live = staged_tree
 
-    run_stands(args.skip_tests, live)
+    args.verified_tests = None
+    if args.external_tests:
+        if not vnext or not relay_choice or not args.skip_tests:
+            raise SystemExit("--external-tests requires exact vNext/relay selection and --skip-tests")
+        import test_receipt
+        try:
+            args.verified_tests = test_receipt.verify(Path(args.external_tests), ROOT,
+                args.vnext_head, vnext["source_digest"], relay_choice["input_sha256"])
+        except test_receipt.ReceiptError as exc:
+            raise SystemExit("external tests refused: " + str(exc)) from exc
+        print("стенды: verified external Linux + Windows receipt")
+    else:
+        run_stands(args.skip_tests, live)
 
     print(f"Hélène {version}")
     print(f"дистрибутив -> {out}")
@@ -1837,6 +2057,10 @@ def main() -> None:
 
     print("app:")
     staged = stage_payload(out, live, args.allow_partial)
+    if vnext:
+        vnext.update(vnext_dist.verify_copied(vnext, out / "tree", _excluded))
+        # The full map stays in the private source manifest, not the public passport.
+        vnext.pop("files")
     if args.skip_smokes:
         print("  импорт Forge worker пропущен (--skip-smokes; только отладка)")
     else:
@@ -1862,13 +2086,14 @@ def main() -> None:
         # поставку неполной — при живом, только что собранном exe рядом.
         # Ровно от этого класса и заведён `layout.py`; здесь строка его
         # пережила.
-        (relay_src.MIRROR / "target" / "release" / "codex-proxy-server.exe", "helene-relay.exe",
-         "собери реле: cargo build --release в _relay_prod_src",
+        ((kit_path / "helene-relay.exe") if kit_path else
+         (relay_root / "target" / "release" / "codex-proxy-server.exe"), "helene-relay.exe",
+         "собери реле: cargo build --release в _relay_prod_src или передай --relay-rebuild-kit",
          None),
         # То же реле под Linux — для сервера: `server/serverboot.py` поднимает
         # его третьим ребёнком, и без него агент с подпиской ChatGPT, увезённый
         # на сервер архивом переноса, нем (ключи приезжают, поднять нечем).
-        (relay_src.linux_binary(), "helene-relay",
+        (relay_src.linux_binary(relay_root), "helene-relay",
          "собери реле под Linux (нужен докер): installer/relay_src.py --build-linux",
          None),
         # Тело руки `computer` — крейты дерева (tree/body), версия у них своя
@@ -1915,14 +2140,15 @@ def main() -> None:
                 stale.append(f"{name}: внутри productName «{product_inside}», а это поставка "
                              f"Hélène — собран не тот вариант оболочки ({how})")
                 continue
-        shutil.copy2(src, out / name)
+        copy_checked_binary(src, out / name)
         print(f"  {name}: положен")
         if name == "helene-relay.exe":
-            relay = relay_provenance(src, args.allow_partial)
+            relay = (relay_kit_provenance(kit_path, out / name) if kit_path
+                     else relay_provenance(out / name, args.allow_partial, relay_root))
         if name == "helene-body.exe":
             body = body_provenance(src, out / "helene-bridge.exe", args.allow_partial, live)
         if name == "helene-relay":
-            relay_linux = relay_linux_provenance(src, args.allow_partial)
+            relay_linux = relay_linux_provenance(out / name, args.allow_partial, relay_root)
     if stale:
         raise SystemExit(
             "версия внутри exe не совпадает с объявленной, поставка была бы смесью:\n  "
@@ -1932,6 +2158,16 @@ def main() -> None:
         if not args.allow_partial:
             raise SystemExit(text + "\n(для отладочной полусборки: --allow-partial)")
         print("  ⚠ " + text)
+    if kit_path:
+        copy_relay_kit(kit_path, out)
+        print("  relay-rebuild/: source-bound Rust kit; offline host/license proof NOT performed")
+    if args.relay_kind == "embedded":
+        attribution = out / "licenses" / "embedded-relay"
+        attribution.mkdir(parents=True, exist_ok=True)
+        for name in ("LICENSE", "NOTICE"):
+            shutil.copy2(relay_root / name, attribution / name)
+            if sha256(attribution / name) != sha256(relay_root / name):
+                raise SystemExit("selected relay attribution changed during copy")
     if (out / "helene.exe").is_file():
         shutil.copy2(DESK / "shell" / "icons" / "icon.ico", out / "helene.ico")
     if (out / "helene-svc.exe").is_file():
@@ -1990,7 +2226,20 @@ def main() -> None:
     (out / "tree" / "LICENSE").write_text(license_text + "\n", encoding="utf-8", newline="\n")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "tree" / "NOTICE")
     copy_text_lf(DESK / "installer" / "NOTICE", out / "NOTICE")
-    n_lic = collect_rust_licenses(out, args.allow_partial, live)
+    if vnext:
+        vnext["final_tree"] = vnext_dist.final_payload(out / "tree")
+        vnext["relay_source"] = relay_choice
+        # Catch a source or binary change while assembling the other components.
+        vnext_dist.verify_edition(ROOT, args.vnext_head, live)
+        if relay_choice and vnext_dist.verify_relay(ROOT, args.vnext_head, relay_root, kind=args.relay_kind) != relay_choice:
+            raise SystemExit("selected relay source changed during packaging")
+        if desk_note:
+            checked = vnext_dist.verify_desk_build(DESK, Path(args.desk_build_receipt))
+            if checked != desk_note or any(not (out / exe).is_file() or sha256(out / exe) != digest
+                                           for exe, digest in checked["exes"].items()):
+                raise SystemExit("vNext desk source or copied executables changed during packaging")
+    n_lic = collect_rust_licenses(out, args.allow_partial, live,
+        relay_lock=(relay_root / "Cargo.lock" if args.relay_kind == "embedded" else None))
     print(f"  лицензии крейтов: {n_lic}")
 
     (out / "helene.json").write_text(HELENE_JSON, encoding="utf-8", newline="\n")
@@ -2007,16 +2256,19 @@ def main() -> None:
 
     print("паспорт сборки:")
     desk_head, desk_dirty = _git_field(DESK, "desk")
-    tree_head, tree_dirty = _git_field(live, "дерево агента")
+    tree_head, tree_dirty = (args.vnext_head, False) if vnext else _git_field(live, "дерево агента")
     core = core_provenance(live)
+    incomplete = qualification_reasons(args, missing, staged, desk_dirty, tree_dirty,
+                                       body, relay, relay_linux, kit_path, desk_note)
     manifest = {
         "product": "Hélène",
         "version": version,
         "built_utc": _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "complete": not (missing or not staged["phone"]),
-        "validation": {"runtime_smoke": "skipped_by_request" if args.skip_smokes else "passed",
+        "complete": not incomplete,
+        "validation": {"external_tests": args.verified_tests,
+                       "runtime_smoke": "skipped_by_request" if args.skip_smokes else "passed",
                        "voice_smoke": "skipped_by_request" if args.skip_smokes else "passed"},
-        "partial_reason": missing + ([] if staged["phone"] else ["телефон (mobile/dist)"]),
+        "partial_reason": incomplete,
         # Хэш с суффиксом -dirty и отдельный флаг: по хэшу без суффикса сборку
         # нельзя было отличить от сборки самого коммита.
         "git": {"desk": desk_head, "desk_dirty": desk_dirty,
@@ -2040,6 +2292,8 @@ def main() -> None:
         # он и есть главный. Плюс расхождение объявленного слоя с делом, чтобы
         # его нельзя было не заметить (см. core_provenance).
         "core": core or None,
+        "vnext_source": vnext,
+        "desk_build": desk_note,
         # Тело: из каких крейтов и тем ли исходником собрано (см. body_provenance).
         "body": body or None,
         "desk": {"version": staged["desk"]["version"],

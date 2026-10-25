@@ -706,10 +706,13 @@ def _block_memory_index(audience: str = "other", ctx=None) -> str:
             body = ("(карта памяти: memory/INDEX.md не прочитался — это отказ "
                     "источника, не пустота памяти; синтетический список вместо "
                     "канона не собирается — её №8)")
+        import capabilities
+        skills = capabilities.skill_navigation(BASE / "soul" / "skills" / "INDEX.md")
         return (body
                 + "\n[из: memory/INDEX.md — полное каноническое тело (её №8) · "
                   "тела: не загружены — поднимаются рукой; «не загружено» не значит "
-                  "«не существует»]")
+                  "«не существует»]"
+                + "\n\n" + skills)
     people_dir = BASE / "memory" / "people"
     names = sorted(p.stem for p in people_dir.glob("*.md")
                    if not p.stem.startswith("_")) if people_dir.exists() else []

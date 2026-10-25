@@ -13,6 +13,17 @@ import package_notice
 LIMIT = 20 * 1024 * 1024
 
 
+def _publish(temp: Path, path: Path):
+    """Publish complete bytes; a concurrent identical cache entry is also success."""
+    try:
+        os.replace(temp, path)
+    except PermissionError:
+        # Windows may refuse replacement while the other caller reads its result.
+        # Do not hide unrelated permissions failures or accept different bytes.
+        if not path.is_file() or path.read_bytes() != temp.read_bytes():
+            raise
+
+
 def outbound(tree: Path, source: Path, *, media_kind: str = 'document') -> dict:
     """Keep accepted outbound bytes after the transient delivery spool is gone."""
     source = Path(source)
@@ -63,11 +74,13 @@ def persist(client, tree: Path, peer: str, message: dict) -> dict:
     if ext not in {'.jpg','.jpeg','.png','.webp','.gif','.tgs','.webm','.mp4','.ogg','.mp3','.m4a','.wav','.pdf','.txt'}: ext='.bin'
     path = folder / (hashlib.sha256(identity.encode()).hexdigest()[:24]+ext)
     if not path.is_file():
-        temp = path.with_suffix(path.suffix+'.part')
+        # Identical Telegram files can arrive in different rooms concurrently.
+        # Each caller must own its temporary bytes and cleanup independently.
+        temp = path.with_name(path.name+'.'+uuid.uuid4().hex+'.part')
         try:
             client.download_media(message,temp)
             if not temp.is_file() or temp.stat().st_size>LIMIT or temp.stat().st_size==0: raise ValueError('Медиа пустое или больше доступного размера.')
-            os.replace(temp,path)
+            _publish(temp,path)
         finally: temp.unlink(missing_ok=True)
     media_kind = 'image' if kind=='photo' or ext in {'.jpg','.jpeg','.png','.webp','.gif'} else 'animation' if kind in {'animation','sticker'} and ext in {'.mp4','.webm'} else 'video' if kind in {'video','video_note'} else 'audio' if kind in {'voice','audio'} else 'file'
     if ext=='.tgs':
@@ -90,25 +103,95 @@ def persist(client, tree: Path, peer: str, message: dict) -> dict:
         from PIL import Image
         preview=path.with_suffix('.first-frame.png')
         if not preview.is_file():
-            temp=preview.with_suffix('.png.part')
+            temp=preview.with_name(preview.name+'.'+uuid.uuid4().hex+'.part')
             try:
                 with Image.open(path) as picture: picture.convert('RGBA').save(temp,format='PNG')
-                os.replace(temp,preview)
+                _publish(temp,preview)
             finally: temp.unlink(missing_ok=True)
     thumb=info.get('thumbnail') or info.get('thumb')
     if preview is None and isinstance(thumb,dict) and thumb.get('file_id'):
         preview=path.with_suffix('.preview.jpg')
-        temp=preview.with_suffix('.jpg.part')
+        temp=preview.with_name(preview.name+'.'+uuid.uuid4().hex+'.part')
         try:
             if not preview.is_file():
                 client.download_file(thumb['file_id'],temp)
                 if not temp.is_file() or not 0 < temp.stat().st_size <= LIMIT: raise ValueError('Превью недоступно.')
-                os.replace(temp,preview)
+                _publish(temp,preview)
         except Exception:
             preview=None
         finally: temp.unlink(missing_ok=True)
     if preview and preview.is_file(): result['media_preview_path']=preview.relative_to(tree).as_posix()
     return result
+
+
+def vision_frames(tree: Path, source: Path, max_frames: int = 4) -> list:
+    """Sample local motion media, returning (PNG path, seconds) in time order.
+
+    Bounded, fail-closed decoder: never accept playlists/network protocols or
+    arbitrary paths. Missing tools/corrupt files leave callers their thumbnail.
+    This is a sparse sample, not a claim to have seen every intervening frame.
+    """
+    import math
+    import subprocess
+    import tempfile
+
+    root = (Path(tree) / 'memory/telegram-media').resolve()
+    source = Path(source).resolve()
+    formats = {'.mp4': 'mov', '.webm': 'matroska', '.gif': 'gif'}
+    count = min(4, max(0, int(max_frames)))
+    if (not count or root not in source.parents or not source.is_file()
+            or source.suffix.lower() not in formats or not 0 < source.stat().st_size <= LIMIT):
+        return []
+    ffmpeg, ffprobe = shutil.which('ffmpeg'), shutil.which('ffprobe')
+    if not ffmpeg or not ffprobe:
+        return []
+    # These are decoder guards, NOT an aggregate process-memory sandbox.
+    # max_alloc limits each allocation; codecs may allocate many such blocks.
+    # Force the demuxer so renamed playlists cannot read other files. Options
+    # precede the input: output-side -threads alone does not bound decoding.
+    inputs = ['-max_alloc', str(32 * 1024 * 1024),
+              '-protocol_whitelist', 'file', '-f', formats[source.suffix.lower()],
+              '-threads', '1', '-max_pixels', str(1920 * 1080),
+              '-probesize', str(1024 * 1024), '-analyzeduration', '1000000']
+    try:
+        # Header-only first: no stream-info heuristic decoding until dimensions
+        # are known to fit. Unsupported flags and unknown dimensions fail closed.
+        header = subprocess.run([ffprobe, '-v', 'error', *inputs,
+                                 '-nofind_stream_info', '-select_streams', 'v:0',
+                                 '-show_entries', 'stream=width,height', '-of', 'json', str(source)],
+                                capture_output=True, timeout=3, check=True)
+        stream = json.loads(header.stdout)['streams'][0]
+        width, height = int(stream['width']), int(stream['height'])
+        if not (0 < width <= 4096 and 0 < height <= 4096 and width * height <= 1920 * 1080):
+            return []
+        probe = subprocess.run([ffprobe, '-v', 'error', *inputs, '-show_entries',
+                                'format=duration', '-of', 'json', str(source)],
+                               capture_output=True, timeout=3, check=True)
+        duration = float(json.loads(probe.stdout)['format']['duration'])
+        if not math.isfinite(duration) or not 0 < duration <= 86400:
+            return []
+        times = [duration * i / count for i in range(count)]
+        frames = []
+        with tempfile.TemporaryDirectory(prefix='.frames-', dir=root) as temp:
+            for index, stamp in enumerate(times):
+                output = Path(temp) / f'{index}.png'
+                subprocess.run([ffmpeg, '-nostdin', '-v', 'error', *inputs,
+                                '-ss', f'{stamp:.6f}', '-i', str(source),
+                                '-map', '0:v:0', '-frames:v', '1', '-an', '-sn', '-dn',
+                                '-vf', 'scale=1024:1024:force_original_aspect_ratio=decrease',
+                                '-threads', '1', '-filter_threads', '1', '-y', str(output)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=3, check=True)
+                if not output.is_file() or not 0 < output.stat().st_size <= LIMIT:
+                    return []
+                # Content addressing prevents stale samples after source replacement.
+                digest = hashlib.sha256(output.read_bytes()).hexdigest()
+                target = root / (digest + '.frame.png')
+                _publish(output, target)
+                frames.append((target, stamp))
+        return frames
+    except (OSError, ValueError, KeyError, IndexError, TypeError, OverflowError, subprocess.SubprocessError):
+        return []
 
 
 def source(message):

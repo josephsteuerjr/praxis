@@ -10,6 +10,8 @@ import { scrollSupportText, type ScrollSupport } from "../feed/scroll-support";
 import { el } from "./lib";
 import { electron } from "./api";
 import * as scroll from "./scroll";
+import { applyTheme, readTheme } from "../dom";
+import { customizationCard } from "./look-customization";
 
 interface Choice { id: string; name: string }
 interface Paper extends Choice { color: string }
@@ -81,10 +83,16 @@ export interface Look {
   text: string;
   feel: FeelName;
   edge: Overscroll;
+  uiScale: number;
+  density: "comfortable" | "compact";
+  style: "paper" | "clean";
+  dayColor: string;
+  nightColor: string;
+  accentColor: string;
 }
 
 /** Светлая бумага с лёгкой фактурой; сохранённый выбор владельца имеет приоритет. */
-export const DEFAULT_LOOK: Look = { paperDay: "light", paperNight: "coal", accent: "terra", grain: "soft", text: "m", feel: "syrup", edge: "rubber" };
+export const DEFAULT_LOOK: Look = { paperDay: "light", paperNight: "coal", accent: "terra", grain: "soft", text: "m", feel: "syrup", edge: "rubber", uiScale: 1, density: "comfortable", style: "paper", dayColor: "", nightColor: "", accentColor: "" };
 
 const KEY = "helene.look";
 
@@ -100,13 +108,17 @@ export function load(): Look {
       text: pick(TEXT, raw.text, DEFAULT_LOOK.text),
       feel: pick(FEELS, raw.feel, DEFAULT_LOOK.feel) as FeelName,
       edge: pick(EDGES, raw.edge, DEFAULT_LOOK.edge) as Overscroll,
+      uiScale: typeof raw.uiScale === "number" && Number.isFinite(raw.uiScale) ? Math.max(.7, Math.min(1.5, raw.uiScale)) : 1,
+      density: raw.density === "compact" ? "compact" : "comfortable",
+      style: raw.style === "clean" ? "clean" : "paper",
+      ...Object.fromEntries((["dayColor", "nightColor", "accentColor"] as const).map(k => [k, /^#[0-9a-f]{6}$/i.test(raw[k] || "") ? raw[k] : ""])) as Pick<Look,"dayColor"|"nightColor"|"accentColor">,
     };
   } catch {
     return { ...DEFAULT_LOOK };
   }
 }
 
-function save(look: Look) {
+export function save(look: Look) {
   try { localStorage.setItem(KEY, JSON.stringify(look)); } catch { /* не запомнится — до перезапуска */ }
 }
 
@@ -120,17 +132,36 @@ export function apply(look: Look) {
   const acc = byId(ACCENTS, look.accent);
   const grain = byId(GRAIN, look.grain);
   const text = byId(TEXT, look.text);
-  r.setProperty("--u-paper-day", day.color);
-  r.setProperty("--u-paper-night", night.color);
-  r.setProperty("--u-terra", acc.fill);
+  r.setProperty("--u-paper-day", look.dayColor || day.color);
+  r.setProperty("--u-paper-night", look.nightColor || night.color);
+  r.setProperty("--u-terra", look.accentColor || acc.fill);
   r.setProperty("--u-accent-day", acc.inkDay);
   r.setProperty("--u-accent-night", acc.inkNight);
   r.setProperty("--u-grain-day", String(grain.day));
   r.setProperty("--u-grain-night", String(grain.night));
   r.setProperty("--u-feed-base", text.px + "px");
   scroll.setPhysics(look.feel, look.edge);
+  applyTheme(readTheme());
+  document.documentElement.style.zoom = String(look.uiScale);
+  const app=document.getElementById("app");
+  if(app) app.style.height=`calc(100dvh / ${look.uiScale})`;
+  document.documentElement.dataset.lookStyle = look.style;
+  document.documentElement.dataset.density = look.density;
+  const dark = readTheme() === "dark" || (readTheme() === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+  const color = dark ? look.nightColor : look.dayColor;
+  for (const key of ["--ink", "--ink-2", "--ink-3", "--muted", "--line", "--line-strong", "--accent", "--accent-ink"]) r.removeProperty(key);
+  const bright = (hex:string) => {
+    const c=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);
+    return c[0]*.2126+c[1]*.7152+c[2]*.0722 > .179;
+  };
+  if (color) {
+    const light=bright(color),ink=light?"#171717":"#ffffff";
+    for(const key of ["--ink","--ink-2","--ink-3","--muted","--accent"]) r.setProperty(key,ink);
+    r.setProperty("--line",light?"#00000033":"#ffffff44");r.setProperty("--line-strong",light?"#00000066":"#ffffff88");
+  }
+  if(look.accentColor) r.setProperty("--accent-ink",bright(look.accentColor)?"#171717":"#ffffff");
   // Оболочке — цвет бумаги: окно открывается уже нужного тона, без вспышки чужого фона.
-  electron?.look?.({ day: day.color, night: night.color });
+  electron?.look?.({ day: look.dayColor || day.color, night: look.nightColor || night.color });
 }
 
 /** Карточка «Вид» для экрана настроек: варианты кружками и плашками, применяются сразу. */
@@ -138,9 +169,11 @@ export function lookCard(): HTMLElement {
   const look = load();
   const c = el("section", "card look-card");
   c.append(el("h3", "", "Вид"));
-  c.append(el("p", "field-hint", "Меняется сразу и запоминается в этом окне. Тема — как в системе: днём своя бумага, ночью своя."));
+  c.append(el("p", "field-hint", "Твой облик окна: готовый вариант или собственная палитра. Изменения применяются сразу; стандартный вид всегда можно вернуть."));
+  c.append(customizationCard(look, () => c.replaceWith(lookCard())));
 
   const set = <K extends keyof Look>(k: K, v: Look[K]) => {
+    Object.assign(look,load());
     look[k] = v;
     save(look);
     apply(look);
@@ -215,14 +248,6 @@ export function lookCard(): HTMLElement {
     c.append(row);
   }
 
-  const reset = el("button", "look-reset", "Вернуть как было") as HTMLButtonElement;
-  reset.type = "button";
-  reset.addEventListener("click", () => {
-    save({ ...DEFAULT_LOOK });
-    apply({ ...DEFAULT_LOOK });
-    c.replaceWith(lookCard());
-  });
-  c.append(reset);
   return c;
 }
 

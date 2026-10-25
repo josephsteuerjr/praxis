@@ -48,7 +48,8 @@ def _bounded_env_float(name: str, default: float, *, low: float, high: float) ->
 
 
 def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dict],
-                               tools: list[dict] | None, logical_iteration: int):
+                               tools: list[dict] | None, logical_iteration: int,
+                               call_options: dict | None = None):
     """Retry an LLM iteration only while no response/tool call has reached the worker.
 
     ``llm.chat`` either returns a complete response object or raises.  Tool dispatch starts
@@ -62,7 +63,8 @@ def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dic
     for attempt in range(retries + 1):
         try:
             return llm.chat("voice", system=system, messages=messages, tools=tools,
-                            model=str(request.get("model") or "").strip() or None)
+                            model=str(request.get("model") or "").strip() or None,
+                            **(call_options or {}))
         except llm.BrokenChannelError as exc:
             if attempt >= retries:
                 raise
@@ -320,7 +322,7 @@ def run(request_path: Path) -> int:
     return _run_request(request_path, request)
 
 
-def _run_request(request_path: Path, request: dict) -> int:
+def _run_request(request_path: Path, request: dict, *, reviewer=None) -> int:
     # This address is supplied by the actual process invocation, not the model's tools.
     request = {**request, "_verified_request_path": str(request_path.resolve())}
     trace: list[dict] = []
@@ -338,7 +340,8 @@ def _run_request(request_path: Path, request: dict) -> int:
             context = replace(context, forge_task_id=str(request["task_id"]))
             bindings.enter_context(run_context.bind_run(context))
         role = request.get("role") or "worker"
-        tools = [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
+        call_options = reviewer.prepare(llm, request) if reviewer is not None else None
+        tools = reviewer.tools if reviewer is not None else [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
         if role == "worker":
             tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
         messages: list[dict] = [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}]
@@ -357,15 +360,15 @@ def _run_request(request_path: Path, request: dict) -> int:
             # Re-orient for each logical model turn, but freeze that exact frame across
             # transport retries of this turn. A retry must not observe a half-new system
             # prompt; the next successful tool iteration may legitimately see new state.
-            system = _system(request)
+            system = reviewer.system(request) if reviewer is not None else _system(request)
             response = _chat_with_transport_retry(
                 request, system=system, messages=messages, tools=tools,
-                logical_iteration=used,
+                logical_iteration=used, call_options=call_options,
             )
             final_model = response.model
             if response.stop_reason != "tool_use":
                 reply = response.text.strip()
-                stopped_himself = True
+                stopped_himself = (response.stop_reason == "end_turn" if reviewer is not None else True)
                 break
             assistant_blocks, tool_results = [], []
             for block in response.blocks:
@@ -375,24 +378,29 @@ def _run_request(request_path: Path, request: dict) -> int:
                     assistant_blocks.append(block)
                     args = {k: v for k, v in (block.get("input") or {}).items() if v is not None}
                     try:
-                        output = _dispatch(request, block.get("name", ""), args)
+                        output = (reviewer.dispatch(request, block.get("name", ""), args)
+                                  if reviewer is not None else _dispatch(request, block.get("name", ""), args))
                     except Exception as exc:
                         output = f"Tool error {type(exc).__name__}: {exc}"
                     trace.append({"tool": block.get("name"), "input": args,
                                   "output": str(output)[:2000], "at": _now()})
                     tool_results.append({"type": "tool_result", "tool_use_id": block.get("id", ""),
                                          "content": _model_tool_result(output)})
-            messages.append({"role": "assistant", "content": assistant_blocks})
+            # The Hélène adapter carries signed reasoning/Responses items in a
+            # route-bound sidecar. Legacy Praxis adapters have no such API.
+            assistant_message = getattr(llm, "assistant_message", None)
+            messages.append(assistant_message(response, assistant_blocks) if callable(assistant_message)
+                            else {"role": "assistant", "content": assistant_blocks})
             messages.append({"role": "user", "content": tool_results})
         if not reply:
-            system = _system(request)
+            system = reviewer.system(request) if reviewer is not None else _system(request)
             summary_response = _chat_with_transport_retry(
                 request, system=system, messages=messages, tools=None,
-                logical_iteration=used + 1,
+                logical_iteration=used + 1, call_options=call_options,
             )
             final_model = summary_response.model
             reply = summary_response.text.strip()
-        diff = forge.inspect(request["task_id"], "diff")
+        diff = reviewer.diff() if reviewer is not None else forge.inspect(request["task_id"], "diff")
         data = {
             "status": "done" if stopped_himself else "stalled",
             "complete": bool(stopped_himself),
@@ -410,6 +418,8 @@ def _run_request(request_path: Path, request: dict) -> int:
             "result": reply, "tool_calls": len(trace), "trace": trace[-30:],
             "diff_tail": diff[-8000:],
         }
+        if reviewer is not None:
+            data.update(reviewer.result_stamp())
         if not _publish_result(request_path, request["task_id"], data):
             print(f"{request['id']} settled concurrently; original result retained", flush=True)
             return 0

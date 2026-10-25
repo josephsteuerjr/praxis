@@ -13,7 +13,8 @@ class Images(unittest.TestCase):
              'images':{'enabled':True,'model':'gpt-image-2','quality':'high','size':'auto','background':'transparent'}}
         built=boot._brain_config(cfg)
         self.assertEqual(built['frameworks']['anthropic']['api_key'],'voice-secret')
-        self.assertEqual(built['roles']['voice']['framework'],'anthropic')
+        self.assertEqual(built['roles']['voice']['framework'],'voice_primary')
+        self.assertEqual(built['frameworks']['voice_primary']['protocol'],'anthropic')
         self.assertEqual(built['image_channel'],{'base_url':'http://127.0.0.1:5123','api_key':'loop-key'})
         self.assertEqual(built['images'],cfg['images'])
         merged=boot._merge_brain({'roles':{},'frameworks':{'openai':{'base_url':'https://text.invalid/v1','api_key':'text-key'}},'custom':{'keep':True}},built)

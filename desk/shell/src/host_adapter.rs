@@ -4,7 +4,7 @@ use std::any::Any;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}};
 
 pub fn event(name: &str, data: serde_json::Value) {
     send(&serde_json::json!({"event": name, "data": data}));
@@ -23,7 +23,10 @@ pub struct ShellHandle {
     state: Arc<dyn Any + Send + Sync>,
     window: Arc<WindowState>,
 }
-struct WindowState { alive: AtomicBool, visible: AtomicBool, focused: AtomicBool }
+struct WindowState {
+    alive: AtomicBool, visible: AtomicBool, focused: AtomicBool,
+    retire_seq: AtomicU64, retire_pending: AtomicU64, retire_ack: AtomicU64,
+}
 pub struct ShellState<'a, T: Send + Sync + 'static>(Arc<T>, PhantomData<&'a T>);
 impl<T: Send + Sync + 'static> Deref for ShellState<'_, T> {
     type Target = T;
@@ -33,10 +36,18 @@ impl ShellHandle {
     pub fn new<T: Any + Send + Sync>(state: T) -> Self {
         Self { state: Arc::new(state), window: Arc::new(WindowState {
             alive: AtomicBool::new(true), visible: AtomicBool::new(false), focused: AtomicBool::new(false),
+            retire_seq: AtomicU64::new(0), retire_pending: AtomicU64::new(0), retire_ack: AtomicU64::new(0),
         }) }
     }
     pub fn state<T: Any + Send + Sync>(&self) -> ShellState<'_, T> {
         ShellState(self.state.clone().downcast::<T>().expect("host state type"), PhantomData)
+    }
+    pub fn retire_window_ack(&self, id: u64) -> Result<(), String> {
+        if id == 0 || self.window.retire_pending.load(Ordering::Acquire) != id {
+            return Err("window retirement identity is not pending".into());
+        }
+        self.window.retire_ack.store(id, Ordering::Release);
+        Ok(())
     }
     pub fn get_webview_window(&self, _: &str) -> Option<HostWindow> {
         self.window.alive.load(Ordering::Relaxed).then(|| HostWindow(self.window.clone()))
@@ -60,7 +71,30 @@ impl HostWindow {
     pub fn unminimize(&self) -> Result<(), String> { Ok(()) }
     pub fn set_focus(&self) -> Result<(), String> { Ok(()) }
     pub fn set_always_on_top(&self, _: bool) -> Result<(), String> { Ok(()) }
-    pub fn destroy(&self) -> Result<(), String> { self.0.alive.store(false, Ordering::Relaxed); Ok(()) }
+    pub fn destroy(&self) -> Result<(), String> {
+        #[cfg(windows)]
+        {
+            // The Electron BrowserWindow is a DIFFERENT process. A local
+            // Boolean cannot attest its destruction before the host spends
+            // seconds stopping Python's Job tree.
+            let id = self.0.retire_seq.fetch_add(1, Ordering::AcqRel) + 1;
+            self.0.retire_pending.store(id, Ordering::Release);
+            event("retire-window", serde_json::json!({"id": id}));
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while std::time::Instant::now() < until {
+                if self.0.retire_ack.load(Ordering::Acquire) == id {
+                    self.0.alive.store(false, Ordering::Release);
+                    self.0.retire_pending.store(0, Ordering::Release);
+                    return Ok(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            self.0.retire_pending.store(0, Ordering::Release);
+            return Err("Electron window destruction not acknowledged".into());
+        }
+        #[cfg(not(windows))]
+        { self.0.alive.store(false, Ordering::Release); Ok(()) }
+    }
 }
 
 pub mod async_runtime {

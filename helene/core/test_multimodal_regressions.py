@@ -80,7 +80,7 @@ class _FakeAudioBackend:
     def __init__(self, root: Path):
         self.root = root
 
-    def synthesize(self, text: str) -> Path:
+    def synthesize(self, text: str, *, stopped=None) -> Path:
         path = self.root / "spoken.wav"
         with wave.open(str(path), "wb") as out:
             out.setnchannels(1)
@@ -490,9 +490,19 @@ class TestRunnerRetryRegressions(RegressionBase):
             self.assertFalse(first)
             self.assertEqual(self.spool.pending(), (item,))
             self.assertTrue(item.path.exists())
+            self.assertEqual(attempts, [], "staging must not attempt an early upload")
+            clock.return_value = 1029.999
+            await runner._media_cleanup_once()
+            self.assertEqual(attempts, [], "the entire 30 second pause is mandatory")
+            clock.return_value = 1030.0
+            await runner._media_cleanup_once()
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(self.spool.pending(), (item,))
+            self.assertTrue(item.path.exists(), "failed upload must remain retryable")
             await runner._media_cleanup_once()
 
         with (
+            patch.object(media.time, "time", return_value=1000.0) as clock,
             patch.object(runner, "client", FlakyClient()),
             patch.object(runner, "_meta", meta),
             patch.object(runner, "_MEDIA_SENDING", set()),

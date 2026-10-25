@@ -42,7 +42,8 @@ def reconcile(rows, lines, *, is_room=False, is_dm=True, birth=False):
         try: row = json.loads(line)
         except (TypeError, ValueError): continue
         if not isinstance(row, dict) or row.get('system'): continue
-        source = row.get('source_message_id') or row.get('source_id')
+        source = (row.get('source_message_id') or row.get('source_id')
+                  or row.get('delivery_key') or row.get('message_id'))
         if row.get('deleted'):
             if source is not None: deleted.add(str(source))
             continue

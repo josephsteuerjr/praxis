@@ -49,6 +49,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 #[path = "../../common/relay_policy.rs"]
 mod relay_policy;
+#[cfg(windows)]
+#[path = "../../common/desktop_owner_lock.rs"]
+mod desktop_owner_lock;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -319,6 +322,16 @@ mod job {
 }
 
 #[cfg(windows)]
+fn wait_job_empty(mut empty: impl FnMut() -> bool, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if empty() { return true; }
+        if Instant::now() >= deadline { return false; }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(windows)]
 static JOB: std::sync::OnceLock<Option<job::Job>> = std::sync::OnceLock::new();
 #[cfg(windows)]
 static SESSION_JOBS: std::sync::Mutex<Vec<job::Job>> = std::sync::Mutex::new(Vec::new());
@@ -494,6 +507,12 @@ fn spawn_child(
     config: &Path,
 ) -> Result<Child, String> {
     if owner_stopped() { return Err("Остановлен владельцем".into()); }
+    #[cfg(windows)]
+    if JOB.get_or_init(job::Job::new).is_none() {
+        return Err("Windows Job unavailable; no desktop owner record or child launch".into());
+    }
+    #[cfg(windows)]
+    let _launch = desktop_owner_lock::begin(tree)?;
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     let mut cmd = Command::new(python);
@@ -1572,8 +1591,8 @@ fn supervise(
                         if !relay_yielded {
                             relay_yielded = true;
                             log.line(&format!(
-                                "реле: порт {} уже держит другая копия (обычно открытое окно) — \
-                                 своё не поднимаю, подхвачу, когда освободится",
+                                "реле: порт {} или общий допуск дерева занят/неподтверждён — \
+                                 своё не поднимаю, повторю проверку после паузы",
                                 plan.relay_port
                             ));
                         }
@@ -1609,7 +1628,218 @@ fn supervise(
         let _ = child.kill();
         let _ = child.wait();
     }
+    #[cfg(windows)]
+    if JOB.get().and_then(Option::as_ref)
+        .is_some_and(|job| wait_job_empty(|| job.empty(), Duration::from_secs(5))) {
+        if let Err(why) = desktop_owner_lock::mark_clean_after_teardown() {
+            log.line(&format!("desktop owner record remains active: {why}"));
+        }
+    } else {
+        log.line("desktop owner record stays active: child Job teardown unconfirmed");
+    }
     log.line("служба: остановлена");
+}
+
+/// A session-host's cooperative Stop channel is private to its data tree.
+/// The scheduler remains the last kill authority; a request/ack is only proof
+/// that Python emptied its Jobs before /End. A crash leaves request and/or
+/// owner marker for explicit recovery, never stale-age eviction.
+#[cfg(windows)]
+fn session_stop_path(tree: &Path, name: &str) -> PathBuf {
+    tree.join(format!(".python-session-{name}"))
+}
+
+#[cfg(windows)]
+fn session_stop_write(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let suffix = random_hex(8).ok_or("stop receipt randomness unavailable")?;
+    let temp = path.with_extension(format!("tmp-{}-{suffix}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+        .open(&temp).map_err(|e| format!("stop receipt temp: {e}"))?;
+    let result = (|| {
+        file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        std::fs::rename(&temp, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temp); }
+    result
+}
+
+#[cfg(windows)]
+fn session_stop_request(plan: &Plan, log: &mut Log) -> Option<String> {
+    let marker = session_stop_path(&plan.tree, "owner");
+    let owner = std::fs::read_to_string(marker).ok()?;
+    if owner.len() != 32 || !owner.bytes().all(|c| c.is_ascii_hexdigit()) {
+        log.line("Python session owner receipt unreadable; task End remains the stop backstop");
+        return None;
+    }
+    let request_path = session_stop_path(&plan.tree, "request");
+    if request_path.exists() {
+        log.line("older Python session Stop unresolved; keeping its request and forcing task End");
+        return None;
+    }
+    let nonce = random_hex(16)?;
+    let request = format!("{owner}\n{nonce}");
+    if let Err(why) = session_stop_write(&request_path, &request) {
+        log.line(&format!("Python session Stop not saved: {why}; forcing task End"));
+        return None;
+    }
+    Some(request)
+}
+
+#[cfg(windows)]
+fn session_stop_wait(plan: &Plan, request: &str, log: &mut Log) {
+    let ack = session_stop_path(&plan.tree, "ack");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        if std::fs::read_to_string(&ack).ok().as_deref() == Some(request) {
+            log.line("Python session Stop: child Jobs and outer Job emptied before task End");
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    log.line("Python session Stop unconfirmed in grace; task End will force teardown; request retained");
+}
+
+#[cfg(windows)]
+fn session_stop_acknowledged(plan: &Plan, request: &str) -> bool {
+    let ack = session_stop_path(&plan.tree, "ack");
+    std::fs::read_to_string(ack).ok().as_deref() == Some(request)
+}
+
+#[cfg(windows)]
+fn session_stop_cleanup_allowed(plan: &Plan, request: &str,
+                                task_end: &Result<(bool, String), String>) -> bool {
+    matches!(task_end, Ok((true, _))) && session_stop_acknowledged(plan, request)
+        && !session_stop_path(&plan.tree, "owner").exists()
+        && std::fs::read(plan.tree.join(".desktop-owner.lock")).ok().as_deref() == Some(b"clean\n")
+}
+
+/// The explicit Windows local Python owner for foreground or user session-host.
+/// Rust launches ONE supervisor, not channel/runner/relay; Python owns their
+/// handles, Jobs, retry and Stop. The native Job is a kill-on-close fuse.
+#[cfg(windows)]
+fn python_foreground(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, session_host: bool) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    let raw = std::fs::read(&plan.config).map_err(|e| format!("config read: {e}"))?;
+    let cfg: serde_json::Value = serde_json::from_str(&decode_config(&raw)?)
+        .map_err(|e| format!("config parse: {e}"))?;
+    if plan.mode != "local" || (!session_host && cfg.pointer("/installed/service").and_then(|v| v.as_bool()) == Some(true)) {
+        return Err("Python owner requires local mode; service installation needs session-host".into());
+    }
+    if owner_stopped() || harness_alive(plan.port) {
+        return Err("owner stop or occupied channel port".into());
+    }
+    if session_host && session_stop_path(&plan.tree, "request").exists() {
+        return Err("prior Python session Stop unresolved; inspect tree before recovery".into());
+    }
+    if session_host {
+        // Legacy supervise owned the periodic backup check. The Python owner
+        // owns child processes, not this filesystem backup policy; keep one
+        // native ticker in the session-host and none in foreground opt-in.
+        let config = plan.config.clone();
+        let backup_stop = stop.clone();
+        std::thread::spawn(move || backup_ticker(config, backup_stop));
+    }
+    let script = plan.app.parent().unwrap_or(Path::new("."))
+        .join("localharness/desktop_supervisor.py");
+    if !script.is_file() { return Err(format!("Python supervisor missing: {}", script.display())); }
+    let mut cmd = Command::new(&plan.python);
+    cmd.arg("-u").arg(&script).arg("--config").arg(&plan.config)
+        .arg("--control-stdin")
+        .current_dir(script.parent().unwrap_or(Path::new(".")))
+        .stdin(Stdio::piped()).creation_flags(CREATE_NO_WINDOW | 0x4);
+    if session_host { cmd.arg("--session-host"); }
+    if let Some(out) = child_log(&plan.tree, &script) {
+        if let Ok(err) = out.try_clone() {
+            cmd.stdout(Stdio::from(out)).stderr(Stdio::from(err));
+        } else { cmd.stdout(Stdio::null()).stderr(Stdio::null()); }
+    } else { cmd.stdout(Stdio::null()).stderr(Stdio::null()); }
+    let mut supervisor = cmd.spawn().map_err(|e| format!("Python supervisor launch: {e}"))?;
+    if let Err(why) = adopt(&supervisor) {
+        let _ = supervisor.kill(); let _ = supervisor.wait();
+        return Err(format!("outer Job admission: {why}"));
+    }
+    let owner_nonce = if session_host {
+        let marker = session_stop_path(&plan.tree, "owner");
+        if marker.exists() {
+            kill_all_descendants();
+            let _ = supervisor.kill(); let _ = supervisor.wait();
+            return Err("prior Python session owner record unresolved".into());
+        }
+        let nonce = match random_hex(16) {
+            Some(value) => value,
+            None => {
+                kill_all_descendants();
+                let _ = supervisor.kill(); let _ = supervisor.wait();
+                return Err("session owner nonce unavailable".into());
+            }
+        };
+        if let Err(why) = session_stop_write(&marker, &nonce) {
+            kill_all_descendants();
+            let _ = supervisor.kill(); let _ = supervisor.wait();
+            return Err(format!("session owner record unavailable: {why}"));
+        }
+        Some(nonce)
+    } else { None };
+    let mut control = supervisor.stdin.take();
+    log.line(&format!("Python owns child tree; launcher watches pid {}", supervisor.id()));
+    let mut stop_started: Option<Instant> = None;
+    let mut stop_request: Option<String> = None;
+    let result = loop {
+        if stop_started.is_none() {
+            if let Some(owner) = owner_nonce.as_ref() {
+                let request = std::fs::read_to_string(session_stop_path(&plan.tree, "request")).ok();
+                if let Some(value) = request.filter(|value| value.starts_with(&format!("{owner}\n"))) {
+                    stop_request = Some(value);
+                }
+            }
+        }
+        if (stop.load(Ordering::Relaxed) || owner_stopped() || stop_request.is_some()) && stop_started.is_none() {
+            log.line("Stop handed to Python; native Job is the bounded fallback");
+            if let Some(writer) = control.as_mut() {
+                if writeln!(writer, "stop").is_err() { break Err("Python Stop pipe unavailable".into()); }
+            }
+            stop_started = Some(Instant::now());
+        }
+        match supervisor.try_wait() {
+            Ok(Some(status)) => break if status.success() { Ok(()) } else {
+                Err(format!("Python supervisor exited: {status}"))
+            },
+            Ok(None) => {
+                if stop_started.is_some_and(|at| at.elapsed() >= Duration::from_secs(3)) {
+                    break Err("Python Stop did not settle inside grace; killing outer Job".into());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            },
+            Err(err) => break Err(format!("Python supervisor status unknown: {err}")),
+        }
+    };
+    // Python's own Jobs own each child. This outer Job is only a backstop;
+    // after a failure no legacy supervisor starts and no generation is retried.
+    kill_all_descendants();
+    let _ = supervisor.kill();
+    let _ = supervisor.wait();
+    if let Some(job) = JOB.get().and_then(Option::as_ref) {
+        if !wait_job_empty(|| job.empty(), Duration::from_secs(5)) {
+            return Err("outer Job teardown unconfirmed".into());
+        }
+    }
+    if let Some(owner) = owner_nonce.as_ref() {
+        let marker = session_stop_path(&plan.tree, "owner");
+        if result.is_ok() {
+            if let Some(request) = stop_request.as_ref() {
+                if std::fs::read_to_string(session_stop_path(&plan.tree, "request")).ok().as_deref()
+                    == Some(request) {
+                    session_stop_write(&session_stop_path(&plan.tree, "ack"), request)?;
+                }
+            }
+        }
+        if std::fs::read_to_string(&marker).ok().as_deref() == Some(owner) {
+            std::fs::remove_file(&marker).map_err(|e| format!("session owner record not retired: {e}"))?;
+        }
+    }
+    result
 }
 
 /// mtime файла или None (нет файла/нет прав) — для наблюдения за helene.json и auth.json.
@@ -1667,6 +1897,20 @@ fn spawn_relay(plan: &Plan) -> Result<Option<Child>, String> {
     if harness_alive(plan.relay_port) {
         return Ok(None);
     }
+    #[cfg(windows)]
+    if JOB.get_or_init(job::Job::new).is_none() {
+        return Err("Windows Job unavailable; no desktop owner record or relay launch".into());
+    }
+    #[cfg(windows)]
+    let _launch = match desktop_owner_lock::begin(&plan.tree) {
+        Ok(ticket) => ticket,
+        Err(why) => {
+            // Another owner or an unresolved prior generation may be fixed
+            // later; this is waiting, not a missing relay executable.
+            to_console(&format!("relay owner admission waiting: {why}"));
+            return Ok(None);
+        }
+    };
     let home = plan.tree.join("relay");
     let _ = std::fs::create_dir_all(&home);
     let mut cmd = Command::new(&exe);
@@ -1770,13 +2014,14 @@ const SESSION_TASK: &str = "Helene\\session-host";
 /// ушёл с зарядки — Windows убил харнесс, служба 15 минут просила планировщик поднять
 /// его снова, а планировщик держал задачу в очереди (на батарее старт запрещён).
 /// Агент лежал, пока окно не подняло его запасным ходом. Здесь всё это названо явно.
-fn session_task_xml(exe: &Path, config: &Path, user: &str) -> String {
+fn session_task_xml(exe: &Path, config: &Path, user: &str, python_owner: bool) -> String {
     let esc = |s: &str| {
         s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
     };
     let exe = esc(&plain_path(exe).display().to_string());
     let config = esc(&plain_path(config).display().to_string());
     let user = esc(user);
+    let python_flag = if python_owner { " --python-supervisor" } else { "" };
     format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -1809,12 +2054,26 @@ fn session_task_xml(exe: &Path, config: &Path, user: &str) -> String {
   <Actions Context="Author">
     <Exec>
       <Command>"{exe}"</Command>
-      <Arguments>session-host --config "{config}"</Arguments>
+      <Arguments>session-host --config "{config}"{python_flag}</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#
     )
+}
+
+/// Only a saved opt-in changes a FUTURE scheduled invocation. Reading a
+/// malformed document cannot rewrite the working legacy task. The installed
+/// task changes only when the owner separately installs its new XML.
+fn python_session_opt_in(config: &Path) -> Result<bool, String> {
+    let raw = std::fs::read(config).map_err(|e| format!("session config read: {e}"))?;
+    let cfg: serde_json::Value = serde_json::from_str(&decode_config(&raw)?)
+        .map_err(|e| format!("session config parse: {e}"))?;
+    match cfg.pointer("/service/python_supervisor") {
+        None => Ok(false),
+        Some(serde_json::Value::Bool(value)) => Ok(*value),
+        _ => Err("service.python_supervisor must be a boolean".into()),
+    }
 }
 
 /// XML задачи — файлом в UTF-16 с BOM: так его читает `schtasks /XML` на любой
@@ -1969,7 +2228,8 @@ fn session_task_install(config: &Path) -> Result<String, String> {
         })?,
     };
     let xml = std::env::temp_dir().join(format!("helene-session-task-{}.xml", std::process::id()));
-    std::fs::write(&xml, utf16_with_bom(&session_task_xml(&exe, config, &user)))
+    let python_owner = python_session_opt_in(config)?;
+    std::fs::write(&xml, utf16_with_bom(&session_task_xml(&exe, config, &user, python_owner)))
         .map_err(|e| format!("задача {SESSION_TASK}: XML не записался ({}): {e}", xml.display()))?;
     let made = schtasks(&session_task_create_args(&xml));
     let _ = std::fs::remove_file(&xml);
@@ -3531,11 +3791,34 @@ fn supervise_session(plan: &Plan, stop: Arc<AtomicBool>, log: &mut Log, stopping
     // и остаётся жить. Задача не запущена — schtasks ответит отказом, и это
     // норма, поэтому пишем в журнал только неожиданное.
     log.line("служба: остановка — прошу планировщик остановить задачу сессии");
-    if let Ok((false, why)) = schtasks(&session_task_end_args()) {
-        if !why.is_empty() {
-            // Чаще всего это значит «задача и не была запущена» (харнесс поднят
-            // окном владельца) — не тревога, просто запись.
-            log.line(&format!("задача {SESSION_TASK} не остановлена (возможно, и не была запущена): {why}"));
+    #[cfg(windows)]
+    // The saved config may have changed after Task Scheduler captured its
+    // command. Select the live Python generation, not today's future-task
+    // preference: a false setting cannot make a running Python owner miss Stop.
+    let request = if session_stop_path(&plan.tree, "owner").exists() {
+        let request = session_stop_request(plan, log);
+        if let Some(text) = request.as_deref() {
+            session_stop_wait(plan, text, log);
+        }
+        request
+    } else { None };
+    // Still ask Task Scheduler to End its task: the service must not trust an
+    // owner-writable acknowledgement as proof that a different session process
+    // did not remain live. A cooperating owner has already exited by then.
+    let task_end = schtasks(&session_task_end_args());
+    match &task_end {
+        Ok((false, why)) if !why.is_empty() =>
+            log.line(&format!("задача {SESSION_TASK} не остановлена (возможно, и не была запущена): {why}")),
+        Err(why) => log.line(&format!("задача {SESSION_TASK}: End не подтверждён: {why}")),
+        _ => {}
+    }
+    #[cfg(windows)]
+    if let Some(text) = request.as_deref() {
+        if session_stop_cleanup_allowed(plan, text, &task_end) {
+            // The request stayed in place through /End: a replacement could
+            // not start and accidentally be killed by this old Stop.
+            let _ = std::fs::remove_file(session_stop_path(&plan.tree, "request"));
+            let _ = std::fs::remove_file(session_stop_path(&plan.tree, "ack"));
         }
     }
     kill_all_descendants();
@@ -4053,6 +4336,12 @@ fn cli() {
         // службы (или по входу владельца). Права здесь — владельца, не системы:
         // задача заведена с /RL LIMITED.
         "session-host" | "foreground" => {
+            let python_opt_in = std::env::args().any(|arg| arg == "--python-supervisor");
+            #[cfg(not(windows))]
+            if python_opt_in {
+                eprintln!("--python-supervisor needs Windows Job qualification");
+                std::process::exit(2);
+            }
             if owner_stopped() {
                 eprintln!("agent stopped by owner; explicit helene-svc resume required");
                 std::process::exit(OWNER_STOP_EXIT);
@@ -4083,11 +4372,18 @@ fn cli() {
             let stop = Arc::new(AtomicBool::new(false));
             let stop_ctrlc = stop.clone();
             let _ = ctrlc_handler(stop_ctrlc);
-            // Второй экземпляр не страшен: планировщик по умолчанию не заводит
-            // вторую копию задачи, а замок порта внутри supervise не даст
-            // поднять вторую пару детей на одном дереве.
+            // Старый путь остаётся без opt-in; новый Python путь должен получить
+            // per-tree OS lease до запуска детей. Порт сам по себе не замок.
             // Брандмауэр из сессии владельца не трогаем: правило требует
             // повышения, его ставит служба.
+            #[cfg(windows)]
+            if python_opt_in {
+                if let Err(why) = python_foreground(&plan, stop, &mut log, session) {
+                    log.line(&format!("Python session owner refused: {why}"));
+                    std::process::exit(1);
+                }
+                return;
+            }
             supervise(&plan, stop, &mut log, !session && plan.firewall_rule, &mut || {});
         }
         // Отдельные команды для установщика и обновления — чтобы не
@@ -4189,7 +4485,7 @@ mod session_tests {
     use super::*;
 
     fn xml_for(exe: &str, config: &str, user: &str) -> String {
-        session_task_xml(Path::new(exe), Path::new(config), user)
+        session_task_xml(Path::new(exe), Path::new(config), user, false)
     }
 
     /// Главное в задаче — НЕ «запускается», а «запускается под владельцем и без
@@ -4242,6 +4538,52 @@ mod session_tests {
         ));
     }
 
+    #[test]
+    fn opt_in_is_selected_by_the_future_task_xml_not_the_live_scheduler() {
+        let temp = std::env::temp_dir().join(format!("helene-python-session-{}.json", std::process::id()));
+        std::fs::write(&temp, br#"{"mode":"local","service":{"python_supervisor":true}}"#).unwrap();
+        assert_eq!(python_session_opt_in(&temp).unwrap(), true);
+        let xml = session_task_xml(Path::new(r"C:\H\svc.exe"), &temp, "OWNER", true);
+        assert!(xml.contains(" --python-supervisor</Arguments>"));
+        assert!(xml.contains("<RunLevel>LeastPrivilege</RunLevel>"));
+        std::fs::write(&temp, br#"{"service":{"python_supervisor":"yes"}}"#).unwrap();
+        assert!(python_session_opt_in(&temp).is_err());
+        std::fs::write(&temp, br#"{"service":{"python_supervisor":null}}"#).unwrap();
+        assert!(python_session_opt_in(&temp).is_err());
+        std::fs::write(&temp, br#"{"service":{"python_supervisor":false}}"#).unwrap();
+        assert_eq!(python_session_opt_in(&temp).unwrap(), false);
+        let _ = std::fs::remove_file(temp);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn cooperative_stop_receipt_is_exact_and_cannot_overwrite_an_open_request() {
+        let root = std::env::temp_dir().join(format!("helene-stop-{}", random_hex(8).unwrap()));
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let config = root.join("helene.json");
+        std::fs::write(&config, br#"{"mode":"local","tree":"data"}"#).unwrap();
+        let plan = load_plan(&config).unwrap();
+        let owner = random_hex(16).unwrap();
+        session_stop_write(&session_stop_path(&plan.tree, "owner"), &owner).unwrap();
+        let mut log = Log::open(&plan.tree);
+        let request = session_stop_request(&plan, &mut log).unwrap();
+        assert!(request.starts_with(&format!("{owner}\n")));
+        assert_eq!(std::fs::read_to_string(session_stop_path(&plan.tree, "request")).unwrap(), request);
+        assert!(session_stop_request(&plan, &mut log).is_none());
+        assert!(!session_stop_acknowledged(&plan, &request));
+        session_stop_write(&session_stop_path(&plan.tree, "ack"), "wrong generation").unwrap();
+        assert!(!session_stop_acknowledged(&plan, &request));
+        session_stop_write(&session_stop_path(&plan.tree, "ack"), &request).unwrap();
+        assert!(session_stop_acknowledged(&plan, &request));
+        std::fs::remove_file(session_stop_path(&plan.tree, "owner")).unwrap();
+        std::fs::write(plan.tree.join(".desktop-owner.lock"), b"clean\n").unwrap();
+        assert!(!session_stop_cleanup_allowed(&plan, &request, &Ok((false, "End refused".into()))));
+        assert!(!session_stop_cleanup_allowed(&plan, &request, &Err("scheduler unavailable".into())));
+        assert!(session_stop_cleanup_allowed(&plan, &request, &Ok((true, String::new()))));
+        drop(log);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// `&` в пути (папка «R&D») — это XML: без экранирования планировщик отверг бы файл.
     #[test]
     fn task_xml_escapes_paths_and_user() {
@@ -4277,7 +4619,7 @@ mod session_tests {
     fn live_task_xml_is_accepted_by_the_scheduler() {
         let user = active_session_user().expect("за консолью никого");
         let exe = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
-        let xml = session_task_xml(Path::new(&exe), Path::new(r"C:\R&D probe\helene.json"), &user);
+        let xml = session_task_xml(Path::new(&exe), Path::new(r"C:\R&D probe\helene.json"), &user, false);
         let path = std::env::temp_dir().join("helene-session-task-probe.xml");
         std::fs::write(&path, utf16_with_bom(&xml)).unwrap();
         let name = "Helene\\session-host-probe";
@@ -4732,5 +5074,19 @@ mod contract_tests {
         let c: serde_json::Value = serde_json::from_str(include_str!("../../ui-kit/contract.json")).unwrap();
         assert_eq!(c["ports"]["relay"], super::RELAY_PORT);
         assert_eq!(c["config_name"], super::CONFIG_NAME);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod desktop_owner_wait_tests {
+    use super::wait_job_empty;
+    use std::time::Duration;
+
+    #[test]
+    fn delayed_descendant_exit_is_observed_before_clean() {
+        let mut samples = 0;
+        assert!(wait_job_empty(|| { samples += 1; samples == 3 }, Duration::from_secs(1)));
+        assert_eq!(samples, 3);
+        assert!(!wait_job_empty(|| false, Duration::ZERO));
     }
 }

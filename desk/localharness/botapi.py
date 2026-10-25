@@ -40,6 +40,7 @@ import boot
 import telegram_proxy
 import addressing
 import telegram_media
+import telegram_inputs
 import time
 import urllib.error
 import urllib.parse
@@ -310,6 +311,7 @@ class Rooms:
         self.agent_name = agent_name
         self._titles: dict[str, dict] = {}   # chat_id -> {title, is_dm, size}
         self._record_lock = threading.Lock()
+        self.pending_inputs = None
 
     def describe(self, chat_id: str, *, title: str, is_dm: bool,
                  size: int | None = None,
@@ -323,6 +325,13 @@ class Rooms:
         known = self._titles.get(str(chat_id))
         if known:
             return known
+        path = self.tree / "memory/.state/group_context" / (str(chat_id) + ".json")
+        try:
+            saved = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        if saved.get("title"):
+            return {"title": saved["title"], "is_dm": not str(chat_id).startswith("-")}
         # Карта комнат живёт в RAM и после рестарта пуста, а комнаты — на диске.
         # Минимум, который можно сказать честно по одному ключу: минусовый peer —
         # группа. Иначе ход из окна в группу после рестарта шёл бы личкой.
@@ -334,12 +343,13 @@ class Rooms:
         # приращением, а не полным перечитыванием файла на каждом сообщении.
         meta = self.meta(chat_id)
         _registry(self.tree, str(chat_id), archive,
-                  participants=int(meta.get("size") or 2))
+                  participants=int(meta.get("size") or 2), title=str(meta.get("title") or ""))
 
     def record(self, chat_id: str, text: str, *, outgoing: bool, sender: str = "",
                source_id: str = "", ts: float | None = None,
                source: str = "botapi", edited: bool = False, historical: bool = False,
-               media: dict | None = None, reply: dict | None = None, sender_id: str = "") -> None:
+               media: dict | None = None, reply: dict | None = None, sender_id: str = "",
+               capture=None) -> None:
         import datetime as dt
         moment = dt.datetime.fromtimestamp(ts, dt.timezone.utc) if ts else \
             dt.datetime.now(dt.timezone.utc)
@@ -400,6 +410,7 @@ class Rooms:
                                encoding="utf-8", newline="\n")
                 os.replace(tmp, archive)
             else:
+                published = capture(dict(row)) if capture is not None else None
                 if historical and rows:
                     rows.append(row)
                     rows.sort(key=lambda r: (str(r.get("timestamp") or ""),
@@ -410,6 +421,8 @@ class Rooms:
                     os.replace(tmp, archive)
                 else:
                     _append_jsonl(archive, row)
+                if published is not None:
+                    published()
             self._registry(chat_id, archive)
         if self._life is None:
             return
@@ -452,10 +465,14 @@ class Rooms:
             rows=[json.loads(line) for line in archive.read_text(encoding='utf-8').splitlines() if line.strip()]
             row=next((r for r in rows if str(r.get('source_message_id') or '')==source_id),None)
             if row is None or row.get('media_source')!=expected: return False
+            published = (self.pending_inputs.media_update(chat_id, source_id, expected, media)
+                         if self.pending_inputs is not None else None)
             row.pop('media_error',None);row.update(media)
             temporary=archive.with_name('.telegram-'+uuid.uuid4().hex+'.tmp')
             temporary.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows),encoding='utf-8')
             os.replace(temporary,archive)
+            if published is not None:
+                published()
         return True
 
     def lines(self, chat_id: str, limit: int = 200) -> list[str]:
@@ -654,6 +671,9 @@ class BotTransport:
         self._wake_priority_rows: dict[str, list[dict]] = {}
         self._stop = threading.Event()
         self.sent_now: list[tuple[str, str]] = []   # (chat_id, text) этого хода
+        self.inputs = telegram_inputs.PendingInputs(tree)
+        self.rooms.pending_inputs = self.inputs
+        self.inputs.recover_archive(self.rooms)
         if not self.owner_id and self.allow_from != "any":
             log.warning("telegram.owner_id не задан: владельца в Telegram нет, и ход "
                         "по входящему не пойдёт ни от кого. Впиши свой id в "
@@ -895,6 +915,22 @@ class BotTransport:
                 try: telegram_media.recover(self.tree,self.client,self.rooms)
                 except Exception: log.warning('Вложения Telegram ждут повторной загрузки.')
 
+    def _capture_allowed(self, update, message, *, outgoing, edited, is_dm, sender_id):
+        """The same ordinary wake gates, evaluated before archive publication."""
+        if outgoing or edited or update.get("_history") or update.get("_catchup"):
+            return False
+        import owner_stop
+        if owner_stop.paused() or not re.fullmatch(r"[1-9]\d*", str(sender_id)):
+            return False
+        word = str(message.get("text") or "").strip()
+        if re.fullmatch(r"/(pause|resume)(?:@[A-Za-z0-9_]+)?", word, re.I):
+            return False
+        command = word.split(maxsplit=1)
+        panic = re.fullmatch(r"/panic(?:@([A-Za-z0-9_]+))?", command[0], re.I) if command else None
+        if panic and (not panic[1] or panic[1].lower() == str(self.username).lower()):
+            return False
+        return (is_dm or self._addressed(message)) and self.is_allowed(sender_id)
+
     def _ingest(self, update: dict) -> None:
         if update.get('_deleted'):
             self.rooms.delete(str(update.get('_peer') or ''), update['_deleted'])
@@ -938,8 +974,9 @@ class BotTransport:
         if thread_id and replied_topic.get("name"):
             self._topic_names[(chat_id, thread_id)] = str(replied_topic["name"])
         if thread_id:
-            topic = self._topic_names.get((chat_id, thread_id)) or f"тема {thread_id}"
-            title = f"{title} · {topic}"
+            topic = self._topic_names.get((chat_id, thread_id))
+            saved_title = str(self.rooms.meta(conversation).get("title") or "")
+            title = f"{title} · {topic}" if topic else (saved_title or f"{title} · тема {thread_id}")
         self.rooms.describe(conversation, title=title, is_dm=is_dm,
                             sender=(sender_name, str(sender.get("id") or "")))
         self.contacts.note(str(sender.get("id") or ""), name=sender_name,
@@ -966,7 +1003,14 @@ class BotTransport:
                           source_id=str(message.get("message_id") or ""),
                           ts=float(message.get("date") or 0) or None, edited=edited,
                           historical=bool(update.get('_history') or update.get('_catchup')), media=media,
-                          reply=message.get('reply_to_message'), sender_id=str(sender.get('id') or ''))
+                          reply=message.get('reply_to_message'), sender_id=str(sender.get('id') or ''),
+                          capture=(lambda row: self.inputs.capture(
+                              row, room=conversation, sender_id=str(sender.get('id') or ''),
+                              owner_id=self.owner_id, is_dm=is_dm, title=title,
+                              input_text=(str(message.get('text') or message.get('caption') or '')
+                                          if ('voice' in message or 'audio' in message) else text)))
+                          if self._capture_allowed(update, message, outgoing=outgoing,
+                              edited=edited, is_dm=is_dm, sender_id=str(sender.get('id') or '')) else None)
         if outgoing or edited or update.get("_history"):
             return
         sender_id = str(sender.get("id") or "")
@@ -1056,6 +1100,7 @@ class BotTransport:
 
     def discard_pending(self) -> None:
         """Keep the archive; discard automatic wakes accumulated before pause."""
+        self.inputs.discard_unbound()
         with self._queue_lock:
             self._pending.clear(); self._pending_set.clear()
             self._wake_senders.clear(); self._wake_priority.clear()
@@ -1164,6 +1209,12 @@ class BotTransport:
                 os.replace(temporary, path)
         except Exception:
             log.warning('статус ожидания Telegram не записался', exc_info=True)
+
+    def cooldown_snapshot(self, chat_id):
+        peer, _thread = peer_thread(str(chat_id))
+        cooldown = getattr(self, '_cooldown', None)
+        return cooldown.snapshot(str(peer)) if cooldown else {
+            "peer": str(peer), "state": "unknown", "source": "no_observed_deadline", "margin_seconds": 2}
 
     def _retry_send(self, peer, method, operation):
         from telegram_retry import Cooldown, DeliveryCancelled

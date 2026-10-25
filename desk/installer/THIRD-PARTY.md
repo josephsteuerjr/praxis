@@ -29,6 +29,9 @@ Hélène собрана из открытых компонентов. Ниже �
 
 - motion — MIT
 - qrcode — MIT
+- WaveSurfer.js 8.0.3 — BSD-3-Clause. Локально включён в аудиоплеер;
+  полный неизменённый текст — `app/resources/WAVESURFER-LICENSE.txt`.
+  Код и веса необязательных голосовых моделей сохраняют собственные условия.
 - Vite и TypeScript используются только при сборке и в поставку не входят
 
 ## Шрифты
@@ -79,6 +82,11 @@ https://github.com/git-for-windows/git (тег `v2.55.0.windows.5`).
 ## Реле подписки ChatGPT
 
 - `helene-relay.exe` — MIT (исходники в репозитории автора)
+
+When the explicit embedded relay lane is selected, its pinned `LICENSE` and
+`NOTICE` ship under `licenses/embedded-relay/`; its Cargo dependencies join
+`licenses/rust/README.md`. Source selection is recorded separately from the
+Windows and Linux build receipts; this does not claim an offline rebuild kit.
 
 ## Тело руки `computer` (`helene-body.exe`, `helene-bridge.exe`)
 

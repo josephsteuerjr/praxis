@@ -154,6 +154,9 @@ class Base(unittest.TestCase):
                 },
             }
             self._direct_proofs[str(entry["key"])] = proof
+            if entry.get("kind") == "file":
+                # These are post-pause transport/resolver unit tests.
+                mtproto_runner._direct_outbox().clock = lambda: entry["not_before"]
             return proof
 
         def _project(entry):

@@ -8,10 +8,9 @@
 // событие хода — отсюда прыжки и «сообщение уходит вниз» (слово Егора 28.09). Плашки хода
 // и ошибок стоят ВНИЗУ, у поля ввода: наверху 250 сообщений их никто не видел.
 import { KeyedList } from "../../feed/keyed";
-import { api, cfg, inTauri, post } from "../api";
+import { api, post } from "../api";
 import { artifactCaption, mediaDescriptor, paperMediaHTML } from "../../paper-media";
 import { deliveryWords, type FoldState } from "../../memory-fold";
-import { hideMemoryLine, memoryLineHidden, memoryLineWords, memoryLineSettingsAvailable } from "../../memory-line";
 import { replyPreview } from "../../reply-preview";
 import { STARTERS } from "./learn";
 import { bindFail, esc, failHTML, fmtDay, fmtTime, humanError, md, q } from "../lib";
@@ -86,18 +85,11 @@ function roomRuns(): Run[] {
 }
 
 /**
- * Архив комнаты. Тема форума (`<чат>__topic__<id>`) своего архива не имеет —
- * её строки лежат в архиве родителя с полем `topic_id`; читаем родителя и
- * оставляем только строки темы. Раньше тема открывала пустоту («архива нет»),
- * хотя переписка была.
+ * Exact conversation key. The server resolves product topic streams and the
+ * legacy parent-row layout; filtering a bounded parent tail here loses topics.
  */
 async function readArchive(peer: string): Promise<Msg[]> {
-  const m = peer.match(/^(.+)__topic__(\d+)$/);
-  if (!m) return api<Msg[]>("/api/chat/" + encodeURIComponent(peer) + "?n=250");
-  const rows = await api<Array<Msg & { topic_id?: number | string }>>("/api/chat/" + encodeURIComponent(m[1]) + "?n=600");
-  const id = m[2];
-  const mine = rows.filter((r) => String(r.topic_id ?? "") === id);
-  return mine.slice(-250);
+  return api<Msg[]>("/api/chat/" + encodeURIComponent(peer) + "?n=250");
 }
 
 /** Ходы, которые не дошли до конца — на месте, под перепиской. */
@@ -550,70 +542,20 @@ export async function render(container: HTMLElement): Promise<void> {
   await panel.render();
 }
 
-// ---------------------------------------------------------------- свёртка по кнопке
-
-let foldTimer = 0;
-
-/**
- * Строка «память чата» у низа ленты (Егор 27.09: «компактирование… неплохо бы по нажатию»).
- * Число горячих сообщений видно и во время свёртки, и после неё.
- * Объяснение следует политике загруженного ядра, архив — отдельное число.
- */
+// Memory is authored by the acting agent. The chat has no hot counter or force
+// control; keep only transport delivery status (not a compaction report).
 async function paintFold(container: HTMLElement, room: string): Promise<void> {
   const box = container.querySelector<HTMLElement>("[data-fold-box]");
   if (!box) return;
-  let st: FoldState;
   try {
-    st = await api<FoldState>(`/api/memory-fold/${encodeURIComponent(room)}`);
+    const st = await api<FoldState>(`/api/memory-fold/${encodeURIComponent(room)}`);
+    if (!box.isConnected || S.room !== room) return;
+    const delivery = deliveryWords(st);
+    box.innerHTML = delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : "";
   } catch {
-    if (box.isConnected && S.room === room) {
-      box.textContent = memoryLineHidden(room) ? "" : "Память пока недоступна.";
-      delete box.dataset.html;
-      clearTimeout(foldTimer);
-      foldTimer = window.setTimeout(() => {
-        if (S.view === "talk" && S.room === room && box.isConnected) void paintFold(container, room);
-      }, 3000);
-    }
-    return;
+    // A failed optional delivery-status read must not invent memory state.
+    if (box.isConnected && S.room === room) box.replaceChildren();
   }
-  if (!box.isConnected || S.room !== room) return;
-  clearTimeout(foldTimer);
-  foldTimer = window.setTimeout(() => {
-    if (S.view === "talk" && S.room === room && box.isConnected) void paintFold(container, room);
-  }, 3000);
-  const delivery = deliveryWords(st);
-  const line = memoryLineWords(st);
-  const html = `${delivery ? `<div class="notice"><span>${esc(delivery)}</span></div>` : ''}${memoryLineHidden(room) ? '' : `<div class="context-line"${line.state === "failed" ? ' role="status"' : ''}>
-    <span title="${esc(line.note || 'Свежие сообщения, ещё не вошедшие в сводку. Переписка сохранена в архиве.')}" data-context-status>${esc(line.text)}</span>
-    ${line.canFold ? '<button class="context-link" data-fold type="button">Свернуть</button>' : ''}
-    ${memoryLineSettingsAvailable(st, inTauri && cfg.local_agent !== false && !foreignHarness()) ? '<button class="context-link" data-context-settings type="button">Контекст владельца</button>' : ''}
-    <button class="context-hide" data-context-hide type="button" aria-label="Скрыть строку памяти этого чата" title="Скрыть">×</button>
-  </div>`}`;
-  if (box.dataset.html === html) return;
-  box.dataset.html = html;
-  scroll.preserve(() => {
-    box.innerHTML = html;
-  });
-  box.querySelector("[data-context-hide]")?.addEventListener("click", () => {
-    hideMemoryLine(room); void paintFold(container, room);
-  });
-  box.querySelector("[data-context-settings]")?.addEventListener("click", () => dispatchEvent(new CustomEvent("frame-go", { detail: "settings" })));
-  const btn = box.querySelector<HTMLButtonElement>("[data-fold]");
-  btn?.addEventListener("click", async () => {
-    btn.disabled = true;
-    btn.textContent = "прошу…";
-    try {
-      const said = await post<{ ok: boolean; note?: string }>("/api/memory-fold", { room });
-      if (!said.ok) throw new Error(said.note || "просьба не записана");
-      void paintFold(container, room);
-    } catch (e) {
-      btn.disabled = false;
-      btn.textContent = "Свернуть";
-      let text = box.querySelector<HTMLElement>("[data-fold-note]");
-      if (!text) { text = document.createElement("p"); text.className = "receipt err"; box.append(text); }
-      text.textContent = humanError(e).text;
-    }
-  });
 }
 
 // ---------------------------------------------------------------- живое

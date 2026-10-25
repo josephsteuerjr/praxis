@@ -22,10 +22,12 @@ mtime — панель (другой контейнер, тот же том) и 
 from __future__ import annotations
 
 import base64
+import io
 import datetime as _dt
 import hashlib
 import praxis_time
 import json
+import provider_observation
 import logging
 import os
 import re
@@ -348,7 +350,7 @@ def _fallback_leg_elsewhere(rc: dict, fw: str) -> str:
     иначе пусто. Та же логика выбора `other`, что в chat()."""
     configured_fw = str(rc.get("framework") or fw)
     other = ((rc.get("fallback_framework") or "").strip()
-             or ("openai" if configured_fw == "anthropic" else "anthropic"))
+             or ("openai" if _protocol(configured_fw) == "anthropic" else "anthropic"))
     if not (rc.get("fallback_model") or "").strip():
         return ""
     if _client_for(other) is None or _same_endpoint(fw, other):
@@ -376,6 +378,8 @@ class LLMResponse:
     # sighted replacement because the input contained pixels.
     vision: bool = False
 
+    provider_observation: dict = field(default_factory=dict)
+    continuation: dict = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class Limits:
@@ -417,21 +421,28 @@ def _normalize(cfg: dict) -> dict:
     """Дозаполнить пропуски дефолтами — конфиг руками/панелью не обязан быть полным."""
     base = _from_env()
     out = {"frameworks": {}, "roles": {}, "limits": dict(base["limits"])}
-    for fw in FRAMEWORKS:
-        cur = (cfg.get("frameworks") or {}).get(fw) or {}
-        out["frameworks"][fw] = {"base_url": str(cur.get("base_url") or base["frameworks"][fw]["base_url"]),
-                                 "api_key": str(cur.get("api_key") or "")}
+    supplied = cfg.get("frameworks") or {}
+    for fw in dict.fromkeys((*FRAMEWORKS, *supplied)):
+        cur = supplied.get(fw) or {}
+        protocol = str(cur.get("protocol") or (fw if fw in FRAMEWORKS else ""))
+        if protocol not in FRAMEWORKS:
+            continue
+        out["frameworks"][fw] = {"base_url": str(cur.get("base_url") or base["frameworks"].get(fw, {}).get("base_url") or ""),
+                                 "api_key": str(cur.get("api_key") or ""), "protocol": protocol}
+        for key in ("api_mode", "provider"):
+            if cur.get(key):
+                out["frameworks"][fw][key] = str(cur[key])
     for role in ROLES:
         cur = (cfg.get("roles") or {}).get(role) or {}
         d = base["roles"][role]
-        fw = cur.get("framework") if cur.get("framework") in FRAMEWORKS else d["framework"]
+        fw = cur.get("framework") if cur.get("framework") in out["frameworks"] else d["framework"]
         try:
             mt = int(cur.get("max_tokens") or d["max_tokens"])
         except (TypeError, ValueError):
             mt = d["max_tokens"]
         out["roles"][role] = {"framework": fw, "model": str(cur.get("model") or d["model"]),
                               "max_tokens": mt, "fallback_model": str(cur.get("fallback_model") or "")}
-        if str(cur.get("fallback_framework") or "").strip() in ("openai", "anthropic"):
+        if str(cur.get("fallback_framework") or "").strip() in out["frameworks"]:
             out["roles"][role]["fallback_framework"] = str(cur.get("fallback_framework")).strip()
         # 19.08: ЕЁ фоновая ступень рассуждения (switch_brain action=reasoning).
         # Нормализация фиксированным набором ключей молча съедала бы её решение —
@@ -450,7 +461,7 @@ def _normalize(cfg: dict) -> dict:
         visions = cur.get("vision_models")
         if isinstance(visions, dict):
             clean_visions = {name: str(visions.get(name) or "").strip()
-                             for name in FRAMEWORKS
+                             for name in out["frameworks"]
                              if str(visions.get(name) or "").strip()}
             if clean_visions:
                 out["roles"][role]["vision_models"] = clean_visions
@@ -616,10 +627,10 @@ def web_search_backend() -> str | None:
         framework = _config()["roles"]["voice"]["framework"]
     except Exception:
         return None
-    if framework == "anthropic":
+    if _protocol(framework) == "anthropic":
         return "anthropic"
     relay_native = os.getenv("PRAXIS_OPENAI_NATIVE_WEB_SEARCH", "0").lower()
-    if framework == "openai" and relay_native in ("1", "true", "yes", "on"):
+    if _protocol(framework) == "openai" and relay_native in ("1", "true", "yes", "on"):
         return "openai"
     return None
 
@@ -681,10 +692,12 @@ def swap_fallback(role: str) -> dict:
     fb = (rc.get("fallback_model") or "").strip()
     if not fb:
         raise ValueError("нечего свапать — сначала задай fallback_model")
-    other = "openai" if rc["framework"] == "anthropic" else "anthropic"
+    other = (str(rc.get("fallback_framework") or "").strip()
+             or ("openai" if _protocol(rc["framework"]) == "anthropic" else "anthropic"))
+    primary = rc["framework"]
     rc["framework"], rc["model"], rc["fallback_model"] = other, fb, rc["model"]
     # свап меняет фреймворк местами — прибитый fallback_framework стал бы ложью
-    rc.pop("fallback_framework", None)
+    rc["fallback_framework"] = primary
     save_config(cfg)
     fresh = _normalize(cfg)
     try:
@@ -709,11 +722,11 @@ def _client_for(framework: str):
     key, base_url = fw.get("api_key") or "", fw.get("base_url") or ""
     if not key:
         return None
-    fp = (base_url, key)
+    fp = (_protocol(framework), base_url, key)
     cached = _CLIENTS.get(framework)
     if cached and cached[0] == fp:
         return cached[1]
-    if framework == "anthropic":
+    if _protocol(framework) == "anthropic":
         from anthropic import Anthropic
         cli = Anthropic(api_key=key, base_url=base_url)
     else:
@@ -861,13 +874,16 @@ def _image_payload(block: dict) -> tuple[str, str]:
     return mime, base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def messages_to_anthropic(messages: list) -> list:
+def messages_to_anthropic(messages: list, *, scope: str | None = None) -> list:
     """Наша история -> Anthropic; локальные image/path превращаются в base64 source."""
     out: list[dict] = []
     for m in messages or []:
-        content = m.get("content", "")
+        replay = _replay(m, scope, "anthropic") if m.get("role") == "assistant" else None
+        content = replay if replay is not None else m.get("content", "")
+        message = {key: value for key, value in m.items()
+                   if key not in ("provider_continuation", "continuation_unavailable")}
         if not isinstance(content, list):
-            out.append(dict(m))
+            out.append(dict(message, content=content))
             continue
         blocks = []
         for b in content:
@@ -879,15 +895,19 @@ def messages_to_anthropic(messages: list) -> list:
                 raise ValueError("non-canonical image block reached anthropic adapter")
             else:
                 blocks.append(b)
-        out.append(dict(m, content=blocks))
+        out.append(dict(message, content=blocks))
     return out
 
 
-def messages_to_openai(messages: list) -> list:
+def messages_to_openai(messages: list, *, scope: str | None = None) -> list:
     """Наша история (anthropic-форма, включая tool_use/tool_result) -> openai-сообщения."""
     out: list[dict] = []
     for m in messages or []:
         role, content = m.get("role", "user"), m.get("content", "")
+        replay = _replay(m, scope, "chat_completions") if role == "assistant" else None
+        if replay is not None:
+            out.append(_wire_value(replay))
+            continue
         if isinstance(content, str):
             out.append({"role": role, "content": content})
             continue
@@ -991,7 +1011,7 @@ def blocks_from_openai(msg) -> list:
 # block is narration/result-dump, never her voice; only text strictly after it is genuine reply.
 # When no such block is present (the overwhelming common case, incl. every existing client tool_use
 # turn), this is a no-op and every text block is kept exactly as before.
-_KNOWN_BLOCK_TYPES = ("text", "tool_use")
+_KNOWN_BLOCK_TYPES = ("text", "tool_use", "thinking", "redacted_thinking")
 
 
 def _blocks_from_anthropic(resp) -> list:
@@ -1184,6 +1204,8 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
     # the incomplete response for the caller to persist and terminalize honestly.
     if str(out.stop_reason or "") == "max_tokens":
         return out
+    if str(out.stop_reason or "") == "error" and out.continuation.get("payload"):
+        raise TornStreamError(out.text[:200] or "stream ended before terminal completion", partial=out)
     if not out.blocks and not out.text.strip():
         raise EmptyResponseError(out.text[:200] or "пустой ответ (ни текста, ни инструмента)")
     # ⚠ Три пути расходились ещё и ЗДЕСЬ, и это нашлось прогоном, а не глазами. Ответ из
@@ -1207,39 +1229,22 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
 
 def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                     reasoning_effort: str | None = None) -> LLMResponse:
-    # reasoning_effort — словарь реле (openai-путь). Здесь глубину задаёт thinking-бюджет;
-    # для glm-* ступень роли проецируется в z.ai-диалект (25.08, см. _GLM_EFFORT),
-    # для остальных моделей принимается-и-игнорируется, а не роняет вызов на общем kw-пути.
+    scope = _continuation_scope(cli, "anthropic", model)
     kw: dict = {"model": model, "max_tokens": max_tokens,
-                "messages": messages_to_anthropic(messages)}
+                "messages": messages_to_anthropic(messages, scope=scope)}
     if system:
         kw["system"] = system
     anthropic_tools = tools_to_anthropic(tools)
     if anthropic_tools:
         kw["tools"] = anthropic_tools
-    glm = _is_glm(model)
-    if thinking:
+    controls = _anthropic_controls(cli, model, thinking, reasoning_effort)
+    if controls is not None:
+        kw.update(controls)
+        if kw.get("thinking", {}).get("budget_tokens"):
+            kw["max_tokens"] = max(int(max_tokens), int(thinking) + 1024)
+    elif thinking:
         kw["thinking"] = {"type": "enabled", "budget_tokens": int(thinking)}
         kw["max_tokens"] = max(int(max_tokens), int(thinking) + 1024)
-        if glm:
-            # z.ai бюджет budget_tokens не соблюдает (проба 08.09: 1024 → 587 знаков
-            # размышления, как и без бюджета); глубину там задаёт только ступень.
-            # Бюджет проецируем в ступень тем же словарём, что и на openai-пути.
-            kw["output_config"] = {"effort": _GLM_EFFORT.get(
-                _openai_reasoning_effort(thinking) or "low", "low")}
-    elif reasoning_effort and glm:
-        # 25.08: у GLM-5.3 thinking обязателен, глубину задаёт ступень; без неё
-        # z.ai молча думает на max каждый вызов (замер 24.08: 10-15с на ответ).
-        # ⚠ 08.09: поле `reasoning_effort` в теле запроса Anthropic-совместимый
-        # эндпойнт z.ai МОЛЧА ИГНОРИРУЕТ (проба: low/max/omitted — одинаковые
-        # ~250 токенов; владелец видел max при low в конфигу). Слушает он родное
-        # поле Anthropic API `output_config.effort` (low → 50–80 токенов на той же
-        # задаче). SDK ≥1.4 знает его штатно (издание: родное поле, не extra_body —
-        # одна правда в запросе). Явный thinking-бюджет вызова по-прежнему сильнее
-        # ступени роли.
-        kw["thinking"] = {"type": "enabled"}
-        kw["output_config"] = {"effort": _GLM_EFFORT.get(
-            str(reasoning_effort).strip().lower(), "low")}
     # PASS 10.0: всегда стримом — SDK кидает «Streaming is required for operations that
     # may take longer than 10 minutes» на больших max_tokens (ночные окна умирали, кап
     # сгорал впустую). get_final_message() возвращает тот же Message (blocks/usage/
@@ -1274,9 +1279,11 @@ def _call_anthropic(cli, model: str, *, system, messages, tools, max_tokens, thi
         log.warning("llm: запросила %s/%s, ответ пришёл от %s", "anthropic", model, actual_model)
     return _guard_answer(LLMResponse(
         text=text_of(resp), blocks=_blocks_from_anthropic(resp),
-        stop_reason=str(getattr(resp, "stop_reason", None) or "end_turn"),
+        stop_reason=str(getattr(resp, "stop_reason", None) or "error"),
         usage=_usage,
-        framework="anthropic", model=actual_model))
+        framework="anthropic", model=actual_model,
+        continuation={"scope": scope, "format": "anthropic",
+                      "payload": _wire_value(getattr(resp, "content", None) or [])}))
 
 
 _OPENAI_STOP = {"tool_calls": "tool_use", "stop": "end_turn", "length": "max_tokens"}
@@ -1302,12 +1309,12 @@ def _openai_reasoning_effort(thinking) -> str | None:
 # своя копия имён разъехалась бы молча, поэтому список закреплён тестом на исходник
 # реле в _relay_prod_src. Реле по умолчанию гасит рассуждение (effort=none);
 # per-request поле сильнее его дефолта, чужой openai-сервер молча проигнорирует.
-REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 # 25.08: проекция ступеней реле в словарь z.ai для glm-* (GLM-5.3: low/high/max,
 # СЕРВЕРНЫЙ ДЕФОЛТ — max на каждый вызов; thinking обязателен и невыключаем,
 # поэтому «none/minimal» глубже low не проецируются — выключить нечего).
 _GLM_EFFORT = {"none": "low", "minimal": "low", "low": "low",
-               "medium": "high", "high": "high", "xhigh": "max"}
+               "medium": "high", "high": "high", "xhigh": "max", "max": "max"}
 
 
 def _is_glm(model: str) -> bool:
@@ -1363,6 +1370,7 @@ _SIGHTED_GLM_FLASH_RE = re.compile(r"(?i)^glm-(?:4\.6|5(?:\.\d)?)-flash$")
 # обеих ног; крупнее — честным маркером, а не молчаливым отрезанием.
 IMAGE_REQUEST_BUDGET: dict[str, int] = {"anthropic": 3, "openai": 10}
 IMAGE_REQUEST_MAX_BYTES = 5 * 1024 * 1024
+IMAGE_REQUEST_MAX_EDGE = 4096
 
 
 def role_model(role: str = "voice") -> str:
@@ -1377,7 +1385,13 @@ def accepts_images(role: str = "voice", model: str | None = None) -> bool:
     """Whether a model is in a deliberately verified sighted family."""
     name = str(model if model is not None else role_model(role) or "").strip()
     return bool(
-        _SIGHTED_GLM_V_RE.fullmatch(name)
+        # Official model/Anthropic-compatibility documentation checked
+        # 2026-10-23 (desk/docs/PROVIDER-SUPPORT.md). Exact IDs, not an
+        # assumption that every compatible/local model supports vision.
+        name.casefold() in {'gpt-5.4', 'minimax-m3.1-flash', 'minimax-m3',
+                            'kimi-k3', 'deepseek-flash', 'deepseek-v4-pro',
+                            'qwen3.8-max'}
+        or _SIGHTED_GLM_V_RE.fullmatch(name)
         or _SIGHTED_GLM_FLASH_RE.fullmatch(name)
         or _SIGHTED_GPT_RE.match(name)
         or _SIGHTED_CLAUDE_RE.match(name)
@@ -1817,12 +1831,13 @@ def _look_once(role: str, sighted: str, block: dict) -> tuple[str, str]:
     return text, answered
 
 
-def _route_image_leg(role: str, framework: str, model: str, messages):
+def _route_image_leg(role: str, framework: str, model: str, messages, image_stats=None):
     """Return (effective_model, leg_messages, substituted, omitted) for one leg."""
     if not _has_image_blocks(messages):
         return model, messages, False, False
     if accepts_images(model=model):
-        return model, _sighted_messages(framework, messages), False, False
+        prepared = _sighted_messages(framework, messages, image_stats)
+        return model, prepared, False, not _has_image_blocks(prepared)
     replacement = vision_model(role, model, framework)
     # ⚠ 20.09.2026. Замена должна принадлежать ЭТОЙ ноге. `vision_model` умеет отдать
     # зрячую модель СОСЕДНЕГО фреймворка — это её контракт, им пользуется кросс-нога
@@ -1836,40 +1851,77 @@ def _route_image_leg(role: str, framework: str, model: str, messages):
                     _ROLE_RU[role], replacement, framework)
         replacement = ""
     if replacement:
-        return replacement, _sighted_messages(framework, messages), True, False
+        prepared = _sighted_messages(framework, messages, image_stats)
+        return replacement, prepared, True, not _has_image_blocks(prepared)
+    if image_stats is not None:
+        count = sum(_is_image_block(block) for message in messages
+                    if isinstance(message, dict) and isinstance(message.get("content"), list)
+                    for block in message["content"])
+        image_stats.update(input=count, prepared=0, omitted_route=count,
+                           all_pixels_omitted=True)
     return model, _omit_image_blocks(messages, model), False, True
 
 
 _IMAGE_BUDGET_MARKER = (
     "[image omitted before model call: the {framework} leg request budget keeps the "
-    "last {kept} images (live-verified joint-vision accuracy); this one was not shown "
+    "last {kept} available images; this one was not shown "
     "and must not be described]")
 
 
 def _image_block_bytes(block) -> int:
-    """Размер пикселей блока: base64-источник или файл по пути; нечитаемое — сверх лимита."""
+    """Encoded image size, without classifying an unreadable file as oversized."""
     source = block.get("source") if isinstance(block, dict) else None
     if isinstance(source, dict) and source.get("type") == "base64":
-        return int(len(str(source.get("data") or "")) * 3 / 4)
+        return len(base64.b64decode(str(source.get("data") or ""), validate=True))
     try:
         return os.path.getsize(str(block.get("path") or ""))
-    except OSError:
-        return IMAGE_REQUEST_MAX_BYTES + 1
+    except OSError as error:
+        raise ValueError("image file is unavailable") from error
 
 
-def _sighted_messages(framework: str, messages):
-    """Зрячая лента: канонические блоки + бюджет ноги, отрезанное — честным маркером.
+def _bounded_image_derivative(payload: bytes) -> tuple[bytes, tuple[int, int]]:
+    """A bounded static view for the request; never overwrite the archived original."""
+    from PIL import Image, ImageOps
+    import warnings
 
-    Бюджет — «последние N», как в `agent._media_prompt` и спуле: свежий контекст
-    важнее старого. Сверхлимитный по размеру файл не везем молча — тем же маркером.
-    Маркер стоит в самой ленте: его видит модель и не выдумывает содержимое, а
-    владелец видит его в ответе — этот же приём использует `_omit_image_blocks`."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        try:
+            original = Image.open(io.BytesIO(payload))
+        except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+            raise ValueError("image dimensions exceed the decoder safety limit") from error
+        with original:
+            if getattr(original, "n_frames", 1) != 1:
+                raise ValueError("an animated original cannot be reduced to one static view")
+            image = ImageOps.exif_transpose(original)
+            image.thumbnail((IMAGE_REQUEST_MAX_EDGE, IMAGE_REQUEST_MAX_EDGE),
+                            Image.Resampling.LANCZOS)
+            if image.mode in ("RGBA", "LA") or "transparency" in image.info:
+                rgba = image.convert("RGBA")
+                image = Image.new("RGB", rgba.size, "white")
+                image.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                image = image.convert("RGB")
+            for _attempt in range(8):
+                buffer = io.BytesIO()
+                image.save(buffer, format="JPEG", quality=85)
+                data = buffer.getvalue()
+                if len(data) <= IMAGE_REQUEST_MAX_BYTES:
+                    return data, image.size
+                image = image.resize((max(1, image.width * 3 // 4),
+                                      max(1, image.height * 3 // 4)),
+                                     Image.Resampling.LANCZOS)
+    raise ValueError("a derivative could not fit the image request size limit")
+
+
+def _sighted_messages(framework: str, messages, image_stats=None):
+    """Prepare immutable wire views, retain originals, and distinguish omission reasons."""
     msgs = _canonicalize_image_blocks(messages)
-    budget = int(IMAGE_REQUEST_BUDGET.get(framework) or 0)
-    if budget <= 0:
-        return msgs
-    seats: list[tuple[int, int]] = []
-    oversize: set[tuple[int, int]] = set()
+    budget = int(IMAGE_REQUEST_BUDGET.get(_protocol(framework)) or 0)
+    prepared, omitted, sizes, derivatives = {}, {}, {}, {}
+    stats = {"input": 0, "prepared": 0, "resized": 0, "omitted_count": 0,
+             "omitted_size": 0, "omitted_unavailable": 0, "source_bytes_known": 0,
+             "prepared_bytes": 0, "all_pixels_omitted": False}
     for i, message in enumerate(msgs):
         content = message.get("content") if isinstance(message, dict) else None
         if not isinstance(content, list):
@@ -1877,17 +1929,45 @@ def _sighted_messages(framework: str, messages):
         for j, block in enumerate(content):
             if not _is_image_block(block):
                 continue
-            if _image_block_bytes(block) > IMAGE_REQUEST_MAX_BYTES:
-                oversize.add((i, j))
-            else:
-                seats.append((i, j))
-    dropped = set(seats[:-budget]) if len(seats) > budget else set()
-    if not dropped and not oversize:
-        return msgs
-    if dropped or oversize:
-        log.warning("llm: %s — бюджет изображений: показаны последние %d из %d, "
-                    "сверхлимитных по размеру %d", framework, budget,
-                    len(seats) - len(dropped), len(oversize))
+            seat = (i, j)
+            stats["input"] += 1
+            size = 0
+            try:
+                size = _image_block_bytes(block)
+                stats["source_bytes_known"] += size
+                mime, encoded = _image_payload(block)
+                payload = base64.b64decode(encoded, validate=True)
+                if not payload or len(payload) > _VISION_MAX_BYTES:
+                    raise ValueError("image is empty or exceeds the local source size limit")
+                if len(payload) > IMAGE_REQUEST_MAX_BYTES:
+                    payload, dimensions = _bounded_image_derivative(payload)
+                    mime = "image/jpeg"
+                    encoded = base64.b64encode(payload).decode("ascii")
+                    derivatives[seat] = (
+                        f"[image prepared before model call: {size}-byte original retained; "
+                        f"this is a {len(payload)}-byte JPEG derivative, "
+                        f"{dimensions[0]}x{dimensions[1]}; fine detail may be reduced]")
+                prepared[seat] = dict(block, source={"type": "base64",
+                                                     "media_type": mime, "data": encoded})
+                sizes[seat] = len(payload)
+            except (ValueError, OSError, ImportError) as error:
+                reason = "size" if size > IMAGE_REQUEST_MAX_BYTES else "unavailable"
+                stats["omitted_" + reason] += 1
+                omitted[seat] = (
+                    f"[image omitted before model call: {reason}; "
+                    + (f"{size} bytes, request limit {IMAGE_REQUEST_MAX_BYTES}; "
+                       "a bounded derivative could not be prepared; " if reason == "size" else "")
+                    + "image payload unavailable; this one was not shown and must not be described]")
+                log.warning("llm: %s image omitted: %s (%s)",
+                            framework, reason, type(error).__name__)
+    seats = list(prepared)
+    dropped = set(seats[:-budget]) if budget > 0 and len(seats) > budget else set()
+    kept = set(seats) - dropped
+    stats.update(prepared=len(kept), resized=sum(seat in derivatives for seat in kept),
+                 omitted_count=len(dropped), prepared_bytes=sum(sizes[seat] for seat in kept),
+                 all_pixels_omitted=bool(stats["input"] and not kept))
+    if image_stats is not None:
+        image_stats.update(stats)
     out = []
     for i, message in enumerate(msgs):
         content = message.get("content") if isinstance(message, dict) else None
@@ -1896,9 +1976,16 @@ def _sighted_messages(framework: str, messages):
             continue
         blocks = []
         for j, block in enumerate(content):
-            if _is_image_block(block) and ((i, j) in dropped or (i, j) in oversize):
+            seat = (i, j)
+            if seat in omitted:
+                blocks.append({"type": "text", "text": omitted[seat]})
+            elif seat in dropped:
                 blocks.append({"type": "text", "text": _IMAGE_BUDGET_MARKER.format(
                     framework=framework, kept=budget)})
+            elif seat in prepared:
+                if seat in derivatives:
+                    blocks.append({"type": "text", "text": derivatives[seat]})
+                blocks.append(prepared[seat])
             else:
                 blocks.append(block)
         out.append(dict(message, content=blocks))
@@ -2064,7 +2151,8 @@ def _max_tokens_field(cli) -> str:
 
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
                  reasoning_effort: str | None = None) -> LLMResponse:
-    msgs = messages_to_openai(messages)
+    scope = _continuation_scope(cli, "chat_completions", model)
+    msgs = messages_to_openai(messages, scope=scope)
     sys_text = system_text(system)
     if sys_text:
         msgs = [{"role": "system", "content": sys_text}] + msgs
@@ -2110,9 +2198,15 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     if choices and getattr(choices[0], "message", None) is not None:
         # ⚠ Этот return уходил ДО сторожа: openai-совместимый сервер, отдавший единый объект
         # с пустым message, возвращался успешным 'end_turn'. Теперь сторож один на оба разбора.
-        return _guard_answer(_openai_from_completion(resp, model))
+        result = _openai_from_completion(resp, model)
+        result.continuation = {"scope": scope, "format": "chat_completions",
+                               "payload": _openai_replay_message(resp.choices[0].message)}
+        return _guard_answer(result)
     # итератор чанков (relay/реальный OpenAI stream); здоровье канала проверяет тот же сторож
-    return _guard_answer(_openai_from_stream(resp, model))
+    result = _openai_from_stream(resp, model)
+    if result.continuation:
+        result.continuation["scope"] = scope
+    return _guard_answer(result)
 
 
 def _note_truncation(out: "LLMResponse", role: str) -> None:
@@ -2169,7 +2263,7 @@ def _note_truncation(out: "LLMResponse", role: str) -> None:
 def _openai_from_completion(resp, model: str) -> LLMResponse:
     choice = (getattr(resp, "choices", None) or [None])[0]
     msg = getattr(choice, "message", None)
-    finish = str(getattr(choice, "finish_reason", None) or "stop")
+    finish = str(getattr(choice, "finish_reason", None) or "error")
     blocks = blocks_from_openai(msg) if msg is not None else []
     usage = getattr(resp, "usage", None)
     cached = _openai_cached_tokens(usage)
@@ -2258,10 +2352,15 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
     """Собрать ответ из SSE-чанков openai-протокола (delta.content + delta.tool_calls)."""
     parts: list[str] = []
     tools_acc: dict[int, dict] = {}
-    finish = "stop"
+    finish = "error"
+    reasoning = {"reasoning_content": [], "reasoning": []}
+    reasoning_details = []
     u_in = u_out = u_cached = 0
+    observations = provider_observation.Collector()
+    transport_error = None
     try:
         for chunk in stream:
+            observations.merge(provider_observation.packet_of(chunk))
             # 25.09: терминал реле — ДО choices и content. Диагностика лимита подписки
             # приходила текстом в content и читалась как ответ модели (см.
             # RelayTerminalError); типизированный код становится типизированной ошибкой,
@@ -2282,6 +2381,13 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
             ch = chs[0]
             d = getattr(ch, "delta", None)
             if d is not None:
+                for key in reasoning:
+                    value = getattr(d, key, None)
+                    if isinstance(value, str):
+                        reasoning[key].append(value)
+                details = getattr(d, "reasoning_details", None)
+                if isinstance(details, list):
+                    reasoning_details.extend(_wire_value(details))
                 c = getattr(d, "content", None)
                 if c:
                     parts.append(c)
@@ -2301,20 +2407,34 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
     except Exception as exc:
         if not _stream_transport_error(exc):
             raise
-        # Физический HTTP-обрыв переводим в обычный LLMResponse с stop=error и отдаём
-        # ЕДИНСТВЕННОМУ семантическому сторожу. Он сам различит: до первого содержимого
-        # это EmptyResponseError (same-channel retry допустим), после текста/фрагмента руки
-        # — TornStreamError с partial (повтор поверх уже начатого ответа запрещён).
-        partial = _openai_stream_result(parts, tools_acc, "error", u_in, u_out, u_cached, model)
+        finish = "error"
+        transport_error = exc
+    result = _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model,
+                                   observation=observations.receipt())
+    payload = messages_to_openai([{"role": "assistant", "content": result.blocks}])[0]
+    for key, fragments in reasoning.items():
+        if fragments:
+            payload[key] = "".join(fragments)
+    if tools_acc:
+        payload["tool_calls"] = [
+            {"id": slot["id"] or f"call_{index}", "type": "function",
+             "function": {"name": slot["name"], "arguments": slot["args"]}}
+            for index, slot in sorted(tools_acc.items()) if slot["name"]]
+    if reasoning_details:
+        payload["reasoning_details"] = reasoning_details
+    if result.blocks or any(reasoning.values()) or reasoning_details:
+        result.continuation = {"format": "chat_completions", "payload": payload}
+    if transport_error is not None:
         try:
-            return _guard_answer(partial)
+            return _guard_answer(result)
         except BrokenChannelError as broken:
-            raise broken from exc
-    return _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model)
+            raise broken from transport_error
+    return result
 
 
 def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: str,
-                           u_in: int, u_out: int, u_cached: int, model: str) -> LLMResponse:
+                           u_in: int, u_out: int, u_cached: int, model: str,
+                           observation: dict | None = None) -> LLMResponse:
     text = "".join(parts).strip()
     blocks: list[dict] = [{"type": "text", "text": text}] if text else []
     for idx in sorted(tools_acc):
@@ -2349,7 +2469,8 @@ def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: 
                        usage={"schema": USAGE_SCHEMA,
                               "in": max(0, u_in - u_cached), "out": u_out,
                               **({"cache_read": u_cached} if u_cached else {})},
-                       framework="openai", model=model)
+                       framework="openai", model=model,
+                       provider_observation=observation or {})
 
 
 # --------------------------------------------------------------------------- #
@@ -2362,9 +2483,11 @@ _MODELS_CACHE: dict[str, tuple[float, list[str]]] = {}   # framework -> (expiry_
 _MODELS_TTL = float(os.getenv("PRAXIS_MODELS_TTL", "600"))
 
 
-def _models_url(base_url: str) -> str:
-    """.../v1/models для любого base_url (снимаем хвостовой /v1, ставим один раз)."""
+def _models_url(base_url: str, protocol: str = "anthropic") -> str:
+    """Match the SDK base path; Anthropic alone appends its versioned resource path."""
     b = (base_url or "").rstrip("/")
+    if protocol == "openai":
+        return b + ("/models" if urlparse(b).path.strip("/") else "/v1/models")
     if b.endswith("/v1"):
         b = b[:-3]
     return b + "/v1/models"
@@ -2390,7 +2513,7 @@ def _available_models(framework: str) -> list[str]:
         base, key = fw.get("base_url") or "", fw.get("api_key") or ""
         if base:
             import urllib.request
-            req = urllib.request.Request(_models_url(base), headers={
+            req = urllib.request.Request(_models_url(base, _protocol(framework)), headers={
                 "Authorization": f"Bearer {key}", "x-api-key": key,
                 "anthropic-version": "2023-06-01"})
             data = json.loads(urllib.request.urlopen(req, timeout=6).read())
@@ -2424,7 +2547,7 @@ def _resolve_model(framework: str, model: str) -> str:
     # but the Codex backend only serves concrete sol/terra/luna slugs. Prefer
     # sol deterministically when the relay's live model list proves it exists,
     # even if a stale discovery cache still advertises the rejected generic id.
-    if framework == "openai" and model == "gpt-5.6" and "gpt-5.6-sol" in avail:
+    if _protocol(framework) == "openai" and model == "gpt-5.6" and "gpt-5.6-sol" in avail:
         pick = "gpt-5.6-sol"
     elif model in avail:
         return model
@@ -2433,7 +2556,7 @@ def _resolve_model(framework: str, model: str) -> str:
     # `_pick_replacement` can itself select the stale generic alias.  Normalize
     # the selected candidate too, otherwise a caller that resolves twice sees
     # two different models (`gpt-5.6` first, `gpt-5.6-sol` second).
-    if framework == "openai" and pick == "gpt-5.6" and "gpt-5.6-sol" in avail:
+    if _protocol(framework) == "openai" and pick == "gpt-5.6" and "gpt-5.6-sol" in avail:
         pick = "gpt-5.6-sol"
     if pick and pick != model:
         log.warning("llm: модель %s пропала у %s — ротация имени на %s", model, framework, pick)
@@ -2459,7 +2582,7 @@ def _resolve_fallback_model(primary_framework: str, primary_model: str,
     ошибку вместо ложного повторного исполнения той же моделью.
     """
     resolved = _resolve_model(fallback_framework, fallback_model)
-    if fallback_framework != primary_framework:
+    if not _same_channel(primary_framework, primary_model, fallback_framework, resolved):
         return resolved
 
     primary = primary_model
@@ -2499,8 +2622,12 @@ def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMRe
         raise RuntimeError(f"llm: фреймворк {framework} не настроен (нет ключа)")
     if not _resolved:
         model = _resolve_model(framework, model)  # ротация наименований провайдера
-    if framework == "anthropic":
+    if _protocol(framework) == "anthropic":
         return _call_anthropic(cli, model, **kw)
+    spec = (_config().get("frameworks") or {}).get(framework) or {}
+    mode = spec.get("api_mode")
+    if mode == "responses" or (not mode and _provider_family(cli) == "openai"):
+        return _call_responses(cli, model, **kw)
     return _call_openai(cli, model, **kw)
 
 
@@ -2670,14 +2797,14 @@ def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
     cfg = _config()
     rc = (cfg.get("roles") or {}).get(role) or {}
     matches: list[str] = []
-    for framework in FRAMEWORKS:
+    for framework in cfg.get("frameworks") or {}:
         names = set(_available_models(framework))
         for role_cfg in (cfg.get("roles") or {}).values():
             role_fw = str(role_cfg.get("framework") or "")
             if role_fw == framework and role_cfg.get("model"):
                 names.add(str(role_cfg["model"]))
             fallback_fw = (str(role_cfg.get("fallback_framework") or "").strip()
-                           or ("openai" if role_fw == "anthropic" else "anthropic"))
+                           or ("openai" if _protocol(role_fw) == "anthropic" else "anthropic"))
             if fallback_fw == framework and role_cfg.get("fallback_model"):
                 names.add(str(role_cfg["fallback_model"]))
         if requested in names:
@@ -2693,7 +2820,9 @@ def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
 def chat(role: str, *, system=None, messages: list, tools: list | None = None,
          max_tokens: int | None = None, thinking: int | None = None,
          end_after_spoken: bool = False, model: str | None = None,
-         reasoning_effort: str | None = None) -> LLMResponse:
+         reasoning_effort: str | None = None,
+         framework: str | None = None,
+         allow_fallback: bool = True) -> LLMResponse:
     """Вызов модели по роли, с необязательным адресным override без смены роли.
 
     Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
@@ -2708,7 +2837,12 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     cfg = _config()
     rc = cfg["roles"][role]
     requested_model = str(model or "").strip()
-    if requested_model:
+    if framework is not None:
+        fw = str(framework).strip()
+        if fw not in cfg.get("frameworks", {}):
+            raise ValueError(f"llm: unknown explicit provider route {fw!r}")
+        resolved_model = requested_model or str(rc["model"])
+    elif requested_model:
         fw, resolved_model = _resolve_requested_model(role, requested_model)
     else:
         fw = rc["framework"]
@@ -2717,6 +2851,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     # comparison must use the model that was actually sent, not a fresh catalog
     # interpretation that may change between attempts.
     model = resolved_model
+    image_stats = {}
     # Keep the caller's original image tape available to a different fallback leg.
     # Sanitising one text-only leg must not blind a later natively sighted leg.
     image_messages = messages
@@ -2735,8 +2870,17 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # frame to Flash even though the primary got only a no-pixels marker.
             image_messages = _omit_image_blocks(messages, model)
             prepass_omitted = True
+            count = sum(_is_image_block(block) for message in messages
+                        if isinstance(message, dict)
+                        and isinstance(message.get('content'), list)
+                        for block in message['content'])
+            image_stats.update(input=count, prepared=0,
+                               omitted_prepass=count,
+                               all_pixels_omitted=True)
     model, messages, vision_used, pixels_omitted = _route_image_leg(
-        role, fw, model, image_messages)
+        role, fw, model, image_messages, image_stats)
+    if framework is not None and requested_model and model != requested_model:
+        raise ValueError("explicit model route cannot substitute a different image model")
     pixels_omitted = pixels_omitted or prepass_omitted
     if vision_used:
         log.info("llm: %s — image turn routed to %s/%s", _ROLE_RU[role], fw, model)
@@ -2769,7 +2913,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
     _sys_len = len(_sys_text)
     _sys_sha = (hashlib.sha1(_sys_text.encode("utf-8", "replace")).hexdigest()[:8]
                 if _sys_text else "")
-    _key = cache_address(model, _sys_text) if fw == "openai" else ""
+    _key = cache_address(model, _sys_text) if _protocol(fw) == "openai" else ""
     try:
         # 25.09: эндпойнт основной ноги закрыт лимитом подписки (RelayTerminalError ниже)
         # и есть запасная нога на ДРУГОМ эндпойнте — не ходим в реле за очередным
@@ -2835,7 +2979,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                     retries=empty_retries + net_retries, gap_sec=_gap, tools_digest=_tools,
                     effort=_sent_effort(fw, model, thinking, role_effort),
                     stop=str(getattr(resp, "stop_reason", "") or ""),
-                    vision=vision_used,
+                    vision=vision_used, images=image_stats,
                     key=_key, sys_sha8=_sys_sha, sys_len=_sys_len,
                     cc=(int(_u["cache_creation"]) if "cache_creation" in _u else -1))
         return resp
@@ -2867,7 +3011,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # строка с ok=True и нулями: вызов состоялся, продолжения не будет.
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
-                        gap_sec=_gap, tools_digest=_tools, vision=vision_used,
+                        gap_sec=_gap, tools_digest=_tools, vision=vision_used, images=image_stats,
                         key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
             return LLMResponse(text="", blocks=[], stop_reason="end_turn",
                                usage={}, framework=fw, model=model, vision=vision_used)
@@ -2888,7 +3032,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # ok=False считалась бы окном как ошибка модели (A1 F6). Не пишем ничего.
             _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
                         latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
-                        tools_digest=_tools, vision=vision_used,
+                        tools_digest=_tools, vision=vision_used, images=image_stats,
                         key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
         if isinstance(e, TornStreamError):
             # Потеря названа вслух. Оборванный стрим — единственный случай, где мы выбрасываем
@@ -2898,7 +3042,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _journal("%s: канал оборвал стрим ошибкой уже после %d знаков — начатый ответ "
                      "потерян; по тому же каналу не переспрашиваю, это была бы не транспортная "
                      "попытка, а повтор поверх сказанного" % (_ROLE_RU[role], _lost))
-        if not _fallbackable(e):
+        if not allow_fallback or not _fallbackable(e):
             raise
         # 17.08.2026: фреймворк фолбэка стал настраиваемым. По умолчанию — противоположный
         # (прежнее поведение байт-в-байт); `fallback_framework: "openai"` при framework=openai
@@ -2912,7 +3056,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # rc.framework == fw, so this is byte-for-byte the old default.
         configured_fw = str(rc.get("framework") or fw)
         other = ((rc.get("fallback_framework") or "").strip()
-                 or ("openai" if configured_fw == "anthropic" else "anthropic"))
+                 or ("openai" if _protocol(configured_fw) == "anthropic" else "anthropic"))
         fb_model = (rc.get("fallback_model") or "").strip()
         if not fb_model or _client_for(other) is None:
             raise
@@ -2927,13 +3071,15 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             raise
         # Route each effective leg independently from the original image tape. A
         # fallback framework may use only its own explicit vision_models entry.
+        fallback_image_stats = dict(image_stats) if prepass_omitted else {}
         resolved_fb_model, fallback_messages, fallback_vision_used, fallback_omitted = (
-            _route_image_leg(role, other, resolved_fb_model, image_messages)
+            _route_image_leg(role, other, resolved_fb_model, image_messages,
+                             fallback_image_stats)
         )
         fallback_omitted = fallback_omitted or prepass_omitted
         # Vision substitution can collapse two same-account legs even when their
         # configured text models differed. Never retry the failed effective channel.
-        if other == fw and resolved_fb_model == model:
+        if _same_channel(fw, model, other, resolved_fb_model):
             log.error("llm: fallback collapsed to failed effective route %s/%s", fw, model)
             raise
         log.warning("llm: %s упал (%s) — фолбэк на %s/%s", _ROLE_RU[role], err,
@@ -2950,8 +3096,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _call_trace(role, resolved_fb_model, ok=False, cached=0, prompt=0,
                         out_tokens=0, latency_ms=(_time.time() - t1) * 1000,
                         error=f"{type(e2).__name__}: {str(e2)[:120]}",
-                        fallback=True, tools_digest=_tools, vision=fallback_vision_used,
-                        key=(cache_address(resolved_fb_model, _sys_text) if other == "openai" else ""),
+                        fallback=True, tools_digest=_tools, vision=fallback_vision_used, images=fallback_image_stats,
+                        key=(cache_address(resolved_fb_model, _sys_text) if _protocol(other) == "openai" else ""),
                         sys_sha8=_sys_sha, sys_len=_sys_len)
             raise
         _note_truncation(resp, role)   # фолбэк-модель обрывается ровно так же
@@ -2979,8 +3125,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
                         latency_ms=(_time.time() - t1) * 1000,
                         effort=str(role_effort or ""),
                         stop=str(getattr(resp, "stop_reason", "") or ""),
-                        fallback=True, tools_digest=_tools, vision=fallback_vision_used,
-                        key=(cache_address(resolved_fb_model, _sys_text) if other == "openai" else ""),
+                        fallback=True, tools_digest=_tools, vision=fallback_vision_used, images=fallback_image_stats,
+                        key=(cache_address(resolved_fb_model, _sys_text) if _protocol(other) == "openai" else ""),
                         sys_sha8=_sys_sha, sys_len=_sys_len,
                         cc=(int(_fu["cache_creation"]) if "cache_creation" in _fu else -1))
         except Exception:
@@ -3014,12 +3160,10 @@ def _sent_effort(fw: str, model: str, thinking, role_effort) -> str:
     """Какая ступень РЕАЛЬНО уехала в запрос (для следа), в словаре провайдера.
 
     Пусто — ступень не передавалась, глубину выбрал провайдер (у z.ai это max)."""
-    if fw == "anthropic":
-        if not _is_glm(model):
-            return ""
-        step = _openai_reasoning_effort(thinking) if thinking else (
-            str(role_effort or "").strip().lower() or "")
-        return _GLM_EFFORT.get(step, "low") if step else ""
+    if _protocol(fw) == "anthropic":
+        cli = _client_for(fw)
+        controls = _anthropic_controls(cli, model, thinking, role_effort) or {}
+        return str((controls.get("output_config") or {}).get("effort") or "")
     return _effective_effort(thinking, role_effort) or ""
 
 
@@ -3028,7 +3172,8 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 retries: int = 0, gap_sec: float = -1.0,
                 tools_digest: str = "", effort: str = "", stop: str = "",
                 vision: bool = False, fallback: bool = False, key: str = "",
-                sys_sha8: str = "", sys_len: int = 0, cc: int = -1) -> None:
+                sys_sha8: str = "", sys_len: int = 0, cc: int = -1,
+                images: dict | None = None) -> None:
     """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов.
 
     `tools` рядом с `cached` — отпечаток набора рук этого вызова. Схемы едут ВЫШЕ
@@ -3061,6 +3206,8 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
             row["slen"] = int(sys_len or 0)
         if cc is not None and int(cc) >= 0:
             row["cc"] = int(cc)
+        if images:
+            row["images"] = dict(images)
         if vision:
             # 09.09: вызов ушёл зрячей замене из-за картинки в кадре — разрез расхода
             # «сколько стоит зрение» и честный ответ на «почему модель не та, что в конфиге».
@@ -3167,7 +3314,7 @@ def ping(role: str) -> tuple[bool, str]:
     try:
         framework = str(rc["framework"])
         model = str(rc["model"])
-        thinking = 1024 if framework == "anthropic" and model.strip().lower() == "glm-5.3" else None
+        thinking = 1024 if _protocol(framework) == "anthropic" and model.strip().lower() == "glm-5.3" else None
         resp = _call(framework, model, system="", messages=[{"role": "user", "content": "ping"}],
                      tools=None, max_tokens=1, thinking=thinking)
         _usage_add(role, resp.usage, model=model)  # 18.5: пинг — тоже расход, не мимо счётчика
@@ -3183,15 +3330,17 @@ def snapshot() -> dict:
     for role in ROLES:
         rc = cfg["roles"][role]
         other = ((rc.get("fallback_framework") or "").strip()
-                 or ("openai" if rc["framework"] == "anthropic" else "anthropic"))
+                 or ("openai" if _protocol(rc["framework"]) == "anthropic" else "anthropic"))
         armed = bool((rc.get("fallback_model") or "").strip()
                      and (cfg["frameworks"].get(other) or {}).get("api_key"))
         st = _STATE[role]
         hold = _endpoint_hold(str(rc["framework"]))
         out[role] = {"framework": rc["framework"], "model": rc["model"],
+                     "protocol": _protocol(rc["framework"]),
                      "max_tokens": rc.get("max_tokens"),
                      "reasoning_effort": rc.get("reasoning_effort") or "",
                      "fallback_model": rc.get("fallback_model") or "",
+                     "fallback_framework": other,
                      "fallback_armed": armed,
                      "on_fallback": bool(st["on_fallback"]),
                      "last_error": st["last_error"],
@@ -3268,3 +3417,255 @@ def state_line() -> str:
             chunk += f"; за сутки: {spread}"
         parts.append(chunk)
     return " · ".join(parts)
+
+
+def _same_channel(framework_a: str, model_a: str, framework_b: str, model_b: str) -> bool:
+    if model_a != model_b or _protocol(framework_a) != _protocol(framework_b):
+        return False
+    if framework_a == framework_b:
+        return True
+    specs = _config().get("frameworks") or {}
+    first, second = specs.get(framework_a) or {}, specs.get(framework_b) or {}
+    return (str(first.get("base_url") or "").rstrip("/"), first.get("api_key"), first.get("api_mode")) == (
+        str(second.get("base_url") or "").rstrip("/"), second.get("api_key"), second.get("api_mode"))
+
+
+def _protocol(framework: str) -> str:
+    spec = (_config().get("frameworks") or {}).get(framework) or {}
+    return str(spec.get("protocol") or (framework if framework in FRAMEWORKS else ""))
+
+
+def _wire_value(value):
+    if isinstance(value, dict):
+        return {key: _wire_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_wire_value(item) for item in value]
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json", exclude_unset=True, exclude_none=True)
+    if hasattr(value, "__dict__"):
+        return _wire_value(vars(value))
+    return value
+
+
+def _continuation_scope(cli, protocol: str, model: str) -> str:
+    identity = [protocol, model, str(getattr(cli, "base_url", "") or "").rstrip("/"),
+                str(getattr(cli, "api_key", "") or ""), str(getattr(cli, "organization", "") or ""),
+                str(getattr(cli, "project", "") or "")]
+    return hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _replay(message: dict, scope: str | None, format: str):
+    continuation = message.get("provider_continuation")
+    if (scope and isinstance(continuation, dict) and continuation.get("scope") == scope
+            and continuation.get("format") == format):
+        return continuation.get("payload")
+    return None
+
+
+def assistant_message(response: LLMResponse, blocks: list | None = None) -> dict:
+    """Checkpoint-safe protocol state, separate from text shown to the agent and user."""
+    message = {"role": "assistant", "content": list((getattr(response, "blocks", None) or []) if blocks is None else blocks)}
+    continuation = getattr(response, "continuation", None)
+    if continuation:
+        message["provider_continuation"] = _wire_value(continuation)
+    return message
+
+
+def _provider_family(cli) -> str:
+    host = (urlparse(str(getattr(cli, "base_url", "") or "")).hostname or "").lower()
+    for family, domains in (
+        ("anthropic", ("anthropic.com",)), ("zai", ("z.ai", "bigmodel.cn")),
+        ("minimax", ("minimax.io", "minimaxi.com")),
+        ("kimi", ("kimi.com", "kimi.ai", "moonshot.ai", "moonshot.cn")),
+        ("deepseek", ("deepseek.com",)), ("qwen", ("aliyuncs.com",)),
+        ("openai", ("openai.com",)),
+    ):
+        if any(host == domain or host.endswith("." + domain) for domain in domains):
+            return family
+    return ""
+
+
+def _anthropic_controls(cli, model: str, thinking, role_effort) -> dict | None:
+    """Vendor contracts checked 2026-10-23; unknown compatible endpoints keep legacy budgets."""
+    family = _provider_family(cli)
+    effort = _effective_effort(thinking, role_effort)
+    name = model.lower()
+    controls = {}
+    if family == "anthropic":
+        version = re.search(r"claude-(?:opus|sonnet|haiku)-(\d+)(?:[.-](\d+))?", name)
+        generation = tuple(int(part or 0) for part in version.groups()) if version else (0, 0)
+        adaptive = generation >= (4, 6) or name.startswith(("claude-mythos", "claude-fable"))
+        if adaptive:
+            if thinking or effort:
+                controls["thinking"] = {"type": "adaptive"}
+            if effort:
+                selected = "low" if effort in ("none", "minimal") else effort
+                if generation == (4, 6) and selected == "xhigh":
+                    selected = "max"
+                controls["output_config"] = {"effort": selected}
+            return controls
+        if name.startswith("claude-opus-4-5") and effort:
+            controls["output_config"] = {"effort": "low" if effort in ("none", "minimal") else
+                                         "high" if effort in ("xhigh", "max") else effort}
+            if thinking:
+                controls["thinking"] = {"type": "enabled", "budget_tokens": int(thinking)}
+            return controls
+        return None
+    if family == "minimax":
+        if name.startswith("minimax-m3"):
+            if thinking or effort:
+                controls["thinking"] = {"type": "adaptive"}
+            if name.startswith("minimax-m3.1") and effort:
+                controls["output_config"] = {"effort": "low" if effort in ("none", "minimal") else effort}
+        return controls
+    if family == "kimi":
+        return {"output_config": {"effort": _GLM_EFFORT[effort]}} if effort else {}
+    if family == "deepseek":
+        if thinking or effort:
+            controls["thinking"] = {"type": "enabled"}
+        if effort:
+            controls["output_config"] = {"effort": _GLM_EFFORT[effort]}
+        return controls
+    if family == "qwen":
+        if name.startswith("qwen3.8"):
+            if thinking or effort:
+                controls["thinking"] = {"type": "enabled"}
+            if effort:
+                controls["output_config"] = {"effort": {"none": "low", "minimal": "low", "low": "low",
+                                                       "medium": "medium"}.get(effort, "xhigh")}
+            return controls
+        if not _is_glm(model):
+            return None
+    if family in ("zai", "qwen", "") and _is_glm(model):
+        if thinking:
+            controls["thinking"] = {"type": "enabled", "budget_tokens": int(thinking)}
+        elif effort:
+            controls["thinking"] = {"type": "enabled"}
+        if effort:
+            controls["output_config"] = {"effort": _GLM_EFFORT[effort]}
+        return controls
+    return None
+
+
+def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thinking,
+                    reasoning_effort: str | None = None) -> LLMResponse:
+    scope = _continuation_scope(cli, "responses", model)
+    inputs = []
+    for message in messages or []:
+        replay = _replay(message, scope, "responses")
+        if replay is not None:
+            inputs.extend(_wire_value(replay))
+            continue
+        for converted in messages_to_openai([message]):
+            role = converted.get("role", "user")
+            if role == "tool":
+                inputs.append({"type": "function_call_output", "call_id": converted["tool_call_id"],
+                               "output": converted.get("content", "")})
+                continue
+            content = converted.get("content")
+            if isinstance(content, list):
+                content = [{"type": "input_image", "image_url": block["image_url"]["url"],
+                            **({"detail": block["image_url"]["detail"]} if "detail" in block["image_url"] else {})}
+                           if block.get("type") == "image_url" else
+                           {"type": "input_text", "text": block.get("text", "")} for block in content]
+            if content:
+                inputs.append({"role": role, "content": content})
+            for call in converted.get("tool_calls") or []:
+                inputs.append({"type": "function_call", "call_id": call["id"],
+                               "name": call["function"]["name"],
+                               "arguments": call["function"]["arguments"]})
+    kw = {"model": model, "input": inputs, "max_output_tokens": max_tokens,
+          "stream": True, "store": False, "include": ["reasoning.encrypted_content"]}
+    if system:
+        kw["instructions"] = system_text(system)
+    effort = _effective_effort(thinking, reasoning_effort)
+    if effort:
+        if ((model.startswith("gpt-6.1-sol") and effort in ("none", "minimal"))
+                or (model.startswith("gpt-6-astra") and effort == "none")):
+            raise ValueError(f"{model} does not support reasoning effort {effort}")
+        kw["reasoning"] = {"effort": effort}
+    converted_tools = []
+    for tool in tools_to_openai(tools) or []:
+        if tool["type"] == "function":
+            converted_tools.append(dict(type="function", **tool["function"], strict=True))
+        elif tool["type"] == "web_search":
+            converted_tools.append({key: value for key, value in tool.items() if key != "max_uses"})
+    if converted_tools:
+        kw["tools"] = converted_tools
+    address = cache_address(model, system_text(system))
+    if address:
+        kw["prompt_cache_key"] = address
+    stream = cli.responses.create(**kw)
+    if getattr(stream, "output", None) is not None:
+        return _guard_answer(_responses_result(stream, model, scope))
+    items = {}
+    final = None
+    try:
+        for event in stream:
+            kind = str(getattr(event, "type", "") or "")
+            index = int(getattr(event, "output_index", 0) or 0)
+            if kind in ("response.completed", "response.incomplete", "response.failed"):
+                final = getattr(event, "response", None)
+            elif kind in ("response.output_item.added", "response.output_item.done"):
+                items[index] = _wire_value(event.item)
+            elif kind == "response.function_call_arguments.delta":
+                item = items.setdefault(index, {"type": "function_call", "arguments": ""})
+                item["arguments"] = item.get("arguments", "") + event.delta
+            elif kind == "response.output_text.delta":
+                item = items.setdefault(index, {"type": "message", "role": "assistant", "content": []})
+                content_index = int(getattr(event, "content_index", 0) or 0)
+                while len(item["content"]) <= content_index:
+                    item["content"].append({"type": "output_text", "text": ""})
+                item["content"][content_index]["text"] += event.delta
+            elif kind == "error":
+                raise TornStreamError(str(getattr(event, "message", "Responses stream failed")),
+                                      partial=_responses_result({"status": "failed", "output": list(items.values())}, model, scope))
+    except Exception as exc:
+        if not _stream_transport_error(exc):
+            raise
+        partial = _responses_result({"status": "failed", "output": [items[index] for index in sorted(items)]}, model, scope)
+        raise TornStreamError("Responses transport interrupted", partial=partial) from exc
+    if final is None:
+        final = {"status": "failed", "output": [items[index] for index in sorted(items)]}
+    return _guard_answer(_responses_result(final, model, scope))
+
+
+def _responses_result(response, model: str, scope: str) -> LLMResponse:
+    raw = _wire_value(response)
+    output = raw.get("output") or []
+    blocks = []
+    for item in output:
+        if item.get("type") == "message":
+            for content in item.get("content") or []:
+                if content.get("type") in ("output_text", "refusal"):
+                    blocks.append({"type": "text", "text": str(content.get("text") or content.get("refusal") or "")})
+        elif item.get("type") == "function_call":
+            arguments = str(item.get("arguments") or "")
+            try:
+                parsed = json.loads(arguments) if arguments.strip() else {}
+            except ValueError:
+                parsed = None
+            blocks.append({"type": "tool_use", "id": str(item.get("call_id") or ""),
+                           "name": str(item.get("name") or ""),
+                           "input": parsed if isinstance(parsed, dict) else {MALFORMED_JSON_KEY: arguments[:MALFORMED_JSON_KEEP]}})
+    status = raw.get("status")
+    stop = ("max_tokens" if status == "incomplete" and
+            (raw.get("incomplete_details") or {}).get("reason") == "max_output_tokens" else
+            "error" if status != "completed" else
+            "tool_use" if any(block["type"] == "tool_use" for block in blocks) else "end_turn")
+    usage = raw.get("usage") or {}
+    cached = int((usage.get("input_tokens_details") or {}).get("cached_tokens") or 0)
+    return LLMResponse(text="\n".join(block["text"] for block in blocks if block["type"] == "text").strip(),
+                       blocks=blocks, stop_reason=stop, model=str(raw.get("model") or model), framework="openai",
+                       usage={"schema": USAGE_SCHEMA, "in": max(0, int(usage.get("input_tokens") or 0) - cached),
+                              "out": int(usage.get("output_tokens") or 0), "cache_read": cached},
+                       continuation={"scope": scope, "format": "responses", "payload": output})
+
+
+def _openai_replay_message(message) -> dict:
+    raw = _wire_value(message)
+    fields = ("content", "tool_calls", "reasoning_content", "reasoning", "reasoning_details", "refusal")
+    return {"role": "assistant", **{key: raw[key] for key in fields if key in raw}}
+
+LLM_ENDPOINTS_API = 1

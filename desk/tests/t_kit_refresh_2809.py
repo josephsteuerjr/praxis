@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Нетронутые тексты поставки обновляются, правленые — нет (1.2.5, 28.09).
+"""Post-birth kit text is proposed, not applied to an agent's authored soul.
 
 Тексты стартового комплекта переписаны без рода и без чужих имён (слово Егора). У агента,
 рождённого раньше, в доме лежит прежняя редакция: если файл совпадает с ней слово в слово
@@ -40,13 +40,18 @@ class KitRefresh(unittest.TestCase):
         dst.write_text(boot._names(self.history[rel][-1], CFG), encoding="utf-8", newline="\n")
         return dst
 
-    def test_untouched_old_text_gets_the_new_one(self):
+    def test_untouched_old_text_is_only_proposed(self):
         dst = self._plant_old("soul/VOICE.md")
+        old = dst.read_bytes()
         done = boot.refresh_kit(self.tree, CFG)
-        self.assertIn("soul/VOICE.md", done)
+        self.assertEqual(done, [])
         new = boot._names((boot._RESOURCES / "soul/VOICE.md").read_text(encoding="utf-8"), CFG)
-        self.assertEqual(dst.read_text(encoding="utf-8"), new)
-        self.assertEqual(boot.refresh_kit(self.tree, CFG), [], "повтор обязан ничего не трогать")
+        self.assertEqual(dst.read_bytes(), old)
+        proposals = list((self.tree / "memory/.state/kit-proposals").glob("*.json"))
+        self.assertEqual(len(proposals), 1)
+        self.assertEqual(json.loads(proposals[0].read_text(encoding="utf-8"))["candidate"], new)
+        self.assertEqual(boot.refresh_kit(self.tree, CFG), [])
+        self.assertEqual(len(list(proposals[0].parent.glob("*.json"))), 1)
 
     def test_edited_text_is_never_touched(self):
         dst = self._plant_old("soul/skills/wanting.md")
@@ -54,11 +59,16 @@ class KitRefresh(unittest.TestCase):
         before = dst.read_text(encoding="utf-8")
         self.assertNotIn("soul/skills/wanting.md", boot.refresh_kit(self.tree, CFG))
         self.assertEqual(dst.read_text(encoding="utf-8"), before)
+        self.assertEqual(len(list((self.tree / "memory/.state/kit-proposals").glob("*.json"))), 1)
 
     def test_constitution_goes_through_the_same_rule(self):
         dst = self._plant_old("SOUL.md")
-        self.assertIn("soul/SOUL.md", boot.refresh_kit(self.tree, CFG))
-        self.assertEqual(dst.read_text(encoding="utf-8"), boot.soul_text(CFG))
+        old = dst.read_bytes()
+        self.assertEqual(boot.refresh_kit(self.tree, CFG), [])
+        self.assertEqual(dst.read_bytes(), old)
+        proposal = next((self.tree / "memory/.state/kit-proposals").glob("*.json"))
+        self.assertEqual(json.loads(proposal.read_text(encoding="utf-8"))["candidate"],
+                         boot.soul_text(CFG))
 
     def test_missing_files_are_not_refreshed_here(self):
         # Отсутствующее кладёт `_seed_kit`; refresh_kit только сверяет лежащее.

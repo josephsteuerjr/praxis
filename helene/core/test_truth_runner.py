@@ -1106,11 +1106,12 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
         captured: dict = {}
         entity = types.SimpleNamespace(id=1240718803, title="AbstractDL Chat",
                                        megagroup=True)
+        room = int("-100" + str(entity.id))
         runner._buf[str(self.OWNER)] = list(owner_lines)
         execution = {"run_id": "run-order", "call_id": call_id, "tool": "send_message"}
         key = f"telegram-outbox:run-order:tool:{call_id}"
         prepared = self.outbox.prepare_text(
-            key, peer_id=-100999999999999999, text=text, run_id="run-order",
+            key, peer_id=room, text=text, run_id="run-order",
             call_id=call_id, purpose="tool:send_message")
         accepted = dict(prepared, state="accepted",
                         receipt={"message_id": 94243,
@@ -1137,7 +1138,7 @@ class OwnerReportIsOrderedNotAssumedTests(unittest.TestCase):
             patch.object(runner.social_pulse, "allow_outbound", return_value=(True, "")),
             patch.object(runner, "_threadsafe_result", side_effect=_threadsafe),
         ):
-            runner._sync_send_message("-100999999999999999", text)
+            runner._sync_send_message(str(room), text)
         return captured
 
     def test_a_plain_owner_line_does_not_order_a_report(self):

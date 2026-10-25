@@ -153,7 +153,11 @@ export async function deleteRoom(room: Room): Promise<void> {
 }
 
 /** Комнаты и прогоны одним чтением; отказ `/api/chats` не роняет список. */
-export async function fetchRooms(): Promise<{ runs: Run[]; chats?: ChatRow[] }> {
-  const [runs, chats] = await Promise.all([api<Run[]>("/api/runs?limit=200"), api<ChatRow[]>("/api/chats").catch(() => undefined)]);
-  return { runs, chats };
+export async function fetchRooms(): Promise<{ runs: Run[]; chats?: ChatRow[]; chatsError?: string }> {
+  const [runs, catalog] = await Promise.all([
+    api<Run[]>("/api/runs?limit=200"),
+    api<ChatRow[]>("/api/chats").then(chats => ({ chats, chatsError: "" }))
+      .catch(() => ({ chats: undefined, chatsError: "Не удалось загрузить чаты и темы. Показан последний известный список; повторить чтение можно кнопкой ниже." })),
+  ]);
+  return { runs, ...catalog };
 }

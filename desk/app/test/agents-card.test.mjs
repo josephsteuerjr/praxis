@@ -349,7 +349,35 @@ const soulParts = (soulBox) => soulBox.children; // [label, pick, textarea, warn
 }
 
 // --------------------------------------------------------------------------
-// 6. «Открыть» на снятом: отказ switch_agent словами — тостом, не молчанием.
+// 6. Частичный remove обновляет список; удалённая папка не остаётся карточкой.
+// --------------------------------------------------------------------------
+{
+  agentsFixture = {
+    agents: [
+      { id: "main", name: "Hélène", tree: "C:\\d", port: 8094, enabled: true, base: true, conflict: "", raised: true, current: true },
+      { id: "mira", name: "Мира", tree: "C:\\d2", port: 8095, enabled: false, base: false, conflict: "", raised: false, current: false },
+    ], current: "main",
+  };
+  const made = await freshCard();
+  const [list] = parts(made);
+  const miraRow = list.children[1];
+  const kill = miraRow.children[1];
+  btnByText(miraRow.children[0], "Удалить…").click();
+  type(kill.children[1], "mira");
+  shellErrors.agent_remove = new Error("агент уже перенесён в чердак C:\\install\\agents-attic\\mira; выбор не очищен");
+  agentsFixture = { agents: [agentsFixture.agents[0]], current: "main" };
+  btnByText(kill.children[2], "Удалить навсегда").click();
+  await tick();
+  await tick();
+  assert.match(toastText(), /уже перенесён в чердак/);
+  assert.equal(list.children.length, 1, "после частичного удаления старую карточку нужно сверить с диском");
+  assert.ok(shellCalls.filter(([cmd]) => cmd === "agents_list").length >= 2,
+            "отказ удаления тоже должен повторно прочесть канонический список");
+  delete shellErrors.agent_remove;
+}
+
+// --------------------------------------------------------------------------
+// 7. «Открыть» на снятом: отказ switch_agent словами — тостом, не молчанием.
 // --------------------------------------------------------------------------
 {
   agentsFixture = {
@@ -373,7 +401,7 @@ const soulParts = (soulBox) => soulBox.children; // [label, pick, textarea, warn
 }
 
 // --------------------------------------------------------------------------
-// 7. «Данные агента»: конституция — второй строкой, «Показать файл» — open_path.
+// 8. «Данные агента»: конституция — второй строкой, «Показать файл» — open_path.
 //    Состав экрана — по образцу settings-remote: чтением исходника.
 // --------------------------------------------------------------------------
 {

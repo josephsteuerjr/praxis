@@ -62,7 +62,8 @@ class TimeoutCustody(unittest.TestCase):
 
     def edition_forge(self):
         # The actual candidate overlay, not a copy of its stop routine.
-        path = Path(__file__).resolve().parents[1] / "helene" / "core" / "forge.py"
+        from test_source_root import source_root
+        path = source_root(__file__) / "helene" / "core" / "forge.py"
         spec = importlib.util.spec_from_file_location("helene_forge_custody_test", path)
         self.assertIsNotNone(spec)
         module = importlib.util.module_from_spec(spec)

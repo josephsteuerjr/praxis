@@ -8,6 +8,8 @@
 // спрашивать не у кого.
 import { start } from "../../ui-kit/window/main";
 import { agentEdition } from "./settings-agent";
+import { setAudioPlayer } from '../../ui-kit/paper-audio';
+setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
 import { setAnimationPlayer } from '../../ui-kit/paper-media';
 import QRCode from "qrcode";
 import { setGuideQrRenderer } from "../../ui-kit/window/connection-guide";

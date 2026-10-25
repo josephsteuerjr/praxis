@@ -51,11 +51,11 @@ class ConfigWatch(unittest.TestCase):
             calls = []
             fake_agent = mock.Mock(BOUNDARY_DELIVERS_UNSPOKEN=True)
             with mock.patch.object(runner, "_CONFIG_WATCH_SEC", 0.05), \
-                 mock.patch.object(boot, "project_brain", side_effect=lambda t, c: calls.append(c) or "мозг: ok"), \
+                 mock.patch.object(boot, "project_brain", side_effect=lambda t, c, **kw: calls.append(c) or "мозг: ok"), \
                  mock.patch.object(runner, "_agent", fake_agent), \
                  mock.patch.object(runner, "_status_message", False), \
                  mock.patch.object(runner, "_deliver_unspoken", True):
-                th = threading.Thread(target=runner._config_watch_forever, args=(cfg_path, tree), daemon=True)
+                th = threading.Thread(target=runner._config_watch_forever, args=(cfg_path, tree, ROOT.parent/'helene/core'), daemon=True)
                 th.start()
                 time.sleep(0.15)
                 self.assertEqual(calls, [], "без изменения файла проекции нет")

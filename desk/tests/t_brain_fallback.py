@@ -33,20 +33,21 @@ class FallbackProvider(unittest.TestCase):
                                         fallback_key="zai-key"))
         self.assertEqual(built["frameworks"]["anthropic"],
                          {"base_url": "https://api.z.ai/api/anthropic", "api_key": "zai-key"})
-        self.assertEqual(built["roles"]["voice"]["fallback_framework"], "anthropic")
+        self.assertEqual(built["roles"]["voice"]["fallback_framework"], "voice_fallback")
+        self.assertEqual(built["frameworks"]["voice_fallback"]["protocol"], "anthropic")
         self.assertEqual(built["roles"]["voice"]["fallback_model"], "glm-5.3")
         # Основная нога не тронута.
         self.assertEqual(built["frameworks"]["openai"]["api_key"], "sk-frame-x")
 
-    def test_same_framework_fallback_keeps_one_client_per_framework(self):
+    def test_same_protocol_fallback_keeps_independent_endpoint(self):
         built = boot._brain_config(_cfg(fallback_framework="openai", fallback_model="gpt-5.6-luna",
                                         fallback_base_url="https://api.openai.com/v1",
                                         fallback_key="sk-own"))
-        # Один клиент на фреймворк — второй адрес того же протокола выразить нельзя,
-        # и проекция честно не притворяется, что может.
         self.assertEqual(built["frameworks"]["openai"]["base_url"], "http://127.0.0.1:5011")
         self.assertEqual(built["frameworks"]["openai"]["api_key"], "sk-frame-x")
-        self.assertEqual(built["roles"]["voice"]["fallback_framework"], "openai")
+        self.assertEqual(built["roles"]["voice"]["fallback_framework"], "voice_fallback")
+        self.assertEqual(built["frameworks"]["voice_fallback"]["api_key"], "sk-own")
+        self.assertEqual(built["frameworks"]["voice_fallback"]["protocol"], "openai")
 
     def test_no_fallback_leaves_the_other_framework_empty(self):
         built = boot._brain_config(_cfg())

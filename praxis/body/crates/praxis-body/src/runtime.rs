@@ -298,6 +298,35 @@ impl Runtime {
                 }
             }
             Err(error) => {
+                #[cfg(windows)]
+                if let Some(uncertain) = error.downcast_ref::<crate::cu_python::EffectUncertain>() {
+                    let result = json!({
+                        "ok": false,
+                        "code": "effect_in_doubt",
+                        "effect": "unknown",
+                        "error": uncertain.to_string(),
+                    });
+                    if let Err(journal_error) = self.journal.finish(
+                        &request_id, OperationStatus::InDoubt, &result,
+                    ) {
+                        self.clear_inflight(&request_id);
+                        return Frame::Error {
+                            request_id: Some(request_id),
+                            code: "journal".into(),
+                            message: format!("filesystem effect in doubt; durable receipt unavailable: {journal_error}"),
+                            operation_id: Some(operation_id),
+                        };
+                    }
+                    self.clear_inflight(&request_id);
+                    return Frame::Result {
+                        request_id,
+                        operation_id,
+                        status: OperationStatus::InDoubt,
+                        ok: false,
+                        result,
+                        artifacts: vec![],
+                    };
+                }
                 // ⚠ `{}` у anyhow печатает ТОЛЬКО верхний слой. Пока здесь стояло
                 // `to_string()`, опечатка в аргументе читалки окна доезжала до неё как
                 // «desktop.window.read arguments» — без слов «unknown field

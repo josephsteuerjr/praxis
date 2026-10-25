@@ -4,6 +4,8 @@
 // Firefox по умолчанию браузер и «Установить» съедают заходы ещё до значка —
 // поэтому токен пары годится трижды (06.10), а манифест несёт его в start_url.
 import "./styles.css";
+import { setAudioPlayer } from '../../ui-kit/paper-audio';
+setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
 import { setAnimationPlayer } from '../../ui-kit/paper-media';
 setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";

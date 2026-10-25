@@ -79,6 +79,7 @@ def dist_files(version: str, **agent) -> dict[str, bytes]:
         "server/Dockerfile": b"FROM python:3.12-slim\n",
         "server/docker-compose.yml": b"name: helene\nservices:\n  helene: {}\n",
         "server/serverboot.py": b"# serverboot\n",
+        "server/supervisor_policy.py": b"# exit policy\n",
         "server/updater/updater.py": f"# updater {version}\n".encode(),
         "server/updater/protocol.py": b"# protocol\n",
         "runtime/python.exe": f"windows python for {version}".encode(),
@@ -1645,6 +1646,18 @@ class PureParts(unittest.TestCase):
             with self.assertRaises(up.UpdateError) as caught:
                 up.check_layout(root, NEW)
             self.assertIn("serverboot", str(caught.exception))
+
+    def test_распакованный_надзор_требует_свою_python_политику(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, blob in dist_files(NEW).items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_bytes(blob)
+            self.assertEqual(up.check_layout(root, NEW)["version"], NEW)
+            (root / "server" / "supervisor_policy.py").unlink()
+            with self.assertRaises(up.UpdateError) as caught:
+                up.check_layout(root, NEW)
+            self.assertIn("server/supervisor_policy.py", str(caught.exception))
 
     def test_проверки_говорят_словами(self):
         info = up.describe(FakeDocker(Path("/opt/helene")).row())

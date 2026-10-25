@@ -1,18 +1,30 @@
-# Changelog
+# Изменения
 
-## 1.7.0 — Python tools and Forge updates, 2026-10-16
+## 1.9.4 — конфликт оформления и очередь
 
-- Nested Forge worker tasks have an explicit scope and linked parent/result records. Worker completion and acceptance are separate events.
-- Focus reads return addressable pages with source fingerprints; truncated tool output is marked explicitly.
-- File and process operations report refusals and uncertain termination states. A stop request does not count as confirmed termination of descendants.
-- System exposes the available tool catalogue and direct versus catalogue-based calls. The workshop view links nested tasks and their receipts.
-- Auxiliary vision can describe screenshots through a separate model while the main model continues the conversation. Perception changes have a visible receipt and an undo path; description failures are reported explicitly. Allowed `.env` vision settings are respected.
-- Profile permissions are restricted before credentials are written; failure to apply them prevents model startup.
-- The computer input schema includes button holds and dragging where supported by the platform driver.
-- Four new default skills cover secret handling, owner-authorized infrastructure changes, Windows paths with spaces, and verification with rollback reporting. Upgrades refresh only an unmodified default index and preserve authored skills.
-- Telegram gateway configuration validates the exact `/helene/telegram` path before a network request; a saved trailing slash is normalized.
-- Windows embedded Python can import the installed Forge tree. The updater verifies the SHA-256 of `python314._pth` before reusing a runtime.
-- Build passports, checksums and verification records accompany the release. See [Python tools and Forge](docs/PYTHON-TOOLS-1.7.0.md) for the tool map and an extension example.
+- После конфликта между ручным и агентным изменением окно сначала применяет канонические значения, затем подтверждает их revision. Черновик не подтверждает невиденное оформление.
+- Уже накопленные ручные правки на отвергнутой версии не повторяются с новым token: они инвалидируются, а нужное изменение можно заново выполнить после восстановления. Неопределённый сетевой исход также не даёт права повторить старую полную Look-структуру.
+- Исполняемые JS-регрессии воспроизводят оба дефекта на опубликованной 1.9.3 и проверяют исправление, независимость черновика и последующую свежую правку.
+
+
+## 1.9.3 — Python-приложение, оформление и повторные загрузки
+
+- Допуск к дереву опирается на живую эксклюзивную блокировку Windows: оставшаяся после сбоя отметка active больше не запрещает запуск сама по себе. Аварийный Stop и пауза не очищаются.
+- Отмена саморевью сначала сохраняет намерение, затем подтверждает Stop каждого критика; ошибка или потеря доказательства остановки остаётся unknown, не cancelled.
+- Общая карта URL/SHA/размеров встроена в проверенный основной ZIP; мастер и Python-обновлятор используют неизменённые архивы компонентов старого тега и сохраняют кеш. Компоненты можно докачать из окна. Первый переход со старой 1.9.1 выполняется новым мастером, не неизменённой старой кнопкой Update.
+- «Вид»: пресеты, свои цвета дня/ночи/акцента, плотность, масштаб всего окна, панели и возврат к системному стандарту. Ручные изменения и owner-tool window_appearance используют один межпроцессный writer; состояние комнат и черновики reset не удаляет.
+- Слово модели с text_ref без начального текста остаётся доступным в настольной панели.
+
+
+## 1.7.0 — мастерская и инструменты, кандидат 14.10.2026
+
+- Мастерская кодинга получает вложенные поручения работников, явные границы работы и расписки о результате и его приёмке. Один агент остаётся владельцем общей истории; окончание дочернего хода само по себе не означает, что результат принят.
+- Чтение больших файлов для фокусной работы разбито на адресуемые страницы с отпечатком исходника. Неполный ответ инструмента отмечается, а не выдаётся за целый файл.
+- Операции с файлами и процессами уточняют отказы и подтверждение остановки; неподтверждённое прекращение потомков не должно превращаться в успешную расписку. Схема компьютерного ввода включает удержание кнопки и перетаскивание там, где это поддерживает тело.
+- После инцидента с мостом добавлены четыре стартовых навыка: граница секретов и сетевого периметра, действия с инфраструктурой по слову владельца, Windows-пути с пробелами, проверка и отчёт с откатом. При обновлении дополняется лишь нетронутый заводской индекс; авторские правки души и навыков сохраняются.
+- Адрес Telegram-шлюза при включении должен указывать ровно на `/helene/telegram` (сохранённый одиночный завершающий слэш нормализуется); неверный путь получает отказ до сетевого вызова.
+- Зрячая модель теперь может описать снимок отдельным узким вызовом, оставляя полный ход основной модели. Изменение восприятия в настольном издании записывается в профиль явно с одноразовой видимой распиской и способом отмены; если описание не получилось, основной модели честно сообщается, что пикселей она не видела. Файл профиля с ключами получает ограниченные права **до** записи байтов и при первом запуске, и при последующих изменениях; отказ установить права блокирует запуск модели. При разрешённом чтении `.env` его явный рычаг зрения учитывается до сохранения расписки — она не должна обещать обратный режим.
+- «Система» показывает полный каталог доступных инструментов с различием между прямым вызовом и вызовом через каталог; представление мастерской связывает вложенные работы и их расписки. Эти записи описывают исходный кандидат: пакетная сборка, проверки всех четырёх платформ, установка и публикация ещё не подтверждены.
 
 ## 1.6.1 — пауза агента и живая лента, 13.10.2026
 

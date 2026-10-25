@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import OrderedDict
 import hashlib
 import json
 import logging
@@ -52,23 +53,75 @@ is_room = rooms.is_room
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
+# Positive archive membership only, tied to exact current bytes' file generation.
+# Restart, append, truncation and replacement return to the canonical scan.
+_INCOMING_SEEN = OrderedDict()
+_INCOMING_SEEN_GUARD = threading.Lock()
 
 
-def _append_jsonl(path: Path, row: dict) -> None:
+def _archive_generation(path):
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _remember_incoming(key, generation):
+    if generation is None:
+        return
+    with _INCOMING_SEEN_GUARD:
+        _INCOMING_SEEN[key] = generation
+        _INCOMING_SEEN.move_to_end(key)
+        if len(_INCOMING_SEEN) > 256:
+            _INCOMING_SEEN.popitem(last=False)
+
+
+def _append_jsonl(path: Path, row: dict, *, incoming_source_id: str = "") -> bool:
     """Одна строка в архив комнаты — под тем же замком, что и квитанции.
 
     ⚠ Здесь замка не было (ревью 06.09, §5): поток приёма бота (`Rooms.record`)
     и главный поток руннера (`Desk.archive`, ответ на границе) дописывают один
     `groups/<комната>.jsonl`, и две строки могли склеиться в одну битую — окно
     её пропускает молча, а лента модели теряет реплику. Строка собирается ДО
-    захвата замка, под замком — только запись и flush.
+    захвата замка. Для входящей со stable source_id под тем же замком сверяем
+    архив перед записью; иначе recovery дублирует уже воспринятую записку.
+    Возвращает True только при добавлении строки.
     """
     line = json.dumps(row, ensure_ascii=False) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     with _path_lock(path):
+        # Recovery may perceive the same inbox note again before its turn is
+        # checkpointed/ACKed. Only incoming stable identities are idempotent;
+        # outgoing rows belong to delivery receipts, not ingress deduplication.
+        # Check AND append share the writer's lock. Quiet retry polls reuse a
+        # positive finding only while the exact file generation is unchanged.
+        if incoming_source_id:
+            key = (str(path), incoming_source_id)
+            generation = _archive_generation(path)
+            with _INCOMING_SEEN_GUARD:
+                known = _INCOMING_SEEN.get(key)
+            if generation is not None and known == generation:
+                return False
+            try:
+                with path.open(encoding="utf-8", errors="replace") as src:
+                    for existing in src:
+                        try:
+                            saved = json.loads(existing)
+                        except ValueError:
+                            continue  # retain legacy/malformed rows unchanged
+                        if (isinstance(saved, dict) and not saved.get("outgoing")
+                                and saved.get("source_id") == incoming_source_id):
+                            _remember_incoming(key, generation)
+                            return False
+            except FileNotFoundError:
+                pass
         with path.open("a", encoding="utf-8", newline="\n") as sink:
             sink.write(line)
             sink.flush()
+        if incoming_source_id:
+            _remember_incoming(key, _archive_generation(path))
+    return True
 
 
 def _path_lock(path: Path) -> threading.Lock:
@@ -121,7 +174,7 @@ def _publish(tmp: Path, path: Path, data: dict) -> None:
 
 
 def _registry(tree: Path, stream: str, archive: Path, *,
-              participants: int = 2, topics: int = 0) -> None:
+              participants: int = 2, topics: int = 0, title: str = "") -> None:
     """Реестр комнаты для окна: сколько сообщений, когда последнее.
 
     ⚠ Две правки против прежней версии.
@@ -159,7 +212,7 @@ def _registry(tree: Path, stream: str, archive: Path, *,
             log.warning("реестр комнаты %s не обновлён: %s", stream, exc)
             return
     try:
-        _write_json(path, {"peer_id": str(stream),
+        _write_json(path, {**prev, "title": title or prev.get("title", ""), "peer_id": str(stream),
                            "archive": "memory/groups/" + str(stream) + ".jsonl",
                            "message_count": count,
                            "participant_count": int(participants),
@@ -223,8 +276,9 @@ class Desk:
             if kind:
                 row["kind"] = str(kind)
         archive = self.tree / "memory" / "groups" / (self.stream + ".jsonl")
-        _append_jsonl(archive, row)
-        _registry(self.tree, self.stream, archive)
+        if _append_jsonl(archive, row, incoming_source_id=(
+                str(source_id) if source_id and not outgoing else "")):
+            _registry(self.tree, self.stream, archive)
 
     def life(self, text: str, *, direction: str, actor: str, source_id: str,
              now: dt.datetime | None = None) -> None:

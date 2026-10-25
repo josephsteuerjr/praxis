@@ -33,8 +33,10 @@ import os
 import re
 import shutil
 import errno
+import stat
 import time
 import unicodedata
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -139,8 +141,10 @@ def _config_readable(path: Path) -> bool:
 
 def agent_name(cfg: dict, fallback: str = "Агент") -> str:
     """Имя агента: как у оболочки — `agent.name`, потом старое место, потом честное."""
-    for got in ((cfg.get("agent") or {}).get("name"),
-                (cfg.get("telegram") or {}).get("agent_name")):
+    agent = cfg.get("agent")
+    telegram = cfg.get("telegram")
+    for got in ((agent.get("name") if isinstance(agent, dict) else None),
+                (telegram.get("agent_name") if isinstance(telegram, dict) else None)):
         if isinstance(got, str) and got.strip():
             return got.strip()
     return fallback
@@ -161,6 +165,7 @@ def _one(dir_: Path, agent_id: str, *, base: bool, index: int) -> Agent:
     tree_raw = cfg.get("tree")
     tree = _resolve(dir_, tree_raw if isinstance(tree_raw, str) and tree_raw.strip() else "data")
     enabled = cfg.get("enabled")
+    # Same interpretation as common/agents.rs: only a JSON boolean can disable.
     return Agent(
         id=agent_id,
         name=agent_name(cfg, "Агент" if base else agent_id),
@@ -168,7 +173,7 @@ def _one(dir_: Path, agent_id: str, *, base: bool, index: int) -> Agent:
         config=config,
         tree=tree,
         port=int(port),
-        enabled=True if enabled is None else bool(enabled),
+        enabled=enabled if isinstance(enabled, bool) else True,
         base=base,
     )
 
@@ -277,6 +282,71 @@ def _write_config(config: Path, cfg: dict) -> None:
     tmp = config.with_name(f".tmp-{config.name}")
     tmp.write_text(text, encoding="utf-8", newline="\n")
     os.replace(tmp, config)
+
+
+@contextmanager
+def _default_writer_lock(base_dir: Path):
+    """Serialize installation roster creation/removal and startup-choice writes.
+
+    Keep the lockfile named after release: unlinking it would let a new writer
+    lock a different inode while an old writer still holds the first one.
+    A failed/untrusted lock is a refusal, never permission to mutate unlocked.
+    """
+    path = base_dir / ".agent-default.lock"
+    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        raise RuntimeError(f"замок выбора агента — ссылка: {path}")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError(f"замок выбора агента не открыт: {exc}") from exc
+    locked = False
+    try:
+        opened, named = os.fstat(fd), path.lstat()
+        if (not stat.S_ISREG(opened.st_mode)
+                or path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
+            raise RuntimeError(f"замок выбора агента сменился при открытии: {path}")
+        if os.name == "nt" and opened.st_size < 1:
+            os.write(fd, b"\0")
+            os.fsync(fd)
+        deadline = time.monotonic() + 10.0
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EAGAIN):
+                    raise RuntimeError(f"замок выбора агента не получен: {exc}") from exc
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("замок выбора агента занят другой операцией") from exc
+                time.sleep(0.05)
+        # Another writer cannot replace the name while cooperating, but a
+        # foreign unlink must never turn this acquired descriptor into authority.
+        named = path.lstat()
+        if (path.is_symlink() or getattr(path, "is_junction", lambda: False)()
+                or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
+            raise RuntimeError(f"замок выбора агента сменился после захвата: {path}")
+        yield
+    finally:
+        try:
+            if locked:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
 
 def _soul_seed_text(base_dir: Path, soul: dict | None, donor_id: str | None) -> str | None:
@@ -398,7 +468,57 @@ def set_enabled(base_dir: Path, agent_id: str, enabled: bool) -> Agent:
     return fresh
 
 
+def set_default(base_dir: Path, agent_id: str) -> Agent:
+    with _default_writer_lock(Path(base_dir)):
+        return _set_default_locked(base_dir, agent_id)
+
+
+def _set_default_locked(base_dir: Path, agent_id: str) -> Agent:
+    """Сохранить выбранного владельцем агента для следующего старта окна.
+
+    Это запись установки, не след переключения текущего окна. Решение и запись
+    живут в одном Python-владельце ростера; оболочка лишь показывает результат.
+    Читатель при старте по-прежнему терпим к повреждённому/старому файлу.
+    """
+    base_dir = Path(base_dir)
+    wanted = (agent_id or "").strip().lower()
+    got = find(base_dir, wanted)
+    if got is None:
+        raise ValueError(f"агента «{wanted or '?'}» в этой установке нет")
+    if not got.enabled:
+        raise ValueError(f"агент «{got.name}» снят в настройках — его нельзя назначать "
+                         "тем, кто откроется при старте")
+    if not got.base and not _config_readable(got.config):
+        raise ValueError(f"конфиг агента «{got.id}» не разбирается как JSON — "
+                         "сохранённый выбор не менялся")
+
+    import tempfile
+    path = base_dir / "agent-default.json"
+    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        raise ValueError(f"выбор агента — ссылка: {path}; сохранённый выбор не менялся")
+    data = json.dumps({"id": got.id}, ensure_ascii=False, indent=2)
+    fd, name = tempfile.mkstemp(prefix=".agent-default-", suffix=".tmp", dir=base_dir)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+    return got
+
+
+class RemovalPartialError(RuntimeError):
+    """The agent is in the attic; preference cleanup did not finish."""
+
+
 def remove_agent(base_dir: Path, agent_id: str, attic: Path | None = None) -> Path:
+    with _default_writer_lock(Path(base_dir)):
+        return _remove_agent_locked(base_dir, agent_id, attic)
+
+
+def _remove_agent_locked(base_dir: Path, agent_id: str, attic: Path | None) -> Path:
     """Убрать агента: папку `agents/<id>` ЦЕЛИКОМ — в чердак. -> куда легла.
 
     Не стирается, а переносится (слово владельца 06.10: «возможность полностью
@@ -417,9 +537,32 @@ def remove_agent(base_dir: Path, agent_id: str, attic: Path | None = None) -> Pa
     if not ID_PATTERN.match(wanted):
         raise ValueError(f"имя агента не по правилу: {wanted!r}")
     dir_ = base_dir / ROSTER_DIR / wanted
+    if dir_.is_symlink() or getattr(dir_, "is_junction", lambda: False)():
+        raise ValueError(f"папка агента — ссылка: {dir_}; агент не тронут")
     if not dir_.is_dir():
         raise ValueError(f"агента нет: папки {dir_} не существует")
     attic = Path(attic) if attic else base_dir.parent / "_state" / "attic"
+    if attic.is_symlink() or getattr(attic, "is_junction", lambda: False)():
+        raise ValueError(f"чердак — ссылка: {attic}; агент не тронут")
+    preference = base_dir / "agent-default.json"
+    if preference.is_symlink() or getattr(preference, "is_junction", lambda: False)():
+        raise ValueError(f"выбор агента — ссылка: {preference}; агент не тронут")
+    if preference.exists() and not preference.is_file():
+        raise ValueError(f"выбор агента не файл: {preference}; агент не тронут")
+    try:
+        raw_preference = preference.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raw_preference = ""
+    except UnicodeError:
+        raw_preference = ""  # malformed choice stays byte-identical
+    except OSError as exc:
+        raise RuntimeError(f"выбор агента не читается ({preference}): {exc}; агент не тронут") from exc
+    try:
+        saved = json.loads(raw_preference)
+    except ValueError:
+        saved = None
+    selected = saved.get("id") if isinstance(saved, dict) else None
+    clear_default = isinstance(selected, str) and selected.strip().lower() == wanted
     try:
         attic.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -456,6 +599,16 @@ def remove_agent(base_dir: Path, agent_id: str, attic: Path | None = None) -> Pa
                 f"агента и повтори") from exc
         raise RuntimeError(f"перенос в чердак не удался ({dir_} → {dest}): {exc} — "
                            f"агент остался на месте") from exc
+    if clear_default:
+        try:
+            if preference.is_symlink() or getattr(preference, "is_junction", lambda: False)():
+                raise OSError(f"выбор агента стал ссылкой: {preference}")
+            preference.unlink()
+        except OSError as exc:
+            raise RemovalPartialError(
+                f"агент уже перенесён в чердак {dest}, но выбор при старте остался "
+                f"в {preference} ({exc}); выбери другого агента или исправь файл"
+            ) from exc
     return dest
 
 
@@ -467,15 +620,40 @@ def create(base_dir: Path, name: str, *, brain_from_base: bool = True,
     (`boot.ensure_layout`), и второй реализации того же засева здесь не будет.
     `soul` — {kind: canonical|inherit|text, text?}: каким текстом родится душа
     (см. `_soul_seed_text`); сид ложится файлом `soul-seed.md` рядом с конфигом,
-    конфиг души не знает. Проверка сида — ДО любых записей: отказ не оставляет
-    половину агента.
+    конфиг души не знает. Проверка сида — ДО записи агента (после открытия
+    постоянного замка установки): отказ не оставляет половину агента.
     """
+    with _default_writer_lock(Path(base_dir)):
+        return _create_locked(base_dir, name, brain_from_base=brain_from_base,
+                              soul=soul, donor_id=donor_id)
+
+
+def _create_locked(base_dir: Path, name: str, *, brain_from_base: bool,
+                   soul: dict | None, donor_id: str | None) -> Agent:
     base_dir = Path(base_dir)
-    seed_text = _soul_seed_text(base_dir, soul, donor_id)
     others = roster(base_dir)
+    # Include the always-present main agent. The same held lock covers the
+    # count, slug/port choice and completed birth, so two CLI callers cannot
+    # both claim the last slot or race a cooperating remove.
+    if len(others) >= 16:
+        raise ValueError("шестнадцать агентов в одной установке — это уже сервер, а не рабочий стол")
+    seed_text = _soul_seed_text(base_dir, soul, donor_id)
     agent_id = slug(name, {a.id for a in others} | {BASE_ID})
     dir_ = base_dir / ROSTER_DIR / agent_id
-    dir_.mkdir(parents=True, exist_ok=True)
+    dir_.parent.mkdir(parents=True, exist_ok=True)
+    if dir_.exists():
+        raise ValueError(f"папка агента уже существует вне реестра: {dir_}; "
+                         "не перезаписываю её при рождении")
+    dir_.mkdir()
+    # Positive provenance before any shell/service creates desk-token in data/.
+    # This receipt stays beside config after data loss, so an old agent cannot
+    # silently be reborn merely because soul/CURRENT/git disappeared.
+    receipt = dir_ / "kit-birth.json"
+    with receipt.open("x", encoding="utf-8") as sink:
+        json.dump({"schema": 1, "state": "prepared", "source": "agents.create",
+                   "tree": str((dir_ / "data").resolve())}, sink)
+        sink.flush()
+        os.fsync(sink.fileno())
     root = read_config(base_dir / CONFIG_NAME) if brain_from_base else {}
     cfg: dict = {k: v for k, v in root.items() if k not in _NOT_INHERITED}
     # Пути установки — от папки агента: два уровня вверх (`agents/<id>/`).

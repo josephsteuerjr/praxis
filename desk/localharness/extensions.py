@@ -548,7 +548,7 @@ def state_line() -> str:
 
 # ─────────────────────────────────────────────── репетиция обновления
 
-def check(data_dir: Path, *, host_version: str = "") -> dict:
+def check(data_dir: Path, *, host_version: str = "", config_path=None) -> dict:
     """Те же манифесты под ЭТИМ движком, без агента: что загрузится, что нет и почему.
 
     Зовётся мастером обновления из НОВОЙ поставки до подмены папок и раннером по
@@ -574,7 +574,7 @@ def check(data_dir: Path, *, host_version: str = "") -> dict:
             import boot as _boot           # движок: localharness на sys.path
         except ImportError:
             from . import boot as _boot    # стенды: пакет localharness
-        raw = json.loads(_boot.read_config_text(data_dir.parent / "helene.json"))
+        raw = json.loads(_boot.read_config_text(Path(config_path) if config_path else data_dir.parent / "helene.json"))
         cfg = raw if isinstance(raw, dict) else {}
     except (OSError, ValueError, ImportError):
         cfg = {}

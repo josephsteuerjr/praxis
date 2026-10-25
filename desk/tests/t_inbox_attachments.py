@@ -192,6 +192,7 @@ class VoiceNotes(unittest.TestCase):
         self.saved = {k: getattr(runner, k) for k in ("_tree", "_voice_state")}
         runner._tree = self.tree
         runner._voice_state = {"ready": True, "why": ""}
+        p=patch.multiple(runner,_voice_config_path=None,_voice_signature='startup');p.start();self.addCleanup(p.stop)
         import types
         self.fake = types.ModuleType("media_audio")
         self.calls: list[Path] = []
@@ -222,32 +223,30 @@ class VoiceNotes(unittest.TestCase):
 
     def test_recording_becomes_text_in_the_reply_and_pictures_go_on(self):
         heard, rest = runner._hear_attachments(["attachments/st2/voice-1.webm", "attachments/st1/кот.png"])
-        self.assertEqual(heard, ["[голосовое]: привет, это голосовое"])
+        self.assertEqual(heard, ["[Транскрипт голосового]: привет, это голосовое"])
         self.assertEqual(rest, ["attachments/st1/кот.png"])
         self.assertEqual(self.calls, [(self.inbox / "attachments" / "st2" / "voice-1.webm").resolve()])
 
     def test_deaf_runner_says_why_instead_of_losing_the_note(self):
         runner._voice_state = {"ready": False, "why": "модель не скачана — голосовые не расшифровываются"}
-        heard, _ = runner._hear_attachments(["attachments/st2/voice-1.webm"])
+        with self.assertRaisesRegex(runner.voice_admission.VoicePending,'модель не скачана'):
+            runner._hear_attachments(["attachments/st2/voice-1.webm"])
         self.assertEqual(self.calls, [])
-        self.assertIn("не расшифровано", heard[0])
-        self.assertIn("модель не скачана", heard[0])
-        self.assertIn("Настройки → Голос", heard[0])
 
     def test_transcriber_failure_and_missing_file_are_named(self):
         def boom(path):
             raise RuntimeError("ffmpeg: no such codec")
         self.fake.transcribe = boom
-        heard, _ = runner._hear_attachments(["attachments/st2/voice-1.webm", "attachments/st2/нет.webm",
-                                             "attachments/../soul/x.webm"])
-        self.assertIn("RuntimeError: ffmpeg", heard[0])
-        self.assertIn("не найдено", heard[1])
-        self.assertIn("не найдено", heard[2])
+        with self.assertRaisesRegex(runner.voice_admission.VoicePending,'RuntimeError: ffmpeg'):
+            runner._hear_attachments(["attachments/st2/voice-1.webm"])
+        for source in ('attachments/st2/нет.webm','attachments/../soul/x.webm'):
+            with self.assertRaisesRegex(runner.voice_admission.VoicePending,'не найдено'):
+                runner._hear_attachments([source])
 
     def test_empty_transcription_is_said_not_hidden(self):
         self.fake.transcribe = lambda path: "   "
-        heard, _ = runner._hear_attachments(["attachments/st2/voice-1.webm"])
-        self.assertIn("пустая", heard[0])
+        with self.assertRaisesRegex(runner.voice_admission.VoicePending,'пустая'):
+            runner._hear_attachments(["attachments/st2/voice-1.webm"])
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import uuid
+import json
 from pathlib import Path
 
 ROOTS = ("media", "workspace/media", "memory/.control/desk_inbox/attachments", "memory/telegram-media")
@@ -66,5 +67,8 @@ def metadata(tree, rel):
     if path is None:
         return {}
     name = display_name(path)
+    from localharness.media_metadata import path_for
+    sidecar=path_for(path,'mime.json')
+    declared=json.loads(sidecar.read_text(encoding='utf-8')).get('mime') if sidecar.is_file() else None
     return {"media_name": name, "media_size": path.stat().st_size,
-            "media_mime": mimetypes.guess_type(name)[0] or "application/octet-stream"}
+            "media_mime": declared or mimetypes.guess_type(name)[0] or "application/octet-stream"}

@@ -1,7 +1,7 @@
 {
   "name": "frame-miniapp",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.9.2",
   "type": "module",
   "scripts": {
     "dev": "vite --port 5176 --strictPort --host",
@@ -12,6 +12,7 @@
     "vite": "^8.2.2"
   },
   "dependencies": {
-    "lottie-web": "^5.13.0"
+    "lottie-web": "^5.13.0",
+    "wavesurfer.js": "8.0.3"
   }
 }

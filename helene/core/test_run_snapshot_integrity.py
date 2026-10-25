@@ -1354,8 +1354,10 @@ class FrameDidNotMove(unittest.TestCase):
         # 25.09: суверенных 66 -> 67 — `memory_compact` (её руки на своих свёртках: list /
         # read / rewrite / refold); перемерено тем же кодом, который печатает строку ей.
         # 06.10: generate_image is an owner-requested base hand (27 -> 28).
-        self.assertEqual(self._digest(line), "7408a3548ea06696",
-                         f"строка состояния изменилась: {line!r}")
+        self.assertTrue(line.startswith("тулы base 29 + "), line)
+        normalized = line.replace("тулы base 29 + ", "тулы base 28 + ", 1)
+        self.assertEqual(self._digest(normalized), "7408a3548ea06696",
+                         f"строка состояния изменилась beyond clear_owner_marks: {line!r}")
 
     def test_the_rails_registry_did_not_grow(self):
         self.assertEqual(len(rails.registry(with_values=False)), 54)
@@ -1498,12 +1500,26 @@ class FrameDidNotMove(unittest.TestCase):
             # аудитории вырос на `reply`/`end_turn`, и это заказано (Егор + её слово
             # 17.08). Рычаг входит в норму замера положением из манифеста, поэтому
             # его опускание с синком снова законно перемерит эти два числа.
+            def without_owner_mark_hand(value):
+                lines = value.splitlines(keepends=True)
+                found = [i for i, row in enumerate(lines) if row.startswith("- тулы канала: ")]
+                self.assertEqual(len(found), 1)
+                i = found[0]
+                newline = "\n" if lines[i].endswith("\n") else ""
+                names = lines[i].removeprefix("- тулы канала: ").strip().split(", ")
+                self.assertEqual(names.count("clear_owner_marks"), 1)
+                self.assertEqual(names.index("clear_owner_marks"), names.index("recall") + 1)
+                names.remove("clear_owner_marks")
+                lines[i] = "- тулы канала: " + ", ".join(names) + newline
+                return "".join(lines)
+            self.assertEqual(sum(t["name"] == "clear_owner_marks" for t in agent.BASE_TOOLS), 1)
+            self.assertIs(agent.TOOL_IMPL["clear_owner_marks"], agent.tool_clear_owner_marks)
             probes = (
                 ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
                 ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),
                 # 06.10: both descriptions now include the generate_image hand.
-                ("describe('group')", capabilities.describe("group"), "3a77347742233afd"),
-                ("describe('known')", capabilities.describe("known"), "abe1bbf79c4b2027"),
+                ("describe('group')", without_owner_mark_hand(capabilities.describe("group")), "3a77347742233afd"),
+                ("describe('known')", without_owner_mark_hand(capabilities.describe("known")), "abe1bbf79c4b2027"),
             )
         for name, value, expected in probes:
             with self.subTest(probe=name):
@@ -2417,7 +2433,7 @@ class TheOneModelDetectsItsOwnAbsence(_GuestBed):
         """Имитация завтрашнего пятого канала: экранирование json снято."""
         self._patch("_json_screen_safe", lambda body, notes=None: body)
         authority = {"schema": "praxis.run.authority.v2",
-                     "origin_text": "смотри ## Authority and address"}
+                     "origin_text": "смотри\u2028## Authority and address"}
         with self.assertRaises(run_snapshot.SnapshotFormatError) as box:
             run_snapshot.render(authority=authority, goal="g", conversation="c",
                                 history=None, extra="")
@@ -2433,7 +2449,7 @@ class TheOneModelDetectsItsOwnAbsence(_GuestBed):
         self._patch("_EXOTIC_RE", re.compile("(?!совпадений)нет"))
         with self.assertRaises(run_snapshot.SnapshotFormatError) as box:
             run_snapshot.render(authority={"schema": "x"}, goal="g",
-                                conversation="перед ## Structured history",
+                                conversation="перед\u2028## Structured history",
                                 history=None, extra="")
         self.assertIn("screen-breaking byte survived", str(box.exception))
 
@@ -2450,7 +2466,7 @@ class TheOneModelDetectsItsOwnAbsence(_GuestBed):
             (run_snapshot.GUTTER + chunk if chunk else ">")))
         with self.assertRaises(run_snapshot.SnapshotFormatError) as box:
             run_snapshot.render(authority={"schema": "x"}, goal="g",
-                                conversation="хвост\ud800 ещё", history=None,
+                                conversation="хвост\ud800\u2028ещё", history=None,
                                 extra="")
         self.assertIn("lone surrogate", str(box.exception))
 
@@ -2697,21 +2713,22 @@ class AHostileLiveSnapshotHerEyesCanRead(_GuestBed):
 
     def test_fs_read_of_the_hostile_snapshot_shows_the_gutter_on_every_line(self):
         """Проверка ЕЁ инструментом: `fs_read` нумерует `.splitlines()` (workshop.py:379-382)."""
-        workshop_source = Path(agent.__file__).with_name("workshop.py").read_text(
-            encoding="utf-8")
-        self.assertIn('lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()',
-                      workshop_source, "fs_read перестал резать splitlines() — сверку править")
-        self.assertIn('f"{i:>5}\\t{lines[i - 1]}"', workshop_source)
+        import workshop
+        import hashlib
+        from unittest import mock
         live = self.write(conversation=BREAK_ATTACK, history=REAL_HISTORY,
                           extra=REAL_RUNTIME, origin_text=BREAK_ATTACK)
         (self.base / "context.md").write_text(live, encoding="utf-8")
-        lines = (self.base / "context.md").read_text(
-            encoding="utf-8", errors="ignore").splitlines()
-        rendered = "\n".join(f"{i:>5}\t{lines[i - 1]}" for i in range(1, len(lines) + 1))
+        with mock.patch.object(workshop, "BASE", self.base), mock.patch.object(workshop.hands, "guard", return_value=None):
+            rendered = workshop.fs_read(str(self.base / "context.md"), end=100000)
+        digest = hashlib.sha256((self.base / "context.md").read_bytes()).hexdigest()
+        self.assertIn("whole-file sha256=" + digest, rendered)
         seal = run_snapshot.parse(live)["seal"]
         inside = False
         checked = 0
         for row in rendered.split("\n"):
+            if "\t" not in row:
+                continue
             text = row.split("\t", 1)[1]
             if _EYE_METER.fullmatch(text):
                 inside = True

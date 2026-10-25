@@ -463,6 +463,8 @@ _WINDOWS_RESERVED = re.compile(
 _QUEUE_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SPOOL_NAME_PREFIX = re.compile(r"^msg-[0-9a-f]{10}-[0-9a-f]{12}-")
+ATTACHMENT_ZEN_PAUSE_SECONDS = 30.0
+
 _OUTBOX_SCHEMA = "praxis.media.outbox.v1"
 _OUTBOX_MAINTENANCE_SCHEMA = "praxis.media.outbox-maintenance.v1"
 _TERMINAL_OUTBOX_STATES = frozenset({"delivered", "expired", "failed"})
@@ -1168,6 +1170,9 @@ class MediaSpool:
             "queue_id": item.queue_id,
             "state": "pending",
             "created_at": now,
+            # Staging into the authorized outbox is the latest possible decision
+            # seam: never start the pause earlier than the explicit tool call.
+            "not_before": now + ATTACHMENT_ZEN_PAUSE_SECONDS,
             "updated_at": now,
             "item": self._item_payload(item),
             "result": None,
@@ -1897,6 +1902,35 @@ class MediaSpool:
                 if (wanted_scope is None or item.scope == wanted_scope)
                 and (wanted_chat is None or str(item.chat_id) == wanted_chat)
             )
+
+    def ready(self, queue_id: str, *, now: float | None = None) -> bool:
+        """True only for a pending intent whose durable zen pause has elapsed.
+
+        Legacy pending rows acquire a pause on first observation, durably, rather
+        than relying on a parse-time default that changes after each restart.
+        Terminal rows are never sendable (including already delivered uploads).
+        """
+        current = time.time() if now is None else float(now)
+        if not math.isfinite(current):
+            raise MediaValidationError("invalid outbox clock")
+        with self._lock, self._ledger_guard():
+            path = self._record_path(queue_id)
+            if not path.is_file():
+                return False
+            record = self._read_record_locked(path)
+            if record.get("state") != "pending":
+                return False
+            if "not_before" not in record:
+                record["not_before"] = current + ATTACHMENT_ZEN_PAUSE_SECONDS
+                self._write_record_locked(record)
+            threshold = record["not_before"]
+            staged = record.get("created_at")
+            if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+                    or isinstance(staged, bool) or not isinstance(staged, (int, float))
+                    or not math.isfinite(threshold) or not math.isfinite(staged)
+                    or threshold < staged + ATTACHMENT_ZEN_PAUSE_SECONDS):
+                raise MediaValidationError("invalid outbox not_before/staged timestamp")
+            return current >= threshold
 
     def peek(self) -> OutboundMedia | None:
         with self._lock, self._ledger_guard():

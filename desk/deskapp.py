@@ -182,10 +182,10 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem", "/tg/", "
 # «перезапустить» в том, чтобы она была под рукой, когда до компьютера не
 # дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
-_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact",
+_DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact", "/api/forge",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
-                 "/api/interrupt", "/api/interrupt-step", "/api/panic", "/api/autonomy"}
+                 "/api/interrupt", "/api/interrupt-step", "/api/panic", "/api/autonomy", "/api/voice/attachment"}
 _DEVICE_PREFIXES = ("/api/chat/", "/api/rooms/", "/api/chat-turns/", "/api/run/",
                     "/api/container-log/")
 
@@ -867,6 +867,13 @@ def _reader(fn: Callable[[], Any]):
     return handler
 
 
+async def _r_forge(c: Call):
+    # Device scope permits a structural overview, not Forge's free-text goal
+    # or worker metadata. Authorization alone cannot sanitize the response.
+    reader = readers.forge_device_tasks if c.role == "device" else readers.forge_tasks
+    return await asyncio.to_thread(reader)
+
+
 def _state_with_autonomy():
     from deskd import autonomy
     snapshot=dict(readers.state())
@@ -1035,6 +1042,21 @@ async def _r_agent_config_save(c: Call):
     return result
 
 
+async def _r_self_review(c: Call):
+    if c.role != "owner":
+        return Fail(403, "Self-review controls require the owner key.")
+    from localharness import self_review_integration
+    try:
+        if c.body is not None:
+            result = await asyncio.to_thread(self_review_integration.command, readers.tree(), c.body)
+            return result
+        config = agentcfg.state()
+        return await asyncio.to_thread(self_review_integration.status, readers.tree(),
+                                       config.get("config") or {}, str(c.query.get("id") or ""))
+    except (OSError, ValueError, TypeError) as exc:
+        return Fail(400, str(exc))
+
+
 async def _r_media(c: Call):
     """Вложение из ленты — байтами. Голос агента окно проигрывает этим.
 
@@ -1108,6 +1130,8 @@ async def _r_local_files(c: Call):
         raise ValueError("Неизвестное действие файлового диалога")
     except FileExistsError:
         raise web.HTTPConflict(text="Файл с этим именем уже существует")
+    except local_files.FileOutcomeUnknown as exc:
+        raise web.HTTPServiceUnavailable(text=str(exc))
     except (OSError, ValueError) as exc:
         raise web.HTTPBadRequest(text=str(exc))
 
@@ -1351,6 +1375,29 @@ async def _r_voice(c: Call):
     return await asyncio.to_thread(lambda: voice.state(readers.tree(), _voice_config()))
 
 
+async def _r_voice_preview(c: Call):
+    if voice is None:raise ValueError('Voice component unavailable')
+    return await asyncio.to_thread(voice.preview, readers.tree(), _voice_config(), c.body or {})
+
+
+async def _r_voice_attachment(c: Call):
+    from localharness import voice_admission
+    body=c.body or {}
+    relative=str(body.get('path') or c.query.get('path') or '')
+    source,why=artifacts.resolve(readers.tree(),relative)
+    if source is None:raise ValueError(why)
+    from localharness.telegram_inputs import original_kind
+    kind=original_kind(readers.tree(),relative,source)
+    if not kind:
+        raise ValueError('Transcription status belongs to an exact incoming audio original')
+    if kind=='window' and not voice_admission.is_audio(source):
+        raise ValueError('This attachment is not audio')
+    if c.body:
+        if not voice_admission.record_path(source).is_file():raise ValueError('No failed transcription to retry')
+        value=voice_admission.retry(source)
+    else:value=voice_admission.state(source)
+    return dict(value,can_retry=value['status']=='error')
+
 
 async def _r_containers(c: Call):
     """Контейнеры рядом с этим каналом: живы ли, с каких пор (deskd/control.py)."""
@@ -1476,7 +1523,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/errors", _reader(lambda: readers.errors())),
     Route("GET", "/api/board", _reader(lambda: readers.board())),
     Route("GET", "/api/agenda", _reader(lambda: readers.agenda())),
-    Route("GET", "/api/forge", _reader(lambda: readers.forge_tasks())),
+    Route("GET", "/api/forge", _r_forge),
     Route("GET", "/api/shadow", _reader(lambda: readers.shadow_streams())),
     Route("GET", "/api/shadow/{stream}/captures", _r_shadow_captures),
     Route("GET", "/api/shadow/{stream}/capture", _r_shadow_capture),
@@ -1498,6 +1545,8 @@ ROUTES: tuple[Route, ...] = (
     Route("POST", "/api/local-files", _r_local_files, local_only=True),
     Route("GET", "/api/agent-config", _r_agent_config),
     Route("POST", "/api/agent-config", _r_agent_config_save),
+    Route("GET", "/api/self-review", _r_self_review),
+    Route("POST", "/api/self-review", _r_self_review),
     Route("GET", "/api/md-tree", _reader(lambda: readers.md_tree())),
     # Обе ручки окно и телефон опрашивают каждые несколько секунд; рубеж от
     # 500-х стоит ВНУТРИ readers.state/readers.health — он общий на оба канала.
@@ -1529,8 +1578,11 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/panic", _r_panic_state),
     Route("POST", "/api/interrupt-step", _r_interrupt_step),
     Route("GET", "/api/memory-fold/{room}", _r_fold_state),
-    Route("POST", "/api/memory-fold", _r_fold),
+    # Compaction belongs to the acting agent; no owner force-fold ingress.
     Route("GET", "/api/voice", _r_voice),
+    Route("POST", "/api/voice/preview", _r_voice_preview),
+    Route("GET", "/api/voice/attachment", _r_voice_attachment),
+    Route("POST", "/api/voice/attachment", _r_voice_attachment),
     Route("GET", "/api/supervisor", _r_supervisor),
     Route("POST", "/api/supervisor/restart", _r_supervisor_restart),
     # Обновление на сервере: канал только кладёт план и «да» — исполняет сосед снаружи
@@ -1687,6 +1739,8 @@ def _write_attachments(control: Path, stamp: str, files: list[dict]) -> list[str
     """
     folder = control / "attachments" / stamp
     folder.mkdir(parents=True, exist_ok=True)
+    from localharness import media_metadata
+    (folder/media_metadata.DIRECTORY).mkdir(exist_ok=True)
     rel_paths: list[str] = []
     for i, f in enumerate(files, 1):
         name = f["name"]
@@ -1695,12 +1749,19 @@ def _write_attachments(control: Path, stamp: str, files: list[dict]) -> list[str
             stem, ext = os.path.splitext(name)
             name = f"{stem}-{i}{ext}"
             target = folder / name
+            collision = 1
+            while target.exists():
+                name = f"{stem}-{i}-{collision}{ext}"
+                target = folder / name
+                collision += 1
         tmp = target.with_name(".part-" + target.name)
         with open(tmp, "wb") as handle:
             handle.write(f["data"])
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, target)
+        metadata=media_metadata.path_for(target,'mime.json')
+        metadata.write_text(json.dumps({'mime':f['mime']},ensure_ascii=False),encoding='utf-8')
         rel_paths.append(f"attachments/{stamp}/{name}")
     return rel_paths
 

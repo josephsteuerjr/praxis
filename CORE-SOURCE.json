@@ -1,11 +1,11 @@
 {
   "mirror": "praxis",
-  "source": "/opt/praxis; sanitized live delta on existing public source",
-  "head": "d1b6cfde9a44be358e9bff326bbed2289154efb2",
+  "source": "/opt/praxis; allowlisted tracked source-only snapshot",
+  "head": "f0f6192f6a7ed1657a5bb127916a9754eb10bf9e",
   "dirty": false,
-  "taken_at": "2026-10-20T13:51:19.731138+00:00",
-  "files": 646,
-  "digest": "27f217767e818c5049fee0812fa4b020047d7b44b91be692ec6a6218f62d4a36",
+  "taken_at": "2026-10-13T08:38:53.061166+00:00",
+  "files": 635,
+  "digest": "a038e6c831881ec06812a2ae6edf74aa3ca15966600119e5bb9428f1034aa3c0",
   "by": "installer/core_src.py --export-core",
   "private_history_published": false,
   "excluded_runtime": true,
@@ -20,9 +20,5 @@
       "extract_enoch.py": "One-off extraction script embeds a private inbox path and third-party identity; not imported by runtime"
     },
     "runtime_soul_memory_history_excluded": true
-  },
-  "public_base": "1a3d49f59078e90196579e9eb02984705ca03add",
-  "preserved_public_extensions": [
-    "forge paged reader and nested worker status"
-  ]
+  }
 }

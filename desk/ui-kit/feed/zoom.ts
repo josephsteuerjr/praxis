@@ -85,6 +85,21 @@ export class Zoom {
     this.aim(z, box.left + box.width / 2, clientY ?? box.top + box.height / 2);
   }
 
+  /** Restore preferences, including while Settings has detached the chat box.
+   * This is not a gesture and must not echo a storage write. */
+  restore(value: number) {
+    if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; }
+    this.origin = null;
+    this.committed = this.z = this.goal = Number.isFinite(value) ? Math.min(this.max, Math.max(this.min,value)) : 1;
+    this.scroller.preserve(() => {
+      if (this.box) {
+        this.box.style.setProperty("--zoom",this.committed.toFixed(4));
+        this.box.style.transform="";this.box.style.transformOrigin="";this.box.style.willChange="";
+      }
+    });
+    this.onChange?.(this.committed);
+  }
+
   private onWheel = (e: WheelEvent) => {
     if (!e.ctrlKey) return;
     e.preventDefault(); // иначе движок масштабирует всю страницу рывком

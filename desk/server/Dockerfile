@@ -31,16 +31,10 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-server.txt
 COPY app/ ./app/
 COPY tree/ ./tree/
 COPY helene-build.json ./helene-build.json
-COPY server/serverboot.py server/emergency_stop.py ./server/
+COPY server/serverboot.py server/supervisor_policy.py server/emergency_stop.py ./server/
 
-# Реле подписки ChatGPT — Linux-бинарь из поставки. Скобки делают его
-# НЕОБЯЗАТЕЛЬНЫМ: поставка без реле (собранная там, где нет докера) соберётся
-# так же, а `serverboot` скажет об отсутствии вслух, вместо молчания. Пара с
-# `requirements.txt` нужна затем, что COPY по маске без единого совпадения —
-# ошибка сборки; с гарантированным соседом маска просто ничего не приносит.
-COPY requirements.txt helene-rela[y] ./
-# Zip Windows-поставки не несёт бита исполнения — без chmod реле не запустится.
-RUN chmod +x /opt/helene/helene-relay 2>/dev/null || true
+COPY helene-relay ./helene-relay
+RUN chmod +x /opt/helene/helene-relay
 
 ENV PYTHONUNBUFFERED=1 PYTHONUTF8=1 HELENE_HOST=0.0.0.0
 EXPOSE 8094

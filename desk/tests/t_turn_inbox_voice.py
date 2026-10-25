@@ -24,6 +24,10 @@ class VoiceBatch(unittest.TestCase):
         self.attachments.mkdir(parents=True)
         for name in ['a.webm', 'b.ogg', 'photo.png']:
             (self.attachments / name).write_bytes(b'synthetic media')
+        from localharness.media_metadata import path_for, DIRECTORY
+        (self.attachments/DIRECTORY).mkdir()
+        for name in ['a.webm','b.ogg']:
+            path_for(self.attachments/name,'mime.json').write_text(json.dumps({'mime':'audio/webm'}),encoding='utf8')
         self.calls, self.archived, self.life, self.done = [], [], [], []
         def transcribe(path):
             self.calls.append(path.name)
@@ -31,6 +35,8 @@ class VoiceBatch(unittest.TestCase):
         self.patch(patch.dict(sys.modules, media_audio=SimpleNamespace(transcribe=transcribe)))
         self.patch(patch.object(runner, '_tree', self.root))
         self.patch(patch.object(runner, '_voice_state', {'ready': True}))
+        self.patch(patch.object(runner, '_voice_config_path', None))
+        self.patch(patch.object(runner, '_voice_signature', 'startup'))
         self.patch(patch.object(runner, '_low_priority', nullcontext))
         desk = SimpleNamespace(archive=lambda text, **kw: self.archived.append(text),
                                life=lambda text, **kw: self.life.append(text))
@@ -41,6 +47,7 @@ class VoiceBatch(unittest.TestCase):
             _note_bytes=lambda p: p.read_bytes(), _seal_claim=lambda p, **kw: (True, ''),
             _message_text=runner._message_text, _split_attachments=runner._split_attachments,
             _hear_attachments=runner._hear_attachments,
+            _archive_inputs=lambda *args: None,
             _IMAGE_EXT=runner._IMAGE_EXT,
             _batch_files=lambda paths, **kw: [f'[файл хода: {Path(p).name}]' for p in paths],
             _batch_images=lambda text, paths, **kw: (text + '\n' + ', '.join(paths),
@@ -62,12 +69,12 @@ class VoiceBatch(unittest.TestCase):
         self.note()
         batch, ack = turn_inbox.collect(self.r, self.current, [])
         content = batch[0]['content']
-        self.assertIn('[голосовое]: Не устанавливать', content)
-        self.assertIn('[голосовое]: Проверь только код', content)
+        self.assertIn('[Транскрипт голосового]: Не устанавливать', content)
+        self.assertIn('[Транскрипт голосового]: Проверь только код', content)
         self.assertLess(content.index('Не устанавливать'), content.index('Проверь только код'))
         self.assertNotIn('.webm', content)
         self.assertEqual(self.calls, ['a.webm', 'b.ogg'])
-        self.assertIn('[голосовое]: Не устанавливать', self.life[0])
+        self.assertIn('[Транскрипт голосового]: Не устанавливать', self.life[0])
         self.assertEqual(self.life, self.archived)
         self.assertEqual(self.done, [])  # caller must persist checkpoint before ACK
         ack()
@@ -99,13 +106,26 @@ class VoiceBatch(unittest.TestCase):
         self.assertIn('Не устанавливать', batch[0]['content'])
         self.assertNotIn('FORGED', batch[0]['content'])
 
-    def test_unavailable_voice_is_explicit_and_image_locator_survives(self):
+    def test_unavailable_voice_waits_without_owner_error_then_retries_once(self):
+        import voice_admission
         self.note(files=('a.webm', 'photo.png'))
         with patch.object(runner, '_voice_state', {'ready': False, 'why': 'backend missing'}):
-            batch, _ = turn_inbox.collect(self.r, self.current, [])
-        self.assertIn('голосовое не расшифровано: backend missing', batch[0]['content'])
-        self.assertIn('attachments/one/photo.png', batch[0]['content'])
+            batch, ack = turn_inbox.collect(self.r, self.current, [])
+            ack()
+        self.assertEqual(batch, [])
+        self.assertEqual(self.life, [])
+        self.assertEqual(self.done, [])
         self.assertEqual(self.calls, [])
+        src=self.attachments/'a.webm'
+        self.assertEqual(voice_admission.state(src)['status'],'error')
+        voice_admission.retry(src)
+        batch,ack=turn_inbox.collect(self.r,self.current,[])
+        self.assertIn('Не устанавливать',batch[0]['content'])
+        self.assertIn('attachments/one/photo.png',batch[0]['content'])
+        self.assertNotIn('backend missing',batch[0]['content'])
+        self.assertNotIn('.webm',batch[0]['content'])
+        ack()
+        self.assertEqual(self.done,['001.md'])
 
     def test_foreign_and_unsealed_voice_never_reaches_transcription(self):
         self.note('001__other.md')

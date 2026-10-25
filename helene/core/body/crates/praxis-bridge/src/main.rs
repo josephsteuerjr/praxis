@@ -77,6 +77,10 @@ struct PeerConnection {
 }
 
 const PEER_QUEUE: usize = 256;
+// One fs.read can return 8 MiB of bytes whose JSON escapes occupy ~48 MiB.
+// Raise only the authenticated device receive bound; the ordinary controller
+// ingress retains Axum's smaller default. The message ceiling remains finite.
+const DEVICE_RESULT_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const PEER_ENQUEUE_TIMEOUT: Duration = Duration::from_secs(10);
 const REPLAY_PAGE: usize = 128;
 
@@ -397,6 +401,12 @@ fn upgrade(
     if !state.authorized(role, &headers) {
         return (StatusCode::UNAUTHORIZED, "invalid bridge token").into_response();
     }
+    let ws = if role == PeerRole::Device {
+        ws.max_frame_size(DEVICE_RESULT_FRAME_BYTES)
+            .max_message_size(DEVICE_RESULT_FRAME_BYTES)
+    } else {
+        ws
+    };
     ws.on_upgrade(move |socket| handle_socket(socket, state, device_id, role))
         .into_response()
 }

@@ -289,10 +289,6 @@ class MediaValidationError(MediaError):
     """The object or its on-disk representation is inconsistent."""
 
 
-class MediaMissingError(MediaValidationError):
-    """A scope/path-validated media reference no longer has local bytes."""
-
-
 class UnsupportedMediaError(MediaValidationError):
     """The bytes do not match the declared guarded-delivery kind."""
 
@@ -1568,14 +1564,9 @@ class MediaSpool:
             actual = _id_text(ref.chat_id, "chat_id")
             if actual != expected:
                 raise MediaSecurityError("media belongs to another chat")
-        if ref.sha256 and not _SHA256.fullmatch(ref.sha256):
-            raise MediaValidationError("invalid spooled media sha256")
-        try:
-            stat = path.stat()
-        except FileNotFoundError as exc:
-            raise MediaMissingError("spooled media file is missing") from exc
         if not path.is_file():
-            raise MediaValidationError("spooled media is not a regular file")
+            raise MediaValidationError("spooled media file is missing")
+        stat = path.stat()
         if stat.st_size != ref.size:
             raise MediaValidationError("spooled media size no longer matches its reference")
         self.check_size(kind, stat.st_size)
@@ -2133,7 +2124,6 @@ __all__ = [
     "SPOOL_MAX_BYTES",
     "TURN_MEDIA_MAX",
     "MediaError",
-    "MediaMissingError",
     "MediaQueueFullError",
     "MediaRef",
     "MediaSecurityError",

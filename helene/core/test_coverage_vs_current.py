@@ -537,261 +537,93 @@ class TestTheDebtIsHonestlyDescribed(Base):
         self.assertEqual(len(row["superseded_event_ids"]), ml._REFRESH_SAMPLE)
 
 
-class TestAddressedCompactRefresh(Base):
+class _AuthoredRefreshBase(Base):
+    """Acting-author tests: no helper may generate, replan or retry for us."""
+
+    def setUp(self):
+        super().setUp()
+        self._original_model = ml._model_compact
+        self.helper_calls = []
+
+        def forbidden(*args, **kwargs):
+            self.helper_calls.append((args, kwargs))
+            raise AssertionError("authored fold invoked hidden _model_compact")
+
+        ml._model_compact = forbidden
+        self.addCleanup(setattr, ml, "_model_compact", self._original_model)
+
+    def _prepare(self, compact_id="", *, chat=ROOM, limit=50, kind="refresh"):
+        prepared = ml.prepare_authored_fold(
+            chat, compact_id=compact_id, limit=limit)
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertEqual(prepared.get("kind"), kind, prepared)
+        self.assertTrue(prepared.get("shown_complete"), prepared)
+        self.assertTrue(prepared.get("sources"), prepared)
+        self.assertRegex(prepared.get("selection", ""), r"^[0-9a-f]{64}$")
+        return prepared
+
+    def _apply(self, prepared, text="fresh authored recap", *, chat=ROOM):
+        result = ml.apply_authored_fold(chat, prepared["selection"], text)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(
+            result["folded"], len(prepared["sources"]), result)
+        self.assertEqual(
+            result["source_ids"],
+            [str(row["id"]) for row in prepared["sources"]],
+            result)
+        self.assertEqual(result["recap"], text.strip(), result)
+        self.assertEqual(
+            ml.compact_text(result["compact_id"], chat), text.strip())
+        self.assertTrue(memory_provenance.compact_evidence(
+            result["compact_id"], self._evidence())["valid"])
+        self.assertEqual(self.helper_calls, [])
+        return result
+
+    def _refresh(self, compact_id, text="fresh authored recap", *,
+                 chat=ROOM, limit=50):
+        return self._apply(
+            self._prepare(compact_id, chat=chat, limit=limit),
+            text, chat=chat)
+
+    def _receipts(self):
+        return list(ml.iter_events(
+            chat_id=ROOM, kinds={"memory_compact_refresh"}))
+
+    def _files(self):
+        return {
+            path.name: path.read_bytes()
+            for path in ml._compact_dir(ROOM).glob("*.md")
+        }
+
+    def _group(self, compact_id):
+        snapshot = ml._refresh_snapshot(ROOM)
+        return snapshot["groups"][snapshot["artifact_group"][compact_id]]
+
+    def _assert_conflict_without_writes(self, prepared, text="obsolete plan"):
+        files, receipts = self._files(), self._receipts()
+        result = ml.apply_authored_fold(ROOM, prepared["selection"], text)
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["reason"], "state_changed", result)
+        self.assertEqual(result["folded"], 0, result)
+        self.assertEqual(result["retained_text"], text)
+        self.assertEqual(self._files(), files)
+        self.assertEqual(self._receipts(), receipts)
+        self.assertEqual(self.helper_calls, [])
+        return result
+
+
+class TestAddressedCompactRefresh(_AuthoredRefreshBase):
     """The next layer: immutable stale audit, bounded current-only replacement."""
 
-    def _capture_model(self, summary="НОВАЯ СВОДКА"):
-        calls = []
-        original = ml._model_compact
 
-        def model(inputs, **_kwargs):
-            calls.append([dict(item) for item in inputs])
-            return {"summary": summary, "open_threads": [], "claims": [], "episodes": []}
 
-        ml._model_compact = model
-        return calls, original
 
-    def test_edit_refresh_uses_latest_body_and_keeps_old_bytes(self):
-        rows = [self._msg(i, f"исходная реплика {i}") for i in range(1, 7)]
-        compact = self._compact(rows, summary="STALE RECAP исходная реплика 3")
-        path = ml._compact_dir(ROOM) / f"{compact['id']}.md"
-        before = path.read_bytes()
-        latest = self._edit(3, "ТОЛЬКО НОВАЯ РЕДАКЦИЯ", ts=60_001.0)
-        calls, original = self._capture_model("сводка с ТОЛЬКО НОВОЙ РЕДАКЦИЕЙ")
-        try:
-            out = ml.refresh_compacts(ROOM, compact["id"])
-        finally:
-            ml._model_compact = original
 
-        self.assertEqual(out["remaining_count"], 0)
-        self.assertEqual(len(calls), 1)
-        prompt = "\n".join(item["text"] for item in calls[0])
-        self.assertIn("ТОЛЬКО НОВАЯ РЕДАКЦИЯ", prompt)
-        self.assertNotIn("исходная реплика 3", prompt)
-        self.assertEqual([item["id"] for item in calls[0]].count(latest["id"]), 1)
-        self.assertEqual(path.read_bytes(), before, "old compact Markdown was rewritten")
-        frame = ml.context_summary(ROOM)
-        self.assertIn("сводка с ТОЛЬКО НОВОЙ РЕДАКЦИЕЙ", frame)
-        self.assertNotIn("STALE RECAP", frame)
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
 
-    def test_delete_never_sends_or_presents_the_old_body(self):
-        body = "УДАЛЁННОЕ ТЕЛО НЕ ДОЛЖНО ВЕРНУТЬСЯ"
-        rows = [self._msg(1, body), self._msg(2, "остаётся")]
-        compact = self._compact(rows, summary=f"STALE RECAP {body}")
-        self._delete(1, ts=61_001.0)
-        calls, original = self._capture_model("сводка после tombstone")
-        try:
-            ml.refresh_compacts(ROOM, compact["id"])
-        finally:
-            ml._model_compact = original
 
-        prompt = "\n".join(item["text"] for item in calls[0])
-        self.assertIn("[deleted #1]", prompt)
-        self.assertNotIn(body, prompt)
-        frame = ml.context_summary(ROOM)
-        self.assertNotIn(body, frame)
-        old_path = ml._compact_dir(ROOM) / f"{compact['id']}.md"
-        evidence = self._evidence()
-        self.assertFalse(memory_fts._compact_markdown_current(
-            old_path, ml.MEM_DIR, evidence=evidence))
 
-    def test_nested_parent_claims_stale_child_and_never_models_stale_recaps(self):
-        rows, kids, parent = TestNestedStaleParent._tree(self)
-        self._edit(5, "новая пятая", ts=62_001.0)
-        calls, original = self._capture_model("fresh nested")
-        try:
-            out = ml.refresh_compacts(ROOM, parent["id"])
-        finally:
-            ml._model_compact = original
 
-        self.assertEqual(out["remaining_count"], 0)
-        modeled = "\n".join(item["text"] for batch in calls for item in batch)
-        self.assertNotIn("родитель", modeled)
-        self.assertNotIn("ребёнок", modeled)
-        receipts = ml.iter_events(chat_id=ROOM, kinds={"memory_compact_refresh"})
-        self.assertEqual(len(receipts), 1)
-        self.assertEqual(receipts[0]["meta"]["stale_compact_ids"],
-                         [parent["id"], kids[0]["id"]])
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
-        self.assertNotIn("родитель", ml.context_summary(ROOM))
 
-    def test_many_revisions_project_latest_exactly_once(self):
-        rows = [self._msg(1, "original"), self._msg(2, "stable")]
-        compact = self._compact(rows, summary="stale original")
-        for revision, text, stamp in ((1, "first edit", 63_001.0),
-                                      (2, "LATEST EDIT", 63_003.0),
-                                      (3, "late older", 63_002.0)):
-            ml.record_message(
-                ROOM, f"Николай: {text}", actor="Николай", direction="in",
-                source_id=f"1:edit:{revision}", ts=stamp,
-                revision_order=revision,
-                dedupe_key=f"telegram:{ROOM}:1:edit:{revision}:in")
-        ml.note_message_revision(ROOM, 1, "Николай: LATEST EDIT")
-        calls, original = self._capture_model("latest recap")
-        try:
-            ml.refresh_compacts(ROOM, compact["id"])
-        finally:
-            ml._model_compact = original
-        prompt = "\n".join(item["text"] for item in calls[0])
-        self.assertEqual(prompt.count("LATEST EDIT"), 1)
-        self.assertNotIn("original", prompt)
-        self.assertNotIn("first edit", prompt)
-        self.assertNotIn("late older", prompt)
-
-    def test_required_model_aborts_before_any_replacement_or_receipt(self):
-        rows = [self._msg(i, "x" * 80 + f" row {i}") for i in range(1, 5)]
-        stale = self._compact(rows, summary="degraded stale chunked")
-        self._edit(1, "y" * 80 + " latest", ts=63_901.0)
-        original_budget = ml.PROMPT_BUDGET_CHARS
-        original_model = ml._model_compact
-        calls = []
-
-        def flaky(inputs, **_kwargs):
-            calls.append([dict(item) for item in inputs])
-            if len(calls) == 1:
-                return {"summary": "first planned chunk", "open_threads": [],
-                        "claims": [], "episodes": []}
-            return {}
-
-        ml.PROMPT_BUDGET_CHARS = 120
-        ml._model_compact = flaky
-        before_compacts = sorted(ml._compact_dir(ROOM).glob("*.md"))
-        before_receipts = list(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"}))
-        try:
-            out = ml.refresh_compacts(ROOM, stale["id"], max_chunks=2)
-        finally:
-            ml.PROMPT_BUDGET_CHARS = original_budget
-            ml._model_compact = original_model
-
-        self.assertFalse(out["ok"], out)
-        self.assertEqual(out["reason"], "model_required", out)
-        self.assertEqual(out["chunks_written"], 0, out)
-        self.assertFalse(out["receipt_written"], out)
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(sorted(ml._compact_dir(ROOM).glob("*.md")), before_compacts)
-        self.assertEqual(list(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"})), before_receipts)
-        self.assertGreater(ml.refresh_debt(ROOM)["needs_refresh"], 0)
-
-    def test_addressed_degraded_model_result_is_not_committed(self):
-        rows = [self._msg(1, "old"), self._msg(2, "stable")]
-        stale = self._compact(rows, summary="degraded stale")
-        self._edit(1, "new", ts=63_951.0)
-        original_model = ml._model_compact
-        before_compacts = sorted(ml._compact_dir(ROOM).glob("*.md"))
-        before_receipts = list(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"}))
-        ml._model_compact = lambda *_args, **_kwargs: {
-            "summary": "looks valid but degraded", "open_threads": [],
-            "claims": [], "episodes": [], "degraded": True,
-        }
-        try:
-            out = ml.refresh_compacts(ROOM, stale["id"])
-        finally:
-            ml._model_compact = original_model
-
-        self.assertFalse(out["ok"], out)
-        self.assertEqual(out["reason"], "model_required", out)
-        self.assertEqual(sorted(ml._compact_dir(ROOM).glob("*.md")), before_compacts)
-        self.assertEqual(list(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"})), before_receipts)
-
-    def test_one_chunk_makes_monotonic_progress_then_completion_is_idempotent(self):
-        rows = [self._msg(i, "x" * 80 + f" row {i}") for i in range(1, 5)]
-        compact = self._compact(rows, summary="stale chunked")
-        self._edit(1, "y" * 80 + " latest", ts=64_001.0)
-        original_budget = ml.PROMPT_BUDGET_CHARS
-        calls, original_model = self._capture_model("bounded chunk")
-        ml.PROMPT_BUDGET_CHARS = 120
-        try:
-            remaining = []
-            for _ in range(8):
-                result = ml.refresh_compacts(ROOM, compact["id"], max_chunks=1)
-                remaining.append(result["remaining_count"])
-                self.assertLessEqual(result["chunks_written"], 1)
-                if result["remaining_count"] == 0:
-                    break
-            calls_at_completion = len(calls)
-            receipts_at_completion = len(ml.iter_events(
-                chat_id=ROOM, kinds={"memory_compact_refresh"}))
-            again = ml.refresh_compacts(ROOM, compact["id"], max_chunks=8)
-        finally:
-            ml.PROMPT_BUDGET_CHARS = original_budget
-            ml._model_compact = original_model
-
-        self.assertEqual(remaining[-1], 0)
-        self.assertTrue(all(a > b for a, b in zip(remaining, remaining[1:])), remaining)
-        self.assertEqual(again["reason"], "already_refreshed")
-        self.assertEqual(again["chunks_written"], 0)
-        self.assertEqual(len(calls), calls_at_completion)
-        self.assertEqual(len(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"})), receipts_at_completion)
-
-    def test_later_overlap_cannot_regress_durable_partial_progress(self):
-        old = [self._msg(i, f"old {i}") for i in range(1, 6)]
-        stale = self._compact(old, summary="stale all five")
-        latest = [self._edit(i, f"new {i}", ts=64_100.0 + i)
-                  for i in range(1, 6)]
-        left = self._compact(latest[:2], summary="current positions 0,1")
-        right = self._compact(latest[2:4], summary="current positions 2,3")
-        before = ml._refresh_snapshot(ROOM)
-        group_id = before["artifact_group"][stale["id"]]
-        group = before["groups"][group_id]
-        replacements, covered = ml._refresh_choose_replacements(group, before)
-        self.assertEqual(replacements, [left["id"], right["id"]])
-        self.assertEqual(covered, {0, 1, 2, 3})
-        receipt = ml._append_refresh_receipt(ROOM, group, replacements)
-        partial = ml._refresh_snapshot(ROOM)["groups"][group_id]
-        self.assertEqual(partial["refreshed_count"], 4)
-        self.assertEqual(partial["remaining_count"], 1)
-
-        crossing = self._compact(
-            latest[:3], summary="later overlapping positions 0,1,2")
-        after = ml._refresh_snapshot(ROOM)["groups"][group_id]
-
-        self.assertEqual(after["receipt"]["receipt_event_id"], receipt["id"])
-        self.assertEqual(after["receipt"]["refreshed_count"], 4)
-        self.assertEqual(after["replacement_compact_ids"], [left["id"], right["id"]])
-        self.assertNotIn(crossing["id"], after["replacement_compact_ids"])
-        self.assertEqual(after["refreshed_count"], 4)
-        self.assertEqual(after["remaining_count"], 1)
-
-        original_model = ml._model_compact
-        ml._model_compact = lambda *_args, **_kwargs: {
-            "summary": "current position 4", "open_threads": [],
-            "claims": [], "episodes": [],
-        }
-        try:
-            out = ml.refresh_compacts(ROOM, stale["id"], max_chunks=1)
-        finally:
-            ml._model_compact = original_model
-        completed = ml._refresh_snapshot(ROOM)["groups"][group_id]
-        self.assertEqual(out["reason"], "target_refreshed", out)
-        self.assertEqual(out["chunks_written"], 1, out)
-        self.assertTrue(out["receipt_written"], out)
-        self.assertTrue(completed["receipt_complete"], completed)
-        self.assertEqual(completed["remaining_count"], 0)
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
-
-    def test_orphan_strict_replacement_is_reconciled_without_model(self):
-        rows = [self._msg(1, "old"), self._msg(2, "stable")]
-        stale = self._compact(rows, summary="old recap")
-        latest = self._edit(1, "new", ts=65_001.0)
-        target = [latest, rows[1]]
-        orphan = self._compact(target, summary="orphan current recap")
-        calls, original = self._capture_model("must not run")
-        try:
-            out = ml.refresh_compacts(ROOM, stale["id"], max_chunks=1)
-        finally:
-            ml._model_compact = original
-
-        self.assertEqual(calls, [])
-        self.assertEqual(out["chunks_written"], 0)
-        self.assertTrue(out["receipt_written"])
-        self.assertEqual(out["replacement_compact_ids"], [orphan["id"]])
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
 
     def test_wrong_digest_receipt_cannot_clear_debt(self):
         rows = [self._msg(1, "old"), self._msg(2, "stable")]
@@ -817,355 +649,234 @@ class TestAddressedCompactRefresh(Base):
             })
         self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 1)
 
+    def test_edit_refresh_uses_latest_body_and_keeps_old_bytes(self):
+        rows = [self._msg(i, f"исходная реплика {i}") for i in range(1, 7)]
+        stale = self._compact(rows, summary="STALE RECAP исходная реплика 3")
+        path = ml._compact_dir(ROOM) / f"{stale['id']}.md"
+        before = path.read_bytes()
+        latest = self._edit(3, "ТОЛЬКО НОВАЯ РЕДАКЦИЯ", ts=60_001.0)
+
+        prepared = self._prepare(stale["id"])
+        source_text = "\n".join(str(row["text"]) for row in prepared["sources"])
+        self.assertIn("ТОЛЬКО НОВАЯ РЕДАКЦИЯ", source_text)
+        self.assertNotIn("исходная реплика 3", source_text)
+        self.assertEqual(
+            [row["id"] for row in prepared["sources"]].count(latest["id"]), 1)
+        result = self._apply(prepared, "сводка с ТОЛЬКО НОВОЙ РЕДАКЦИЕЙ")
+
+        self.assertEqual(result["remaining_count"], 0)
+        self.assertEqual(path.read_bytes(), before)
+        frame = ml.context_summary(ROOM)
+        self.assertIn("сводка с ТОЛЬКО НОВОЙ РЕДАКЦИЕЙ", frame)
+        self.assertNotIn("STALE RECAP", frame)
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
+    def test_delete_never_sends_or_presents_the_old_body(self):
+        body = "УДАЛЁННОЕ ТЕЛО НЕ ДОЛЖНО ВЕРНУТЬСЯ"
+        rows = [self._msg(1, body), self._msg(2, "остаётся")]
+        stale = self._compact(rows, summary=f"STALE RECAP {body}")
+        path = ml._compact_dir(ROOM) / f"{stale['id']}.md"
+        before = path.read_bytes()
+        self._delete(1, ts=61_001.0)
+
+        prepared = self._prepare(stale["id"])
+        sources = "\n".join(str(row["text"]) for row in prepared["sources"])
+        self.assertIn("[deleted #1]", sources)
+        self.assertNotIn(body, sources)
+        self._apply(prepared, "сводка после tombstone")
+
+        self.assertNotIn(body, ml.context_summary(ROOM))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertIn(body, path.read_text(encoding="utf-8"))
+        self.assertFalse(memory_fts._compact_markdown_current(
+            path, ml.MEM_DIR, evidence=self._evidence()))
+
+    def test_nested_parent_claims_stale_child_and_never_models_stale_recaps(self):
+        _rows, kids, parent = TestNestedStaleParent._tree(self)
+        self._edit(5, "новая пятая", ts=62_001.0)
+
+        prepared = self._prepare(parent["id"])
+        sources = "\n".join(str(row["text"]) for row in prepared["sources"])
+        self.assertNotIn("родитель", sources)
+        self.assertNotIn("ребёнок", sources)
+        self.assertIn("новая пятая", sources)
+        result = self._apply(prepared, "fresh nested")
+
+        self.assertEqual(result["remaining_count"], 0)
+        receipts = self._receipts()
+        self.assertEqual(len(receipts), 1)
+        self.assertEqual(
+            receipts[0]["meta"]["stale_compact_ids"],
+            [parent["id"], kids[0]["id"]])
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+        self.assertNotIn("родитель", ml.context_summary(ROOM))
+
+    def test_many_revisions_project_latest_exactly_once(self):
+        rows = [self._msg(1, "original"), self._msg(2, "stable")]
+        stale = self._compact(rows, summary="stale original")
+        for revision, text, stamp in (
+                (1, "first edit", 63_001.0),
+                (2, "LATEST EDIT", 63_003.0),
+                (3, "late older", 63_002.0)):
+            ml.record_message(
+                ROOM, f"Николай: {text}", actor="Николай", direction="in",
+                source_id=f"1:edit:{revision}", ts=stamp,
+                revision_order=revision,
+                dedupe_key=f"telegram:{ROOM}:1:edit:{revision}:in")
+        ml.note_message_revision(ROOM, 1, "Николай: LATEST EDIT")
+
+        prepared = self._prepare(stale["id"])
+        sources = "\n".join(str(row["text"]) for row in prepared["sources"])
+        self.assertEqual(sources.count("LATEST EDIT"), 1)
+        for obsolete in ("original", "first edit", "late older"):
+            self.assertNotIn(obsolete, sources)
+        self._apply(prepared, "latest recap")
+
+    def test_required_model_aborts_before_any_replacement_or_receipt(self):
+        """No author text: no fallback, no replacement, no refresh receipt."""
+        rows = [self._msg(i, "x" * 80 + f" row {i}") for i in range(1, 5)]
+        stale = self._compact(rows, summary="stale chunked")
+        self._edit(1, "y" * 80 + " latest", ts=63_901.0)
+        files, receipts = self._files(), self._receipts()
+
+        prepared = self._prepare(stale["id"], limit=1)
+        self.assertEqual(len(prepared["sources"]), 1)
+        self.assertEqual(prepared["remaining_unselected"], 3)
+        self.assertEqual(self._files(), files)
+        self.assertEqual(self._receipts(), receipts)
+        result = ml.apply_authored_fold(ROOM, prepared["selection"], "")
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["reason"], "text_and_selection_required")
+        self.assertEqual(result["folded"], 0)
+        self.assertEqual(self._files(), files)
+        self.assertEqual(self._receipts(), receipts)
+        self.assertGreater(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+        self.assertEqual(self.helper_calls, [])
+
+    def test_addressed_degraded_model_result_is_not_committed(self):
+        """A refused legacy generator cannot advance canonical refresh state."""
+        rows = [self._msg(1, "old"), self._msg(2, "stable")]
+        stale = self._compact(rows, summary="degraded stale")
+        self._edit(1, "new", ts=63_951.0)
+        files, receipts = self._files(), self._receipts()
+
+        result = ml.refresh_compacts(ROOM, stale["id"])
+
+        self.assertFalse(result["ok"], result)
+        self.assertEqual(result["reason"], "acting_author_required", result)
+        self.assertEqual(result["chunks_written"], 0)
+        self.assertEqual(self._files(), files)
+        self.assertEqual(self._receipts(), receipts)
+        self.assertEqual(self.helper_calls, [])
+        # The replacement route actually works; refusal alone is not coverage.
+        self._refresh(stale["id"], "nondegraded acting-author recap")
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
+    def test_one_chunk_makes_monotonic_progress_then_completion_is_idempotent(self):
+        rows = [self._msg(i, "x" * 80 + f" row {i}") for i in range(1, 5)]
+        stale = self._compact(rows, summary="stale chunked")
+        self._edit(1, "y" * 80 + " latest", ts=64_001.0)
+        remaining = []
+
+        for step in range(4):
+            prepared = self._prepare(stale["id"], limit=1)
+            self.assertEqual(len(prepared["sources"]), 1)
+            before_files, before_receipts = len(self._files()), len(self._receipts())
+            result = self._apply(prepared, f"bounded chunk {step}")
+            self.assertEqual(result["folded"], 1)
+            self.assertEqual(len(self._files()) - before_files, 1)
+            self.assertEqual(len(self._receipts()) - before_receipts, 1)
+            remaining.append(result["remaining_count"])
+
+        self.assertEqual(remaining, [3, 2, 1, 0])
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+        # A stale retained selection cannot generate a duplicate on replay.
+        self._assert_conflict_without_writes(prepared, "duplicate must not commit")
+        self.assertEqual(len(self._receipts()), 4)
+
+    def test_later_overlap_cannot_regress_durable_partial_progress(self):
+        old = [self._msg(i, f"old {i}") for i in range(1, 6)]
+        stale = self._compact(old, summary="stale all five")
+        latest = [
+            self._edit(i, f"new {i}", ts=64_100.0 + i)
+            for i in range(1, 6)]
+        left = self._compact(latest[:2], summary="current positions 0,1")
+        right = self._compact(latest[2:4], summary="current positions 2,3")
+        snapshot = ml._refresh_snapshot(ROOM)
+        group_id = snapshot["artifact_group"][stale["id"]]
+        group = snapshot["groups"][group_id]
+        replacements, covered = ml._refresh_choose_replacements(group, snapshot)
+        self.assertEqual(replacements, [left["id"], right["id"]])
+        self.assertEqual(covered, {0, 1, 2, 3})
+        receipt = ml._append_refresh_receipt(ROOM, group, replacements)
+
+        crossing = self._compact(
+            latest[:3], summary="later overlapping positions 0,1,2")
+        after = self._group(stale["id"])
+        self.assertEqual(after["receipt"]["receipt_event_id"], receipt["id"])
+        self.assertEqual(after["receipt"]["refreshed_count"], 4)
+        self.assertEqual(after["replacement_compact_ids"], [left["id"], right["id"]])
+        self.assertNotIn(crossing["id"], after["replacement_compact_ids"])
+        self.assertEqual(after["remaining_count"], 1)
+
+        prepared = self._prepare(stale["id"], limit=1)
+        self.assertEqual(
+            [row["id"] for row in prepared["sources"]], [latest[4]["id"]])
+        self._apply(prepared, "current position 4")
+        completed = self._group(stale["id"])
+        self.assertTrue(completed["receipt_complete"], completed)
+        self.assertEqual(completed["remaining_count"], 0)
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
+    def test_orphan_strict_replacement_is_reconciled_without_model(self):
+        rows = [self._msg(1, "old"), self._msg(2, "stable")]
+        stale = self._compact(rows, summary="old recap")
+        latest = self._edit(1, "new", ts=65_001.0)
+        orphan = self._compact([latest, rows[1]], summary="orphan current recap")
+        files = self._files()
+
+        result = ml.prepare_authored_fold(ROOM, compact_id=stale["id"])
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["reason"], "refresh_reconciled", result)
+        self.assertEqual(result["sources"], [])
+        self.assertEqual(self._files(), files)
+        self.assertEqual(self.helper_calls, [])
+        group = self._group(stale["id"])
+        self.assertEqual(group["replacement_compact_ids"], [orphan["id"]])
+        self.assertTrue(group["receipt_complete"])
+        self.assertEqual(len(self._receipts()), 1)
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
     def test_new_edit_after_completion_reopens_debt(self):
         rows = [self._msg(1, "old"), self._msg(2, "stable")]
         stale = self._compact(rows, summary="old recap")
         self._edit(1, "new", ts=67_001.0)
-        calls, original = self._capture_model("fresh")
-        try:
-            ml.refresh_compacts(ROOM, stale["id"])
-        finally:
-            ml._model_compact = original
+        self._refresh(stale["id"])
         self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
         self._edit(2, "newer again", ts=67_002.0)
         debt = ml.refresh_debt(ROOM)
         self.assertGreater(debt["needs_refresh"], 0)
         self.assertGreater(debt["sample"][0]["remaining_count"], 0)
+        prepared = self._prepare(stale["id"])
+        self.assertIn(
+            "newer again",
+            "\n".join(str(row["text"]) for row in prepared["sources"]))
 
 
-class TestAddressedRefreshAdversarial(Base):
+
+class TestAddressedRefreshAdversarial(_AuthoredRefreshBase):
     """Measured regressions from the rejected first implementation."""
 
-    def _model(self, calls, summary="fresh"):
-        def model(inputs, **_kwargs):
-            calls.append([dict(item) for item in inputs])
-            return {"summary": summary, "open_threads": [], "claims": [], "episodes": []}
-        return model
 
-    def test_target_change_during_evaluator_never_claims_success(self):
-        rows = [self._msg(1, "old"), self._msg(2, "stable")]
-        stale = self._compact(rows, summary="stale old")
-        self._edit(1, "new", ts=70_001.0)
-        original = ml._model_compact
 
-        def mutate(inputs, **_kwargs):
-            self._edit(2, "changed during evaluator", ts=70_002.0)
-            return {"summary": "obsolete plan", "open_threads": [], "claims": [], "episodes": []}
-
-        ml._model_compact = mutate
-        try:
-            out = ml.refresh_compacts(ROOM, stale["id"])
-        finally:
-            ml._model_compact = original
-        self.assertFalse(out["ok"], out)
-        self.assertEqual(out["reason"], "target_changed", out)
-        debt = ml.refresh_debt(ROOM)
-        self.assertGreater(debt["needs_refresh"], 0)
-
-    def test_blocked_evaluator_does_not_block_unrelated_append(self):
-        rows = [self._msg(1, "old"), self._msg(2, "stable")]
-        stale = self._compact(rows, summary="stale old")
-        self._edit(1, "new", ts=71_001.0)
-        entered = threading.Event()
-        release = threading.Event()
-        appended = threading.Event()
-        errors = []
-        original = ml._model_compact
-
-        def blocked(inputs, **_kwargs):
-            entered.set()
-            release.wait(2.0)
-            return {"summary": "fresh", "open_threads": [], "claims": [], "episodes": []}
-
-        def refresh():
-            try:
-                ml.refresh_compacts(ROOM, stale["id"])
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-
-        def append_other():
-            try:
-                self._msg(99, "unrelated", chat=OTHER, ts=71_002.0)
-                appended.set()
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-
-        ml._model_compact = blocked
-        try:
-            refresh_thread = threading.Thread(target=refresh)
-            refresh_thread.start()
-            self.assertTrue(entered.wait(1.0))
-            append_thread = threading.Thread(target=append_other)
-            append_thread.start()
-            self.assertTrue(appended.wait(0.5), "global write lock was held across evaluator")
-            release.set()
-            refresh_thread.join(3.0)
-            append_thread.join(3.0)
-        finally:
-            release.set()
-            ml._model_compact = original
-        self.assertFalse(errors, errors)
 
     @unittest.skipIf(not hasattr(os, "fork"), "порт: fork-семантика стенда; замок кроссплатформенный (O_EXCL, test_pid_identity зелёный на винде), spawn-переписывание — отдельный шаг")
-    def test_slow_hot_compaction_does_not_block_same_place_cross_process_append(self):
-        for mid in range(1, 7):
-            self._msg(mid, f"row {mid}", ts=float(mid * 10_000))
-        ctx = multiprocessing.get_context("fork")
-        entered = ctx.Event()
-        release = ctx.Event()
-        child_out = ctx.Queue()
 
-        def compact_child():
-            original = ml._model_compact
-
-            def blocked(inputs, **_kwargs):
-                entered.set()
-                if not release.wait(3.0):
-                    raise TimeoutError("writer did not release the slow compactor")
-                return {"summary": "fresh", "open_threads": [],
-                        "claims": [], "episodes": []}
-
-            ml._model_compact = blocked
-            try:
-                child_out.put(("ok", ml.compact_if_due(ROOM, force=True)))
-            except Exception as exc:  # pragma: no cover - asserted below
-                child_out.put(("error", repr(exc)))
-            finally:
-                ml._model_compact = original
-
-        process = ctx.Process(target=compact_child)
-        process.start()
-        writer_done = threading.Event()
-        errors = []
-        written = {}
-
-        def write_same_place():
-            try:
-                written["row"] = self._msg(99, "during slow compact", ts=99_000.0)
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-            finally:
-                writer_done.set()
-
-        try:
-            self.assertTrue(entered.wait(2.0))
-            writer = threading.Thread(target=write_same_place)
-            writer.start()
-            self.assertTrue(writer_done.wait(0.8),
-                            "slow model held the cross-process state transaction")
-            release.set()
-            writer.join(3.0)
-            process.join(5.0)
-        finally:
-            release.set()
-            if process.is_alive():
-                process.terminate()
-                process.join(2.0)
-        self.assertFalse(errors, errors)
-        self.assertEqual(process.exitcode, 0)
-        status, payload = child_out.get(timeout=1.0)
-        self.assertEqual(status, "ok", payload)
-        event_ids = {
-            row.get("id") for row in ml.iter_events(
-                chat_id=ROOM, kinds={"conversation_message"})
-        }
-        self.assertIn(written["row"]["id"], event_ids)
-        final_hot = {row.get("id") for row in ml._load_state(ROOM, rebuild=True)["hot"]}
-        self.assertIn(written["row"]["id"], final_hot)
-
-    def test_hot_compaction_and_refresh_share_one_commit_domain(self):
-        old = self._msg(1, "old")
-        stale = self._compact([old], summary="stale old")
-        latest = self._edit(1, "new", ts=99_100.0)
-        self._msg(2, "stable tail", ts=99_200.0)
-        refresh_planned = threading.Event()
-        allow_refresh_commit = threading.Event()
-        compact_done = threading.Event()
-        outputs = {}
-        errors = []
-        original_model = ml._model_compact
-        model_calls = []
-
-        def model(inputs, **_kwargs):
-            model_calls.append([dict(item) for item in inputs])
-            if threading.current_thread().name == "refresh-thread":
-                refresh_planned.set()
-                if not allow_refresh_commit.wait(3.0):
-                    raise TimeoutError("hot compaction did not commit")
-                summary = "obsolete refresh"
-            else:
-                summary = "ordinary hot compact"
-            return {"summary": summary, "open_threads": [], "claims": [], "episodes": []}
-
-        def refresh():
-            try:
-                outputs["refresh"] = ml.refresh_compacts(ROOM, stale["id"])
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-
-        def compact():
-            try:
-                outputs["compact"] = ml.compact_if_due(ROOM, force=True)
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-            finally:
-                compact_done.set()
-                allow_refresh_commit.set()
-
-        ml._model_compact = model
-        try:
-            refresh_thread = threading.Thread(target=refresh, name="refresh-thread")
-            refresh_thread.start()
-            self.assertTrue(refresh_planned.wait(1.0))
-            compact_thread = threading.Thread(target=compact, name="compact-thread")
-            compact_thread.start()
-            self.assertTrue(compact_done.wait(2.0))
-            refresh_thread.join(5.0)
-            compact_thread.join(5.0)
-        finally:
-            allow_refresh_commit.set()
-            ml._model_compact = original_model
-        self.assertFalse(errors, errors)
-        self.assertTrue(outputs["compact"]["ok"], outputs)
-        self.assertEqual(outputs["compact"]["folded"], 1, outputs)
-        self.assertEqual(outputs["refresh"]["reason"], "target_refreshed", outputs)
-        self.assertEqual(outputs["refresh"]["chunks_written"], 0, outputs)
-        self.assertTrue(outputs["refresh"]["receipt_written"], outputs)
-        strict = [meta for meta, _recap in ml._canonical_compact_graph(ROOM)[0].values()
-                  if meta.get("source_event_ids") == [latest["id"]]]
-        self.assertEqual(len(strict), 1, strict)
-        frame = ml.context_summary(ROOM)
-        self.assertEqual(frame.count("ordinary hot compact"), 1, frame)
-        self.assertNotIn("obsolete refresh", frame)
 
     @unittest.skipIf(not hasattr(os, "fork"), "порт: fork-семантика стенда; замок кроссплатформенный (O_EXCL, test_pid_identity зелёный на винде), spawn-переписывание — отдельный шаг")
-    def test_hot_compaction_and_refresh_share_cross_process_commit_domain(self):
-        old = self._msg(1, "old")
-        stale = self._compact([old], summary="stale old")
-        latest = self._edit(1, "new", ts=99_300.0)
-        self._msg(2, "stable tail", ts=99_400.0)
-        ctx = multiprocessing.get_context("fork")
-        compact_model_ready = ctx.Event()
-        allow_compact_commit = ctx.Event()
-        refresh_in_commit = ctx.Event()
-        release_refresh = ctx.Event()
-        compact_attempted = ctx.Event()
-        compact_done = ctx.Event()
-        child_out = ctx.Queue()
-
-        def refresh_child():
-            original_snapshot = ml._refresh_snapshot
-            original_model = ml._model_compact
-            calls = 0
-
-            def paused_snapshot(chat, **kwargs):
-                nonlocal calls
-                snapshot = original_snapshot(chat, **kwargs)
-                calls += 1
-                if calls == 2:
-                    refresh_in_commit.set()
-                    if not release_refresh.wait(5.0):
-                        raise TimeoutError("hot compactor never attempted the state lock")
-                return snapshot
-
-            ml._refresh_snapshot = paused_snapshot
-            ml._model_compact = lambda *_args, **_kwargs: {
-                "summary": "cross-process refresh", "open_threads": [],
-                "claims": [], "episodes": [],
-            }
-            try:
-                child_out.put(("refresh", "ok", ml.refresh_compacts(ROOM, stale["id"])))
-            except Exception as exc:  # pragma: no cover - asserted below
-                child_out.put(("refresh", "error", repr(exc)))
-            finally:
-                ml._refresh_snapshot = original_snapshot
-                ml._model_compact = original_model
-
-        def compact_child():
-            original_adopt = ml.adopt_place
-            original_guard = ml._state_write_guard
-            original_model = ml._model_compact
-            model_returned = False
-
-            def adopt_without_state_guard(chat):
-                return ml._place_key_live(str(chat))
-
-            @contextlib.contextmanager
-            def observed_commit_guard(chat):
-                if model_returned:
-                    compact_attempted.set()
-                with original_guard(chat):
-                    yield
-
-            def model(*_args, **_kwargs):
-                nonlocal model_returned
-                result = {
-                    "summary": "cross-process hot compact", "open_threads": [],
-                    "claims": [], "episodes": [],
-                }
-                model_returned = True
-                compact_model_ready.set()
-                if not allow_compact_commit.wait(5.0):
-                    raise TimeoutError("refresh never entered its commit domain")
-                return result
-
-            ml.adopt_place = adopt_without_state_guard
-            ml._state_write_guard = observed_commit_guard
-            ml._model_compact = model
-            try:
-                child_out.put(("compact", "ok", ml.compact_if_due(ROOM, force=True)))
-            except Exception as exc:  # pragma: no cover - asserted below
-                child_out.put(("compact", "error", repr(exc)))
-            finally:
-                compact_done.set()
-                ml.adopt_place = original_adopt
-                ml._state_write_guard = original_guard
-                ml._model_compact = original_model
-
-        refresh_process = ctx.Process(target=refresh_child)
-        compact_process = ctx.Process(target=compact_child)
-        compact_process.start()
-        try:
-            self.assertTrue(compact_model_ready.wait(3.0),
-                            "hot compactor never finished planning")
-            refresh_process.start()
-            self.assertTrue(refresh_in_commit.wait(3.0),
-                            "refresh never paused inside the state commit domain")
-            allow_compact_commit.set()
-            self.assertTrue(compact_attempted.wait(3.0),
-                            "hot compactor never attempted its commit state lock")
-            self.assertFalse(compact_done.wait(0.3),
-                             "hot compactor bypassed refresh's state commit domain")
-            release_refresh.set()
-            refresh_process.join(10.0)
-            compact_process.join(10.0)
-        finally:
-            allow_compact_commit.set()
-            release_refresh.set()
-            if refresh_process.pid is not None and refresh_process.is_alive():
-                refresh_process.terminate()
-                refresh_process.join(2.0)
-            if compact_process.is_alive():
-                compact_process.terminate()
-                compact_process.join(2.0)
-        self.assertEqual(refresh_process.exitcode, 0)
-        self.assertEqual(compact_process.exitcode, 0)
-        results = {}
-        for _ in range(2):
-            name, status, payload = child_out.get(timeout=2.0)
-            self.assertEqual(status, "ok", payload)
-            results[name] = payload
-        self.assertEqual(results["refresh"]["reason"], "target_refreshed", results)
-        self.assertEqual(results["refresh"]["chunks_written"], 1, results)
-        self.assertEqual(results["compact"]["folded"], 0, results)
-        strict = [meta for meta, _recap in ml._canonical_compact_graph(ROOM)[0].values()
-                  if meta.get("source_event_ids") == [latest["id"]]]
-        self.assertEqual(len(strict), 1, strict)
-        frame = ml.context_summary(ROOM)
-        self.assertEqual(frame.count("cross-process refresh"), 1, frame)
-        self.assertNotIn("cross-process hot compact", frame)
-        self.assertEqual(len(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"})), 1)
 
     def test_same_place_waiter_does_not_convoy_unrelated_place(self):
         self._msg(1, "seed room")
@@ -1235,96 +946,9 @@ class TestAddressedRefreshAdversarial(Base):
             ml._state_write_guard = original_guard
         self.assertFalse(errors, errors)
 
-    def test_repeated_revisions_collapse_historical_roots(self):
-        row = self._msg(1, "v0")
-        current = self._compact([row], summary="v0")
-        receipts = []
-        original = ml._model_compact
-        calls = []
-        ml._model_compact = self._model(calls)
-        try:
-            for revision in range(1, 6):
-                latest = ml.record_message(
-                    ROOM, f"Николай: v{revision}", actor="Николай", direction="in",
-                    source_id=f"1:edit:{revision}", ts=72_000.0 + revision,
-                    revision_order=revision,
-                    dedupe_key=f"telegram:{ROOM}:1:edit:{revision}:in")
-                ml.note_message_revision(ROOM, 1, f"Николай: v{revision}")
-                out = ml.refresh_compacts(ROOM, current["id"])
-                self.assertTrue(out["ok"], out)
-                self.assertEqual(out["reason"], "target_refreshed", out)
-                self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
-                receipts = ml.iter_events(chat_id=ROOM, kinds={"memory_compact_refresh"})
-                current = ml._write_compact(
-                    ROOM, {"summary": f"current {revision}", "open_threads": [],
-                           "claims": [], "episodes": []},
-                    tier=1, depth=1, source_events=[latest["id"]], source_compacts=[],
-                    event_count=1, continued=False, first_ts=latest["ts"], last_ts=latest["ts"])
-        finally:
-            ml._model_compact = original
-        self.assertEqual(len(receipts), 5)
-        self.assertLessEqual(len(calls), 5)
 
-    def test_presentable_superset_is_reused_without_model(self):
-        rows = [self._msg(i, f"row {i}") for i in range(1, 4)]
-        stale = self._compact(rows[:2], summary="old A B")
-        latest = self._edit(1, "new A", ts=73_001.0)
-        strict = ml._write_compact(
-            ROOM, {"summary": "strict A B C", "open_threads": [], "claims": [], "episodes": []},
-            tier=1, depth=1,
-            source_events=[latest["id"], rows[1]["id"], rows[2]["id"]],
-            source_compacts=[], event_count=3, continued=False,
-            first_ts=min(rows[1]["ts"], rows[2]["ts"], latest["ts"]),
-            last_ts=max(rows[1]["ts"], rows[2]["ts"], latest["ts"]))
-        original = ml._model_compact
-        ml._model_compact = lambda *_a, **_kw: self.fail("model called despite strict superset")
-        try:
-            before = len(list(ml._compact_dir(ROOM).glob("*.md")))
-            out = ml.refresh_compacts(ROOM, stale["id"], max_chunks=1)
-            after = len(list(ml._compact_dir(ROOM).glob("*.md")))
-        finally:
-            ml._model_compact = original
-        self.assertEqual(out["remaining_count"], 0, out)
-        self.assertEqual(out["chunks_written"], 0, out)
-        self.assertEqual(before, after)
-        self.assertIn(strict["id"], out["replacement_compact_ids"])
 
-    def test_addressless_result_names_remaining_room_debt(self):
-        roots = []
-        for mid in range(1, 4):
-            row = self._msg(mid, f"old {mid}")
-            roots.append(self._compact([row], summary=f"old {mid}"))
-            self._edit(mid, f"new {mid}", ts=74_000.0 + mid)
-        calls = []
-        original = ml._model_compact
-        ml._model_compact = self._model(calls)
-        try:
-            out = ml.refresh_compacts(ROOM, max_chunks=1)
-        finally:
-            ml._model_compact = original
-        self.assertEqual(out["scope"], "one_group")
-        self.assertGreater(out["room_unresolved_group_count"], 0, out)
-        self.assertGreater(out["room_needs_refresh"], 0, out)
-        self.assertEqual(out["target_remaining_count"], 0, out)
 
-    def test_many_chunks_append_at_most_one_receipt(self):
-        rows = [self._msg(i, "x" * 80 + str(i)) for i in range(1, 6)]
-        stale = self._compact(rows, summary="stale")
-        self._edit(1, "y" * 80, ts=75_001.0)
-        calls = []
-        original_model, original_budget = ml._model_compact, ml.PROMPT_BUDGET_CHARS
-        ml._model_compact = self._model(calls)
-        ml.PROMPT_BUDGET_CHARS = 120
-        try:
-            before = len(ml.iter_events(chat_id=ROOM, kinds={"memory_compact_refresh"}))
-            out = ml.refresh_compacts(ROOM, stale["id"], max_chunks=8)
-            after = len(ml.iter_events(chat_id=ROOM, kinds={"memory_compact_refresh"}))
-        finally:
-            ml._model_compact = original_model
-            ml.PROMPT_BUDGET_CHARS = original_budget
-        self.assertGreater(out["chunks_written"], 1, out)
-        self.assertLessEqual(after - before, 1)
-        self.assertEqual(after - before, int(out["receipt_written"]))
 
 
     def test_three_hundred_roots_addressed_snapshot_is_linear_by_counts(self):
@@ -1355,49 +979,16 @@ class TestAddressedRefreshAdversarial(Base):
 
         ml._refresh_logical_id, ml._refresh_validate_receipt = logical, receipt
         try:
-            out = ml.refresh_compacts(ROOM, roots[-1]["id"], max_chunks=0)
+            snapshot = ml._refresh_snapshot(ROOM)
+            group = snapshot["groups"][snapshot["artifact_group"][roots[-1]["id"]]]
         finally:
             ml._refresh_logical_id, ml._refresh_validate_receipt = originals
-        self.assertTrue(out["ok"], out)
+        self.assertEqual(len(snapshot["groups"]), 300)
+        self.assertEqual(group["remaining_count"], 1)
         self.assertLessEqual(counts["logical"], 10 * 300 + 20, counts)
         self.assertEqual(counts["receipt"], 0, counts)
 
 
-    def test_future_partial_receipt_cannot_override_complete_receipt(self):
-        rows = [self._msg(1, "old"), self._msg(2, "stable")]
-        stale = self._compact(rows, summary="old recap")
-        latest = self._edit(1, "new", ts=82_001.0)
-        calls = []
-        original = ml._model_compact
-        ml._model_compact = self._model(calls)
-        try:
-            done = ml.refresh_compacts(ROOM, stale["id"])
-        finally:
-            ml._model_compact = original
-        self.assertEqual(done["reason"], "target_refreshed", done)
-        partial = self._compact([latest], summary="partial current")
-        snapshot = ml._refresh_snapshot(ROOM)
-        group = snapshot["groups"][snapshot["artifact_group"][stale["id"]]]
-        ml.append_event(
-            "memory_compact_refresh", chat_id=ROOM,
-            text=f"Compact refresh group: {group['group_id']}", source="memory_life",
-            source_id=group["group_id"], refs=group["stale_ids"] + [partial["id"]],
-            ts=9_999_999_999.0,
-            meta={
-                "schema": ml._COMPACT_REFRESH_SCHEMA,
-                "group_id": group["group_id"],
-                "coverage_root_ids": group["root_ids"],
-                "stale_compact_ids": group["stale_ids"],
-                "logical_target_count": len(group["logical_ids"]),
-                "logical_target_ids_sha256": ml._refresh_digest(group["logical_ids"]),
-                "target_event_count": len(group["target_ids"]),
-                "target_event_ids_sha256": ml._refresh_digest(group["target_ids"]),
-                "replacement_compact_ids": [partial["id"]],
-            })
-        debt = ml.refresh_debt(ROOM)
-        self.assertEqual(debt["needs_refresh"], 0, debt)
-        selected = ml._refresh_snapshot(ROOM)["groups"][group["group_id"]]["receipt"]
-        self.assertEqual(selected["remaining_count"], 0, selected)
 
     def test_reversed_replacement_order_cannot_clear_debt(self):
         rows = [self._msg(1, "old A"), self._msg(2, "old B")]
@@ -1488,120 +1079,7 @@ class TestAddressedRefreshAdversarial(Base):
         self.assertNotIn(later_whole["id"], after["receipt"]["replacement_compact_ids"])
         self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
 
-    def test_retry_reconciles_state_after_crash_post_receipt(self):
-        rows = [self._msg(1, "old")]
-        stale = self._compact(rows, summary="old recap")
-        latest = self._edit(1, "new", ts=83_001.0)
-        original_model, original_rebuild = ml._model_compact, ml.rebuild_state
-        ml._model_compact = self._model([])
-        crashed = []
 
-        def crash_after_receipt(chat):
-            crashed.append(str(chat))
-            raise RuntimeError("simulated crash after durable receipt")
-
-        ml.rebuild_state = crash_after_receipt
-        try:
-            with self.assertRaises(RuntimeError):
-                ml.refresh_compacts(ROOM, stale["id"])
-        finally:
-            ml._model_compact = original_model
-            ml.rebuild_state = original_rebuild
-        self.assertTrue(crashed)
-        before = ml._load_state(ROOM, rebuild=False)
-        self.assertIn(latest["id"], {row.get("id") for row in before["hot"]})
-        retry = ml.refresh_compacts(ROOM, stale["id"])
-        self.assertEqual(retry["reason"], "already_refreshed", retry)
-        after = ml._load_state(ROOM, rebuild=False)
-        self.assertNotIn(latest["id"], {row.get("id") for row in after["hot"]})
-
-    def test_retry_reconciliation_cannot_overwrite_newer_revision_state(self):
-        old = self._msg(1, "old", ts=100.0)
-        stale = self._compact([old], summary="stale old")
-        rev1 = ml.record_message(
-            ROOM, "Николай: rev1", actor="Николай", direction="in",
-            source_id="1:edit:1", ts=200.0, revision_order=1,
-            dedupe_key=f"telegram:{ROOM}:1:edit:1:in")
-        ml.note_message_revision(ROOM, 1, "Николай: rev1")
-        original_model = ml._model_compact
-        ml._model_compact = self._model([])
-        try:
-            first = ml.refresh_compacts(ROOM, stale["id"])
-        finally:
-            ml._model_compact = original_model
-        self.assertEqual(first["reason"], "target_refreshed", first)
-        self.assertNotIn(rev1["id"], {
-            row.get("id") for row in ml._load_state(ROOM, rebuild=False)["hot"]})
-
-        entered = threading.Event()
-        attempted = threading.Event()
-        release = threading.Event()
-        retry_done = threading.Event()
-        writer_done = threading.Event()
-        errors = []
-        outputs = {}
-        original_save = ml._save_state
-        original_guard = ml._state_write_guard
-
-        def paused_save(state):
-            if threading.current_thread().name == "retry-thread" and not entered.is_set():
-                entered.set()
-                if not release.wait(3.0):
-                    raise TimeoutError("writer did not test the state guard")
-            return original_save(state)
-
-        @contextlib.contextmanager
-        def observed_guard(chat):
-            if threading.current_thread().name == "writer-thread":
-                attempted.set()
-            with original_guard(chat):
-                yield
-
-        def retry():
-            try:
-                outputs["retry"] = ml.refresh_compacts(ROOM, stale["id"])
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-            finally:
-                retry_done.set()
-
-        def write_rev2():
-            try:
-                outputs["rev2"] = ml.record_message(
-                    ROOM, "Николай: rev2", actor="Николай", direction="in",
-                    source_id="1:edit:2", ts=300.0, revision_order=2,
-                    dedupe_key=f"telegram:{ROOM}:1:edit:2:in")
-                ml.note_message_revision(ROOM, 1, "Николай: rev2")
-            except Exception as exc:  # pragma: no cover - asserted below
-                errors.append(exc)
-            finally:
-                writer_done.set()
-
-        ml._save_state = paused_save
-        ml._state_write_guard = observed_guard
-        try:
-            retry_thread = threading.Thread(target=retry, name="retry-thread")
-            retry_thread.start()
-            self.assertTrue(entered.wait(1.0))
-            writer_thread = threading.Thread(target=write_rev2, name="writer-thread")
-            writer_thread.start()
-            self.assertTrue(attempted.wait(1.0), "writer never attempted the state guard")
-            self.assertFalse(writer_done.wait(0.2),
-                             "new revision bypassed the reconciliation state guard")
-            release.set()
-            retry_thread.join(5.0)
-            writer_thread.join(5.0)
-        finally:
-            release.set()
-            ml._save_state = original_save
-            ml._state_write_guard = original_guard
-        self.assertTrue(retry_done.is_set())
-        self.assertTrue(writer_done.is_set())
-        self.assertFalse(errors, errors)
-        final = ml._load_state(ROOM, rebuild=False)
-        self.assertIn(outputs["rev2"]["id"], {row.get("id") for row in final["hot"]})
-        debt = ml.refresh_debt(ROOM)
-        self.assertGreater(debt["needs_refresh"], 0, debt)
 
     def test_non_writer_shaped_receipt_cannot_clear_debt(self):
         rows = [self._msg(1, "old")]
@@ -1630,48 +1108,519 @@ class TestAddressedRefreshAdversarial(Base):
         self.assertEqual(refreshed["groups"][group["group_id"]]["receipt"], {})
         self.assertGreater(ml.refresh_debt(ROOM)["needs_refresh"], 0)
 
-    def test_concurrent_same_group_commits_only_one_compact_and_receipt(self):
-        row = self._msg(1, "old")
-        stale = self._compact([row], summary="old recap")
-        self._edit(1, "new", ts=85_001.0)
-        entered = threading.Barrier(2)
-        calls = []
-        outputs = []
+    def test_target_change_during_evaluator_never_claims_success(self):
+        rows = [self._msg(1, "old"), self._msg(2, "stable")]
+        stale = self._compact(rows, summary="stale old")
+        self._edit(1, "new", ts=70_001.0)
+        prepared = self._prepare(stale["id"])
+
+        self._edit(2, "changed during acting-author turn", ts=70_002.0)
+
+        self._assert_conflict_without_writes(prepared)
+        self.assertGreater(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
+    def test_blocked_evaluator_does_not_block_unrelated_append(self):
+        rows = [self._msg(1, "old"), self._msg(2, "stable")]
+        stale = self._compact(rows, summary="stale old")
+        self._edit(1, "new", ts=71_001.0)
+        prepared = self._prepare(stale["id"])
+        appended = threading.Event()
         errors = []
-        original = ml._model_compact
 
-        def model(inputs, **_kwargs):
-            name = threading.current_thread().name
-            calls.append(name)
-            entered.wait(2.0)
-            return {"summary": f"NEW {name}", "open_threads": [],
-                    "claims": [], "episodes": []}
-
-        def run():
+        def append_other():
             try:
-                outputs.append(ml.refresh_compacts(ROOM, stale["id"]))
-            except Exception as exc:  # pragma: no cover - asserted below
+                self._msg(99, "unrelated", chat=OTHER, ts=71_002.0)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                appended.set()
+
+        thread = threading.Thread(target=append_other)
+        thread.start()
+        try:
+            self.assertTrue(
+                appended.wait(2.0),
+                "retained source selection held a lock across authoring")
+        finally:
+            thread.join(5.0)
+        self.assertFalse(thread.is_alive())
+        self.assertFalse(errors, errors)
+        self._apply(prepared)
+
+    @unittest.skipIf(not hasattr(os, "fork"), "fork-only process fixture")
+    def test_slow_hot_compaction_does_not_block_same_place_cross_process_append(self):
+        for mid in range(1, 7):
+            self._msg(mid, f"row {mid}", ts=float(mid * 10_000))
+        ctx = multiprocessing.get_context("fork")
+        prepared_ready, release = ctx.Event(), ctx.Event()
+        child_out = ctx.Queue()
+
+        def compact_child():
+            try:
+                prepared = ml.prepare_authored_fold(ROOM, limit=1)
+                if not prepared.get("selection"):
+                    raise AssertionError(prepared)
+                prepared_ready.set()
+                if not release.wait(5.0):
+                    raise TimeoutError("author was not released")
+                child_out.put(("ok", ml.apply_authored_fold(
+                    ROOM, prepared["selection"], "fresh hot authored recap")))
+            except Exception as exc:
+                child_out.put(("error", repr(exc)))
+
+        process = ctx.Process(target=compact_child)
+        process.start()
+        written = {}
+        writer_done = threading.Event()
+        errors = []
+
+        def writer():
+            try:
+                written["row"] = self._msg(
+                    99, "during slow authoring", ts=99_000.0)
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                writer_done.set()
+
+        thread = None
+        try:
+            self.assertTrue(prepared_ready.wait(3.0))
+            thread = threading.Thread(target=writer)
+            thread.start()
+            self.assertTrue(
+                writer_done.wait(2.0),
+                "cross-process selection retained the state lock")
+            release.set()
+            thread.join(5.0)
+            process.join(10.0)
+        finally:
+            release.set()
+            if thread is not None:
+                thread.join(5.0)
+            if process.is_alive():
+                process.terminate()
+                process.join(2.0)
+
+        self.assertFalse(errors, errors)
+        self.assertEqual(process.exitcode, 0)
+        status, result = child_out.get(timeout=2.0)
+        self.assertEqual(status, "ok", result)
+        self.assertTrue(result["ok"], result)
+        self.assertIn(written["row"]["id"], {
+            row["id"] for row in ml.iter_events(
+                chat_id=ROOM, kinds={"conversation_message"})})
+        self.assertIn(written["row"]["id"], {
+            row["id"] for row in ml.rebuild_state(ROOM)["hot"]})
+
+    def test_hot_compaction_and_refresh_share_one_commit_domain(self):
+        old = self._msg(1, "old")
+        stale = self._compact([old], summary="stale old")
+        latest = self._edit(1, "new", ts=99_100.0)
+        self._msg(2, "stable tail", ts=99_200.0)
+        prepared = self._prepare(stale["id"])
+        original_snapshot = ml._refresh_snapshot
+        entered, release, attempted, done = (
+            threading.Event() for _ in range(4))
+        outputs, errors = {}, []
+
+        def paused_snapshot(chat, **kwargs):
+            result = original_snapshot(chat, **kwargs)
+            if (threading.current_thread().name == "refresh-winner"
+                    and not entered.is_set()):
+                entered.set()
+                if not release.wait(5.0):
+                    raise TimeoutError("winner was not released")
+            return result
+
+        def run(name):
+            try:
+                if name == "offer":
+                    attempted.set()
+                    outputs[name] = ml.compact_if_due(ROOM, force=True)
+                else:
+                    outputs[name] = ml.apply_authored_fold(
+                        ROOM, prepared["selection"], "ordinary authored refresh")
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                if name == "offer":
+                    done.set()
+
+        ml._refresh_snapshot = paused_snapshot
+        first = threading.Thread(target=run, args=("refresh",),
+                                 name="refresh-winner")
+        second = threading.Thread(target=run, args=("offer",))
+        try:
+            first.start()
+            self.assertTrue(entered.wait(3.0))
+            second.start()
+            self.assertTrue(attempted.wait(2.0))
+            self.assertFalse(done.wait(0.2),
+                             "offer bypassed refresh's state commit domain")
+            release.set()
+        finally:
+            release.set()
+            first.join(10.0)
+            if second.ident is not None:
+                second.join(10.0)
+            ml._refresh_snapshot = original_snapshot
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertFalse(errors, errors)
+        self.assertTrue(outputs["refresh"]["ok"], outputs)
+        self.assertEqual(outputs["offer"]["folded"], 0, outputs)
+        self.assertEqual(self.helper_calls, [])
+        strict = [
+            meta for meta, _ in ml._canonical_compact_graph(ROOM)[0].values()
+            if meta.get("source_event_ids") == [latest["id"]]]
+        self.assertEqual(len(strict), 1, strict)
+        self.assertEqual(len(self._receipts()), 1)
+
+    @unittest.skipIf(not hasattr(os, "fork"), "fork-only process fixture")
+    def test_hot_compaction_and_refresh_share_cross_process_commit_domain(self):
+        old = self._msg(1, "old")
+        stale = self._compact([old], summary="stale old")
+        latest = self._edit(1, "new", ts=99_300.0)
+        prepared = self._prepare(stale["id"])
+        ctx = multiprocessing.get_context("fork")
+        entered, release, attempted, done = (
+            ctx.Event() for _ in range(4))
+        child_out = ctx.Queue()
+
+        def winner():
+            original_snapshot = ml._refresh_snapshot
+
+            def paused_snapshot(chat, **kwargs):
+                snapshot = original_snapshot(chat, **kwargs)
+                if not entered.is_set():
+                    entered.set()
+                    if not release.wait(5.0):
+                        raise TimeoutError("winner was not released")
+                return snapshot
+
+            ml._refresh_snapshot = paused_snapshot
+            try:
+                child_out.put(("winner", "ok", ml.apply_authored_fold(
+                    ROOM, prepared["selection"], "cross-process winner")))
+            except Exception as exc:
+                child_out.put(("winner", "error", repr(exc)))
+            finally:
+                ml._refresh_snapshot = original_snapshot
+
+        def loser():
+            original_guard = ml._state_write_guard
+
+            @contextlib.contextmanager
+            def observed_guard(chat):
+                attempted.set()
+                with original_guard(chat):
+                    yield
+
+            ml._state_write_guard = observed_guard
+            try:
+                child_out.put(("loser", "ok", ml.apply_authored_fold(
+                    ROOM, prepared["selection"], "cross-process duplicate")))
+            except Exception as exc:
+                child_out.put(("loser", "error", repr(exc)))
+            finally:
+                ml._state_write_guard = original_guard
+                done.set()
+
+        processes = [ctx.Process(target=winner), ctx.Process(target=loser)]
+        try:
+            processes[0].start()
+            self.assertTrue(entered.wait(3.0))
+            processes[1].start()
+            self.assertTrue(attempted.wait(3.0))
+            self.assertFalse(done.wait(0.2),
+                             "second author bypassed the cross-process guard")
+            release.set()
+            for process in processes:
+                process.join(10.0)
+        finally:
+            release.set()
+            for process in processes:
+                if process.pid is not None and process.is_alive():
+                    process.terminate()
+                    process.join(2.0)
+
+        results = {}
+        for process in processes:
+            self.assertEqual(process.exitcode, 0)
+        for _ in processes:
+            name, status, result = child_out.get(timeout=2.0)
+            self.assertEqual(status, "ok", result)
+            results[name] = result
+        self.assertTrue(results["winner"]["ok"], results)
+        self.assertFalse(results["loser"]["ok"], results)
+        self.assertEqual(results["loser"]["reason"], "state_changed")
+        self.assertEqual(results["loser"]["folded"], 0)
+        self.assertEqual(len(self._receipts()), 1)
+        strict = [
+            meta for meta, _ in ml._canonical_compact_graph(ROOM)[0].values()
+            if meta.get("source_event_ids") == [latest["id"]]]
+        self.assertEqual(len(strict), 1, strict)
+        frame = ml.context_summary(ROOM)
+        self.assertEqual(frame.count("cross-process winner"), 1)
+        self.assertNotIn("cross-process duplicate", frame)
+
+    def test_repeated_revisions_collapse_historical_roots(self):
+        row = self._msg(1, "v0")
+        current = self._compact([row], summary="v0")
+        for revision in range(1, 6):
+            latest = ml.record_message(
+                ROOM, f"Николай: v{revision}", actor="Николай", direction="in",
+                source_id=f"1:edit:{revision}", ts=72_000.0 + revision,
+                revision_order=revision,
+                dedupe_key=f"telegram:{ROOM}:1:edit:{revision}:in")
+            ml.note_message_revision(ROOM, 1, f"Николай: v{revision}")
+            prepared = self._prepare(current["id"])
+            self.assertEqual(
+                [row["id"] for row in prepared["sources"]], [latest["id"]])
+            result = self._apply(prepared, f"current {revision}")
+            current = {"id": result["compact_id"]}
+            self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+        self.assertEqual(len(self._receipts()), 5)
+        self.assertEqual(self.helper_calls, [])
+
+    def test_presentable_superset_is_reused_without_model(self):
+        rows = [self._msg(i, f"row {i}") for i in range(1, 4)]
+        stale = self._compact(rows[:2], summary="old A B")
+        latest = self._edit(1, "new A", ts=73_001.0)
+        strict = ml._write_compact(
+            ROOM, {"summary": "strict A B C", "open_threads": [],
+                   "claims": [], "episodes": []},
+            tier=1, depth=1,
+            source_events=[latest["id"], rows[1]["id"], rows[2]["id"]],
+            source_compacts=[], event_count=3, continued=False,
+            first_ts=min(rows[1]["ts"], rows[2]["ts"], latest["ts"]),
+            last_ts=max(rows[1]["ts"], rows[2]["ts"], latest["ts"]))
+        before = self._files()
+
+        out = ml.prepare_authored_fold(ROOM, compact_id=stale["id"])
+
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["reason"], "refresh_reconciled", out)
+        self.assertEqual(out["sources"], [])
+        self.assertEqual(self._files(), before)
+        self.assertEqual(self.helper_calls, [])
+        group = self._group(stale["id"])
+        self.assertEqual(group["remaining_count"], 0)
+        self.assertIn(strict["id"], group["replacement_compact_ids"])
+        self.assertTrue(group["receipt_complete"])
+
+    def test_addressless_result_names_remaining_room_debt(self):
+        for mid in range(1, 4):
+            row = self._msg(mid, f"old {mid}")
+            self._compact([row], summary=f"old {mid}")
+            self._edit(mid, f"new {mid}", ts=74_000.0 + mid)
+
+        prepared = self._prepare(limit=1)
+        self._apply(prepared)
+        snapshot = ml._refresh_snapshot(ROOM)
+        debt = ml.refresh_debt(ROOM)
+
+        self.assertEqual(len(self._receipts()), 1)
+        self.assertEqual(len(snapshot["unresolved_groups"]), 2)
+        self.assertEqual(debt["unresolved_group_count"], 2)
+        self.assertEqual(debt["needs_refresh"], 2)
+        self.assertTrue(all(
+            group["remaining_count"] == 1
+            for group in snapshot["unresolved_groups"]))
+
+    def test_many_chunks_append_at_most_one_receipt(self):
+        """One authored apply is one bounded chunk and at most one receipt."""
+        rows = [self._msg(i, "x" * 80 + str(i)) for i in range(1, 6)]
+        stale = self._compact(rows, summary="stale")
+        self._edit(1, "y" * 80, ts=75_001.0)
+        for step in range(3):
+            prepared = self._prepare(stale["id"], limit=2)
+            before = len(self._receipts())
+            self._apply(prepared, f"explicit authored chunk {step}")
+            self.assertEqual(len(self._receipts()) - before, 1)
+        self.assertEqual(self._group(stale["id"])["remaining_count"], 0)
+        self.assertEqual(len(self._receipts()), 3)
+
+    def test_future_partial_receipt_cannot_override_complete_receipt(self):
+        rows = [self._msg(1, "old"), self._msg(2, "stable")]
+        stale = self._compact(rows, summary="old recap")
+        latest = self._edit(1, "new", ts=82_001.0)
+        self._refresh(stale["id"])
+        completed_receipt = self._group(stale["id"])["receipt"]
+        partial = self._compact([latest], summary="partial current")
+        group = self._group(stale["id"])
+        ml.append_event(
+            "memory_compact_refresh", chat_id=ROOM,
+            text=f"Compact refresh group: {group['group_id']}",
+            source="memory_life", source_id=group["group_id"],
+            refs=group["stale_ids"] + [partial["id"]],
+            ts=9_999_999_999.0,
+            meta={
+                "schema": ml._COMPACT_REFRESH_SCHEMA,
+                "group_id": group["group_id"],
+                "coverage_root_ids": group["root_ids"],
+                "stale_compact_ids": group["stale_ids"],
+                "logical_target_count": len(group["logical_ids"]),
+                "logical_target_ids_sha256": ml._refresh_digest(group["logical_ids"]),
+                "target_event_count": len(group["target_ids"]),
+                "target_event_ids_sha256": ml._refresh_digest(group["target_ids"]),
+                "replacement_compact_ids": [partial["id"]],
+            })
+        selected = self._group(stale["id"])["receipt"]
+        self.assertEqual(selected["remaining_count"], 0)
+        self.assertEqual(
+            selected["receipt_event_id"], completed_receipt["receipt_event_id"])
+        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
+    def test_retry_reconciles_state_after_crash_post_receipt(self):
+        old = self._msg(1, "old")
+        stale = self._compact([old], summary="old recap")
+        latest = self._edit(1, "new", ts=83_001.0)
+        prepared = self._prepare(stale["id"])
+        original_rebuild = ml._rebuild_state_locked
+        crashed = []
+
+        def crash_after_receipt(chat):
+            if self._receipts():
+                crashed.append(str(chat))
+                raise RuntimeError("simulated crash after durable receipt")
+            return original_rebuild(chat)
+
+        ml._rebuild_state_locked = crash_after_receipt
+        try:
+            with self.assertRaisesRegex(RuntimeError, "durable receipt"):
+                ml.apply_authored_fold(
+                    ROOM, prepared["selection"], "durable authored recap")
+        finally:
+            ml._rebuild_state_locked = original_rebuild
+
+        self.assertTrue(crashed)
+        self.assertEqual(len(self._receipts()), 1)
+        self.assertIn(latest["id"], {
+            row["id"] for row in ml._load_state(ROOM, rebuild=False)["hot"]})
+        # Retrying the public preparation reconciles disk-derived state;
+        # it must not require another author or manufacture another compact.
+        files, receipts = self._files(), self._receipts()
+        retry = ml.prepare_authored_fold(ROOM, compact_id=stale["id"])
+        self.assertTrue(retry["ok"], retry)
+        self.assertEqual(self._files(), files)
+        self.assertEqual(self._receipts(), receipts)
+        self.assertNotIn(latest["id"], {
+            row["id"] for row in ml._load_state(ROOM, rebuild=False)["hot"]})
+
+    def test_retry_reconciliation_cannot_overwrite_newer_revision_state(self):
+        old = self._msg(1, "old", ts=100.0)
+        stale = self._compact([old], summary="stale old")
+        rev1 = self._edit(1, "rev1", ts=200.0)
+        self._refresh(stale["id"])
+        self.assertNotIn(rev1["id"], {
+            row["id"] for row in ml._load_state(ROOM, rebuild=False)["hot"]})
+        entered, attempted, release, writer_done = (
+            threading.Event() for _ in range(4))
+        errors, outputs = [], {}
+        original_save, original_guard = ml._save_state, ml._state_write_guard
+
+        def paused_save(state):
+            if (threading.current_thread().name == "retry-thread"
+                    and not entered.is_set()):
+                entered.set()
+                if not release.wait(5.0):
+                    raise TimeoutError("reconciliation was not released")
+            return original_save(state)
+
+        @contextlib.contextmanager
+        def observed_guard(chat):
+            if threading.current_thread().name == "writer-thread":
+                attempted.set()
+            with original_guard(chat):
+                yield
+
+        def retry():
+            try:
+                outputs["retry"] = ml.prepare_authored_fold(
+                    ROOM, compact_id=stale["id"])
+            except Exception as exc:
                 errors.append(exc)
 
-        before = len(list(ml._compact_dir(ROOM).glob("*.md")))
-        ml._model_compact = model
+        def writer():
+            try:
+                outputs["rev2"] = ml.record_message(
+                    ROOM, "Николай: rev2", actor="Николай", direction="in",
+                    source_id="1:edit:2", ts=300.0, revision_order=2,
+                    dedupe_key=f"telegram:{ROOM}:1:edit:2:in")
+                ml.note_message_revision(ROOM, 1, "Николай: rev2")
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                writer_done.set()
+
+        ml._save_state, ml._state_write_guard = paused_save, observed_guard
+        first = threading.Thread(target=retry, name="retry-thread")
+        second = threading.Thread(target=writer, name="writer-thread")
         try:
-            threads = [threading.Thread(target=run, name=f"worker-{i}") for i in range(2)]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(5.0)
+            first.start()
+            self.assertTrue(entered.wait(3.0))
+            second.start()
+            self.assertTrue(attempted.wait(3.0))
+            self.assertFalse(
+                writer_done.wait(0.2),
+                "new revision bypassed reconciliation's state guard")
+            release.set()
         finally:
-            ml._model_compact = original
+            release.set()
+            first.join(10.0)
+            if second.ident is not None:
+                second.join(10.0)
+            ml._save_state, ml._state_write_guard = original_save, original_guard
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
         self.assertFalse(errors, errors)
-        self.assertEqual(len(calls), 2)
+        self.assertIn(outputs["rev2"]["id"], {
+            row["id"] for row in ml._load_state(ROOM, rebuild=False)["hot"]})
+        self.assertGreater(ml.refresh_debt(ROOM)["needs_refresh"], 0)
+
+    def test_concurrent_same_group_commits_only_one_compact_and_receipt(self):
+        old = self._msg(1, "old")
+        stale = self._compact([old], summary="old recap")
+        self._edit(1, "new", ts=85_001.0)
+        barrier = threading.Barrier(2)
+        outputs, errors = [], []
+        before = len(self._files())
+
+        def author():
+            try:
+                prepared = ml.prepare_authored_fold(
+                    ROOM, compact_id=stale["id"])
+                if not prepared.get("selection"):
+                    raise AssertionError(prepared)
+                barrier.wait(5.0)
+                outputs.append(ml.apply_authored_fold(
+                    ROOM, prepared["selection"],
+                    f"NEW {threading.current_thread().name}"))
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [
+            threading.Thread(target=author, name=f"worker-{i}")
+            for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10.0)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertFalse(errors, errors)
         self.assertEqual(len(outputs), 2)
-        self.assertEqual(sorted(out["chunks_written"] for out in outputs), [0, 1])
-        self.assertEqual(len(list(ml._compact_dir(ROOM).glob("*.md"))) - before, 1)
-        self.assertEqual(len(ml.iter_events(
-            chat_id=ROOM, kinds={"memory_compact_refresh"})), 1)
-        frame = ml.context_summary(ROOM)
-        self.assertEqual(frame.count("NEW worker-"), 1, frame)
+        self.assertEqual(sorted(result["folded"] for result in outputs), [0, 1])
+        self.assertEqual(sum(bool(result["ok"]) for result in outputs), 1)
+        loser = next(result for result in outputs if not result["ok"])
+        self.assertEqual(loser["reason"], "state_changed")
+        self.assertEqual(len(self._files()) - before, 1)
+        self.assertEqual(len(self._receipts()), 1)
+        self.assertEqual(ml.context_summary(ROOM).count("NEW worker-"), 1)
+        self.assertEqual(self.helper_calls, [])
+
 
 
 class TestOneSnapshotPerAnswer(Base):
@@ -1758,7 +1707,7 @@ class TestOneSnapshotPerAnswer(Base):
 
 
 
-class TestTierFuseSeesUpperFallback(Base):
+class TestTierFuseSeesUpperFallback(_AuthoredRefreshBase):
     """Предохранитель обязан видеть механические выжимки ВЕРХНИХ ярусов.
 
     Живой путь: _fold_tiers_transactional при отказе модели пишет
@@ -1774,40 +1723,7 @@ class TestTierFuseSeesUpperFallback(Base):
             self._compact(rows, summary=f"сводка {n}")
         ml.rebuild_state(ROOM)
 
-    def test_upper_tier_fallback_surfaces_in_return(self):
-        self._eight_tier1()
-        original = ml._model_compact
-        ml._model_compact = lambda *a, **k: None  # evaluator мёртв
-        try:
-            result = ml._fold_tiers_transactional(ROOM)
-        finally:
-            ml._model_compact = original
-        made, degraded = (result if isinstance(result, tuple) and len(result) == 2
-                          else (result, None))
-        self.assertTrue(made, "fallback обязан был записать родителя яруса")
-        state = ml._load_state(ROOM, rebuild=False)
-        parents = {str(x.get("id")): x for x in state.get("frontier") or []}
-        self.assertTrue(any(parents.get(str(m), {}).get("degraded") for m in made),
-                        "родитель-выжимка обязан нести degraded=True в meta")
-        self.assertIsNotNone(degraded,
-                             "degraded верхних ярусов не всплывает из возврата")
-        self.assertEqual(sorted(degraded), sorted(str(m) for m in made),
-                         "каждый fallback-родитель обязан быть назван поимённо")
 
-    def test_compact_if_due_carries_degraded_tiers(self):
-        self._eight_tier1()
-        for i in (901, 902, 903, 904, 905, 906):
-            self._msg(i, f"горячая реплика {i}")
-        original = ml._model_compact
-        ml._model_compact = lambda *a, **k: None
-        try:
-            out = ml.compact_if_due(ROOM, force=True)
-        finally:
-            ml._model_compact = original
-        self.assertIn("degraded_tiers", out,
-                      "возврат compact_if_due обязан называть ярусные выжимки")
-        self.assertTrue(out["degraded_tiers"],
-                        "каскад с мёртвой моделью обязан назвать fallback-ярусы")
 
     def test_drain_stops_on_degraded_tier_even_without_hot_fold(self):
         import compact_places as cp
@@ -1826,8 +1742,47 @@ class TestTierFuseSeesUpperFallback(Base):
                          "проходило стоп-кран")
         self.assertEqual(outcome.get("degraded_id"), "cmp-t2-fallback")
 
+    def test_upper_tier_fallback_surfaces_in_return(self):
+        """The new guarantee is stronger: no helper/fallback parent is produced."""
+        self._eight_tier1()
+        before = self._files()
+        made, degraded = ml._fold_tiers_transactional(ROOM)
+        self.assertEqual(made, [])
+        self.assertEqual(degraded, [])
+        self.assertEqual(self._files(), before)
+        self.assertEqual(self.helper_calls, [])
 
-class TestRefreshBindsBranchKeyBeforeWriting(Base):
+        prepared = self._prepare(kind="tier")
+        result = self._apply(prepared, "authored upper-tier synthesis")
+        evidence = self._evidence()
+        meta = evidence["compacts"][result["compact_id"]]
+        self.assertGreater(meta["tier"], 1)
+        self.assertFalse(meta["degraded"])
+        self.assertEqual(meta["source_event_ids"], [])
+        self.assertEqual(
+            meta["source_compact_ids"],
+            [row["id"] for row in prepared["sources"]])
+
+    def test_compact_if_due_carries_degraded_tiers(self):
+        """Pressure offers authorship; it cannot generate degraded tiers."""
+        self._eight_tier1()
+        for i in (901, 902, 903, 904, 905, 906):
+            self._msg(i, f"горячая реплика {i}")
+        before = self._files()
+
+        out = ml.compact_if_due(ROOM, force=True)
+
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["author_required"], out)
+        self.assertTrue(out["offered"], out)
+        self.assertEqual(out["folded"], 0)
+        self.assertEqual(out["tiers"], [])
+        self.assertEqual(out["degraded_tiers"], [])
+        self.assertEqual(self._files(), before)
+        self.assertEqual(self.helper_calls, [])
+
+
+class TestRefreshBindsBranchKeyBeforeWriting(_AuthoredRefreshBase):
     """Регрессия пробки Ouroboros 21.09: мельница писала чанки, которые сама не принимала.
 
     Правка сообщения может приехать под веточным ключом места (…__topic__N): текущей
@@ -1839,41 +1794,29 @@ class TestRefreshBindsBranchKeyBeforeWriting(Base):
     """
 
     def test_refresh_chunk_with_branch_revision_becomes_presentable(self):
-        root, branch = f"{ROOM}", f"{ROOM}__topic__947"
+        root, branch = ROOM, f"{ROOM}__topic__947"
         rows = [self._msg(1, "первая реплика"), self._msg(2, "вторая реплика")]
         stale = self._compact(rows, summary="старая сводка")
-        # Правка приезжает через топик: текущая ревизия несёт веточный ключ,
-        # message id пир-широкий — lineage тот же, событие вытесняет исходное.
-        ml.record_message(branch, "Николай: новая редакция", actor="Николай",
-                          direction="in", source_id="1:edit:1", ts=99_100.0,
-                          dedupe_key=f"telegram:{branch}:1:in")
+        ml.record_message(
+            branch, "Николай: новая редакция", actor="Николай",
+            direction="in", source_id="1:edit:1", ts=99_100.0,
+            dedupe_key=f"telegram:{branch}:1:in")
         ml.note_message_revision(branch, 1, "Николай: новая редакция")
-
-        debt = ml.refresh_debt(root)
-        self.assertGreaterEqual(debt["needs_refresh"], 1, debt)
+        self.assertGreaterEqual(ml.refresh_debt(root)["needs_refresh"], 1)
         self.assertNotIn(branch, ml.bindings())
 
-        original = ml._model_compact
-        ml._model_compact = lambda *_a, **_k: {
-            "summary": "свежий refresh", "open_threads": [], "claims": [], "episodes": []}
-        try:
-            result = ml.refresh_compacts(root, max_chunks=2)
-        finally:
-            ml._model_compact = original
+        prepared = self._prepare(stale["id"], chat=root)
+        self.assertIn(
+            "новая редакция",
+            "\n".join(str(row["text"]) for row in prepared["sources"]))
+        result = self._apply(prepared, "свежий refresh", chat=root)
 
-        self.assertTrue(result["ok"], result)
-        self.assertGreaterEqual(result["chunks_written"], 1, result)
-        self.assertIn(branch, ml.bindings(),
-                      "refresh не привязал веточный ключ места")
-        made = result.get("new_compact_ids") or []
-        self.assertTrue(made, result)
-        evidence = self._evidence()
-        for compact_id in made:
-            resolved = memory_provenance.compact_evidence(compact_id, evidence)
-            self.assertTrue(resolved["valid"],
-                            f"свежий чанк {compact_id} невалиден: {resolved}")
-        after = ml.refresh_debt(root)
-        self.assertEqual(after["needs_refresh"], 0, after)
+        self.assertIn(branch, ml.bindings())
+        self.assertTrue(memory_provenance.compact_evidence(
+            result["compact_id"], self._evidence())["valid"])
+        self.assertEqual(ml.refresh_debt(root)["needs_refresh"], 0)
+        self.assertEqual(self.helper_calls, [])
+
 
 
 if __name__ == "__main__":

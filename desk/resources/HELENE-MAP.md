@@ -11,6 +11,7 @@
 | Установщик и снятие | `helene-setup.exe` | Rust (`setup/`), пересборкой |
 | Служба Windows | `helene-svc.exe` | Rust (`svc/`), пересборкой |
 | Реле подписки ChatGPT | `helene-relay.exe` (и `helene-relay` для Linux-сервера) | Rust, отдельный проект. Оболочка поднимает его ребёнком при `relay.enabled`; на сервере то же делает `server/serverboot.py`. Ключ `model.key` обязателен Bearer-ом на локальном порту |
+| Только в опытной `--relay-rebuild-kit --allow-partial` поставке: исходник, рецепт, manifest и офлайн-зависимости Windows-реле | `relay-rebuild/` | Проверяемая копия source/lock/vendor/toolchain + отдельный бинарь, **не** установленная возможность офлайн-пересборки: изоляция сети, права на native SDK, чистая машина и откат не подтверждены. В обычной поставке этой папки нет; установленное реле не меняется само |
 | Тело руки `computer`: окна, экран, клавиатура и мышь, файлы и процессы на этой машине | `helene-body.exe` и мост `helene-bridge.exe` | Rust, собраны из `tree/body/crates` (код Праксис). Поднимает их харнесс (`app/localharness/body.py`) рядом с собой, в твоей сессии, когда включена опция «Управление компьютером»; умирают вместе с ним |
 | Канал: HTTP и WebSocket, которыми окно и телефон читают состояние и пишут в комнаты | `app/deskapp.py`, `app/deskd/readers.py` | Python, правится на месте, применяется перезапуском |
 | Харнесс: рождение, ходы, сердцебиение, доставка слова, Telegram Bot API | `app/localharness/runner.py`, `boot.py`, `transport.py`, `botapi.py` | Python, правится на месте, применяется перезапуском |

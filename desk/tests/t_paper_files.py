@@ -54,4 +54,51 @@ class PaperFiles(unittest.TestCase):
         with patch.dict("os.environ", {"HELENE_SERVER_AUTH_IMPORT": "1"}):
             with self.assertRaises(deskapp.web.HTTPForbidden): asyncio.run(deskapp._r_local_files(c))
 
+    def test_owner_http_route_uses_the_same_python_file_operations(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "media/artifacts/abc/document.bin"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"source\x00\xff")
+            folder = root / "destination"
+            folder.mkdir()
+
+            class Call:
+                role = "owner"
+                local = True
+                body = None
+                query = {"path": str(folder)}
+
+            c = Call()
+            with patch.object(deskapp.readers, "tree", return_value=root):
+                self.assertEqual(asyncio.run(deskapp._r_local_files(c))["entries"], [])
+                c.body = {"action": "save", "rel": source.relative_to(root).as_posix(),
+                          "folder": str(folder), "name": "copy.bin", "overwrite": False,
+                          "data": base64.b64encode(b"edited\x00").decode()}
+                saved = asyncio.run(deskapp._r_local_files(c))
+                self.assertEqual(saved["bytes"], 7)
+                self.assertEqual((folder / "copy.bin").read_bytes(), b"edited\x00")
+                c.body = {"action": "read", "path": str(folder / "copy.bin")}
+                read = asyncio.run(deskapp._r_local_files(c))
+                self.assertEqual(base64.b64decode(read["data"]), b"edited\x00")
+                c.body = {"action": "save", "rel": source.relative_to(root).as_posix(),
+                          "folder": str(folder), "name": "copy.bin", "overwrite": False}
+                with self.assertRaises(deskapp.web.HTTPConflict):
+                    asyncio.run(deskapp._r_local_files(c))
+                self.assertEqual((folder / "copy.bin").read_bytes(), b"edited\x00")
+
+                # A lost confirmation AFTER replace does not prove the old
+                # bytes survived. HTTP tells the owner to read back, never
+                # presents a precommit 400 or silently resends the write.
+                real_replace = local_files.os.replace
+                def committed_then_lost(src, dst):
+                    real_replace(src, dst)
+                    raise OSError("postcommit reply lost")
+                c.body["overwrite"] = True
+                with patch.object(local_files.os, "replace", side_effect=committed_then_lost):
+                    with self.assertRaises(deskapp.web.HTTPServiceUnavailable) as raised:
+                        asyncio.run(deskapp._r_local_files(c))
+                self.assertIn("перед повтором", raised.exception.text)
+                self.assertEqual((folder / "copy.bin").read_bytes(), source.read_bytes())
+
 if __name__ == "__main__": unittest.main()

@@ -86,7 +86,7 @@ impl LimitsCache {
 }
 
 async fn fetch_usage(account: &AccountLease) -> Result<Value> {
-    let response = reqwest::Client::new()
+    let response = crate::core::network::client()?
         .get(CHATGPT_USAGE_URL)
         .bearer_auth(&account.access_token)
         .header("ChatGPT-Account-ID", &account.account_id)

@@ -26,18 +26,26 @@ class RelayPassportPrivacy(unittest.TestCase):
                         'commit': 'private-origin-marker:/private/tree',
                         'public_commit': 'private operational detail', 'dirty': False,
                         'pulled_utc': 'private operational detail', 'digest': digest, 'files': 1}
+            exact = hashlib.sha256(b'full source including Dockerfile').hexdigest()
             built = {'digest': digest, 'exe_sha256': hashlib.sha256(exe.read_bytes()).hexdigest(),
+                     'input_digest_kind': build_dist.relay_src.INPUT_DIGEST_KIND,
+                     'input_sha256': exact, 'input_files': 2,
+                     'build_method': build_dist.relay_src.WINDOWS_BUILD_METHOD,
+                     'target': 'x86_64-pc-windows-msvc',
                      'exe': 'private-origin-marker:/private/tree',
                      'built_utc': 'private operational detail', 'note': 'private operational detail'}
             shown = io.StringIO()
             with mock.patch.object(build_dist.relay_src, 'digest', return_value=(digest, ['src/lib.rs'])), \
                  mock.patch.object(build_dist.relay_src, 'stamp', return_value=original), \
                  mock.patch.object(build_dist.relay_src, 'built', return_value=built), \
+                 mock.patch.object(build_dist.relay_src, 'build_inputs', return_value=(exact, 2)), \
                  contextlib.redirect_stdout(shown):
                 row = build_dist.relay_provenance(exe, allow_partial=False)
             self.assertEqual(row['digest'], digest)
             self.assertEqual(row['source'], {'digest': digest, 'files': 1})
-            self.assertEqual(row['built'], {k: built[k] for k in ('digest', 'exe_sha256')})
+            self.assertEqual(row['built'], {k: built[k] for k in
+                             ('digest', 'exe_sha256', 'input_sha256', 'input_digest_kind',
+                              'input_files', 'build_method')})
             self.assertNotIn('from', row['source'])
             self.assertNotIn('note', row['source'])
             self.assertNotIn('private-origin-marker', json.dumps(row) + shown.getvalue())
@@ -50,15 +58,23 @@ class RelayPassportPrivacy(unittest.TestCase):
             binary = Path(folder) / 'helene-relay'
             binary.write_bytes(b'linux fixture executable')
             digest = hashlib.sha256(b'linux fixture source').hexdigest()
-            built = {'digest': digest, 'target': 'private-origin-marker:/private/tree',
+            exact = hashlib.sha256(b'linux source and Dockerfile').hexdigest()
+            built = {'digest': digest, 'target': 'x86_64-unknown-linux-gnu',
                      'exe': 'private operational detail',
                      'exe_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
+                     'input_digest_kind': build_dist.relay_src.INPUT_DIGEST_KIND,
+                     'input_sha256': exact, 'input_files': 2,
+                     'build_method': build_dist.relay_src.LINUX_BUILD_METHOD,
+                     'image_id': 'sha256:' + 'a' * 64,
                      'built_utc': 'private operational detail', 'from': 'private-origin-marker:/private/tree'}
             with mock.patch.object(build_dist.relay_src, 'digest', return_value=(digest, ['src/lib.rs'])), \
                  mock.patch.object(build_dist.relay_src, 'built_linux', return_value=built), \
+                 mock.patch.object(build_dist.relay_src, 'build_inputs', return_value=(exact, 2)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 row = build_dist.relay_linux_provenance(binary, allow_partial=False)
-                self.assertEqual(row, {k: built[k] for k in ('digest', 'exe_sha256')})
+                self.assertEqual(row, {k: built[k] for k in
+                                 ('digest', 'exe_sha256', 'input_sha256', 'input_digest_kind',
+                                  'input_files', 'build_method')})
                 self.assertNotIn('from', row)
                 row = build_dist.relay_linux_provenance(Path(folder) / 'missing', allow_partial=True)
                 self.assertTrue(row['stale'])

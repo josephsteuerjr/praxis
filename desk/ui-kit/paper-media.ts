@@ -1,4 +1,5 @@
 import { esc } from "./text";
+import { audioHTML, mountPaperAudio } from './paper-audio';
 import { fileError, fileSize, paperButton, paperDialog } from "./paper-dialog";
 
 export interface PaperMedia { path: string; kind: string; name: string; size?: number; mime?: string; originalPath?: string }
@@ -10,16 +11,19 @@ export interface MediaClient {
   key(media: PaperMedia): string;
   bytes(media: PaperMedia): Promise<Blob>;
   save(media: PaperMedia, blob: Blob): Promise<void>;
+  voice?(media: PaperMedia, retry?: boolean): Promise<{status: string; transcript?: string; error?: string; retry_requested?: boolean}>;
 }
 
 export function mediaDescriptor(m: { media_path?: string; media_kind?: string; media_name?: string; media_size?: number; media_mime?: string; media_original_path?: string }): PaperMedia | null {
   const path = String(m.media_path || "").trim(); if (!path) return null;
   const name = m.media_name || path.split(/[\\/]/).pop() || "Файл";
-  return { path, kind: String(m.media_kind || "file"), name: name.replace(/^(?:msg-[a-f0-9]{10}-[a-f0-9]{12}-)+/, ""), size: m.media_size, mime: m.media_mime, originalPath:m.media_original_path };
+  const kind = m.media_kind === 'audio' || (m.media_kind !== 'video' && (m.media_mime?.startsWith('audio/') || (!m.media_mime && /^voice-.*\.webm$/i.test(name)))) ? 'audio' : String(m.media_kind || 'file');
+  return { path, kind, name: name.replace(/^(?:msg-[a-f0-9]{10}-[a-f0-9]{12}-)+/, ""), size: m.media_size, mime: m.media_mime, originalPath:m.media_original_path };
 }
 export function paperMediaHTML(m: PaperMedia) {
-  const data = `data-paper-path="${esc(m.path)}" data-paper-kind="${esc(m.kind)}" data-paper-name="${esc(m.name)}"${m.originalPath?` data-paper-original="${esc(m.originalPath)}"`:''}`;
+  const data = `data-paper-path="${esc(m.path)}" data-paper-kind="${esc(m.kind)}" data-paper-name="${esc(m.name)}" data-paper-mime="${esc(m.mime || '')}"${m.originalPath?` data-paper-original="${esc(m.originalPath)}"`:''}`;
   const size = m.size === undefined ? "" : fileSize(m.size);
+  if (m.kind === 'audio') return audioHTML(m, data);
   if (m.kind === "image") return `<figure class="paper-media" ${data}><button type="button" class="paper-print" data-paper-open aria-label="Увеличить: ${esc(m.name)}"><span class="paper-image-state" role="status">Изображение</span><img alt="${esc(m.name)}" hidden></button><figcaption><span>${esc(m.name)}</span><button type="button" class="paper-link" data-paper-save>Сохранить…</button></figcaption></figure>`;
   if (['video','animation','sticker_tgs','audio'].includes(m.kind)) {
     const visual = m.kind==='sticker_tgs' ? '<div class="paper-sticker" hidden></div>' : m.kind==='audio' ? '<audio preload="metadata" hidden></audio>' : '<video playsinline preload="metadata" hidden></video>';
@@ -35,6 +39,7 @@ export function artifactCaption(text: string, path?: string) {
 }
 
 export function mountPaperMedia(root: HTMLElement, client: MediaClient) {
+  const disposeAudio = mountPaperAudio(root, client);
   type Cached = { promise: Promise<{ blob: Blob; url: string }>; refs: number; timer?: ReturnType<typeof setTimeout> };
   const cache = new Map<string, Cached>();
   function acquire(media: PaperMedia) {
@@ -124,14 +129,14 @@ export function mountPaperMedia(root: HTMLElement, client: MediaClient) {
     if (image) { image.hidden=true; image.removeAttribute('src'); }
   }
   function reconcile() {
-    root.querySelectorAll<HTMLElement>(".paper-media").forEach(node => {
+    root.querySelectorAll<HTMLElement>(".paper-media:not(.paper-audio)").forEach(node => {
       if (!bound.has(node)) { bound.set(node, { seq: 0 }); observer.observe(node); }
     });
     for (const [node, state] of bound) if (!root.contains(node)) { ++state.seq; state.release?.(); stateCleanup(node,state); observer.unobserve(node); bound.delete(node); }
   }
   const mutations=new MutationObserver(reconcile);
   mutations.observe(root, { childList: true, subtree: true }); reconcile();
-  root.addEventListener("click", event => {
+  const onClick = (event: Event) => {
     const button = (event.target as Element).closest<HTMLButtonElement>("[data-paper-open], [data-paper-save], [data-paper-play]");
     const node = button?.closest<HTMLElement>("[data-paper-path]"); if (!button || !node) return;
     event.preventDefault();
@@ -143,7 +148,8 @@ export function mountPaperMedia(root: HTMLElement, client: MediaClient) {
     }
     if (button.hasAttribute("data-paper-open") && bound.get(node)?.failed) { void print(node, true); return; }
     void open(descriptor(node), button.hasAttribute("data-paper-save"));
-  });
+  };
+  root.addEventListener('click', onClick);
   async function open(media: PaperMedia, saving = false) {
     if(saving&&media.originalPath) media=original(media);
     const ui = paperDialog(saving ? "Сохранение файла" : media.name, true);
@@ -222,5 +228,5 @@ export function mountPaperMedia(root: HTMLElement, client: MediaClient) {
     const extension=media.originalPath?.split('.').pop()||'';
     return {...media,path:media.originalPath!,originalPath:undefined,name:media.name.toLowerCase().endsWith('.'+extension)?media.name:media.name+'.'+extension};
   }
-  return () => { mutations.disconnect(); observer.disconnect(); for(const [node,state] of bound) { ++state.seq; state.release?.(); stateCleanup(node,state); } bound.clear(); };
+  return () => { disposeAudio(); root.removeEventListener('click', onClick); mutations.disconnect(); observer.disconnect(); for(const [node,state] of bound) { ++state.seq; state.release?.(); stateCleanup(node,state); } bound.clear(); };
 }

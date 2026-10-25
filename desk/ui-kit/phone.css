@@ -1,8 +1,8 @@
 @import "./fonts.css";
 @import "./tokens.css";
-.chip.emergency-stop { color: var(--err, #a3332d); border-color: currentColor; font-weight: 600; }
 @import "./actions.css";
 @import "./window/styles/paper-tokens.css";
+.chip.emergency-stop { color: var(--err, #a3332d); border-color: currentColor; font-weight: 600; }
 
 .msg-media.artifact { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 12px; padding: 12px; overflow-wrap: anywhere; }
 

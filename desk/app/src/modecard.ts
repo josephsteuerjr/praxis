@@ -7,7 +7,7 @@
 // рядом с собой, и на чужом харнессе означала бы правку не того конфига.
 import { el, humanError, toast } from "../../ui-kit/window/lib";
 import { button as btn, toggle as switchRow } from "../../ui-kit/dom";
-import { shell } from "../../ui-kit/window/api";
+import { shell, electron } from "../../ui-kit/window/api";
 import { persistSession0 } from "./session0-persist";
 import { LEGACY_SERVICE, SESSION0_WARNING_FALLBACK,
          type ModeChoice, type ModeState, type StoredService } from "../../ui-kit/window/mode";
@@ -99,6 +99,27 @@ export function modeCard(
 ): ModeCard {
   const box = el("section", "card");
   box.append(el("h3", "", "Режим"));
+
+  // Portable Python owns the process tree without a service/elevation path.
+  if (electron?.shell === 'python') {
+    const choices = (live?.choices || []).filter(c => c.name === 'sandbox' || c.name === 'interactive');
+    let selected = choices.find(c => c.name === live?.name) || choices[0];
+    const row = el('div', 'choice-row');
+    for (const choice of choices) {
+      const b = btn(choice.title, 'quiet', () => {
+        selected = choice;
+        onPick(choice.name, !!choice.sandbox, choice.title);
+        for (const node of row.querySelectorAll('button')) node.setAttribute('aria-checked', String(node === b));
+      });
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', String(choice === selected));
+      row.append(b);
+    }
+    box.append(row, el('p', 'field-hint', 'Процессы агента держит Python-приложение с правами текущего пользователя. Применяется перезапуском движка.'));
+    if (!selected) box.append(el('p', 'receipt err', failure ? humanError(failure).text : 'Режим не прочитан.'));
+    return { el: box, name: () => selected?.name || '', title: () => selected?.title || '',
+      sandbox: () => !!selected?.sandbox, session0: () => false, firewall: () => false, note: () => '' };
+  }
 
   // --- ограды, которые прислала труба.
   //

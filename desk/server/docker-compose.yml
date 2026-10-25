@@ -9,14 +9,14 @@
 # на общем сервере видит в «своём» проекте чужие контейнеры — проверено на
 # VPS автора 06.09: чужой `wedding` попал в предупреждение об «orphans».
 # Никогда не запускать с --remove-orphans.
-name: helene
+name: ${HELENE_PROJECT:-helene}
 
 services:
   helene:
     build:
       context: ..
       dockerfile: server/Dockerfile
-    container_name: helene
+    container_name: ${HELENE_CONTAINER:-helene}
     restart: unless-stopped
     environment:
       - PYTHONUNBUFFERED=1
@@ -26,6 +26,7 @@ services:
       # Host-заголовки, которые канал пускает сверх localhost/IP/*.ts.net —
       # имя, по которому окно и телефон приходят через Caddy.
       - HELENE_HOSTS=${HELENE_HOSTS:-}
+      - HELENE_XTTS_PYTHON=/opt/helene-xtts/bin/python3
       - HELENE_HOST_BROKER_SOCKET=/run/helene-host/broker.sock
       # STT — та же коробка, что у Праксис (тома и модель ниже). Пусто в
       # HELENE_MODELS — модели нет, голосовые не расшифровываются, дерево
@@ -56,5 +57,6 @@ services:
       # Модели тяжёлые и живут вне поставки; в контейнере только читаются.
       # На сервере автора это /opt/praxis-models (та же модель, что у Праксис).
       - ${HELENE_MODELS:-./models}:/models:ro
+      - ${HELENE_XTTS_RUNTIME:-./xtts-runtime}:/opt/helene-xtts:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

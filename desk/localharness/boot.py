@@ -203,8 +203,10 @@ class LayoutError(RuntimeError):
     """Раскладку завести не удалось — причина в тексте, для лога и для оболочки."""
 
 
-def _seed_kit(tree: Path, cfg: dict) -> int:
-    """Стартовый комплект из `resources/**` — в дерево, ТОЛЬКО чего там ещё нет.
+def _seed_kit(tree: Path, cfg: dict, *, birth: bool = True,
+              skill_overrides: frozenset[str] = frozenset(),
+              proposals: set[str] | None = None) -> int:
+    """Birth seeds `resources/**`; later calls only stage soul candidates.
 
     ⚠ Здесь писался РОВНО ОДИН файл — `soul/SOUL.md`. Поэтому конституция,
     ссылающаяся на соседей (soul/VOICE.md, soul/FRAME.md, soul/skills/INDEX.md),
@@ -225,11 +227,23 @@ def _seed_kit(tree: Path, cfg: dict) -> int:
             rel = src.relative_to(src_root)
             if src.is_dir() or any(part.startswith((".", "__")) for part in rel.parts):
                 continue
+            if src_root.name == "soul" and rel.parts[0] == "skills" and rel.name in skill_overrides:
+                continue
             dst = dst_root / rel
-            if dst.exists():
+            if dst.exists() and birth:
                 continue
             try:
                 data = src.read_bytes()
+                if src_root.name == "soul" and not birth:
+                    import kit_proposals
+                    text = data.decode("utf-8")
+                    selected = kit_proposals.stage(tree, f"soul/{rel.as_posix()}",
+                                                   _names(text, cfg).encode("utf-8"), source="kit")
+                    if selected and proposals is not None:
+                        proposals.add(selected)
+                    continue
+                if dst.exists():
+                    continue
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     text = data.decode("utf-8")
@@ -237,7 +251,9 @@ def _seed_kit(tree: Path, cfg: dict) -> int:
                     dst.write_bytes(data)    # не текст — кладём байтами
                 else:
                     dst.write_text(_names(text, cfg), encoding="utf-8", newline="\n")
-            except OSError as exc:
+            except (OSError, UnicodeError) as exc:
+                if src_root.name == "soul" and not birth:
+                    raise LayoutError(f"кандидат soul/{rel} не сохранён: {exc}") from exc
                 log.warning("стартовый файл %s не лёг в дерево: %s", rel, exc)
                 continue
             planted += 1
@@ -259,22 +275,24 @@ def _kit_history() -> dict[str, list[str]]:
             for k, v in (files or {}).items() if isinstance(v, list)}
 
 
-def refresh_kit(tree: Path, cfg: dict) -> list[str]:
-    """Нетронутые тексты поставки — на новую редакцию. -> что обновлено (пути от дома).
+def refresh_kit(tree: Path, cfg: dict, *, birth: bool = False,
+                skill_overrides: frozenset[str] = frozenset(),
+                proposals: set[str] | None = None) -> list[str]:
+    """Legacy stock is evidence for a candidate, not consent to replace soul.
 
     1.2.5 (28.09, слово Егора): тексты комплекта переписаны — без рода, без чужих имён,
     путей и контейнеров. `_seed_kit` кладёт только отсутствующее, и у агентов, рождённых
     раньше, лежали бы прежние слова. Правило: файл, совпадающий СЛОВО В СЛОВО с какой-либо
     прежней редакцией поставки (после подстановки имён), не правил никто — его меняем;
-    правленый агентом или владельцем не трогаем никогда. Запись о себе (CURRENT) —
-    отдельно: у неё версии, и новая ложится ревизией, а не перезаписью.
+    changed or missing soul text stays outside the live persona until she reviews
+    it and chooses her own revision. The legacy CURRENT shortcut is proposal-only.
     """
     history = _kit_history()
-    if not history:
-        return []
     done: list[str] = []
     for rel, olds in sorted(history.items()):
         if rel == "self-day-zero.md":
+            continue
+        if rel.startswith("soul/skills/") and Path(rel).name in skill_overrides:
             continue
         src = _SOUL_CANON if rel == "SOUL.md" else _RESOURCES / rel
         dst = tree / "soul" / "SOUL.md" if rel == "SOUL.md" else tree / rel
@@ -285,7 +303,16 @@ def refresh_kit(tree: Path, cfg: dict) -> list[str]:
             new = _names(src.read_text(encoding="utf-8"), cfg)
         except (OSError, UnicodeDecodeError):
             continue
-        if have == new or have not in {_names(old, cfg) for old in olds}:
+        if have == new:
+            continue
+        if not birth and dst.relative_to(tree).parts[0] == "soul":
+            import kit_proposals
+            selected = kit_proposals.stage(tree, dst.relative_to(tree).as_posix(),
+                                           new.encode("utf-8"), source="kit")
+            if selected and proposals is not None:
+                proposals.add(selected)
+            continue
+        if have not in {_names(old, cfg) for old in olds}:
             continue
         try:
             dst.write_text(new, encoding="utf-8", newline="\n")
@@ -293,8 +320,35 @@ def refresh_kit(tree: Path, cfg: dict) -> list[str]:
             log.warning("текст поставки %s не обновился: %s", rel, exc)
             continue
         done.append(str(dst.relative_to(tree)).replace("\\", "/"))
-    if _refresh_day_zero(tree, cfg, history.get("self-day-zero.md") or []):
+    if birth and _refresh_day_zero(tree, cfg, history.get("self-day-zero.md") or []):
         done.append("soul/self/CURRENT.md")
+    elif not birth and _SELF_DAY_ZERO.is_file():
+        # The old revision-0 shortcut was still an installer-authored identity
+        # revision. Keep the proposed body outside CURRENT until the agent acts.
+        current = tree / "soul" / "self" / "CURRENT.md"
+        if not current.exists() and (tree / "soul" / "self.md").is_file():
+            import kit_proposals
+            selected = kit_proposals.stage(tree, "soul/self/CURRENT.md",
+                                           _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg).encode("utf-8"),
+                                           source="kit:day-zero-body")
+            if selected and proposals is not None:
+                proposals.add(selected)
+        elif current.is_file() and history.get("self-day-zero.md"):
+            model = _import_self_model()
+            if model is not None:
+                try:
+                    meta, body = model._store(tree)._split_current(current.read_text(encoding="utf-8"))
+                    proposal = _names(_SELF_DAY_ZERO.read_text(encoding="utf-8"), cfg)
+                    olds = {_names(old, cfg).strip() for old in history["self-day-zero.md"]}
+                    if str(meta.get("revision")) == "0" and body.strip() in olds \
+                            and body.strip() != proposal.strip():
+                        import kit_proposals
+                        selected = kit_proposals.stage(tree, "soul/self/CURRENT.md",
+                                                       proposal.encode("utf-8"), source="kit:day-zero-body")
+                        if selected and proposals is not None:
+                            proposals.add(selected)
+                except (OSError, UnicodeError, ValueError) as exc:
+                    log.warning("запись дня ноль: кандидат не подготовлен: %s", exc)
     return done
 
 
@@ -608,8 +662,25 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     return True
 
 
+def _unfinished_birth_scaffold(tree: Path) -> bool:
+    """The gap after a first creator made directories but before O_EXCL marker.
+
+    A legacy tree containing only these empty directories is ambiguous too:
+    refusing it is safer than interpreting a second writer as an old home.
+    """
+    entries = list(tree.iterdir())
+    if len(entries) != 1 or entries[0].name != "memory" or not entries[0].is_dir():
+        return False
+    entries = list(entries[0].iterdir())
+    if not entries:
+        return True
+    return (len(entries) == 1 and entries[0].name == ".state" and
+            entries[0].is_dir() and not any(entries[0].iterdir()))
+
+
 def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None = None,
-                  skills_seed: dict[str, str] | None = None) -> None:
+                  skills_seed: dict[str, str] | None = None,
+                  birth_receipt: Path | None = None) -> None:
     """Составляющие кадра — каждая в своей папке (слово владельца 30.08).
 
     Создаём только то, чего дерево само не заводит по дороге: дом конституции,
@@ -617,9 +688,12 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
     (memory/**, runs, .state) код дерева создаёт сам — заводить это здесь
     значило бы держать вторую карту раскладки.
 
-    Конституция и весь комплект пишутся ТОЛЬКО если их ещё нет: принятый при
-    установке текст и всё, что владелец или сам агент правил после, здесь не
-    трогаются. `soul_seed` (1.4.0) — текст рождения из `agents/<id>/soul-seed.md`,
+    The production runner presents one tree-bound birth receipt, minted by
+    setup or agents.create outside the data tree and consumed exactly once.
+    Missing, interrupted or completed receipts never authorize another birth;
+    later kit soul text stays as candidates outside soul. Direct test callers
+    without a receipt may seed an empty home only through the compatibility path.
+    `soul_seed` (1.4.0) — текст рождения из `agents/<id>/soul-seed.md`,
     который раннер читает рядом с конфигом: он ложится вместо канона ТОЖЕ только
     при отсутствии души; живая душа сильнее сида. Подстановка имён — та же,
     `{{agent}}`/`{{owner}}`, и только они: сид — текст, а не макрос.
@@ -633,6 +707,74 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
     исключением с текстом, а руннер уходит кодом «конфиг/раскладка», не «упал».
     """
     cfg = cfg or {}
+    tree = Path(tree)
+    proposals: set[str] = set()
+    # Classify BEFORE creating a directory. A missing SOUL or .git is not proof
+    # of birth: both can be lost from an agent who has already lived here. This
+    # exclusive marker also serializes two competing first starts: only one may
+    # seed, the loser refuses an incomplete home rather than opening it.
+    try:
+        if birth_receipt is not None:
+            # A real runner must use install/agent provenance OUTSIDE data. A
+            # deleted data tree is not a new agent; a shell/service desk-token
+            # prewrite is not proof of birth. Only an installer/create receipt
+            # authorizes the first seed, once, bound to this exact tree.
+            marker = Path(birth_receipt)
+            if marker.is_symlink():
+                raise LayoutError(f"маркер рождения — symlink: {marker}")
+            if marker.is_file():
+                state = json.loads(marker.read_text(encoding="utf-8"))
+                if not isinstance(state, dict) or state.get("schema") != 1 or \
+                        os.path.normcase(str(Path(state.get("tree", "")).resolve())) != \
+                        os.path.normcase(str(tree.resolve())):
+                    raise LayoutError(f"маркер рождения не принадлежит дереву {tree}")
+                if state.get("state") == "prepared":
+                    claim = marker.with_name(marker.name + ".claim")
+                    fd = os.open(claim, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "w", encoding="utf-8") as sink:
+                        json.dump({"pid": os.getpid(), "tree": state["tree"]}, sink)
+                        sink.flush()
+                        os.fsync(sink.fileno())
+                    state["state"] = "started"
+                    tmp = marker.with_name(marker.name + ".tmp")
+                    tmp.write_text(json.dumps(state), encoding="utf-8")
+                    os.replace(tmp, marker)
+                    empty = True
+                elif state.get("state") in ("complete", "partial"):
+                    empty = False
+                else:
+                    raise LayoutError(f"первое рождение не завершено ({marker}); проверь дерево")
+            else:
+                if marker.exists():
+                    raise LayoutError(f"маркер рождения не файл: {marker}")
+                empty = False
+        else:
+            # Only isolated direct boot callers use this compatibility route.
+            empty = not tree.exists() or not any(tree.iterdir())
+            marker = tree / "memory" / ".state" / "kit-birth.json"
+            if not empty and not marker.exists() and _unfinished_birth_scaffold(tree):
+                raise LayoutError(f"рождение другого процесса ещё не отмечено ({tree}); "
+                                  "сохрани дерево и повтори после проверки")
+            if empty:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    empty = False
+                else:
+                    with os.fdopen(fd, "w", encoding="utf-8") as sink:
+                        json.dump({"state": "started", "pid": os.getpid()}, sink)
+                        sink.flush()
+                        os.fsync(sink.fileno())
+            if not empty and marker.exists():
+                if marker.is_symlink():
+                    raise LayoutError(f"маркер рождения — symlink: {marker}")
+                started = json.loads(marker.read_text(encoding="utf-8"))
+                if not isinstance(started, dict) or started.get("state") != "complete":
+                    raise LayoutError(f"первое рождение не завершено ({marker}); "
+                                      "сохрани дерево и проверь его до повторного старта")
+    except (OSError, ValueError) as exc:
+        raise LayoutError(f"состояние рождения не читается ({tree}): {exc}") from exc
     for rel in ("soul", "workspace/inbox", "memory/.control/desk_inbox/processed"):
         try:
             (tree / rel).mkdir(parents=True, exist_ok=True)
@@ -646,10 +788,17 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
             # значит слово о себе уже сказано, и мы его не переписываем.
             text = _names(soul_seed, cfg)
         try:
-            soul.write_text(text, encoding="utf-8", newline="\n")
-        except OSError as exc:
-            raise LayoutError(f"не пишется конституция {soul}: {exc}") from exc
-    planted = _seed_kit(tree, cfg)
+            if empty:
+                soul.write_text(text, encoding="utf-8", newline="\n")
+            else:
+                import kit_proposals
+                selected = kit_proposals.stage(tree, "soul/SOUL.md", text.encode("utf-8"), source="kit")
+                if selected:
+                    proposals.add(selected)
+        except (OSError, UnicodeError) as exc:
+            raise LayoutError(f"конституция не подготовлена ({soul}): {exc}") from exc
+    planted = _seed_kit(tree, cfg, birth=empty,
+                        skill_overrides=frozenset(skills_seed or ()), proposals=proposals)
     if planted:
         log.info("стартовый комплект: положено файлов в дерево: %d", planted)
     # Знания рождения (1.4.1, доктор): каждый файл — только при отсутствии
@@ -660,21 +809,78 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
             skills_root.mkdir(parents=True, exist_ok=True)
             for fname, text in skills_seed.items():
                 target = skills_root / fname
-                if target.exists():
+                if empty and target.exists():
                     continue
-                target.write_text(text, encoding="utf-8", newline="\n")
-        except OSError as exc:
+                if empty:
+                    target.write_text(text, encoding="utf-8", newline="\n")
+                else:
+                    import kit_proposals
+                    selected = kit_proposals.stage(tree, f"soul/skills/{fname}",
+                                                   text.encode("utf-8"), source="kit:agent-seed")
+                    if selected:
+                        proposals.add(selected)
+        except (OSError, ValueError, UnicodeError) as exc:
             raise LayoutError(f"не пишутся знания рождения {skills_root}: {exc}") from exc
-    refreshed = refresh_kit(tree, cfg)
+    refreshed = refresh_kit(tree, cfg, birth=empty,
+                            skill_overrides=frozenset(skills_seed or ()), proposals=proposals)
     if refreshed:
         log.info("стартовый комплект: обновлены нетронутые тексты поставки — %s",
                  ", ".join(refreshed))
-    if seed_self(tree, cfg):
+    if empty and seed_self(tree, cfg):
         log.info("запись о себе: день ноль, soul/self/CURRENT.md")
     # После записи о себе: первый снимок должен застать дом целиком.
-    if seed_git(tree, cfg):
+    git_seeded = seed_git(tree, cfg)
+    if git_seeded:
         log.info("личный git агента: репозиторий заведён в дереве данных, "
                  "первый снимок «день ноль» сделан")
+    if not empty:
+        import kit_proposals
+        kit_proposals.publish_active(tree, proposals)
+    if empty:
+        # An interrupted birth stays visibly incomplete. Even a *returned*
+        # birth can lack a soul file, a provenance-valid CURRENT or Git (the
+        # legacy seed helpers warn and return on failure). Never certify such
+        # a home complete or silently retry installing persona on next boot.
+        gaps = []
+        for source in sorted((_RESOURCES / "soul").rglob("*.md")):
+            target = tree / "soul" / source.relative_to(_RESOURCES / "soul")
+            if not target.is_file():
+                gaps.append(target.relative_to(tree).as_posix())
+        if not soul.is_file():
+            gaps.append("soul/SOUL.md")
+        if _SELF_DAY_ZERO.is_file():
+            model = _import_self_model()
+            try:
+                valid_self = (model is not None and
+                              model.current_prompt_info(tree).source == "current")
+            except (OSError, ValueError, UnicodeError):
+                valid_self = False
+            if not valid_self:
+                gaps.append("soul/self/CURRENT.md")
+        if not (tree / ".git").exists():
+            gaps.append("agent_git")
+        if gaps and birth_receipt is not None:
+            # She gets a precise candidate/repair address on her first turn.
+            # No implicit second birth follows this partial result. A fresh
+            # failure while retaining candidates leaves STARTED, not complete.
+            import kit_proposals
+            if "soul/SOUL.md" in gaps:
+                selected = kit_proposals.stage(tree, "soul/SOUL.md",
+                                               (soul_seed or soul_text(cfg)).encode("utf-8"),
+                                               source="kit")
+                if selected:
+                    proposals.add(selected)
+            _seed_kit(tree, cfg, birth=False, proposals=proposals)
+            refresh_kit(tree, cfg, birth=False, proposals=proposals)
+            kit_proposals.publish_active(tree, proposals)
+            log.warning("первое рождение частично: %s; тексты души не досеиваются без решения агента",
+                        ", ".join(gaps))
+        temporary = marker.with_name(marker.name + ".tmp")
+        completed = ({**state, "state": "partial" if gaps else "complete", "gaps": gaps}
+                     if birth_receipt is not None
+                     else {"state": "complete"})
+        temporary.write_text(json.dumps(completed), encoding="utf-8")
+        os.replace(temporary, marker)
 
 
 # --------------------------------------------------------------------------- #
@@ -1470,6 +1676,32 @@ def _brain_config(cfg: dict) -> dict:
     out = {"frameworks": {"anthropic": {"base_url": "", "api_key": ""},
                           "openai": {"base_url": "", "api_key": ""}},
            "roles": {}, "limits": {}}
+    def endpoint(block, protocol, *, inherited_from=None):
+        from urllib.parse import urlsplit
+        source = inherited_from or {}
+        base = str(block.get("base_url", source.get("base_url", "")) or "").strip()
+        key = str(block.get("key", block.get("api_key", source.get("key", source.get("api_key", "")))) or "").strip()
+        host = (urlsplit(base).hostname or "").lower()
+        families = {"api.openai.com": "openai", "api.anthropic.com": "anthropic",
+                    "api.z.ai": "zai", "api.minimax.io": "minimax", "api.minimaxi.com": "minimax",
+                    "api.kimi.com": "kimi", "api.kimi.ai": "kimi", "api.moonshot.ai": "kimi",
+                    "api.moonshot.cn": "kimi", "api.deepseek.com": "deepseek"}
+        family = str(block.get("provider_id") or families.get(host) or
+                     ("qwen" if host.endswith(".aliyuncs.com") else "compatible"))
+        if block.get("provider") == "chatgpt":
+            family = "relay"
+        spec = {"base_url": base, "api_key": key, "protocol": protocol, "provider": family,
+                "api_mode": str(block.get("api_mode") or source.get("api_mode") or "")}
+        if spec["api_mode"] not in ("responses", "chat_completions"):
+            spec["api_mode"] = ""
+        return spec
+
+    def register(name, spec):
+        out["frameworks"][name] = spec
+        legacy = out["frameworks"][spec["protocol"]]
+        if not legacy["base_url"] and not legacy["api_key"]:
+            legacy.update(base_url=spec["base_url"], api_key=spec["api_key"])
+
     for role, block, default_tokens in (("voice", voice, 8192),
                                         ("evaluator", judge if judge else voice, 1024)):
         inherited = role == "evaluator" and judge is None
@@ -1481,27 +1713,36 @@ def _brain_config(cfg: dict) -> dict:
         framework = str(block.get("framework") or default_fw).strip().lower()
         if framework not in ("openai", "anthropic"):
             framework = "openai"
-        base_url = str(block.get("base_url") or "").strip()
-        key = str(block.get("key") or block.get("api_key") or "").strip()
-        if base_url:
-            out["frameworks"][framework]["base_url"] = base_url
-        if key:
-            out["frameworks"][framework]["api_key"] = key
+        primary = "voice_primary" if inherited else role + "_primary"
+        if inherited:
+            out["frameworks"]["evaluator_primary"] = dict.fromkeys(("base_url", "api_key", "protocol", "provider", "api_mode"), "")
+        if not inherited:
+            register(primary, endpoint(block, framework,
+                                      inherited_from=voice if role == "evaluator" and framework == default_fw and not block.get("base_url") else None))
         tokens = default_tokens if inherited else _int_or(
             block.get("max_tokens") or default_tokens, default_tokens,
             what=f"model.max_tokens ({role})")
-        role_cfg = {"framework": framework,
+        role_cfg = {"framework": primary,
                     "model": str(block.get("model") or ""),
                     "max_tokens": max(1, tokens),
                     "fallback_model": str(block.get("fallback_model") or "")}
         fallback_fw = str(block.get("fallback_framework") or "").strip().lower()
-        if fallback_fw in ("openai", "anthropic"):
-            role_cfg["fallback_framework"] = fallback_fw
-        elif role_cfg["fallback_model"]:
-            # Вторая модель того же реле — самый частый случай подписки
-            # (gpt-5.6-sol -> gpt-5.6-luna). Без явного слова фолбэк остаётся
-            # в том же фреймворке, где есть ключ, а не уходит в пустой.
-            role_cfg["fallback_framework"] = framework
+        if fallback_fw not in ("openai", "anthropic"):
+            fallback_fw = framework
+        fallback_name = role + "_fallback"
+        out["frameworks"][fallback_name] = dict.fromkeys(("base_url", "api_key", "protocol", "provider", "api_mode"), "")
+        if role_cfg["fallback_model"]:
+            own_endpoint = any(str(block.get(name) or "").strip() for name in
+                               ("fallback_base_url", "fallback_key", "fallback_api_mode", "fallback_provider_id"))
+            if own_endpoint:
+                fallback = {"base_url": block.get("fallback_base_url", ""),
+                            "key": block.get("fallback_key", ""),
+                            "api_mode": block.get("fallback_api_mode", ""),
+                            "provider_id": block.get("fallback_provider_id", "")}
+                register(fallback_name, endpoint(fallback, fallback_fw))
+                role_cfg["fallback_framework"] = fallback_name
+            else:
+                role_cfg["fallback_framework"] = primary if fallback_fw == framework else fallback_fw
         # 09.09: зрячая замена текстовой модели на ход с картинкой (`model.vision_model`
         # в helene.json). Пусто — ядро само берёт glm-5.3-flash для glm; оценщик без
         # своего блока наследует ручку голоса вместе с адресом и моделью.
@@ -1518,21 +1759,6 @@ def _brain_config(cfg: dict) -> dict:
             # `evaluator`; чужим провайдерам ничего не подставляется.
             role_cfg["reasoning_effort"] = "low"
         out["roles"][role] = role_cfg
-    # 25.09 (C.2, баг Сергея): запасной провайдер — на СВОЁМ эндпойнте и со своим ключом.
-    # Раньше второй фреймворк описывался пустым блоком: `fallback_framework` указывал
-    # в него, а адреса и ключа там не было — ядро молча отказывало (llm.py: без ключа
-    # клиента нет), и «запасной провайдер» в конфиге не работал никогда.
-    # Ограничение ядра остаётся: один клиент на фреймворк, поэтому запасной у ДРУГОГО
-    # протокола; «подписка → свой ключ OpenAI» этим не выразить (см. отчёт 25.09).
-    voice_fw = out["roles"]["voice"]["framework"]
-    fb_fw = str(voice.get("fallback_framework") or "").strip().lower()
-    if fb_fw in ("openai", "anthropic") and fb_fw != voice_fw:
-        fb_url = str(voice.get("fallback_base_url") or "").strip()
-        fb_key = str(voice.get("fallback_key") or "").strip()
-        if fb_url:
-            out["frameworks"][fb_fw]["base_url"] = fb_url
-        if fb_key:
-            out["frameworks"][fb_fw]["api_key"] = fb_key
     out["limits"]["max_tool_iters"] = _int_or(cfg.get("max_tool_iters") or 20, 20,
                                               what="max_tool_iters")
     pricing = cfg.get("pricing")
@@ -1693,7 +1919,51 @@ def _pin_holds(target: Path, cfg: dict, built: dict) -> bool:
     return (voice.get("framework"), voice.get("model")) == (want.get("framework"), want.get("model"))
 
 
-def project_brain(tree: Path, cfg: dict) -> str:
+def _consumer_brain_config(built, code_dir):
+    """Preserved pre-alias code keeps its two-protocol role contract."""
+    if code_dir is None:
+        return built  # callers without a selected runtime request the new schema
+    import ast
+    source = Path(code_dir) / 'llm.py'
+    try:
+        module = ast.parse(source.read_text(encoding='utf-8-sig'))
+    except (OSError, SyntaxError) as exc:
+        raise RuntimeError('Selected model consumer is unreadable; config was not projected') from exc
+    if any(isinstance(node, ast.Assign)
+           and any(isinstance(t, ast.Name) and t.id == 'LLM_ENDPOINTS_API' for t in node.targets)
+           and isinstance(node.value, ast.Constant) and node.value.value == 1
+           for node in module.body):
+        return built
+    import copy
+    legacy = copy.deepcopy(built)
+    specs = built['frameworks']
+    selected = {}
+    def resolve(alias):
+        spec = specs.get(alias) or {}
+        protocol = spec.get('protocol') or alias
+        if protocol not in ('openai', 'anthropic'):
+            raise ValueError('Selected preserved code does not support this endpoint protocol')
+        if spec.get('api_mode') == 'responses':
+            raise ValueError('Selected preserved code does not support explicit Responses mode; update its code before selecting this route')
+        identity = (spec.get('base_url') or '', spec.get('api_key') or '', spec.get('api_mode') or '')
+        if protocol in selected and selected[protocol][0] != identity:
+            raise ValueError('Selected preserved code cannot represent independent same-protocol accounts; update its code or use one account')
+        selected[protocol] = (identity, spec)
+        return protocol
+    for role in legacy['roles'].values():
+        role['framework'] = resolve(role['framework'])
+        if role.get('fallback_model'):
+            role['fallback_framework'] = resolve(role.get('fallback_framework') or
+                ('openai' if role['framework'] == 'anthropic' else 'anthropic'))
+        else:
+            role.pop('fallback_framework', None)
+    legacy['frameworks'] = {key: {'base_url': '', 'api_key': ''} for key in ('openai', 'anthropic')}
+    for protocol, (_, spec) in selected.items():
+        legacy['frameworks'][protocol] = {key: spec.get(key, '') for key in ('base_url', 'api_key')}
+    return legacy
+
+
+def project_brain(tree: Path, cfg: dict, *, code_dir: Path | None = None) -> str:
     """Положить мозг из helene.json в её `memory/llm.json` — но не затирать ЕЁ выбор.
 
     У неё есть своя рука `switch_brain`: она правит этот же файл. Переписывать его на
@@ -1715,7 +1985,7 @@ def project_brain(tree: Path, cfg: dict) -> str:
             os.replace(legacy_receipt, receipt)
         except OSError as exc:  # дальше просто спроецируем заново
             log.warning("расписка мозга не перенеслась: %s", exc)
-    built = _brain_config(cfg)
+    built = _consumer_brain_config(_brain_config(cfg), code_dir)
     # Свёртки памяти — вторая по расходу статья продукта после самих ходов, и до
     # 04.09 о ней не говорила ни одна строка: роль молча брала модель голоса.
     judge, voice_role = built["roles"]["evaluator"], built["roles"]["voice"]
@@ -1766,7 +2036,10 @@ def project_brain(tree: Path, cfg: dict) -> str:
     # Windows directory ACL until AFTER its bytes had been written. Use the same
     # empty-file-first, verified private writer as the vision-policy migration;
     # its restricted ACL follows the file through the atomic replacement.
-    from vision_policy import _write as _write_private_config
+    if __package__:
+        from .vision_policy import _write as _write_private_config
+    else:
+        from vision_policy import _write as _write_private_config
     _write_private_config(
         target, json.dumps(merged, ensure_ascii=False, indent=1).encode("utf-8"),
         private=True)

@@ -42,10 +42,12 @@ def git(tree: Path, *args: str) -> str:
 class SeedGit(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="helene-git-"))
-        # то, чего в снимке быть не должно: ключ и память, как в живом дереве
-        (self.tmp / "memory").mkdir()
-        (self.tmp / "memory" / "llm.json").write_text('{"api_key": "sk-secret"}', encoding="utf-8")
+        # Birth is an empty home. An already-populated memory with no SOUL is
+        # ambiguous (it could be a damaged existing agent) and may no longer
+        # authorize automatic kit seeding. The secret arrives after birth and
+        # must still remain outside every later snapshot.
         boot.ensure_layout(self.tmp, CFG)
+        (self.tmp / "memory" / "llm.json").write_text('{"api_key": "sk-secret"}', encoding="utf-8")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

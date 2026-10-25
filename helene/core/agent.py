@@ -17,6 +17,7 @@ formation и узкая data-authority проверка вне owner-DM). Вто
 from __future__ import annotations
 
 import praxis_time
+import outgoing_spelling
 import contextlib
 import copy
 import difflib
@@ -28,6 +29,7 @@ import datetime as _dt
 import hashlib
 import hmac
 import json
+import provider_observation
 import logging
 import math
 import os
@@ -1589,9 +1591,9 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         if offers:
             add("fold_offers", {
                 "note": ("горячее окно этих мест перешло мягкий порог; свёртка не запускается "
-                         "сама — рука memory_compact(action=fold, place=<место>) или ночное "
-                         "решение голоса; жёсткое давление, не снятое голосом дольше "
-                         "FOLD_OFFER_BACKSTOP_HOURS, сворачивается физикой с квитанцией"),
+                         "сама. memory_compact(prepare, place) даёт источники; прочитай их и "
+                         "в этом ходе напиши fold(selection,text). Жёсткий порог и ночь не "
+                         "меняют автора; несвёрнутые источники сохранены"),
                 "places": [{"place": k, "hot": v.get("count"), "keep": v.get("keep"),
                             "hi": v.get("hi"), "hard_hi": v.get("hard_hi"),
                             "hard": bool(v.get("hard")),
@@ -1951,27 +1953,18 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
 
 
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
-                        tier: int | None = None, since: str = "", limit: int = 0) -> str:
+                        tier: int | None = None, since: str = "", limit: int = 0, selection: str = "") -> str:
     """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop / fold."""
     op = str(action or "").strip().casefold()
     where = str(place or "").strip() or str(_active_chat() or "")
-    if op == "fold":
-        # 25.09, слово Егора: свёртка на мягком пороге ПРЕДЛАГАЕТСЯ (STATE: fold_offers), а
-        # делает её она — этой рукой. Принудительно, как на жёстком пороге.
+    if op in {"prepare", "fold"}:
         if not where:
-            return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
-        fold_fn = getattr(memory_life, "fold_now", None)
-        out = fold_fn(where) if fold_fn else memory_life.compact_if_due(where, force=True)
-        if out.get("folded"):
-            tiers = ", ".join(str(x) for x in (out.get("tiers") or [])) or "нет"
-            return (f"Свёрнуто {out['folded']} событий у {where} → {out.get('compact_id')}; "
-                    f"горячих осталось {out.get('hot')}; верхние ярусы: {tiers}.")
-        if str(out.get("reason") or "") == "state_changed":
-            # 26.09 (ревью W1 S7): это не «нечего», а окно, сдвинувшееся под рукой.
-            return (f"Не свернулось у {where}: окно сдвинулось, пока шла свёртка "
-                    f"(горячих {out.get('hot')}). Предложение осталось — повтори руку.")
-        return (f"Сворачивать нечего у {where}: {out.get('reason') or 'окно в норме'} "
-                f"(горячих {out.get('hot')}).")
+            return "Не вижу места: укажи place (chat_id)."
+        if op == "prepare":
+            out = memory_life.prepare_authored_fold(where, limit=int(limit or 50), compact_id=compact_id)
+        else:
+            out = memory_life.apply_authored_fold(where, selection, text)
+        return json.dumps(out, ensure_ascii=False)
     if op == "list":
         if not where:
             return "Не вижу места: укажи place (chat_id) — в окне текущего чата нет."
@@ -1983,7 +1976,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             mark = " · обрубок" if r.get("degraded") else ""
             lines.append(f"- {r['id']} · tier {r['tier']} · {r['first_ts'][:16]} → {r['last_ts'][:16]} "
                          f"· {r['events']} соб. · {r['chars']} зн.{mark}\n  «{r['head']}»")
-        lines.append("read — одну целиком; rewrite — переписать суть; refold — перевыпустить пачкой.")
+        lines.append("read — целиком; rewrite — своя суть; prepare — точные источники, затем fold(selection,text).")
         return "\n".join(lines)
     if op == "read":
         if not compact_id:
@@ -2011,23 +2004,7 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
         return (f"Переписано {compact_id}: {out.get('chars')} знаков; прежний текст в истории "
                 f"({out.get('history')}). Источники и границы те же.")
     if op == "refold":
-        scope = where if where and where.casefold() != "all" else "all"
-        if scope == "all" and not (place or "").strip():
-            return ("Для refold назови place: chat_id одного места или all — всю память "
-                    "(это много вызовов модели; можно сузить tier/since/limit).")
-        out = memory_life.refold_start(scope, tier=tier, since=since, limit=int(limit or 0))
-        if not out.get("ok"):
-            return (f"Перевыпуск уже идёт: {out.get('done')}/{out.get('planned')} сделано, "
-                    f"{out.get('failed')} не вышло — status/stop.")
-        if not out.get("planned"):
-            return "Перевыпускать нечего: под условия не попала ни одна свёртка."
-        try:
-            tool_journal(f"[память] запущен перевыпуск свёрток своим голосом: {out['planned']} шт., "
-                         f"место {scope}, tier {tier or 'все'}, since {since or '—'}", salience=2)
-        except Exception:
-            log.debug("журнал о перевыпуске не записался", exc_info=True)
-        return (f"Запущен перевыпуск: {out['planned']} свёрток ({out.get('first')} … {out.get('last')}), "
-                f"в фоне, с паузами. status — ход, stop — остановить.")
+        return "Фоновое сочинение выключено. prepare → прочитай источники → fold(selection,text); rewrite — своя новая суть существующей свёртки."
     if op == "status":
         st = memory_life.refold_status()
         if not st.get("planned"):
@@ -2449,8 +2426,13 @@ _CORE_EDIT_SYS = (
 )
 
 
+SELF_EDIT_REVIEW_HOOK = None
+
+
 def _core_edit_check_on() -> bool:
-    return os.getenv("PRAXIS_CORE_EDIT_CHECK", "1").lower() not in ("0", "", "false", "no")
+    return (not callable(SELF_EDIT_REVIEW_HOOK)
+            and os.getenv("PRAXIS_CORE_EDIT_CHECK", "1").lower() not in ("0", "", "false", "no"))
+
 
 
 def _edits_core(command: str) -> bool:
@@ -2515,9 +2497,13 @@ def _autocommit_self_edit(pre_dirt: dict[str, float] | None = None) -> None:
     msg = "self-edit: " + ", ".join(changed[:6])
     sha = selfgit.snapshot_paths(changed, msg) if pre_dirt is not None else selfgit.snapshot(msg)
     try:
-        immune.enqueue(sha, msg)
+        if callable(SELF_EDIT_REVIEW_HOOK):
+            SELF_EDIT_REVIEW_HOOK(sha, msg, changed)
+        else:
+            immune.enqueue(sha, msg)
     except Exception:
-        log.debug("immune.enqueue не удался", exc_info=True)
+        log.exception("self-edit review request was not saved")
+
 
 
 def _shell_at_home(command: str, workdir: Path) -> str:
@@ -3967,7 +3953,7 @@ def _direct_send_outcome(label: str, exc: BaseException) -> str:
     return f"Не отправилось: {reason}"
 
 
-def tool_reply(text: str, reply_to: str = "") -> str:
+def tool_reply(text: str, reply_to: str = "", spelling_confirm_text: str | None = None) -> str:
     """Ответить собеседнику ЭТОГО хода. Моя реплика уходит только так.
 
     ⚑ ЭТА РУКА — И ЕСТЬ МОЯ РЕЧЬ В РАЗГОВОРЕ, а не дополнение к ней.
@@ -4010,6 +3996,9 @@ def tool_reply(text: str, reply_to: str = "") -> str:
     fn = _TELETHON.get("reply")
     if not fn:
         return "Telegram-отправка сейчас недоступна."
+    review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
+    if review:
+        return review
     # ⚠ ГАРД ЗДЕСЬ, А НЕ НА ГРАНИЦЕ ХОДА, И БЕЗ `turn`.
     # Проверка исходящего (кред-пол, советник приватности, режимная директива) обязана
     # ехать вместе с текстом, а текст теперь едет отсюда. Запись прожитого хода при этом
@@ -4075,7 +4064,7 @@ def tool_reply(text: str, reply_to: str = "") -> str:
         tool_journal(f"[ответ] {_clip_reason(receipt, 300)}", salience=2)
     except Exception:
         log.debug("журнал ответа не записался", exc_info=True)
-    return out
+    return outgoing_spelling.receipt(out, spelling_note)
 
 
 def tool_end_turn(outcome: str = "", note: str = "") -> str:
@@ -4112,7 +4101,7 @@ def tool_end_turn(outcome: str = "", note: str = "") -> str:
             + (f" Заметка: {text[:200]}" if text else ""))
 
 
-def tool_send_message(to: str, text: str) -> str:
+def tool_send_message(to: str, text: str, spelling_confirm_text: str | None = None) -> str:
     """Написать кому-то в Telegram (owner). to — id/@username/имя."""
     # ⚠ Здесь кред-пола не было ВООБЩЕ. Он стоял на голосе (`_guard_outbound`), на
     # `narrate` и на файлах — а этот выход остался открытым. Именно сюда съезжается вся
@@ -4123,6 +4112,9 @@ def tool_send_message(to: str, text: str) -> str:
     # 03.10: утечка «训练ный» в Ouroboros 18:38 — этот выход никогда не чистился:
     # гард снимает артефакты генерации на голосе (_guard_outbound), а прямая рука
     # отправляла сырой текст модели. Чистим здесь, тем же чистильщиком.
+    review, spelling_note = outgoing_spelling.preflight(str(text or ""), spelling_confirm_text)
+    if review:
+        return review
     text, _cjk_note = _strip_generation_artifacts(str(text or ""), "")
     if not text.strip():
         return "После чистки не осталось текста — не отправляю пустоту."
@@ -4160,7 +4152,7 @@ def tool_send_message(to: str, text: str) -> str:
         tool_journal(f"[отправка] {_clip_reason(out, 300)}", salience=2)
     except Exception:
         log.debug("журнал отправки не записался", exc_info=True)
-    return out
+    return outgoing_spelling.receipt(out, spelling_note)
 
 
 def tool_narrate(text: str, task_id: str = "") -> str:
@@ -6036,8 +6028,18 @@ def tool_speak(text: str, caption: str = "") -> str:
     """Озвучить короткий текст женским голосом и отложить аудио до общего guard."""
     if _TURN_CHANNEL.get() is None or _TURN_OUTBOUND.get() is None:
         return "Голосовое можно подготовить только из живого хода Telegram."
+    current = run_context.current_run()
+    def stopped():
+        if current is None:return False
+        manifest = _runs().manifest(current.run_id)
+        return manifest.get('status') != 'running' or (manifest.get('control') or {}).get('action') == 'cancel'
     try:
-        path = media_audio.synthesize(text)
+        path = media_audio.synthesize(text, stopped=stopped)
+        if stopped():
+            Path(path).unlink(missing_ok=True)
+            raise InterruptedError('Speech cancelled before staging')
+    except InterruptedError:
+        return 'Озвучка отменена; аудио не отправлено.'
     except media_audio.AudioBackendError as e:
         return f"Озвучка недоступна: {str(e)[:180]}"
     except Exception as e:
@@ -6831,6 +6833,7 @@ BASE_TOOLS = [
                 "text": {"type": "string", "description": "что сказать собеседнику"},
                 "reply_to": {"type": "string",
                              "description": "id сообщения, на которое отвечаешь (необязательно)"},
+                "spelling_confirm_text": {"type": "string", "description": outgoing_spelling.CONFIRM_RU},
             },
             "required": ["text"],
         },
@@ -7608,7 +7611,8 @@ FORGET_CONNECTION_TOOL = {
 SEND_MESSAGE_TOOL = {
     "name": "send_message",
     "description": "Send a Telegram message on your own initiative or an owner request. to: id / @username / name; text: the message.",
-    "input_schema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"}},
+    "input_schema": {"type": "object", "properties": {"to": {"type": "string"}, "text": {"type": "string"},
+        "spelling_confirm_text": {"type": "string", "description": outgoing_spelling.CONFIRM_EN}},
                      "required": ["to", "text"]},
 }
 
@@ -8186,25 +8190,20 @@ MANAGE_NOTES_TOOL = {
 # 25.09: свёртки памяти — её слово. Переписать любую под себя, перевыпустить пачкой.
 MEMORY_COMPACT_TOOL = {
     "name": "memory_compact",
-    "description": (
-        "Твои свёртки памяти — твоё слово, не хроникёра. list показывает свёртки места "
-        "(ярус, обхват, первые слова сути), read — одну целиком, rewrite переписывает суть "
-        "свёртки твоими словами на месте (тот же id и те же источники — разрешение принимает "
-        "без спора, прежний текст уходит в историю), refold перевыпускает свёртки твоим голосом "
-        "пачкой в фоне (place=all — всю память; tier/since/limit сужают; расписки в дневник), "
-        "status/stop — ход перевыпуска; fold сворачивает горячее окно места сейчас (по "
-        "предложению из STATE fold_offers или по своей воле; на мягком пороге свёртка сама не "
-        "запускается — только по этой руке или на жёстком пороге). Свёртка — единственное, что "
-        "ты будешь помнить о тех сообщениях: пиши её так, как хочешь помнить."
-    ),
+    "description": ("Author your episodic memory IN THIS TURN. prepare returns complete bounded sources "
+        "and selection; read all of them, then fold with that selection and your own text. "
+        "Unselected sources remain hot. Originals remain readable. Hard pressure never calls a helper. "
+        "list/read inspect compacts; rewrite updates an existing recap with history. "
+        "This folds episodic memory, not current tool history."),
     "input_schema": _obj({
         "action": {"type": "string",
-                   "enum": ["list", "read", "rewrite", "refold", "status", "stop", "fold"]},
+                   "enum": ["list", "read", "rewrite", "refold", "status", "stop", "prepare", "fold"]},
         "place": {"type": "string",
                   "description": "chat_id/место; пусто = текущий чат; для refold можно all"},
+        "selection": {"type": "string", "description": "Exact selection returned by prepare; required for fold."},
         "compact_id": {"type": "string", "description": "id свёртки (cmp-…) для read/rewrite"},
         "text": {"type": "string",
-                 "description": "новая суть свёртки для rewrite — от первого лица, твоими словами"},
+                 "description": "Your own recap for fold/rewrite; fold also requires selection."},
         "tier": {"type": "integer",
                  "description": "ярус свёрток: 1 — над сообщениями, выше — над свёртками"},
         "since": {"type": "string",
@@ -8959,6 +8958,7 @@ HAND_GROUPS = (
 
 # Назначение одной строкой, от первого лица. Нет в словаре — первая фраза описания.
 HAND_PURPOSE = {
+    "clear_owner_marks": 'просмотреть или снять отметки правок владельца после их прочтения',
     "generate_image": "сгенерировать или изменить изображение отдельной моделью через реле",
     "reply": "ответить собеседнику; только так реплика уходит человеку",
     "end_turn": "закрыть ход явным исходом: done / wait / blocked",
@@ -10257,7 +10257,7 @@ def _index_body_on() -> bool:
         not in {"off", "0", "false", ""}
 
 
-def _memory_navigation_hint() -> str:
+def _memory_navigation_hint(*, owner_audience: bool = True) -> str:
     """Ярус «Карта памяти»: тело индекса, а не записка о том, что индекс где-то есть.
 
     ⚠ 10.08.2026, её решение. Прежде здесь стояли 323 знака: «Generated navigation is
@@ -10278,7 +10278,10 @@ def _memory_navigation_hint() -> str:
         "COMPUTERS.md. These are locators only: inspect the canonical source or an "
         "evidence receipt before relying on a remembered statement."
     )
-    if not _index_body_on():
+    # The generated index includes recent soul/skills filenames (and other
+    # private navigation). Disk existence is not authority to disclose a
+    # filename to a non-owner model request, even when the body lever is on.
+    if not owner_audience or not _index_body_on():
         return locator
     body = _read(INDEX_MD).strip()
     if not body:
@@ -10999,9 +11002,15 @@ def _build_prompt_parts(
     # Personal memory belongs to Praxis, not to the current speaker.  This map is an
     # internal orientation layer in every channel; it is not ready-made public copy.
     with pre_model_timing.span("old_context.index"):
-        index_map = _memory_navigation_hint()
+        index_map = _memory_navigation_hint(owner_audience=owner_audience)
     if index_map:
         tiers.append(("Карта памяти — ВНУТРЕННЯЯ, не разрешение на раскрытие", index_map))
+    if owner_audience:
+        # The edition's model sees an addressable map, never the skill bodies.
+        # The live soul remains authored by her; this is navigation only.
+        import skill_navigation
+        tiers.append(("Навыки — файловый указатель, не тела и не публичный ответ",
+                      skill_navigation.owner_map(SKILLS_DIR / "INDEX.md")))
     if scope in ("owner", "family"):
         # 10.10: общий «домашний» слой — быт/планы/нити семьи; ведёт она сама (home_note)
         home = _read(HOME_MD).strip()
@@ -12534,17 +12543,31 @@ def _durable_model_text(text: object, blocks: list | tuple, *,
     return _scrub_critical_text(text, secrets)
 
 
-def _durable_model_messages(messages: list[dict]) -> list[dict]:
+def _durable_model_messages(
+    messages: list[dict], *, secret_values: tuple[str, ...] = (),
+) -> list[dict]:
     raw = list(messages or ())
-    secrets = _critical_secret_values_from_messages(raw)
+    secrets = _merged_secret_values(
+        secret_values, _critical_secret_values_from_messages(raw),
+    )
     safe = _scrub_critical_value(raw, secrets)
     for raw_message, message in zip(raw, safe):
-        if (not isinstance(raw_message, dict) or not isinstance(message, dict)
-                or not isinstance(raw_message.get("content"), list)):
+        if not isinstance(raw_message, dict) or not isinstance(message, dict):
             continue
-        message["content"] = _durable_model_blocks(
-            raw_message["content"], secret_values=secrets,
-        )
+        if isinstance(raw_message.get("content"), list):
+            message["content"] = _durable_model_blocks(
+                raw_message["content"], secret_values=secrets,
+            )
+        continuation = raw_message.get("provider_continuation")
+        if continuation and (
+            message.get("provider_continuation") != continuation
+            or message.get("content") != raw_message.get("content")
+        ):
+            # Opaque signatures/encrypted fields cannot be repaired by redaction.
+            # Also drop raw replay when its display/tool projection was redacted:
+            # malformed tool arguments can contain otherwise unclassifiable secrets.
+            message.pop("provider_continuation", None)
+            message["continuation_unavailable"] = "redacted"
     return safe
 
 
@@ -12797,9 +12820,16 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
             response_secrets = _merged_secret_values(
                 prior_secrets, _critical_secret_values_from_blocks(response_blocks),
             )
+            safe_response_message = _durable_model_messages(
+                [llm.assistant_message(response, response_blocks)],
+                secret_values=response_secrets,
+            )[0]
             _runs().store_result(
                 current.run_id,
                 json.dumps({
+                    **{key: safe_response_message[key] for key in
+                       ("provider_continuation", "continuation_unavailable")
+                       if key in safe_response_message},
                     "text": _durable_model_text(
                         getattr(response, "text", ""),
                         response_blocks,
@@ -13714,11 +13744,14 @@ def _delivery_evidence(run_id: str) -> dict:
     refused_media: dict[str, dict] = {}
     skipped = False
     skipped_reason = ""
+    text_superseded = False
     for row in _runs().iter_events(run_id):
         kind = str(row.get("kind") or "")
         if (kind == "tool_started" and row.get("tool") == "telegram.deliver"
                 and row.get("call_id") == f"delivery:{run_id}"):
             intent = dict(row.get("args") or {})
+        elif kind == "telegram_text_superseded":
+            text_superseded = True
         elif kind == "telegram_media_permanently_refused":
             # Маршрут отверг файл НАВСЕГДА: это терминальный исход доставки этого
             # медиа, а не вечный долг. Пока refusal не входил в уравнение, ран
@@ -13815,6 +13848,13 @@ def _delivery_evidence(run_id: str) -> dict:
     # A receipt for only the accepted prefix of a multi-chunk reply is useful
     # evidence, but it is not completion. ``text_chars`` is measured from the
     # same losslessly split Python string, so equality is exact and stable.
+    # Supersession retires only an unsent draft, not its authorized media.
+    # Keep the original intent above as audit evidence; never replay that text.
+    if text_superseded and not chunk_receipts and not final_text:
+        expected_text = 0
+        text_plan = None
+        pending_chunks = []
+        aggregate_exact = True
     text_ok = expected_text == 0 or len(final_text) == expected_text
     media_ok = (expected_media == 0 or (
         exact_media_plan
@@ -14369,6 +14409,23 @@ def run_delivery_failed(run_id: str, error: BaseException | str, *,
                 _runs().transition(run_id, "in_doubt", expected="running", reason=message)
     except Exception:
         log.warning("delivery failure не записался [%s]", run_id, exc_info=True)
+
+
+def run_delivery_text_superseded(run_id: str, *, reason: str = "") -> bool:
+    """Retire an unsent text plan while preserving the media delivery intent.
+
+    Called at the pre-network handoff while the runner owns _TEXT_SENDING.
+    A real accepted text receipt forbids retiring the draft.
+    """
+    evidence = _delivery_evidence(run_id)
+    if (not evidence.get("has_intent") or evidence.get("accepted_text_indices")
+            or evidence.get("observed_text_chars")):
+        return False
+    _runs().append_event_once(
+        run_id, "telegram_text_superseded", f"telegram-text-superseded:{run_id}",
+        reason=str(reason or "newer trigger before send"),
+    )
+    return not _delivery_evidence(run_id).get("replayable_text")
 
 
 def run_delivery_superseded(run_id: str, *, reason: str = "") -> bool:
@@ -15647,6 +15704,10 @@ class _AgentResumeRuntime:
             raise DurableExecutionError("tool response continuation lacks exact model state")
         messages = copy.deepcopy(model_input.get("keat_economy_legacy_messages", model_input["messages"]))
         assistant_blocks = copy.deepcopy(model_output.get("blocks") or [])
+        assistant_message = {"role": "assistant", "content": assistant_blocks}
+        for key in ("provider_continuation", "continuation_unavailable"):
+            if key in model_output:
+                assistant_message[key] = copy.deepcopy(model_output[key])
         tool_results: list[dict] = []
         for resolution in request.resolutions:
             tool_results.extend(self._resolution_blocks(resolution))
@@ -15666,7 +15727,7 @@ class _AgentResumeRuntime:
             else keat_live.bind_turn(None, messages))
         with self.bind(), resume_scope:
             _append_captured_messages(messages, [
-                {"role": "assistant", "content": assistant_blocks},
+                assistant_message,
                 {"role": "user", "content": tool_results},
             ])
             # Кадр здесь взят из расписки через deepcopy, `_build_prompt_parts` не звался
@@ -17400,6 +17461,14 @@ def _current_run_kind() -> str:
     return str(getattr(current, "kind", "") or "")
 
 
+def _provider_action_feedback(observation: dict) -> list[dict]:
+    # New context lever is explicit and OFF by default. Metadata is still saved.
+    if os.getenv("PRAXIS_PROVIDER_EVENT_FEEDBACK", "0").lower() not in ("1", "true", "yes", "on"):
+        return []
+    return provider_observation.feedback(observation)
+
+
+
 def _append_captured_messages(messages: list[dict], additions: list[dict]) -> None:
     """Capture newly created loop roles, never reconstruct them at selection."""
     try:
@@ -17453,8 +17522,9 @@ def _work_loop_continue(reply: str, resp, messages: list[dict],
     blocks = [b for b in (list(getattr(resp, "blocks", None) or ()))
               if isinstance(b, dict) and b.get("type") == "text"]
     _append_captured_messages(messages, [
-        {"role": "assistant", "content": blocks or [{"type": "text", "text": reply}]},
-        {"role": "user", "content": [{"type": "text", "text": note}]},
+        llm.assistant_message(resp, blocks or [{"type": "text", "text": reply}]),
+        {"role": "user", "content": [{"type": "text", "text": note}]
+         + _provider_action_feedback(dict(getattr(resp, "provider_observation", None) or {}))},
     ])
     if tool_trace is not None:
         # ⚠ Печаталось `work_loop.budget()` (8) и в ЧАТ-ходе тоже, где бюджет 2. Её
@@ -17521,7 +17591,13 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 raise RunStopped(current.run_id, target, reason)
             raise DurableExecutionError(reason)
         if resp.stop_reason != "tool_use":
-            if _drain_owner_input(system, messages, tools, iteration, {"role": "assistant", "content": resp.text or ""}):
+            if _drain_owner_input(
+                system, messages, tools, iteration,
+                llm.assistant_message(
+                    resp, list(getattr(resp, "blocks", None) or [])
+                    or [{"type": "text", "text": resp.text or ""}],
+                ),
+            ):
                 continue
             _run_status_gate(phase="after terminal model step")
             reply = _durable_model_text(
@@ -17753,7 +17829,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
         if notice_text:
             tool_results.append({"type": "text", "text": notice_text})
         _append_captured_messages(messages, [
-            {"role": "assistant", "content": assistant_blocks},
+            llm.assistant_message(resp, assistant_blocks),
             {"role": "user", "content": tool_results},
         ])
         _prune_stale_screenshots(messages)

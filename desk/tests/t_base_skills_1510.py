@@ -68,8 +68,11 @@ class IncidentStarterSkills(unittest.TestCase):
             index.write_text(history[-1], encoding="utf-8", newline="\n")
             boot._seed_kit(tree, {})
             self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
-            self.assertIn("soul/skills/INDEX.md", boot.refresh_kit(tree, {}))
-            self.assertEqual(index.read_text(encoding="utf-8"),
+            self.assertEqual(boot.refresh_kit(tree, {}), [])
+            self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
+            candidate = next((tree / "memory/.state/kit-proposals").glob("*.json"))
+            import json
+            self.assertEqual(json.loads(candidate.read_text(encoding="utf-8"))["candidate"],
                              (STOCK / "INDEX.md").read_text(encoding="utf-8"))
             self.assertEqual(boot.refresh_kit(tree, {}), [])
 

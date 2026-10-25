@@ -32,6 +32,7 @@ from typing import Any, Callable, Iterator
 EVENT_SCHEMA = "praxis.telegram.outbox.event.v1"
 DEFAULT_MAX_FILE_BYTES = 250 * 1024 * 1024
 DEFAULT_MAX_TEXT_BYTES = 4 * 1024 * 1024
+ATTACHMENT_ZEN_PAUSE_SECONDS = 30.0
 DEFAULT_MAX_ATTEMPTS = 12
 DEFAULT_BASE_BACKOFF_SECONDS = 5.0
 DEFAULT_MAX_BACKOFF_SECONDS = 3600.0
@@ -597,6 +598,9 @@ class TelegramOutbox:
             "payload": canonical_payload,
             "attempts": 0,
             "next_attempt_at": float(row["at_epoch"]),
+            # The immutable decision event is durable across retries/restarts.
+            "not_before": (float(row["at_epoch"]) + ATTACHMENT_ZEN_PAUSE_SECONDS
+                           if kind == "file" else 0.0),
             "last_error": "",
             "receipt": None,
             "created_at": row["at"],
@@ -1101,6 +1105,15 @@ class TelegramOutbox:
         self._state_cache[path.name] = (signature, dict(state) if state is not None else None)
         return state
 
+    def ready(self, idempotency_key: str, *, now: float | None = None) -> bool:
+        """Check authoritative state and both the decision pause and retry deadline."""
+        current = _finite_number(self.clock() if now is None else now, "ready time")
+        with self._guard():
+            state = self._state_for_key_locked(_key(idempotency_key))
+            return bool(state and state["state"] in {"pending", "retry"}
+                        and current >= max(state["not_before"],
+                                           float(state["next_attempt_at"])))
+
     def pending(
         self, *, due_only: bool = False, now: float | None = None,
         verify_files: bool = True,
@@ -1112,7 +1125,7 @@ class TelegramOutbox:
                 state = self._state_cached_locked(path)
                 if state is None or state["state"] not in {"pending", "retry"}:
                     continue
-                if due_only and float(state["next_attempt_at"]) > current:
+                if due_only and max(float(state["next_attempt_at"]), state["not_before"]) > current:
                     continue
                 states.append(self._public(state, verify_file=verify_files))
         return tuple(sorted(states, key=lambda row: (row["created_at"], row["id"])))

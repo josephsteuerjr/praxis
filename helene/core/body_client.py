@@ -1307,8 +1307,12 @@ def format_element_find(result: dict) -> str:
                 bits.append(f"{key}={row[key]!r}")
         rect = row.get("rect") or {}
         if isinstance(rect, dict) and rect.get("center"):
-            bits.append(f"центр={rect['center'].get('x')},{rect['center'].get('y')}")
+            if rect.get('coordinate_space') not in (None, 'screen'):
+                bits.append('координаты экрана не подтверждены; используй native selector')
+            else:
+                bits.append(f"центр={rect['center'].get('x')},{rect['center'].get('y')}")
         lines.append("  " + " · ".join(bits))
+    lines.extend(str(note) for note in result.get('notes', []) if note)
     return "\n".join(lines)
 
 

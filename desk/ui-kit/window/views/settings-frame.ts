@@ -20,7 +20,8 @@
 // «Сохранить»), а издание приносит свои карточки и свою часть записи в конфиг.
 // Веток `remote` здесь нет ни одной — если понадобилась, значит разрез прошёл
 // не там.
-import { api, cfg, inTauri, post, shell } from "../api";
+import { api, cfg, electron, inTauri, post, shell } from "../api";
+import { componentsCard } from "../components-card";
 import { keepBlock } from "../config";
 import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
@@ -33,7 +34,7 @@ import { relayAuthCard } from "../relay-auth-card";
 import { collectConnection } from "../server-connection";
 import { paperDialog } from "../../paper-dialog";
 import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
-import { showMemoryLines } from "../../memory-line";
+import { selfReviewCard } from "./self-review-card";
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -74,7 +75,7 @@ export interface Config {
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
   backup?: { every_days?: number; keep?: number; dir?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; vision_model?: string; pinned?: boolean };
+  model?: { framework?: string; provider?: string; provider_id?: string; api_mode?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; fallback_api_mode?: string; fallback_provider_id?: string; vision_model?: string; pinned?: boolean };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
   // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
@@ -244,10 +245,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // происходило, и никто не говорил, что не происходит.
     center.append(el("div", "card muted", `Настройки доступны в приложении ${PRODUCT_NAME} на том компьютере, где живёт агент: здесь окно смотрит на удалённый код агента. Тема — как в системе.`));
     // «Вид» — удобство этого окна, а не настройка агента: доступен и здесь.
-    center.append(lookCard());
-    center.append(button("Показать скрытые строки памяти в чатах", "quiet", () => {
-      showMemoryLines(); toast("Строки памяти снова видны в чатах");
-    }));
+    center.append(selfReviewCard(), lookCard());
     mountSettings(container, center);
     return;
   }
@@ -317,6 +315,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   for (const box of built.cards) center.append(box);
 
+  center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
+
   center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg), GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
@@ -325,21 +325,45 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     center.append(inGroup(relayAuthCard(String(c.base)), GROUP.app));
   }
 
+  if (electron?.shell === "python") center.append(inGroup(componentsCard(), GROUP.app));
+
   // --- копии памяти (1.2): расписание, «сейчас», последние снимки
   center.append(inGroup(backupCard(draft), GROUP.app));
 
   // --- автозапуск
   const auto = el("div");
+  let autoState: boolean | null = null;
+  const readAutostart = async () => {
+    const value = await shell<boolean>("autostart_get");
+    if (typeof value !== "boolean") throw new Error("Не удалось определить состояние автозапуска");
+    autoState = value;
+    autoToggle.setAttribute("aria-checked", String(value));
+    return value;
+  };
   // На macOS это LaunchAgent при входе в систему — «Windows» в подписи был бы чужим словом.
   const autoToggle = toggle(posix ? "Запускать при входе в систему" : "Запускать при входе в Windows", false, async (v) => {
+    autoToggle.disabled = true;
+    autoToggle.setAttribute("aria-busy", "true");
+    let failure = "";
     try {
       await shell("autostart_set", { on: v });
-      toast(v ? "Автозапуск включён" : "Автозапуск выключен");
     } catch (e) {
-      toast(humanError(e).text);
+      failure = humanError(e).text;
+    }
+    try {
+      const current = await readAutostart();
+      toast(failure || (current !== v ? "Изменение автозапуска не подтверждено" : current ? "Автозапуск включён" : "Автозапуск выключен"));
+    } catch (e) {
+      autoToggle.setAttribute("aria-checked", String(autoState ?? false));
+      autoState = null;
+      toast([failure, humanError(e).text].filter(Boolean).join(" · "));
+    } finally {
+      autoToggle.disabled = autoState === null;
+      autoToggle.removeAttribute("aria-busy");
     }
   });
-  shell<boolean>("autostart_get").then((v) => autoToggle.setAttribute("aria-checked", String(v))).catch(() => {});
+  autoToggle.disabled = true;
+  readAutostart().then(() => { autoToggle.disabled = false; }).catch((e) => toast(humanError(e).text));
   auto.append(autoToggle);
   center.append(inGroup(card("Автозапуск", auto), GROUP.app));
 
@@ -381,30 +405,35 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // Скачать и поставить — оболочка (КОНТРАКТ A→B §5: update_download →
   // update_install). Несовпадение суммы оболочка отвергает сама (throw, файл
   // удалён); `sha_ok: null` — сверять было не с чем. Установщик гасит
-  // программу — «установщик запущен» говорим ДО вызова. Старая оболочка без
-  // этих команд — кнопка честно открывает ссылку на выпуск.
-  const dlBtn = button(linux ? "Открыть выпуск Linux" : "Скачать и установить", "primary", async () => {
+  // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
+  // Python обновляет рабочую папку собственным helper, без setup.
+  const pythonUpdate = electron?.shell === 'python';
+  const legacyLinux = linux && !pythonUpdate;
+  let updateHandedOff = false;
+  const dlBtn = button(legacyLinux ? "Открыть выпуск Linux" : pythonUpdate ? 'Обновить Hélène' : "Скачать и установить", "primary", async () => {
     if (!updUrl) return;
-    if (linux) {
+    if (legacyLinux) {
       await shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
       updOut.textContent = "Установи новый .deb/.rpm через пакетный менеджер. Данные останутся в твоём доме.";
       return;
     }
     dlBtn.disabled = true;
     updOut.className = "receipt";
-    updOut.textContent = "Скачиваю в «Загрузки»…";
+    updOut.textContent = pythonUpdate ? 'Скачиваю и проверяю обновление рядом с рабочей папкой…' : "Скачиваю в «Загрузки»…";
     try {
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
       const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
-      updOut.textContent = `Скачано (${checked}). Установщик запущен — программа закроется сама и откроется новой.`;
+      updOut.textContent = `Скачано (${checked}). Подготавливаю обновление…`;
       // 25.09 (K): установщик сначала репетирует расширения владельца под новой
       // версией и без явного слова не подменяет папки, если хоть одно не грузится.
       // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
       // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
       await shell("update_install", { path: got.path, forceExtensions: forceExt });
+      updateHandedOff = true;
+      updOut.textContent = pythonUpdate ? 'Обновление передано Python. Программа перезапустится; неудачный запуск откатится. Установщик не нужен.' : 'Установщик запущен; программа закроется для обновления.';
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
-      if (/not found|неизвестн|unknown|command/i.test(text)) {
+      if (!pythonUpdate && /not found|неизвестн|unknown|command/i.test(text)) {
         updOut.textContent = mac
           ? "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай архив для macOS и запусти из него Helene Setup."
           : "Эта версия оболочки ещё не умеет ставить обновление сама — открыл страницу выпуска, скачай и запусти helene-setup.exe.";
@@ -414,7 +443,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         updOut.textContent = humanError(e).text;
       }
     } finally {
-      dlBtn.disabled = false;
+      dlBtn.disabled = updateHandedOff;
     }
   });
   dlBtn.hidden = true;
@@ -434,7 +463,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updUrl = r.url || "";
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
-          forceToggle.hidden = linux || !updUrl;
+          forceToggle.hidden = legacyLinux || !updUrl;
         } else {
           updOut.textContent = `Это последняя версия (${r.current}).`;
           updUrl = "";
@@ -539,7 +568,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
           : "";
         saveOut.textContent =
-          "Сохранено. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
+          "Сохранено. Модель и ключ движок перечитает перед следующим запросом." +
           relayWords + restartNote + modeNote;
         if (cfg.needs_local_setup) saveOut.textContent = "Настройки сохранены. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
         // Пустой ключ при первом запуске — не «настройки сохранены», а полдела:
@@ -725,8 +754,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   restartBtn.hidden = true;
   save.append(restartBtn);
   const saveCard = el("section", "card save-bar");
-  saveCard.append(save, conflictBox, el("p", "field-hint", `Файл настроек: ${loaded.path}`));
-  center.append(saveCard);
+  saveCard.append(save, conflictBox);
+  const sourceInfo = el("details", "settings-source");
+  sourceInfo.append(el("summary", "", "Где хранятся настройки"), el("p", "mono", loaded.path));
+  center.append(sourceInfo, saveCard);
 
   mountSettings(container, center, built.groups || []);
 }
@@ -834,6 +865,10 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
       a.href = "#" + c.id;
       a.addEventListener("click", (e) => {
         e.preventDefault();
+        // Measure wrapped tabs at this viewport/DPI; an 8px anchor margin put
+        // the section heading underneath their sticky surface.
+        const tabs = body.querySelector<HTMLElement>(".settings-tabs");
+        c.style.scrollMarginTop = `${(tabs?.getBoundingClientRect().height || 0) + 12}px`;
         c.scrollIntoView({ block: "start", behavior: "smooth" });
         for (const l of links) l.setAttribute("aria-current", String(l === a));
       });
@@ -902,7 +937,7 @@ function backupCard(draft: Config): HTMLElement {
     placeholder: "backups рядом с программой",
     hint: "пусто — рядом с программой, вне папки агента",
   });
-  grid.append(every, keep, dir);
+  grid.append(every, ...(electron?.shell === "python" ? [] : [keep]), dir);
   const out = el("span", "receipt");
   const listBox = el("ul", "backup-list");
   let where = "";
@@ -956,7 +991,9 @@ function backupCard(draft: Config): HTMLElement {
     el(
       "p",
       "field-hint",
-      "Копия — один zip: память, конституция, рабочая папка агента, расширения, настройки и соседние агенты. " +
+      (electron?.shell === "python"
+        ? "Малая копия: конституция, память, досье, граф, состояния, inbox, Telegram-сессии и настройки всех агентов. Runtime, модели, кэши и проекты не копируются. Прежние архивы не удаляются. "
+        : "Копия — один zip: память, конституция, рабочая папка агента, расширения, настройки и соседние агенты. ") +
         "Вход в ChatGPT, журналы и голосовые модели в копию не идут. Перед каждым обновлением установщик снимает свою копию сам. " +
         "Вернуть — распаковать нужное из zip на место при закрытой программе.",
     ),
@@ -967,6 +1004,17 @@ function backupCard(draft: Config): HTMLElement {
 
 function transferCard(draft: Config, posix = false): HTMLElement {
   const box = el("div");
+  if (electron?.shell === 'python' && platformOf(electron) === 'linux') {
+    const migrate = button('Перенести офлайн-профиль…', 'quiet', () => {
+      const dialog = paperDialog('Открыть мастер переноса?');
+      dialog.body.append(el('p', '', 'Приложение закроет своих детей и откроет мастер до нового запуска агента. Несохранённые настройки сначала сохрани.'));
+      dialog.footer.append(button('Открыть мастер', 'primary', async () => {
+        dialog.dialog.close();
+        await shell('migration_wizard').catch(e => toast(humanError(e).text));
+      }));
+    });
+    box.append(migrate);
+  }
   // Команда обратного импорта — путём питона ЭТОЙ системы (runtime/python.exe
   // против runtime/bin/python3): подсказка, которую копируют в консоль, обязана
   // работать как есть.

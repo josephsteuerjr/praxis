@@ -145,7 +145,12 @@ class Live(unittest.TestCase):
         proc = subprocess.Popen(["zenity", *args, "--title", title], stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, text=True,
                                 env={**os.environ, "GTK_A11Y": "atspi", "NO_AT_BRIDGE": "0"})
-        self.addCleanup(lambda: proc.poll() is None and proc.kill())
+        def close_program():
+            if proc.poll() is None: proc.kill()
+            proc.wait(timeout=5)
+            for stream in (proc.stdout, proc.stderr):
+                if stream: stream.close()
+        self.addCleanup(close_program)
         for _ in range(100):
             found = run("xdotool", "search", "--name", title, check=False)
             if found:
@@ -207,9 +212,15 @@ class Live(unittest.TestCase):
         self.activate(hwnd)
         time.sleep(0.5)
         typed = "Привет, Linux! ёЁ 123"
+        # Real X servers can have only 15 unmapped keycodes. The executor
+        # deliberately refuses a larger distinct-character batch before input.
+        # Make the caller's batching explicit and observe consumption before
+        # remapping for the next request; keep the complete expected text.
+        self.ok('desktop.input.perform', {'expected_foreground':f'0x{hwnd:X}', 'events':[{'type':'text','text':typed[:10]}]})
+        self.assertEqual(self.field_value(hwnd), typed[:10])
         result = self.ok("desktop.input.perform", {
             "expected_foreground": f"0x{hwnd:X}",
-            "events": [{"type": "text", "text": typed}, {"type": "key", "key": "enter"}],
+            "events": [{"type": "text", "text": typed[10:]}, {"type": "key", "key": "enter"}],
         })
         self.assertEqual(result["platform"], "linux")
         out, _ = proc.communicate(timeout=10)
@@ -222,7 +233,9 @@ class Live(unittest.TestCase):
         self.ok('desktop.input.perform',{'events':[{'type':'mouse','x':321,'y':234}]})
         # On X11 the pointer can change focus. Restore the desired entry before
         # the separate keyboard request; keep the real Ctrl cleanup witness.
-        self.ok('desktop.element.act',{'hwnd':f'0x{hwnd:X}','select':{'role':'edit'},'do':'focus'})
+        # This case witnesses modifier cleanup, not GTK's optional grab_focus
+        # implementation. Restore X input focus independently of the body.
+        self.activate(hwnd); run('xdotool','windowfocus',str(hwnd))
         result = self.ok("desktop.input.perform", {"events": [{"type":"key","key":"ctrl","action":"down"}]})
         self.assertIn("ctrl", result["modifiers_auto_released"])
         # Отладочный слух (STAND_XEV=1): что приходит в окно фокуса zenity.
@@ -237,7 +250,7 @@ class Live(unittest.TestCase):
         # X11 desktops may focus a different widget when the pointer moves.
         # Explicitly select the entry again; this must not release a stuck Ctrl,
         # so the following external text witness still proves modifier cleanup.
-        self.ok('desktop.element.act', {'hwnd':f'0x{hwnd:X}', 'select':{'role':'edit'}, 'do':'focus'})
+        self.activate(hwnd); run('xdotool','windowfocus',str(hwnd))
         # Свидетель отпускания: останься Ctrl зажат, «abc» ушло бы как Ctrl+A, Ctrl+B,
         # Ctrl+C, и zenity напечатал бы не «abc».
         self.ok("desktop.input.perform", {"expected_foreground": f"0x{hwnd:X}", "events": [
@@ -324,8 +337,10 @@ class ThroughTheEngine(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "localharness"))
+        app = Path(os.environ['HELENE_PACKAGED_APP']) if os.environ.get('HELENE_PACKAGED_APP') else Path(__file__).resolve().parent.parent
+        sys.path.insert(0, str(app / 'localharness'))
         import body as harness  # noqa: PLC0415
+        assert Path(harness.__file__).resolve().is_relative_to((app/'localharness').resolve()), 'wrong harness input'
         cls.body = harness
         cls.tmp = Path(tempfile.mkdtemp(prefix="helene-engine-linux-"))
         cls.root = cls.tmp / "helene"

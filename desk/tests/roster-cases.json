@@ -43,6 +43,17 @@
       ]
     },
     {
+      "name": "не-boolean enabled не означает снятого агента в обоих читателях",
+      "files": {
+        "helene.json": { "agent": { "name": "Hélène" } },
+        "agents/mira/helene.json": { "agent": { "name": "Мира" }, "enabled": 0 }
+      },
+      "expect": [
+        { "id": "main", "name": "Hélène", "tree": "data", "port": 8094, "enabled": true, "base": true, "conflict": "" },
+        { "id": "mira", "name": "Мира", "tree": "agents/mira/data", "port": 8095, "enabled": true, "base": false, "conflict": "" }
+      ]
+    },
+    {
       "name": "спор за порт называется вслух и не молчит",
       "files": {
         "helene.json": { "agent": { "name": "Hélène" }, "port": 8094 },

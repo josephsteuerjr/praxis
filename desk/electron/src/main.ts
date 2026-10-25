@@ -60,7 +60,8 @@ if (process.platform === "linux") {
 }
 const UI = process.env.HELENE_UI || (app.isPackaged ? join(PROGRAM, "app", "static") : uiRoot(ROOT));
 let host: HostClient;
-let channel: Record<string, unknown>;
+let channel: Record<string, unknown> | null = null;
+let rendererRetired = false;
 let initScript = "";
 let stopped = false;
 let closing = false;
@@ -97,11 +98,14 @@ let trayAnchor: PopupPoint | null = null;
 let quitting = false;
 let freeTimer: NodeJS.Timeout | undefined;
 
+// The same argv selects the host owner again after a window restart.
+function relaunchSameOwner() { app.relaunch({ args: process.argv.slice(1) }); app.quit(); }
+
 const ctx: Ctx = {
   root: ROOT,
   version: app.getVersion(),
   product: PRODUCT_UI,
-  relaunch: () => { app.relaunch(); app.quit(); },
+  relaunch: relaunchSameOwner,
   host: { invoke: (cmd, args) => host.invoke(cmd, args) },
 };
 
@@ -121,21 +125,49 @@ async function start() {
       if (intent.action === "panic") { app.quit(); return; }
     }
     if (process.platform === "linux") initOwner(PROGRAM, ROOT, !!process.env.HELENE_ROOT);
-    host = new HostClient(executable, ROOT, log, intent.agent);
+    if (intent.pythonSupervisor && process.platform !== "win32") {
+      throw new Error("Python desktop owner requires Windows Job qualification");
+    }
+    host = new HostClient(executable, ROOT, log, intent.agent, intent.pythonSupervisor);
     host.on("event", (name, data) => {
       if (name === "show-window") show();
+      if (name === "retire-window") {
+        // A host-side Boolean is not proof that this renderer has gone.
+        // Destroy it BEFORE answering the owner that may now stop its Job tree.
+        rendererRetired = true;
+        channel = null;
+        clearTimeout(freeTimer);
+        try {
+          if (!Number.isSafeInteger(data?.id) || data.id < 1) throw new Error("invalid retirement identity");
+          const old = win;
+          old?.destroy();
+          if (old && !old.isDestroyed()) throw new Error("window remained alive after destroy");
+          win = null;
+          void host.invoke("window_retire_ack", { retireId: data.id }).catch((error) => {
+            log(`retire-window ack failed: ${String(error)}`); app.quit();
+          });
+        } catch (error) {
+          log(`retire-window failed: ${String(error)}`); app.quit();
+        }
+        return;
+      }
       if (name === "replace-window") {
+        if (quitting || stopped) return;
         initScript = data.script; channel = bootstrapChannel(initScript);
-        win?.destroy(); win = null; show();
+        win?.destroy(); win = null;
+        rendererRetired = false; // only the host may release the retirement latch
+        show();
       }
       if (name === "notify" && Notification.isSupported()) new Notification(data).show();
       if (name === "message") void dialog.showMessageBox({ type: data.type, title: data.title, message: data.message }).catch((e) => log(String(e)));
-      if (name === "relaunch") { app.relaunch(); app.quit(); }
+      if (name === "relaunch") relaunchSameOwner();
       if (name === "exit") app.quit();
     });
     const ready = await host.ready;
-    initScript = ready.script;
-    channel = bootstrapChannel(initScript);
+    if (!rendererRetired) {
+      initScript = ready.script;
+      channel = bootstrapChannel(initScript);
+    }
     host.on("closed", (error) => {
       if (!quitting) { dialog.showErrorBox("Движок оболочки остановился", String(error)); app.quit(); }
     });
@@ -276,7 +308,7 @@ function createWindow(): BrowserWindow {
     },
   });
   if (b.maximized) w.maximize();
-  w.once("ready-to-show", () => w.show());
+  w.once("ready-to-show", () => { if (!rendererRetired && !w.isDestroyed()) w.show(); });
   const visibility = () => void host.invoke("host_visibility", { visible: w.isVisible(), focused: w.isFocused() }).catch((e) => log(String(e)));
   // Четыре отдельных вызова: общий union имён не выбирает одну перегрузку BrowserWindow.on.
   w.on("show", visibility);
@@ -285,7 +317,8 @@ function createWindow(): BrowserWindow {
   w.on("blur", visibility);
   w.webContents.on("did-finish-load", () => {
     // Bootstrap owns this code. It may render the explicit foreign-port refusal.
-    void w.webContents.executeJavaScript(initScript).catch((e) => log(String(e)));
+    if (!rendererRetired && !w.isDestroyed())
+      void w.webContents.executeJavaScript(initScript).catch((e) => log(String(e)));
   });
   // Закрыть окно ≠ выйти: окно прячется к часам, агент живёт; выход — из меню значка.
   w.on("close", (e) => {
@@ -321,7 +354,7 @@ function armFree() {
 }
 
 function show() {
-  if (!channel || quitting) return;
+  if (rendererRetired || !channel || quitting) return;
   if (!win || win.isDestroyed()) win = createWindow();
   else {
     if (win.isMinimized()) win.restore();
@@ -397,6 +430,27 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   if (closing) return;
   closing = true;
+  if (process.platform === "win32" && launchIntent(process.argv).pythonSupervisor) {
+    // Exit, not just Restart, must retire every renderer before host_shutdown
+    // can stop Python's Job tree. A failed destroy leaves the owner running.
+    rendererRetired = true;
+    channel = null;
+    clearTimeout(freeTimer);
+    try {
+      const old = win, popup = trayPopup;
+      old?.destroy();
+      popup?.destroy();
+      if ((old && !old.isDestroyed()) || (popup && !popup.isDestroyed()))
+        throw new Error("renderer remained alive after Exit destroy");
+      win = null;
+      trayPopup = null;
+    } catch (error) {
+      log(`Exit refused before Python owner teardown: ${String(error)}`);
+      closing = false;
+      quitting = false;
+      return;
+    }
+  }
   void host.close().finally(() => { stopped = true; app.quit(); });
 });
 app.on("window-all-closed", () => { /* живём у часов */ });

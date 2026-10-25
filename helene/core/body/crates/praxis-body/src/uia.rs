@@ -13,7 +13,9 @@
 use anyhow::{Context, Result, bail};
 use praxis_body_protocol::{AdapterDescriptor, CapabilityDescriptor};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::Value;
+#[cfg(any(not(target_os = "linux"), test))]
+use serde_json::{Map, json};
 
 /// Глагол чтения; действие над элементом объявлено в `element`.
 pub const CAPABILITY: &str = "desktop.window.read";
@@ -112,6 +114,7 @@ fn selected_read<T>(cached: bool, cached_read: impl FnOnce() -> T, live_read: im
 // `limits` вместе со своим потолком, а всякая подрезка — в `truncated_by` и `notes`.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct Limits {
     max_nodes: u64,
     max_depth: u64,
@@ -124,6 +127,7 @@ struct Limits {
 /// экрана (2.4 с). Поэтому дефолтный срок — 1800 мс: даже упёршись в него, глагол вернёт
 /// ЧЕСТНЫЙ ЧАСТИЧНЫЙ ответ раньше, чем сделался бы скриншот. Нужен полный обход огромного
 /// окна — она поднимает `timeout_ms` сама, потолок 20 с.
+#[cfg(any(not(target_os = "linux"), test))]
 const DEFAULTS: Limits = Limits {
     max_nodes: 400,
     max_depth: 24,
@@ -132,6 +136,7 @@ const DEFAULTS: Limits = Limits {
     timeout_ms: 1_800,
 };
 
+#[cfg(any(not(target_os = "linux"), test))]
 const CEILINGS: Limits = Limits {
     max_nodes: 5_000,
     max_depth: 64,
@@ -140,6 +145,7 @@ const CEILINGS: Limits = Limits {
     timeout_ms: 20_000,
 };
 
+#[cfg(any(not(target_os = "linux"), test))]
 const FLOORS: Limits = Limits {
     max_nodes: 1,
     max_depth: 0,
@@ -150,6 +156,7 @@ const FLOORS: Limits = Limits {
 
 /// Запас поверх `timeout_ms`, который ждёт вызывающая сторона: сам обход обязан уложиться
 /// в свой срок, эта разница — только на дорогу до потока и обратно.
+#[cfg(any(not(target_os = "linux"), test))]
 const WORKER_GRACE_MS: u64 = 750;
 /// Сколько даётся ОДНОМУ проходу обхода, когда ожидания не просили вовсе.
 ///
@@ -157,12 +164,14 @@ const WORKER_GRACE_MS: u64 = 750;
 /// поиска он по умолчанию ноль: «покажи, что есть сейчас». Обход с нулевым сроком не
 /// успел бы ни одного узла и всегда отвечал бы «не досмотрел» — то есть простой вопрос
 /// «что в окне» стал бы неотвечаемым.
+#[cfg(any(not(target_os = "linux"), test))]
 const SWEEP_MS: u64 = 2_000;
 
 /// Внешняя рука не имеет права бросить worker раньше, чем закончится разрешённый
 /// внутренний обход. При timeout_ms=0 даём один sweep; при ожидании учитываем, что
 /// последний poll может начаться прямо перед deadline и получить ещё полный SWEEP_MS,
 /// затем оставляем запас на доставку ответа и освобождение COM-apartment.
+#[cfg(any(not(target_os = "linux"), test))]
 fn find_worker_wait_ms(timeout_ms: u64) -> u64 {
     timeout_ms
         .saturating_add(SWEEP_MS)
@@ -171,8 +180,10 @@ fn find_worker_wait_ms(timeout_ms: u64) -> u64 {
 
 /// Только для запасного пути: `WM_GETTEXT` в чужой процесс может повиснуть на зависшем
 /// окне, поэтому каждый текст спрашивается с таймаутом.
+#[cfg(any(not(target_os = "linux"), test))]
 const WIN32_TEXT_TIMEOUT_MS: u32 = 150;
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Limits {
     fn resolve(args: &ReadArgs, notes: &mut Vec<String>) -> Self {
         let mut limits = DEFAULTS;
@@ -239,6 +250,7 @@ impl Limits {
 
 /// Просьбу вне границ не отвергаем (это был бы забор) и не проглатываем молча
 /// (это была бы ложь): подтягиваем к границе и говорим об этом вслух.
+#[cfg(any(not(target_os = "linux"), test))]
 fn clamp(
     name: &str,
     requested: Option<u64>,
@@ -265,6 +277,8 @@ fn clamp(
 // Опечатка в имени аргумента иначе означала бы «я подняла кап, а он не поднялся» — тихое
 // ограничение в чистом виде. Пусть лучше глагол назовёт неизвестное поле.
 #[serde(deny_unknown_fields)]
+// Linux validates the same wire schema, then Python consumes its fields.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 struct ReadArgs {
     #[serde(default)]
     hwnd: Option<HwndArg>,
@@ -292,11 +306,13 @@ struct ReadArgs {
 /// `desktop.window.list`, и читалка обязана принимать ровно то, что тот глагол отдал.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 enum HwndArg {
     Number(u64),
     Text(String),
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl HwndArg {
     fn value(&self) -> Result<u64> {
         let value = match self {
@@ -324,11 +340,13 @@ impl HwndArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(not(target_os = "linux"), test))]
 enum Shape {
     Tree,
     Flat,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Shape {
     fn name(self) -> &'static str {
         match self {
@@ -339,6 +357,7 @@ impl Shape {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct Plan {
     hwnd: Option<u64>,
     /// `true` — читать сразу обычным Win32, не поднимая UIA. Это не запрет и не режим
@@ -352,6 +371,7 @@ struct Plan {
     notes: Vec<String>,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn plan(args: Value) -> Result<Plan> {
     let args: ReadArgs = serde_json::from_value(args)
         .context("desktop.window.read arguments")?;
@@ -385,6 +405,7 @@ fn plan(args: Value) -> Result<Plan> {
 // ─── прочитанное ────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct Rect {
     left: i32,
     top: i32,
@@ -392,6 +413,7 @@ struct Rect {
     bottom: i32,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Rect {
     fn is_empty(&self) -> bool {
         self.right <= self.left || self.bottom <= self.top
@@ -417,6 +439,7 @@ impl Rect {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct WindowInfo {
     hwnd: u64,
     title: String,
@@ -431,6 +454,7 @@ struct WindowInfo {
     dpi: u32,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl WindowInfo {
     fn json(&self) -> Value {
         json!({
@@ -449,6 +473,7 @@ impl WindowInfo {
 }
 
 #[derive(Debug, Clone, Default)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct Node {
     parent: Option<usize>,
     depth: u64,
@@ -483,6 +508,7 @@ struct Node {
     secure: bool,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Node {
     fn haystack(&self) -> String {
         let mut text = self.role.clone();
@@ -590,6 +616,7 @@ impl Node {
 }
 
 #[derive(Debug, Default)]
+#[cfg(any(not(target_os = "linux"), test))]
 struct Walk {
     nodes: Vec<Node>,
     /// Элементы, которые обход УЖЕ УВИДЕЛ, но не успел прочитать. Это и есть честное
@@ -603,6 +630,7 @@ struct Walk {
     walk_ms: u64,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 impl Walk {
     fn mark(&mut self, reason: &'static str) {
         if !self.truncated_by.contains(&reason) {
@@ -613,6 +641,7 @@ impl Walk {
 
 /// Обрезка по единицам UTF-16 (как её видит Windows), а не по символам: иначе эмодзи
 /// и суррогатные пары считались бы «одним», и предел был бы не тем, что заявлен.
+#[cfg(any(not(target_os = "linux"), test))]
 fn clip_utf16(text: &str, limit: u64) -> (String, bool) {
     let limit = usize::try_from(limit).unwrap_or(usize::MAX);
     let mut result = String::new();
@@ -628,6 +657,7 @@ fn clip_utf16(text: &str, limit: u64) -> (String, bool) {
     (result, false)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn role_name(control_type: i32) -> String {
     let known = match control_type {
         0 => "unknown",
@@ -685,6 +715,7 @@ fn role_name(control_type: i32) -> String {
 
 /// Роль по имени оконного класса — только для запасного Win32-пути, где никакой роли
 /// не сообщают вообще.
+#[cfg(any(not(target_os = "linux"), test))]
 fn win32_role(class: &str) -> &'static str {
     let class = class.to_ascii_lowercase();
     if class.contains("richedit") || class == "edit" {
@@ -718,6 +749,7 @@ fn win32_role(class: &str) -> &'static str {
 
 // ─── сборка ответа ──────────────────────────────────────────────────────────────────────
 
+#[cfg(any(not(target_os = "linux"), test))]
 struct Rendered<'a> {
     plan: &'a Plan,
     window: &'a WindowInfo,
@@ -730,6 +762,7 @@ struct Rendered<'a> {
     workers_live: u64,
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn render(rendered: Rendered<'_>) -> Value {
     let Rendered {
         plan,
@@ -863,6 +896,7 @@ fn render(rendered: Rendered<'_>) -> Value {
     Value::Object(object)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn children_of(nodes: &[Node]) -> Vec<Vec<usize>> {
     let mut children = vec![Vec::new(); nodes.len()];
     for (index, node) in nodes.iter().enumerate() {
@@ -875,6 +909,7 @@ fn children_of(nodes: &[Node]) -> Vec<Vec<usize>> {
     children
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn keep_flags(plan: &Plan, nodes: &[Node], children: &[Vec<usize>]) -> Vec<bool> {
     if plan.needle.is_empty() {
         return vec![true; nodes.len()];
@@ -896,6 +931,7 @@ fn keep_flags(plan: &Plan, nodes: &[Node], children: &[Vec<usize>]) -> Vec<bool>
     keep
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn tree_json(index: usize, nodes: &[Node], children: &[Vec<usize>], keep: &[bool]) -> Value {
     let kids: Vec<Value> = children[index]
         .iter()
@@ -958,7 +994,7 @@ fn run(capability: &str, args: Value) -> Result<Value> {
     platform::read(&plan)
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
 mod platform {
     use anyhow::{Result, bail};
     use serde_json::Value;
@@ -2848,13 +2884,16 @@ mod platform {
     }
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 const WINDOW_READ_UIA_DETAIL: &str =
     "IUIAutomation control view, properties and patterns read from one cache request, walked on a dedicated MTA thread";
+#[cfg(any(not(target_os = "linux"), test))]
 const WINDOW_READ_WIN32_DETAIL: &str =
     "plain Win32 child-window walk with timed WM_GETTEXT; no COM involved";
 /// В какой системе координат прямоугольники ответа. На Windows — пиксели виртуального
 /// рабочего стола; на macOS — пункты в глобальной системе CoreGraphics (на Retina пункт —
 /// два пикселя), и ввод считает в них же. Одна строка на обе ОС была бы ложью на одной.
+#[cfg(any(not(target_os = "linux"), test))]
 const COORDINATES_NOTE: &str = if cfg!(target_os = "macos") {
     "screen points in the global CoreGraphics space (origin at the top-left of the main display; on Retina one point is two pixels), same space desktop.input.perform takes"
 } else {

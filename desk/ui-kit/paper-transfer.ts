@@ -22,16 +22,26 @@ export function saveName(media: PaperMedia) {
 /** A web page has no directory access. Ask for the name before a browser download,
  * and describe the hand-off honestly instead of claiming a path we cannot observe. */
 export async function browserSave(media: PaperMedia, blob: Blob) {
+  const picker=(window as Window & {showSaveFilePicker?: (options:{suggestedName:string})=>Promise<{createWritable():Promise<{write(blob:Blob):Promise<void>;close():Promise<void>;abort():Promise<void>}>}>}).showSaveFilePicker;
   const ui = paperDialog("Сохранить на устройство");
   const label = document.createElement("label"); label.className = "paper-save-name"; label.textContent = "Имя файла";
   const name = document.createElement("input"); name.value = saveName(media); name.setAttribute("aria-label", "Имя файла"); label.append(name);
   const status = document.createElement("p"); status.className = "paper-file-receipt"; status.setAttribute("role", "status");
-  status.textContent = "Место сохранения выбирает браузер или система устройства.";
+  status.textContent = picker ? 'Откроется системный диалог сохранения на этом устройстве.' : "Место сохранения выбирает браузер или система устройства.";
   ui.body.append(label,status);
   ui.footer.append(paperButton("Отмена", () => ui.dialog.close()));
-  const action = paperButton("Сохранить", () => {
+  const action = paperButton("Сохранить", async () => {
     if (!name.value.trim() || /[\\/\x00-\x1f]/.test(name.value)) { status.textContent = "Введи имя файла без пути."; name.focus(); return; }
     try {
+      if(picker) {
+        const handle=await picker.call(window,{suggestedName:name.value.trim()});
+        const output=await handle.createWritable();
+        try { await output.write(blob); await output.close(); }
+        catch(e) { await output.abort();throw e; }
+        status.textContent='Файл сохранён на выбранном устройстве.';
+        name.disabled=true;action.disabled=true;ui.footer.append(paperButton('Готово',()=>ui.dialog.close(),true));
+        return;
+      }
       const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = name.value.trim(); document.body.append(link); link.click(); link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
       status.textContent = "Файл передан браузеру. Проверь загрузки устройства.";

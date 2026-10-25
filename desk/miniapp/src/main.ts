@@ -3,6 +3,8 @@
 // владельца; подпись initData проверяет канал (`POST /pair/telegram`,
 // КОНТРАКТ-B→A §6) и выдаёт ключ устройства той же природы, что у QR.
 import "./styles.css";
+import { setAudioPlayer } from '../../ui-kit/paper-audio';
+setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
 import { setAnimationPlayer } from '../../ui-kit/paper-media';
 setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";

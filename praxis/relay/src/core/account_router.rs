@@ -24,7 +24,7 @@ use tracing::{info, warn};
 use crate::login::lib::{AuthMode, CodexAuth};
 
 const STATE_SCHEMA: &str = "relay.account-router.v1";
-const ACCOUNT_SLOTS: [&str; 2] = ["primary", "secondary"];
+pub(crate) const ACCOUNT_SLOTS: [&str; 2] = ["primary", "secondary"];
 const DEFAULT_COOLDOWN_SECONDS: u64 = 15 * 60;
 
 #[derive(Clone)]
@@ -194,8 +194,8 @@ impl AccountRouter {
 
         // Backward compatibility keeps the current deployment viable while the
         // first profile is migrated into accounts/primary.
-        if accounts.is_empty() && auth_root.join("auth.json").is_file() {
-            accounts.push(AccountProfile {
+        if !accounts.iter().any(|account| account.slot == "primary") && auth_root.join("auth.json").is_file() {
+            accounts.insert(0, AccountProfile {
                 slot: "primary".to_string(),
                 auth_home: auth_root.to_path_buf(),
                 refresh_lock: Mutex::new(()),
@@ -645,6 +645,19 @@ mod tests {
             serde_json::to_vec_pretty(&auth).unwrap(),
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn legacy_primary_remains_available_with_a_new_secondary() {
+        let root = tempdir().unwrap();
+        write_account(root.path(), "primary", "acct-primary");
+        fs::rename(root.path().join("accounts/primary/auth.json"), root.path().join("auth.json")).unwrap();
+        write_account(root.path(), "secondary", "acct-secondary");
+        let router = AccountRouter::load(root.path()).await.unwrap();
+        assert_eq!(router.account_count(), 2);
+        assert_eq!(router.switch_to("primary").await.unwrap().account_id, "acct-primary");
+        assert_eq!(router.switch_to("secondary").await.unwrap().account_id, "acct-secondary");
+        assert_eq!(AccountRouter::load(root.path()).await.unwrap().active_slot().await, "secondary");
     }
 
     #[tokio::test]

@@ -91,7 +91,7 @@ export function start(opts: WindowOptions): void {
   view.replaceChildren(viewInner);
   scroll.mountView(view, viewInner);
   const app = q<HTMLElement>("#app");
-  mountWindowMedia(app, opts.localAgent !== false);
+  const disposeMedia = mountWindowMedia(app, opts.localAgent !== false);
   const disposeTextMenu = mountTextMenu(app);
   const railNav = q<HTMLElement>("#rail-nav");
   const railBottom = q<HTMLElement>("#rail-bottom");
@@ -628,8 +628,21 @@ export function start(opts: WindowOptions): void {
   setCollapsed("rail", readFlag("frame.rail"));
   setCollapsed("panel", readFlag("frame.panel"));
   const disposeWidths = mountPanelWidths(app);
+  const appearanceChanged = () => scroll.preserve(() => {
+    look.apply(look.load());
+    scroll.restoreZoom();
+    for (const side of ["rail","panel"] as const) {
+      const collapsed=readFlag("frame."+side);
+      app.classList.toggle(side+"-collapsed",collapsed);
+      (side === "rail" ? railBtn : panelBtn).setAttribute("aria-pressed",String(!collapsed));
+    }
+    window.dispatchEvent(new Event("resize"));
+  });
+  const colorScheme=matchMedia("(prefers-color-scheme: dark)");
+  window.addEventListener("helene:appearance",appearanceChanged);
+  colorScheme.addEventListener("change",appearanceChanged);
   window.addEventListener("pagehide", (event: PageTransitionEvent) => {
-    if (!event.persisted) { disposeWidths(); disposeTextMenu(); }
+    if (!event.persisted) { disposeWidths(); disposeMedia(); disposeTextMenu(); window.removeEventListener("helene:appearance",appearanceChanged); colorScheme.removeEventListener("change",appearanceChanged); }
   });
   function togglePanel(which: "rail" | "panel") {
     setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
@@ -885,18 +898,21 @@ export function start(opts: WindowOptions): void {
     void show("talk");
   }
 
-  function roomButton(room: Room): HTMLButtonElement {
-    const b = document.createElement("button");
-    b.type = "button";
+  function roomButton(room: Room): HTMLElement {
+    const b = document.createElement("div");
     b.className = "room" + (room.stub ? " stub" : "");
     b.dataset.key = room.key;
     b.setAttribute("aria-current", String(room.key === S.room));
     // Имя агента над его комнатой — его почерком; остальные — гротеском.
     const hand = room.key === WINDOW_ROOM;
-    b.innerHTML =
+    const select = document.createElement("button");
+    select.type = "button";
+    select.className = "room-select";
+    select.innerHTML =
       `<span class="dot ${room.live ? "live" : ""}"></span>` +
       `<span class="room-name${hand ? " hand" : ""}" title="${esc(room.name)}">${esc(room.name)}</span>` +
       (room.count && !hand ? `<span class="room-count">${room.count}</span>` : "");
+    b.append(select);
     if (room.kind === "window" && room.key !== WINDOW_ROOM) {
       const more = document.createElement("button");
       more.type = "button";
@@ -913,10 +929,11 @@ export function start(opts: WindowOptions): void {
         openMenu(room, new DOMRect(e.clientX, e.clientY, 0, 0));
       });
     }
-    b.addEventListener("click", () => selectRoom(room));
+    select.addEventListener("click", () => selectRoom(room));
     return b;
   }
 
+  let roomsError = "";
   function renderRooms() {
     if (renaming) return;
     const nodes: HTMLElement[] = [];
@@ -930,6 +947,18 @@ export function start(opts: WindowOptions): void {
         nodes.push(label);
       }
       nodes.push(roomButton(room));
+    }
+    if (roomsError) {
+      const error = document.createElement("div");
+      error.className = "rooms-group";
+      error.setAttribute("role", "status");
+      error.textContent = roomsError;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "room";
+      retry.textContent = "Повторить загрузку чатов и тем";
+      retry.addEventListener("click", () => void loadRooms());
+      nodes.push(error, retry);
     }
     roomsBox.replaceChildren(...nodes);
     roomAdd.hidden = false;
@@ -950,10 +979,14 @@ export function start(opts: WindowOptions): void {
   }
   async function readRooms(identity: string) {
     const before = S.rooms.find((r) => r.key === S.room);
-    const { runs, chats } = await fetchRooms();
+    const { runs, chats, chatsError } = await fetchRooms();
     if (identity !== cfg.base + "\n" + cfg.key) return;
     S.runs = runs;
-    if (chats === undefined && S.rooms.length) return; // A failed catalog cannot erase known chats.
+    roomsError = chatsError || "";
+    if (chats === undefined && S.rooms.length) {
+      renderRooms();
+      return; // A failed catalog cannot erase known chats.
+    }
     S.rooms = buildRooms(runs, chats);
     // Чужой харнесс (Praxis): комната окна у неё пуста — чат открывается
     // на самой свежей комнате, пока владелец не выбрал сам.
@@ -1283,7 +1316,7 @@ export function start(opts: WindowOptions): void {
       // The header identifies the model; detailed usage remains in the tooltip,
       // context disclosure and System. Keep the conversation visually primary.
       pulseHTML =
-        `<b>${esc(l.model || "")}</b>${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+        `<span class="muted">Последний ответ</span> <b>${esc(l.model || "")}</b>${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
       pulseLast = `Последний вызов модели — ${fmtTs(l.ts)}: из кэша провайдера ${share}% входа, ` +
         `вход ${fmtK(total)} → ответ ${fmtK(l.out || 0)}.`;
       pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
@@ -1636,11 +1669,15 @@ export function start(opts: WindowOptions): void {
 
   // Первый запуск издания: занял экран — окно не подключается и комнат не
   // грузит, потому что подключаться пока не к чему.
+  window.dispatchEvent(new Event('helene:ui-ready'));
   if (opts.firstRun?.(view)) return;
   if (cfg.needs_local_setup) {
     // The local engine intentionally waits for a configured provider/model.
     // Native settings remain available without a running agent or API channel.
     void show("settings");
+    stateText.textContent = "Нужна настройка модели";
+    statePill.dataset.level = "warn";
+    stateAction.hidden = true;
     return;
   }
   connect();
@@ -1648,14 +1685,20 @@ export function start(opts: WindowOptions): void {
   // 26.09: окно, открытое мастером сразу после установки, заставало канал ещё не
   // поднятым и оставалось на этом экране до клика владельца — а обещало «продолжит
   // попытки само». Держим слово: пробуем снова, пока на экране этот же экран.
+  // Startup owns the initial empty page only. A late channel failure/success
+  // must not erase Settings (which can work while the engine is stopped), or
+  // pull the owner back to Now after they deliberately navigated elsewhere.
+  const firstShowSeq = showSeq;
   const openFirst = (): void => {
+    if (showSeq !== firstShowSeq) return;
     loadRooms()
-      .then(() => show("now"))
+      .then(() => { if (showSeq === firstShowSeq) return show("now"); })
       .catch(() => {
+        if (showSeq !== firstShowSeq) return;
         viewInner.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
         renderState(null, false);
         window.setTimeout(() => {
-          if (viewInner.querySelector("[data-first-wait]")) openFirst();
+          if (showSeq === firstShowSeq && viewInner.querySelector("[data-first-wait]")) openFirst();
         }, 4000);
       });
   };

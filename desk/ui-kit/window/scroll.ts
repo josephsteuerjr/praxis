@@ -40,6 +40,12 @@ export function view(): Scroller | null {
   return viewScroller;
 }
 
+export function resetZoom() { viewZoom?.restore(1); }
+export function restoreZoom() {
+  const value=Number(localStorage.getItem("helene.zoom") || "1");
+  viewZoom?.restore(value);
+}
+
 /** Раздел сменился: лента чата липнет к низу и масштабируется, остальные — нет. */
 export function sectionShown(talk: boolean, zoomBox: HTMLElement | null) {
   if (viewScroller) viewScroller.stick = talk;

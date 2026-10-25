@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from test_authorship_support_1910 import AuthoredMemoryBase, assert_reissue_refused
+
 import json
 import tempfile
 import types
@@ -84,30 +86,24 @@ class ForeignSelfIsCaughtTests(unittest.TestCase):
 
 
 class ModelCompactRewritesForeignSelfTests(unittest.TestCase):
-    def _run(self, *responses):
-        chat = mock.Mock(side_effect=list(responses))
-        with mock.patch.object(llm, "configured", return_value=True), \
-                mock.patch.object(llm, "chat", chat):
-            out = ml._model_compact([HOPE, TORV, MINE], tier=1, depth=1, continued=False)
-        return out, chat
+    def test_helper_neither_corrects_nor_retries_foreign_self(self):
+        with mock.patch.object(llm, "chat") as chat, \
+                mock.patch.object(ml, "_write_compact") as write:
+            with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                ml._model_compact(
+                    [HOPE, TORV, MINE], tier=1, depth=1, continued=False
+                )
+        chat.assert_not_called()
+        write.assert_not_called()
 
-    def test_second_try_with_a_correction_replaces_the_foreign_self(self):
-        out, chat = self._run(_resp(BAD), _resp(GOOD))
-        self.assertEqual(out["summary"], GOOD)
-        self.assertEqual(chat.call_count, 2)
-        retry_user = chat.call_args_list[1].kwargs["messages"][0]["content"]
-        self.assertIn("«я» от имени Hope", retry_user)
-        self.assertIn("_manifest", out)
+    def test_even_a_clean_summary_does_not_authorize_a_hidden_call(self):
+        with mock.patch.object(llm, "chat", return_value=_resp(GOOD)) as chat:
+            with self.assertRaisesRegex(RuntimeError, "Acting author required"):
+                ml._model_compact(
+                    [HOPE, TORV, MINE], tier=1, depth=1, continued=False
+                )
+        chat.assert_not_called()
 
-    def test_two_foreign_selves_write_nothing(self):
-        out, chat = self._run(_resp(BAD), _resp(BAD))
-        self.assertEqual(out, {})
-        self.assertEqual(chat.call_count, 2)
-
-    def test_clean_summary_goes_through_in_one_call(self):
-        out, chat = self._run(_resp(GOOD))
-        self.assertEqual(out["summary"], GOOD)
-        self.assertEqual(chat.call_count, 1)
 
 
 class ReissueForForeignSelfTests(unittest.TestCase):
@@ -128,26 +124,31 @@ class ReissueForForeignSelfTests(unittest.TestCase):
                                       return_value=[HOPE, TORV, MINE]), \
                     mock.patch.object(ml, "place_key", return_value="-100"), \
                     mock.patch.object(ml, "_model_compact", return_value={}) as model:
-                return ml.reissue_degraded_compact("-100", "cmp-x", why=why), model
+                return assert_reissue_refused(self, "-100", "cmp-x", why=why), model
 
     def test_clean_compact_is_not_reissued(self):
         out, model = self._reissue(GOOD)
-        self.assertEqual(out["reason"], "no_foreign_self")
+        self.assertEqual(out["reason"], "acting_author_required")
         model.assert_not_called()
 
-    def test_foreign_self_compact_goes_to_the_model(self):
+    def test_foreign_self_compact_requires_the_acting_author(self):
         out, model = self._reissue(BAD)
-        self.assertEqual(out["reason"], "model_unavailable")
-        model.assert_called_once()
-
-    def test_old_path_still_demands_a_degraded_stub(self):
-        out, model = self._reissue(BAD, why="degraded")
-        self.assertEqual(out["reason"], "not_degraded")
+        self.assertEqual(out["reason"], "acting_author_required")
         model.assert_not_called()
 
-    def test_unknown_reason_is_refused(self):
-        out, _ = self._reissue(BAD, why="because")
-        self.assertEqual(out["reason"], "unknown_why")
+    def test_degraded_reason_does_not_restore_the_helper(self):
+        out, model = self._reissue(BAD, why="degraded")
+        self.assertEqual(out["reason"], "acting_author_required")
+        model.assert_not_called()
+
+    def test_unknown_reason_never_writes(self):
+        out, model = self._reissue(BAD, why="because")
+        self.assertEqual(out["reason"], "acting_author_required")
+        model.assert_not_called()
+
+
+
+
 
 
 class ReissueTierCompactTests(unittest.TestCase):
@@ -173,36 +174,47 @@ class ReissueTierCompactTests(unittest.TestCase):
                     mock.patch.object(ml, "compact_text", return_value="детская сводка"), \
                     mock.patch.object(ml, "place_key", return_value="-200"), \
                     mock.patch.object(ml, "_model_compact", return_value={}) as model:
-                return ml.reissue_degraded_compact("-200", "cmp-p", why=why), model
+                return assert_reissue_refused(self, "-200", "cmp-p", why=why), model
 
-    def test_tier_compact_needs_the_foreign_self_reason(self):
-        out, model = self._reissue("я (Ashe) писала", why="degraded", degraded=True)
-        self.assertEqual(out["reason"], "not_a_leaf")
+    def test_degraded_tier_is_not_reissued_implicitly(self):
+        out, model = self._reissue(
+            "я (Ashe) писала", why="degraded", degraded=True
+        )
+        self.assertEqual(out["reason"], "acting_author_required")
         model.assert_not_called()
 
-    def test_foreign_self_found_through_the_subtree_goes_to_the_model(self):
-        out, model = self._reissue("Ночь 5–6 сентября: я (Ashe, @ashe_rain) писала «Добро пожаловать»")
-        self.assertEqual(out["reason"], "model_unavailable")
-        inputs = model.call_args.args[0]
-        self.assertEqual([x["id"] for x in inputs], ["cmp-c"])
-        self.assertIn("ashe", model.call_args.kwargs["authors"])
-
-    def test_clean_tier_compact_is_left_alone(self):
-        out, model = self._reissue("Ashe писала «Добро пожаловать», я ответила коротко")
-        self.assertEqual(out["reason"], "no_foreign_self")
+    def test_foreign_self_tier_is_not_reissued_implicitly(self):
+        out, model = self._reissue(
+            "Ночь 5–6 сентября: я (Ashe, @ashe_rain) писала «Добро пожаловать»"
+        )
+        self.assertEqual(out["reason"], "acting_author_required")
         model.assert_not_called()
+
+    def test_clean_tier_compact_is_left_unchanged(self):
+        out, model = self._reissue(
+            "Ashe писала «Добро пожаловать», я ответила коротко"
+        )
+        self.assertEqual(out["reason"], "acting_author_required")
+        model.assert_not_called()
+
+
+
 
 
 class ExtraAuthorsReachTheGuardTests(unittest.TestCase):
     def test_name_known_only_from_the_subtree_is_caught(self):
-        chat = mock.Mock(side_effect=[_resp("я (Ashe) писала приветствие"), _resp(GOOD)])
         rows = [{"id": "cmp-c", "text": "детская сводка без авторов"}]
-        with mock.patch.object(llm, "configured", return_value=True), \
-                mock.patch.object(llm, "chat", chat):
-            out = ml._model_compact(rows, tier=2, depth=2, continued=False, authors={"ashe"})
-        self.assertEqual(out["summary"], GOOD)
-        self.assertEqual(chat.call_count, 2)
+        authors = ml._window_authors(rows) | {"ashe"}
+        self.assertEqual(
+            ml._foreign_self("я (Ashe) писала приветствие", authors), "Ashe"
+        )
+        self.assertIsNone(ml._foreign_self(GOOD, authors))
+
 
 
 if __name__ == "__main__":
     unittest.main()
+
+class AuthoredSelfAnchor(AuthoredMemoryBase):
+    def test_honest_author_text_is_retained_without_helper_rewriting(self):
+        self.assert_authored_success(GOOD)

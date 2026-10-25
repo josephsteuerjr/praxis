@@ -1,8 +1,8 @@
-import { ApiError, artifactURL, cfg, channelURL, inTauri, shell } from "./api";
+import { api, post, ApiError, artifactURL, cfg, channelURL, inTauri, shell } from "./api";
 import { fileDialog, FILE_BYTES, type FileAccess, type Folder } from "../paper-files";
 import { fileError, paperButton, paperDialog } from "../paper-dialog";
 import { mountPaperMedia, type PaperMedia } from "../paper-media";
-import { artifactBytes, saveName } from "../paper-transfer";
+import { artifactBytes, saveName, browserSave } from "../paper-transfer";
 
 type ReadFile = { name: string; mime: string; data: string; size: number };
 export function bytesToFile(value: ReadFile): File {
@@ -44,10 +44,23 @@ function access(localAgent: boolean, media?: PaperMedia, blob?: Blob): FileAcces
     },
   };
 }
-export async function pickPaperFiles(localAgent: boolean, count: number, bytes: number): Promise<File[]> {
-  const result = await fileDialog(access(localAgent), { count, bytes }); return Array.isArray(result) ? result : [];
+export async function pickPaperFiles(_localAgent: boolean, count: number, bytes: number): Promise<File[]> {
+  // The browser/WebView opens its viewer-side native file chooser. A remote
+  // agent's filesystem is not a substitute for the person's local picker.
+  return new Promise((resolve,reject)=>{
+    const input=document.createElement('input'); input.type='file'; input.multiple=true; input.hidden=true; document.body.append(input);
+    const clean=()=>input.remove();
+    input.addEventListener('cancel',()=>{clean();resolve([]);},{once:true});
+    input.addEventListener('change',()=>{
+      const files=Array.from(input.files || []); clean();
+      if(files.length>count || files.some(f=>f.size>bytes) || files.reduce((n,f)=>n+f.size,0)>bytes) {reject(new Error('Слишком много файлов или превышен допустимый размер'));return;}
+      resolve(files);
+    },{once:true});
+    try { input.click(); } catch(e) { clean();reject(e); }
+  });
 }
 async function save(localAgent: boolean, media: PaperMedia, blob: Blob) {
+  if (!inTauri || 'showSaveFilePicker' in window) return browserSave(media,blob);
   try {
     const result = await fileDialog(access(localAgent, media, blob), { save: saveName(media) });
     if (!result || Array.isArray(result)) return;
@@ -59,5 +72,5 @@ async function save(localAgent: boolean, media: PaperMedia, blob: Blob) {
   }
 }
 export function mountWindowMedia(root: HTMLElement, localAgent: boolean) {
-  mountPaperMedia(root, { key: m => artifactURL(m.path, true), bytes: m => artifactBytes(artifactURL(m.path, true)), save: (m,b) => save(localAgent,m,b) });
+  return mountPaperMedia(root, { key: m => artifactURL(m.path, true), bytes: m => artifactBytes(artifactURL(m.path, true)), save: (m,b) => save(localAgent,m,b), voice: (m,retry) => retry ? post('/api/voice/attachment',{path:m.path}) : api('/api/voice/attachment?path='+encodeURIComponent(m.path)) });
 }

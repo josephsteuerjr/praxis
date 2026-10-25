@@ -34,7 +34,8 @@ const agent = read(src, "settings-agent.ts");
 assert.match(agent, /setField\(spareModelOther, v\)/, "поле «Запасная модель» не отражается во втором");
 assert.match(agent, /setField\(spareModelSame, v\)/, "поле «Модель запасного» не отражается в первом");
 assert.match(agent, /Запасному провайдеру нужно имя модели/, "«другой провайдер» без модели сохраняется молча");
-assert.match(agent, /spare === "other" && frameworkOf\(provider\) !== before/, "смена основного не чистит адрес/ключ запасного");
+assert.match(agent, /out\.model\.fallback_framework = spareFramework/, "запасной теряет собственный протокол");
+assert.ok(!/spare === "other" && frameworkOf\(provider\) !== before/.test(agent), "смена основного стирает независимый запасной адрес");
 
 // A7 F8/F9: stop is scoped to the foreground run; receipts use request identity.
 const talk = read(win, "views", "talk.ts");

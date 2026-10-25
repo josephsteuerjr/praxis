@@ -105,6 +105,31 @@ class Channel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.runtime.port,8193)
         probe = await self.client.get('/api/phone/probe')
         self.assertEqual((await probe.json())['instance'],self.runtime.instance)
+
+    async def test_forge_device_route_uses_only_structural_projection(self):
+        private = 'private-token-in-goal/C:/workspace'
+        task = Path(self.temp.name)/'memory/.forge/tasks/code-12345678'
+        task.mkdir(parents=True)
+        (task/'task.json').write_text(json.dumps({'status':'done','goal':private}))
+        unit = task/'agents/agent-abcdef12'
+        unit.mkdir(parents=True)
+        (unit/'request.json').write_text(json.dumps({'status':'running','role':private}))
+        (unit/'result.json').write_text(json.dumps({'status':'done','result':private}))
+        self.assertEqual((await self.client.get('/api/forge')).status,403)
+        pair = deskapp._new_pair()
+        redeem = await self.client.get('/pair/redeem', params={'token':pair['token']})
+        key = (await redeem.json())['key']
+        headers = {'Authorization':'Bearer '+key}
+        response = await self.client.get('/api/forge', headers=headers)
+        self.assertEqual(response.status,200)
+        data = await response.json()
+        self.assertEqual(data[0]['agents'][0]['status'],'done')
+        self.assertNotIn(private,json.dumps(data))
+        self.assertNotIn('goal',data[0])
+        owner = await self.client.get('/api/forge',headers={'Authorization':'Bearer owner-test'})
+        self.assertEqual((await owner.json())[0]['goal'],private)
+        for path in ('/api/md','/api/shadow','/api/anatomy'):
+            self.assertEqual((await self.client.get(path,headers=headers)).status,403)
     async def test_public_ready_checks_the_advertised_instance_and_http_status(self):
         self.runtime.url=str(self.client.make_url('/'))
         self.assertTrue(await self.runtime.public_ready())
