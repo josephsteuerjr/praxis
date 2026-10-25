@@ -2,8 +2,8 @@
   "version": "2.1.0",
   "platform": "windows",
   "artifact": "Helene-2.1.0.zip",
-  "sha256": "da4014bde00d1ed17c7eac51c6d154abdfd74a983e980ce29922e8f6a0a48dfc",
-  "bytes": 133436271,
+  "sha256": "d7cf57b8d09d8e7cf753061334bd4b21c402d86ec415322d137e2f9f013f519a",
+  "bytes": 133426790,
   "source_files": {
     "python_app.py": "f48eaf4a6dbd8d358f75f3b0a7329b597442523af81e65f6d27f8fc33b3f04bf",
     "python_migrate.py": "4109e001a6c7708cbb827f78c0d9afadc02a776faa70ceaf33df421d86618515",
@@ -282,5 +282,10 @@
     "app/dist/assets/ZenKurenaido-latin-Cm0i6hix.woff2": "8f6d05dfd2ac95edf905676a2b2edf5d797aa7d1a365974475c84b781fe6ef8c",
     "python_migration_window.py": "767a731330235dc474a547d7c32f0002dcfd5e0337ee1858e0434925a4cecc1a"
   },
-  "source_scope": "Platform desktop source; compiled frontend and dependency/native runtime bytes are verified separately. No new native runtime rebuild claimed."
+  "source_scope": "Platform desktop source; compiled frontend and dependency/native runtime bytes are verified separately. No new native runtime rebuild claimed.",
+  "metadata_only_changes": [
+    "Helene/app/component-downloads.json",
+    "Helene/app/desk.json",
+    "Helene/python-package-files.json"
+  ]
 }
