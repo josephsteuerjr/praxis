@@ -121,13 +121,8 @@ def discover(root: Path, *, path_aliases=None):
 def write_note(root, note):
     path=Path(root)/'python-migration.json'
     temporary=path.with_suffix('.tmp')
-    with temporary.open('w',encoding='utf-8') as stream:
-        stream.write(json.dumps(note,indent=2));stream.flush();os.fsync(stream.fileno())
+    temporary.write_text(json.dumps(note,indent=2),encoding='utf-8')
     temporary.replace(path)
-    if os.name != 'nt':
-        directory=os.open(path.parent,os.O_RDONLY | os.O_DIRECTORY)
-        try:os.fsync(directory)
-        finally:os.close(directory)
 
 
 def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
@@ -189,7 +184,29 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
     return {'reused_files':reused,'copied_files':copied,'prior_delta':str(delta)}
 
 
-def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None):
+def preservation_roots(found, old_root, *, copy_external=False):
+    """One inventory for preservation and platform migration admission."""
+    roots=set()
+    for row in found['agents']:
+        roots.update(p for p in (Path(row['tree']),row['code']) if copy_external or p.is_relative_to(old_root))
+        for key in ('app','runner'):
+            if not row['value'].get(key):continue
+            script=Path(str(row['value'][key]))
+            script=(script if script.is_absolute() else Path(row['config']).parent/script).resolve()
+            stock={'app':('deskapp.py','app/deskapp.py'),
+                   'runner':('localharness/runner.py','app/localharness/runner.py')}[key]
+            if ((copy_external or script.is_relative_to(old_root)) and script.is_file()
+                    and not any(script==(old_root/p).resolve() for p in stock)):
+                roots.add(script.parent)
+    for source in list(roots):
+        for parent in (source,*source.parents):
+            if not copy_external and not parent.is_relative_to(old_root):break
+            if (parent/'.git').exists():
+                roots.add(parent);break
+    return roots
+
+
+def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,copy_external=False):
     old_root, new_root, data_home = (p.resolve() for p in (old_root, new_root, data_home))
     if new_root == old_root or new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
         raise ValueError("New and old program directories must be separate")
@@ -199,15 +216,7 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
     had_service = any((r["value"].get("installed") or {}).get("service") is True for r in found["agents"])
     if had_service and not old_service_stopped:
         raise ValueError("Stop the old installed service before preparing the desktop-owner migration")
-    template = new_root / 'helene.json'
-    # Offline callers hold the destination installation lock and pass the exact
-    # validated template. Keep it through backup: an uncatchable exit before the
-    # journal must still enter the fresh-install wizard on ordinary startup.
-    if fresh_template is not None:
-        if (reuse or json.loads(fresh_template).get('setup_complete') is not False
-                or not template.is_file() or template.read_bytes() != fresh_template):
-            raise ValueError('Fresh destination template changed before migration')
-    elif template.exists():
+    if (new_root / "helene.json").exists():
         raise FileExistsError("New owner directory already contains configuration")
     operation = uuid.uuid4().hex
     data_home.mkdir(parents=True, exist_ok=True)
@@ -227,27 +236,10 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         previous.update((Path(a).resolve(),Path(b).resolve()) for a,b in reuse.get('preserved_roots',{}).items())
     try:
         # Copy enclosing roots first so shared/nested data and code stay shared.
-        roots=set()
-        for row in found['agents']:
-            code=row['code']
-            roots.update(p for p in (Path(row['tree']),code) if p.is_relative_to(old_root))
-            for key in ('app','runner'):
-                if not row['value'].get(key):continue
-                script=Path(str(row['value'][key]))
-                script=(script if script.is_absolute() else Path(row['config']).parent/script).resolve()
-                stock={'app':('deskapp.py','app/deskapp.py'),
-                       'runner':('localharness/runner.py','app/localharness/runner.py')}[key]
-                if (script.is_relative_to(old_root) and script.is_file()
-                        and not any(script==(old_root/p).resolve() for p in stock)):
-                    roots.add(script.parent)
-        # A configured code subfolder can belong to an enclosing Git repository.
-        # Preserve that repository, not just source bytes stripped of history.
-        for source in list(roots):
-            for parent in (source,*source.parents):
-                if not parent.is_relative_to(old_root):break
-                if (parent/'.git').exists():
-                    roots.add(parent);break
+        roots=preservation_roots(found,old_root,copy_external=copy_external)
         for source in sorted(roots,key=lambda p:len(p.parts)):
+            if source == new_root or new_root.is_relative_to(source) or data_home == source or data_home.is_relative_to(source):
+                raise ValueError('Preserved source overlaps the new program or data destination')
             if any(source.is_relative_to(parent) for parent in relocated):continue
             destination=previous.get(source)
             if destination is not None and not (source/'.git').is_file():
@@ -270,10 +262,6 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
                  'copied_data':copied,'preserved_roots':{str(a):str(b) for a,b in relocated.items()},
                  'data_home':str(data_home),'path_aliases':path_aliases}
         new_root.mkdir(parents=True,exist_ok=True);write_note(new_root,pending)
-        if fresh_template is not None:
-            if template.read_bytes() != fresh_template:
-                raise ValueError('Fresh destination template changed during backup')
-            template.unlink()  # the existing preserving journal now owns recovery
         for index,(source,destination) in enumerate(relocated.items()):
             if destination.exists():
                 refresh_preserved(source,destination,data_home/operation/('previous-delta-'+str(index)),progress)

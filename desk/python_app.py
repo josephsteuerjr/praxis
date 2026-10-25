@@ -30,8 +30,9 @@ def recover_before_imports(argv):
     from localharness.python_source_updater import recover_startup
     root=known.root.resolve()
     if not recover_startup(root,known.migration):return False
-    executable=root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
-    os.execv(str(executable),[str(executable),str(root/'app/python_app.py'),*argv])
+    from localharness.python_platform import desktop_argv
+    command=desktop_argv(root,argv)
+    os.execv(command[0],command)
     return True
 
 
@@ -49,7 +50,6 @@ class Application:
         self.window = None
         self.window_maximized = False
         self.relaunch = False
-        self.migration_wizard = False
         self.migration_id = ''
         self.confirm_lock = threading.Lock()
         self.confirmed_ui = False
@@ -108,13 +108,6 @@ class Application:
             return app_components.status(self.program, self.root)+component_downloads.status(self.program)
         if command == 'python_ready':
             return self.confirm_ui()
-        if command == 'migration_wizard':
-            if not sys.platform.startswith('linux'):
-                raise ValueError('This offline migration wizard is available in the Linux application')
-            self.migration_wizard = True
-            self.relaunch = True
-            self.event('exit', {})
-            return None
         if command == "restart_self":
             self.relaunch = True
             self.event("exit", {})
@@ -531,7 +524,6 @@ def _main(argv=None):
     parser.add_argument("--panic", action="store_true", help="latch owner Stop without starting the application")
     parser.add_argument("--notify", action="store_true", help="show the emergency-stop result")
     parser.add_argument("--migration", default="", help="confirm this prepared migration after the real window loads")
-    parser.add_argument('--migration-wizard', action='store_true', help='open the offline profile migration wizard before starting any agent')
     parser.add_argument("--browser", action="store_true", help="open the same Python-owned UI in the system browser")
     parser.add_argument("--launch-intent", choices=("manual", "automatic"), default="manual")
     args = parser.parse_args(argv)
@@ -554,19 +546,11 @@ def _main(argv=None):
     if not (ui / "index.html").is_file():
         raise FileNotFoundError(f"Нет сборки окна: {ui}")
     pending=root/'python-migration.json'
-    interrupted=pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving'
-    from localharness.essential_backup import load
-    fresh=(root/'helene.json').is_file() and load(root/'helene.json').get('setup_complete') is False and not pending.exists()
-    if sys.platform.startswith('linux') and (args.migration_wizard or interrupted or (fresh and not args.browser)):
-        from localharness.migration_wizard import run
-        if not run(root):return 0
-    elif interrupted:
+    if pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving':
         raise RuntimeError('Interrupted profile copy: resume migration before starting the application')
-    if pending.is_file() and not args.migration:
-        migrated=json.loads(pending.read_text(encoding='utf-8'))
-        if migrated.get('state')=='prepared':args.migration=migrated['id']
     app = Application(root, ui, None, program)
-    app.migration_id=args.migration
+    prepared=json.loads(pending.read_text(encoding='utf-8')) if pending.is_file() else {}
+    app.migration_id=args.migration or (prepared.get('id','') if prepared.get('state')=='prepared' else '')
     app.browser_mode=args.browser
     host = Controller(root, app.event, app.origin, args.agent)
     host.browser_mode=args.browser
@@ -608,9 +592,9 @@ def _main(argv=None):
     finally:
         app.close()
     if app.relaunch:
-        arguments=[a for a in sys.argv[1:] if a!='--migration-wizard']
-        if app.migration_wizard:arguments.append('--migration-wizard')
-        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *arguments])
+        from localharness.python_platform import desktop_argv
+        command=desktop_argv(program,sys.argv[1:])
+        os.execv(command[0],command)
     return 0
 
 

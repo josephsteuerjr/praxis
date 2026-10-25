@@ -179,10 +179,9 @@ def preserve_cache(previous, current):
 
 def _overlay(program, rows, progress=None, *, xtts_tree=None):
     """Apply validated optional roots to the exact program, regardless of its name."""
-    if not rows:
-        return  # Base-only migration deliberately selects no optional payload.
     import tempfile
     from .python_updates import _extract
+    if not rows:return
     with tempfile.TemporaryDirectory(prefix='.component-stage-', dir=program) as temporary:
         stage = Path(temporary)
         for row in rows:

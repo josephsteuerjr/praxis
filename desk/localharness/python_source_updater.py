@@ -82,14 +82,7 @@ def apply_files(source, target, recovery):
                 shutil.copy2(destination,previous)
             destination.parent.mkdir(parents=True,exist_ok=True)
             written.append({'path':relative.as_posix(),'existed':existed,'incoming':incoming})
-        # Retain every preimage and the complete intent before changing program
-        # bytes. Rewriting an ever-growing JSON map after each dependency made
-        # large optional runtime installs quadratic in serialized journal size.
-        record()
-        for row in written:
-            relative=Path(row['path'])
-            item=source/relative
-            destination=target/relative
+            record()  # recovery is durable before the first changed program byte
             temporary=destination.with_name('.'+destination.name+'.update-part')
             try:
                 if relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth' and item.stat().st_dev==destination.parent.stat().st_dev:
@@ -231,14 +224,15 @@ def perform(args):
     old,new=args.old.resolve(),args.new.resolve()
     presentation=['--browser'] if args.browser else []
     def reopen_previous():
-        executable=old/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+        from localharness.python_platform import desktop_argv
+        command=desktop_argv(old,['--root',str(old),*presentation])
         with (old/'python-update-recovery.log').open('ab') as output:
             # The restored version may predate startup recovery. A current
             # staging-runtime trampoline waits for our lease to be released,
             # then execs the unmodified old entry point (no new CLI required).
             staging_python=new/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
-            trampoline="import os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from python_migrate import installation_lock\nprint('Waiting for update installation lease',flush=True)\nwith installation_lock(Path(sys.argv[2]),timeout_sec=60):\n pass\nos.chdir(sys.argv[2])\nos.execv(sys.argv[3],[sys.argv[3],sys.argv[4],'--root',sys.argv[2],*sys.argv[5:]])"
-            subprocess.Popen([str(staging_python),'-s','-c',trampoline,str(new/'app'),str(old),str(executable),str(old/'app/python_app.py'),*presentation],
+            trampoline="import os,sys,json;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from python_migrate import installation_lock\nprint('Waiting for update installation lease',flush=True)\nwith installation_lock(Path(sys.argv[2]),timeout_sec=60):\n pass\nos.chdir(sys.argv[2])\ncommand=json.loads(sys.argv[3]);os.execv(command[0],command)"
+            subprocess.Popen([str(staging_python),'-s','-c',trampoline,str(new/'app'),str(old),json.dumps(command)],
                 cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
                 creationflags=0x00000200 if os.name=='nt' else 0,start_new_session=os.name!='nt')
     staging=args.staging.resolve()
@@ -267,7 +261,8 @@ def perform(args):
     child=None
     try:
         from localharness.desktop_supervisor import JobChild
-        child=JobChild.spawn([str(executable),str(old/'app/python_app.py'),'--root',str(old),'--migration',note['id'],*presentation],
+        from localharness.python_platform import desktop_argv
+        child=JobChild.spawn(desktop_argv(old,['--root',str(old),'--migration',note['id'],*presentation]),
                              cwd=old,env=dict(os.environ),log=log,stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:

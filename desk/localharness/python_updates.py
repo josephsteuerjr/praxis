@@ -192,7 +192,7 @@ def _extract(archive, destination, progress=None, prefix='Helene/'):
                             progress({'stage':'unpacking','asset':Path(archive).name,'bytes':done,'total_bytes':total,'files':index,'total_files':len(reader.infolist()),'file':entry.filename});reported=time.monotonic()
                 if os.name != 'nt':
                     mode=(entry.external_attr >> 16) & 0o777
-                    temporary.chmod((mode or 0o644) & 0o755)
+                    temporary.chmod(mode or 0o644)
                 temporary.replace(target)
             finally:temporary.unlink(missing_ok=True)
 
