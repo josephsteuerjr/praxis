@@ -128,7 +128,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const items: Array<[Provider, string, string]> = [
     ["api", "Ключ API", "OpenAI и любой совместимый адрес"],
     ["anthropic", "Anthropic API", "Anthropic, Z.ai, MiniMax, Kimi и совместимые"],
-    ["chatgpt", "Подписка ChatGPT", "вход в аккаунт через встроенное реле"],
+    ["chatgpt", "Подписка ChatGPT", "вход через отдельный praxis-relay"],
     ["local", "Локальная модель", "Ollama или LM Studio на этом ПК"],
   ];
   const syncPick = () => {
@@ -239,6 +239,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const subscriptions = relayAccounts();
   const relayConnection = relayProxy(draft.relay?.proxy);
   const relayRefresh = subscriptions.refresh;
+  let relayExecutable=String(draft.relay?.executable||'');
+  const relayExecutableField=field('Путь к отдельному praxis-relay',relayExecutable,v=>{relayExecutable=v;},{placeholder:'Автоматически после установки компонента'});
   const chatgptDraft = { model: provider === "chatgpt" ? String(draft.model.model || "gpt-5.6-sol") : "gpt-5.6-sol" };
   const chatgptGrid = el("div", "form-grid two");
   chatgptGrid.style.marginTop = "14px";
@@ -318,7 +320,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     }),
     localProbeOut,
   );
-  panes.local.append(localGrid, localProbeRow, localModels, el("p", "field-hint", "Ollama, LM Studio или другое совместимое реле. Ключ сохраняется отдельно; пустой подходит только серверу без авторизации. Встроенное реле ChatGPT выбирается отдельной вкладкой."));
+  panes.local.append(localGrid, localProbeRow, localModels, el("p", "field-hint", "Ollama, LM Studio или другое совместимое реле. Ключ сохраняется отдельно; пустой подходит только серверу без авторизации. Реле ChatGPT выбирается отдельной вкладкой."));
   let effort = String(draft.model.reasoning_effort || "");
   let effortChanged = false;
   const effortRow = el("div", "models");
@@ -435,7 +437,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   syncEffort();
   cards.push(inGroup(card("Модель", model), GROUP.brain));
   const subscriptionBody = el("div");
-  subscriptionBody.append(subscriptions.element, relayConnection.element);
+  subscriptionBody.append(subscriptions.element, relayConnection.element, relayExecutableField);
   cards.push(inGroup(card("Подписки и реле", subscriptionBody), GROUP.brain));
 
   // --- Telegram: бот или свой аккаунт агента
@@ -795,7 +797,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         }
         const proxyError = relayConnection.error();
         if (proxyError) return proxyError;
-        out.relay = keepBlock(out.relay, { proxy: relayConnection.collect() });
+        out.relay = keepBlock(out.relay, { proxy: relayConnection.collect(), executable: relayExecutable.trim() || undefined });
         const imageError = images.collect(out);
         if (imageError) return imageError;
         if (provider === "chatgpt") out.relay = keepBlock(out.relay, { key: out.model.key });

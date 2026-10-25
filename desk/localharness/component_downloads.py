@@ -20,7 +20,8 @@ if not __package__:
 
 FORMAT = 'helene-component-downloads.v1'
 MANIFEST = 'component-downloads.json'
-EXTENSIONS = {'toolchain', 'xtts', 'whisper'}
+EXTENSIONS = {'xtts', 'whisper'}
+LEGACY_EXTENSIONS = EXTENSIONS | {'toolchain'}
 MAX_MANIFEST = 65536
 
 
@@ -28,10 +29,10 @@ def validate(value):
     if not isinstance(value, dict) or value.get('format') != FORMAT:
         raise ValueError('Unsupported component download manifest')
     groups, artifacts = value.get('extensions'), value.get('artifacts')
-    if not isinstance(groups, dict) or set(groups) != EXTENSIONS or not isinstance(artifacts, dict):
+    if not isinstance(groups, dict) or not EXTENSIONS <= set(groups) <= LEGACY_EXTENSIONS or not isinstance(artifacts, dict):
         raise ValueError('Incomplete component download manifest')
     unavailable=value.get('unavailable',{})
-    if (not isinstance(unavailable,dict) or any(k not in EXTENSIONS or not isinstance(v,str) or not v.strip() for k,v in unavailable.items())):
+    if (not isinstance(unavailable,dict) or any(k not in LEGACY_EXTENSIONS or not isinstance(v,str) or not v.strip() for k,v in unavailable.items())):
         raise ValueError('Invalid unavailable-component reasons')
     names = set()
     for key, row in artifacts.items():
@@ -135,6 +136,7 @@ def fetch(program, manifest, extensions, progress=None):
     rows = []
     for artifact in select(manifest, extensions):
         target = cache_dir(program) / cache_name(artifact)
+        got = None
         if target.exists():
             with target.open('rb') as source:
                 valid=target.stat().st_size==artifact['size'] and hashlib.file_digest(source,'sha256').hexdigest()==artifact['sha256']
@@ -142,7 +144,12 @@ def fetch(program, manifest, extensions, progress=None):
                 # Keep the bad input for diagnosis but let an explicit retry heal
                 # the cache rather than pinning every future install to it.
                 target.rename(target.with_name(target.name+'.invalid-'+uuid.uuid4().hex))
-        if artifact.get('offline_only') is True:
+            else:
+                got={'path':str(target),'bytes':artifact['size'],'sha256':artifact['sha256'],'sha_ok':True,'reused':True}
+                if progress:progress(dict(got,stage='downloading',asset=artifact['name'],total_bytes=artifact['size']))
+        if got is not None:
+            pass  # This operation has already verified the cached archive once.
+        elif artifact.get('offline_only') is True:
             if not target.is_file():
                 raise FileNotFoundError('Offline component required: '+artifact['name']+'; prepare the supplied extension pack with --offline first')
             got={'path':str(target),'bytes':target.stat().st_size,'sha256':artifact['sha256'],'reused':True}
@@ -177,6 +184,38 @@ def preserve_cache(previous, current):
             temporary.unlink(missing_ok=True)
 
 
+def changed_extensions(program, manifest, extensions):
+    """Normal updates keep installed payload when its pinned identity is equal.
+
+    This is preservation, not an integrity/repair claim. Explicit component
+    installation still checks the archives and reinstalls their exact bytes.
+    """
+    from .python_updates import installed_extensions
+    try:previous=load(program)
+    except (OSError,ValueError,KeyError):return list(extensions)
+    installed=set(installed_extensions(program))
+    def identity(value,name):
+        return sorted((row['name'],row['sha256'],row['size']) for row in select(value,[name]))
+    changed=[]
+    for name in extensions:
+        try:same=identity(previous,name)==identity(manifest,name)
+        except ValueError:same=False
+        if name not in installed or not same:changed.append(name)
+    return changed
+
+
+def preserve_installed(previous, current):
+    """First migration retains optional payloads without fetching them again."""
+    from .parallel_files import copytree
+    previous,current=Path(previous),Path(current)
+    from .standalone_relay import preserve
+    preserve(previous,current)
+    for relative in ('components/toolchain','components/xtts','components/whisper','voice','voice-xtts'):
+        source=previous/relative;target=current/relative
+        if source.is_dir() and not target.exists():
+            copytree(source,target,symlinks=False)
+
+
 def _overlay(program, rows, progress=None, *, xtts_tree=None):
     """Apply validated optional roots to the exact program, regardless of its name."""
     if not rows:
@@ -185,8 +224,9 @@ def _overlay(program, rows, progress=None, *, xtts_tree=None):
     from .python_updates import _extract
     with tempfile.TemporaryDirectory(prefix='.component-stage-', dir=program) as temporary:
         stage = Path(temporary)
+        verified = {}
         for row in rows:
-            _extract(row['path'], stage, progress)
+            verified.update(_extract(row['path'], stage, progress) or {})
         payload = stage / 'Helene'
         # These public archives carry only optional component/voice trees, never
         # configuration or agent code. Validate the whole layout before writes.
@@ -195,7 +235,9 @@ def _overlay(program, rows, progress=None, *, xtts_tree=None):
                 raise ValueError('Unexpected optional payload root: ' + entry.name)
         from .python_source_updater import apply_files, rollback
         recovery=program/('.component-recovery-'+uuid.uuid4().hex)
-        apply_files(payload,program.resolve(),recovery)
+        # The stage lives on this same volume. Move each fully extracted file
+        # into place after journalling preimages instead of copying GB again.
+        apply_files(payload,program.resolve(),recovery,consume=True,verified=verified)
         try:
             if xtts_tree is not None:
                 from .xtts_install import install as install_xtts
@@ -226,24 +268,22 @@ def status(program):
                   'error':manifest['unavailable'][name]} if name in manifest.get('unavailable',{}) else
                  {'id':name,'ready':True,'installed':name in installed,
                   'download_bytes':sum(row['size'] for row in select(manifest,[name]))})
-                for name in ('toolchain','xtts','whisper')]
+                for name in ('xtts','whisper')]
     except (OSError,ValueError,KeyError) as error:
-        return [{'id':name,'ready':False,'installed':False,'error':str(error)} for name in ('toolchain','xtts','whisper')]
+        return [{'id':name,'ready':False,'installed':False,'error':str(error)} for name in ('xtts','whisper')]
 
 
 def prepare(program, extensions, *, offline=None, progress=None):
     """Wizard entry after its main ZIP was verified; use the very same parser."""
-    from .python_updates import _extract, _download
     program=Path(program).resolve()
     manifest=load(program)
-    rows=[]
-    for artifact in select(manifest,extensions):
-        target=cache_dir(program)/cache_name(artifact)
-        if offline is not None:
+    if offline is None:
+        archives=fetch(program,manifest,extensions,progress)
+    else:
+        archives=[]
+        for artifact in select(manifest,extensions):
+            target=cache_dir(program)/cache_name(artifact)
             source=Path(offline)/artifact['name']
-            with source.open('rb') as stream:
-                if source.stat().st_size!=artifact['size'] or hashlib.file_digest(stream,'sha256').hexdigest()!=artifact['sha256']:
-                    raise ValueError('Offline component differs: '+artifact['name'])
             if target.exists():
                 with target.open('rb') as stream:
                     valid=target.stat().st_size==artifact['size'] and hashlib.file_digest(stream,'sha256').hexdigest()==artifact['sha256']
@@ -251,21 +291,15 @@ def prepare(program, extensions, *, offline=None, progress=None):
             if not target.exists():
                 temporary=target.with_name('.'+uuid.uuid4().hex+'.copy')
                 try:
-                    shutil.copyfile(source,temporary)
-                    with temporary.open('rb') as stream:
-                        if temporary.stat().st_size!=artifact['size'] or hashlib.file_digest(stream,'sha256').hexdigest()!=artifact['sha256']:
-                            raise ValueError('Offline component changed while copying: '+artifact['name'])
+                    digest=hashlib.sha256();size=0
+                    with source.open('rb') as stream,temporary.open('xb') as output:
+                        while chunk:=stream.read(1024*1024):
+                            size+=len(chunk);digest.update(chunk);output.write(chunk)
+                    if size!=artifact['size'] or digest.hexdigest()!=artifact['sha256']:
+                        raise ValueError('Offline component differs: '+artifact['name'])
                     temporary.replace(target)
                 finally:temporary.unlink(missing_ok=True)
-        rows.append(artifact)
-    if offline is None:fetch(program,manifest,extensions,progress)
-    archives=[]
-    for artifact in rows:
-        archive=cache_dir(program)/cache_name(artifact)
-        with archive.open('rb') as source:
-            if archive.stat().st_size!=artifact['size'] or hashlib.file_digest(source,'sha256').hexdigest()!=artifact['sha256']:
-                raise ValueError('Cached component changed: '+artifact['name'])
-        archives.append({'path':str(archive)})
+            archives.append({'path':str(target),'sha256':artifact['sha256'],'bytes':artifact['size']})
     _overlay(program, archives, progress)
     return {'state':'prepared','extensions':extensions,'cache':str(cache_dir(program))}
 

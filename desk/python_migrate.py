@@ -3,7 +3,8 @@
 
 Discovery/unpacking is not a final snapshot. After confirmation the previous
 writers stop; only then do we copy data and the actual executable self-edits.
-No recursive legacy uninstaller is invoked.
+The identified native package is removed with its registered non-purge command
+only after the new Python owner confirms the preserved profile.
 """
 from __future__ import annotations
 import argparse
@@ -20,7 +21,7 @@ import uuid
 from localharness import app_migration, migration_windows
 
 
-def transaction(old, new):
+def transaction(old, new, *, prepared=False):
     """Admit a new target or resume only this exact recorded handoff.
 
     The native Stop latch predates the application and shares its known folder;
@@ -33,7 +34,10 @@ def transaction(old, new):
                 Path(note.get('new_root','')).resolve()!=new):
             raise ValueError('This folder belongs to another migration; retained without changes')
         return note
-    if new.exists():
+    if prepared:
+        if (new/'helene.json').exists() or not all((new/p).is_file() for p in ('python-app.json','app/python_app.py','runtime/python.exe')):
+            raise ValueError('Use the unpacked, unconfigured portable application for migration')
+    elif new.exists():
         from localharness import owner_stop
         latch = owner_stop.client_file()
         allowed = {'owner-stop.json'} if latch is not None and latch.parent.resolve()==new else set()
@@ -63,7 +67,7 @@ def copy_program(package, new, progress, extensions=None):
     xtts_files=set(json.loads(bundle.read_text(encoding='utf-8'))['files'])|{'xtts-bundle.json'} if bundle.is_file() else None
     def selected(path):
         parts=path.relative_to(package).parts
-        if parts[:2]==('components','toolchain'):return 'toolchain' in extensions
+        if parts[:2]==('components','toolchain'):return False
         if parts[:2]==('components','xtts'):return 'xtts' in extensions and (xtts_files is None or Path(*parts[2:]).as_posix() in xtts_files)
         if parts[0]=='voice' or parts[:2]==('components','whisper'):return 'whisper' in extensions
         return True
@@ -72,7 +76,12 @@ def copy_program(package, new, progress, extensions=None):
            '__pycache__' not in p.relative_to(package).parts and
            p.name not in ('helene.json','python-migration.json','owner-stop.json','install.log') and not p.name.endswith('.pyc')]
     total=sum(p.stat().st_size for p in files);done=0
-    for item in files:
+    from concurrent.futures import ThreadPoolExecutor
+    from localharness.parallel_files import WORKERS
+    import threading
+    lock=threading.Lock()
+    def copy(item):
+        nonlocal done
         if item.is_symlink():raise ValueError('Package symlink is unsupported: '+str(item))
         relative=item.relative_to(package);target=new/relative
         if not target.resolve().is_relative_to(new):raise ValueError('Program destination leaves target')
@@ -94,8 +103,19 @@ def copy_program(package, new, progress, extensions=None):
             else:shutil.copy2(item,temporary)
             if not temporary.samefile(item) and hash_file(temporary)!=expected:raise IOError('Program copy verification failed: '+str(relative))
             temporary.replace(target)
-        done+=item.stat().st_size
-        progress({'stage':'unpacking','bytes':done,'total_bytes':total,'file':relative.as_posix(),'reused':equal})
+        with lock:
+            done+=item.stat().st_size
+            progress({'stage':'unpacking','bytes':done,'total_bytes':total,'file':relative.as_posix(),'reused':equal})
+
+    # Resolve and validate every target before independent copy workers start.
+    for item in files:
+        if item.is_symlink() or not (new/item.relative_to(package)).resolve().is_relative_to(new):
+            raise ValueError('Invalid program copy path')
+    with ThreadPoolExecutor(max_workers=max(1,WORKERS-1)) as pool:
+        pending=[pool.submit(copy,p) for p in files if p.stat().st_size>=256*1024]
+        for item in files:
+            if item.stat().st_size<256*1024:copy(item)
+        for future in pending:future.result()
 
 
 def retain_attempt_configs(new, note):
@@ -115,6 +135,11 @@ def finish_retirement(old, package, new, note, progress):
     """Repeatable integration cleanup, never a second application launch."""
     migration_windows.quiescent(old)
     progress('retiring_old')
+    if note.get('startup_proof') and (command:=migration_windows.registered_uninstall(old)):
+        retirement=migration_windows.uninstall_registered(old,command)
+        integrations=migration_windows.retire(old,new)
+        note.update(integrations=integrations,retirement=retirement,state='completed')
+        app_migration.write_note(new,note);progress('completed');return note
     integrations=migration_windows.retire(old,new)
     inventory=old/'python-package-files.json'
     if not inventory.is_file():inventory=package/'migration/legacy-package-files.json'
@@ -162,18 +187,20 @@ def resume_retirement(old, package, new, note, progress):
 
 
 def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=False,
-            launch=True, progress=None, extensions=None,resume_copy=None):
+            launch=True, progress=None, extensions=None,resume_copy=None,prepared=False):
     old,package,new,data=(p.resolve() for p in (old,package,new,data))
     progress=progress or (lambda stage:None)
     app_migration.discover(old)  # read-only preflight; never reused as final state
-    if new.is_relative_to(old) or old.is_relative_to(new) or new==package or package.is_relative_to(new):
+    if new.is_relative_to(old) or old.is_relative_to(new) or (not prepared and (new==package or package.is_relative_to(new))):
         raise ValueError('Old, new and unpacked package must be separate')
-    prior=transaction(old,new)
+    if prepared and new!=package:raise ValueError('Portable migration stays in this unpacked application')
+    prior=transaction(old,new,prepared=prepared)
     if prior['state']=='completed':return prior
     if prior['state'] in ('new_app_started','retirement_incomplete'):
         return resume_retirement(old,package,new,prior,progress)
-    progress('unpacking')
-    copy_program(package,new,progress,extensions)
+    if not prepared:
+        progress('unpacking')
+        copy_program(package,new,progress,extensions)
     from localharness.update_extensions import check
     progress('checking_extensions')
     check(old,new)
@@ -191,7 +218,8 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
             migration_windows.quiescent(Path(reuse['new_root']))
         progress('preserving')
         retain_attempt_configs(new,prior)
-        note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse)
+        note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse,
+                                   independent=prepared,copy_external=prepared)
         install_selected_extensions(new,note,extensions,progress)
         if not launch:return note
         interpreter=new/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
@@ -296,9 +324,24 @@ def installation_lock(target, *, timeout_sec=0):
     from localharness.phone_tunnel.platform_support import acquire_file_lock,release_file_lock
     target=Path(target).resolve();target.parent.mkdir(parents=True,exist_ok=True)
     identity=hashlib.sha256(os.path.normcase(str(target)).encode()).hexdigest()[:24]
-    lock=acquire_file_lock(target.parent/('.helene-install-'+identity+'.lock'),timeout_sec=timeout_sec)
-    try:yield
-    finally:release_file_lock(lock)
+    if os.name=='nt':state=Path(os.environ.get('LOCALAPPDATA') or Path.home()/'AppData/Local')/'Helene'
+    elif sys.platform=='darwin':state=Path.home()/'Library/Application Support/Helene'
+    else:state=Path(os.environ.get('XDG_STATE_HOME') or Path.home()/'.local/state')/'helene'
+    directory=state/'installation-locks';directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+    lock=acquire_file_lock(directory/(identity+'.lock'),timeout_sec=timeout_sec)
+    legacy=None
+    try:
+        # Also fence older helpers whenever their historical parent lock is
+        # writable. A root-owned /opt parent cannot host that old lock; all new
+        # fresh/update/recovery consumers still share the same user-state lock.
+        try:legacy=acquire_file_lock(target.parent/('.helene-install-'+identity+'.lock'),timeout_sec=timeout_sec)
+        except Exception as exc:
+            import errno
+            cause=exc.__cause__
+            if not isinstance(cause,OSError) or cause.errno not in (errno.EACCES,errno.EPERM,errno.EROFS):raise
+        yield
+    finally:
+        release_file_lock(legacy);release_file_lock(lock)
 
 
 def main():
@@ -314,7 +357,7 @@ def main():
     p.add_argument('--in-place',action='store_true',help='Update an existing Python application in its current folder')
     p.add_argument('--resume-copy',type=Path,help='Explicit journal of an earlier failed, unstarted copy of the same installation')
     p.add_argument('--shortcut-dir',type=Path,help='Optional per-user/portable shortcut folder for a fresh installation')
-    p.add_argument('--extensions',default='xtts',help='Optional downloads selected by the owner: xtts,whisper,toolchain')
+    p.add_argument('--extensions',default='',help='Optional downloads selected by the owner: xtts,whisper,toolchain')
     a=p.parse_args()
     if not a.confirmed:raise ValueError('Open the migration wizard and confirm the switch')
     package=Path(__file__).resolve().parent.parent

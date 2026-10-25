@@ -1,6 +1,6 @@
 [package]
 name = "helene-setup"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "Установщик Hélène: motion-сцена первого запуска, имя агента, конституция, ключи, служба и установка в папку пользователя. Отдельный процесс от основной программы: одно окно, один экземпляр, закрыл окно = вышел."
 
@@ -42,6 +42,12 @@ strip = true
 [profile.release.package.zstd-sys]
 opt-level = 3
 [profile.release.package.sha2]
+opt-level = 3
+[profile.release.package.zip]
+opt-level = 3
+[profile.release.package.flate2]
+opt-level = 3
+[profile.release.package.miniz_oxide]
 opt-level = 3
 
 # Без этой фичи Tauri считает сборку «dev» и грузит devUrl (localhost) вместо

@@ -17,7 +17,7 @@ export interface MediaClient {
 export function mediaDescriptor(m: { media_path?: string; media_kind?: string; media_name?: string; media_size?: number; media_mime?: string; media_original_path?: string }): PaperMedia | null {
   const path = String(m.media_path || "").trim(); if (!path) return null;
   const name = m.media_name || path.split(/[\\/]/).pop() || "Файл";
-  const kind = m.media_kind === 'audio' || (m.media_kind !== 'video' && (m.media_mime?.startsWith('audio/') || (!m.media_mime && /^voice-.*\.webm$/i.test(name)))) ? 'audio' : String(m.media_kind || 'file');
+  const kind = ['audio','voice','voice_note'].includes(m.media_kind || '') || (m.media_kind !== 'video' && (m.media_mime?.startsWith('audio/') || ((!m.media_mime || m.media_mime === 'application/octet-stream') && /\.(?:wav|mp3|ogg|oga|opus|m4a|aac|flac)$|^voice-.*\.webm$/i.test(name)))) ? 'audio' : String(m.media_kind || 'file');
   return { path, kind, name: name.replace(/^(?:msg-[a-f0-9]{10}-[a-f0-9]{12}-)+/, ""), size: m.media_size, mime: m.media_mime, originalPath:m.media_original_path };
 }
 export function paperMediaHTML(m: PaperMedia) {
@@ -35,7 +35,7 @@ export function paperMediaHTML(m: PaperMedia) {
 /** Hide only a typed artifact's historical transport annotation, never rewrite its archive. */
 export function artifactCaption(text: string, path?: string) {
   if (!path) return text;
-  return text.replace(/^\[(?:файл(?::[^\]]*)?|голос|изображение|картинка|фото|стикер[^\]]*|анимация|видео)\][^\n]*(?:\n|$)/, "");
+  return text.replace(/^\[(?:файл(?::[^\]]*)?|голос(?:овое)?|изображение|картинка|фото|стикер[^\]]*|анимация|видео)\][^\n]*(?:\n|$)/, "");
 }
 
 export function mountPaperMedia(root: HTMLElement, client: MediaClient) {

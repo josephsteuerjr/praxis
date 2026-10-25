@@ -4,6 +4,7 @@ fn main() {
     // exited green. This is the input that must invalidate the setup binary.
     println!("cargo:rerun-if-changed=icons/icon.ico");
     println!("cargo:rerun-if-changed=../shell/icons/icon.ico");
+    println!("cargo:rerun-if-changed=../shell/icons/icon.png");
     println!("cargo:rerun-if-changed=migration.conf.json");
     println!("cargo:rerun-if-changed=migration-ui/index.html");
     // UI собирается Vite в ./dist (npm --prefix ui run build) и запекается в exe

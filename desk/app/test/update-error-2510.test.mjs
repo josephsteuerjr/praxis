@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {stripTypeScriptTypes} from 'node:module';
+const source=readFileSync(new URL('../../ui-kit/update-error.ts',import.meta.url),'utf8');
+const {updateError}=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64'));
+assert.match(updateError('download',new Error('HTTP 404: SHA sidecar unavailable')), /Скачивание.*HTTP 404: SHA sidecar unavailable/);
+assert.match(updateError('download','Update SHA256 differs'),/SHA256 differs/);
+assert.match(updateError('install','profile busy'),/Запуск обновления: profile busy/);
+assert.match(updateError('install',null),/не сообщила причину/);
+assert.match(updateError('download','denied'),/помощник вручную/);
+console.log('Update stage, original reason and manual fallback PASS');

@@ -5,6 +5,7 @@
 // Хранится в localStorage окна: это удобство этого окна на этом компьютере, а не
 // настройка агента, и в helene.json ей делать нечего. Применяется сразу, без «Сохранить».
 // Тема по-прежнему — как в системе (слово владельца 07.09); палитры — у дня и у ночи свои.
+import "./styles/look-variants.css";
 import type { FeelName, Overscroll } from "../feed/scroller";
 import { scrollSupportText, type ScrollSupport } from "../feed/scroll-support";
 import { el } from "./lib";
@@ -85,14 +86,17 @@ export interface Look {
   edge: Overscroll;
   uiScale: number;
   density: "comfortable" | "compact";
-  style: "paper" | "clean";
+  style: "paper" | "clean" | "studio" | "glass" | "terminal";
+  font: "hand" | "sans" | "serif" | "mono";
+  shape: "default" | "round" | "square";
+  backdrop: "plain" | "grid" | "glow";
   dayColor: string;
   nightColor: string;
   accentColor: string;
 }
 
 /** Светлая бумага с лёгкой фактурой; сохранённый выбор владельца имеет приоритет. */
-export const DEFAULT_LOOK: Look = { paperDay: "light", paperNight: "coal", accent: "terra", grain: "soft", text: "m", feel: "syrup", edge: "rubber", uiScale: 1, density: "comfortable", style: "paper", dayColor: "", nightColor: "", accentColor: "" };
+export const DEFAULT_LOOK: Look = { paperDay: "light", paperNight: "coal", accent: "terra", grain: "soft", text: "m", feel: "syrup", edge: "rubber", uiScale: 1, density: "comfortable", style: "paper", font: "hand", shape: "default", backdrop: "plain", dayColor: "", nightColor: "", accentColor: "" };
 
 const KEY = "helene.look";
 
@@ -110,7 +114,10 @@ export function load(): Look {
       edge: pick(EDGES, raw.edge, DEFAULT_LOOK.edge) as Overscroll,
       uiScale: typeof raw.uiScale === "number" && Number.isFinite(raw.uiScale) ? Math.max(.7, Math.min(1.5, raw.uiScale)) : 1,
       density: raw.density === "compact" ? "compact" : "comfortable",
-      style: raw.style === "clean" ? "clean" : "paper",
+      style: (['paper','clean','studio','glass','terminal'].includes(raw.style||'') ? raw.style : 'paper') as Look['style'],
+      font: (['hand','sans','serif','mono'].includes(raw.font||'') ? raw.font : 'hand') as Look['font'],
+      shape: (['default','round','square'].includes(raw.shape||'') ? raw.shape : 'default') as Look['shape'],
+      backdrop: (['plain','grid','glow'].includes(raw.backdrop||'') ? raw.backdrop : 'plain') as Look['backdrop'],
       ...Object.fromEntries((["dayColor", "nightColor", "accentColor"] as const).map(k => [k, /^#[0-9a-f]{6}$/i.test(raw[k] || "") ? raw[k] : ""])) as Pick<Look,"dayColor"|"nightColor"|"accentColor">,
     };
   } catch {
@@ -146,6 +153,9 @@ export function apply(look: Look) {
   const app=document.getElementById("app");
   if(app) app.style.height=`calc(100dvh / ${look.uiScale})`;
   document.documentElement.dataset.lookStyle = look.style;
+  document.documentElement.dataset.lookFont = look.font;
+  document.documentElement.dataset.lookShape = look.shape;
+  document.documentElement.dataset.lookBackdrop = look.backdrop;
   document.documentElement.dataset.density = look.density;
   const dark = readTheme() === "dark" || (readTheme() === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
   const color = dark ? look.nightColor : look.dayColor;

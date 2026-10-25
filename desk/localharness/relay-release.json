@@ -1,0 +1,31 @@
+{
+  "version": "1.1.0",
+  "source_commit": "ab34851ee6a5061a5a6548bb959277c620072657",
+  "project": "https://github.com/josephsteuerjr/praxis-relay/releases/tag/v1.1.0",
+  "platforms": {
+    "windows-x86_64": {
+      "name": "praxis-relay-1.1.0-windows-x64.zip",
+      "size": 8439088,
+      "sha256": "528cbfd3ccdf19483b7bbad7a1132c205b11352ff5c3682224f015ada2606c66",
+      "url": "https://github.com/josephsteuerjr/praxis-relay/releases/download/v1.1.0/praxis-relay-1.1.0-windows-x64.zip"
+    },
+    "linux-x86_64": {
+      "name": "praxis-relay-1.1.0-linux-x64-headless.tar.gz",
+      "size": 3605722,
+      "sha256": "fad338da2c3003609e6dbf7e1394996c20c4ff3b27e6eb1555617457d9f527ca",
+      "url": "https://github.com/josephsteuerjr/praxis-relay/releases/download/v1.1.0/praxis-relay-1.1.0-linux-x64-headless.tar.gz"
+    },
+    "macos-arm64": {
+      "name": "praxis-relay-1.1.0-macos-universal-headless.tar.gz",
+      "size": 6889748,
+      "sha256": "389fc1252ee79e2074b6c7c125e6f2501fefd600a2600ce207aea37faff26fad",
+      "url": "https://github.com/josephsteuerjr/praxis-relay/releases/download/v1.1.0/praxis-relay-1.1.0-macos-universal-headless.tar.gz"
+    },
+    "macos-x86_64": {
+      "name": "praxis-relay-1.1.0-macos-universal-headless.tar.gz",
+      "size": 6889748,
+      "sha256": "389fc1252ee79e2074b6c7c125e6f2501fefd600a2600ce207aea37faff26fad",
+      "url": "https://github.com/josephsteuerjr/praxis-relay/releases/download/v1.1.0/praxis-relay-1.1.0-macos-universal-headless.tar.gz"
+    }
+  }
+}

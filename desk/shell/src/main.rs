@@ -8777,6 +8777,11 @@ fn pick_update_zip(
     let is_zip = |x: &serde_json::Value| url_of(x).ends_with(".zip");
     let for_mac = |x: &serde_json::Value| name_of(x).ends_with(UPDATE_MAC_SUFFIX);
     let prefix = format!("{}-", product.trim().to_lowercase());
+    let for_windows = |x: &serde_json::Value| {
+        let name = name_of(x);
+        name.strip_prefix(&prefix).and_then(|s| s.strip_suffix(".zip"))
+            .is_some_and(|version| version.bytes().all(|b| b.is_ascii_digit() || b == b'.') && parse_version(version).is_some())
+    };
     if macos {
         return assets
             .iter()
@@ -8785,8 +8790,8 @@ fn pick_update_zip(
     }
     assets
         .iter()
-        .find(|x| is_zip(x) && !for_mac(x) && name_of(x).starts_with(&prefix))
-        .or_else(|| allow_any.then(|| assets.iter().find(|x| is_zip(x) && !for_mac(x))).flatten())
+        .find(|x| is_zip(x) && for_windows(x))
+        .or_else(|| allow_any.then(|| assets.iter().find(|x| is_zip(x) && name_of(x) == format!("{}.zip", product.trim().to_lowercase()))).flatten())
         .cloned()
 }
 
@@ -11349,6 +11354,22 @@ mod tests {
 
     /// В одном релизе два архива — каждая программа берёт свой; у варианта отката
     /// на чужой .zip нет.
+    #[test]
+    fn windows_update_never_selects_a_platform_source_or_component_zip() {
+        let assets = serde_json::json!([
+            {"name":"Helene-2.0.0-fedora-x86_64.zip","browser_download_url":"https://x/Helene-2.0.0-fedora-x86_64.zip"},
+            {"name":"Helene-2.0.0-linux-x86_64.zip","browser_download_url":"https://x/Helene-2.0.0-linux-x86_64.zip"},
+            {"name":"Helene-2.0.0-source.zip","browser_download_url":"https://x/Helene-2.0.0-source.zip"},
+            {"name":"Helene-components-toolchain.zip","browser_download_url":"https://x/Helene-components-toolchain.zip"},
+            {"name":"Helene-2.0.0-macos-arm64.zip","browser_download_url":"https://x/Helene-2.0.0-macos-arm64.zip"},
+            {"name":"Helene-2.0.0.zip","browser_download_url":"https://x/Helene-2.0.0.zip"}
+        ]);
+        let assets = assets.as_array().unwrap();
+        assert_eq!(pick_update_zip(assets,"Helene",true,false).unwrap()["name"],"Helene-2.0.0.zip");
+        assert!(pick_update_zip(&assets[..5],"Helene",true,false).is_none());
+        assert_eq!(pick_update_zip(assets,"Helene",true,true).unwrap()["name"],"Helene-2.0.0-macos-arm64.zip");
+    }
+
     #[test]
     fn update_zip_is_the_products_own_archive() {
         use super::pick_update_zip;

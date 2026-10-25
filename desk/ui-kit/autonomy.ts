@@ -33,7 +33,7 @@ export function mountAutonomy(box: HTMLElement, io: {
     const words = autonomyWords(observed);
     const receipt = requestId && observed.receipt?.id === requestId && observed.receipt.phase !== "resume_prepared" ? observed.receipt : null;
     if (receipt) { message = receipt.note || (receipt.done ? observed.note : "Команда не подтверждена."); requestId = ""; }
-    const note=io.compact ? observed.paused ? "На паузе" : !observed.available ? "Нет подтверждения" : observed.pending ? "Жду подтверждения" : "" : message || words.note;
+    const note=io.compact ? observed.stopped ? "Остановлен" : observed.pending ? "Жду подтверждения" : observed.paused ? "На паузе" : !observed.available ? "Пауза недоступна" : "" : message || words.note;
     box.innerHTML = `<button type="button" class="${esc(io.buttonClass || "btn quiet")}" data-autonomy-action="${words.action}"${words.disabled || sending ? " disabled" : ""} title="${esc(words.disabled ? words.note : words.title)}">${esc(words.label)}</button><span class="muted" aria-live="polite" data-autonomy-note>${esc(note)}</span>`;
   };
   async function refresh() {
