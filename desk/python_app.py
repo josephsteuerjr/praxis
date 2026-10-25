@@ -586,7 +586,7 @@ def _main(argv=None):
             # writer for native and browser windows alike.
             icon=program/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')
             webview.start(gui='qt' if sys.platform.startswith('linux') else None,
-                          private_mode=False,icon=str(icon) if icon.is_file() else None)
+                          private_mode=False,storage_path=str(root/'.webview'),icon=str(icon) if icon.is_file() else None)
     except KeyboardInterrupt:
         pass
     finally:

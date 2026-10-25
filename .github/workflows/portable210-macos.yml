@@ -16,8 +16,7 @@ jobs:
           cache: npm
           cache-dependency-path: desk/app/package-lock.json
       - name: Build current window
-        working-directory: desk/app
-        run: npm ci && npm run build
+        run: npm ci --prefix desk/remote && npm ci --prefix desk/app && npm run build --prefix desk/app
       - name: Inspect published native baseline
         run: python3 desk/tests/native_mac_portable210.py
       - uses: actions/upload-artifact@v4

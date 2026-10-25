@@ -62,7 +62,7 @@ def main(argv=None):
         app.window=webview.create_window('Hélène · Перенос с прежней версии',app.origin,
             **geometry,background_color='#f7eddf',text_select=True)
         app.window.events.shown += app.publish_control
-        webview.start(private_mode=False)
+        webview.start(private_mode=False,storage_path=str(app.root/'.migration-webview'))
     finally:app.close()
     return 0
 
