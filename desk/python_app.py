@@ -16,6 +16,7 @@ import sys
 import threading
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -43,6 +44,15 @@ from localharness.python_controller import Controller
 from localharness.python_platform import desktop_identity
 
 
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer normally calls getfqdn() even for 127.0.0.1. The local
+        # renderer needs no DNS discovery; macOS may ask for LAN access for it.
+        TCPServer.server_bind(self)
+        self.server_name = 'localhost'
+        self.server_port = self.server_address[1]
+
+
 class Application:
     def __init__(self, root: Path, ui: Path, host=None, program: Path | None = None):
         self.root, self.ui, self.host = root.resolve(), ui.resolve(), host
@@ -65,7 +75,7 @@ class Application:
                         self._channel(host.ready.result(timeout=60)["script"]) if host else {})
         if host:
             self.host.on_event = self.event
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.server = _LoopbackHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
         self.control_file = self.root / f'.python-window-{os.getpid()}.json'

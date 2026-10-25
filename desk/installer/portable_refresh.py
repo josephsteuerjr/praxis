@@ -10,9 +10,10 @@ DESK=Path(__file__).resolve().parents[1]
 def digest(path):
     with Path(path).open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
-def refresh(donor,output,version,*,libraries=None,setup=None):
+def refresh(donor,output,version,*,libraries=None,setup=None,downloads=None):
     donor,output=Path(donor).resolve(),Path(output).resolve()
     if output.exists() or donor.is_relative_to(output) or output.is_relative_to(donor):raise ValueError('Use a new separate output directory')
+    if not all((donor/name).exists() for name in ['runtime','app/python_app.py','python-app.json']):raise ValueError('Donor must be the verified Helene payload root')
     def omit(directory,names):
         here=Path(directory);ignored={'__pycache__','.git','.webview','node_modules'}
         if here==donor:ignored|={'components','relay-product','helene-relay','helene-relay.exe','data','agents','backups','downloads','logs','owner-stop.json','python-migration.json'}
@@ -64,7 +65,9 @@ def refresh(donor,output,version,*,libraries=None,setup=None):
                 for extension in value.get('extensions',{}).values():extension['default']=False
                 if 'native_inputs'in value:value['native_inputs']['relay']=False
             put(name,json.dumps(value,ensure_ascii=False,indent=2).encode())
-    name='app/component-downloads.json';value=json.loads((output/name).read_text(encoding='utf-8'));value['app_version']=version
+    name='app/component-downloads.json'
+    if downloads:put(name,Path(downloads).read_bytes())
+    value=json.loads((output/name).read_text(encoding='utf-8'));value['app_version']=version
     for key in value.get('extensions',{}).pop('toolchain',[]):value.get('artifacts',{}).pop(key,None)
     value.get('unavailable',{}).pop('toolchain',None);put(name,json.dumps(value,indent=2).encode())
     put('components/components.json',json.dumps({'format':'helene-components.v1','components':{}}).encode())
