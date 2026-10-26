@@ -200,8 +200,18 @@ class Application:
                 from localharness import app_migration, owner_stop
                 proof=({'stopped':True,'root':str(self.root)} if owner_stop.stopped()
                        else migration_proof(self.host,self.root))
-                app_migration.confirm_started(self.root,self.migration_id,proof=proof)
+                migration=app_migration.confirm_started(self.root,self.migration_id,proof=proof) or {}
                 self.confirmed_ui=True
+                if migration.get('installed_package') and not migration.get('package_removed'):
+                    def finish_package():
+                        try:
+                            from localharness import installed_packages
+                            note=installed_packages.retire(self.root)
+                        except Exception as exc:
+                            note={'retirement_error':str(exc)}
+                        self.event('package-transition',{'removed':bool(note.get('package_removed')),
+                            'error':note.get('retirement_error','')})
+                    threading.Thread(target=finish_package,daemon=True).start()
         return {'confirmed':True,'migration_id':self.migration_id}
 
     @staticmethod
@@ -297,6 +307,14 @@ window.addEventListener('helene:ui-ready',()=>window.__HELENE__.invoke('python_r
   else if(e.name==='replace-window') location.replace('/');
   else if(e.name==='retire-window') location.replace('/__python__/retired?id='+encodeURIComponent(e.data.id));
   else if(e.name==='exit') window.__HELENE__.win('exit');
+  else if(e.name==='package-transition') {
+   let note=document.getElementById('package-transition-notice');
+   if(!note){note=document.createElement('div');note.id='package-transition-notice';note.setAttribute('role','status');
+    note.style.cssText='position:fixed;bottom:16px;left:16px;right:16px;z-index:10000;padding:16px;background:#f4efe6;color:#302c26;border:1px solid #a99f8d;border-radius:8px;white-space:pre-wrap';document.body.append(note);}
+   note.textContent=e.data.removed?'Переезд завершён. Прежний пакет удалён.':
+    'Новая Hélène работает. Удаление прежнего пакета пока не завершено: '+e.data.error+'\\nПовторим при следующем запуске.';
+   const close=document.createElement('button');close.textContent='Понятно';close.style.marginLeft='12px';close.onclick=()=>note.remove();note.append(close);
+  }
   else window.dispatchEvent(new CustomEvent('helene:'+e.name,{detail:e.data}));
  }
 } catch(e){console.error(e)} setTimeout(events,500)})();
@@ -445,7 +463,6 @@ def bind_window_state(app):
             def set_bounds():
                 native.MaximizedBounds = Screen.FromHandle(native.Handle).WorkingArea
             native.Invoke(Action(set_bounds))
-            set_window_icon(app)
             from python_tray import install
             install(app)
         app.publish_control()
@@ -459,18 +476,6 @@ def bind_window_state(app):
     app.window.events.maximized += maximized
     app.window.events.restored += restored
     app.window.events.shown += shown
-
-
-def set_window_icon(app):
-    if sys.platform!='win32':return
-    from System import Action
-    from System.Drawing import Icon,Size
-    path=app.program/'app/resources/python-app.ico'
-    if not path.is_file():return
-    def install():
-        app._window_icon=Icon(str(path),Size(256,256))
-        app.window.native.Icon=app._window_icon
-    app.window.native.Invoke(Action(install))
 
 
 def bind_native_reload(app):
@@ -571,6 +576,10 @@ def _main(argv=None):
             ctypes.windll.user32.MessageBoxW(None, 'Emergency Stop requested. Automatic starts remain paused.', 'Hélène', 0)
         return 0
     os.environ['PYTHONNOUSERSITE']='1'
+    if sys.platform.startswith('linux'):
+        # Qt's GLib dispatcher can stall Chromium HTTP delivery on Debian 12.
+        # Use Qt's own event dispatcher; GPU and Chromium sandbox stay enabled.
+        os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
     from localharness import owner_stop
@@ -578,14 +587,6 @@ def _main(argv=None):
         return 0
     if program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
-    if sys.platform=='win32' and not args.migration:
-        from localharness import portable_start
-        incomplete=root/'python-migration.json'
-        needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started')
-        if args.migration_wizard or needs_migration or (not (root/'helene.json').exists() and portable_start.previous_installations(root)):
-            from python_migration_window import main as migration_window
-            return migration_window(['--root',str(root)])
-        portable_start.initialize(root)
     ui = program / "app" / "static"
     if not (ui / "index.html").is_file():
         raise FileNotFoundError(f"Нет сборки окна: {ui}")
@@ -593,14 +594,22 @@ def _main(argv=None):
     interrupted=pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving'
     from localharness.essential_backup import load
     fresh=(root/'helene.json').is_file() and load(root/'helene.json').get('setup_complete') is False and not pending.exists()
-    if sys.platform.startswith('linux') and (args.migration_wizard or interrupted or (fresh and not args.browser)):
+    if sys.platform.startswith('linux') and not args.browser and (fresh or (root/'installed-package.json').is_file()):
+        from localharness.package_wizard import run as package_entry
+        if not package_entry(root):return 0
+        interrupted=pending.is_file() and load(pending).get('state')=='preserving'
+    if sys.platform.startswith('linux') and (args.migration_wizard or interrupted):
         from localharness.migration_wizard import run
         if not run(root):return 0
     elif interrupted:
         raise RuntimeError('Interrupted profile copy: resume migration before starting the application')
     if pending.is_file() and not args.migration:
         migrated=json.loads(pending.read_text(encoding='utf-8'))
-        if migrated.get('state')=='prepared':args.migration=migrated['id']
+        if migrated.get('state') in ('prepared','new_app_started','retirement_incomplete'):
+            args.migration=migrated['id']
+            if not migrated.get('update_source') and (root/'installed-package.json').is_file() and not migrated.get('installed_package'):
+                from localharness.app_migration import write_note
+                migrated['installed_package']=load(root/'installed-package.json');write_note(root,migrated)
     app = Application(root, ui, None, program)
     app.migration_id=args.migration
     app.browser_mode=args.browser

@@ -392,11 +392,18 @@ def perform(args):
                        previous_program_retained=True, previous_reopen_requested=False)
                 raise RuntimeError('Previous Python owner still holds its data lease; no update applied')
     try:
-        if legacy_prepare:
-            from localharness.update_progress import Progress
-            progress = Progress(progress_path) if progress_path else None
-            prepare_install(old,new,progress=progress)
-        note,recovery=install(old,new)
+        from contextlib import ExitStack
+        from localharness.app_migration import discover
+        from localharness.desktop_supervisor import _tree_hold
+        with ExitStack() as holds:
+            profiles=discover(old)['agents'] if (old/'helene.json').is_file() else []
+            for tree in sorted({Path(row['tree']) for row in profiles}):
+                holds.enter_context(_tree_hold(tree))
+            if legacy_prepare:
+                from localharness.update_progress import Progress
+                progress = Progress(progress_path) if progress_path else None
+                prepare_install(old,new,progress=progress)
+            note,recovery=install(old,new)
     except BaseException as exc:
         if active_update(old).exists():
             report('failed', error=str(exc), rollback_completed=False, recovery_required=True,
@@ -412,7 +419,9 @@ def perform(args):
     try:
         report('starting')
         from localharness.desktop_supervisor import JobChild
-        child=JobChild.spawn([str(executable),str(old/'app/python_app.py'),'--root',str(old),'--migration',note['id'],*presentation],
+        entry=old/'app/localharness/desktop_entry.py'
+        launch=([str(entry),'--worker','--log',str(log)] if os.name!='nt' and entry.is_file() else [str(old/'app/python_app.py')])
+        child=JobChild.spawn([str(executable),*launch,'--root',str(old),'--migration',note['id'],*presentation],
                              cwd=old,env=dict(os.environ),log=log,stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
