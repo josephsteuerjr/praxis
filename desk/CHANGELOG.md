@@ -1,4 +1,8 @@
-# 2.2.5
+# 2.2.6
+
+The normal Update button now hands custody from public2.1.1 to the incoming helper in one invocation. Real upstream source is verified/materialized before merge and independent frozen review. Manual preparation Python/VBS removed; source edits/profile/Pause/Stop/rollback remain protected. See [release notes](docs/RELEASE-2.2.6.md).
+
+# 2.2.5 — withdrawn
 
 The isolated merger can journal compatibility repairs across declared candidate source, including automatically merged files. Every changed candidate requires fresh independent review. An explicit incoming preparation entry handles the old2.1.1 button gate without installing/restarting its owner. See [release notes](docs/RELEASE-2.2.5.md).
 
