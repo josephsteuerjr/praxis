@@ -56,6 +56,19 @@ class CandidateRepairs(unittest.TestCase):
         put(f.plan / 'result', 'dependency.py', 'tampered = True\n')
         with self.assertRaisesRegex(ValueError, 'recorded repair'): merge.finish(f.plan)
 
+    def test_repair_without_original_text_conflicts_still_requires_review_before_apply(self):
+        f = merge_fixtures.MergeTests('runTest'); f.setUp(); self.addCleanup(f.doCleanups)
+        f.create()
+        self.assertEqual(read(f.plan / 'plan.json')['conflicts'], [])
+        merge.reopen(f.plan)
+        merge.resolve(f.plan, 'module.py', LOCAL, reason='Explicit compatibility correction',
+                      expected_candidate=merge.candidate_signature(f.plan))
+        merge.finish(f.plan)
+        target = f.root / 'target'; shutil.copytree(f.local, target)
+        with self.assertRaisesRegex(ValueError, 'canonical independent review'):
+            merge.apply(f.plan, target)
+        self.assertEqual((target / 'module.py').read_text(), LOCAL)
+
 
 class ReviewedCandidate(unittest.TestCase):
     def test_review_finding_can_repair_automatic_file_and_needs_new_frozen_review(self):

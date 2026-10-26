@@ -285,7 +285,7 @@ def resolve(directory, name, content=None, *, delete=False, side='', reason='', 
 def apply(directory, target):
     directory, target = Path(directory), Path(target).resolve()
     value = validate_inputs(directory)
-    if value['conflicts']:
+    if value['conflicts'] or value.get('repairs'):
         from .source_update import validate_ready
         validate_ready(directory)
     if value.get('state') != 'ready' or inventory(directory / 'result') != value['result']:

@@ -92,7 +92,7 @@ def preflight(old, new, *, notify=True):
                 raise ValueError('Local code changed during preparation; retry the update')
             state = plan['state']
             detail = {}
-            if plan['conflicts']:
+            if plan['conflicts'] or plan.get('repairs'):
                 agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
                 if notify:
                     source_update.ensure(agent['tree'], old, source, directory,
@@ -137,7 +137,7 @@ def validate(new):
         plan = merge.validate_inputs(row['directory'])
         if merge.inventory(row['source']) != plan['files']['local']:
             raise ValueError('Local code changed before applying the update; retry')
-        if plan['conflicts']:
+        if plan['conflicts'] or plan.get('repairs'):
             source_update.validate_ready(row['directory'])
 
 

@@ -233,6 +233,8 @@ def _clear(service, record, expected_subject):
 def validate_ready(directory):
     directory = Path(directory)
     operation = read(directory / 'pipeline.json')
+    if not operation:
+        raise ValueError('Source update has no canonical independent review')
     plan = _fresh(operation, directory)
     if _owner_blocked(operation['tree']):
         raise ValueError('Owner Stop/Pause forbids source-update apply; old application retained')
