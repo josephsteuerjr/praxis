@@ -125,6 +125,8 @@ def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain
         'extensions':{'xtts':{'default':False,'license':'CPML non-commercial','assets':['Helene-components-xtts-runtime.zip','Helene-components-xtts-model.zip']},
                       'whisper':{'default':False,'assets':['Helene-components-whisper.zip']}}}
     (output/'python-app.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+    from localharness.code_transition import seal
+    seal(output)
     from localharness.component_downloads import parse as parse_downloads
     downloads = (DESK/'component-downloads.json').read_bytes()
     parse_downloads(downloads)

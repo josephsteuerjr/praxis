@@ -1,3 +1,9 @@
+# Hélène 2.1.1 — portable Python desktop
+
+Windows x64, macOS Apple Silicon, Debian and Fedora x86_64 archives carry their own Python runtime. Extract once into a permanent writable folder. Migration preserves the old profile, memory, authored code and Git; later updates stay in the same folder. Optional downloads are Whisper and XTTS only; the subscription relay is independently distributed.
+
+See the [release overview](../README.md), [platform source snapshots](../SOURCE-SNAPSHOTS.md) and [release workflow](installer/RELEASE.md). Older native builder documentation below describes previous editions.
+
 # Hélène
 
 Приложение вокруг [Praxis](https://github.com/josephsteuerjr/praxis) для
