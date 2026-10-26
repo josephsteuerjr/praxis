@@ -7,22 +7,25 @@
     ],
     "xtts": [
       "xtts"
-    ]
+    ],
+    "toolchain": []
   },
   "artifacts": {
     "whisper": {
       "name": "Helene-components-whisper-macos-arm64.zip",
       "size": 65002441,
       "sha256": "7865add11cefe976f09fdb75c3654b4aa7bca06e5f5902979d3cef4499993755",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-components-whisper-macos-arm64.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-components-whisper-macos-arm64.zip"
     },
     "xtts": {
       "name": "Helene-components-xtts-runtime-model-macos-arm64.zip",
       "size": 2118654231,
       "sha256": "c5255bf5bbc75ecad87119bb3973a539f06ded920b53b0b0cf3971bd2950a84a",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-components-xtts-runtime-model-macos-arm64.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-components-xtts-runtime-model-macos-arm64.zip"
     }
   },
-  "unavailable": {},
-  "app_version": "2.1.0"
+  "unavailable": {
+    "toolchain": "Build tools are not required by the portable Python application."
+  },
+  "app_version": "2.1.1"
 }

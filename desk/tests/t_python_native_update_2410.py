@@ -99,7 +99,7 @@ class NativeUpdate(unittest.TestCase):
                 try:
                     with python_migrate.installation_lock(old):updater.install(old,new)
                 except ValueError as exc:errors.append(str(exc))
-            with patch.object(app_migration,'prepare',side_effect=prepare):
+            with patch('localharness.update_profile.prepare',side_effect=prepare):
                 thread=threading.Thread(target=work);thread.start()
                 try:
                     self.assertTrue(entered.wait(2));self.assertFalse(updater.active_update(old).exists())
@@ -189,7 +189,7 @@ class UpdateHandoff(unittest.TestCase):
                         time.sleep(.02)
                     self.assertIn(b'Waiting for update installation lease',log.read_bytes())
                     self.assertFalse(marker.exists());self.assertIsNone(children[0].poll())
-                self.assertEqual(children[0].wait(timeout=10),0)
+                self.assertEqual(children[0].wait(timeout=10),0,log.read_text(encoding='utf-8',errors='replace'))
                 # Windows CRT exec can retire the trampoline PID before its
                 # replacement exits; observe the actual legacy entry event.
                 deadline=time.monotonic()+10
