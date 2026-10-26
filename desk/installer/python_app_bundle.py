@@ -93,8 +93,7 @@ def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain
         for entry in ('..\\app','..\\app\\localharness'):
             if entry not in text.splitlines():text+='\n'+entry+'\n'
         pth.write_text(text,encoding='utf-8')
-    for name in ('python_app.py','python_tray.py','python_migrate.py','python_update_prepare.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
-    (output/'Prepare update.vbs').write_bytes((DESK/'resources/prepare-update.vbs').read_text(encoding='utf-8-sig').encode('utf-16'))
+    for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
     for name in ('deskd','localharness'):
         shutil.copytree(DESK/name,app/name,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     # The engine is release-owned even when the authored tree is preserved.

@@ -69,7 +69,7 @@ class MigrationTests(unittest.TestCase):
             new=root/'new';note=app_migration.prepare(old,new,root/'saved')
             note.update(state='retirement_incomplete',startup_proof={'stopped':True,'root':str(new)})
             app_migration.write_note(new,note)
-            with patch('localharness.owner_stop.stopped',return_value=True),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(python_migrate.migration_windows,'retire',return_value={'service_removed':False}) as retire,patch('localharness.desktop_process.JobChild.spawn') as spawn:
+            with patch('localharness.owner_stop.stopped',return_value=True),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(python_migrate.migration_windows,'retire',return_value={'service_removed':False}) as retire,patch('localharness.desktop_supervisor.JobChild.spawn') as spawn:
                 result=python_migrate.migrate(old,package,new,root/'saved')
                 self.assertEqual(result['state'],'completed')
                 self.assertEqual(python_migrate.migrate(old,package,new,root/'saved')['state'],'completed')

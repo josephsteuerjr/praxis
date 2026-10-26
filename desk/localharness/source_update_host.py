@@ -24,6 +24,8 @@ from localharness.package_notice import read, write
 def verified_runtime(new):
     """Recheck executable source before importing it; never run merge material."""
     new = Path(new).resolve()
+    from localharness.source_admission import activate
+    activate(new)
     core = read(new / 'code-upstream.json')
     app = read(new / 'source-inputs.json')
     if not {'forge.py', 'forge_worker.py', 'llm.py'} <= set(core.get('files', {})):

@@ -78,7 +78,8 @@ def preflight(old, new, *, notify=True):
         for source in sources:
             local_files = merge.inventory(source)
             identity = merge.signature({'base': base_files, 'local': local_files,
-                                        'incoming': incoming, 'source': source})
+                                        'incoming': incoming, 'source': source,
+                                        'version': read(new / 'python-app.json').get('version', '')})
             directory = root / identity
             plan = read(directory / 'plan.json')
             if not plan:

@@ -363,6 +363,9 @@ def _update_install(owner,path,forceExtensions=False):
 
 def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
     new_root=destination/'Helene'
+    from . import source_admission
+    if source_admission.activate(new_root):
+        verified = source_admission.current_proofs(verified, new_root)
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
     from .python_platform import require_runtime

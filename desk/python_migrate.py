@@ -201,6 +201,8 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
     if not prepared:
         progress('unpacking')
         copy_program(package,new,progress,extensions)
+    from localharness.source_admission import activate
+    activate(new,lease_held=True)  # migration CLI owns this target lease
     from localharness.update_extensions import check
     progress('checking_extensions')
     check(old,new)
@@ -278,6 +280,8 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
         note.update(kind='fresh',old_root='',data_paths=[],source_paths=[])
         app_migration.write_note(new,note)
     copy_program(package,new,progress,extensions)
+    from localharness.source_admission import activate
+    activate(new,lease_held=True)  # before any fresh profile/source seeding
     config=new/'helene.json'
     if not config.exists():
         import socket

@@ -102,6 +102,9 @@ def prepared_install_path(new):
 def prepare_install(old, new, *, verified=None, progress=None):
     """Prepare before switching; legacy helpers do this after old-owner exit."""
     old, new = Path(old).resolve(), Path(new).resolve()
+    from localharness import source_admission
+    if source_admission.activate(new):
+        verified = source_admission.current_proofs(verified, new)
     if active_update(old).is_file():
         # Preparation runs beside a live owner. Never repair a mixed prior
         # generation under its feet; ordinary startup recovery owns that path.

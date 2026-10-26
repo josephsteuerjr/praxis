@@ -35,8 +35,27 @@ def recover_before_imports(argv):
     return True
 
 
+def prepare_before_imports(argv):
+    parser=argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1])
+    known,_rest=parser.parse_known_args(argv)
+    if '--panic' not in argv:
+        from localharness.source_admission import activate
+        activate(known.root)
+
+
 if __name__=='__main__':
-    recover_before_imports(sys.argv[1:])
+    try:
+        recover_before_imports(sys.argv[1:])
+        prepare_before_imports(sys.argv[1:])
+    except Exception as exc:
+        import traceback
+        detail=traceback.format_exc()
+        print(detail,file=sys.stderr)
+        if os.name=='nt':
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None,str(exc),'Hélène — startup failed',0x10)
+        raise SystemExit(1)
 
 from localharness.python_controller import Controller
 from localharness.python_platform import desktop_identity
