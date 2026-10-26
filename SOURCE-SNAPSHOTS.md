@@ -1,12 +1,12 @@
-# Hélène 2.2.3 source and package bindings
+# Hélène 2.2.4 source and package bindings
 
-Implementation `f9b1e8ccdf159915897fced1a587ba853a19d0dd` on public 2.2.2 `912b798161b74be6f0c2920779c6d873822b449b`. The publication commit adds documentation and exact package bindings. Platform snapshots are immutable tags, avoiding temporary review branches.
+Implementation `1dddd8dd30723336a85e3108a4a768dad27c4362` on public 2.2.3 `4fe8f971250763cb4f5fad32ee5dc4b9c47b2161`. The publication commit adds documentation and exact package bindings. Platform snapshots are immutable tags.
 
-- **windows**: tag `source/helene-2.2.3-windows`, commit `be7ec3ee676a2cf96c40f4981977bef4d46267f7`, archive `Helene-2.2.3.zip`.
-- **macos**: tag `source/helene-2.2.3-macos`, commit `c457bb2358768403fff24f8b99b51f3766a6db5d`, archive `Helene-2.2.3-macos-arm64.zip`.
-- **debian**: tag `source/helene-2.2.3-debian`, commit `28602503ba422d318ff19e0362465c0ccfcadebf`, archive `Helene-2.2.3-linux-x86_64.zip`.
-- **fedora**: tag `source/helene-2.2.3-fedora`, commit `0b0d92320d35ecbe3b200c4c4b91d8ba19c6b9ad`, archive `Helene-2.2.3-fedora-x86_64.zip`.
+- **windows**: tag `source/helene-2.2.4-windows`, commit `2741b04b9fde063aaeb6a3c34982be46c796d679`, archive `Helene-2.2.4.zip`.
+- **macos**: tag `source/helene-2.2.4-macos`, commit `0f92cd878848e66f332b076a7fd4b458a6b7f668`, archive `Helene-2.2.4-macos-arm64.zip`.
+- **debian**: tag `source/helene-2.2.4-debian`, commit `e7c8604d0c3d1b5a605b824469e7d755816dcebf`, archive `Helene-2.2.4-linux-x86_64.zip`.
+- **fedora**: tag `source/helene-2.2.4-fedora`, commit `5746e36e906bcbf455ae329066f48be151a19309`, archive `Helene-2.2.4-fedora-x86_64.zip`.
 
-Snapshots overlay exact packaged source-inputs and the pristine code-upstream tree. Native runtimes and built interfaces are unchanged from 2.2.2. Windows tray changes are confined to Windows; qualified macOS/Linux window entry points and platform adaptations remain intact. Optional Whisper and XTTS components stay pinned to v2.1.1. Personal profiles, memory and credentials are not publication inputs.
+Snapshots contain exact packaged application inputs and the pristine code-upstream tree. Shared updater modules match the tested implementation on all four platforms. Native runtimes, platform-specific window entry points and built interface files are unchanged from 2.2.3. Optional Whisper and XTTS components remain pinned to v2.1.1. Personal profiles, memory and credentials are not publication inputs.
 
-The 653 publishable Praxis source files were compared with the current server tree on 26 October 2026. Executable source matches; two existing comment/docstring anonymizations are retained. No live services, profiles or configuration were changed. The public mirror and the packaged Hélène edition remain separate source boundaries. Historical 2.2.2 platform snapshot refs are now preserved as same-name tags.
+The Praxis public mirror is unchanged from the 2.2.3 source audit; no live service or profile was changed. Hélène edition source includes a narrow read-only model-config option for its incoming update coordinator; ordinary config migration behavior is unchanged. See release-evidence.json for qualification boundaries.

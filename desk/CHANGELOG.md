@@ -1,3 +1,7 @@
+# 2.2.4
+
+Legacy upgrades coordinate restricted conflict merging and mandatory source review from the verified incoming runtime, without requiring new APIs in old authored Forge. Review ownership is isolated and model configuration is read without pre-install migration. See [release notes](docs/RELEASE-2.2.4.md).
+
 # 2.2.3
 
 No startup shell probe; explicit bundled Windows shell, including sandbox fallback; Windows login starts in the tray with a visible-window fallback if tray creation fails. See [release notes](docs/RELEASE-2.2.3.md).
