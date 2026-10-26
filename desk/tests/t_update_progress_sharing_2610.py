@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -77,7 +78,7 @@ class ProgressSharing(unittest.TestCase):
     def test_nonsharing_publication_errors_are_not_retried_or_swallowed(self):
         old = self.path.read_bytes()
         denied = PermissionError('ACL denied')
-        denied.winerror = 5
+        denied.winerror = 112
         for error in (denied, OSError('disk failure')):
             with self.subTest(error=type(error).__name__):
                 with patch.object(Path, 'replace', side_effect=error) as replace:
@@ -86,6 +87,33 @@ class ProgressSharing(unittest.TestCase):
                 self.assertIs(failure.exception, error)
                 replace.assert_called_once()
                 self.assertEqual(self.path.read_bytes(), old)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows external observer overlap')
+    def test_external_reader_can_release_during_bounded_publication(self):
+        opened=threading.Event()
+        def external_reader():
+            with self.path.open('r',encoding='utf-8'):
+                opened.set()
+                time.sleep(.15)
+        thread=threading.Thread(target=external_reader)
+        thread.start()
+        self.assertTrue(opened.wait(3))
+        self.report.phase('completed')
+        thread.join(3)
+        self.assertEqual(progress.read_json(self.path)['stage'],'completed')
+        self.assertFalse(self.path.with_suffix('.json.tmp').exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows bounded persistent denial')
+    def test_persistent_access_denial_is_bounded_and_keeps_previous_snapshot(self):
+        old=self.path.read_bytes()
+        denied=PermissionError('Persistent access denial');denied.winerror=5
+        with patch.object(Path,'replace',side_effect=denied) as replace, \
+             patch.object(progress.time,'monotonic',side_effect=[0,0,3]), \
+             patch.object(progress.time,'sleep'):
+            with self.assertRaises(PermissionError) as failure:progress.atomic_json(self.path,{'new':True})
+        self.assertIs(failure.exception,denied)
+        self.assertEqual(replace.call_count,2)
+        self.assertEqual(self.path.read_bytes(),old)
 
     def test_read_failure_preserves_error_and_releases_reader(self):
         self.path.write_text('{not json', encoding='utf-8')
@@ -151,7 +179,7 @@ class ProgressSharing(unittest.TestCase):
                 published.set()
             return 'complete'
 
-        fake = SimpleNamespace(create_window=create, start=start)
+        fake = SimpleNamespace(create_window=create, start=start, settings={})
         with patch.dict(sys.modules, {'webview': fake}), \
              patch.object(progress, '_open_reader', side_effect=held), \
              patch.object(update_window.time, 'sleep'):

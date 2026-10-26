@@ -9,10 +9,8 @@ import threading
 import time
 from contextlib import contextmanager, nullcontext
 
-# The native/browser observer and transaction share this module in one process.
-# Windows replace can deny an open destination even with share-delete handles;
-# close the complete read before publishing, not by retrying generic WinError 5.
-# POSIX retains its existing concurrent open/rename semantics.
+# Serialize this process's observer and transaction. External readers may still
+# briefly hold the destination; publication handles that overlap below.
 _publication_lock = threading.RLock() if os.name == 'nt' else nullcontext()
 
 LABELS = {
@@ -73,7 +71,17 @@ def atomic_json(path, value):
             json.dump(value, stream, ensure_ascii=False, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
-        part.replace(path)
+        # An external observer or scanner can briefly deny replacement even
+        # after our own readers closed. Keep old bytes intact and bound the wait;
+        # permanent denial and disk errors still fail the transaction.
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                part.replace(path)
+                break
+            except PermissionError as exc:
+                if os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32, 33) or time.monotonic() >= deadline:raise
+                time.sleep(.025)
     if os.name != 'nt':
         fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:os.fsync(fd)

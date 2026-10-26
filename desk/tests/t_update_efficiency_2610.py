@@ -250,12 +250,16 @@ class Observer(unittest.TestCase):
             ready=threading.Event();seen={}
             class Window:
                 def destroy(self):seen['destroyed']=True
+                def minimize(self):seen['minimized']=True
             def create(*args,**kwargs):seen.update(kwargs);return Window()
             def start(**kwargs):
                 self.assertFalse(ready.is_set())
+                self.assertFalse(seen['js_api'].dismiss())
+                self.assertNotIn('destroyed',seen)
+                seen['js_api'].minimize()
                 seen['js_api'].ready()
                 kwargs['func']()
-            webview=SimpleNamespace(create_window=create,start=start)
+            webview=SimpleNamespace(create_window=create,start=start,settings={})
             def transaction():
                 self.assertTrue(ready.wait(.1));self.assertEqual(seen['js_api'].status()['id'],'one')
                 update_progress.Progress(path).phase('completed')
@@ -263,6 +267,12 @@ class Observer(unittest.TestCase):
             with patch.dict(sys.modules,{'webview':webview}),patch.object(update_window.time,'sleep'):
                 self.assertEqual(update_window.run(transaction,path,ready),7)
             self.assertTrue(seen['destroyed'])
+            self.assertTrue(seen['minimized'])
+            self.assertTrue(seen['frameless'])
+            self.assertFalse(seen['easy_drag'])
+            self.assertTrue(seen['js_api'].status()['can_close'])
+            self.assertTrue(seen['js_api'].dismiss())
+            self.assertEqual(webview.settings['DRAG_REGION_SELECTOR'],'#update-chrome, #update-chrome small')
             self.assertGreaterEqual(seen['width'], seen['min_size'][0])
             self.assertIn('Golos Text', seen['html'])
             self.assertIn('Zen Kurenaido', seen['html'])
