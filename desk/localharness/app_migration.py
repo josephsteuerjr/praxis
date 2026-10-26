@@ -18,7 +18,7 @@ from pathlib import Path
 from .essential_backup import configs, load, tree_path, snapshot
 
 
-def preserve_source(source: Path, destination: Path, progress=None):
+def preserve_source(source: Path, destination: Path, progress=None, *, source_only=False):
     """Copy executable self-authored bytes and make Git history independent.
 
     A linked worktree's .git file points outside its directory. Materialize the
@@ -33,6 +33,12 @@ def preserve_source(source: Path, destination: Path, progress=None):
     # memory, Git index or owner Stop/pause record is removed.
     ephemeral = {'.desktop-owner.lock', '.python-desktop-status'}
     def ignore(directory, names):
+        if source_only:
+            from .source_merge import allowed
+            relative = Path(directory).relative_to(source)
+            if '.git' in relative.parts:
+                return []
+            return [n for n in names if n != '.git' and not allowed((relative / n).as_posix())]
         return [n for n in names if n in ephemeral or n.startswith(('.python-desktop-status.', '.python-window-'))]
     from .parallel_files import copytree
     copied = 0

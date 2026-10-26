@@ -435,7 +435,11 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
       // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
       updateStage = 'install';
-      await shell("update_install", { path: got.path, forceExtensions: forceExt });
+      const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt }) as { state?: string; message?: string } | null;
+      if (installed?.state === 'needs_resolution') {
+        updOut.textContent = installed.message || 'Нужно совместить правки кода. После ответа Элен нажми «Обновить» ещё раз.';
+        return;
+      }
       updateHandedOff = true;
       updOut.textContent = pythonUpdate ? 'Обновление передано Python. Программа перезапустится; неудачный запуск откатится. Установщик не нужен.' : 'Установщик запущен; программа закроется для обновления.';
     } catch (e) {
