@@ -19,23 +19,36 @@ const initial = new Function('cfg', 'opts', 'localStorage', `
   ${fragment('  setProductName(opts.productName);', '  // Длинный результат')}
   return S.view;
 `);
-const delayed = new Function('cfg', 'LOCAL_AGENT', 'localStorage', 'loadRooms', `
+// Execute the actual initial navigation, request, and completion handlers, not
+// a copy of their ordering. In particular the request can stay pending forever.
+const startup = new Function('cfg', 'loadRooms', `
   let showSeq = 0;
-  const S = {agent:'Fixture'}, shown = [];
-  const show = view => { shown.push(view); ++showSeq; };
+  const LOCAL_AGENT = true, S = {agent:'Fixture'}, shown = [], states = [], timers = [];
   const viewInner = {innerHTML:'', querySelector:() => false};
-  const renderState = () => {};
+  const show = view => { shown.push(view); ++showSeq; viewInner.innerHTML = view; };
+  const renderState = (...args) => states.push(args);
   const esc = value => value;
-  const window = {setTimeout:() => {}};
-  ${fragment('  const firstShowSeq = showSeq;', '\n  openFirst();')}
-  return {openFirst, shown, navigate:show};
+  const window = {setTimeout:fn => timers.push(fn)};
+  const connect = () => {}, refreshState = () => {};
+  ${fragment('  connect();', '  void refreshPulse();')}
+  return {shown, states, timers, viewInner, navigate:show};
 `);
 const fresh = new Function('cfg', 'opts', 'view', 'show', 'stateText', 'statePill', 'stateAction', `
   ${fragment('  if (opts.firstRun?.(view)) return;', '  connect();')}
   return 'connect';
 `);
 const storage = value => ({getItem:() => value});
-const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return {promise, resolve, reject};
+};
+
+function manualNavigate(h, view) {
+  const manual = new Function('addEventListener', 'show', fragment('  addEventListener("frame-go",', '  addEventListener("frame-restart",'));
+  manual((name, handler) => { assert.equal(name, 'frame-go'); handler({detail:view}); }, h.navigate);
+}
 
 test('configured/legacy install starts Now without browser onboarding storage', () => {
   for (const needs_local_setup of [false, undefined]) {
@@ -52,29 +65,47 @@ test('fresh setup uses onboarding even if an old browser marker says done', () =
   assert.equal(action.hidden, true);
   assert.equal(pill.dataset.level, 'warn');
 });
+test('edition first-run interception is preserved before connecting', () => {
+  let calls = 0;
+  const result = fresh({needs_local_setup:false}, {firstRun:() => {calls++; return true;}}, {}, () => assert.fail('no shared page'), {}, {}, {});
+  assert.equal(result, undefined);
+  assert.equal(calls, 1);
+});
 test('remote edition is not forced into local onboarding', () => {
   assert.equal(initial({needs_local_setup:true}, {localAgent:false}, storage(null)), 'now');
 });
-test('late startup response uses durable setup state, never browser marker', async () => {
-  for (const needs_local_setup of [false, undefined, true]) {
-    let resolve;
-    const h = delayed({needs_local_setup}, true, storage(needs_local_setup ? 'done' : null), () => new Promise(r => {resolve=r;}));
-    h.openFirst(); resolve(); await flush();
-    assert.deepEqual(h.shown, [needs_local_setup ? 'learn' : 'now']);
-  }
-});
-test('delayed startup rechecks current configuration at arrival', async () => {
-  const cfg = {needs_local_setup:true}; let resolve;
-  const h = delayed(cfg, true, storage(null), () => new Promise(r => {resolve=r;}));
-  h.openFirst(); cfg.needs_local_setup = false; resolve(); await flush();
+test('configured startup opens Now before a slow or unavailable room read settles', () => {
+  const roomRead = deferred();
+  const h = startup({needs_local_setup:false}, () => roomRead.promise);
   assert.deepEqual(h.shown, ['now']);
+  assert.equal(h.viewInner.innerHTML, 'now');
 });
-test('manual onboarding remains available and late startup cannot replace it', async () => {
-  let resolve;
-  const h = delayed({needs_local_setup:false}, true, storage(null), () => new Promise(r => {resolve=r;}));
-  h.openFirst();
-  const manual = new Function('addEventListener', 'show', fragment('  addEventListener("frame-go",', '  addEventListener("frame-restart",'));
-  manual((name, handler) => { assert.equal(name, 'frame-go'); handler({detail:'learn'}); }, h.navigate);
-  resolve(); await flush();
-  assert.deepEqual(h.shown, ['learn']);
+test('connection-refused room read leaves Now mounted and reports disconnected', async () => {
+  const roomRead = deferred();
+  const h = startup({needs_local_setup:false}, () => roomRead.promise);
+  roomRead.reject(new TypeError('fetch failed: ERR_CONNECTION_REFUSED'));
+  await flush();
+  assert.deepEqual(h.shown, ['now']);
+  assert.equal(h.viewInner.innerHTML, 'now');
+  assert.deepEqual(h.states, [[null, false]]);
+  assert.equal(h.timers.length, 0, 'ordinary room polling owns retries; no stale startup takeover');
 });
+test('room success refreshes an untouched initial Now page', async () => {
+  const roomRead = deferred();
+  const h = startup({needs_local_setup:false}, () => roomRead.promise);
+  roomRead.resolve(); await flush();
+  assert.deepEqual(h.shown, ['now', 'now']);
+});
+for (const view of ['learn', 'settings', 'talk']) {
+  for (const outcome of ['resolve', 'reject']) {
+    test(`late startup ${outcome} cannot replace manually selected ${view}`, async () => {
+      const roomRead = deferred();
+      const h = startup({needs_local_setup:false}, () => roomRead.promise);
+      manualNavigate(h, view);
+      roomRead[outcome](outcome === 'reject' ? new TypeError('connection refused') : undefined);
+      await flush();
+      assert.deepEqual(h.shown, ['now', view]);
+      assert.equal(h.viewInner.innerHTML, view);
+    });
+  }
+}

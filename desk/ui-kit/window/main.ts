@@ -1603,27 +1603,14 @@ export function start(opts: WindowOptions): void {
   }
   connect();
   void refreshState();
-  // 26.09: окно, открытое мастером сразу после установки, заставало канал ещё не
-  // поднятым и оставалось на этом экране до клика владельца — а обещало «продолжит
-  // попытки само». Держим слово: пробуем снова, пока на экране этот же экран.
-  // Startup owns the initial empty page only. A late channel failure/success
-  // must not erase Settings (which can work while the engine is stopped), or
-  // pull the owner back to Now after they deliberately navigated elsewhere.
+  // The configured window has a page even when Stop keeps the channel offline.
+  // Room reads enrich Now, never gate its first render or take back navigation.
+  // Reconnection and the ordinary room poll below own subsequent retries.
+  void show("now");
   const firstShowSeq = showSeq;
-  const openFirst = (): void => {
-    if (showSeq !== firstShowSeq) return;
-    loadRooms()
-      .then(() => { if (showSeq === firstShowSeq) return show(LOCAL_AGENT && cfg.needs_local_setup ? "learn" : "now"); })
-      .catch(() => {
-        if (showSeq !== firstShowSeq) return;
-        viewInner.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
-        renderState(null, false);
-        window.setTimeout(() => {
-          if (showSeq === firstShowSeq && viewInner.querySelector("[data-first-wait]")) openFirst();
-        }, 4000);
-      });
-  };
-  openFirst();
+  void loadRooms()
+    .then(() => { if (showSeq === firstShowSeq) return show("now", { quiet: true }); })
+    .catch(() => { renderState(null, false); });
   void refreshPulse();
   void refreshOwner();
   setInterval(() => void refreshOwner(), 2000);
