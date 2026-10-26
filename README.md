@@ -1,4 +1,4 @@
-# Hélène 2.2.0 candidate — a portable Python home for your agent
+# Hélène 2.2.0 — a portable Python home for your agent
 
 Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
@@ -16,7 +16,7 @@ Routine updates back up settings and program/code preimages, not unchanged memor
 
 Application-owned XTTS and a narrow speak adapter support older authored code without overwriting it. WAV preview and actual Ogg/Opus voice-note output differ; the installed SoundFile/libsndfile codec capability is checked, without requiring an extra PyAV download. CPU synthesis needs substantial free memory: one measured Windows stock-voice run peaked near 4.9 GB worker RSS, with about 128 seconds for the first client call including loading and 9 seconds for a separate warm synthesis. These are scoped observations, not a minimum-memory or latency guarantee. Configured profiles open **Now** with empty browser storage; first setup and manual onboarding remain available.
 
-This source is a candidate, not a publication or installation receipt. Links below remain the last public 2.1.1 downloads until a separate release.
+Hélène 2.2.0 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.0.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
 
 ## Previous changes in 2.1
 
@@ -42,7 +42,7 @@ On Debian and Fedora, the portable migration flow preserves the profile, working
 
 ### Optional voice components, independent relay
 
-**Whisper and XTTS are the only optional large component downloads.** Their platform-specific runtime/model archives are pinned by size and SHA-256 and are attached to this release. They are downloaded only when selected. Existing Linux/macOS component asset objects were retained; the unchanged Windows components were consolidated here so retiring earlier tags cannot break voice installation. The native rebuild kit is no longer offered as a new component download. Existing optional installations are preserved during migration and updates.
+**Whisper and XTTS are the only optional large component downloads.** Their platform-specific runtime/model archives are pinned by size and SHA-256 and reused from the retained 2.1.1 release. They are downloaded only when selected. Do not delete the 2.1.1 tag or its voice assets: the bundled component manifests deliberately refer to those immutable URLs. The native rebuild kit is no longer offered as a new component download. Existing optional installations are preserved during migration and updates.
 
 The subscription relay is a separate product: [praxis-relay 1.1.0](https://github.com/josephsteuerjr/praxis-relay/releases/tag/v1.1.0). Hélène can use its independently distributed executable without installing a compiler. XTTS model use remains subject to the model's CPML non-commercial terms; bundled third-party notices and license files remain included.
 
@@ -50,10 +50,10 @@ The subscription relay is a separate product: [praxis-relay 1.1.0](https://githu
 
 | Platform | Archive | Entry after extracting the whole folder |
 | --- | --- | --- |
-| Windows x64 | [Helene-2.1.1.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
-| macOS Apple Silicon | [Helene-2.1.1-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
-| Debian x86_64 | [Helene-2.1.1-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
-| Fedora x86_64 | [Helene-2.1.1-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Windows x64 | [Helene-2.2.0.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.0/Helene-2.2.0.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
+| macOS Apple Silicon | [Helene-2.2.0-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.0/Helene-2.2.0-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
+| Debian x86_64 | [Helene-2.2.0-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.0/Helene-2.2.0-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Fedora x86_64 | [Helene-2.2.0-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.0/Helene-2.2.0-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
 
 Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
 
