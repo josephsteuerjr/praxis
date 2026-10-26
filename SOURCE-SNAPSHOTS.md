@@ -1,14 +1,10 @@
-# Hélène 2.2.0 source and package bindings
+# Hélène 2.2.2 source and package bindings
 
-The release implementation is `c9da1edc8fb8e26187e1fa05e27f36129c0710c7`, five commits on the existing public 2.1.1 baseline `2d9b9eb3428450c4b6fbadf90c8dc757e0a9d3ba`. The release documentation commit adds no executable change.
+Implementation `b5b144b4b2aa1dc6e2a6da359972742c85baa421` on public 2.2.0 `cbd8dfe9a7055488f9c702297d52e364437e52da`. The publication commit adds documentation and exact package bindings. Native runtimes are reused; source and built interfaces are updated.
 
-The four portable ZIPs are byte-identical to the prepared candidates; only their external filenames change. Historical `local_candidate` / `public_release` construction fields remain inside those exact bytes. `release-evidence.json` records the publication separately.
+- **windows**: `source/helene-2.2.2-windows`, commit `7755e017d563f8f4bb3c493fbc845922e9d6f005`, archive `Helene-2.2.2.zip`.
+- **macos**: `source/helene-2.2.2-macos`, commit `caf1841a0947d9a2ec8873ffd37a9959bbf1d4b4`, archive `Helene-2.2.2-macos-arm64.zip`.
+- **debian**: `source/helene-2.2.2-debian`, commit `4abd38d05fda1253297ec09774d9f60553cadcae`, archive `Helene-2.2.2-linux-x86_64.zip`.
+- **fedora**: `source/helene-2.2.2-fedora`, commit `551a32815397e8cff448af847623f3a346cc6182`, archive `Helene-2.2.2-fedora-x86_64.zip`.
 
-- **windows**: `source/helene-2.2.0-windows`, commit `7154c47aab639a62da229e1a2fa9f64945e597b4`, archive `Helene-2.2.0.zip`.
-- **macos**: `source/helene-2.2.0-macos`, commit `f422c07b13b9b4e73fee698c985bda06db17e979`, archive `Helene-2.2.0-macos-arm64.zip`.
-- **debian**: `source/helene-2.2.0-debian`, commit `146743d5ed2b002f695fe166b1b9923a71f8a723`, archive `Helene-2.2.0-linux-x86_64.zip`.
-- **fedora**: `source/helene-2.2.0-fedora`, commit `12cf67f55da293c658f2b60ba8924425d69ea8ea`, archive `Helene-2.2.0-fedora-x86_64.zip`.
-
-Each snapshot overlays the exact packaged desktop source-input hashes and the full pristine code-upstream tree on the common source. `helene/PLATFORM-SOURCE.json` binds those paths, modes and the archive digest. Built frontend assets are included where the package input inventory names them; native/runtime dependencies are reused, not claimed rebuilt. Existing unrelated Praxis source remains inherited; this publication performs no service deployment.
-
-Optional Whisper and XTTS downloads remain pinned to the unchanged v2.1.1 release. The standalone relay is separately distributed. No personal profile, memory, credentials or task evidence is an input to this source publication.
+Platform snapshots overlay exact packaged source-inputs and the pristine code-upstream tree. Historical native-build provenance is retained. Optional Whisper and XTTS components stay pinned to v2.1.1. No personal profile, memory or credentials are publication inputs.

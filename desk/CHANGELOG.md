@@ -1,3 +1,7 @@
+# 2.2.2
+
+Automatic continuation after independent update review; windowless Windows helpers; themed update progress; always open Now; truthful Forge control outcomes. See [release notes](docs/RELEASE-2.2.2.md).
+
 # 2.2.0 candidate
 
 Acceptance-gated Forge teams, durable worker journals and owner task inspection/control; isolated merger plus independent conflict review; preclose preparation, narrow routine backups and update progress; application-owned XTTS/old-code speak compatibility and real voice-note encoding; configured startup at Now. Verification, platform artifacts, publication and installation remain separate facts.
