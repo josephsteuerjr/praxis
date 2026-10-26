@@ -199,6 +199,8 @@ class Controller:
             time.sleep(.2)
 
     def close(self):
+        from .python_updates import cancel_waiting
+        cancel_waiting(self)
         from .desktop_supervisor import stop_children
         with self.lock:
             self.stop.set()  # also wakes the primary supervisor's own fanout
@@ -276,8 +278,8 @@ class Controller:
 
     def invoke(self, command, args):
         if command == 'update_progress':
-            from .update_progress import status
-            return status(self.root)
+            from .python_updates import update_progress
+            return update_progress(self)
         agent = self.current()
         if command == 'config_load':
             return {'config':load(agent.config), 'path':str(agent.config),

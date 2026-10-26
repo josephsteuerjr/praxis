@@ -6,6 +6,8 @@ operation receipt. This window runs in the updater itself, not another app owner
 from __future__ import annotations
 
 import json
+import base64
+import re
 from pathlib import Path
 import sys
 import threading
@@ -14,21 +16,24 @@ import time
 HTML = r'''<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-:root{color-scheme:light dark;--paper:#f4eee3;--ink:#29251f;--muted:#655d52;--accent:#765735}
-@media(prefers-color-scheme:dark){:root{--paper:#1d1914;--ink:#eee6d9;--muted:#b9ad9c;--accent:#d2b186}}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,sans-serif;padding:28px}
-small{color:var(--muted);letter-spacing:.08em}h1{font-size:23px;font-weight:550;line-height:1.25;margin:12px 0 20px}
-p{margin:9px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-size:13px}#error{color:var(--ink);white-space:pre-wrap}
-.track{height:3px;background:color-mix(in srgb,var(--accent) 20%,transparent);overflow:hidden;margin:20px 0}
+:root{color-scheme:light;--paper:#f8eee0;--ink:#1d1a17;--muted:#7d6c5a;--accent:#9a4a1e;--line:rgba(29,26,23,.14);--hand:'Zen Kurenaido','Segoe Print',cursive}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--paper:#1d1914;--ink:#f1e4d0;--muted:#ab9982;--accent:#eda676;--line:rgba(241,228,208,.13)}}
+:root[data-theme=dark]{color-scheme:dark;--paper:#1d1914;--ink:#f1e4d0;--muted:#ab9982;--accent:#eda676;--line:rgba(241,228,208,.13)}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15.5px/1.6 'Golos Text','Segoe UI',sans-serif;padding:28px 32px;overflow:auto;height:auto;min-height:100vh}
+body>main{position:relative;max-width:660px;margin:auto}small{color:var(--muted);font-size:11px;letter-spacing:.13em}h1{font-family:var(--hand);font-size:32px;font-weight:400;line-height:1.22;margin:18px 0 22px}
+p{margin:9px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-size:13px}#error{color:var(--ink);white-space:pre-wrap}#history{border-top:1px solid var(--line);padding-top:15px;margin-top:22px}
+.track{height:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden;margin:22px 0}
 .track:before{content:'';display:block;width:28%;height:100%;background:var(--accent);animation:moving 2s ease-in-out infinite}
 @keyframes moving{0%{transform:translateX(-110%)}100%{transform:translateX(460%)}}
 body.done .track:before{animation:none;width:100%}body.failed .track:before{animation:none;width:0}
-</style><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><h1 id="stage">Подготавливаю переключение</h1>
+@media(prefers-reduced-motion:reduce){.track:before{animation:none;transform:none}}
+@media(max-width:430px){body{padding:22px}h1{font-size:28px}}
+</style><!--shared-appearance--><main><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><h1 id="stage">Подготавливаю обновление</h1>
 <div class="track" aria-hidden="true"></div><p id="detail" role="status" aria-live="polite"></p><p id="error"></p>
-<p id="history"></p><script>
+<p id="history"></p></main><script>
 const stage=document.getElementById('stage'),detail=document.getElementById('detail'),error=document.getElementById('error'),history=document.getElementById('history');
 function paint(r){stage.textContent=r.label||r.stage||'Подготавливаю переключение';
-const now=Date.now()/1000, s=r.stages?.at(-1); const seconds=s?Math.max(0,now-s.started_at):0;
+const now=r.finished_at||Date.now()/1000, s=r.stages?.at(-1); const seconds=s?Math.max(0,now-s.started_at):0;
 const parts=[`Этап: ${Math.floor(seconds)} с`];
 if(r.total_files)parts.push(`${r.files||0} / ${r.total_files} файлов`);
 if(r.bytes)parts.push(`${(r.bytes/1048576).toFixed(1)} МиБ${r.total_bytes?' / '+(r.total_bytes/1048576).toFixed(1)+' МиБ':''}`);
@@ -40,6 +45,43 @@ async function tick(){try{paint(await window.pywebview.api.status());}catch(e){e
 window.addEventListener('pywebviewready',async()=>{await tick();requestAnimationFrame(()=>requestAnimationFrame(()=>window.pywebview.api.ready()));timer=setInterval(tick,350)});
 window.addEventListener('beforeunload',()=>clearInterval(timer));
 </script></html>'''
+
+
+def page(root):
+    """Use the application's shipped fonts/tokens, with no external requests.
+
+    Resolve only the stylesheet selected by static/index.html: old hashed
+    assets can legitimately remain after an in-place update.
+    """
+    root = Path(root)
+    app = Path(__file__).resolve().parents[1]
+    index = app / 'static/index.html'
+    sheets = []
+    if index.is_file():
+        for ref in re.findall(r'href=[\"\']([^\"\']+\.css)[\"\']', index.read_text(encoding='utf-8')):
+            candidate = (index.parent / ref.lstrip('/')).resolve()
+            if candidate.is_relative_to(index.parent.resolve()) and candidate.is_file():
+                sheets.append(candidate)
+    else:  # source preview; production uses its exact built stylesheet
+        sheets = [app / 'ui-kit/fonts.css', app / 'ui-kit/window/styles/paper-tokens.css']
+    def embed(sheet):
+        css = sheet.read_text(encoding='utf-8')
+        def resource(match):
+            ref = match[1].strip('\"\' ')
+            if ref.startswith('data:'):return match[0]
+            path = (sheet.parent / ref).resolve()
+            if not path.is_relative_to(app) or not path.is_file():return 'url(data:,)'
+            return 'url(data:font/woff2;base64,' + base64.b64encode(path.read_bytes()).decode() + ')'
+        return re.sub(r'url\(([^)]+)\)', resource, css)
+    # Insert shared styles first, then the small window's layout overrides.
+    shared = '\n'.join(embed(sheet) for sheet in sheets if sheet.is_file())
+    output = HTML.replace('<style>', '<style>' + shared + '</style><style>', 1)
+    from .window_preferences import storage
+    prefs = storage(root)
+    theme = prefs.get('frame.theme', 'system')
+    if theme in {'light', 'dark'}:
+        output = output.replace('<html lang="ru">', '<html lang="ru" data-theme="' + theme + '">')
+    return output
 
 
 def run(transaction, receipt, ready, *, browser=False):
@@ -55,6 +97,7 @@ def run(transaction, receipt, ready, *, browser=False):
     receipt = Path(receipt)
     progress = Progress(receipt)
     operation = progress.value['id']
+    content = page(progress.value['target'])
     result = []
     failure = []
     class Bridge:
@@ -65,9 +108,9 @@ def run(transaction, receipt, ready, *, browser=False):
         def ready(self):
             ready.set()
             return True
-    window = webview.create_window('Hélène — обновление', html=HTML, js_api=Bridge(),
-                                   width=520, height=330, min_size=(400, 280), resizable=True,
-                                   background_color='#1d1914', text_select=True)
+    window = webview.create_window('Hélène — обновление', html=content, js_api=Bridge(),
+                                   width=560, height=390, min_size=(360, 300), resizable=True,
+                                   background_color='#f8eee0', text_select=True)
     def work():
         try:result.append(transaction())
         except BaseException as exc:
@@ -102,24 +145,24 @@ def _browser(transaction, receipt, ready):
     path = Path(receipt)
     identity = Progress(path).value['id']
     stub = """<script>window.pywebview={api:{status:async()=>{const r=await fetch(location.pathname+'/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()},ready:async()=>true}};window.addEventListener('DOMContentLoaded',()=>window.dispatchEvent(new Event('pywebviewready')));</script>"""
-    page = HTML.replace('<small>', stub + '<small>', 1).encode('utf-8')
+    content = page(Progress(path).value['target']).replace('<small>', stub + '<small>', 1).encode('utf-8')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):pass  # random observer URL stays out of logs
         def do_GET(self):
             if self.path == '/' + token:
-                content, mime = page, 'text/html; charset=utf-8'
+                body, mime = content, 'text/html; charset=utf-8'
             elif self.path == '/' + token + '/status':
                 value = read_json(path)
                 if value.get('id') != identity:
                     self.send_error(409);return
-                content, mime = json.dumps(value).encode(), 'application/json'
+                body, mime = json.dumps(value).encode(), 'application/json'
             else:
                 self.send_error(404);return
             self.send_response(200)
             self.send_header('Content-Type', mime)
             self.send_header('Cache-Control', 'no-store')
-            self.send_header('Content-Length', str(len(content)))
-            self.end_headers();self.wfile.write(content)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers();self.wfile.write(body)
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)

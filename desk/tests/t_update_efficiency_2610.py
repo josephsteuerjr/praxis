@@ -262,7 +262,10 @@ class Observer(unittest.TestCase):
                 return 7
             with patch.dict(sys.modules,{'webview':webview}),patch.object(update_window.time,'sleep'):
                 self.assertEqual(update_window.run(transaction,path,ready),7)
-            self.assertTrue(seen['destroyed']);self.assertEqual(seen['width'],520)
+            self.assertTrue(seen['destroyed'])
+            self.assertGreaterEqual(seen['width'], seen['min_size'][0])
+            self.assertIn('Golos Text', seen['html'])
+            self.assertIn('Zen Kurenaido', seen['html'])
             self.assertNotIn('invoke',dir(seen['js_api']))
 
 

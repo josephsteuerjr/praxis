@@ -115,7 +115,7 @@ def preflight(old, new, *, notify=True):
     message = ('Панель обновления требует внимания; старая версия сохранена. ' +
                '; '.join(row['error'] or row['state'] for row in blocked) if blocked else
                'Изолированный исполнитель и независимая панель разбирают пересечения кода. '
-               'Старая версия остаётся открытой. После готовности панели повторите «Обновить».')
+               'Старая версия остаётся открытой. После проверки обновление продолжится автоматически.')
     return {'state': 'needs_resolution' if pending else 'ready', 'plans': plans,
             'message': message if pending else ''}
 

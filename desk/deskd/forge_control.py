@@ -174,7 +174,15 @@ def consume_pending(tree: Path, callback: Callable[..., dict], limit: int = 30) 
                                 expected_generation=request.get("expected_generation", ""))
             if not isinstance(observed, dict):
                 raise TypeError("Forge control returned no receipt")
-            value = {"ok": observed.get("ok", True), "state": "observed", "result": observed}
+            status = observed.get("status")
+            if status in {"refused", "unknown"}:
+                value = {"ok": False, "state": "rejected" if status == "refused" else "unknown",
+                         "reason": observed.get("reason") or (
+                             "Forge refused this command" if status == "refused" else
+                             "Forge could not confirm that all owned processes stopped"),
+                         "result": observed}
+            else:
+                value = {"ok": observed.get("ok", True), "state": "observed", "result": observed}
         except reader.ReadError as exc:
             value = {"ok": False, "state": "rejected", "reason": str(exc)}
         except Exception as exc:

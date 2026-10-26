@@ -34,6 +34,7 @@ const startup = new Function('cfg', 'loadRooms', `
   return {shown, states, timers, viewInner, navigate:show};
 `);
 const fresh = new Function('cfg', 'opts', 'view', 'show', 'stateText', 'statePill', 'stateAction', `
+  const LOCAL_AGENT = opts.localAgent !== false;
   ${fragment('  if (opts.firstRun?.(view)) return;', '  connect();')}
   return 'connect';
 `);
@@ -57,11 +58,11 @@ test('configured/legacy install starts Now without browser onboarding storage', 
     }
   }
 });
-test('fresh setup uses onboarding even if an old browser marker says done', () => {
-  assert.equal(initial({needs_local_setup:true}, {}, storage('done')), 'learn');
+test('fresh setup also opens Now without connecting an unconfigured model', () => {
+  assert.equal(initial({needs_local_setup:true}, {}, storage('done')), 'now');
   const shown = [], text = {}, pill = {dataset:{}}, action = {};
   assert.equal(fresh({needs_local_setup:true}, {}, {}, view => shown.push(view), text, pill, action), undefined);
-  assert.deepEqual(shown, ['learn']);
+  assert.deepEqual(shown, ['now']);
   assert.equal(action.hidden, true);
   assert.equal(pill.dataset.level, 'warn');
 });

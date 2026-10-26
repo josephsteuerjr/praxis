@@ -25,8 +25,10 @@ LABELS = {
     'rollback': 'Возвращаю прежнюю версию', 'reopening': 'Открываю прежнюю Hélène',
     'completed': 'Обновление завершено', 'failed': 'Обновление не завершено',
     'needs_resolution': 'Слияние кода ожидает независимой проверки',
+    'waiting_review': 'Проверяю слияние кода · обновление продолжится автоматически',
+    'cancelled': 'Автопродолжение отменено',
 }
-TERMINAL = {'completed', 'failed', 'needs_resolution'}
+TERMINAL = {'completed', 'failed', 'needs_resolution', 'cancelled'}
 
 
 def pointer(target):

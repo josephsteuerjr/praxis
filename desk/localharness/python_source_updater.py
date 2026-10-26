@@ -327,6 +327,8 @@ def validate_staging(args):
 
 
 def perform(args):
+    if not args.cleanup:
+        from localharness.update_process import interpreter_for, background_flags
     old,new=args.old.resolve(),args.new.resolve()
     presentation=['--browser'] if args.browser else []
     prepared_path = prepared_install_path(new)
@@ -338,16 +340,16 @@ def perform(args):
             from localharness.update_progress import Progress
             Progress(progress_path).phase(stage, **details)
     def reopen_previous():
-        executable=old/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+        executable=interpreter_for(old)
         with (old/'python-update-recovery.log').open('ab') as output:
             # The restored version may predate startup recovery. A current
             # staging-runtime trampoline waits for our lease to be released,
             # then execs the unmodified old entry point (no new CLI required).
-            staging_python=new/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+            staging_python=interpreter_for(new)
             trampoline="import os,sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from python_migrate import installation_lock\nprint('Waiting for update installation lease',flush=True)\nwith installation_lock(Path(sys.argv[2]),timeout_sec=60):\n pass\nos.chdir(sys.argv[2])\nos.execv(sys.argv[3],[sys.argv[3],sys.argv[4],'--root',sys.argv[2],*sys.argv[5:]])"
             subprocess.Popen([str(staging_python),'-s','-c',trampoline,str(new/'app'),str(old),str(executable),str(old/'app/python_app.py'),*presentation],
                 cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
-                creationflags=0x00000200 if os.name=='nt' else 0,start_new_session=os.name!='nt')
+                creationflags=background_flags(),start_new_session=os.name!='nt')
     staging=args.staging.resolve()
     validate_staging(args)
     legacy_prepare = not args.cleanup and not prepared_path.is_file() and (new/'python-app.json').is_file()
@@ -406,7 +408,7 @@ def perform(args):
         reopen_previous()
         report('failed', error=str(exc), previous_reopen_requested=True)
         raise
-    executable=old/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+    executable=interpreter_for(old)
     log=old/'python-update-start.log'
     child=None
     try:
@@ -462,7 +464,7 @@ def perform(args):
     for archive in args.archive:command.extend(['--archive',str(archive)])
     with log.open('ab') as output:
         subprocess.Popen(command,cwd=old.parent,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
-                         creationflags=0x00000200 if os.name=='nt' else 0,start_new_session=os.name!='nt')
+                         creationflags=background_flags(),start_new_session=os.name!='nt')
     return 0
 
 

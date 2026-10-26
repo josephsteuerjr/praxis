@@ -125,6 +125,21 @@ class OwnerForge(unittest.TestCase):
         self.assertEqual(row["result_ref"]["sha256"], new)
         self.assertEqual(row["status"], "error")
 
+    def test_core_refusal_and_unknown_outcome_are_not_successful_receipts(self):
+        for i, (status, state) in enumerate((('refused', 'rejected'), ('unknown', 'unknown')), 5):
+            command_id = str(i) * 32
+            control.enqueue(self.base, self.task.name, 'stop', command_id=command_id)
+            observed = {'status': status, 'reason': 'controlled core result'}
+            callback = mock.Mock(return_value=observed)
+            result = control.consume_pending(self.base, callback)
+            self.assertEqual(len(result), 1)
+            self.assertFalse(result[0]['ok'])
+            self.assertEqual(result[0]['state'], state)
+            self.assertEqual(result[0]['reason'], observed['reason'])
+            self.assertEqual(control.receipt(self.base, command_id)['result'], observed)
+            self.assertEqual(control.consume_pending(self.base, callback), [])
+            callback.assert_called_once()
+
     def test_arbitrary_paths_identity_mismatch_and_read_failures_not_empty(self):
         for value in ("../code-fixture", "C:\\secret", "/secret", "..", "a/b"):
             with self.assertRaises(reader.ReadError):
@@ -166,11 +181,12 @@ class OwnerForge(unittest.TestCase):
         callback = mock.Mock(return_value={"status": "unknown", "stops": [{"state": "unresolved"}]})
         outcome = control.consume_pending(self.base, callback)
         self.assertEqual(outcome[0]["result"]["status"], "unknown")
-        self.assertEqual(outcome[0]["state"], "observed")
+        self.assertEqual(outcome[0]["state"], "unknown")
+        self.assertFalse(outcome[0]['ok'])
         control.consume_pending(self.base, callback)
         self.assertEqual(callback.call_count, 1)
         put(self.unit / "progress.json", {"generation": "later"})
-        self.assertEqual(control.enqueue(self.base, self.task.name, "stop", **kwargs)["state"], "observed")
+        self.assertEqual(control.enqueue(self.base, self.task.name, "stop", **kwargs)["state"], "unknown")
         self.assertEqual(control.recent(self.base, self.task.name)["commands"][0]["command_id"], "1" * 32)
         with self.assertRaises(reader.ReadError):
             control.enqueue(self.base, self.task.name, "resume", **kwargs)

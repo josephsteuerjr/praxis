@@ -15,6 +15,93 @@ import threading
 
 _update_guard = threading.Lock()
 _update_targets = set()
+_waiting_updates = {}
+
+
+def cancel_waiting(owner):
+    """Revoke only a pending review continuation, never interrupt a file switch."""
+    target = os.path.normcase(str(owner.root.resolve()))
+    with _update_guard:
+        pending = _waiting_updates.get(target)
+        if pending is not None:
+            pending.set()
+        return pending is not None
+
+
+def update_cancel(owner):
+    if not cancel_waiting(owner):
+        raise RuntimeError('Ожидание ревью уже завершено; переключение версии не прерывается.')
+    return {'ok': True}
+
+
+def update_progress(owner):
+    from .update_progress import status
+    value = status(owner.root)
+    target = os.path.normcase(str(owner.root.resolve()))
+    with _update_guard:
+        waiting = target in _waiting_updates
+    if value and value['stage'] == 'waiting_review' and not waiting:
+        return dict(value, stage='cancelled', label='Автопродолжение остановлено',
+                    error='Окно было закрыто. Начни обновление снова, когда будет удобно.')
+    return value
+
+
+def _wait_for_review(owner, new_root, progress):
+    """Keep the original Update invocation alive, independent of its UI page.
+
+    Never re-plan while waiting: a different local/config/release snapshot needs
+    a new owner action. Closing the application revokes this invocation.
+    """
+    from . import code_transition, source_update, update_profile
+    from .package_notice import read
+    target = os.path.normcase(str(owner.root.resolve()))
+    record = read(new_root / 'code-transition-plan.json')
+    def selection_now():
+        value = update_profile.selection(owner.root)
+        # Opening the panel/changing its appearance is not a new source input.
+        # prepare_install snapshots the latest window preferences before handoff.
+        value['settings'].pop('window-preferences.json', None)
+        return value
+    selection = selection_now()
+    cancelled = threading.Event()
+    with _update_guard:
+        _waiting_updates[target] = cancelled
+    try:
+        progress.phase('waiting_review', message='После независимой проверки обновление продолжится автоматически.')
+        deadline = time.monotonic() + 7200
+        while True:
+            if cancelled.is_set():
+                progress.phase('cancelled', label='Автопродолжение отменено', previous_application_open=True)
+                return False
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Проверка кода не завершилась за два часа; старая версия остаётся открытой.')
+            ready = True
+            for row in record['plans']:
+                directory = Path(row['directory'])
+                if (directory / 'cancel.json').exists():
+                    raise ValueError('Проверка обновления отменена или заменена новой.')
+                if not read(directory / 'plan.json').get('conflicts'):
+                    continue
+                operation = read(directory / 'pipeline.json')
+                state = operation.get('state')
+                if state not in source_update.ACTIVE | {'ready_to_apply'}:
+                    raise ValueError(operation.get('error') or operation.get('reason') or 'Панель обновления требует внимания.')
+                if state != 'ready_to_apply' or operation.get('paused') or source_update._owner_blocked(operation['tree']):
+                    ready = False
+            if ready:
+                code_transition.validate(new_root)
+                if selection_now() != selection:
+                    raise ValueError('Настройки или код изменились во время ревью. Начни обновление снова.')
+                # Cancellation and the final handoff decision share one lock.
+                with _update_guard:
+                    if cancelled.is_set():
+                        continue
+                    _waiting_updates.pop(target, None)
+                return True
+            cancelled.wait(.5)
+    finally:
+        with _update_guard:
+            _waiting_updates.pop(target, None)
 
 EXTENSION_ASSETS = {'xtts':('Helene-components-xtts-model.zip','Helene-components-xtts-runtime.zip'),
                     'whisper':('Helene-components-whisper.zip',)}
@@ -188,7 +275,7 @@ def update_install(owner,path,forceExtensions=False):
         _update_targets.add(target)
     try:
         result = _update_install(owner,path,forceExtensions)
-        if isinstance(result, dict) and result.get('state') == 'needs_resolution':
+        if isinstance(result, dict) and result.get('state') in {'needs_resolution', 'cancelled'}:
             with _update_guard:_update_targets.discard(target)
         return result
     except BaseException:
@@ -275,30 +362,33 @@ def _update_install(owner,path,forceExtensions=False):
 
 
 def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
-    folder=owner.root.resolve().parent
     new_root=destination/'Helene'
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
     from .python_platform import require_runtime
     require_runtime(new_root)
-    interpreter=new_root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+    from .update_process import interpreter_for
+    interpreter=interpreter_for(new_root)
     if not interpreter.is_file():raise ValueError('Python application runtime is missing')
-    import shutil
-    import threading
-    # Copy the helper outside the live installation before replacing its files.
-    helper=destination/'python_source_updater.py'
     from .update_extensions import check
     progress.phase('extensions')
     check(owner.root, new_root, force=forceExtensions)
     from .code_transition import preflight
     progress.phase('code')
     source_plan = preflight(owner.root, new_root)
+    review_binding = None
     if source_plan['state'] != 'ready':
-        # All merge material lives in .source-updates, independent of this
-        # disposable extraction. Keep the verified ZIP for the next click.
-        progress.phase('needs_resolution',message=source_plan.get('message',''))
-        shutil.rmtree(destination)
-        return source_plan
+        if any(row['state'] in {'needs_attention', 'cancelled'} for row in source_plan['plans']):
+            progress.phase('needs_resolution',message=source_plan.get('message',''))
+            _discard_extraction(owner, destination)
+            return source_plan
+        if not _wait_for_review(owner, new_root, progress):
+            _discard_extraction(owner, destination)
+            return {'state': 'cancelled', 'message': 'Автопродолжение отменено. Старая версия остаётся открытой.'}
+        review_binding = [(row['source'], row['directory']) for row in source_plan['plans']]
+        # The isolated material is still pinned to the original click. No
+        # download, extraction, or new merge request is needed after approval.
+        check(owner.root, new_root, force=forceExtensions)
     # No old window closes on preparation failure. The helper independently
     # reacquires the lease and binds the snapshot identity before admission.
     # Full mutable-byte validation follows old-owner exit, before any replacement.
@@ -306,6 +396,35 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
     from .python_source_updater import prepare_install
     with installation_lock(owner.root):
         prepare_install(owner.root,new_root,verified=verified,progress=progress)
+        if review_binding is not None:
+            from .package_notice import read
+            final = read(new_root / 'code-transition-plan.json')
+            if [(row['source'], row['directory']) for row in final['plans']] != review_binding:
+                raise ValueError('Состав обновления изменился после ревью. Старая версия остаётся открытой.')
+    return _launch_handoff(owner, destination, new_root, interpreter, progress)
+
+
+def _discard_extraction(owner, destination):
+    """Retire only this invocation's unused extraction; merge evidence stays."""
+    import shutil
+    from .update_io import remove_created_file
+    destination = Path(destination)
+    if (destination.resolve() != owner.root.resolve().parent / destination.name
+            or not destination.name.startswith('.helene-update-')):
+        raise ValueError('Unexpected update extraction directory')
+    def readonly(function, path, failure):
+        if function is not os.unlink or not isinstance(failure[1], PermissionError):
+            raise failure[1]
+        remove_created_file(path)
+    shutil.rmtree(destination, onerror=readonly)
+
+
+def _launch_handoff(owner, destination, new_root, interpreter, progress):
+    import shutil
+    from .update_process import background_flags
+    folder = owner.root.resolve().parent
+    # Copy the helper outside the live installation before replacing its files.
+    helper = destination / 'python_source_updater.py'
     shutil.copy2(new_root/'app/localharness/python_source_updater.py',helper)
     argv=[str(interpreter),str(helper),'--old',str(owner.root),'--new',str(new_root),
           '--pid',str(os.getpid()),'--staging',str(destination)]
@@ -315,7 +434,7 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
     with log.open('ab') as output:
         child=subprocess.Popen(argv,cwd=destination,stdin=subprocess.DEVNULL,
             stdout=output,stderr=subprocess.STDOUT,
-            creationflags=(0x00000200|0x00000008) if os.name=='nt' else 0,
+            creationflags=background_flags(),
             start_new_session=os.name!='nt')
     await_admission(child,destination,owner.root)
     def exit_old():

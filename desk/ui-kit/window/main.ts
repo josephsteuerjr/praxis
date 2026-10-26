@@ -77,9 +77,9 @@ export interface WindowOptions {
 export function start(opts: WindowOptions): void {
   setProductName(opts.productName);
   setLocalAgent(opts.localAgent !== false && cfg.local_agent !== false);
-  // The shell projects durable setup_complete as needs_local_setup; browser
-  // storage may be empty after an update/origin change without a new profile.
-  S.view = LOCAL_AGENT && cfg.needs_local_setup ? 'learn' : 'now';
+  // The home screen is always Now. Setup remains an explicit action there;
+  // neither a changed origin nor a setup flag redirects into onboarding.
+  S.view = 'now';
 
 
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
@@ -1592,10 +1592,10 @@ export function start(opts: WindowOptions): void {
   // грузит, потому что подключаться пока не к чему.
   window.dispatchEvent(new Event('helene:ui-ready'));
   if (opts.firstRun?.(view)) return;
-  if (cfg.needs_local_setup) {
+  if (LOCAL_AGENT && cfg.needs_local_setup) {
     // The local engine intentionally waits for a configured provider/model.
     // Native settings remain available without a running agent or API channel.
-    void show("learn");
+    void show("now");
     stateText.textContent = "Нужна настройка модели";
     statePill.dataset.level = "warn";
     stateAction.hidden = true;

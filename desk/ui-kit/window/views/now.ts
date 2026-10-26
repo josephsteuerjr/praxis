@@ -2,7 +2,7 @@
 // текущий ход»): идущий ход во всю ширину, шаги живьём, кадр, недавние ходы
 // по всем комнатам с раскрывающимися шагами. Писать здесь нечего — это монитор.
 import { esc, fmtDur, fmtTime } from "../lib";
-import { api } from "../api";
+import { api, cfg } from "../api";
 import { mountUsage, usageShell } from "../../usage";
 import { frameStripHTML, type RunDetail } from "../../steps";
 import { activityHTML, updateActivity } from "../../activity";
@@ -32,6 +32,7 @@ function since(run: Run): string {
 }
 
 function idleHTML(): string {
+  if (cfg.needs_local_setup) return `<div class="now-idle"><span class="dot"></span><span>Настрой модель, чтобы начать работу.</span><button class="btn btn-quiet" type="button" data-go="settings">Настроить модель →</button></div>`;
   const s = S.agentState;
   if (!s) return `<div class="now-idle"><span class="dot"></span><span>Подключение…</span></div>`;
   const at = s.brain?.last_call_at;

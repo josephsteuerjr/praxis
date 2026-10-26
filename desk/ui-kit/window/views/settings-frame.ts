@@ -418,7 +418,11 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       const row = await shell<{ stage: string; label?: string; error?: string; bytes?: number } | null>('update_progress');
       if (!updOut.isConnected || !row) return;
       updOut.textContent = [row.label || row.stage, row.error || ''].filter(Boolean).join(' · ');
-      if (!['completed', 'failed', 'needs_resolution'].includes(row.stage)) setTimeout(restoreUpdateProgress, 600);
+      const waiting = row.stage === 'waiting_review';
+      cancelUpdate.hidden = !waiting;
+      const active = !['completed', 'failed', 'needs_resolution', 'cancelled'].includes(row.stage);
+      dlBtn.disabled = active;
+      if (active) setTimeout(restoreUpdateProgress, 600);
     } catch (error) {
       if (updOut.isConnected) updOut.textContent = `Состояние обновления недоступно: ${humanError(error).text}`;
     }
@@ -426,6 +430,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   if (pythonUpdate) setTimeout(restoreUpdateProgress, 0);
   const legacyLinux = linux && !pythonUpdate;
   let updateHandedOff = false;
+  const cancelUpdate = button('Отменить автопродолжение', 'quiet', async () => {
+    try {
+      await shell('update_cancel');
+      cancelUpdate.hidden = true;
+      updOut.textContent = 'Автопродолжение отменено. Старая версия остаётся открытой.';
+    } catch (error) { toast(humanError(error).text); }
+  });
+  cancelUpdate.hidden = true;
   const manualUpdate = button('Открыть выпуск и помощник', 'quiet', async () => {
     await shell('open_path', { path: 'https://github.com/josephsteuerjr/praxis/releases/latest' });
   });
@@ -450,6 +462,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       if (!row || typeof row.id !== 'string' || typeof row.label !== 'string') return;
       if (operationId && operationId !== row.id) return;
       operationId = row.id;
+      cancelUpdate.hidden = row.stage !== 'waiting_review';
       const details: string[] = [];
       if (typeof row.bytes === 'number' && row.bytes > 0) details.push(`${(row.bytes / 1048576).toFixed(1)} МиБ`);
       if (typeof row.files === 'number' && row.files > 0) details.push(`${row.files} файлов`);
@@ -467,7 +480,11 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       updateStage = 'install';
       const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt }) as { state?: string; message?: string } | null;
       if (installed?.state === 'needs_resolution') {
-        updOut.textContent = installed.message || 'Нужно совместить правки кода. После ответа Элен нажми «Обновить» ещё раз.';
+        updOut.textContent = installed.message || 'Проверка слияния требует внимания. Старая версия остаётся открытой.';
+        return;
+      }
+      if (installed?.state === 'cancelled') {
+        updOut.textContent = installed.message || 'Автопродолжение отменено.';
         return;
       }
       updateHandedOff = true;
@@ -486,6 +503,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       manualUpdate.hidden = false;
     } finally {
       window.removeEventListener('helene:package-progress', updateProgress);
+      cancelUpdate.hidden = true;
       dlBtn.disabled = updateHandedOff;
     }
   });
@@ -524,6 +542,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       }
     }),
     dlBtn,
+    cancelUpdate,
     forceToggle,
     updOut,
   );
