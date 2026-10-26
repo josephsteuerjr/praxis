@@ -3,8 +3,7 @@
 
 Discovery/unpacking is not a final snapshot. After confirmation the previous
 writers stop; only then do we copy data and the actual executable self-edits.
-The identified native package is removed with its registered non-purge command
-only after the new Python owner confirms the preserved profile.
+No recursive legacy uninstaller is invoked.
 """
 from __future__ import annotations
 import argparse
@@ -21,7 +20,7 @@ import uuid
 from localharness import app_migration, migration_windows
 
 
-def transaction(old, new, *, prepared=False):
+def transaction(old, new):
     """Admit a new target or resume only this exact recorded handoff.
 
     The native Stop latch predates the application and shares its known folder;
@@ -34,10 +33,7 @@ def transaction(old, new, *, prepared=False):
                 Path(note.get('new_root','')).resolve()!=new):
             raise ValueError('This folder belongs to another migration; retained without changes')
         return note
-    if prepared:
-        if (new/'helene.json').exists() or not all((new/p).is_file() for p in ('python-app.json','app/python_app.py','runtime/python.exe')):
-            raise ValueError('Use the unpacked, unconfigured portable application for migration')
-    elif new.exists():
+    if new.exists():
         from localharness import owner_stop
         latch = owner_stop.client_file()
         allowed = {'owner-stop.json'} if latch is not None and latch.parent.resolve()==new else set()
@@ -135,11 +131,6 @@ def finish_retirement(old, package, new, note, progress):
     """Repeatable integration cleanup, never a second application launch."""
     migration_windows.quiescent(old)
     progress('retiring_old')
-    if note.get('startup_proof') and (command:=migration_windows.registered_uninstall(old)):
-        retirement=migration_windows.uninstall_registered(old,command)
-        integrations=migration_windows.retire(old,new)
-        note.update(integrations=integrations,retirement=retirement,state='completed')
-        app_migration.write_note(new,note);progress('completed');return note
     integrations=migration_windows.retire(old,new)
     inventory=old/'python-package-files.json'
     if not inventory.is_file():inventory=package/'migration/legacy-package-files.json'
@@ -187,20 +178,18 @@ def resume_retirement(old, package, new, note, progress):
 
 
 def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=False,
-            launch=True, progress=None, extensions=None,resume_copy=None,prepared=False):
+            launch=True, progress=None, extensions=None,resume_copy=None):
     old,package,new,data=(p.resolve() for p in (old,package,new,data))
     progress=progress or (lambda stage:None)
     app_migration.discover(old)  # read-only preflight; never reused as final state
-    if new.is_relative_to(old) or old.is_relative_to(new) or (not prepared and (new==package or package.is_relative_to(new))):
+    if new.is_relative_to(old) or old.is_relative_to(new) or new==package or package.is_relative_to(new):
         raise ValueError('Old, new and unpacked package must be separate')
-    if prepared and new!=package:raise ValueError('Portable migration stays in this unpacked application')
-    prior=transaction(old,new,prepared=prepared)
+    prior=transaction(old,new)
     if prior['state']=='completed':return prior
     if prior['state'] in ('new_app_started','retirement_incomplete'):
         return resume_retirement(old,package,new,prior,progress)
-    if not prepared:
-        progress('unpacking')
-        copy_program(package,new,progress,extensions)
+    progress('unpacking')
+    copy_program(package,new,progress,extensions)
     from localharness.update_extensions import check
     progress('checking_extensions')
     check(old,new)
@@ -218,8 +207,7 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
             migration_windows.quiescent(Path(reuse['new_root']))
         progress('preserving')
         retain_attempt_configs(new,prior)
-        note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse,
-                                   independent=prepared,copy_external=prepared)
+        note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse)
         install_selected_extensions(new,note,extensions,progress)
         if not launch:return note
         interpreter=new/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
