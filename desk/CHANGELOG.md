@@ -1,3 +1,7 @@
+# 2.2.3
+
+No startup shell probe; explicit bundled Windows shell, including sandbox fallback; Windows login starts in the tray with a visible-window fallback if tray creation fails. See [release notes](docs/RELEASE-2.2.3.md).
+
 # 2.2.2
 
 Automatic continuation after independent update review; windowless Windows helpers; themed update progress; always open Now; truthful Forge control outcomes. See [release notes](docs/RELEASE-2.2.2.md).
