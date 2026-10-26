@@ -1,7 +1,7 @@
 {
   "format": "helene-component-downloads.v1",
   "target": "linux-x86_64",
-  "app_version": "2.1.0",
+  "app_version": "2.1.1",
   "extensions": {
     "whisper": [
       "whisper"
@@ -9,26 +9,30 @@
     "xtts": [
       "xtts_runtime",
       "xtts_model"
-    ]
+    ],
+    "toolchain": []
   },
   "artifacts": {
     "whisper": {
       "name": "Helene-debian-whisper-abi314.zip",
       "sha256": "bbef3ce17edf3f28b82c242b79795d3c7a13d7e36172262b5d5437a06bcdf2af",
       "size": 148437957,
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-debian-whisper-abi314.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-debian-whisper-abi314.zip"
     },
     "xtts_runtime": {
       "name": "Helene-debian-xtts-runtime-cpu2.zip",
       "sha256": "cb9baf6c215b60f3a392c8562c3867ebd06d0fa7643d77c5108c00c643650369",
       "size": 663069990,
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-debian-xtts-runtime-cpu2.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-debian-xtts-runtime-cpu2.zip"
     },
     "xtts_model": {
       "name": "Helene-debian-xtts-model-cpu2.zip",
       "sha256": "6173f806a887997e05f7da81c6a5d9a4122d7ee47059dafd354e1f6a06b7c724",
       "size": 1741848732,
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-debian-xtts-model-cpu2.zip"
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-debian-xtts-model-cpu2.zip"
     }
+  },
+  "unavailable": {
+    "toolchain": "Build tools are not required by the portable Python application."
   }
 }

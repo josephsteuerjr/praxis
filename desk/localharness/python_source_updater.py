@@ -140,8 +140,8 @@ def install(old, new):
     # and keeps external paths selected. Do this before replacing program bytes.
     metadata=json.loads((new/'python-app.json').read_text(encoding='utf-8')) if (new/'python-app.json').is_file() else {}
     portable=metadata.get('delivery')=='portable'
-    note=app_migration.prepare(old,new,new/'profile' if portable else old.parent/'Helene-update-data',
-                               preserve_voice=False,preserve_downloads=False,independent=portable)
+    from localharness.update_profile import prepare as prepare_profile
+    note=prepare_profile(old,new)
     from localharness.code_transition import prepare as prepare_code
     prepare_code(old,new,note)
     def relocate(value):
@@ -159,7 +159,7 @@ def install(old, new):
             value['backup']['dir']=relocate(value['backup']['dir'])
         config.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
     note['new_root']=str(old)
-    if portable:
+    if portable or note.get('in_place_profile'):
         for key in ('data_paths','copied_data'):
             note[key]=[relocate(value) for value in note[key]]
         for row in note['source_paths']:row['selected']=relocate(row['selected'])
@@ -173,6 +173,8 @@ def install(old, new):
     temporary.write_text(json.dumps({'target':str(old),'recovery':str(recovery),'migration_id':note['id']}),encoding='utf-8')
     temporary.replace(pending)
     try:
+        from localharness.code_transition import validate
+        validate(new)
         apply_files(new,old,recovery)
         # A legacy main ZIP may retain only a manifest, not the optional
         # payload. Prepare a voice only when this update actually supplies it.
