@@ -162,7 +162,6 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
     except Exception:
         log.warning("sitecustomize дерева не загрузился — записи пойдут с CRLF", exc_info=True)
     boot.dotenv_gate(code_dir, cfg)
-    boot.ensure_shell()
     import agent
     import memory_life
     boot.apply_env(knobs, where="после импорта")

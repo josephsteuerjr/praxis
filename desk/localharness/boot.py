@@ -1519,52 +1519,6 @@ def apply_env(knobs: dict[str, str], *, where: str) -> None:
     log.debug("ручки среды применены (%s): %d", where, len(knobs))
 
 
-def _bash_answers(exe: str) -> bool:
-    """Живой ли это bash: только ИСПОЛНЕНИЕ, не наличие файла.
-
-    ⚠ Найденное живьём 31.08: `System32\\bash.EXE` — заглушка WSL. `which` её
-    находит, а запуск падает «execvpe(/bin/bash) failed» — ровно то, что агент
-    процитировал в дыме коробки. Наличие файла здесь не значит ничего.
-    """
-    import subprocess
-    try:
-        probe = subprocess.run([exe, "-lc", "echo praxis-shell-ok"],
-                               capture_output=True, text=True, timeout=8)
-        return probe.returncode == 0 and "praxis-shell-ok" in (probe.stdout or "")
-    except Exception:
-        return False
-
-
-def ensure_shell() -> None:
-    """Инструмент shell агента зовёт `bash -lc` — дать команде шанс на винде.
-
-    Порядок от полного к достаточному: живой bash уже в PATH (Git for Windows,
-    MSYS) — не трогаем ничего; иначе типовые установки Git; иначе busybox-шим
-    из поставки (runtime/bash.exe — ПРЯМО рядом с python.exe, подпапки
-    runtime/shims в поставке нет вовсе; кладёт сборщик дистрибутива). Не
-    нашлось ничего живого — инструмент продолжит честно отказывать, и это
-    правильнее тихой подмены синтаксиса.
-    """
-    import shutil as _shutil
-    import sys as _sys
-    if os.name != "nt":
-        return
-    found = _shutil.which("bash")
-    if found and _bash_answers(found):
-        return
-    # ⚠ PATH здесь НЕ помогает: CreateProcess ищет команду в каталоге
-    # приложения и System32 РАНЬШЕ PATH, и заглушка WSL из System32
-    # перехватывает имя «bash» при любом порядке путей. Работает ровно одно
-    # место — каталог интерпретатора (наш runtime): туда сборщик поставки и
-    # кладёт busybox как bash.exe, а первый probe выше его сам находит.
-    here = Path(_sys.executable).resolve().parent / "bash.exe"
-    if here.is_file() and _bash_answers(str(here)):
-        log.info("shell: живой bash — %s (busybox из поставки)", here)
-        return
-    log.info("shell: живого bash нет — инструмент shell будет честно отказывать"
-             + (" (найденный %s — заглушка WSL)" % found if found else ""))
-
-
 def chosen_dotenv(code_dir: Path) -> Path | None:
     """Match python-dotenv's ordinary upward search from agent.py's directory.
 

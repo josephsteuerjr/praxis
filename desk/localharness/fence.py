@@ -1480,8 +1480,12 @@ class _SubprocessShim:
 
     def _bash(self, command: str) -> list[str]:
         """Интерпретатор руки `shell` — busybox поставки, как было до ограды."""
-        bash = self._root / "runtime" / "bash.exe"
-        return [str(bash) if bash.exists() else "bash", "-lc", command]
+        if os.name == "nt":
+            # A missing bundled shell must fail at this path, never start WSL
+            # through Windows' search for a bare executable name.
+            bash = (self._root / "runtime" / "bash.exe").resolve()
+            return [str(bash), "-lc", command]
+        return ["bash", "-lc", command]
 
     def _shell(self, command: str) -> list[str]:
         """Интерпретатор руки `run` — тот же bash, что и у `shell`.
@@ -1533,6 +1537,11 @@ class _SubprocessShim:
     def _plain(self, args, *pargs, **kwargs):
         """Без ограды — но через ОДИН декодер вывода, а не через text=True."""
         opts = dict(kwargs)
+        if os.name == "nt":
+            plan = self._plan(args, kwargs)
+            if plan is not None:
+                args, _cwd = plan
+                opts.pop("shell", None)
         for key in ("text", "encoding", "errors", "universal_newlines"):
             opts.pop(key, None)
         if not opts.get("capture_output"):

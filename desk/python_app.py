@@ -55,6 +55,7 @@ class Application:
         self.confirmed_ui = False
         self.browser_mode = False
         self.tray = None
+        self.start_in_tray = False
         self.voice_keys = None
         self.exiting = False
         self.token = secrets.token_urlsafe(32)
@@ -439,15 +440,25 @@ def window_geometry(screen):
 def bind_window_state(app):
     def shown():
         if sys.platform == "win32":
-            from System import Action
-            from System.Windows.Forms import Screen
-            native = app.window.native
-            def set_bounds():
-                native.MaximizedBounds = Screen.FromHandle(native.Handle).WorkingArea
-            native.Invoke(Action(set_bounds))
-            set_window_icon(app)
-            from python_tray import install
-            install(app)
+            try:
+                from System import Action
+                from System.Windows.Forms import Screen
+                native = app.window.native
+                def set_bounds():
+                    native.MaximizedBounds = Screen.FromHandle(native.Handle).WorkingArea
+                native.Invoke(Action(set_bounds))
+                set_window_icon(app)
+            except Exception as error:
+                app.event('window-error', {'error': str(error)})
+            try:
+                from python_tray import install
+                install(app)
+            except Exception as error:
+                app.event('tray-error', {'error': str(error)})
+            # A hidden application must remain reachable if the notification
+            # icon cannot be created. Successful automatic starts stay hidden.
+            if app.start_in_tray and app.tray is None:
+                app.window.show()
         app.publish_control()
 
     def maximized():
@@ -552,6 +563,7 @@ def migration_proof(host, root):
 
 
 def _main(argv=None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--program", type=Path)
@@ -562,7 +574,7 @@ def _main(argv=None):
     parser.add_argument('--migration-wizard', action='store_true', help='open the offline profile migration wizard before starting any agent')
     parser.add_argument("--browser", action="store_true", help="open the same Python-owned UI in the system browser")
     parser.add_argument("--launch-intent", choices=("manual", "automatic"), default="manual")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
     if args.panic:
         from localharness import owner_stop
         owner_stop.latch_client('shortcut', 'owner emergency stop')
@@ -627,11 +639,13 @@ def _main(argv=None):
             app.stopping.wait()
         else:
             import webview
+            app.start_in_tray = (args.launch_intent == 'automatic' and
+                                 sys.platform == 'win32' and not app.migration_id)
             webview.settings['DRAG_REGION_SELECTOR'] = '#chrome, .chrome-drag, .rail-sign'
             webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
             app.window = webview.create_window("Hélène", app.origin, **window_geometry(webview.screens[0]),
                                                frameless=True, easy_drag=False, text_select=True,
-                                               background_color="#1d1914")
+                                               background_color="#1d1914", hidden=app.start_in_tray)
             bind_window_state(app)
             bind_native_reload(app)
             # The shared renderer's python_ready is the sole confirmation
@@ -644,7 +658,16 @@ def _main(argv=None):
     finally:
         app.close()
     if app.relaunch:
-        arguments=[a for a in sys.argv[1:] if a!='--migration-wizard']
+        # Relaunch is an explicit action in the application. The login-only
+        # intent must not hide the window again after its owner opened it.
+        previous = iter(arguments)
+        arguments = []
+        for argument in previous:
+            if argument == '--launch-intent':
+                next(previous, None)
+            elif argument != '--migration-wizard' and not argument.startswith('--launch-intent='):
+                arguments.append(argument)
+        arguments.extend(['--launch-intent', 'manual'])
         if app.migration_wizard:arguments.append('--migration-wizard')
         os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *arguments])
     return 0
