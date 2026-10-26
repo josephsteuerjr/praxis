@@ -1,62 +1,10 @@
-"""Retire the identified legacy Windows package after proving the new owner."""
+"""Narrow legacy Windows retirement: no recursive product/data uninstaller."""
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
 from .python_windows import AUTOMATIC_ARGUMENTS,powershell,shortcut,shortcut_binding
-
-def registered_uninstall(old):
-    """Use the old installation's registered quiet command, never a name match."""
-    if os.name!='nt':return None
-    import ctypes,winreg
-    from ctypes import wintypes
-    old=Path(old).resolve();base=r'Software\Microsoft\Windows\CurrentVersion\Uninstall'
-    for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
-        for view in (winreg.KEY_WOW64_64KEY,winreg.KEY_WOW64_32KEY):
-            try:
-                with winreg.OpenKey(hive,base,0,winreg.KEY_READ|view) as parent:
-                    names=[winreg.EnumKey(parent,i) for i in range(winreg.QueryInfoKey(parent)[0])]
-                for name in names:
-                    with winreg.OpenKey(hive,base+'\\'+name,0,winreg.KEY_READ|view) as key:
-                        try:location=winreg.QueryValueEx(key,'InstallLocation')[0]
-                        except FileNotFoundError:continue
-                        if Path(location).resolve()!=old:continue
-                        try:command=winreg.QueryValueEx(key,'QuietUninstallString')[0]
-                        except FileNotFoundError:command=winreg.QueryValueEx(key,'UninstallString')[0]
-                    shell=ctypes.WinDLL('shell32');kernel=ctypes.WinDLL('kernel32')
-                    shell.CommandLineToArgvW.argtypes=[wintypes.LPCWSTR,ctypes.POINTER(ctypes.c_int)]
-                    shell.CommandLineToArgvW.restype=ctypes.POINTER(wintypes.LPWSTR)
-                    count=ctypes.c_int();array=shell.CommandLineToArgvW(command,ctypes.byref(count))
-                    if not array:raise ValueError('Invalid registered uninstaller command')
-                    try:argv=[array[i] for i in range(count.value)]
-                    finally:kernel.LocalFree.argtypes=[ctypes.c_void_p];kernel.LocalFree(array)
-                    executable=Path(argv[0]).resolve()
-                    if executable.parent!=old or not executable.is_file():raise ValueError('Registered uninstaller leaves the selected old installation')
-                    if executable.name.lower()=='helene-setup.exe':
-                        if '--uninstall' not in argv or any(a not in ('--uninstall','--quiet') for a in argv[1:]):raise ValueError('Unsupported legacy removal switches')
-                        if '--quiet' not in argv:argv.append('--quiet')
-                    elif executable.name.lower()=='uninstall.exe':
-                        if any(a.lower()!='/s' for a in argv[1:]):raise ValueError('Unsupported registered removal switches')
-                        if len(argv)==1:argv.append('/S')
-                    else:raise ValueError('Unrecognized registered Helene uninstaller')
-                    return argv
-            except FileNotFoundError:continue
-    return None
-
-def uninstall_registered(old,argv):
-    """Called only after the new Python window and preserved profile are proven."""
-    current=service()
-    if current and not service_belongs_to(old,current):
-        raise RuntimeError('The Helene service belongs to another installation; old package retained')
-    result=subprocess.run(argv,cwd=old,capture_output=True,timeout=180,creationflags=0x08000000)
-    if result.returncode:raise RuntimeError('The old uninstaller failed; the new application remains available')
-    deadline=time.monotonic()+15
-    while time.monotonic()<deadline:
-        if registered_uninstall(old) is None and service(old) is None:
-            return {'ok':True,'method':'registered_uninstaller','purge':False}
-        time.sleep(.25)
-    raise RuntimeError('Old installation removal has not yet been confirmed')
 
 
 def request_python_exit(old, pid):
@@ -85,18 +33,17 @@ def request_python_exit(old, pid):
         return json.load(response)
 
 
-def service(old=None):
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();$s=Get-CimInstance Win32_Service -Filter \"Name='Helene'\"; if($s){$s|Select-Object Name,State,PathName|ConvertTo-Json -Compress}",dict(os.environ))
+def service(old):
+    env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()))
+    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();$s=Get-CimInstance Win32_Service -Filter \"Name='Helene'\"; if($s){$s|Select-Object Name,State,PathName|ConvertTo-Json -Compress}",env)
     if not raw:return None
     value=json.loads(raw)
-    return value if old is None or service_belongs_to(old,value) else None
-
-
-def service_belongs_to(old,value):
     command=str(value.get('PathName','')).replace('/','\\').lower()
     root=str(old.resolve()).replace('/','\\').lower()
     # Exact quoted executable/config root component, not a product-name guess.
-    return ('"'+root+'\\') in command or command.startswith(root+'\\')
+    if ('"'+root+'\\') not in command and not command.startswith(root+'\\'):
+        return None  # another installation is not this transaction's service
+    return value
 
 
 def close_python(old):

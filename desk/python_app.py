@@ -16,6 +16,7 @@ import sys
 import threading
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -30,8 +31,9 @@ def recover_before_imports(argv):
     from localharness.python_source_updater import recover_startup
     root=known.root.resolve()
     if not recover_startup(root,known.migration):return False
-    executable=root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
-    os.execv(str(executable),[str(executable),str(root/'app/python_app.py'),*argv])
+    from localharness.python_platform import desktop_argv
+    command=desktop_argv(root,argv)
+    os.execv(command[0],command)
     return True
 
 
@@ -42,14 +44,22 @@ from localharness.python_controller import Controller
 from localharness.python_platform import desktop_identity
 
 
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer normally calls getfqdn() even for 127.0.0.1. The local
+        # renderer needs no DNS discovery; macOS may ask for LAN access for it.
+        TCPServer.server_bind(self)
+        self.server_name = 'localhost'
+        self.server_port = self.server_address[1]
+
+
 class Application:
     def __init__(self, root: Path, ui: Path, host=None, program: Path | None = None):
-        self.root, self.ui, self.host = root, ui.resolve(), host
+        self.root, self.ui, self.host = root.resolve(), ui.resolve(), host
         self.program = program or root
         self.window = None
         self.window_maximized = False
         self.relaunch = False
-        self.migration_wizard = False
         self.migration_id = ''
         self.confirm_lock = threading.Lock()
         self.confirmed_ui = False
@@ -65,7 +75,7 @@ class Application:
                         self._channel(host.ready.result(timeout=60)["script"]) if host else {})
         if host:
             self.host.on_event = self.event
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.server = _LoopbackHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
         self.control_file = self.root / f'.python-window-{os.getpid()}.json'
@@ -118,13 +128,6 @@ class Application:
             return [standalone_relay.status(self.program)]+component_downloads.status(self.program)
         if command == 'python_ready':
             return self.confirm_ui()
-        if command == 'migration_wizard':
-            if not sys.platform.startswith('linux'):
-                raise ValueError('This offline migration wizard is available in the Linux application')
-            self.migration_wizard = True
-            self.relaunch = True
-            self.event('exit', {})
-            return None
         if command == "restart_self":
             self.relaunch = True
             self.event("exit", {})
@@ -445,7 +448,6 @@ def bind_window_state(app):
             def set_bounds():
                 native.MaximizedBounds = Screen.FromHandle(native.Handle).WorkingArea
             native.Invoke(Action(set_bounds))
-            set_window_icon(app)
             from python_tray import install
             install(app)
         app.publish_control()
@@ -459,18 +461,6 @@ def bind_window_state(app):
     app.window.events.maximized += maximized
     app.window.events.restored += restored
     app.window.events.shown += shown
-
-
-def set_window_icon(app):
-    if sys.platform!='win32':return
-    from System import Action
-    from System.Drawing import Icon,Size
-    path=app.program/'app/resources/python-app.ico'
-    if not path.is_file():return
-    def install():
-        app._window_icon=Icon(str(path),Size(256,256))
-        app.window.native.Icon=app._window_icon
-    app.window.native.Invoke(Action(install))
 
 
 def bind_native_reload(app):
@@ -559,7 +549,6 @@ def _main(argv=None):
     parser.add_argument("--panic", action="store_true", help="latch owner Stop without starting the application")
     parser.add_argument("--notify", action="store_true", help="show the emergency-stop result")
     parser.add_argument("--migration", default="", help="confirm this prepared migration after the real window loads")
-    parser.add_argument('--migration-wizard', action='store_true', help='open the offline profile migration wizard before starting any agent')
     parser.add_argument("--browser", action="store_true", help="open the same Python-owned UI in the system browser")
     parser.add_argument("--launch-intent", choices=("manual", "automatic"), default="manual")
     args = parser.parse_args(argv)
@@ -578,31 +567,15 @@ def _main(argv=None):
         return 0
     if program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
-    if sys.platform=='win32' and not args.migration:
-        from localharness import portable_start
-        incomplete=root/'python-migration.json'
-        needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started')
-        if args.migration_wizard or needs_migration or (not (root/'helene.json').exists() and portable_start.previous_installations(root)):
-            from python_migration_window import main as migration_window
-            return migration_window(['--root',str(root)])
-        portable_start.initialize(root)
     ui = program / "app" / "static"
     if not (ui / "index.html").is_file():
         raise FileNotFoundError(f"Нет сборки окна: {ui}")
     pending=root/'python-migration.json'
-    interrupted=pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving'
-    from localharness.essential_backup import load
-    fresh=(root/'helene.json').is_file() and load(root/'helene.json').get('setup_complete') is False and not pending.exists()
-    if sys.platform.startswith('linux') and (args.migration_wizard or interrupted or (fresh and not args.browser)):
-        from localharness.migration_wizard import run
-        if not run(root):return 0
-    elif interrupted:
+    if pending.is_file() and json.loads(pending.read_text(encoding='utf-8')).get('state')=='preserving':
         raise RuntimeError('Interrupted profile copy: resume migration before starting the application')
-    if pending.is_file() and not args.migration:
-        migrated=json.loads(pending.read_text(encoding='utf-8'))
-        if migrated.get('state')=='prepared':args.migration=migrated['id']
     app = Application(root, ui, None, program)
-    app.migration_id=args.migration
+    prepared=json.loads(pending.read_text(encoding='utf-8')) if pending.is_file() else {}
+    app.migration_id=args.migration or (prepared.get('id','') if prepared.get('state')=='prepared' else '')
     app.browser_mode=args.browser
     host = Controller(root, app.event, app.origin, args.agent)
     host.browser_mode=args.browser
@@ -644,9 +617,9 @@ def _main(argv=None):
     finally:
         app.close()
     if app.relaunch:
-        arguments=[a for a in sys.argv[1:] if a!='--migration-wizard']
-        if app.migration_wizard:arguments.append('--migration-wizard')
-        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *arguments])
+        from localharness.python_platform import desktop_argv
+        command=desktop_argv(program,sys.argv[1:])
+        os.execv(command[0],command)
     return 0
 
 

@@ -44,3 +44,14 @@ def asset_name(version, selected):
 def require_runtime(program):
     if target(program) != runtime_target():
         raise ValueError('Incoming application is for another OS/architecture')
+
+
+def desktop_argv(program, arguments=()):
+    """GUI re-entry keeps Cocoa bundle identity; helpers keep raw Python."""
+    program=Path(program).resolve()
+    arguments=list(map(str,arguments))
+    bundle=program/'Helene.app/Contents/MacOS/Helene'
+    if sys.platform=='darwin' and '--browser' not in arguments and bundle.is_file():
+        return [str(bundle),*arguments]
+    python=program/('runtime/python.exe' if sys.platform=='win32' else 'runtime/bin/python3')
+    return [str(python),str(program/'app/python_app.py'),*arguments]
