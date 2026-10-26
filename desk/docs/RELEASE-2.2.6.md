@@ -8,7 +8,7 @@ The rejected 2.2.5 manual-preparation release is withdrawn. Its extra preparatio
 
 - A declared compatibility admission view lets the old 2.1.1 updater hand control to the incoming helper while carrying authored source unchanged. The helper then verifies and materializes the real pristine upstream source before the real A/L/B/M merge and review. The admission gate is not source acceptance.
 - Compatibility repairs can include automatically merged source files. Every such repair has a reason, current-candidate binding and before/after journal; changed candidates require fresh independent frozen review.
-- First startup and migration materialize the real source before controller/core imports or profile seeding. Interrupted promotion is recoverable. Unexpected authored, private or linked content is refused, and completed admission never overwrites later self-edits.
+- First startup and migration materialize the real source before controller/core imports or profile seeding. Interrupted promotion is recoverable. Retrying an interrupted first copy retains already materialized source and later authored edits. Unexpected authored, private or linked content is refused, and completed admission never overwrites later self-edits.
 - Existing Stop/Pause, stale-input, custody, source preservation and rollback fences remain authoritative. A failed review retains/restores the previous program.
 
 ## Downloads

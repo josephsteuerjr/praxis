@@ -77,6 +77,18 @@ class SourceAdmission(unittest.TestCase):
         self.assertEqual(private.read_bytes(),b'preserve')
         self.assertEqual((self.program/'tree/module.py').read_bytes(),(self.base/'module.py').read_bytes())
 
+    def test_fresh_retry_preserves_materialized_source_and_later_authored_edits(self):
+        from python_migrate import fresh,installation_lock
+        new=self.root/'retry';data=self.root/'retry-data'
+        with installation_lock(new):fresh(self.program,new,data,launch=False)
+        authored=self.real+b'\n# later authored change\n'
+        (new/'tree/module.py').write_bytes(authored)
+        passport=(new/'python-package-files.json').read_bytes()
+        with installation_lock(new):fresh(self.program,new,data,launch=False)
+        self.assertEqual((new/'tree/module.py').read_bytes(),authored)
+        self.assertEqual((new/'python-package-files.json').read_bytes(),passport)
+        self.assertEqual(read(new/'source-admission-state.json')['state'],'ready')
+
     def test_crash_between_directory_renames_recovers_exact_stock(self):
         original=Path.replace
         def replace(path,target):

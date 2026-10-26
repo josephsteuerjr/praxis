@@ -11,3 +11,5 @@ The old planner sees identical baseline/incoming views and carries authored **L*
 The new updater materializes declared source before preflight. A fresh application does so before controller/core imports. The old 2.1.1 path transfers custody and closes its old owner through its existing protocol; the incoming observer remains visible during preparation. This does not claim that every historical updater/baseline combination has been qualified. The supported 2.1.1 baseline and actual one-invocation transition are explicit release gates.
 
 Release construction must keep both inventories truthful: the package manifest describes the shipped admission view; `code-upstream` describes real pristine B. Platform source tags bind real core source separately from the admission view. Do not substitute authored code for either published snapshot or manufacture a ready/review receipt to admit an upgrade.
+
+A retry of the same interrupted fresh/migration copy preserves an already activated target tree and its derived passports. The admission view is never recopied over materialized source or later authored edits while its ready marker remains.

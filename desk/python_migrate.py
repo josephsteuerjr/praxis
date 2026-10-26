@@ -63,10 +63,13 @@ def copy_program(package, new, progress, extensions=None):
             while chunk:=stream.read(1024*1024):h.update(chunk)
         return h.hexdigest()
     extensions=set(extensions or ())
+    from localharness.source_admission import copy_exclusions
+    preserved=copy_exclusions(package,new)
     bundle=package/'components/xtts/xtts-bundle.json'
     xtts_files=set(json.loads(bundle.read_text(encoding='utf-8'))['files'])|{'xtts-bundle.json'} if bundle.is_file() else None
     def selected(path):
         parts=path.relative_to(package).parts
+        if parts[0] in preserved:return False
         if parts[:2]==('components','toolchain'):return False
         if parts[:2]==('components','xtts'):return 'xtts' in extensions and (xtts_files is None or Path(*parts[2:]).as_posix() in xtts_files)
         if parts[0]=='voice' or parts[:2]==('components','whisper'):return 'whisper' in extensions

@@ -154,3 +154,20 @@ def current_proofs(verified, program):
             if relative.startswith('tree/') or relative in changed:continue
         result[name] = proof
     return result
+
+
+def copy_exclusions(package, target):
+    """A retry of this delivery must retain its already materialized source.
+
+    The packaged admission view is a one-time custody view. Copying it again
+    after activation would replace B/self-edits while retaining the ready marker.
+    Preserve the derived passports with the source they describe.
+    """
+    declaration = read(Path(package) / 'source-admission.json')
+    if not declaration:
+        return set()
+    state = read(Path(target) / 'source-admission-state.json')
+    if state.get('state') == 'ready' and state.get('identity') == merge.signature(declaration):
+        return {'tree', 'python-package-files.json', 'edition-inventory.json',
+                'selected-source.json', 'source-admission-state.json'}
+    return set()
