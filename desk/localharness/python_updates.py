@@ -180,7 +180,10 @@ def update_install(owner,path,forceExtensions=False):
             raise RuntimeError('Python update is already preparing or handed off for this installation')
         _update_targets.add(target)
     try:
-        return _update_install(owner,path,forceExtensions)
+        result = _update_install(owner,path,forceExtensions)
+        if isinstance(result, dict) and result.get('state') == 'needs_resolution':
+            with _update_guard:_update_targets.discard(target)
+        return result
     except BaseException:
         with _update_guard:_update_targets.discard(target)
         raise
@@ -254,6 +257,13 @@ def _update_install(owner,path,forceExtensions=False):
     helper=destination/'python_source_updater.py'
     from .update_extensions import check
     check(owner.root, new_root, force=forceExtensions)
+    from .code_transition import preflight
+    source_plan = preflight(owner.root, new_root)
+    if source_plan['state'] != 'ready':
+        # All merge material lives in .source-updates, independent of this
+        # disposable extraction. Keep the verified ZIP for the next click.
+        shutil.rmtree(destination)
+        return source_plan
     shutil.copy2(new_root/'app/localharness/python_source_updater.py',helper)
     argv=[str(interpreter),str(helper),'--old',str(owner.root),'--new',str(new_root),
           '--pid',str(os.getpid()),'--staging',str(destination)]

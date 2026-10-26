@@ -2245,6 +2245,11 @@ def _update_report_due() -> None:
     """
     if _tree is None or _desk is None:
         return
+    from localharness import source_update
+    if source_update.pending(_tree):
+        if not owner_stop.paused():
+            source_update.notify_due(_tree, _turn_in_window)
+        return
     receipt = updates.pending_report(_tree)
     if receipt is None:
         return

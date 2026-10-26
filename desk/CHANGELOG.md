@@ -1,3 +1,7 @@
+# 2.1.1
+
+Three-way Git source updates preserve authored changes across releases, resolve actual conflicts in an isolated candidate, and retain the exact upstream baseline. In-place updates keep profile/model paths and restore the prior code selection on rollback. The component map is readable by the original 2.0 updater; optional downloads remain Whisper and XTTS.
+
 # 2.1.0 — Portable Python, refreshed onboarding and voice
 
 Archive-first Windows launch and migration; in-place updates; custom migration chrome and sharper icon; inline waveform messages; configurable hold-to-record shortcuts, Shift draft parking, Esc cancellation and automatic playback; refreshed onboarding/help and appearance settings; independent relay and only Whisper/XTTS optional downloads. See the English release notes for exact platform checks and limits.

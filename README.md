@@ -1,4 +1,4 @@
-# Hélène 2.1 — a portable Python home for your agent
+# Hélène 2.1.1 — a portable Python home for your agent
 
 Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
@@ -38,10 +38,10 @@ The subscription relay is a separate product: [praxis-relay 1.1.0](https://githu
 
 | Platform | Archive | Entry after extracting the whole folder |
 | --- | --- | --- |
-| Windows x64 | [Helene-2.1.0.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
-| macOS Apple Silicon | [Helene-2.1.0-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
-| Debian x86_64 | [Helene-2.1.0-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
-| Fedora x86_64 | [Helene-2.1.0-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.0/Helene-2.1.0-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Windows x64 | [Helene-2.1.1.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
+| macOS Apple Silicon | [Helene-2.1.1-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
+| Debian x86_64 | [Helene-2.1.1-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Fedora x86_64 | [Helene-2.1.1-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.1.1/Helene-2.1.1-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
 
 Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
 

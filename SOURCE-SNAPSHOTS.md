@@ -1,12 +1,10 @@
-# Hélène 2.1 platform source snapshots
+# Hélène 2.1.1 source snapshots
 
-The v2.1.0 tag and main desktop tree carry the Windows/common application source. Each archive is bound to its qualified platform snapshot below; the snapshots preserve the tested platform differences.
+The public main branch contains the shared source and Windows desktop implementation. Platform snapshots preserve their existing launch and recovery adaptations. Native runtimes are reused from the qualified 2.1.0 archives.
 
-- **windows**: [`source/helene-2.1.0-windows`](https://github.com/josephsteuerjr/praxis/tree/source/helene-2.1.0-windows), commit `971c61de72ec4c2ab773fbc7706443de1be4e74b`.
-- **debian**: [`source/helene-2.1.0-debian`](https://github.com/josephsteuerjr/praxis/tree/source/helene-2.1.0-debian), commit `d8a4fa72df8c98408ece456e61fb626efaca0aec`.
-- **fedora**: [`source/helene-2.1.0-fedora`](https://github.com/josephsteuerjr/praxis/tree/source/helene-2.1.0-fedora), commit `314c8318c632dadaf4c1e774ca0970e545773c1d`.
-- **macos**: [`source/helene-2.1.0-macos`](https://github.com/josephsteuerjr/praxis/tree/source/helene-2.1.0-macos), commit `db005741064ab75466bd7be831b9e63f8e154aaf`.
+- windows: `source/helene-2.1.1-windows` — `0bad32defc8193d97dd8e2fe10271c09a136eb94`; `Helene-2.1.1.zip` SHA256 `ca67191b64983f586ecc528b4041072f15718e7b9e6c8f1aa3535194ac9e6ab9`.
+- debian: `source/helene-2.1.1-debian` — `c9f5e6acacd9b4774c52de217af3cdd10ae3305e`; `Helene-2.1.1-linux-x86_64.zip` SHA256 `ec50fa2cb1cf673304579b0fe44bc9805dd9772d5c0e080622da53dd89f9b441`.
+- fedora: `source/helene-2.1.1-fedora` — `b9cf654b555e67c918f64acf7d9de6264dbb30ab`; `Helene-2.1.1-fedora-x86_64.zip` SHA256 `f1537223a60e4e089d06f746a2ddf12c7ffc2ec7de2278530b130def97ec7332`.
+- macos: `source/helene-2.1.1-macos` — `a72dfb54fde61fa0b589dc9c862bc9aae6dd1fde`; `Helene-2.1.1-macos-arm64.zip` SHA256 `8d32a67c42d750d095a724912308705020426b3b0332883b5cae9962a558ec07`.
 
-Each snapshot contains `helene/PLATFORM-SOURCE.json` with the exact application archive hash and packaged source inputs. Built frontend and reused runtime/native dependencies are identified separately; these source commits do not assert that unchanged binaries were rebuilt. Whisper/XTTS component maps pin the final v2.1.0 release URLs; deleting obsolete version tags does not remove their storage. The standalone relay is published in its own repository.
-
-The live Praxis source and its existing CORE-SOURCE.json receipt are preserved from public main; publishing this desktop release does not deploy or change the live agent. Private profiles, memory, credentials and local work reports are excluded.
+Each archive has an exact source-input manifest, application file hashes and a pristine code-upstream snapshot. The source merge, conflict resolution and two successive update/rollback paths were tested on Windows and on a separate Linux server workspace. Actual owner installation remains a separate acceptance step.
