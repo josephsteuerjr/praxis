@@ -1,3 +1,7 @@
+# 2.2.5
+
+The isolated merger can journal compatibility repairs across declared candidate source, including automatically merged files. Every changed candidate requires fresh independent review. An explicit incoming preparation entry handles the old2.1.1 button gate without installing/restarting its owner. See [release notes](docs/RELEASE-2.2.5.md).
+
 # 2.2.4
 
 Legacy upgrades coordinate restricted conflict merging and mandatory source review from the verified incoming runtime, without requiring new APIs in old authored Forge. Review ownership is isolated and model configuration is read without pre-install migration. See [release notes](docs/RELEASE-2.2.4.md).

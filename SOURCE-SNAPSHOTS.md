@@ -1,12 +1,12 @@
-# Hélène 2.2.4 source and package bindings
+# Hélène 2.2.5 source and package bindings
 
-Implementation `1dddd8dd30723336a85e3108a4a768dad27c4362` on public 2.2.3 `4fe8f971250763cb4f5fad32ee5dc4b9c47b2161`. The publication commit adds documentation and exact package bindings. Platform snapshots are immutable tags.
+Implementation `63ff66e4262cf5ea13d91bbd10831f7d8f973a49` on public 2.2.4 `63682382f50c0031f791fd31760502a0fd4d2dd9`. Platform snapshots are immutable tags.
 
-- **windows**: tag `source/helene-2.2.4-windows`, commit `2741b04b9fde063aaeb6a3c34982be46c796d679`, archive `Helene-2.2.4.zip`.
-- **macos**: tag `source/helene-2.2.4-macos`, commit `0f92cd878848e66f332b076a7fd4b458a6b7f668`, archive `Helene-2.2.4-macos-arm64.zip`.
-- **debian**: tag `source/helene-2.2.4-debian`, commit `e7c8604d0c3d1b5a605b824469e7d755816dcebf`, archive `Helene-2.2.4-linux-x86_64.zip`.
-- **fedora**: tag `source/helene-2.2.4-fedora`, commit `5746e36e906bcbf455ae329066f48be151a19309`, archive `Helene-2.2.4-fedora-x86_64.zip`.
+- **windows**: tag `source/helene-2.2.5-windows`, commit `2434c1c35c6f053db64dd1f0edbe7b6ceaf69308`, archive `Helene-2.2.5.zip`.
+- **macos**: tag `source/helene-2.2.5-macos`, commit `6f627585f7a387f9ce5633aa8546ebaeb275e1f9`, archive `Helene-2.2.5-macos-arm64.zip`.
+- **debian**: tag `source/helene-2.2.5-debian`, commit `9eab382f24b63741d261e6e37a11c615d9f0db77`, archive `Helene-2.2.5-linux-x86_64.zip`.
+- **fedora**: tag `source/helene-2.2.5-fedora`, commit `b92f6cdb818c5e6541b1f375f1d7622002d51f18`, archive `Helene-2.2.5-fedora-x86_64.zip`.
 
-Snapshots contain exact packaged application inputs and the pristine code-upstream tree. Shared updater modules match the tested implementation on all four platforms. Native runtimes, platform-specific window entry points and built interface files are unchanged from 2.2.3. Optional Whisper and XTTS components remain pinned to v2.1.1. Personal profiles, memory and credentials are not publication inputs.
+Snapshots contain exact packaged application inputs and pristine upstream source. Native runtimes, platform adaptations and interface bytes are unchanged from2.2.4. Optional Whisper/XTTS assets remain pinned to2.1.1. The Windows root preparation launcher is a UTF16 encoding of desk/resources/prepare-update.vbs; package manifests bind it.
 
-The Praxis public mirror is unchanged from the 2.2.3 source audit; no live service or profile was changed. Hélène edition source includes a narrow read-only model-config option for its incoming update coordinator; ordinary config migration behavior is unchanged. See release-evidence.json for qualification boundaries.
+The explicit incoming preparation entry lets an old2.1.1 updater pass its pre-helper conflict gate without editing or closing the old application. The owner then retries the normal button for the same release. See release-evidence.json for exact qualification and boundaries. The Praxis public source mirror is unchanged.
