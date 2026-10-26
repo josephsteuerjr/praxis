@@ -23,6 +23,8 @@ ACTIVE = {'queued', 'merging', 'reviewing'}
 MAX_ATTEMPTS = 3
 MAX_ITERS = 40
 MAX_SECONDS = 1800
+UNAVAILABLE = ('Running application/selected Forge lacks an available source-update coordinator API v1. '
+               'Old application retained; no ordinary agent conflict turn or generic worker fallback.')
 TOOL = {'name': 'source_update', 'description':
     'Read the isolated update pipeline status. Conflicts are handled by a restricted '
     'merger and independent reviewers; this tool cannot edit, approve or install code.',
@@ -94,7 +96,7 @@ def _bound(request):
     return directory, plan
 
 
-def ensure(tree, program, source, directory, version):
+def ensure(tree, program, source, directory, version, *, coordinator=None):
     """Queue once before shutdown; retries never revive a stopped or failed plan."""
     directory = Path(directory).resolve()
     plan = merge.validate_inputs(directory)
@@ -119,15 +121,33 @@ def ensure(tree, program, source, directory, version):
             operation = {**request, 'schema': 1, 'created': time.time(), 'attempts': [],
                          'max_attempts': MAX_ATTEMPTS, 'tree': str(Path(tree).resolve())}
             runtime = read(Path(tree) / 'memory/.self-review/runtime.json')
-            if (runtime.get('source_update_supported') is not True
+            if coordinator is None and (runtime.get('source_update_supported') is not True
                     or runtime.get('app_root') != str(Path(program).resolve())
                     or not 0 <= time.time() - float(runtime.get('at') or 0) < 60):
-                operation.update(state='needs_attention', error=
-                    'Running application/selected Forge lacks an available source-update coordinator API v1. '
-                    'Old application retained; no ordinary agent conflict turn or generic worker fallback.')
+                operation.update(state='needs_attention', error=UNAVAILABLE)
             _persist(directory, operation)
         if operation['input_sha256'] != request['input_sha256']:
             raise ValueError('Update pipeline input binding changed')
+        if coordinator is not None:
+            # Only the verified incoming host calls this under its process lease.
+            # An unavailable capability never admitted work; it is safe to retry
+            # that one case. Execution failures, cancellation and Stop are final.
+            unused = (operation.get('state') == 'needs_attention'
+                      and operation.get('error') == UNAVAILABLE
+                      and operation.get('attempts') == []
+                      and not any(operation.get(k) for k in ('task_id', 'unit_id', 'review_id',
+                                  'admission', 'cancel_requested', 'stop_receipt'))
+                      and not _cancelled(directory))
+            if unused:
+                operation['capability_retry'] = {'created': operation['created'],
+                                                'error': operation['error'], 'at': time.time()}
+                operation.update(state='queued', created=time.time(), version=str(version))
+                operation.pop('error', None)
+            prior = operation.get('coordinator')
+            if prior and prior != coordinator and operation['state'] != 'ready_to_apply':
+                raise ValueError('Another incoming coordinator owns this source review; inspect its existing work')
+            if operation['state'] == 'queued' and not operation.get('attempts'):
+                operation['coordinator'] = coordinator
         _persist(directory, operation)
         request['state'] = operation['state']
         write(path(tree), request)
@@ -175,8 +195,11 @@ def _fresh(operation, directory):
 def _materials(directory, plan):
     files = {**plan['files'], 'result': plan['result']}
     names = set().union(*(set(side) for side in files.values()))
+    published = {name: sorted({entry['sha256'] for side in ('base', 'incoming')
+                              if (entry := files[side].get(name))}) for name in names}
     return {label: {'root': str(Path(directory) / side),
-                    'merge_files': {name: files[side].get(name) for name in sorted(names)}}
+                    'merge_files': {name: files[side].get(name) for name in sorted(names)},
+                    'published_files': published}
             for side, label in (('base', 'base'), ('local', 'mine'),
                                 ('incoming', 'release'), ('result', 'resolved'))}
 
@@ -253,9 +276,10 @@ def _stop(operation, forge, service):
     operation['stop_confirmed'] = confirmed
 
 
-def cancel(tree, forge, service, reason='Owner stopped the source update'):
+def cancel(tree, forge, service, reason='Owner stopped the source update', *, directory=None):
     with _LOCK:
-        request = read(path(tree))
+        request = (read(Path(directory) / 'pipeline.json') if directory is not None
+                   else read(path(tree)))
         if not request:
             return {'state': 'none'}
         directory, _ = _bound(request)
@@ -426,7 +450,7 @@ def _producer_pending(operation, forge, service):
     return False
 
 
-def tick(tree, forge, review_service, paused=False, stopped=False):
+def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinator=None):
     """Runner maintenance hook: current producers only after initial discovery."""
     with _LOCK:
         changed = []
@@ -435,6 +459,10 @@ def tick(tree, forge, review_service, paused=False, stopped=False):
             operation_path = Path(request['directory']) / 'pipeline.json'
             operation = read(operation_path)
             if not operation:
+                continue
+            if operation.get('coordinator') != coordinator:
+                # Incoming-runtime review has a separate owner. An ordinary
+                # (possibly older) agent is not its producer or cancellation API.
                 continue
             before = json.dumps(operation, sort_keys=True)
             current = identity == cache.get('current_id')

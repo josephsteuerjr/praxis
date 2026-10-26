@@ -11,14 +11,14 @@ import sys
 try:
     from . import source_merge as merge
     from .package_notice import read
-    from .self_review import SECRET, PRIVATE_NAMES
+    from .self_review import source_credential, PRIVATE_NAMES
 except ImportError:
     # A script starts outside the desk package; import its installed package,
     # never the candidate directory as executable Python.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from localharness import source_merge as merge
     from localharness.package_notice import read
-    from localharness.self_review import SECRET, PRIVATE_NAMES
+    from localharness.self_review import source_credential, PRIVATE_NAMES
 
 
 class SourceMergeAdapter:
@@ -111,7 +111,10 @@ class SourceMergeAdapter:
                         text = raw.decode('utf-8-sig')
                         if '\x00' in text:
                             raise UnicodeError('binary input')
-                        if any(p.lower() in PRIVATE_NAMES for p in Path(logical).parts) or SECRET.search(text):
+                        published = any(row['sha256'] == (plan['files'][label].get(logical) or {}).get('sha256')
+                                        for label in ('base', 'incoming'))
+                        if (any(p.lower() in PRIVATE_NAMES for p in Path(logical).parts)
+                                or source_credential(text, published=published)):
                             row['withheld'] = 'private or possible embedded credential'
                         else:
                             row.update(text=text[offset:offset + 8000], offset=offset, total_chars=len(text))

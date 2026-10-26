@@ -576,7 +576,8 @@ def _config() -> dict:
         if _CACHE["cfg"] is None or _CACHE["mtime"] is not None:
             _CACHE.update(mtime=None, cfg=_from_env())
             try:
-                save_config(_CACHE["cfg"])
+                if os.environ.get('PRAXIS_LLM_READ_ONLY_CONFIG') != '1':
+                    save_config(_CACHE["cfg"])
                 _CACHE["mtime"] = _config_stamp()
                 log.info("llm: конфиг мигрирован из env → %s", CONFIG_PATH)
             except OSError:
@@ -594,7 +595,7 @@ def _config() -> dict:
         else:
             _CACHE["mtime"] = mtime
         return _CACHE["cfg"]
-    if stored != fresh:
+    if stored != fresh and os.environ.get('PRAXIS_LLM_READ_ONLY_CONFIG') != '1':
         # Normalisation is also the one-way migration boundary.  Retired
         # evaluator/drift/window policy must not linger in the durable file and
         # surprise a later process or operator merely because it is inert today.

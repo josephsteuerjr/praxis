@@ -141,14 +141,19 @@ def validate(new):
             source_update.validate_ready(row['directory'])
 
 
-def prepare(old, new, note):
+def prepare(old, new, note, *, progress=None):
     old, new = Path(old).resolve(), Path(new).resolve()
     if not (new / 'tree').is_dir():
         return
     if not note['source_paths']:
         seal(new)
         return
-    result = preflight(old, new)
+    result = preflight(old, new, notify=False)
+    if result['state'] != 'ready':
+        from .source_update_host import review
+        review(old, new, result['plans'], progress)
+        validate(new)
+        result = preflight(old, new, notify=False)
     if result['state'] != 'ready':
         raise RuntimeError(result['message'])
     from .app_migration import preserve_source

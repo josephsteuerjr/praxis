@@ -113,6 +113,19 @@ class Base(unittest.TestCase):
 
 
 class TestConfig(Base):
+    def test_update_review_reads_legacy_config_without_rewriting_it(self):
+        raw = b'{"roles":{"voice":{"model":"legacy-model"}},"limits":{"evaluator_mode":"all"}}\n'
+        llm.CONFIG_PATH.write_bytes(raw)
+        with mock.patch.dict(os.environ, {'PRAXIS_LLM_READ_ONLY_CONFIG': '1'}):
+            cfg = llm._config()
+        self.assertEqual(cfg['roles']['voice']['model'], 'legacy-model')
+        self.assertEqual(llm.CONFIG_PATH.read_bytes(), raw)
+
+    def test_update_review_env_fallback_does_not_create_config(self):
+        with mock.patch.dict(os.environ, {'PRAXIS_LLM_READ_ONLY_CONFIG': '1', 'GLM_API_KEY': 'fixture'}):
+            self.assertEqual(llm._config()['frameworks']['anthropic']['api_key'], 'fixture')
+        self.assertFalse(llm.CONFIG_PATH.exists())
+
     def test_migration_from_env(self):
         os.environ.update(GLM_API_KEY="k1", GLM_VOICE_MODEL="glm-9",
                           GLM_FIRSTPASS_MODEL="glm-mini", PRAXIS_MAX_TOOL_ITERS="7")

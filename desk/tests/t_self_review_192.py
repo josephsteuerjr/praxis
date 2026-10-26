@@ -23,6 +23,9 @@ def load_forge():
                     "computer_memory", "serverd_client", "selfdev", "process_liveness")
     replacements = {name: types.ModuleType(name) for name in dependencies}
     replacements["process_liveness"].is_process_alive = lambda pid: True
+    # Dedicated frozen tasks have no dependency graph. The current queue drain
+    # still asks the planner for its snapshot before admitting the next critic.
+    replacements["forge_swarm"].refresh = lambda *args: {"nodes": []}
     spec = importlib.util.spec_from_file_location("self_review_test_forge", ROOT / "helene/core/forge.py")
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, replacements):

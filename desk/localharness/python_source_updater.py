@@ -123,7 +123,7 @@ def prepare_install(old, new, *, verified=None, progress=None):
     note=prepare_profile(old,new,progress)
     from localharness.code_transition import prepare as prepare_code
     if progress:progress.phase('code')
-    prepare_code(old,new,note)
+    prepare_code(old,new,note,progress=progress)
     def relocate(value):
         if isinstance(value,str):
             path=Path(value)

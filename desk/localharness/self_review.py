@@ -39,6 +39,14 @@ SECRET = re.compile(r"-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH)|"
                     r"(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})|"
                     r"(?im:^\s*(?:[\"']?(?:api_key|api_secret|access_token|refresh_token|password)"
                     r"[\"']?)\s*[:=]\s*[\"'][^\"'\n]{8,}[\"'])")
+PUBLISHED_SECRET = re.compile(r"-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH)[^-]*-----\s+[A-Za-z0-9+/=\s]{80,}|"
+                              r"gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{32,}")
+
+
+def source_credential(text, *, published=False):
+    # Distribution provenance disambiguates short test placeholders, not full
+    # private-key material or token-shaped credentials accidentally published.
+    return bool(SECRET.search(text) and (not published or PUBLISHED_SECRET.search(text)))
 _LOCK = threading.RLock()
 
 
@@ -138,7 +146,8 @@ def _source_roots(sources):
                 if not isinstance(source['merge_files'], dict):
                     raise ValueError('merge projection requires the complete inventory')
                 result[label] = {'root': str(Path(source['root']).absolute()),
-                                 'merge_files': source['merge_files']}
+                                 'merge_files': source['merge_files'],
+                                 'published_files': source.get('published_files', {})}
                 continue
             if not isinstance(source.get("files"), dict):
                 raise ValueError("explicit side projection requires a files mapping")
@@ -212,8 +221,16 @@ def _merge_projection(label, source, destination, used):
                 text = raw.decode('utf-8-sig')
                 if '\x00' in text:
                     raise UnicodeError('binary input')
-                if SECRET.search(text):
+                # Exact A/B distribution bytes are already published source.
+                # Test credential literals and public protocol constants must
+                # not make every complete release impossible to review. This
+                # exception never applies to a changed authored/candidate blob
+                # or a private path, and does not affect ordinary home reviews.
+                public = row['sha256'] in source.get('published_files', {}).get(name, [])
+                if source_credential(text, published=public):
                     reason = 'possible embedded credential; entire file withheld'
+                elif SECRET.search(text):
+                    row['published_source'] = True
         except UnicodeError:
             reason = 'binary or non-UTF-8 input; inventory retained'
         if row['sha256'] != entry['sha256']:
@@ -378,10 +395,11 @@ def _validate_material_text(intent, criteria):
 
 
 class Service:
-    def __init__(self, tree, code_dir, app_root, forge, config=None):
+    def __init__(self, tree, code_dir, app_root, forge, config=None, *, coordinator=None):
         self.tree, self.code_dir, self.app_root = map(Path, (tree, code_dir, app_root))
         self.forge = forge
         self.config = settings(config)
+        self.coordinator = coordinator
         self.root = self.tree / "memory" / ".self-review"
         self._terminal_cache = {}
 
@@ -449,7 +467,7 @@ class Service:
         with _LOCK:
             if operation_id:
                 for prior in self.status():
-                    if str(operation_id) in prior["operations"]:
+                    if str(operation_id) in prior["operations"] and prior.get('coordinator') == self.coordinator:
                         prior["required"] = prior["required"] or required
                         prior["triggers"] = list(dict.fromkeys(prior["triggers"] + [trigger]))
                         _write(self._path(prior["id"]), prior)
@@ -502,7 +520,7 @@ class Service:
             code_identity = _sha(_json({"manifest": [row for row in manifest if row["path"] != "changes.diff"],
                                        "gaps": gaps, "intent": subject["intent"], "criteria": subject["criteria"],
                                        "overlay": subject["overlay"], "policy": policy,
-                                       "sources": source_roots}))
+                                       "sources": source_roots, "coordinator": self.coordinator}))
             for prior in earlier:
                 if prior.get("identity") == code_identity:
                     if retry:
@@ -530,7 +548,7 @@ class Service:
                       "operations": [str(operation_id)] if operation_id else [], "required": required,
                       "policy": policy, "identity": code_identity, "subject_sha256": subject_sha,
                       "snapshot": str(snapshot.absolute()),
-                      "sources": source_roots,
+                      "sources": source_roots, "coordinator": self.coordinator,
                       "task_id": "code-" + uuid.uuid4().hex[:8], "critics": critics,
                       "execution": "queued", "state": "pending", "verdict": "insufficient",
                       "dispositions": [], "gaps": gaps}
@@ -546,10 +564,14 @@ class Service:
                 "findings:[{path,scenario,detail}], gaps:[]}. Missing evidence is insufficient, not clear. "
                 "Source-only clear is not installed/runtime verification.")
 
-    def tick(self, paused=False):
+    def tick(self, paused=False, *, review_ids=None):
         with _LOCK:
             changed = []
             for record in self.status():
+                if record.get('coordinator') != self.coordinator:
+                    continue
+                if review_ids is not None and record['id'] not in review_ids:
+                    continue
                 if record.get("cancel_requested"):
                     if not all(c.get("cancel_confirmed") for c in record["critics"]):
                         self._reconcile_cancel(record)

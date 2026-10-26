@@ -375,16 +375,34 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
     check(owner.root, new_root, force=forceExtensions)
     from .code_transition import preflight
     progress.phase('code')
-    source_plan = preflight(owner.root, new_root)
+    source_plan = preflight(owner.root, new_root, notify=False)
     review_binding = None
     if source_plan['state'] != 'ready':
-        if any(row['state'] in {'needs_attention', 'cancelled'} for row in source_plan['plans']):
-            progress.phase('needs_resolution',message=source_plan.get('message',''))
-            _discard_extraction(owner, destination)
-            return source_plan
-        if not _wait_for_review(owner, new_root, progress):
-            _discard_extraction(owner, destination)
-            return {'state': 'cancelled', 'message': 'Автопродолжение отменено. Старая версия остаётся открытой.'}
+        from .source_update_host import review
+        from . import update_profile, code_transition
+        def selected():
+            value = update_profile.selection(owner.root)
+            value['settings'].pop('window-preferences.json', None)
+            return value
+        before_review = selected()
+        cancelled = threading.Event()
+        target = os.path.normcase(str(owner.root.resolve()))
+        with _update_guard:
+            _waiting_updates[target] = cancelled
+        try:
+            review(owner.root, new_root, source_plan['plans'], progress, cancelled)
+        finally:
+            with _update_guard:
+                if _waiting_updates.get(target) is cancelled:
+                    _waiting_updates.pop(target, None)
+        if cancelled.is_set():
+            raise RuntimeError('Update review was cancelled; previous application remains open')
+        code_transition.validate(new_root)
+        if selected() != before_review:
+            raise ValueError('Settings or selected source changed during update review; retry Update')
+        source_plan = preflight(owner.root, new_root, notify=False)
+        if source_plan['state'] != 'ready':
+            raise RuntimeError(source_plan['message'])
         review_binding = [(row['source'], row['directory']) for row in source_plan['plans']]
         # The isolated material is still pinned to the original click. No
         # download, extraction, or new merge request is needed after approval.

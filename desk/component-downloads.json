@@ -1,6 +1,6 @@
 {
   "format": "helene-component-downloads.v1",
-  "app_version": "2.2.3",
+  "app_version": "2.2.4",
   "extensions": {
     "xtts": [
       "xtts_runtime",

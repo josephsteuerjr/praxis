@@ -58,7 +58,7 @@ class Continuation(unittest.TestCase):
         self.assertNotIn(self.target, updates._waiting_updates)
 
     def test_original_install_invocation_reaches_one_prepared_handoff_after_review(self):
-        from localharness import python_platform, update_extensions
+        from localharness import python_platform, update_extensions, source_update_host
         f = self.fixture
         staging = f.root / '.helene-update-single-click'
         staging.mkdir();f.new.rename(staging / 'Helene');f.new = staging / 'Helene'
@@ -68,6 +68,11 @@ class Continuation(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(python_platform, 'require_runtime'))
             stack.enter_context(patch.object(update_extensions, 'check'))
+            # This handoff fixture fakes process launch; actual incoming-host
+            # admission and runtime inventories have their own regression suite.
+            def incoming_review(old, new, plans, progress, cancelled):
+                self.assertTrue(updates._wait_for_review(self.owner, new, progress))
+            stack.enter_context(patch.object(source_update_host, 'review', side_effect=incoming_review))
             handoff = stack.enter_context(patch.object(updates, '_launch_handoff', return_value={'updater_pid':42}))
             def run():
                 try:self.out.append(updates._prepare_handoff(self.owner, staging, {}, self.report, False))
