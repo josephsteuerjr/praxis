@@ -66,7 +66,7 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     gui='from PySide6 import QtCore,QtGui,QtWidgets,QtWebEngineWidgets' if target.startswith('linux-') else 'import Cocoa,WebKit'
     subprocess.run([str(python),'-I','-c','import psutil,socks,yaml,webview,aiohttp,telethon,paramiko; '+gui],check=True)
     app=output/'app';app.mkdir()
-    for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
+    for name in ('python_app.py','python_tray.py','python_migrate.py','python_update_prepare.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
     for name in ('localharness','deskd','resources'):shutil.copytree(DESK/name,app/name,ignore=ignore)
     # Same canonical release engine as Windows; edition/tree may be older or edited.
     shutil.copy2(DESK.parent/'helene/core/xtts_tts_worker.py',app/'localharness/xtts_tts_worker.py')

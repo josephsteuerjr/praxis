@@ -316,8 +316,9 @@ def _merge_tick(operation, directory, forge):
     if not unit.exists():
         # Persist the reserved identity before admission. A crash after spawn is
         # reconciled by its existing unit, never a replacement worker.
-        brief = ('Merge the listed source conflicts, preserving both intents; inspect full candidate '
-                 'for coupling and call finish. input_sha256=' + operation['input_sha256'] +
+        brief = ('Merge the source conflicts, preserving both intents; inspect and repair the full '
+                 'declared candidate for coupling, including automatically merged files, then call finish. '
+                 'Every nonconflict repair requires its reason and current candidate SHA256. input_sha256=' + operation['input_sha256'] +
                  '. Independent reviewer findings: ' + json.dumps(operation.get('findings', []), ensure_ascii=False))
         operation['admission'] = forge.agent(operation['task_id'], 'spawn', agent_id=operation['unit_id'],
                                             role='worker', brief=brief, max_iters=MAX_ITERS)

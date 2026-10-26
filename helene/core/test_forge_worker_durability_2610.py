@@ -125,6 +125,16 @@ class WorkerDurability(unittest.TestCase):
             "generation": info["generation"], "checkpoint_sha256": info["checkpoint_sha256"]})
         return info
 
+    def test_older_llm_without_assistant_helper_runs_and_checkpoints(self):
+        del self.worker.llm.assistant_message
+        self.responses = [self.response('inspect', 0), self.response(text='legacy complete')]
+        self.assertEqual(self.run_worker(Adapter()), 0)
+        result = json.loads((self.request_path.parent / 'result.json').read_text('utf-8'))
+        self.assertEqual(result['status'], 'done')
+        checkpoint = json.loads((self.request_path.parent / 'checkpoint.json').read_text('utf-8'))
+        self.assertEqual(checkpoint['messages'][1]['role'], 'assistant')
+        self.assertEqual(checkpoint['messages'][1]['content'][0]['type'], 'tool_use')
+
     def test_more_than_thirty_long_outputs_and_route_carry_survive(self):
         output = "кириллица🙂" * 2100
         adapter = Adapter()
@@ -348,8 +358,13 @@ class WorkerDurability(unittest.TestCase):
         second.close()
 
     def test_actual_snapshot_reviewer_keyword_is_compatible(self):
-        review_module = load("self_review", ROOT / "desk" / "localharness" / "self_review.py")
-        adapter_module = load("_actual_snapshot_reviewer", ROOT / "desk" / "localharness" / "self_review_worker.py")
+        app = ROOT / "desk" / "localharness"
+        if not (app / "self_review.py").is_file():
+            app = CORE.parent / "app" / "localharness"
+        if not (app / "self_review.py").is_file():
+            self.skipTest("App-owned reviewer is absent from this candidate-only source layout")
+        review_module = load("self_review", app / "self_review.py")
+        adapter_module = load("_actual_snapshot_reviewer", app / "self_review_worker.py")
         frozen = self.base / "frozen"
         frozen.mkdir()
         content = b"- old\n+ new\n"

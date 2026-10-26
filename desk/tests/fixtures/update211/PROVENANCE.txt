@@ -1,0 +1,4 @@
+Unmodified public Hélène 2.1.1 source fixtures.
+Commit: 2d9b9eb3428450c4b6fbadf90c8dc757e0a9d3ba
+Original paths: desk/localharness/{python_updates,code_transition,source_merge}.py
+Used only for the legacy preflight/bootstrap regression.

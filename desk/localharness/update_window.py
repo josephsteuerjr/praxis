@@ -41,8 +41,8 @@ const parts=[`Этап: ${Math.floor(seconds)} с`];
 if(r.total_files)parts.push(`${r.files||0} / ${r.total_files} файлов`);
 if(r.bytes)parts.push(`${(r.bytes/1048576).toFixed(1)} МиБ${r.total_bytes?' / '+(r.total_bytes/1048576).toFixed(1)+' МиБ':''}`);
 detail.textContent=parts.join(' · '); error.textContent=r.error||'';
-history.textContent=r.stage==='completed'?'Новое окно подтвердило запуск.':r.stage==='failed'?'Подробности сохранены в журнале обновления.': 'Настройки и память остаются на своих путях.';
-document.body.className=r.stage==='completed'?'done':r.stage==='failed'?'failed':'';document.getElementById('close').disabled=!r.can_close;}
+history.textContent=r.stage==='review_prepared'?(r.message||'Повторите «Обновить» для этого же выпуска в прежнем окне.'):r.stage==='completed'?'Новое окно подтвердило запуск.':r.stage==='failed'?'Подробности сохранены в журнале обновления.': 'Настройки и память остаются на своих путях.';
+document.body.className=['completed','review_prepared'].includes(r.stage)?'done':r.stage==='failed'?'failed':'';document.getElementById('close').disabled=!r.can_close;}
 document.getElementById('minimize').onclick=()=>window.pywebview.api.minimize();
 document.getElementById('close').onclick=()=>window.pywebview.api.dismiss();
 let timer;

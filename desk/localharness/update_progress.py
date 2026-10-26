@@ -25,8 +25,9 @@ LABELS = {
     'needs_resolution': 'Слияние кода ожидает независимой проверки',
     'waiting_review': 'Проверяю слияние кода · обновление продолжится автоматически',
     'cancelled': 'Автопродолжение отменено',
+    'review_prepared': 'Код проверен — повторите «Обновить» в прежнем окне',
 }
-TERMINAL = {'completed', 'failed', 'needs_resolution', 'cancelled'}
+TERMINAL = {'completed', 'failed', 'needs_resolution', 'cancelled', 'review_prepared'}
 
 
 def pointer(target):

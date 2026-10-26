@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 
 from .package_notice import read, write
 
@@ -88,11 +89,9 @@ def candidate_signature(directory):
 
 
 def reopen(directory):
-    """A correction may edit only the original conflicts; keep its prior candidate."""
+    """Keep the previous candidate while reopening its declared source for repair."""
     directory = Path(directory)
     value = validate_inputs(directory)
-    if not value['conflicts']:
-        raise ValueError('No contested paths to repair')
     value['state'] = 'conflicts'
     write(directory / 'plan.json', value)
     return value
@@ -224,10 +223,12 @@ def finish(directory, *, exe='git'):
         raise ValueError('Resolve every source conflict before finishing')
     for name in set(value['automatic']) | set(actual):
         if name not in value['conflicts'] and actual.get(name) != value['automatic'].get(name):
-            raise ValueError('Resolution changed an unrelated source file: ' + name)
+            repairs = [row for row in value.get('repairs', []) if row['path'] == name]
+            if not repairs or repairs[-1]['after'] != actual.get(name):
+                raise ValueError('Resolution changed an unrelated source file without a recorded repair: ' + name)
     for name, entry in actual.items():
         content = (directory / 'result' / name).read_bytes()
-        if name in value['conflicts'] and re.search(rb'(?m)^(<<<<<<< |=======$|>>>>>>> )', content):
+        if re.search(rb'(?m)^(<<<<<<< |=======$|>>>>>>> )', content):
             raise ValueError('Unresolved conflict markers: ' + name)
         if name.endswith('.py') and entry != value['files']['local'].get(name):
             compile(content, name, 'exec')
@@ -240,12 +241,19 @@ def finish(directory, *, exe='git'):
     return value
 
 
-def resolve(directory, name, content=None, *, delete=False, side=''):
+def resolve(directory, name, content=None, *, delete=False, side='', reason='', expected_candidate=''):
     directory = Path(directory)
     value = validate_inputs(directory)
     relative(name)
-    if value.get('state') != 'conflicts' or name not in value['conflicts']:
-        raise ValueError('Path is not an unresolved merge conflict')
+    declared = set().union(*(set(side) for side in value['files'].values()))
+    if value.get('state') != 'conflicts' or not allowed(name) or name not in declared:
+        raise ValueError('Path is not a declared candidate source input')
+    repair = name not in value['conflicts']
+    before = inventory(directory / 'result')
+    if expected_candidate and signature(before) != expected_candidate:
+        raise ValueError('Candidate changed before resolution; read its current state')
+    if repair and (not str(reason).strip() or not expected_candidate):
+        raise ValueError('Nonconflict repair requires a reason and exact expected candidate SHA256')
     path = directory / 'result' / name
     if side:
         if side not in ('base', 'local', 'incoming') or delete or content is not None:
@@ -263,7 +271,13 @@ def resolve(directory, name, content=None, *, delete=False, side=''):
             raise ValueError('A complete UTF-8 resolution or explicit deletion is required')
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding='utf-8', newline='')
-    value['resolved'][name] = side or ('deleted' if delete else 'written')
+    if repair:
+        after = inventory(directory / 'result').get(name)
+        value.setdefault('repairs', []).append({'path': name, 'reason': str(reason).strip(),
+            'before': before.get(name), 'after': after, 'at': time.time(),
+            'candidate_before_sha256': signature(before)})
+    else:
+        value['resolved'][name] = side or ('deleted' if delete else 'written')
     write(directory / 'plan.json', value)
     return value
 

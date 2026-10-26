@@ -21,11 +21,14 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'desk'))
 from localharness import code_transition, source_merge, source_update, source_update_host, python_source_updater
 from localharness.package_notice import read,write
+from python_update_prepare import prepare_existing
 
 BASE='def value():\n    return 1\n\ndef mine():\n    return 1\n'
 MINE=BASE.replace('return 1\n\n','return 2\n\n')
 INCOMING=BASE.replace('return 1\n\n','return 99\n\n')
 MERGED='def value():\n    return 99\n\ndef mine():\n    return 2\n'
+HELPER='def shared_helper():\n    return 7\n'
+LOCAL_FEATURE='local_feature = True\n'
 
 
 @unittest.skipIf(os.name=='nt','Real detached Forge workers require Linux boundary')
@@ -43,6 +46,9 @@ class LegacyHostProcess(unittest.TestCase):
                 (directory/'upgrade_fixture.py').write_text(BASE if directory==old/'tree' else MINE)
             shutil.copytree(ROOT/'helene/core',new/'tree',dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','.git'))
             (new/'tree/upgrade_fixture.py').write_text(INCOMING)
+            for directory in (old/'tree',new/'tree'):
+                (directory/'compatibility_fixture.py').write_text(HELPER)
+            (code/'compatibility_fixture.py').write_text(LOCAL_FEATURE)
             shutil.copytree(ROOT/'desk/localharness',new/'app/localharness',ignore=shutil.ignore_patterns('__pycache__'))
             for name in ('python_migrate.py','python_app.py'):
                 shutil.copy2(ROOT/'desk'/name,new/'app'/name)
@@ -69,15 +75,24 @@ class LegacyHostProcess(unittest.TestCase):
                             digest=re.search(r'Input SHA256=([0-9a-f]{64})',system)[1]
                             sequence=[{'action':'read','path':'upgrade_fixture.py'},
                                       {'action':'resolve','path':'upgrade_fixture.py','content':MERGED},
+                                      {'action':'status'},
+                                      {'action':'resolve','path':'compatibility_fixture.py',
+                                       'content':LOCAL_FEATURE+HELPER,'reason':'Restore shared dependency while retaining authored feature'},
                                       {'action':'finish'}]
-                            if count<len(sequence):call=('merge_source',{**sequence[count],'expected_input_sha256':digest})
+                            if count<len(sequence):
+                                args={**sequence[count],'expected_input_sha256':digest}
+                                if count==3:
+                                    status=json.loads([m for m in body['messages'] if m['role']=='tool'][-1]['content'])
+                                    args['expected_candidate_sha256']=status['candidate_sha256']
+                                call=('merge_source',args)
                             content='Candidate finished; independent review required.'
                         elif tools=={'inspect'}:
                             digest=re.search(r'Subject SHA-256: ([0-9a-f]{64})',system)[1]
                             if count==0:call=('inspect',{'action':'read','path':'resolved/upgrade_fixture.py'})
+                            elif count==1:call=('inspect',{'action':'read','path':'resolved/compatibility_fixture.py'})
                             else:
                                 returned=[m for m in body['messages'] if m['role']=='tool'][-1]['content']
-                                assert MERGED in json.loads(returned)['text']
+                                assert LOCAL_FEATURE+HELPER in json.loads(returned)['text']
                             content=json.dumps({'subject_sha256':digest,'verdict':'clear','summary':'Deterministic fixture only','findings':[],'gaps':[]})
                         else:raise AssertionError('Unexpected general-agent tools: '+str(tools))
                         requests.append({'tools':sorted(tools),'path':self.path,'tool':call[0] if call else None})
@@ -115,11 +130,20 @@ class LegacyHostProcess(unittest.TestCase):
                 # The real legacy entry prepares AFTER old-owner exit, with no
                 # capable running agent. Preparation includes the actual host,
                 # worker processes, independent panel and recoverable overlay.
+                # A real old updater refuses before launching incoming code.
+                # The explicit incoming bridge reviews first without closing
+                # or installing the old app; its next button preflight is ready.
+                bridge=prepare_existing(old,new)
+                self.assertEqual(bridge['state'],'ready')
+                self.assertEqual(read(old/'python-app.json')['version'],'2.1.1')
+                self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
                 prepared=python_source_updater.prepare_install(old,new)
                 self.assertFalse(errors,errors)
                 accepted=source_update.validate_ready(directory)
                 self.assertEqual(accepted['state'],'ready_to_apply')
                 self.assertEqual((directory/'result/upgrade_fixture.py').read_text(),MERGED)
+                self.assertEqual((directory/'result/compatibility_fixture.py').read_text(),LOCAL_FEATURE+HELPER)
+                self.assertEqual(read(directory/'plan.json')['repairs'][0]['path'],'compatibility_fixture.py')
                 self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
                 self.assertEqual(read(old/'python-app.json')['version'],'2.1.1')
                 self.assertEqual({tuple(r['tools']) for r in requests},{('merge_source',),('inspect',)})
@@ -135,7 +159,7 @@ class LegacyHostProcess(unittest.TestCase):
                 self.assertEqual(read(old/'python-app.json')['version'],'2.1.1')
                 self.assertEqual((old/'helene.json').read_bytes(),old_config)
                 self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
-                print('REAL_LEGACY_HOST_PASS',json.dumps({'provider_calls':len(requests),'normal_agent_started':False,'old_source_unchanged':True,'canonical_review_validated':True,'actual_overlay_and_rollback':True,'profile_preserved':True,'native_gui_started':False}),flush=True)
+                print('REAL_LEGACY_HOST_PASS',json.dumps({'provider_calls':len(requests),'normal_agent_started':False,'old_source_unchanged':True,'canonical_review_validated':True,'semantic_repair':True,'actual_overlay_and_rollback':True,'profile_preserved':True,'native_gui_started':False}),flush=True)
             except BaseException:
                 for record in home.glob('memory/.self-review/review-*/request.json'):
                     value=read(record);print('REVIEW_FAILURE',json.dumps({k:value.get(k) for k in ('execution','verdict','gaps','critics','error')}),flush=True)

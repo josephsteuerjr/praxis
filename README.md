@@ -1,10 +1,10 @@
-# Hélène 2.2.4 — reliable legacy update reviews
+# Hélène 2.2.5 — complete candidate integration and legacy update preparation
 
-Legacy update reviews now use the verified incoming runtime, including when the old authored Forge lacks coordinator APIs. Settings remain unchanged during review. [Release notes](desk/docs/RELEASE-2.2.4.md).
+The isolated updater can repair compatibility in automatically merged source files, with a reason and exact candidate binding for each repair. Independent reviewers approve the complete result. For an old 2.1.1 updater, run `Prepare update.vbs` from a separately extracted new Windows archive, select the existing installation, then retry its normal Update button for the same release after preparation succeeds. [Release notes](desk/docs/RELEASE-2.2.5.md).
 
-Windows starts in the tray at login and invokes its own bundled shell only for commands. Startup no longer probes the WSL launcher. [Release notes](desk/docs/RELEASE-2.2.4.md).
+Windows starts in the tray at login and invokes its own bundled shell only for commands. Startup no longer probes the WSL launcher. [Release notes](desk/docs/RELEASE-2.2.5.md).
 
-Updates now continue after reviewed conflict resolution, helpers run without a Windows console, the frameless update window follows the application theme, and every launch opens Now. [Release notes](desk/docs/RELEASE-2.2.4.md).
+Updates now continue after reviewed conflict resolution, helpers run without a Windows console, the frameless update window follows the application theme, and every launch opens Now. [Release notes](desk/docs/RELEASE-2.2.5.md).
 
 Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
@@ -16,13 +16,13 @@ This release completes the move to an archive-first desktop on Windows x64, Appl
 
 Forge separates execution from acceptance: dependent work waits for the coordinator's decision on the exact result. Roles retain enforced tool boundaries, shared-root writers serialize, and queued work, checkpoints and full worker output remain inspectable. An editing parent explicitly waits on one immediate editing child to yield the shared writer slot, then consumes its exact result before continuing; this does not permit two concurrent writers. The owner task panel reads these records and submits task/group controls without creating an ordinary agent turn.
 
-Source conflicts use an isolated merger plus the existing independent panel over exact A/L/B/M inventories. Changed candidates need new evidence; missing capabilities/materials keep the old program. For a 2.1.1 upgrade, the incoming helper can coordinate the mandatory source review after the legacy owner exits, without requiring the old authored Forge to provide new APIs.
+Source conflicts use an isolated merger plus the existing independent panel over exact A/L/B/M inventories. Changed candidates need new evidence; missing capabilities/materials keep the old program. The 2.1.1 button refuses unresolved conflicts before launching an incoming helper. The explicit incoming preparation entry handles that first gate while the old application stays open; it never installs or restarts the old app. On macOS/Linux use the new archive runtime with `app/python_update_prepare.py --old /path/to/existing/Helene`.
 
-Routine updates back up settings and program/code preimages, not unchanged memory/models. In current versions preparation precedes old-window closure; legacy 2.1.1 hands preparation to the incoming helper after closure; a progress observer follows the durable operation. POSIX timestamp-only freshness cannot skip hashing. Manual/periodic full backups remain separate.
+Routine updates back up settings and program/code preimages, not unchanged memory/models. In current versions preparation precedes old-window closure; legacy 2.1.1 can use the explicit incoming preparation entry before retrying Update; a progress observer follows the durable operation. POSIX timestamp-only freshness cannot skip hashing. Manual/periodic full backups remain separate.
 
 Application-owned XTTS and a narrow speak adapter support older authored code without overwriting it. WAV preview and actual Ogg/Opus voice-note output differ; the installed SoundFile/libsndfile codec capability is checked, without requiring an extra PyAV download. CPU synthesis needs substantial free memory: one measured Windows stock-voice run peaked near 4.9 GB worker RSS, with about 128 seconds for the first client call including loading and 9 seconds for a separate warm synthesis. These are scoped observations, not a minimum-memory or latency guarantee. Every launch opens **Now**, including after updates and before initial setup; setup and manual onboarding remain available.
 
-Hélène 2.2.4 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.4.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
+Hélène 2.2.5 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.5.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
 
 ## Previous changes in 2.1
 
@@ -56,10 +56,10 @@ The subscription relay is a separate product: [praxis-relay 1.1.0](https://githu
 
 | Platform | Archive | Entry after extracting the whole folder |
 | --- | --- | --- |
-| Windows x64 | [Helene-2.2.4.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
-| macOS Apple Silicon | [Helene-2.2.4-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
-| Debian x86_64 | [Helene-2.2.4-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
-| Fedora x86_64 | [Helene-2.2.4-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Windows x64 | [Helene-2.2.5.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.5/Helene-2.2.5.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
+| macOS Apple Silicon | [Helene-2.2.5-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.5/Helene-2.2.5-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
+| Debian x86_64 | [Helene-2.2.5-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.5/Helene-2.2.5-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Fedora x86_64 | [Helene-2.2.5-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.5/Helene-2.2.5-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
 
 Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
 

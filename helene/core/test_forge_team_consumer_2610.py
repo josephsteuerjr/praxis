@@ -110,7 +110,7 @@ def worker_environment():
         stack.enter_context(mock.patch.object(forge_worker, "_system", lambda req: json.dumps(req)))
         stack.enter_context(mock.patch.object(forge_worker.llm, "chat", provider))
         stack.enter_context(mock.patch.object(forge_worker.llm, "assistant_message",
-            lambda response, blocks: {"role": "assistant", "content": blocks}))
+            lambda response, blocks: {"role": "assistant", "content": blocks}, create=True))
         stack.enter_context(mock.patch.object(forge, "inspect", inspect))
         stack.enter_context(mock.patch.object(forge, "emit_unit_event"))
         stack.enter_context(mock.patch.object(forge, "_task_run_context", return_value={}))
