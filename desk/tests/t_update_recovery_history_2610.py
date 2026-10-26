@@ -38,7 +38,9 @@ class RecoveryTests(unittest.TestCase):
         self.note = {'id': 'fault', 'data_paths': [], 'new_root': str(self.old)}
         self.progress = update_progress.Progress(self.root / '.helene-update-fault.progress.json', 'fault', self.old)
         overlay.prepare(self.new, self.old, self.recovery)
-        self.prepared = {'note': self.note, 'recovery': str(self.recovery), 'progress': str(self.progress.path)}
+        self.prepared = {'format': 'helene-prepared-install.v1',
+                         'old': str(self.old.resolve()), 'new': str(self.new.resolve()),
+                         'note': self.note, 'recovery': str(self.recovery), 'progress': str(self.progress.path)}
         write(updater.prepared_install_path(self.new), self.prepared)
         self.args = SimpleNamespace(old=self.old, new=self.new, staging=self.staging,
                                     archive=[], pid=0, cleanup=False, browser=False)

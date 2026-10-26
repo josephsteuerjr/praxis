@@ -300,7 +300,8 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
         shutil.rmtree(destination)
         return source_plan
     # No old window closes on preparation failure. The helper independently
-    # reacquires the lease and validates this snapshot before admission.
+    # reacquires the lease and binds the snapshot identity before admission.
+    # Full mutable-byte validation follows old-owner exit, before any replacement.
     from python_migrate import installation_lock
     from .python_source_updater import prepare_install
     with installation_lock(owner.root):

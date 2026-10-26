@@ -271,13 +271,39 @@ class LegacyAdmission(unittest.TestCase):
         self.assertEqual((recovery / 'a').read_bytes(), b'old-a')
         self.assertTrue(update_progress.status(self.old)['recovery_required'])
 
-    def test_prepared_22_handoff_still_validates_before_admission_without_reprepare(self):
+    def test_prepared_wrong_target_or_recovery_refuses_before_admission(self):
+        progress = update_progress.Progress(self.root / '.helene-update-legacy.progress.json', 'legacy', self.old)
+        updater.prepare_install(self.old, self.new, progress=progress)
+        path = updater.prepared_install_path(self.new)
+        original = json.loads(path.read_text(encoding='utf-8'))
+        def observer(transaction, receipt, ready, **kwargs):
+            ready.set()
+            return transaction()
+        for field in ('old', 'new', 'recovery'):
+            with self.subTest(field=field):
+                changed = dict(original, **{field: str(self.root / 'wrong-target')})
+                path.write_text(json.dumps(changed), encoding='utf-8')
+                with patch.object(updater, 'prepare_install') as prepare, \
+                     patch.object(updater.subprocess, 'Popen') as launch:
+                    with self.assertRaisesRegex(ValueError, 'Prepared update (target|recovery) differs'):
+                        self.run_main(observer=observer)
+                    prepare.assert_not_called()
+                    launch.assert_not_called()
+                self.assertFalse((self.staging / 'updater-admitted.json').exists())
+                self.assertFalse(self.owner_exited)
+        self.assert_old_unchanged()
+
+    def test_prepared_22_admits_before_slow_final_validation_without_reprepare(self):
         progress = update_progress.Progress(self.root / '.helene-update-legacy.progress.json', 'legacy', self.old)
         updater.prepare_install(self.old, self.new, progress=progress)
         prepared = json.loads(updater.prepared_install_path(self.new).read_text(encoding='utf-8'))
-        real_validate = updater.validate_prepared
+        real_validate, real_install = updater.validate_prepared, updater.install
         calls = []
         def validate(*args, **kwargs):
+            # Realistic full-package validation can exceed the acknowledgement
+            # budget; it is still mandatory after old exit and before writes.
+            self.assertTrue(self.owner_exited)
+            self.clock += 16
             calls.append('validate')
             return real_validate(*args, **kwargs)
         def observer(transaction, receipt, ready, **kwargs):
@@ -287,14 +313,20 @@ class LegacyAdmission(unittest.TestCase):
         def install(*args):
             self.assertTrue(self.owner_exited)
             self.assertTrue(self.admitted['preparation_completed'])
+            self.assertEqual(calls, [])
+            real_install(*args)
             self.assertEqual(calls, ['validate'])
-            raise OSError('stop after prepared admission')
+            self.assertEqual((self.old / 'a').read_bytes(), b'new-a')
+            raise OSError('stop after prepared validation and overlay')
         with patch.object(updater, 'validate_prepared', side_effect=validate), \
              patch.object(updater, 'prepare_install') as prepare, \
-             patch.object(updater.subprocess, 'Popen'):
-            with self.assertRaisesRegex(OSError, 'stop after prepared admission'):
+             patch.object(updater.subprocess, 'Popen') as launch:
+            with self.assertRaisesRegex(OSError, 'stop after prepared validation and overlay'):
                 self.run_main(observer=observer, install=install)
             prepare.assert_not_called()
+            launch.assert_not_called()  # active journal prevents a mixed reopen
+        self.assertGreater(self.clock, 15)
+        self.child.terminate.assert_not_called()
         self.assertEqual(prepared, json.loads(updater.prepared_install_path(self.new).read_text(encoding='utf-8')))
 
 

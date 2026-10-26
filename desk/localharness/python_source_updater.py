@@ -155,7 +155,8 @@ def prepare_install(old, new, *, verified=None, progress=None):
     if progress:progress.phase('preimages')
     update_overlay.prepare(new, old, recovery, verified, progress)
     # This second check closes the source-copy/preimage preparation window. The
-    # helper repeats it while holding the lease and again after old-owner exit.
+    # helper checks the small identity before admission; costly final freshness
+    # checks run after old-owner exit, before any program replacement.
     if update_profile.selection(old) != before:
         raise ValueError('Settings or selected source changed before update handoff; retry')
     prepared = {'format': 'helene-prepared-install.v1', 'old': str(old), 'new': str(new),
@@ -166,9 +167,8 @@ def prepare_install(old, new, *, verified=None, progress=None):
     return prepared
 
 
-def validate_prepared(old, new, progress=None):
-    from localharness import update_profile, update_overlay
-    from localharness.code_transition import validate
+def _prepared_identity(old, new):
+    """Bound handoff identity, not an assertion that mutable bytes stayed fresh."""
     old, new = Path(old).resolve(), Path(new).resolve()
     value = json.loads((prepared_install_path(new)).read_text(encoding='utf-8'))
     if value['old'] != str(old) or value['new'] != str(new):
@@ -176,6 +176,15 @@ def validate_prepared(old, new, progress=None):
     recovery = Path(value['recovery']).resolve()
     if recovery.parent != old.parent or recovery.name != '.helene-recovery-' + value['note']['id']:
         raise ValueError('Prepared update recovery differs')
+    return value
+
+
+def validate_prepared(old, new, progress=None):
+    from localharness import update_profile, update_overlay
+    from localharness.code_transition import validate
+    old, new = Path(old).resolve(), Path(new).resolve()
+    value = _prepared_identity(old, new)
+    recovery = Path(value['recovery']).resolve()
     if update_profile.selection(old) != value['selection']:
         raise ValueError('Settings or selected source changed after preparation; retry the update')
     validate(new)
@@ -345,7 +354,10 @@ def perform(args):
     if not args.cleanup:
         if legacy_prepare and active_update(old).exists():
             raise RuntimeError('An interrupted update requires startup recovery before another update; previous application remains open')
-        if prepared_path.is_file():validate_prepared(old, new)
+        # Admission is a bounded custody acknowledgement, not the expensive
+        # full-package check. install() performs that after quiescence; a late
+        # source/preimage change still refuses before the first replacement.
+        if prepared_path.is_file():_prepared_identity(old, new)
         observer_ready = getattr(args, 'observer_ready', None)
         if observer_ready is not None and not observer_ready.wait(15):
             raise TimeoutError('Update progress window did not become ready; previous application remains open')
