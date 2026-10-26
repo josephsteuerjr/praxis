@@ -1,0 +1,20 @@
+.forge-plans { overflow-wrap: anywhere; }
+.forge-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.forge-heading .section-title { margin: 12px 0; }
+.forge-task > summary, .forge-unit > summary { overflow-wrap: anywhere; }
+.forge-task > summary b { font-size: 1.06em; }
+.forge-unit > summary { line-height: 1.5; }
+.forge-unit > summary .muted { font-size: .86em; font-weight: normal; white-space: pre-line; margin-top: 5px; }
+.forge-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.forge-actions .btn { white-space: normal; min-height: 32px; max-width: 100%; }
+.forge-brief { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow-y: auto; }
+.forge-payload { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; max-height: 32em; overflow: auto; font-size: .86em; }
+.forge-payload:empty { display: none; }
+.forge-hash { font-size: .82em; overflow-wrap: anywhere; }
+.forge-command { white-space: pre-wrap; font-size: .88em; }
+.forge-teams .fold-body { min-width: 0; }
+@media (max-width: 650px) {
+  .forge-unit { margin-left: 0 !important; }
+  .forge-actions { gap: 6px; }
+  .forge-task .fold-body { padding-left: 10px; padding-right: 10px; }
+}

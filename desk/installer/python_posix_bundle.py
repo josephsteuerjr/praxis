@@ -68,6 +68,8 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     app=output/'app';app.mkdir()
     for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
     for name in ('localharness','deskd','resources'):shutil.copytree(DESK/name,app/name,ignore=ignore)
+    # Same canonical release engine as Windows; edition/tree may be older or edited.
+    shutil.copy2(DESK.parent/'helene/core/xtts_tts_worker.py',app/'localharness/xtts_tts_worker.py')
     shutil.copy2(DESK/'shell/icons/python-app.png',app/'resources/python-app.png')
     shutil.copytree(DESK/'app/dist',app/'static')
     for frontend,dest in (('mobile','mobile'),('miniapp','miniapp')):

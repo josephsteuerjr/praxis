@@ -308,15 +308,17 @@ def _specs(config: Path, *, session_host: bool = False,
         install_base = base if agent_id == BASE_ID else base.parent.parent
         speech_python = runtime_for(install_base) / ("python.exe" if os.name == "nt" else "bin/python3")
         model_home = tree / "models/xtts"
-        code = _resolve(base, str(cfg.get("code") or cfg.get("tree") or "data"))
-        worker = code / "xtts_tts_worker.py"
+        # Service code belongs to the application, not the agent's deliberately
+        # preserved/maybe older authored tree. No fallback into cfg.code.
+        worker = Path(__file__).resolve().with_name('speech_worker.py')
         if speech_python.is_file() and worker.is_file() and (model_home / "model.pth").is_file():
             home = tree / "memory/.state/xtts"
             specs[f"{agent_id}:xtts"] = Spec("xtts", (str(speech_python), "-u", str(worker),
-                "--home", str(home), "--model", str(model_home), "--device",
+                "--home", str(home), "--model", str(model_home), "--tree", str(tree), "--device",
                 str(voice_cfg.get("tts_device") or "cpu")), tree,
-                {"PATH":ambient.get("PATH", ""), "SYSTEMROOT":ambient.get("SYSTEMROOT", ""),
-                 "PYTHONUTF8":"1"}, tree / "xtts.log", 0)
+                {**{key:ambient[key] for key in ('PATH', 'SYSTEMROOT', 'HOME', 'USERPROFILE',
+                    'LOCALAPPDATA', 'PROGRAMDATA') if key in ambient},
+                 "PYTHONUTF8":"1", "PYTHONUNBUFFERED":"1"}, tree / "xtts.log", 0)
     return tree, specs
 
 
@@ -640,7 +642,11 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                         policy.children[key].retry_at = int((time.monotonic() - started) * 1000) + 20000
                         continue
                     try:
-                        active[key] = JobChild.spawn(list(spec.argv), cwd=spec.cwd, env=spec.env,
+                        argv = list(spec.argv)
+                        if spec.role == 'xtts':
+                            # Fresh per physical spawn, not per config refresh.
+                            argv.extend(('--generation', secrets.token_hex(16)))
+                        active[key] = JobChild.spawn(argv, cwd=spec.cwd, env=spec.env,
                                                      log=spec.log, stopped=stopped)
                         print(f"[python-supervisor] {key} pid {active[key].pid}", flush=True)
                     except CustodyFault as exc:

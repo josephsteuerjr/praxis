@@ -2142,6 +2142,8 @@ def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
 
 def _resume_due() -> None:
     """Следующий шаг уже существующих задач — в том же потоке, что окно и бот."""
+    if _forge_events is not None and _forge_events.suppress_dedicated_handoff():
+        return
     if owner_stop.paused() or _continuity is None or not _brain_ready():
         return
     try:
@@ -2247,8 +2249,8 @@ def _update_report_due() -> None:
         return
     from localharness import source_update
     if source_update.pending(_tree):
-        if not owner_stop.paused():
-            source_update.notify_due(_tree, _turn_in_window)
+        # The dedicated maintenance consumer owns this request. Never call the
+        # legacy ordinary-turn notifier, even with a preserved older core.
         return
     receipt = updates.pending_report(_tree)
     if receipt is None:
@@ -2558,6 +2560,73 @@ def _fire_due_tasks() -> None:
                 _ALARM_FIRED.append(now_ts)
         except Exception:
             log.exception("будильник #%s не завершил передачу владения", task.get("id"))
+
+
+def _forge_maintenance_tick(tree, forge, review) -> None:
+    """No conversation/brain gate: owner controls precede new admissions.
+
+    This helper has exactly one background consumer. The selected authored core
+    is used as-is; a missing control API produces a receipt, not a stock retrofit.
+    """
+    from deskd import forge_control
+    from localharness import source_update
+
+    def control(task_id, action, *, agent_id="", expected_generation=""):
+        callback = getattr(forge, "control", None)
+        if not callable(callback):
+            return {"ok": False, "status": "unsupported",
+                    "reason": "Selected preserved Forge lacks the owner-control API"}
+        if action == "resume" and (owner_stop.stopped() or owner_stop.paused()):
+            return {"ok": False, "status": "refused", "reason": "Owner Stop/Pause is active"}
+        receipt = callback(task_id, action, agent_id=agent_id, expected_generation=expected_generation)
+        if isinstance(receipt, dict) and "ok" not in receipt:
+            receipt = {**receipt, "ok": receipt.get("status") not in {
+                "refused", "unknown", "unsupported", "error", "failed"}}
+        return receipt
+
+    try:
+        forge_control.consume_pending(tree, control)
+    except Exception:
+        log.exception("Forge control consumer failed; durable intent/claim retained")
+    if not owner_stop.stopped() and not owner_stop.paused():
+        drain = getattr(forge, "tick_queued", None)
+        if callable(drain):
+            try:
+                drain()
+            except Exception:
+                log.exception("Forge queued admissions wait for the next maintenance tick")
+    if review is None:
+        return  # Its startup failure remains explicit; never fall back to a turn.
+    if not owner_stop.stopped():
+        try:
+            review.tick(paused=owner_stop.paused())
+        except Exception:
+            log.exception("self-review maintenance unavailable; owner controls remain independent")
+    try:
+        # Unconditional: cancelled/superseded requests need settling even when
+        # pending() is false. The coordinator owns durable Stop before teardown.
+        source_update.tick(tree, forge, review.service,
+                           paused=owner_stop.paused(), stopped=owner_stop.stopped())
+    except Exception:
+        log.exception("source-update maintenance failed; no ordinary conflict turn fallback")
+
+
+def _start_forge_maintenance(tree, forge, review, *, interval=0.5):
+    """Runner-lifetime maintenance; never start from a view or a model turn."""
+    import threading
+    stop = threading.Event()
+
+    def maintain():
+        while not stop.is_set():
+            try:
+                _forge_maintenance_tick(tree, forge, review)
+            except Exception:
+                log.exception("Forge maintenance failed; recorded work retained")
+            stop.wait(interval)
+
+    thread = threading.Thread(target=maintain, name="forge-maintenance", daemon=True)
+    thread.start()
+    return stop, thread
 
 
 def _forge_events_due() -> None:
@@ -3356,6 +3425,8 @@ def main() -> None:
         log.exception('синтез не настроен; распознавание речи остаётся независимым')
     agent, memory_life = _load_tree(code_dir, tree, cfg)
     owner_stop.configure(tree)
+    from localharness import speech_bridge
+    speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop)
     def edition_panic(reason=""):
         import emergency
         return emergency.request(config_path, via="agent", reason=reason)['note']
@@ -3582,6 +3653,8 @@ def main() -> None:
         tree, agent._runs(), agent.run_manager.NONTERMINAL_STATUSES,
         started=_STARTED_UTC, before_resume=lambda: _bot.discard_pending() if _bot and hasattr(_bot, 'discard_pending') else None)
     atexit.register(control_stop.set)
+    forge_stop, _forge_thread = _start_forge_maintenance(tree, forge, _self_review)
+    atexit.register(forge_stop.set)
     import refresh_care
     global _refresh_care
     _refresh_care = refresh_care.RefreshCare(
@@ -3681,11 +3754,6 @@ def main() -> None:
             _forge_events_due()
         except Exception:
             log.exception("события Forge ждут следующего тика")
-        if _self_review is not None:
-            try:
-                _self_review.tick(paused=owner_stop.paused())
-            except Exception:
-                log.exception("self-review maintenance unavailable; owner dialogue and Stop remain active")
         # Итог обновления на сервере (27.09): исполнитель пишет его ПОСЛЕ проверок, а
         # проверки ждут, что движок уже поднят, — поэтому смотрим не раз на старте, а
         # раз в полминуты.

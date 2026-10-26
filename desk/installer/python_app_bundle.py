@@ -96,6 +96,9 @@ def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain
     for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
     for name in ('deskd','localharness'):
         shutil.copytree(DESK/name,app/name,dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    # The engine is release-owned even when the authored tree is preserved.
+    # speech_worker imports this exact sibling, never cfg.code or stage/tree.
+    shutil.copy2(DESK.parent/'helene/core/xtts_tts_worker.py',app/'localharness/xtts_tts_worker.py')
     if (DESK/'server').is_dir():
         shutil.copytree(DESK/'server',output/'server',dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     if (app/'desk.json').is_file():

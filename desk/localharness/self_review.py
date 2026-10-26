@@ -134,6 +134,12 @@ def _source_roots(sources):
     result = {}
     for label, source in sources.items():
         if isinstance(source, dict):
+            if 'merge_files' in source:
+                if not isinstance(source['merge_files'], dict):
+                    raise ValueError('merge projection requires the complete inventory')
+                result[label] = {'root': str(Path(source['root']).absolute()),
+                                 'merge_files': source['merge_files']}
+                continue
             if not isinstance(source.get("files"), dict):
                 raise ValueError("explicit side projection requires a files mapping")
             result[label] = {"root": str(Path(source["root"]).absolute()),
@@ -153,7 +159,8 @@ def _overlay_gaps(overlay, manifest):
         labels.setdefault(label, set()).add(logical)
     if all(label in labels for label in ("base", "mine", "release", "resolved")):
         sides = [labels[label] for label in ("base", "mine", "release", "resolved")]
-        if all(paths == sides[0] for paths in sides):
+        required = {name for name in conflicts if isinstance(name, str)} if isinstance(conflicts, list) else set()
+        if all(paths == sides[0] for paths in sides) and required <= sides[0]:
             return []
     if isinstance(conflicts, list) and conflicts:
         complete = True
@@ -166,12 +173,77 @@ def _overlay_gaps(overlay, manifest):
     return [{"path": "overlay", "reason": "conflicting overlay lacks matching frozen base/mine/release/resolved sides"}]
 
 
+def _has_content(row):
+    return row.get('exists', True) and not row.get('withheld')
+
+
+def _merge_projection(label, source, destination, used):
+    """Inventory-complete merge input, including absence and withheld-byte gaps.
+
+    This is not the ordinary private-home collector. Callers supply a complete
+    source_merge inventory; any changed bytes, binary/private input or budget
+    shortfall stays an explicit gap and cannot produce a clear review.
+    """
+    from . import source_merge
+    root = Path(source['root']).absolute()
+    declared = source['merge_files']
+    manifest, gaps = [], []
+    actual = source_merge.inventory(root)
+    if actual != {name: entry for name, entry in declared.items() if entry is not None}:
+        raise ValueError('Frozen merge inventory changed: ' + label)
+    for name, entry in sorted(declared.items()):
+        if not source_merge.allowed(name):
+            raise ValueError('Non-code path in merge material')
+        logical = label + '/' + name
+        if entry is None:
+            manifest.append({'path': logical, 'exists': False, 'size': 0, 'sha256': None, 'mode': None})
+            continue
+        path = root / name
+        raw = path.read_bytes()
+        row = {'path': logical, 'exists': True, 'size': len(raw),
+               'sha256': _sha(raw), 'mode': entry['mode']}
+        reason = ''
+        try:
+            if any(part.lower() in PRIVATE_NAMES for part in Path(name).parts):
+                reason = 'private input withheld; inventory retained'
+            elif len(raw) > 16 * 1024 * 1024 or used + len(raw) > 64 * 1024 * 1024:
+                reason = 'source exceeds projection byte budget'
+            else:
+                text = raw.decode('utf-8-sig')
+                if '\x00' in text:
+                    raise UnicodeError('binary input')
+                if SECRET.search(text):
+                    reason = 'possible embedded credential; entire file withheld'
+        except UnicodeError:
+            reason = 'binary or non-UTF-8 input; inventory retained'
+        if row['sha256'] != entry['sha256']:
+            raise ValueError('Frozen merge bytes changed: ' + logical)
+        if reason:
+            row['withheld'] = reason
+            gaps.append({'path': logical, 'reason': reason})
+        else:
+            used += len(raw)
+            if destination is not None:
+                target = Path(destination) / logical
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(raw)
+                if os.name != 'nt':
+                    target.chmod(0o755 if entry['mode'] == '100755' else 0o644)
+        manifest.append(row)
+    return manifest, gaps, used
+
+
 def collect(sources, destination=None):
     manifest, gaps = [], []
     total = 0
     for label, raw_root in sorted(sources.items()):
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", label):
             raise ValueError("invalid logical source name")
+        if isinstance(raw_root, dict) and 'merge_files' in raw_root:
+            rows, missing, total = _merge_projection(label, raw_root, destination, total)
+            manifest.extend(rows)
+            gaps.extend(missing)
+            continue
         explicit = raw_root.get("files") if isinstance(raw_root, dict) else None
         root = Path(raw_root["root"] if isinstance(raw_root, dict) else raw_root).absolute()
         before_count = len(manifest)
@@ -255,6 +327,10 @@ def validate_snapshot(root, expected_sha256):
         if relative.is_absolute() or ".." in relative.parts or ":" in logical or "\\" in logical:
             raise ValueError("invalid snapshot path")
         path = root / relative
+        if not _has_content(row):
+            if path.exists() or path.is_symlink():
+                raise ValueError('Unexpected bytes for absent/withheld snapshot input: ' + logical)
+            continue
         if any(_linked(parent) for parent in (path, *path.parents) if parent != root.parent and root in (parent, *parent.parents)):
             raise ValueError("linked snapshot input")
         raw = path.read_bytes()
@@ -402,9 +478,9 @@ class Service:
                         if old_files.get(logical) == new_files.get(logical):
                             continue
                         before = ((old_root / logical).read_text(encoding="utf-8-sig").splitlines(True)
-                                  if logical in old_files else [])
+                                  if logical in old_files and _has_content(old_files[logical]) else [])
                         after = ((snapshot / logical).read_text(encoding="utf-8-sig").splitlines(True)
-                                 if logical in new_files else [])
+                                 if logical in new_files and _has_content(new_files[logical]) else [])
                         changes.extend(difflib.unified_diff(before, after, fromfile="before/" + logical,
                                                             tofile="after/" + logical))
                 except (OSError, ValueError):
@@ -419,6 +495,8 @@ class Service:
                        "overlay": {key: bool(overlay.get(key)) for key in
                                    ("merged", "conflicts", "no_base", "materials_error", "skipped_code")},
                        "scope": "source-only; memory/config/credentials excluded; code is never executed"}
+            if overlay.get('merge_identity'):
+                subject['merge_identity'] = overlay['merge_identity']
             raw = _json(subject)
             subject_sha = _sha(raw)
             code_identity = _sha(_json({"manifest": [row for row in manifest if row["path"] != "changes.diff"],
@@ -500,6 +578,9 @@ class Service:
                                                 record["subject_sha256"],
                                                 str(Path(__file__).with_name("self_review_worker.py")),
                                                 record["policy"]["max_parallel"])
+                    drain = getattr(self.forge, 'tick_queued', None)
+                    if callable(drain):
+                        drain(record['task_id'])
                     for critic in record["critics"]:
                         directory = self.forge._unit_dir(record["task_id"], "agents", critic["unit_id"])
                         if not directory.exists() and critic["execution"] == "queued":

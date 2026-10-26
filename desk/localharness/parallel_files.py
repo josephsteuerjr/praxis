@@ -109,7 +109,11 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
                     digest.update(chunk);output.write(chunk);report(len(chunk),entry.filename)
             if os.name!='nt':temporary.chmod((entry.external_attr>>16)&0o777 or 0o644)
             temporary.replace(target);report(0,entry.filename,True)
-            with lock:verified[str(target)]=digest.hexdigest()
+            from .update_io import stamp, count
+            count(progress, 'extracted', entry.file_size)
+            # Later archive overlays replace this receipt; later config/code
+            # writes invalidate it through the exact file change identity.
+            with lock:verified[str(target)]={'sha256':digest.hexdigest(),'stat':stamp(target)}
         finally:temporary.unlink(missing_ok=True)
     try:
         if workers==1:

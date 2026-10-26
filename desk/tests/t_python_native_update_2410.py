@@ -84,6 +84,7 @@ class NativeUpdate(unittest.TestCase):
             shutil.copytree(DESK/'localharness',old/'app/localharness',ignore=shutil.ignore_patterns('__pycache__'))
             shutil.copy2(DESK/'python_migrate.py',old/'app/python_migrate.py')
             (old/'app/localharness/python_controller.py').write_text('raise RuntimeError("CONTROLLER_DURING_PREPARATION")')
+            put(old,'helene.json',json.dumps({'mode':'remote','tree':str(old/'profile'),'code':str(old/'code')}).encode())
             entered=threading.Event();release=threading.Event();errors=[]
             def prepare(*args,**kwargs):entered.set();release.wait(5);raise ValueError('prepare sentinel')
             def work():
@@ -198,17 +199,22 @@ class UpdateHandoff(unittest.TestCase):
 
     def test_cli_inplace_uses_the_existing_lease_without_child_reacquisition(self):
         with tempfile.TemporaryDirectory() as tmp:
-            old=Path(tmp)/'application';put(old,'python-app.json',b'{}');seen=[]
+            old=Path(tmp)/'application';put(old,'python-app.json',b'{}');seen=[];order=[]
+            def prepare(*args,**kwargs):order.append('prepare')
+            def stop(*args):order.append('stop')
+            def observe(transaction,receipt,ready):ready.set();return transaction()
             def perform(args):
                 with self.assertRaises(Exception):
                     with python_migrate.installation_lock(old):pass
                 seen.append(args.old)
+                order.append('perform')
                 (old/'python-migration.json').write_text(json.dumps({'id':'one','state':'completed','old_root':str(old),'new_root':str(old)}))
             from localharness import update_extensions
             argv=['migration','--dir',str(old),'--in-place','--confirmed']
-            with patch.object(sys,'argv',argv),patch.object(python_migrate,'copy_program'),patch.object(update_extensions,'check'),patch.object(python_migrate.migration_windows,'stop'),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(updater,'perform',side_effect=perform):
+            with patch.object(sys,'argv',argv),patch.object(python_migrate,'copy_program'),patch.object(update_extensions,'check'),patch.object(python_migrate.migration_windows,'stop',side_effect=stop),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(updater,'prepare_install',side_effect=prepare),patch.object(updater,'validate_prepared'),patch('localharness.update_window.run',side_effect=observe),patch.object(updater,'perform',side_effect=perform):
                 python_migrate.main()
             self.assertEqual(seen,[old])
+            self.assertEqual(order,['prepare','stop','perform'])
 
     def test_two_ui_ready_requests_write_once_and_never_regress_completed(self):
         with tempfile.TemporaryDirectory() as tmp:

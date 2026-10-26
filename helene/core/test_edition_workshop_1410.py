@@ -78,7 +78,7 @@ class EditionWorkshop(unittest.TestCase):
              mock.patch.object(forge, "_proc_started_at", return_value="born"), \
              mock.patch.object(forge, "_pid_alive", return_value=True), \
              mock.patch.object(forge, "_spawn_runner", return_value=72):
-            response = forge.agent(self.task_id, "spawn", agent_id="agent-bbbbbbbb", brief="child",
+            response = forge.agent(self.task_id, "spawn", agent_id="agent-bbbbbbbb", brief="child", role="scout",
                                    _parent_request_path=str(parent / "request.json"))
             self.assertIn("agent-bbbbbbbb", response)
             request = json.loads((self.directory / "agents/agent-bbbbbbbb/request.json").read_text())

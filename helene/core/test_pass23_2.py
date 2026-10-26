@@ -91,7 +91,7 @@ class RoutingCase(unittest.TestCase):
             out = agent.tool_coding_session("start", goal="g", target="/etc", scope="host")
         self.assertIn("hcode-one", out)
         start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="",
-                                      max_active_workers=8)
+                                      max_active_workers=16)
         with mock.patch.object(agent, "_active_chat", return_value=None), \
              mock.patch.object(agent.forge, "start_host", return_value="coding-задача hcode-three: g") as start:
             agent.tool_coding_session("start", goal="g", target="/etc", scope="host",

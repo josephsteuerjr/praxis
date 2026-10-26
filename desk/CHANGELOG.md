@@ -1,3 +1,7 @@
+# 2.2.0 candidate
+
+Acceptance-gated Forge teams, durable worker journals and owner task inspection/control; isolated merger plus independent conflict review; preclose preparation, narrow routine backups and update progress; application-owned XTTS/old-code speak compatibility and real voice-note encoding; configured startup at Now. Verification, platform artifacts, publication and installation remain separate facts.
+
 # 2.1.1
 
 Three-way Git source updates preserve authored changes across releases, resolve actual conflicts in an isolated candidate, and retain the exact upstream baseline. In-place updates keep profile/model paths and restore the prior code selection on rollback. The component map is readable by the original 2.0 updater; optional downloads remain Whisper and XTTS.

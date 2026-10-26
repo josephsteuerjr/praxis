@@ -41,7 +41,73 @@ class ForgeEvents:
                 bridge.append(unit + ":overdue")
         self.forge.mark_seen(bridge)
 
+    def _dedicated(self, event):
+        """Old journals predate the producer's dedicated-adapter exclusion.
+
+        Resolve identities only inside this owner's canonical Forge tree; event
+        receipt paths are presentation, never authority to open arbitrary files.
+        """
+        payload = event.get("payload") or {}
+        if payload.get("self_review") or payload.get("source_update"):
+            return True
+        task, unit = str(payload.get("task_id") or ""), str(payload.get("agent_id") or "")
+        if not task or any(c in task + unit for c in "/\\:") or task in {".", ".."} or unit in {".", ".."}:
+            return False
+        folder = self.continuity.desks.tree / "memory" / ".forge" / "tasks" / task
+        paths = [folder / "task.json"]
+        if unit:
+            paths.append(folder / "agents" / unit / "request.json")
+        for path in paths:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                continue
+            if not isinstance(value, dict):
+                raise ValueError("Forge adapter metadata must be an object: " + str(path))
+            if value.get("self_review") or value.get("source_update"):
+                return True
+        return False
+
+    def suppress_dedicated_handoff(self):
+        """Fence an old automatic turn before generic durable-run resumption.
+
+        A mixed old snapshot cannot be edited into a new authority. Cancel that
+        activation, acknowledge only dedicated events, and leave ordinary ones
+        pending for their normal consumer. Unknown tool effects retain the claim.
+        """
+        if not self.path.exists():
+            return False
+        claim = json.loads(self.path.read_text(encoding="utf-8"))
+        if not claim:
+            return False
+        if claim.get("owner_stamp") != self.continuity.owner_stamp():
+            raise ValueError("Forge event handoff belongs to a different local owner")
+        dedicated = [event for event in claim["events"] if self._dedicated(event)]
+        if not dedicated:
+            return False
+        manager = self.continuity.agent._runs()
+        run_id = claim["run_id"]
+        if run_id in manager.run_ids():
+            context = manager.context(run_id)
+            channel, _ = self.continuity.agent._load_exact_run_channel(manager, context)
+            if context.kind != "task_window" or not channel.praxis_self:
+                raise ValueError("Forge handoff points to a different run authority")
+            status = manager.manifest(run_id)["status"]
+            if status not in {"done", "failed", "cancelled"}:
+                receipt = manager.request_cancel(run_id, actor="helene:forge-adapter-migration",
+                    reason="Dedicated source review/update belongs to its coordinator, not an ordinary turn")
+                if receipt.get("status") != "cancelled":
+                    return True  # Retain evidence and never resume uncertain effects.
+        elif list(manager.root.glob("*/" + run_id)):
+            raise ValueError("partial Forge event run needs inspection; handoff retained")
+        self._accepted(dedicated)
+        self._save({})
+        log.warning("Retired historical dedicated Forge activation %s; original run retained", run_id)
+        return False
+
     def _reconcile(self):
+        if self.suppress_dedicated_handoff():
+            return True
         if not self.path.exists():
             return False
         claim = json.loads(self.path.read_text(encoding="utf-8"))
@@ -85,6 +151,9 @@ class ForgeEvents:
         if time.time() - self.last < gap:
             return
         pending = self.events.undelivered({"subagent_result"})
+        dedicated = [event for event in pending if self._dedicated(event)]
+        self._accepted(dedicated)
+        pending = [event for event in pending if event not in dedicated]
         if not pending:
             return
         self.last = time.time()

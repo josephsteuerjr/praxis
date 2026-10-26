@@ -308,7 +308,10 @@ class Child:
             extra = {"user": self.user, "group": self.group, "extra_groups": [], "umask": 0o002}
         elif self.umask is not None:
             extra = {"umask": self.umask}
-        self.proc = subprocess.Popen(self.argv, env=self.env, cwd=str(self.cwd),
+        # Bind speech IPC to this physical spawn, including automatic retries.
+        # Keep the plan argv stable so a restart cannot accumulate generations.
+        argv = self.argv + ["--generation", secrets.token_hex(16)] if self.key == "xtts" else self.argv
+        self.proc = subprocess.Popen(argv, env=self.env, cwd=str(self.cwd),
                                      stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
                                      start_new_session=True, **extra)
         out.close()
@@ -424,20 +427,22 @@ def xtts_child(base: Path, cfg: dict, tree: Path, env: dict,
     if not isinstance(voice, dict) or voice.get("speak") is not True:
         return None
     python = Path(env.get("HELENE_XTTS_PYTHON") or "/opt/helene-xtts/bin/python3")
-    code = Path(str(cfg.get("code") or "tree"))
-    if not code.is_absolute():
-        code = base / code
-    worker = code / "xtts_tts_worker.py"
+    app = base / str(cfg.get("app") or "app/deskapp.py")
+    worker = app.parent / "localharness/speech_worker.py"
+    engine = worker.with_name("xtts_tts_worker.py")
     model = tree / "models" / "xtts"
-    if not python.is_file() or not worker.is_file() or not all(
+    if not python.is_file() or not worker.is_file() or not engine.is_file() or not all(
             (model / name).is_file() for name in ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth")):
         print("[serverboot] XTTS включён, но Linux runtime, worker или модель не установлены; "
               "голос недоступен, другие дети продолжают работать", flush=True)
         return None
     worker_env = {key: env[key] for key in ("PATH", "HOME", "LANG", "HELENE_XTTS_PYTHON") if key in env}
-    worker_env.update(PYTHONUTF8="1", PYTHONUNBUFFERED="1")
+    # owner_stop must observe the container's latch, not the account's desktop
+    # XDG latch. Tree-local Pause and request leases use the same client contract.
+    worker_env.update(PYTHONUTF8="1", PYTHONUNBUFFERED="1",
+                      HELENE_SUPERVISOR="serverboot", HELENE_TREE=str(tree))
     return Child("xtts", "XTTS", [str(python), "-u", str(worker), "--home",
-                 str(tree / "memory/.state/xtts"), "--model", str(model), "--device",
+                 str(tree / "memory/.state/xtts"), "--model", str(model), "--tree", str(tree), "--device",
                  str(voice.get("tts_device") or "cpu")], worker_env, tree, tree / "xtts.log",
                  user=user, group=group)
 

@@ -249,12 +249,14 @@ class PythonApplicationTests(unittest.TestCase):
         import desktop_supervisor as owner
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);tree=root/'private';tree.mkdir()
-            for relative in ('voice-xtts/python.exe','code/xtts_tts_worker.py','private/models/xtts/model.pth','deskapp.py'):
+            for relative in ('voice-xtts/python.exe','private/models/xtts/model.pth','deskapp.py'):
                 p=root/relative;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'fixture')
             config=root/'helene.json'
             config.write_text(json.dumps({'mode':'local','tree':'private','code':'code','runner':'','voice':{'speak':True}}))
             _,specs=owner._specs(config)
             self.assertEqual(specs['main:xtts'].role,'xtts')
+            self.assertEqual(Path(specs['main:xtts'].argv[2]), DESK/'localharness/speech_worker.py')
+            self.assertFalse((root/'code/xtts_tts_worker.py').exists())
             coordinator=owner.Coordinator({key:spec.role for key,spec in specs.items()})
             actions=coordinator.tick({'seq':1,'now_ms':0,'children':{key:{'state':'absent'} for key in specs}})
             self.assertIn({'id':'main:xtts','action':'spawn'},actions)

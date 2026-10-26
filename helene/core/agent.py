@@ -4494,7 +4494,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         submit: bool = True, reviewer: str = "",
                         success_criteria: list[str] | None = None,
                         verify_commands: list[str] | None = None,
-                        max_active_workers: int = 8) -> str:
+                        max_active_workers: int = 16) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4533,6 +4533,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыта coding-задача: {goal[:180]}", salience=2)
         return out
+    if action in {"stop", "pause", "resume"}:
+        return json.dumps(forge.control(task_id, action), ensure_ascii=False)
     if action == "status":
         return forge.inspect(task_id, "status")
     if action == "list":
@@ -4549,7 +4551,7 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         label = "windows-body" if _is_windows_task(task_id) else "forge"
         tool_journal(f"[{label}] abandon {task_id}: {out[:600]}", salience=2)
         return out
-    return "action: start | status | list | finish | abandon"
+    return "action: start | status | list | finish | abandon | stop | pause | resume"
 
 
 def _computer_actor() -> str:
@@ -5257,10 +5259,12 @@ def tool_coding_process(task_id: str, action: str, process_id: str = "",
 def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                       role: str = "worker", max_iters: int = 0, tail: int = 10000,
                       model: str = "", result_sha256: str = "",
-                      disposition: str = "") -> str:
+                      disposition: str = "", phase: str = "",
+                      success_criteria: list[str] | None = None) -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
                        model=model, max_iters=max_iters, tail=tail,
-                       result_sha256=result_sha256, disposition=disposition)
+                       result_sha256=result_sha256, disposition=disposition,
+                       phase=phase, success_criteria=success_criteria)
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -5268,7 +5272,7 @@ def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> s
 
 
 def tool_coding_verify(task_id: str, action: str = "plan", verification_id: str = "",
-                       commands: str = "", full: bool = False, max_parallel: int = 2,
+                       commands: str = "", full: bool = False, max_parallel: int = 4,
                        timeout: int = 900, tail: int = 12000) -> str:
     return forge.verify(task_id, action=action, verification_id=verification_id,
                         commands=commands, full=full, max_parallel=max_parallel,
@@ -5277,9 +5281,11 @@ def tool_coding_verify(task_id: str, action: str = "plan", verification_id: str 
 
 def tool_coding_swarm(task_id: str, action: str = "status", plan: str = "",
                       node_id: str = "", kind: str = "finding", message: str = "",
-                      files: list[str] | None = None, max_parallel: int = 3) -> str:
+                      files: list[str] | None = None, max_parallel: int = 8,
+                      result_sha256: str = "") -> str:
     return forge.swarm(task_id, action=action, plan=plan, node_id=node_id, kind=kind,
-                       message=message, files=files or [], max_parallel=max_parallel)
+                       message=message, files=files or [], max_parallel=max_parallel,
+                       result_sha256=result_sha256)
 
 
 def tool_coding_learn(task_id: str, action: str = "recall", query: str = "",
@@ -7854,14 +7860,14 @@ FORGE_TOOLS = [
          "unreachable and finish has nothing to survey; it needs `review` as the reason and never "
          "touches a branch or worktree."),
      "input_schema": _obj({
-         "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon"]},
+         "action": {"type": "string", "enum": ["start", "status", "list", "finish", "abandon", "stop", "pause", "resume"]},
          "task_id": {"type": "string"}, "goal": {"type": "string"},
          "target": {"type": "string", "description": "self or a directory path; host = absolute Linux path, windows = absolute Windows path"},
          "isolation": {"type": "string", "enum": ["auto", "worktree", "direct"]},
          "priority": {"type": "string", "enum": ["normal", "urgent"], "description": "urgent = разбуди меня немедленно при завершении воркера; normal = в ближайшем часовом окне"},
          "success_criteria": {"type": "array", "items": {"type": "string"}},
          "verify_commands": {"type": "array", "items": {"type": "string"}},
-         "max_active_workers": {"type": "integer", "description": "Concurrent Forge agents across the whole task tree (default 8); nesting over time is unrestricted."},
+         "max_active_workers": {"type": "integer", "description": "Concurrent agents across the task (default 16, maximum 64); one mutating worker per shared root. Extra units are durably queued."},
          "scope": {"type": "string", "enum": ["self", "host", "windows"],
                    "description": "self = my own code repository (the default). host and windows are not available in this edition: the computer tool is the path to this machine. All scopes stay in the same canonical Forge."},
          "title": {"type": "string"}, "review": {"type": "string"},
@@ -7883,7 +7889,7 @@ FORGE_TOOLS = [
          "action": {"type": "string", "enum": ["status", "orientation", "overview", "review", "model", "symbols",
                                                       "references", "diagnostics", "impact", "checks",
                                                       "lessons", "observations", "mailbox", "read", "list", "search",
-                                                      "diff", "history", "watching", "watch", "unwatch"]},
+                                                      "diff", "history", "coordination", "watching", "watch", "unwatch"]},
          "path": {"type": "string"}, "query": {"type": "string"},
          "glob": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"},
          "start_char": {"type": "integer", "description": "Character offset in start line; continue using returned next_char."},
@@ -7923,13 +7929,15 @@ FORGE_TOOLS = [
     {"name": "coding_agent",
      "description": (
         "Fresh-context workers of one Praxis: spawn scout/worker/reviewer, poll/list "
-         "durable results, stop agent descendants (not detached process/verify jobs). "
+         "durable results, stop agent descendants; task stop includes detached jobs. "
          "Workers may delegate. disposition binds "
          "an exact result SHA without rewriting it."),
      "input_schema": _obj({
          "task_id": {"type": "string"},
-         "action": {"type": "string", "enum": ["spawn", "poll", "stop", "list", "disposition"]},
+         "action": {"type": "string", "enum": ["spawn", "poll", "stop", "pause", "resume", "tick", "list", "disposition"]},
          "agent_id": {"type": "string"}, "brief": {"type": "string"},
+         "phase": {"type": "string", "description": "Brief phase such as implementation/testing/integration; does not change enforced role tools."},
+         "success_criteria": {"type": "array", "items": {"type": "string"}},
          "result_sha256": {"type": "string"},
          "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
          "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
@@ -7960,8 +7968,9 @@ FORGE_TOOLS = [
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["plan", "start", "tick", "status", "signal",
-                                                      "mailbox", "compare"]},
-         "plan": {"type": "string"}, "node_id": {"type": "string"},
+                                                      "mailbox", "compare", "rework", "checkpoint"]},
+         "plan": {"type": "string", "description": "DAG JSON, or checkpoint JSON with next_action/current_candidate/checks/unresolved_reviews."}, "node_id": {"type": "string"},
+         "result_sha256": {"type": "string", "description": "rework: exact prior result SHA; message gives correction brief. New unit keeps old result."},
          "kind": {"type": "string", "enum": ["finding", "question", "blocker", "contract",
                                                    "result", "claim", "release"]},
          "message": {"type": "string"}, "files": {"type": "array", "items": {"type": "string"}},

@@ -39,7 +39,7 @@ class VoiceExtensionsTests(unittest.TestCase):
     def ready(self,root):
         live=patch.object(voice,'worker_live',return_value=True);live.start();self.addCleanup(live.stop)
         home=root/'memory/.state/xtts';home.mkdir(parents=True)
-        (home/'ready.json').write_text(json.dumps({'pid':123,'ready':True,'speakers':['A','B'],'languages':['ru','en']}))
+        (home/'ready.json').write_text(json.dumps({'schema':2,'pid':123,'ready':True,'generation':'a'*32,'speakers':['A','B'],'languages':['ru','en']}))
         return home
 
     def test_catalogue_is_model_metadata_not_hardcoded_names(self):
@@ -55,7 +55,7 @@ class VoiceExtensionsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);home=self.ready(root)
             with self.assertRaisesRegex(ValueError,'каталога'):
-                voice.preview(root,{}, {'speaker':'invented','language':'ru'})
+                voice.preview(root,{'voice':{'speak':True}}, {'speaker':'invented','language':'ru'})
             self.assertFalse((home/'inbox').exists())
 
     def test_preview_receives_worker_audio_then_retires_files(self):
@@ -74,10 +74,10 @@ class VoiceExtensionsTests(unittest.TestCase):
                 path=output/(identity+'.wav')
                 with wave.open(str(path),'wb') as wav:
                     wav.setnchannels(1);wav.setsampwidth(2);wav.setframerate(24000);wav.writeframes(b'\x01\x00'*240)
-                (output/(identity+'.json')).write_text(json.dumps({'ok':True,'request_id':identity,'path':str(path)}))
+                (output/(identity+'.json')).write_text(json.dumps({'ok':True,'request_id':identity,'generation':body['generation'],'format':'wav','path':str(path)}))
                 request.unlink()
             thread=threading.Thread(target=worker);thread.start()
-            result=voice.preview(root,{}, {'speaker':'B','language':'en','text':'Test'},timeout=3)
+            result=voice.preview(root,{'voice':{'speak':True}}, {'speaker':'B','language':'en','text':'Test'},timeout=3)
             thread.join(3)
             self.assertEqual(result['mime'],'audio/wav')
             self.assertGreater(len(result['base64']),100)
@@ -87,9 +87,8 @@ class VoiceExtensionsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);home=self.ready(root)
             with self.assertRaises(TimeoutError):
-                voice.preview(root,{}, {'speaker':'A','language':'ru'},timeout=.01)
-            requests=list((home/'inbox').glob('*.json'))
-            self.assertEqual(len(requests),1)
-            self.assertTrue(requests[0].with_suffix('.cancel').is_file())
+                voice.preview(root,{'voice':{'speak':True}}, {'speaker':'A','language':'ru'},timeout=.01)
+            self.assertEqual(list((home/'inbox').glob('*.json')),[])
+            self.assertEqual(len(list((home/'inbox').glob('*.cancel'))),1)
 
 if __name__=='__main__':unittest.main()

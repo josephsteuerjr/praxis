@@ -29,6 +29,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,9 @@ TASKS_DIR = STATE_DIR / "tasks"
 _RUNNERS: dict[int, subprocess.Popen] = {}  # reap local children; durable state itself remains on disk
 
 SELF_REVIEW_API = 1
+SOURCE_UPDATE_API = 1
+DEFAULT_WORKERS = 16
+MAX_WORKERS = 64
 
 _SKIP_DIRS = {
     ".git", ".venv", "__pycache__", "node_modules", "target", ".pytest_cache",
@@ -76,7 +80,17 @@ def _atomic_json(path: Path, data: dict | list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    # Windows read_text() temporarily holds a non-delete-sharing handle. A
+    # newly spawned worker can overlap its request read with PID publication.
+    # Retry only that transient sharing error; a persistent denial still raises.
+    for attempt in range(21):
+        try:
+            tmp.replace(path)
+            break
+        except PermissionError:
+            if os.name != "nt" or attempt == 20:
+                raise
+            time.sleep(.01)
 
 
 def _atomic_text(path: Path, text: str) -> None:
@@ -329,11 +343,21 @@ def _mutation_lock(task_id: str, timeout: float = 60.0):
     try:
         yield beat
     finally:
-        try:
-            if path.read_text(encoding="utf-8") == token:
-                path.unlink()
-        except OSError:
-            pass
+        # Contenders read the owner token. Windows may briefly refuse deletion
+        # while that reader is open. Ignoring release strands a live-PID lock.
+        # Recheck our token on EVERY retry; never unlink a successor's lock.
+        for attempt in range(21):
+            try:
+                if path.read_text(encoding="utf-8") == token:
+                    path.unlink()
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 20:
+                    log.error("task %s: mutation lock release unconfirmed", task_id, exc_info=True)
+                    break
+                time.sleep(.01)
+            except OSError:
+                break
 
 
 # Из чего складывается объявленный лизинг — чтобы его можно было пересчитать, а не
@@ -620,6 +644,13 @@ def _task_root(task_id: str) -> tuple[dict | None, Path | None, str]:
     return task, root, ""
 
 
+def _control_root(task_id: str, action: str) -> tuple[dict | None, Path | None, str]:
+    task, root, error = _task_root(task_id)
+    if error and task and str(action or "").strip().lower() == "stop":
+        return task, Path(str(task.get("root") or ".")), ""
+    return task, root, error
+
+
 def _missing_root_reason(task: dict, root: Path) -> str:
     """Почему корня нет — и «не существовал» здесь не то же самое, что «пропал».
 
@@ -773,6 +804,20 @@ def _contract_evidence(task: dict, verification_rows: list[dict]) -> dict:
             "verify": {"met": met, "unmet": unmet, "unknown": unknown}}
 
 
+def _coordinator_state(task: dict) -> dict:
+    task_id = str(task["id"])
+    checkpoint = _read_json(_task_dir(task_id) / "coordinator-checkpoint.json", {}) or {}
+    pending = [{"agent_id": r["id"], "role": r.get("role"), "status": r.get("status"),
+                "result_sha256": r.get("result_sha256"),
+                "disposition": r.get("current_disposition") or {}}
+               for r in _worker_tree(task_id) if r.get("result_sha256")
+               and (r.get("current_disposition") or {}).get("disposition") not in {"integrated", "irrelevant"}]
+    return {"goal": task.get("goal"), "success_criteria": task.get("success_criteria") or [],
+            "verify_commands": task.get("verify_commands") or [], "pending_results": pending,
+            "unresolved_reviews": checkpoint.get("unresolved_reviews") or [],
+            "checkpoint": checkpoint, "next_action": checkpoint.get("next_action") or "coordinator decision required"}
+
+
 def _orientation_text(task: dict) -> str:
     root = Path(task["root"])
     # Наблюдение за чужим upstream дописывается ПОСЛЕ кап-среза и у всех бэкендов:
@@ -846,7 +891,8 @@ def _orientation_text(task: dict) -> str:
         ]
     else:
         lines.append("git: нет")
-    return _cap("\n".join(lines), 12000) + _upstream_note(task)
+    return (_cap("\n".join(lines), 12000) + _upstream_note(task)
+            + "\nCOORDINATOR STATE\n" + json.dumps(_coordinator_state(task), ensure_ascii=False))
 
 
 # ─── Пробуждение-на-готово ────────────────────────────────────────────────────
@@ -885,6 +931,10 @@ def _wake_parse_iso(s: str) -> float:
         return 0.0
 
 
+def _dedicated_adapter(value: dict | None) -> bool:
+    return isinstance(value, dict) and bool(value.get("self_review") or value.get("source_update"))
+
+
 def _scan_worker_completions() -> list[dict]:
     """Терминальные результаты ВОРКЕРОВ (не scout/reviewer) за недавнее окно."""
     out: list[dict] = []
@@ -911,6 +961,9 @@ def _scan_worker_completions() -> list[dict]:
                 encoding="utf-8", errors="replace"))
         except Exception:
             task = {}
+        request = _read_json(aj.parent / "request.json", {}) or {}
+        if _dedicated_adapter(task) or _dedicated_adapter(request):
+            continue
         priority = _norm_priority(task.get("priority"))
         verdict_escalation = ""
         if verdict_close_enabled() and priority == "normal":
@@ -1031,10 +1084,13 @@ def emit_unit_event(task_id: str, unit_id: str, result: dict | None,
                     request: dict | None = None) -> None:
     """Terminal-событие юнита в core.events. Best-effort: никогда не бросает."""
     try:
-        from core import events as core_events
-        from core import subagents as core_subagents
         task = _read_json(_task_dir(task_id) / "task.json", {}) or {}
         unit_dir = _unit_dir(task_id, "agents", unit_id)
+        request = request or _read_json(unit_dir / "request.json", {}) or {}
+        if _dedicated_adapter(task) or _dedicated_adapter(request):
+            return  # Dedicated coordinator owns delivery; never an ordinary agent turn.
+        from core import events as core_events
+        from core import subagents as core_subagents
         payload = core_subagents.normalize(
             task_id, unit_id, result, request=request, task=task, unit_dir=str(unit_dir))
         core_events.emit("subagent_result", "forge", payload=payload,
@@ -1097,6 +1153,10 @@ def reconcile_subagent_events(force: bool = False) -> int:
                 unit_id = unit_dir.name
                 request, result = core_subagents.load_unit(unit_dir)
                 request = request or {}
+                task = _read_json(_task_dir(task_id) / "task.json", {}) or {}
+                if (_dedicated_adapter(task) or _dedicated_adapter(request)
+                        or request.get("status") == "queued"):
+                    continue
                 # 23.07: роль не фильтруем — упавший/зависший РЕВЬЮЕР тоже обязан
                 # родить событие (его молчание стоило 4ч простоя 23.07 02:09).
                 base_key = core_subagents.event_key(task_id, unit_id)
@@ -1413,7 +1473,8 @@ def reconcile_lost_tasks() -> int:
     for path in TASKS_DIR.glob("*/task.json"):
         try:
             task = _read_json(path)
-            if not isinstance(task, dict) or str(task.get("status") or "") != "active":
+            if (not isinstance(task, dict) or str(task.get("status") or "") != "active"
+                    or _dedicated_adapter(task)):
                 continue
             task_id = str(task.get("id") or path.parent.name)
             if not _wake_parse_iso(str(task.get("created") or "")):
@@ -2160,8 +2221,8 @@ def _task_run_context(task_id: str) -> dict:
 
 def _worker_slots(value: int) -> int:
     slots = int(value)
-    if slots < 1:
-        raise ValueError("max_active_workers must be positive")
+    if not 1 <= slots <= MAX_WORKERS:
+        raise ValueError(f"max_active_workers must be between 1 and {MAX_WORKERS}")
     return slots
 
 
@@ -2169,7 +2230,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
           priority: str = "normal", origin_chat: str = "",
           success_criteria: list[str] | None = None,
           verify_commands: list[str] | None = None,
-          max_active_workers: int = 8) -> str:
+          max_active_workers: int = DEFAULT_WORKERS) -> str:
     """Open a durable coding task and return its factual orientation."""
     goal = str(goal or "").strip()
     if not goal:
@@ -2282,7 +2343,7 @@ def start(goal: str, target: str = "self", isolation: str = "auto",
 
 
 def start_host(goal: str, target: str, priority: str = "normal",
-               origin_chat: str = "", max_active_workers: int = 8) -> str:
+               origin_chat: str = "", max_active_workers: int = DEFAULT_WORKERS) -> str:
     """Open a canonical Forge task whose execution backend is the root broker."""
     goal = str(goal or "").strip()
     target = str(target or "").strip()
@@ -2324,7 +2385,7 @@ def start_host(goal: str, target: str, priority: str = "normal",
 
 
 def start_windows(goal: str, target: str, priority: str = "normal",
-                  origin_chat: str = "", max_active_workers: int = 8) -> str:
+                  origin_chat: str = "", max_active_workers: int = DEFAULT_WORKERS) -> str:
     """Open a canonical Forge task whose execution backend is a Windows body."""
     from pathlib import PureWindowsPath
 
@@ -2496,15 +2557,18 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
     remote = _remote_client(task)
     if action == "orientation":
         return _orientation_text(task)
+    if action == "coordination":
+        return json.dumps(_coordinator_state(task), ensure_ascii=False, indent=2)
     if action == "status":
-        agents = _worker_tree(task_id)
-        jobs = _units(task_id, "processes")
-        checks = _units(task_id, "verifications")
-        swarm_plan = forge_swarm.refresh(
-            _task_dir(task_id),
-            lambda aid: _unit_state(_unit_dir(task_id, "agents", aid))
-            if _unit_dir(task_id, "agents", aid).is_dir() else {"status": "lost"},
-        )
+        # Refresh writes the graph. Reading before the lock would let a slow
+        # status observer overwrite a later rework/reservation transaction.
+        with _mutation_lock(task_id):
+            agents = _worker_tree(task_id)
+            jobs = _units(task_id, "processes")
+            checks = _units(task_id, "verifications")
+            snapshots = {row["id"]: row for row in agents}
+            swarm_plan = forge_swarm.refresh(
+                _task_dir(task_id), lambda aid: snapshots.get(aid, {"status": "lost"}))
         git = _git_root(root) if remote is None else None
         if remote is not None:
             with _remote_observations(task):
@@ -2514,11 +2578,12 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                          if git else "нет")
         return _cap("\n".join([
             f"{task_id} [{task.get('status')}] {task.get('goal')}",
+            "coordination: " + json.dumps(_coordinator_state(task), ensure_ascii=False),
             f"root: {root}; isolation: {task.get('isolation')}",
             f"agents: {_unit_counts(agents)}; processes: {_unit_counts(jobs)}; "
             f"verification: {_unit_counts(checks)}",
             f"worker slots: {sum(r.get('status') in (_LIVE_UNIT_STATES | {'unknown'}) for r in agents)}"
-            f"/{task.get('max_active_workers', 8)}; tree:",
+            f"/{task.get('max_active_workers', DEFAULT_WORKERS)}; shared-root writers=1; verification parallel default=4/max=8; tree:",
             *(f"- {r['id']} [{r.get('status')}] parent={r.get('parent_unit_id') or '-'} "
               f"result_sha256={r.get('result_sha256') or '-'} "
               f"dispositions={','.join(d.get('disposition', '') for d in r.get('dispositions', [])) or '-'} "
@@ -2734,9 +2799,13 @@ def _edit_unlocked(task_id: str, action: str, path: str = "", content: str = "",
 
 
 def edit(task_id: str, action: str, path: str = "", content: str = "", old: str = "",
-         new: str = "", patch: str = "", expected_sha256: str = "") -> str:
+         new: str = "", patch: str = "", expected_sha256: str = "",
+         _parent_request_path: str = "") -> str:
     try:
         with _mutation_lock(task_id) as beat:
+            reason = _admission_reason(task_id, _parent_request_path, general=True)
+            if reason:
+                return f"Edit refused: {reason}"
             # Правка — один вызов, ударить внутри него нечем; объявляем срок молчания
             # заранее, иначе порог бездействия снесёт замок из-под работающей руки.
             beat(_remote_step_lease(get(task_id)))
@@ -2885,7 +2954,8 @@ def _retain_foreground_unknown(task_id: str, proc: subprocess.Popen, command: st
     return unit_id
 
 
-def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600) -> str:
+def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
+        _parent_request_path: str = "") -> str:
     task, root, err = _task_root(task_id)
     if err:
         return err
@@ -2926,13 +2996,27 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600) -> str:
     proc = None
     born = ""
     unresolved = ""
+    unit_id = _id("proc")
+    directory = _unit_dir(task_id, "processes", unit_id)
     try:
         with log_path.open("wb") as log_file:
-            proc = subprocess.Popen(command, shell=True, cwd=str(place), stdout=log_file,
-                                    stderr=subprocess.STDOUT,
-                                    start_new_session=(os.name != "nt"),
-                                    creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
-            born = _proc_started_at(proc.pid)
+            with _mutation_lock(task_id):
+                reason = _admission_reason(task_id, _parent_request_path, general=True)
+                if reason:
+                    return f"Run refused: {reason}"
+                parent_id, _ = _worker_parent(task_id, _parent_request_path)
+                proc = subprocess.Popen(command, shell=True, cwd=str(place), stdout=log_file,
+                                        stderr=subprocess.STDOUT,
+                                        start_new_session=(os.name != "nt"),
+                                        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
+                born = _proc_started_at(proc.pid)
+                _RUNNERS[int(proc.pid)] = proc
+                _atomic_json(directory / "request.json", {"id": unit_id, "task_id": task_id,
+                    "command": command, "cwd": str(place), "created": _now(), "status": "running",
+                    "supervisor_pid": proc.pid, "supervisor_started_at": born,
+                    "parent_unit_id": parent_id, "log": str(log_path)})
+                _atomic_json(directory / "state.json", {"foreground": True,
+                    "child_pid": proc.pid, "child_started_at": born})
             proc.wait(timeout=(seconds or None))
         code, status = proc.returncode, "ok" if proc.returncode == 0 else "failed"
     except subprocess.TimeoutExpired:
@@ -2950,6 +3034,11 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600) -> str:
         else:
             log_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
     duration = round(time.monotonic() - t0, 3)
+    if proc is not None and status != "unknown":
+        with _mutation_lock(task_id):
+            if not (directory / "result.json").exists():
+                _atomic_json(directory / "result.json", {"status": "done" if status == "ok" else status,
+                    "code": code, "finished": _now(), "log": str(log_path), "duration_s": duration})
     out = log_path.read_text(encoding="utf-8", errors="replace")
     _event(task_id, "command", command=command, cwd=str(place), code=code, status=status,
            duration_s=duration, log=str(log_path), summary=f"{status} exit={code} {duration}s")
@@ -2985,9 +3074,12 @@ def _checkpoint_unlocked(task_id: str, message: str = "forge checkpoint") -> str
     return f"Checkpoint {sha}: {message}"
 
 
-def checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
+def checkpoint(task_id: str, message: str = "forge checkpoint", _parent_request_path: str = "") -> str:
     try:
         with _mutation_lock(task_id) as beat:
+            reason = _admission_reason(task_id, _parent_request_path, general=True)
+            if reason:
+                return f"Checkpoint refused: {reason}"
             # `add -A` + `commit` (или один удалённый checkpoint) идут секунды-десятки
             # секунд без единого удара — объявляем это, а не молчим (см. _remote_step_lease).
             beat(_remote_step_lease(get(task_id)))
@@ -3048,6 +3140,8 @@ def _unit_state(path: Path) -> dict:
             if local.poll() is not None:
                 _RUNNERS.pop(pid, None)
         return {**request, **result, "id": request.get("id") or path.name}
+    if request.get("status") == "queued":
+        return {**request, "id": request.get("id") or path.name}
     pid = int(request.get("supervisor_pid") or 0)
     born = str(request.get("supervisor_started_at") or "")
     state = {**request, "id": request.get("id") or path.name}
@@ -3135,18 +3229,83 @@ def _result_identity(path: Path) -> str:
         return ""
 
 
+def _admission_reason(task_id: str, parent_request_path: str = "", *, general: bool = False,
+                      waiting: bool = False) -> str:
+    """Called under the task mutex by every admitting writer, including nested work."""
+    task = get(task_id)
+    if not task or task.get("status") not in LIVE_TASK_STATUSES:
+        return "task is terminal or missing"
+    control = _read_json(_task_dir(task_id) / "control.json", {}) or {}
+    if control.get("action") in {"stop", "pause"}:
+        return f"task is {control['action']}-fenced"
+    if general and (task.get("self_review") or task.get("source_update")):
+        return "trusted adapter task cannot use general mutation/process tools"
+    owner = sys.modules.get("localharness.owner_stop") or sys.modules.get("owner_stop")
+    if owner is not None and owner.paused():
+        return "owner Stop/Pause is active"
+    if (BASE / "memory" / ".control" / "autonomy-paused.json").exists():
+        return "owner Pause is active"
+    parent_id, caller_request = _worker_parent(task_id, parent_request_path)
+    caller, below = parent_id, ""
+    seen: set[str] = set()
+    while parent_id and parent_id not in seen:
+        seen.add(parent_id)
+        directory = _unit_dir(task_id, "agents", parent_id)
+        if (directory / "stop.json").exists():
+            return f"ancestor {parent_id} is stop-fenced"
+        if (directory / "result.json").exists():
+            return f"ancestor {parent_id} is terminal"
+        handoff = _read_json(directory / "handoff.json", {}) or {}
+        if handoff.get("state") == "waiting":
+            if parent_id == caller:
+                if not waiting:
+                    return f"writer {parent_id} yielded to {handoff.get('child_unit_id')}"
+            elif handoff.get("child_unit_id") != below and caller_request.get("role") == "worker":
+                return f"ancestor {parent_id} yielded to another child"
+        below = parent_id
+        parent_id = _parent_of(task_id, parent_id)
+    return "corrupt/cyclic worker ancestry" if parent_id else ""
+
+
+def _worker_control_unlocked(request_path: str | Path) -> dict:
+    path = Path(request_path).resolve()
+    request = _read_json(path, {}) or {}
+    reason = _admission_reason(str(request.get("task_id") or ""), str(path))
+    return {"allowed": not reason, "reason": reason}
+
+
+def worker_control(request_path: str | Path) -> dict:
+    path = Path(request_path).resolve()
+    request = _read_json(path, {}) or {}
+    task_id = str(request.get("task_id") or "")
+    try:
+        with _mutation_lock(task_id):
+            return _worker_control_unlocked(path)
+    except (ValueError, OSError, TimeoutError) as exc:
+        return {"allowed": False, "reason": f"control unavailable: {exc}"}
+
+
+def _agent_snapshot(task_id: str, unit_id: str, state: dict | None = None) -> dict:
+    directory = _unit_dir(task_id, "agents", unit_id)
+    row = state if state is not None else (_unit_state(directory) if directory.is_dir() else {"status": "lost"})
+    digest = _result_identity(directory / "result.json")
+    decisions = [value for file in sorted(directory.glob("disposition-*.json"))
+                 if isinstance(value := _read_json(file), dict)]
+    parent = str(row.get("parent_unit_id") or "")
+    current = [d for d in decisions if d.get("result_sha256") == digest
+               and str(d.get("parent_unit_id") or "") == parent]
+    current.sort(key=lambda d: (int(d.get("revision") or 1), str(d.get("at") or "")))
+    return {**row, "result_sha256": digest, "dispositions": decisions,
+            "current_disposition": current[-1] if current else {}}
+
+
 def _worker_tree(task_id: str) -> list[dict]:
     rows = _units(task_id, "agents")
     for row in rows:
         unit = str(row["id"])
         directory = _unit_dir(task_id, "agents", unit)
         row["parent_unit_id"] = str(row.get("parent_unit_id") or "")
-        row["result_sha256"] = _result_identity(directory / "result.json")
-        row["dispositions"] = []
-        for record in sorted(directory.glob("disposition-*.json")):
-            value = _read_json(record)
-            if isinstance(value, dict):
-                row["dispositions"].append(value)
+        row.update(_agent_snapshot(task_id, unit))
         stop = _read_json(directory / "stop.json")
         if isinstance(stop, dict):
             row["stop_receipt"] = stop
@@ -3347,8 +3506,27 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
 
 
 def process(task_id: str, action: str, process_id: str = "", command: str = "",
-            cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000) -> str:
-    task, root, err = _task_root(task_id)
+            cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
+            _parent_request_path: str = "") -> str:
+    if str(action or "").lower() == "start":
+        try:
+            with _mutation_lock(task_id) as beat:
+                reason = _admission_reason(task_id, _parent_request_path, general=True)
+                if reason:
+                    return f"Process refused: {reason}"
+                parent, _ = _worker_parent(task_id, _parent_request_path)
+                beat(lease_sec=20)
+                return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail,
+                                         parent_unit_id=parent)
+        except (TimeoutError, ValueError) as exc:
+            return f"Process refused: {exc}"
+    return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail)
+
+
+def _process_unlocked(task_id: str, action: str, process_id: str = "", command: str = "",
+            cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
+            parent_unit_id: str = "") -> str:
+    task, root, err = _control_root(task_id, action)
     if err:
         return err
     assert root is not None
@@ -3379,6 +3557,7 @@ def process(task_id: str, action: str, process_id: str = "", command: str = "",
         d = _unit_dir(task_id, "processes", unit_id)
         request = {
             "id": unit_id, "task_id": task_id, "name": str(name or "").strip(),
+            "parent_unit_id": parent_unit_id,
             "command": command, "cwd": str(place), "timeout": max(0, int(timeout or 0)),
             "created": _now(), "status": "starting",
         }
@@ -3480,10 +3659,29 @@ def process(task_id: str, action: str, process_id: str = "", command: str = "",
 
 
 def verify(task_id: str, action: str = "plan", verification_id: str = "",
-           commands: str = "", full: bool = False, max_parallel: int = 2,
-           timeout: int = 900, tail: int = 12000) -> str:
+           commands: str = "", full: bool = False, max_parallel: int = 4,
+           timeout: int = 900, tail: int = 12000, _parent_request_path: str = "") -> str:
+    if str(action or "").lower() == "start":
+        try:
+            with _mutation_lock(task_id) as beat:
+                reason = _admission_reason(task_id, _parent_request_path, general=True)
+                if reason:
+                    return f"Verification refused: {reason}"
+                parent, _ = _worker_parent(task_id, _parent_request_path)
+                beat(lease_sec=60)
+                return _verify_unlocked(task_id, action, verification_id, commands, full,
+                                        max_parallel, timeout, tail, parent_unit_id=parent)
+        except (TimeoutError, ValueError) as exc:
+            return f"Verification refused: {exc}"
+    return _verify_unlocked(task_id, action, verification_id, commands, full,
+                            max_parallel, timeout, tail)
+
+
+def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = "",
+           commands: str = "", full: bool = False, max_parallel: int = 4,
+           timeout: int = 900, tail: int = 12000, parent_unit_id: str = "") -> str:
     """Plan and supervise a durable test/build/lint matrix."""
-    task, root, err = _task_root(task_id)
+    task, root, err = _control_root(task_id, action)
     if err:
         return err
     assert task is not None and root is not None
@@ -3537,7 +3735,8 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
             # Дерево, на котором гоняется матрица: без него следующий заход не отличит
             # «то же дерево, можно не гонять» от «новое — обязано доказать себя заново».
             "tree_sha": tree_sha,
-            "max_parallel": max(1, min(int(max_parallel or 2), 8)),
+            "max_parallel": max(1, min(int(max_parallel or 4), 8)),
+            "parent_unit_id": parent_unit_id,
             "timeout": max(0, int(timeout or 0)), "created": _now(), "status": "starting",
         }
         req = d / "request.json"
@@ -3615,6 +3814,42 @@ def verify(task_id: str, action: str = "plan", verification_id: str = "",
     return "action: plan | start | poll | stop | list"
 
 
+def source_update_task(task_id: str, root: str, plan_id: str, input_sha256: str,
+                       worker_script: str, max_active_workers: int = 1) -> dict:
+    """Trusted coordinator-only isolated merge registration, never a general worker."""
+    if not re.fullmatch(r"code-[0-9a-f]{8}", task_id):
+        raise ValueError("invalid source-update task id")
+    if not all(re.fullmatch(r"[0-9a-f]{64}", value or "") for value in (plan_id, input_sha256)):
+        raise ValueError("source-update requires full plan/input hashes")
+    if int(max_active_workers) != 1:
+        raise ValueError("source-update has exactly one isolated root worker")
+    try:
+        from localharness import source_update_worker
+    except ImportError:
+        import source_update_worker
+    script = Path(worker_script).resolve()
+    if script != Path(source_update_worker.__file__).resolve() or not script.is_file():
+        raise ValueError("source-update requires the installed localharness worker adapter")
+    directory = Path(root).resolve()
+    if not directory.is_dir():
+        raise ValueError("source-update frozen material directory missing")
+    metadata = {"schema": 1, "root": str(directory), "plan_id": plan_id,
+                "input_sha256": input_sha256, "worker_script": str(script),
+                "runtime_code_dir": str(REPO.resolve())}
+    with _mutation_lock(task_id):
+        prior = get(task_id)
+        if prior:
+            if prior.get("source_update") != metadata:
+                raise ValueError("source-update task identity already has another subject")
+            return prior
+        task = {"id": task_id, "root": str(directory), "source_root": str(directory),
+                "goal": "Isolated source-update conflict resolution", "isolation": "frozen-source-update",
+                "status": "active", "priority": "normal", "created": _now(),
+                "max_active_workers": 1, "run_context": None, "source_update": metadata}
+        _save_task(task)
+        return task
+
+
 def self_review_task(task_id: str, root: str, subject_sha256: str,
                      worker_script: str, max_active_workers: int = 1) -> dict:
     if not re.fullmatch(r"code-[0-9a-f]{8}", task_id):
@@ -3647,12 +3882,452 @@ def self_review_task(task_id: str, root: str, subject_sha256: str,
 
 
 
+def _worker_script(task: dict) -> Path:
+    if task.get("source_update"):
+        try:
+            from localharness import source_update_worker as adapter
+        except ImportError:
+            import source_update_worker as adapter
+        metadata = task["source_update"]
+    elif task.get("self_review"):
+        try:
+            from localharness import self_review_worker as adapter
+        except ImportError:
+            import self_review_worker as adapter
+        metadata = task["self_review"]
+    else:
+        return REPO / "forge_worker.py"
+    script = Path(metadata["worker_script"]).resolve()
+    if (script != Path(adapter.__file__).resolve() or not script.is_file()
+            or metadata.get("runtime_code_dir") != str(REPO.resolve())
+            or metadata.get("root") != str(Path(task["root"]).resolve())):
+        raise ValueError("trusted adapter identity drifted")
+    return script
+
+
+def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
+                    task: dict | None = None) -> str:
+    task = task if task is not None else (get(task_id) or {})
+    def rows_of(kind):
+        return units[kind] if units is not None else _units(task_id, kind)
+    rows = [r for r in rows_of("agents") if r.get("id") != request.get("id")]
+    active = [r for r in rows if r.get("status") in (_LIVE_UNIT_STATES | {"unknown"})
+              or (r.get("status") == "lost" and not _writer_ended(
+                  _unit_dir(task_id, "agents", str(r["id"]))))]
+    # A waiting worker has NO model/tool execution until its selected child
+    # releases this root. Its slot is transferred only along that exact branch,
+    # never to a sibling/unrelated writer. Ancestry/control fences still apply.
+    active = [row for row in active if not _yielded_to(task_id, str(row["id"]), str(request["id"]))]
+    limit = _worker_slots(task.get("max_active_workers", DEFAULT_WORKERS))
+    if len(active) >= limit:
+        return f"Active worker slots exhausted: {len(active)}/{limit}"
+    if request.get("role") == "worker":
+        writers = [str(r["id"]) for r in active if r.get("role") == "worker"]
+        for kind in ("processes", "verifications"):
+            writers.extend(str(r["id"]) for r in rows_of(kind)
+                           if r.get("status") not in (_TERMINAL_AGENT_STATES | {
+                               "passed", "passed_with_skips", "stale"}))
+        if writers:
+            return "shared-root writer occupied: " + ",".join(writers)
+    return ""
+
+
+def _yielded_to(task_id: str, parent: str, child: str) -> bool:
+    handoff = _read_json(_unit_dir(task_id, "agents", parent) / "handoff.json", {}) or {}
+    selected = str(handoff.get("child_unit_id") or "")
+    return (handoff.get("state") == "waiting" and bool(selected)
+            and _parent_of(task_id, selected) == parent
+            and _in_subtree(task_id, selected, child))
+
+
+def release_worker_root(request_path: str | Path) -> None:
+    """Worker finalization relinquishes root tools, not its private journal or OS process.
+
+    A terminal file by itself is not a handoff. This is emitted only after the
+    actual worker loop has ended; every later tool admission is terminal-fenced.
+    Detached jobs retain independent custody and may still forbid a transfer.
+    """
+    path = Path(request_path).resolve()
+    request = _read_json(path, {}) or {}
+    tid = str(request.get("task_id") or "")
+    with _mutation_lock(tid):
+        unit, _ = _worker_parent(tid, str(path))
+        result = _read_json(path.parent / "result.json", {}) or {}
+        if result.get("status") in _TERMINAL_AGENT_STATES:
+            _atomic_json(path.parent / "root-released.json", {"unit_id": unit,
+                "result_sha256": _result_identity(path.parent / "result.json"), "at": _now()})
+
+
+def _root_released(task_id: str, unit_id: str) -> bool:
+    directory = _unit_dir(task_id, "agents", unit_id)
+    release = _read_json(directory / "root-released.json", {}) or {}
+    digest = _result_identity(directory / "result.json")
+    return (bool(digest) and release.get("unit_id") == unit_id
+            and release.get("result_sha256") == digest)
+
+
+def _detached_writer_reason(task_id: str) -> str:
+    settled = _TERMINAL_AGENT_STATES | {"passed", "passed_with_skips", "stale"}
+    outstanding = [str(row["id"]) for kind in ("processes", "verifications")
+                   for row in _units(task_id, kind) if row.get("status") not in settled]
+    return "detached writer exit unconfirmed: " + ",".join(outstanding) if outstanding else ""
+
+
+def _wait_worker_child(task_id: str, parent_path: str, child: str) -> str:
+    """Explicit serialized worker->worker handoff, inside ONE blocking tool call.
+
+    The parent remains an ancestor and keeps its transcript/writer.lock, but
+    cannot issue any other tool or model call. A crash leaves the handoff and
+    in-flight checkpoint unknown; neither admission nor continuation replays it.
+    """
+    parent, request = _worker_parent(task_id, parent_path)
+    directory = _unit_dir(task_id, "agents", parent)
+    target = _unit_dir(task_id, "agents", child)
+    def answer(status, reason, **fields):
+        return json.dumps({"status": status, "reason": reason, "agent_id": child, **fields},
+                          ensure_ascii=False)
+    with _mutation_lock(task_id):
+        reason = _admission_reason(task_id, parent_path)
+        if reason:
+            return answer("refused", reason)
+        child_request = _read_json(target / "request.json", {}) or {}
+        if (not parent or request.get("role") != "worker" or child_request.get("role") != "worker"
+                or child_request.get("parent_unit_id") != parent):
+            return answer("refused", "wait transfers ownership only to an immediate worker child")
+        reason = _detached_writer_reason(task_id)
+        if reason:
+            return answer("refused", reason)
+        _atomic_json(directory / "handoff.json", {"state": "waiting", "child_unit_id": child,
+                                                  "at": _now()})
+        _event(task_id, "worker_yielded", agent_id=parent, child_unit_id=child)
+    while True:
+        with _mutation_lock(task_id):
+            reason = _admission_reason(task_id, parent_path, waiting=True)
+            if reason:
+                return answer("refused", reason)  # fence survives; no regained write authority
+            state = _unit_state(target)
+            if state.get("status") in {"lost", "unknown"}:
+                return answer("unknown", "child execution is unconfirmed; ownership remains yielded",
+                              execution_status=state.get("status"), liveness=state.get("liveness"))
+            result = _read_json(target / "result.json")
+            if isinstance(result, dict) and state.get("status") in _TERMINAL_AGENT_STATES:
+                # Private-journal finalization may still be unwinding, but root
+                # tools have stopped. Old workers need actual tree-exit evidence.
+                released = _root_released(task_id, child) or _writer_ended(target)
+                descendants = [r for r in _units(task_id, "agents")
+                    if r["id"] != child and _in_subtree(task_id, child, str(r["id"]))
+                    and (r.get("status") not in _TERMINAL_AGENT_STATES
+                         or not (_root_released(task_id, str(r["id"])) or _writer_ended(
+                             _unit_dir(task_id, "agents", str(r["id"])))))]
+                reason = _detached_writer_reason(task_id)
+                if released and not descendants and not reason:
+                    digest = _result_identity(target / "result.json")
+                    _atomic_json(directory / "handoff.json", {"state": "returned",
+                        "child_unit_id": child, "result_sha256": digest, "at": _now()})
+                    _event(task_id, "worker_reacquired", agent_id=parent, child_unit_id=child)
+                    return answer("settled", "serialized child released task root",
+                                  result_sha256=digest, result=result)
+                if reason:
+                    return answer("unknown", reason + "; ownership remains yielded")
+        tick_queued(task_id)
+        time.sleep(.1)
+
+
+def _launch_agent_unlocked(task_id: str, directory: Path, request: dict, beat) -> int:
+    task = get(task_id) or {}
+    script = _worker_script(task)
+    request.update(status="starting", queued_reason="")
+    _atomic_json(directory / "request.json", request)
+    try:
+        beat(lease_sec=20)
+        pid = _spawn_runner(script, directory / "request.json", directory / "supervisor.log")
+    except Exception as exc:
+        failure = {"status": "error", "finished": _now(),
+                   "error": f"{type(exc).__name__}: {exc}", "reported_inline": True}
+        _atomic_json(directory / "result.json", failure)
+        emit_unit_event(task_id, request["id"], failure, request=request)
+        raise
+    request.update(supervisor_pid=pid, supervisor_started_at=_proc_started_at(pid), status="running")
+    _atomic_json(directory / "request.json", request)
+    return pid
+
+
+_QUEUE_OBSERVER: dict = {}
+_QUEUE_OBSERVER_LOCK = threading.Lock()
+_QUEUE_COLD_BATCH = 16
+
+
+def _directory_identity(path: Path):
+    try:
+        stat = path.stat()
+        return stat.st_dev, stat.st_ino, stat.st_mtime_ns
+    except FileNotFoundError:
+        return None
+
+
+def _queued_identities() -> list[Path]:
+    """A disposable discovery hint, never queue authority.
+
+    Spawn/Resume always publish a NEW unit directory. Watch those directory
+    identities (also cross-process), not every retained request twice a second.
+    A directory observed before request publication stays unread/current until
+    published. Restart rebuilds in bounded batches; queued units are re-read and
+    admitted only under the task mutex. No new durable index is needed.
+    """
+    with _QUEUE_OBSERVER_LOCK:
+        root = str(TASKS_DIR.resolve())
+        state = _QUEUE_OBSERVER
+        if state.get("root") != root:
+            state.clear()
+            state.update(root=root, stamp=None, tasks={}, scans=deque(), unread=deque(), queued=set())
+        stamp = _directory_identity(TASKS_DIR)
+        if stamp != state["stamp"]:
+            # Capture BEFORE enumeration: a producer racing this pass causes
+            # another discovery pass, rather than being stamped as already read.
+            state["stamp"] = stamp
+            for directory in TASKS_DIR.iterdir() if stamp is not None else ():
+                if directory.is_dir() and directory.name not in state["tasks"]:
+                    state["tasks"][directory.name] = {"stamp": None, "seen": set()}
+        for tid, observed in state["tasks"].items():
+            agents = _task_dir(tid) / "agents"
+            signature = _directory_identity(agents)
+            if signature != observed["stamp"]:
+                observed["stamp"] = signature
+                if not observed.get("scanning"):
+                    observed["scanning"] = True
+                    state["scans"].append(tid)
+        for _ in range(min(_QUEUE_COLD_BATCH, len(state["scans"]))):
+            tid = state["scans"].popleft()
+            observed = state["tasks"][tid]
+            observed["scanning"] = False
+            for directory in (_task_dir(tid) / "agents").glob("agent-*"):
+                if directory.name not in observed["seen"]:
+                    observed["seen"].add(directory.name)
+                    state["unread"].append(directory)
+        # Incomplete publications rotate behind other discoveries, never spin
+        # within a tick or consume an unbounded JSON budget.
+        candidates = [state["unread"].popleft()
+                      for _ in range(min(_QUEUE_COLD_BATCH, len(state["unread"])))]
+        for directory in candidates:
+            request = _read_json(directory / "request.json")
+            if not isinstance(request, dict):
+                if directory.is_dir():
+                    state["unread"].append(directory)
+            elif request.get("status") == "queued" and not (directory / "result.json").exists():
+                state["queued"].add(directory)
+        return sorted(state["queued"])
+
+
+def _queued_dependency_reason(request: dict, by_id: dict) -> str:
+    nid = str(request.get("node_id") or "")
+    if not nid or request.get("parent_unit_id"):
+        return ""
+    node = by_id.get(nid)
+    if not node or node.get("agent_id") != request.get("id"):
+        return "swarm reservation identity changed"
+    return forge_swarm.dependency_reason(node, by_id)
+
+
+def tick_queued(task_id: str = "") -> list[dict]:
+    """Drain current admitted identities; never recreate/retry a lost execution."""
+    directories = (sorted((_task_dir(task_id) / "agents").glob("agent-*"))
+                   if task_id else _queued_identities())
+    by_task: dict[str, list[Path]] = {}
+    for directory in directories:
+        by_task.setdefault(directory.parent.parent.name, []).append(directory)
+    outcomes, discharged = [], set()
+    for tid, pending in by_task.items():
+        try:
+            with _mutation_lock(tid, timeout=.1) as beat:
+                requests = []
+                for directory in pending:
+                    request = _read_json(directory / "request.json", {}) or {}
+                    if request.get("status") == "queued" and not (directory / "result.json").exists():
+                        requests.append((directory, request))
+                    else:
+                        discharged.add(directory)
+                if not requests:
+                    continue
+                # A single coherent effective graph per drain. Dispositions and
+                # rework use this mutex too; no stale pre-lock snapshot can admit B.
+                task = get(tid) or {}
+                units = {kind: _units(tid, kind) for kind in ("agents", "processes", "verifications")}
+                states = {row["id"]: row for row in units["agents"]}
+                snapshots = {}
+                def snapshot(aid):
+                    if aid not in snapshots:
+                        snapshots[aid] = _agent_snapshot(tid, aid, states.get(aid, {"status": "lost"}))
+                    return snapshots[aid]
+                plan = forge_swarm.refresh(_task_dir(tid), snapshot)
+                nodes = {node["id"]: node for node in plan.get("nodes", [])}
+                for directory, request in requests:
+                    reason = _admission_reason(tid, str(directory / "request.json"))
+                    if (directory / "stop.json").exists():
+                        reason = "unit is stop-fenced"
+                    reason = reason or _queued_dependency_reason(request, nodes)
+                    reason = reason or _agent_capacity(tid, request, units=units, task=task)
+                    if reason:
+                        if request.get("queued_reason") != reason:
+                            request["queued_reason"] = reason
+                            _atomic_json(directory / "request.json", request)
+                        continue
+                    pid = _launch_agent_unlocked(tid, directory, request, beat)
+                    # Reserve the newly occupied slot/root for later queued
+                    # entries in this same snapshot, without rescanning history.
+                    units["agents"] = [request if row["id"] == request["id"] else row
+                                       for row in units["agents"]]
+                    discharged.add(directory)
+                    outcomes.append({"task_id": tid, "agent_id": request["id"], "pid": pid})
+                    _event(tid, "agent_dequeued", agent_id=request["id"], summary=f"{request['id']} pid={pid}")
+        except (TimeoutError, ValueError, OSError, ImportError) as exc:
+            outcomes.append({"task_id": tid, "status": "not_started", "reason": str(exc)})
+    with _QUEUE_OBSERVER_LOCK:
+        _QUEUE_OBSERVER.get("queued", set()).difference_update(discharged)
+    return outcomes
+
+
+def _writer_ended(directory: Path) -> bool:
+    request = _read_json(directory / "request.json", {}) or {}
+    if request.get("status") == "queued" and not request.get("supervisor_pid"):
+        return True
+    pid = int(request.get("supervisor_pid") or 0)
+    born = str(request.get("supervisor_started_at") or "")
+    if not pid or not born or _pid_alive(pid, born):
+        return False
+    if os.name == "nt":
+        stop = _read_json(directory / "stop.json", {}) or {}
+        return stop.get("state") == "settled"
+    return _group_live_members(pid) is False
+
+
+def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") -> dict:
+    import forge_runtime
+    with _mutation_lock(task_id):
+        reason = _admission_reason(task_id)
+        if reason:
+            return {"status": "refused", "reason": reason}
+        task = get(task_id) or {}
+        if task.get("self_review") or task.get("source_update"):
+            return {"status": "refused", "reason": "trusted adapter correction needs a new bound task"}
+        original_parent = _parent_of(task_id, agent_id)
+        if original_parent:
+            reason = _admission_reason(task_id, str(_unit_dir(task_id, "agents", original_parent) / "request.json"))
+            if reason:
+                return {"status": "refused", "reason": reason}
+        source = _unit_dir(task_id, "agents", agent_id)
+        request = _read_json(source / "request.json", {}) or {}
+        progress = forge_runtime.read_progress(source)
+        if expected_generation and progress.get("generation") != expected_generation:
+            return {"status": "refused", "reason": "generation changed"}
+        if not request or not _writer_ended(source):
+            return {"status": "unknown", "reason": "old writer tree exit is unproven"}
+        for prior_path in (_task_dir(task_id) / "agents").glob("*/request.json"):
+            prior_request = _read_json(prior_path, {}) or {}
+            if (prior_request.get("previous_unit_id") == agent_id
+                    and (prior_request.get("resume_of") == agent_id
+                         or prior_request.get("continuation_source"))):
+                return {"status": _unit_state(prior_path.parent).get("status") or "unknown",
+                        "agent_id": prior_path.parent.name, "previous_unit_id": agent_id,
+                        "reason": "existing continuation retained; select that unit for any later resume"}
+        result = _read_json(source / "result.json", {}) or {}
+        if result.get("status") == "done":
+            return {"status": "refused", "reason": "completed result is immutable; use new rework brief"}
+        info = forge_runtime.continuation_info(source)
+        never_started = result.get("never_started") is True
+        if not never_started and not info.get("safe"):
+            return {"status": "refused", "reason": str(info.get("reason") or "no safe checkpoint")}
+        # A resumed execution has a NEW durable identity. Its old Stop/result and
+        # transcript remain intact, rather than silently reviving a terminal unit.
+        unit = _id("agent")
+        directory = _unit_dir(task_id, "agents", unit)
+        resumed = {k: v for k, v in request.items() if k not in {
+            "id", "supervisor_pid", "supervisor_started_at", "continuation_source", "queued_reason"}}
+        resumed.update(id=unit, created=_now(), status="queued", previous_unit_id=agent_id,
+                       previous_result_sha256=_result_identity(source / "result.json"),
+                       resume_of=agent_id)
+        if not never_started:
+            resumed["continuation_source"] = {"unit_dir": str(source.resolve()),
+                "generation": info["generation"], "checkpoint_sha256": info["checkpoint_sha256"]}
+            _atomic_json(directory / "resume.json", {"schema": 1,
+                "generation": info["generation"], "checkpoint_sha256": info["checkpoint_sha256"],
+                "authorized": True, "old_writer_ended": True, "task_control_permits": True})
+        resumed["queued_reason"] = _agent_capacity(task_id, resumed) or "explicit continuation admitted"
+        _atomic_json(directory / "request.json", resumed)
+        plan = forge_swarm.load(_task_dir(task_id))
+        for node in plan.get("nodes", []):
+            if node.get("agent_id") == agent_id:
+                node.setdefault("attempts", []).append({k: v for k, v in node.items() if k != "attempts"})
+                node.update(agent_id=unit, status="queued", previous_unit_id=agent_id,
+                            accepted_sha256="", result_sha256="", acceptance="pending")
+                forge_swarm.save(_task_dir(task_id), plan)
+                break
+        _event(task_id, "agent_continuation_queued", agent_id=unit, previous_unit_id=agent_id)
+        return {"status": "queued", "agent_id": unit, "previous_unit_id": agent_id,
+                "reason": resumed["queued_reason"]}
+
+
+def control(task_id: str, action: str, agent_id: str = "", expected_generation: str = "") -> dict:
+    """Owner/coordinator control. Submission is not an assertion of process exit."""
+    action = str(action or "").lower()
+    if action not in {"stop", "pause", "resume"}:
+        return {"status": "refused", "reason": "action: stop | pause | resume"}
+    if agent_id and not re.fullmatch(r"agent-[A-Za-z0-9_.-]+", agent_id):
+        return {"status": "refused", "reason": "invalid agent identity"}
+    if action == "resume" and agent_id:
+        return _resume_agent(task_id, agent_id, expected_generation)
+    with _mutation_lock(task_id):
+        task = get(task_id)
+        if not task:
+            return {"status": "refused", "reason": "task missing"}
+        if agent_id:
+            import forge_runtime
+            progress = forge_runtime.read_progress(_unit_dir(task_id, "agents", agent_id))
+            if expected_generation and progress.get("generation") != expected_generation:
+                return {"status": "refused", "reason": "generation changed"}
+        else:
+            if task.get("status") not in LIVE_TASK_STATUSES and action != "stop":
+                return {"status": "refused", "reason": "terminal task cannot be revived"}
+            previous = _read_json(_task_dir(task_id) / "control.json", {}) or {}
+            if action == "resume":
+                if previous.get("action") != "pause":
+                    return {"status": "refused", "reason": "only explicit task Pause can resume"}
+                _atomic_json(_task_dir(task_id) / "control.json", {"action": "resume", "at": _now()})
+                return {"status": "resumed", "reason": "admission open; select safe unit continuations explicitly"}
+            _atomic_json(_task_dir(task_id) / "control.json", {"action": action, "at": _now()})
+            if action == "stop" and task.get("status") in LIVE_TASK_STATUSES:
+                task.update(status="stopped", finished=_now())
+                _save_task(task)
+        rows = _units(task_id, "agents")
+        targets = [agent_id] if agent_id else [r["id"] for r in rows if not r.get("parent_unit_id")]
+        if not agent_id:
+            for row in rows:
+                if not any(_in_subtree(task_id, target, row["id"]) for target in targets):
+                    targets.append(row["id"])  # orphan/corrupt ancestry is still group-owned
+    receipts = [agent(task_id, "stop", agent_id=unit) for unit in targets]
+    # Detached commands/checks are part of group Stop. Unit Stop also owns the
+    # jobs recorded from its subtree; legacy task-scoped jobs remain group-owned.
+    for kind, key, fn in (("processes", "process_id", process),
+                          ("verifications", "verification_id", verify)):
+        for row in _units(task_id, kind):
+            owner = str(row.get("parent_unit_id") or "")
+            if not agent_id or (owner and _in_subtree(task_id, agent_id, owner)):
+                receipts.append(fn(task_id, "stop", **{key: row["id"]}))
+    unknown = [r["id"] for kind in ("agents", "processes", "verifications")
+               for r in _units(task_id, kind) if r.get("status") in
+               (_LIVE_UNIT_STATES | {"unknown", "lost", "queued"})]
+    value = {"status": "unknown" if unknown else "settled", "action": action,
+             "task_id": task_id, "agent_id": agent_id, "unknown_units": unknown, "receipts": receipts}
+    _event(task_id, "group_control", summary=f"{action}: {value['status']}")
+    return value
+
+
 def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
           role: str = "worker", max_iters: int = 0, tail: int = 10000,
           node_id: str = "", owns: list[str] | None = None,
           spawned_by: str = "", model: str = "", result_sha256: str = "",
-          disposition: str = "", _parent_request_path: str = "") -> str:
-    task, root, err = _task_root(task_id)
+          disposition: str = "", _parent_request_path: str = "", phase: str = "",
+          success_criteria: list[str] | None = None, previous_unit_id: str = "") -> str:
+    task, root, err = _control_root(task_id, action)
     if err:
         return err
     assert task is not None and root is not None
@@ -3669,10 +4344,16 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         return "\n".join(f"{r['id']} [{r.get('status')}] parent={r.get('parent_unit_id') or '-'} "
                          f"sha256={r.get('result_sha256') or '-'} {r.get('role')}: {r.get('brief')}"
                           for r in rows[:30]) or "Субагентов нет."
+    if action == "tick":
+        if parent_id:
+            return "Only the coordinator drains the task queue."
+        return json.dumps(tick_queued(task_id), ensure_ascii=False)
     if action == "spawn":
         role = str(role or "worker").strip().lower()
         if task.get("self_review") and (role != "reviewer" or parent_id):
             return "Self-review admits root read-only critics only."
+        if task.get("source_update") and (role != "worker" or parent_id):
+            return "Source-update admits one isolated root worker only."
         if role not in {"scout", "worker", "reviewer"}:
             return "role: scout | worker | reviewer"
         if parent_id and parent_request.get("role") != "worker" and role == "worker":
@@ -3690,6 +4371,24 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
             # Same durable task mutex for root/DAG/nested workers and stop fences. The
             # reservation, admission decision and Popen are a single short transaction.
             with _mutation_lock(task_id) as beat:
+                reason = _admission_reason(task_id, _parent_request_path)
+                if reason:
+                    return f"Spawn refused: {reason}"
+                task = get(task_id) or task
+                _worker_script(task)
+                if node_id and not parent_id:
+                    current_plan = forge_swarm.refresh(
+                        _task_dir(task_id), lambda aid: _agent_snapshot(task_id, aid))
+                    nodes = {node["id"]: node for node in current_plan.get("nodes", [])}
+                    node = nodes.get(node_id)
+                    if (not node or node.get("agent_id") != unit_id
+                            or node.get("status") not in {"starting", "lost"}):
+                        return "Spawn refused: swarm reservation identity changed."
+                    reason = forge_swarm.dependency_reason(node, nodes)
+                    if reason:
+                        return f"Spawn refused: {reason}"
+                if task.get("source_update") and list((_task_dir(task_id) / "agents").glob("*/request.json")):
+                    return "Source-update already has its sole root unit; correction requires a new task."
                 if d.exists():
                     return (f"Юнит {unit_id} уже существует (status={_unit_state(d).get('status')}); "
                             "повторный spawn отклонён — это была бы вторая копия того же юнита.")
@@ -3702,7 +4401,11 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                         prior_node = _read_json(existing, {}) or {}
                         if (prior_node.get("node_id") == node_id
                                 and not prior_node.get("parent_unit_id")):
-                            return f"Swarm node {node_id} already has unit {existing.parent.name}; no duplicate spawn."
+                            history = forge_swarm.load(_task_dir(task_id))
+                            node = next((n for n in history.get("nodes", []) if n.get("id") == node_id), {})
+                            old_ids = {n.get("agent_id") for n in node.get("attempts", [])}
+                            if not previous_unit_id or existing.parent.name not in old_ids:
+                                return f"Swarm node {node_id} already has unit {existing.parent.name}; no duplicate spawn."
                 if parent_id:
                     # Read the durable request again under the same lock as stop; no stale
                     # in-memory copy can resurrect a fenced ancestor after the stop returns.
@@ -3718,22 +4421,17 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                         current = _parent_of(task_id, current)
                     if current:
                         return "Spawn refused: corrupt/cyclic worker ancestry."
-                limit = _worker_slots(task.get("max_active_workers", 8))
-                active = [r for r in _units(task_id, "agents")
-                          if r.get("status") in (_LIVE_UNIT_STATES | {"unknown"})
-                          or (r.get("status") == "lost" and not r.get("supervisor_pid"))]
-                if len(active) >= limit:
-                    return (f"Active worker slots exhausted: {len(active)}/{limit}; "
-                            "poll or reconcile uncertain units before retrying.")
                 request = {
                     "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
-                    "run_context": (None if task.get("self_review") else
+                    "run_context": (None if task.get("self_review") or task.get("source_update") else
                                     parent_request.get("run_context") if parent_id else
                                     task.get("run_context") or _task_run_context(task_id)),
                     "root": str(root), "proposal_id": task.get("proposal_id") or "",
                     "role": role, "brief": brief, "model": str(model or "").strip(),
                     "max_iters": max(0, int(max_iters or 0)),
                     "node_id": str(node_id or ""), "owns": list(owns or []),
+                    "phase": str(phase or ""), "success_criteria": list(success_criteria or []),
+                    "previous_unit_id": str(previous_unit_id or ""),
                     "parent_unit_id": parent_id,
                     # Legacy provenance only; not an authority/lineage input.
                     "spawned_by": str(spawned_by or ""),
@@ -3741,23 +4439,21 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                 }
                 if task.get("self_review"):
                     request["self_review"] = dict(task["self_review"])
+                if task.get("source_update"):
+                    request["source_update"] = dict(task["source_update"])
                 req = d / "request.json"
+                reason = _agent_capacity(task_id, request)
+                if reason:
+                    request.update(status="queued", queued_reason=reason)
+                    _atomic_json(req, request)
+                    _event(task_id, "agent_queued", agent_id=unit_id, summary=reason)
+                    return f"Queued {unit_id} ({role}): {reason}. Durable request retained; no process started."
                 _atomic_json(req, request)
                 try:
-                    beat(lease_sec=20)
-                    script = (Path(task["self_review"]["worker_script"])
-                              if task.get("self_review") else REPO / "forge_worker.py")
-                    pid = _spawn_runner(script, req, d / "supervisor.log")
+                    pid = _launch_agent_unlocked(task_id, d, request, beat)
                 except Exception as exc:
-                    failure = {"status": "error", "finished": _now(),
-                               "error": f"{type(exc).__name__}: {exc}", "reported_inline": True}
-                    _atomic_json(d / "result.json", failure)
-                    emit_unit_event(task_id, unit_id, failure, request=request)
                     return f"Субагент не стартовал: {type(exc).__name__}: {exc}"
-                request.update(supervisor_pid=pid, supervisor_started_at=_proc_started_at(pid),
-                               status="running")
-                _atomic_json(req, request)
-        except (TimeoutError, ValueError) as exc:
+        except (TimeoutError, ValueError, ImportError, OSError) as exc:
             return f"Spawn refused: {exc}"
         _event(task_id, "agent_spawned", agent_id=unit_id, role=role,
                summary=f"{unit_id} {role}: {brief[:120]}")
@@ -3771,10 +4467,18 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
     if parent_id and (agent_id == parent_id or not _in_subtree(task_id, parent_id, agent_id)):
         return "Worker cannot inspect or control itself, an ancestor, or a sibling."
     state = _unit_state(d)
+    if action in {"pause", "resume"}:
+        if parent_id:
+            return "Only the coordinator can resume or pause a selected unit."
+        return json.dumps(control(task_id, action, agent_id=agent_id), ensure_ascii=False)
     if action == "poll":
         log = _tail(d / "supervisor.log", max(500, min(int(tail or 10000), 30000)))
         result = _read_json(d / "result.json")
+        import forge_runtime
         body = json.dumps({**(result or {k: v for k, v in state.items() if k != "goal"}),
+                           "progress": forge_runtime.read_progress(d),
+                           "continuation": forge_runtime.continuation_info(d),
+                           "current_disposition": _agent_snapshot(task_id, agent_id)["current_disposition"],
                            "status": state.get("status"), "liveness": state.get("liveness"),
                            "agent_id": agent_id, "parent_unit_id": _parent_of(task_id, agent_id),
                            "result_sha256": _result_identity(d / "result.json"),
@@ -3800,18 +4504,23 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                 receipt = {"at": _now(), "parent_unit_id": parent_id,
                            "child_unit_id": agent_id, "result_sha256": observed,
                            "disposition": disposition}
-                # One decision per parent+child+result, never overwrite a past verdict.
-                path = d / f"disposition-{parent_id or 'root'}-{observed}.json"
-                previous = _read_json(path)
-                if previous:
-                    return (json.dumps(previous, ensure_ascii=False) if previous == receipt else
-                            f"Existing disposition retained: {json.dumps(previous, ensure_ascii=False)}")
+                # Revisions are append-only: deferred may later become integrated,
+                # but the earlier judgment and exact old result remain readable.
+                previous = _agent_snapshot(task_id, agent_id).get("current_disposition") or {}
+                if previous.get("disposition") == disposition:
+                    return json.dumps(previous, ensure_ascii=False)
+                revision = int(previous.get("revision") or (1 if previous else 0)) + 1
+                receipt.update(revision=revision, supersedes=previous.get("record") or "")
+                path = d / f"disposition-{parent_id or 'root'}-{observed}-r{revision:06d}.json"
+                receipt["record"] = path.name
                 _atomic_json(path, receipt)
                 _event(task_id, "agent_disposition", agent_id=agent_id,
                        parent_unit_id=parent_id, disposition=disposition, result_sha256=observed)
                 return json.dumps(receipt, ensure_ascii=False)
         except TimeoutError as exc:
             return f"Disposition not recorded: {exc}"
+    if action == "wait":
+        return _wait_worker_child(task_id, _parent_request_path, agent_id)
     if action == "stop":
         try:
             with _mutation_lock(task_id):
@@ -3832,8 +4541,25 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         for unit in sorted(targets, key=lambda x: _worker_depth(task_id, x), reverse=True):
             directory = _unit_dir(task_id, "agents", unit)
             prior = _read_json(directory / "result.json")
+            request = _read_json(directory / "request.json", {}) or {}
+            previous_stop = _read_json(directory / "stop.json", {}) or {}
+            if (isinstance(prior, dict) and prior.get("status") in _TERMINAL_AGENT_STATES
+                    and previous_stop.get("state") == "settled"
+                    and previous_stop.get("result_sha256") == _result_identity(directory / "result.json")):
+                # Resume creates another unit identity. Rechecking other group
+                # members must not replace this exact unit's proven Stop with
+                # uncertainty merely because its stopped Windows PID is absent.
+                receipts.append(f"{unit}: settled Stop receipt and result retained")
+                continue
             stop_confirmed = False
-            if isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
+            if request.get("status") == "queued" and not request.get("supervisor_pid"):
+                if not isinstance(prior, dict):
+                    prior = {"status": "stopped", "finished": _now(), "never_started": True,
+                             "note": "queued request stopped before process admission"}
+                    _atomic_json(directory / "result.json", prior)
+                outcome = "queued unit never started; result retained"
+                stop_confirmed = True
+            elif isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
                 outcome = f"settled {prior.get('status')}; result retained (результат сохранён)"
                 # A result is not process-death evidence. The worker may still be
                 # unwinding (or have left a descendant); stop it when its bound
@@ -3901,12 +4627,12 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         return ("\n".join(receipts) + "\n[scope] stop fenced agent descendants only; "
                 "detached coding_process/coding_verify jobs remain task-scoped. "
                 "Poll and stop them separately before task finish.")
-    return "action: spawn | poll | stop | disposition | list"
+    return "action: spawn | poll | stop | pause | resume | tick | disposition | list"
 
 
 def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "",
           kind: str = "finding", message: str = "", files: list[str] | None = None,
-          max_parallel: int = 3) -> str:
+          max_parallel: int = 8, result_sha256: str = "") -> str:
     """Coordinate fresh-context workers as a persistent dependency graph."""
     task, root, err = _task_root(task_id)
     if err:
@@ -3917,11 +4643,44 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
 
     def agent_state(aid: str) -> dict:
         path = _unit_dir(task_id, "agents", aid)
-        return _unit_state(path) if path.is_dir() else {"status": "lost"}
+        return _agent_snapshot(task_id, aid) if path.is_dir() else {"status": "lost"}
 
+    if action == "checkpoint":
+        try:
+            value = json.loads(plan or "{}")
+            if not isinstance(value, dict) or not str(value.get("next_action") or "").strip():
+                raise ValueError("coordinator checkpoint needs an object with next_action")
+            with _mutation_lock(task_id):
+                reason = _admission_reason(task_id)
+                if reason:
+                    return f"Checkpoint refused: {reason}"
+                previous = _read_json(directory / "coordinator-checkpoint.json", {}) or {}
+                revision = int(previous.get("revision") or 0) + 1
+                value.update(task_id=task_id, goal=task.get("goal"),
+                             success_criteria=task.get("success_criteria") or [],
+                             revision=revision, at=_now())
+                _atomic_json(directory / "coordinator-checkpoints" / f"{revision:06d}.json", value)
+                _atomic_json(directory / "coordinator-checkpoint.json", value)
+            return json.dumps(value, ensure_ascii=False)
+        except (ValueError, TimeoutError) as exc:
+            return f"Coordinator checkpoint refused: {exc}"
+    if action == "rework":
+        try:
+            with _mutation_lock(task_id):
+                reason = _admission_reason(task_id)
+                if reason:
+                    return f"Rework refused: {reason}"
+                forge_swarm.refresh(directory, agent_state)
+                return forge_swarm.summary(forge_swarm.rework(directory, node_id, message, result_sha256))
+        except (ValueError, TimeoutError) as exc:
+            return f"Rework refused: {exc}"
     if action == "plan":
         try:
-            created = forge_swarm.create(directory, plan, max_parallel=max_parallel)
+            with _mutation_lock(task_id):
+                reason = _admission_reason(task_id)
+                if reason:
+                    return f"Plan refused: {reason}"
+                created = forge_swarm.create(directory, plan, max_parallel=max_parallel)
         except ValueError as exc:
             return f"Swarm-план не принят: {exc}"
         _event(task_id, "swarm_planned", summary=f"{len(created.get('nodes') or [])} nodes")
@@ -3935,76 +4694,93 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
         _event(task_id, "swarm_signal", node_id=node_id, signal_kind=kind,
                summary=f"{kind}: {(message or ','.join(files or []))[:160]}")
         return json.dumps(row, ensure_ascii=False, indent=2)
-    current = forge_swarm.refresh(directory, agent_state)
-    if not current:
-        return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
     if action in {"start", "tick"}:
+        tick_queued(task_id)
         launched = []
-        # Восстановление после рестарта/краша между резервацией и спавном: узел в
-        # starting (или уже lost — refresh выше успел его так пометить) с agent_id,
-        # но юнита нет — возвращаем в pending, спавн повторится под ТЕМ ЖЕ
-        # идентификатором (дублей нет: agent() отказывает, если юнит существует).
-        for node in current.get("nodes") or []:
-            if node.get("status") in {"starting", "lost"} and node.get("agent_id"):
-                unit = _unit_dir(task_id, "agents", str(node["agent_id"]))
-                if not unit.is_dir():
-                    node["status"] = "pending"
-                    node["agent_id"] = ""
-                    node.pop("finished", None)
-        # Обратная половина crash-окна: спавн УСПЕЛ, но план не сохранился (краш между
-        # agent() и save). Ищем существующий юнит этого узла по request.node_id и
-        # перепривязываем его — второй спавн того же узла не появляется.
-        pending_nodes = [n for n in (current.get("nodes") or [])
-                         if not n.get("agent_id") and n.get("status") == "pending"]
-        if pending_nodes:
-            wanted = {str(n["id"]) for n in pending_nodes}
-            recovered: dict[str, list[tuple[str, dict]]] = {}
-            for unit_dir in (_task_dir(task_id) / "agents").glob("agent-*"):
-                req = _read_json(unit_dir / "request.json", {}) or {}
-                nid = str(req.get("node_id") or "")
-                if nid in wanted and not req.get("parent_unit_id"):
-                    recovered.setdefault(nid, []).append((unit_dir.name, req))
-            for n in pending_nodes:
-                candidates = recovered.get(str(n["id"]), [])
-                if len(candidates) > 1:
-                    n["status"] = "blocked_identity"
-                    n["error"] = f"ambiguous unit identities: {[unit for unit, _ in candidates]}"
-                elif candidates:
-                    unit, req = candidates[0]
-                    n["agent_id"] = unit
-                    n["status"] = "starting"
-                    n["started"] = req.get("created") or _now()
-                    launched.append(f"{n['id']}↔{unit} (восстановлен)")
-        ready = forge_swarm.ready_nodes(current)
+        with _mutation_lock(task_id):
+            reason = _admission_reason(task_id)
+            if reason:
+                return f"Swarm start refused: {reason}"
+            current = forge_swarm.refresh(directory, agent_state)
+            if not current:
+                return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
+            # Both halves of the reservation/crash recovery window are read and
+            # committed in ONE task transaction, like status refresh and rework.
+            before = json.dumps(current, sort_keys=True)
+            for node in current.get("nodes") or []:
+                if node.get("status") in {"starting", "lost"} and node.get("agent_id"):
+                    unit = _unit_dir(task_id, "agents", str(node["agent_id"]))
+                    if not unit.is_dir():
+                        node["reserved_agent_id"] = node["agent_id"]
+                        node["status"] = "pending"
+                        node["agent_id"] = ""
+                        node.pop("finished", None)
+            pending_nodes = [n for n in current.get("nodes", [])
+                             if not n.get("agent_id") and n.get("status") == "pending"]
+            if pending_nodes:
+                pending_by_id = {str(n["id"]): n for n in pending_nodes}
+                historical = {str(n["id"]): {a.get("agent_id") for a in n.get("attempts", [])}
+                              for n in pending_nodes}
+                recovered: dict[str, list[tuple[str, dict]]] = {}
+                for unit_dir in (_task_dir(task_id) / "agents").glob("agent-*"):
+                    req = _read_json(unit_dir / "request.json", {}) or {}
+                    nid = str(req.get("node_id") or "")
+                    if nid in pending_by_id and not req.get("parent_unit_id"):
+                        node = pending_by_id[nid]
+                        if (unit_dir.name in historical[nid]
+                                or (node.get("reserved_agent_id") and unit_dir.name != node["reserved_agent_id"])
+                                or str(req.get("previous_unit_id") or "") != str(node.get("previous_unit_id") or "")):
+                            continue
+                        recovered.setdefault(nid, []).append((unit_dir.name, req))
+                for node in pending_nodes:
+                    candidates = recovered.get(str(node["id"]), [])
+                    if len(candidates) > 1:
+                        node.update(status="blocked_identity", error=f"ambiguous unit identities: {[u for u, _ in candidates]}")
+                    elif candidates:
+                        unit, req = candidates[0]
+                        node.update(agent_id=unit, reserved_agent_id=unit, status="starting",
+                                    started=req.get("created") or _now())
+                        launched.append(f"{node['id']}↔{unit} (восстановлен)")
+            ready = forge_swarm.ready_nodes(current)
+            by_id = {n["id"]: n for n in current.get("nodes", [])}
+            for node in ready:
+                reserved = str(node.get("reserved_agent_id") or "") or _id("agent")
+                node.update(reserved_agent_id=reserved, agent_id=reserved, status="starting",
+                            dependency_results={dep: by_id[dep].get("accepted_sha256") or ""
+                                                for dep in node.get("deps", [])})
+            if json.dumps(current, sort_keys=True) != before:
+                forge_swarm.save(directory, current)
+        # agent() takes the non-reentrant task lock itself and validates this
+        # reservation/dependency binding again. Never save `current` after unlock.
         for node in ready:
-            # Резервация ДО спавна: устойчивый agent_id пишется в план и на диск
-            # раньше, чем рождается процесс. Краш между ними больше не порождает
-            # вторую копию узла — тик выше свяжет резервацию с тем же идентификатором.
-            reserved = _id("agent")
-            node["agent_id"] = reserved
-            node["status"] = "starting"
-            forge_swarm.save(directory, current)
+            reserved = node["agent_id"]
             out = agent(task_id, "spawn", brief=node["brief"], role=node["role"],
-                        node_id=node["id"], owns=node.get("owns") or [], agent_id=reserved)
-            unit = _unit_dir(task_id, "agents", reserved)
-            req = _read_json(unit / "request.json", {}) or {}
-            if not unit.is_dir() or req.get("node_id") != node["id"]:
-                node["status"] = ("pending" if out.startswith("Active worker slots exhausted")
-                                  else "blocked_identity")
-                node["agent_id"] = ""
-                node["error"] = out[:1000]
-                continue
-            node["agent_id"] = reserved
-            node["status"] = _unit_state(unit).get("status") or "starting"
-            node["started"] = _now()
-            launched.append(f"{node['id']}→{node['agent_id']}")
-            if node.get("owns"):
-                forge_swarm.signal(directory, node_id=node["id"], agent_id=node["agent_id"],
-                                   kind="claim", message="advisory ownership",
-                                   files=node.get("owns") or [])
-        forge_swarm.save(directory, current)
+                        node_id=node["id"], owns=node.get("owns") or [], agent_id=reserved,
+                        phase=node.get("phase") or "", success_criteria=node.get("success_criteria") or [],
+                        previous_unit_id=node.get("previous_unit_id") or "")
+            with _mutation_lock(task_id):
+                live = forge_swarm.load(directory)
+                selected = next((n for n in live.get("nodes", []) if n["id"] == node["id"]), {})
+                if selected.get("agent_id") != reserved:
+                    continue  # another transaction owns the new logical attempt
+                unit = _unit_dir(task_id, "agents", reserved)
+                req = _read_json(unit / "request.json", {}) or {}
+                if not unit.is_dir() or req.get("node_id") != node["id"]:
+                    selected.update(status="pending", agent_id="", error=out[:1000])
+                    forge_swarm.save(directory, live)
+                    continue
+                launched.append(f"{node['id']}→{reserved}")
+                if node.get("owns"):
+                    forge_swarm.signal(directory, node_id=node["id"], agent_id=reserved,
+                                       kind="claim", message="advisory ownership", files=node["owns"])
+        with _mutation_lock(task_id):
+            current = forge_swarm.refresh(directory, agent_state)
         _event(task_id, "swarm_tick", summary=", ".join(launched) or "no ready nodes")
         return forge_swarm.summary(current, forge_swarm.mailbox(directory, 40))
+    with _mutation_lock(task_id):
+        current = forge_swarm.refresh(directory, agent_state)
+    if not current:
+        return "У задачи нет swarm-плана; action=plan принимает JSON nodes[]."
     if action == "status":
         return forge_swarm.summary(current, forge_swarm.mailbox(directory, 40))
     if action == "mailbox":
@@ -4023,7 +4799,7 @@ def swarm(task_id: str, action: str = "status", plan: str = "", node_id: str = "
                          "result": result.get("result", ""), "tool_calls": result.get("tool_calls"),
                          "diff_tail": result.get("diff_tail", "")})
         return _cap(json.dumps(rows, ensure_ascii=False, indent=2), 40000)
-    return "action: plan | start | tick | status | signal | mailbox | compare"
+    return "action: plan | start | tick | status | signal | mailbox | compare | rework | checkpoint"
 
 
 def learn(task_id: str, action: str = "recall", query: str = "", lesson: str = "",
@@ -4116,7 +4892,7 @@ def _finish_survey(task_id: str, beat=None) -> dict:
     # по verify_commands из всех терминальных матриц задачи. Advisory-информация: она
     # попадает в survey, ответ finish и урок, но НЕ блокирует закрытие (закон 3 AGENTS.md).
     contract_evidence = _contract_evidence(task, verification_rows)
-    active_agents = [x for x in agent_rows if x.get("status") in _LIVE_UNIT_STATES]
+    active_agents = [x for x in agent_rows if x.get("status") in (_LIVE_UNIT_STATES | {"queued"})]
     active_jobs = [x for x in job_rows if x.get("status") in _LIVE_UNIT_STATES]
     active_checks = [x for x in verification_rows if x.get("status") in _LIVE_UNIT_STATES]
     unknown_units = [x for x in agent_rows + job_rows + verification_rows
@@ -4451,6 +5227,9 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
         # потому, что замок больше не переживает ни смерть держателя, ни его молчание;
         # долгие шаги осмотра объявляются лизингом внутри _finish_survey.
         with _mutation_lock(task_id, timeout=120) as beat:
+            task = get(task_id)
+            if task and task.get("status") not in LIVE_TASK_STATUSES:
+                return f"{task_id} is terminal ({task.get('status')}); result retained."
             survey = _finish_survey(task_id, beat=beat)
             if survey.get("error"):
                 return str(survey["error"])
@@ -4471,6 +5250,11 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
 
 
 def abandon(task_id: str, reason: str = "", checked: str = "") -> str:
+    with _mutation_lock(task_id):
+        return _abandon_unlocked(task_id, reason, checked)
+
+
+def _abandon_unlocked(task_id: str, reason: str = "", checked: str = "") -> str:
     """Закрыть запись задачи, ничего не интегрируя и ничего не восстанавливая.
 
     ⚠ 28.07. До этой правки закрыть задачу с недостижимым корнем было НЕЧЕМ. `finish`

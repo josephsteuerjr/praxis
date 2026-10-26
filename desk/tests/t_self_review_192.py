@@ -14,6 +14,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "desk"))
+sys.path.insert(0, str(ROOT / 'helene/core'))
 from localharness import self_review, self_review_worker
 
 

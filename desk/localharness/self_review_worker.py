@@ -27,6 +27,7 @@ class SnapshotReviewer:
         self.sha256 = metadata["subject_sha256"]
         self.subject = validate_snapshot(self.root, self.sha256)
         self.files = {row["path"] for row in self.subject["manifest"]} | {"subject.json"}
+        self.entries = {row['path']: row for row in self.subject['manifest']}
 
     def system(self, request):
         validate_snapshot(self.root, self.sha256)
@@ -70,6 +71,9 @@ class SnapshotReviewer:
         if action == "read":
             if logical not in self.files:
                 return "Not a declared frozen input."
+            row = self.entries.get(logical, {})
+            if row.get('exists') is False or row.get('withheld'):
+                return json.dumps(row, ensure_ascii=False)
             text = (self.root / logical).read_text(encoding="utf-8-sig")
             lines = text.splitlines(True)
             start = max(1, int(args.get("start") or 1))
@@ -88,6 +92,9 @@ class SnapshotReviewer:
             matches = []
             for path in sorted(self.files):
                 if logical and path != logical and not path.startswith(logical + "/"):
+                    continue
+                row = self.entries.get(path, {})
+                if row.get('exists') is False or row.get('withheld'):
                     continue
                 for number, line in enumerate((self.root / path).read_text(encoding="utf-8-sig").splitlines(), 1):
                     if query in line:

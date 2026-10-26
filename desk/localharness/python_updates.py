@@ -121,6 +121,8 @@ def _download(url, target, expected='', progress=None):
             length=source.headers.get('Content-Length')
             total=int(length) if length and length.isdecimal() else None
             while chunk:=source.read(262144):
+                from .update_io import count as count_read
+                count_read(progress, 'download', len(chunk))
                 count+=len(chunk)
                 if count>8_000_000_000:raise ValueError('Update archive exceeds 8 GB')
                 digest.update(chunk);output.write(chunk)
@@ -146,7 +148,10 @@ def update_download(owner,url,sha256=None,extensions=None):
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',release) or name != asset_name(release,selected):
         raise ValueError('Expected an update archive for this application target')
     folder=owner.root.resolve().parent
-    report=lambda value:owner.event('package-progress',value)
+    from .update_progress import Progress
+    operation=uuid.uuid4().hex
+    report=Progress(folder/('.helene-update-'+operation+'.progress.json'),operation,owner.root,event=owner.event)
+    report.phase('downloading')
     selected=installed_extensions(owner.root) if extensions is None else extensions
     if not isinstance(selected,list) or any(s not in EXTENSION_ASSETS for s in selected):raise ValueError('Unknown extension selection')
     result=_download(url,folder/name,sha256 or asset_sha(url),report)
@@ -163,7 +168,9 @@ def update_download(owner,url,sha256=None,extensions=None):
             component_url=urllib.parse.urlunsplit(parsed._replace(path=parsed.path.rsplit('/',1)[0]+'/'+component))
             components.append(_download(component_url,cache/component,asset_sha(component_url),report))
     receipt=folder/(name+'.download.json')
-    receipt.write_text(json.dumps({'archive':result,'components':components,'extensions':selected},indent=2),encoding='utf-8')
+    receipt.write_text(json.dumps({'archive':result,'components':components,'extensions':selected,
+                                   'progress':str(report.path)},indent=2),encoding='utf-8')
+    report.save()
     result['components']=components
     return result
 
@@ -217,10 +224,23 @@ def _update_install(owner,path,forceExtensions=False):
         raise ValueError('Choose the update ZIP beside the working Helene folder')
     destination=folder/('.helene-update-'+uuid.uuid4().hex)
     destination.mkdir()
+    from .update_progress import Progress
+    operation=destination.name.removeprefix('.helene-update-')
+    progress=Progress(folder/(destination.name+'.progress.json'),operation,owner.root,event=owner.event)
     archives=[archive]
     receipt=archive.with_name(archive.name+'.download.json')
     if receipt.is_file():
         value=json.loads(receipt.read_text(encoding='utf-8'))
+        if value.get('progress'):
+            previous=Path(value['progress']).resolve()
+            if previous.parent!=folder or not previous.name.startswith('.helene-update-') or not previous.name.endswith('.progress.json'):
+                raise ValueError('Download progress receipt differs')
+            downloaded=Progress(previous,target=owner.root)
+            if downloaded.value['stage'] not in ('completed','failed','needs_resolution'):
+                progress.path.unlink()
+                progress=downloaded
+                progress.event=owner.event
+                progress.pin()
         rows=[value['archive'],*value['components']]
         cache=folder/'.helene-downloads'/archive.name.removesuffix('.zip')
         from . import component_downloads
@@ -243,7 +263,19 @@ def _update_install(owner,path,forceExtensions=False):
         # A manually downloaded base ZIP is a complete application. Optional
         # components already installed in the working root remain there.
         pass
-    for item in archives:_extract(item,destination,lambda value:owner.event('package-progress',value))
+    verified={}
+    try:
+        progress.phase('unpacking',staging=str(destination))
+        for item in archives:
+            verified.update(_extract(item,destination,progress))
+        return _prepare_handoff(owner,destination,verified,progress,forceExtensions)
+    except BaseException as exc:
+        progress.phase('failed',error=str(exc),previous_application_open=True)
+        raise
+
+
+def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
+    folder=owner.root.resolve().parent
     new_root=destination/'Helene'
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
@@ -256,14 +288,23 @@ def _update_install(owner,path,forceExtensions=False):
     # Copy the helper outside the live installation before replacing its files.
     helper=destination/'python_source_updater.py'
     from .update_extensions import check
+    progress.phase('extensions')
     check(owner.root, new_root, force=forceExtensions)
     from .code_transition import preflight
+    progress.phase('code')
     source_plan = preflight(owner.root, new_root)
     if source_plan['state'] != 'ready':
         # All merge material lives in .source-updates, independent of this
         # disposable extraction. Keep the verified ZIP for the next click.
+        progress.phase('needs_resolution',message=source_plan.get('message',''))
         shutil.rmtree(destination)
         return source_plan
+    # No old window closes on preparation failure. The helper independently
+    # reacquires the lease and validates this snapshot before admission.
+    from python_migrate import installation_lock
+    from .python_source_updater import prepare_install
+    with installation_lock(owner.root):
+        prepare_install(owner.root,new_root,verified=verified,progress=progress)
     shutil.copy2(new_root/'app/localharness/python_source_updater.py',helper)
     argv=[str(interpreter),str(helper),'--old',str(owner.root),'--new',str(new_root),
           '--pid',str(os.getpid()),'--staging',str(destination)]
@@ -281,4 +322,5 @@ def _update_install(owner,path,forceExtensions=False):
         os._exit(0)
     timer=threading.Timer(2,exit_old);timer.daemon=True;timer.start()
     return {'dir':str(owner.root),'updater_pid':child.pid,'log':str(log),
-            'old_install_retained':True,'staging':str(destination)}
+            'old_install_retained':True,'staging':str(destination),'progress':str(progress.path),
+            'operation_id':progress.value['id']}

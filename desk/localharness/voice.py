@@ -440,6 +440,14 @@ def worker_live(home: Path, ready: dict):
         args=psutil.Process(ready['pid']).cmdline()
         selected=next((args[i+1] for i,arg in enumerate(args[:-1]) if arg=='--home'),None)
         if selected is None:selected=next((arg.split('=',1)[1] for arg in args if arg.startswith('--home=')),None)
+        worker = any(Path(arg).name == 'speech_worker.py' for arg in args)
+        if worker:
+            generation = next((args[i+1] for i,arg in enumerate(args[:-1]) if arg == '--generation'), None)
+            return (ready.get('schema') == 2 and generation == ready.get('generation')
+                    and isinstance(generation, str) and len(generation) == 32
+                    and selected is not None and Path(selected).resolve() == home.resolve())
+        # Legacy metadata may be shown, but the application request client never
+        # admits the old unbound protocol (no generation in its ready record).
         return any(Path(arg).name=='xtts_tts_worker.py' for arg in args) and selected is not None and Path(selected).resolve()==home.resolve()
     except psutil.NoSuchProcess:return False
     except (psutil.AccessDenied,OSError,ValueError):return None
@@ -463,48 +471,32 @@ def speech_state(tree: Path, cfg: dict) -> dict:
             "speaker":str(block(cfg).get("tts_speaker") or "Ana Florence"),
             "language":str(block(cfg).get("tts_language") or "ru"),
             "speakers":speakers,"languages":languages,"worker_ready":live,
+            "generation":worker.get('generation') if live else None,
+            "voice_note_ready":live is True and worker.get('ogg_opus') is True,
             "device":str(block(cfg).get('tts_device') or 'cpu')}
 
 
 def preview(tree: Path, cfg: dict, request: dict, timeout=90):
     """One local sample via the supervised worker, never a Telegram delivery."""
-    import uuid
     import base64
-    home=Path(tree)/'memory/.state/xtts'
-    ready=_read(home/'ready.json')
-    if worker_live(home,ready) is not True:
-        raise ValueError('XTTS ещё не готов. Установи расширение, включи голос и дождись запуска процесса.')
-    speaker=str(request.get('speaker') or block(cfg).get('tts_speaker') or 'Ana Florence')
-    language=str(request.get('language') or block(cfg).get('tts_language') or 'ru')
-    catalog=_read(voices_dir(Path(tree))/'voices.json')
-    if speaker not in (ready.get('speakers') or catalog.get('speakers') or []):raise ValueError('Выбери голос из каталога установленной модели')
-    if language not in (ready.get('languages') or catalog.get('languages') or []):raise ValueError('Язык отсутствует в установленной модели')
+    if __package__:
+        from . import speech_client
+    else:
+        from localharness import speech_client
     text=str(request.get('text') or 'Привет. Это мой голос. Настройки можно изменить.')
     if not 1<=len(text.strip())<=300:raise ValueError('Образец: от 1 до 300 символов')
-    identity=uuid.uuid4().hex;incoming=home/'inbox';output=home/'output'
-    incoming.mkdir(parents=True,exist_ok=True)
-    path=incoming/(identity+'.json');temporary=path.with_suffix('.tmp')
-    payload={'text':text,'speaker':speaker,'language':language}
-    reference=str(request.get('reference') or block(cfg).get('tts_reference') or '').strip()
-    if reference:
-        chosen=Path(reference).expanduser()
-        if not chosen.is_file() or chosen.suffix.lower()!='.wav':raise ValueError('Свой образец должен быть существующим локальным WAV')
-        payload['reference']=str(chosen.resolve())
-    temporary.write_text(json.dumps(payload),encoding='utf-8')
-    temporary.replace(path);receipt=output/(identity+'.json');audio=output/(identity+'.wav')
-    deadline=time.monotonic()+timeout
-    while not receipt.is_file():
-        if time.monotonic()>=deadline:
-            (incoming/(identity+'.cancel')).touch()
-            raise TimeoutError('Образец ещё не готов; запрос отменён, звук не отправлялся')
-        time.sleep(.05)
+    selection={key:request[name] for name,key in (('speaker','tts_speaker'),
+               ('language','tts_language'),('reference','tts_reference')) if request.get(name)}
+    audio=speech_client.synthesize(text, Path(tree), Path(tree)/'media/tts-preview',
+            configuration=lambda: cfg, selection=selection, format='wav', timeout=timeout)
     try:
-        result=_read(receipt)
-        if not result.get('ok') or result.get('request_id')!=identity:raise ValueError(result.get('error') or 'XTTS не подтвердил образец')
-        if audio.stat().st_size>8*1024*1024:raise ValueError('Образец слишком велик')
-        return {'mime':'audio/wav','base64':base64.b64encode(audio.read_bytes()).decode('ascii')}
+        audio.check()
+        if audio.path.stat().st_size>8*1024*1024:raise ValueError('Образец слишком велик')
+        result={'mime':'audio/wav','base64':base64.b64encode(audio.path.read_bytes()).decode('ascii')}
+        audio.check()
+        return result
     finally:
-        audio.unlink(missing_ok=True);receipt.unlink(missing_ok=True)
+        audio.path.unlink(missing_ok=True)
 
 
 def stt_state(tree: Path, cfg: dict) -> dict:

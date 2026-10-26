@@ -275,6 +275,9 @@ class Controller:
                         self.helpers.remove(child)
 
     def invoke(self, command, args):
+        if command == 'update_progress':
+            from .update_progress import status
+            return status(self.root)
         agent = self.current()
         if command == 'config_load':
             return {'config':load(agent.config), 'path':str(agent.config),

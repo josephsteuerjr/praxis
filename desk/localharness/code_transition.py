@@ -60,6 +60,7 @@ def baseline(program, destination, sources=()):
 
 def preflight(old, new, *, notify=True):
     from .app_migration import discover
+    from . import source_update
     old, new = Path(old).resolve(), Path(new).resolve()
     found = discover(old)
     sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
@@ -89,25 +90,55 @@ def preflight(old, new, *, notify=True):
                 raise ValueError('Source merge inputs changed')
             if merge.inventory(source) != local_files:
                 raise ValueError('Local code changed during preparation; retry the update')
-            plans.append({'source': source, 'directory': str(directory), 'state': plan['state']})
-            if notify and plan['state'] == 'conflicts':
+            state = plan['state']
+            detail = {}
+            if plan['conflicts']:
                 agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
-                request = Path(agent['tree']) / 'memory/.control/source-update.json'
-                if read(request).get('id') != identity:
-                    write(request, {'id': identity, 'directory': str(directory), 'state': 'pending',
-                                    'version': read(new / 'python-app.json').get('version', ''),
-                                    'source': source, 'program': str(old), 'tries': 0})
-    write(new / 'code-transition-plan.json', {'format': 'helene-code-plan.v1', 'old': str(old), 'plans': plans})
+                if notify:
+                    source_update.ensure(agent['tree'], old, source, directory,
+                                         read(new / 'python-app.json').get('version', ''))
+                try:
+                    source_update.validate_ready(directory)
+                    state = 'ready'
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    detail = read(directory / 'pipeline.json')
+                    state = detail.get('state', 'queued')
+                    if state == 'ready_to_apply':
+                        state = 'needs_attention'
+                        detail = {**detail, 'error': str(exc)}
+            plans.append({'source': source, 'directory': str(directory), 'state': state,
+                          'error': str(detail.get('error') or detail.get('reason') or '')})
+    write(new / 'code-transition-plan.json', {'format': 'helene-code-plan.v1', 'old': str(old),
+          'sources': sources, 'incoming': incoming, 'plans': plans})
     pending = [row for row in plans if row['state'] != 'ready']
+    blocked = [row for row in pending if row['state'] in {'needs_attention', 'cancelled'}]
+    message = ('Панель обновления требует внимания; старая версия сохранена. ' +
+               '; '.join(row['error'] or row['state'] for row in blocked) if blocked else
+               'Изолированный исполнитель и независимая панель разбирают пересечения кода. '
+               'Старая версия остаётся открытой. После готовности панели повторите «Обновить».')
     return {'state': 'needs_resolution' if pending else 'ready', 'plans': plans,
-            'message': 'Нужно совместить правки кода. Элен получила задачу; после её ответа нажми «Обновить» ещё раз.' if pending else ''}
+            'message': message if pending else ''}
 
 
 def validate(new):
-    for row in read(Path(new) / 'code-transition-plan.json').get('plans', []):
-        plan = read(Path(row['directory']) / 'plan.json')
+    from .app_migration import discover
+    from . import source_update
+    record = read(Path(new) / 'code-transition-plan.json')
+    if not record:
+        return
+    found = discover(Path(record['old']))
+    sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
+                                if row['value'].get('mode') != 'remote'))
+    if sources != record.get('sources'):
+        raise ValueError('Selected code paths changed before applying the update; retry')
+    if merge.inventory(Path(new) / 'tree') != record['incoming']:
+        raise ValueError('Incoming upstream code changed before applying the update; retry')
+    for row in record.get('plans', []):
+        plan = merge.validate_inputs(row['directory'])
         if merge.inventory(row['source']) != plan['files']['local']:
             raise ValueError('Local code changed before applying the update; retry')
+        if plan['conflicts']:
+            source_update.validate_ready(row['directory'])
 
 
 def prepare(old, new, note):

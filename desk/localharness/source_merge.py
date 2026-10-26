@@ -6,6 +6,7 @@ Existing agent repositories are copied by migration and never rewritten here.
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -63,6 +64,38 @@ def inventory(root):
 
 def signature(files):
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def input_signature(value):
+    """Bind the immutable sides, source identity and permitted resolution surface."""
+    return signature({key: value[key] for key in
+                      ('local_path', 'commits', 'files', 'conflicts', 'automatic')})
+
+
+def validate_inputs(directory, expected=''):
+    directory = Path(directory)
+    value = read(directory / 'plan.json')
+    if expected and input_signature(value) != expected:
+        raise ValueError('Source merge input identity changed')
+    for side in ('base', 'local', 'incoming'):
+        if inventory(directory / side) != value['files'][side]:
+            raise ValueError('Frozen source merge side changed: ' + side)
+    return value
+
+
+def candidate_signature(directory):
+    return signature(inventory(Path(directory) / 'result'))
+
+
+def reopen(directory):
+    """A correction may edit only the original conflicts; keep its prior candidate."""
+    directory = Path(directory)
+    value = validate_inputs(directory)
+    if not value['conflicts']:
+        raise ValueError('No contested paths to repair')
+    value['state'] = 'conflicts'
+    write(directory / 'plan.json', value)
+    return value
 
 
 def executable(*programs):
@@ -185,7 +218,7 @@ def create(base, local, incoming, directory, *, exe='git'):
 
 def finish(directory, *, exe='git'):
     directory = Path(directory)
-    value = read(directory / 'plan.json')
+    value = validate_inputs(directory)
     actual = inventory(directory / 'result')
     if set(value['conflicts']) != set(value['resolved']):
         raise ValueError('Resolve every source conflict before finishing')
@@ -209,7 +242,7 @@ def finish(directory, *, exe='git'):
 
 def resolve(directory, name, content=None, *, delete=False, side=''):
     directory = Path(directory)
-    value = read(directory / 'plan.json')
+    value = validate_inputs(directory)
     relative(name)
     if value.get('state') != 'conflicts' or name not in value['conflicts']:
         raise ValueError('Path is not an unresolved merge conflict')
@@ -237,7 +270,10 @@ def resolve(directory, name, content=None, *, delete=False, side=''):
 
 def apply(directory, target):
     directory, target = Path(directory), Path(target).resolve()
-    value = read(directory / 'plan.json')
+    value = validate_inputs(directory)
+    if value['conflicts']:
+        from .source_update import validate_ready
+        validate_ready(directory)
     if value.get('state') != 'ready' or inventory(directory / 'result') != value['result']:
         raise ValueError('Source merge is not ready or its result changed')
     if inventory(target) != value['files']['local']:
@@ -248,7 +284,19 @@ def apply(directory, target):
     if inventory(value['local_path']) != value['files']['local']:
         raise ValueError('Local code changed during update preparation; merge again')
     for name in sorted(set(value['files']['local']) - set(value['result']), reverse=True):
-        (target / name).unlink()
+        removed = target / name
+        removed.unlink()
+        # Git may replace a whole directory with a file. Only empty ancestors
+        # of these planned deletions are removable, never unplanned contents.
+        parent = removed.parent
+        while parent != target:
+            try:
+                parent.rmdir()
+            except OSError as exc:
+                if exc.errno in {errno.ENOTEMPTY, errno.EEXIST}:
+                    break
+                raise
+            parent = parent.parent
     for name, entry in value['result'].items():
         if entry == value['files']['local'].get(name):
             continue

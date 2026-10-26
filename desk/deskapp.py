@@ -48,6 +48,7 @@ from deskd import artifacts
 from deskd import control
 from deskd import connection_checks
 from deskd import readers
+from deskd import forge_reader, forge_control
 from deskd import rooms
 from deskd import usage
 
@@ -874,6 +875,57 @@ async def _r_forge(c: Call):
     return await asyncio.to_thread(reader)
 
 
+async def _forge_owner(c: Call, fn, *args, **kwargs):
+    # Handler-level check also protects direct tunnel dispatch/tests, not only
+    # the HTTP scope middleware. Owner records never extend paired /api/forge.
+    if c.role != "owner":
+        raise web.HTTPForbidden(text="Forge details and control require the owner key")
+    try:
+        return await asyncio.to_thread(fn, readers.tree(), *args, **kwargs)
+    except forge_reader.ReadError as exc:
+        return Fail(exc.status, str(exc), "forge_record")
+
+
+async def _r_forge_tasks(c: Call):
+    return await _forge_owner(c, forge_reader.tasks, _int_arg(c.query, "limit", 30, 1, 100))
+
+
+async def _r_forge_task(c: Call):
+    return await _forge_owner(c, forge_reader.task_detail, c.query.get("task_id") or "")
+
+
+async def _r_forge_events(c: Call):
+    return await _forge_owner(c, forge_reader.events, c.query.get("task_id") or "",
+                              c.query.get("unit_id") or "",
+                              _int_arg(c.query, "offset", 0, 0, 2**53 - 1),
+                              _int_arg(c.query, "limit", 50, 1, 100),
+                              c.query.get("generation") or "",
+                              _int_arg(c.query, "after_seq", 0, 0, 2**53 - 1))
+
+
+async def _r_forge_payload(c: Call):
+    return await _forge_owner(c, forge_reader.payload, c.query.get("task_id") or "",
+                              c.query.get("unit_id") or "", c.query.get("sha256") or "",
+                              c.query.get("kind") or "payload",
+                              _int_arg(c.query, "offset", 0, 0, 2**53 - 1),
+                              _int_arg(c.query, "limit", 8000, 1, 8000))
+
+
+async def _r_forge_control(c: Call):
+    if not isinstance(c.body, dict):
+        raise web.HTTPBadRequest(text="Expected a Forge control object")
+    value = c.body
+    return await _forge_owner(c, forge_control.enqueue, value.get("task_id") or "",
+                              value.get("action") or "", value.get("agent_id") or "",
+                              value.get("expected_generation") or "", value.get("command_id") or "")
+
+
+async def _r_forge_receipt(c: Call):
+    if c.query.get("task_id"):
+        return await _forge_owner(c, forge_control.recent, c.query["task_id"])
+    return await _forge_owner(c, forge_control.receipt, c.query.get("command_id") or "")
+
+
 def _state_with_autonomy():
     from deskd import autonomy
     snapshot=dict(readers.state())
@@ -1524,6 +1576,12 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/board", _reader(lambda: readers.board())),
     Route("GET", "/api/agenda", _reader(lambda: readers.agenda())),
     Route("GET", "/api/forge", _r_forge),
+    Route("GET", "/api/forge/tasks", _r_forge_tasks),
+    Route("GET", "/api/forge/task", _r_forge_task),
+    Route("GET", "/api/forge/events", _r_forge_events),
+    Route("GET", "/api/forge/payload", _r_forge_payload),
+    Route("POST", "/api/forge/control", _r_forge_control),
+    Route("GET", "/api/forge/control", _r_forge_receipt),
     Route("GET", "/api/shadow", _reader(lambda: readers.shadow_streams())),
     Route("GET", "/api/shadow/{stream}/captures", _r_shadow_captures),
     Route("GET", "/api/shadow/{stream}/capture", _r_shadow_capture),
@@ -1657,7 +1715,8 @@ def _http_handler(route: Route):
             # причину из тела ответа словами.
             return web.Response(status=result.status, text=result.error)
         response = _json(result)
-        if route.path.startswith(_remote_computer.PREFIX): response.headers['Cache-Control'] = 'no-store'
+        if route.path.startswith(_remote_computer.PREFIX) or route.path.startswith('/api/forge/'):
+            response.headers['Cache-Control'] = 'no-store'
         return response
     return handler
 

@@ -23,6 +23,7 @@ from pathlib import Path
 import forge
 import llm
 import run_context
+import forge_runtime
 
 
 def _now() -> str:
@@ -49,7 +50,7 @@ def _bounded_env_float(name: str, default: float, *, low: float, high: float) ->
 
 def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dict],
                                tools: list[dict] | None, logical_iteration: int,
-                               call_options: dict | None = None):
+                               call_options: dict | None = None, journal=None):
     """Retry an LLM iteration only while no response/tool call has reached the worker.
 
     ``llm.chat`` either returns a complete response object or raises.  Tool dispatch starts
@@ -66,6 +67,16 @@ def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dic
                             model=str(request.get("model") or "").strip() or None,
                             **(call_options or {}))
         except llm.BrokenChannelError as exc:
+            if journal is not None:
+                partial = getattr(exc, "partial", None)
+                reference = None
+                if partial is not None:
+                    reference = journal.payload(json.dumps({"text": partial.text, "blocks": partial.blocks,
+                        "stop_reason": partial.stop_reason, "model": partial.model,
+                        "assistant": _assistant(partial)}, ensure_ascii=False))
+                journal.event("model_transport_error", error=f"{type(exc).__name__}: {exc}",
+                              output_ref=reference, attempt=attempt, retry=attempt < retries,
+                              partial_not_dispatched=partial is not None)
             if attempt >= retries:
                 raise
             retry_number = attempt + 1
@@ -89,9 +100,7 @@ def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dic
 
 
 def _write(path: Path, data: dict) -> None:
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    forge_runtime.atomic_json(path, data)
 
 
 def _publish_result(request_path: Path, task_id: str, data: dict) -> bool:
@@ -103,6 +112,10 @@ def _publish_result(request_path: Path, task_id: str, data: dict) -> bool:
             if not isinstance(prior, dict) or str(prior.get("status") or "") not in forge._LIVE_UNIT_STATES:
                 return False
             data = {**prior, **data}  # preserve any earlier partial observations
+        if data.get("status") in {"done", "stalled"}:
+            reason = forge._admission_reason(task_id, str(request_path))
+            if reason:
+                raise WorkerControlStopped(reason)
         _write(result, data)
         return True
 
@@ -205,10 +218,12 @@ DELEGATE_TOOL = {
         "Spawn a child fresh-context worker, poll/stop agent descendants, or disposition their "
         "exact terminal result. The parent identity comes from your worker request, never from "
         "model arguments. Detached process/verification jobs are task-scoped, separately stopped. "
-        "disposition requires the full result_sha256 returned by poll."
+        "disposition requires the full result_sha256 returned by poll. To execute a queued editing "
+        "child, wait explicitly yields your shared-root writer slot, blocks all your other work, "
+        "and returns its full terminal result before you regain ownership. First settle detached jobs."
     ),
     "input_schema": _obj({
-        "action": {"type": "string", "enum": ["spawn", "list", "poll", "stop", "disposition"]},
+        "action": {"type": "string", "enum": ["spawn", "list", "poll", "stop", "disposition", "wait"]},
         "agent_id": {"type": "string"}, "result_sha256": {"type": "string"},
         "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
         "brief": {"type": "string"},
@@ -255,6 +270,7 @@ Operating contract:
 - For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
 - A worker may use `run` for arbitrary build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Detached process/verification jobs are task-scoped; stopping your agent subtree does NOT stop them. Stop those jobs explicitly.
 - Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
+- Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
 - Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
 - End with a compact but complete result: what you learned/changed, exact verification, remaining risks, and the next useful integration step. Do not merely narrate intentions.
 """
@@ -278,13 +294,13 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
     if name == "inspect":
         return forge.inspect(task_id, **clean)
     if name == "edit":
-        return forge.edit(task_id, **clean)
+        return forge.edit(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "run":
-        return forge.run(task_id, **clean)
+        return forge.run(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "process":
-        return forge.process(task_id, **clean)
+        return forge.process(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "verify":
-        return forge.verify(task_id, **clean)
+        return forge.verify(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "signal":
         return forge.swarm(task_id, "signal", node_id=str(request.get("node_id") or request.get("id") or ""),
                            kind=str(clean.get("kind") or "finding"),
@@ -296,7 +312,7 @@ def _dispatch(request: dict, name: str, args: dict) -> str:
         return forge.agent(task_id, action, _parent_request_path=request.get("_verified_request_path", ""),
                            **clean)
     if name == "checkpoint":
-        return forge.checkpoint(task_id, **clean)
+        return forge.checkpoint(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     return f"Unknown tool {name}"
 
 
@@ -322,16 +338,116 @@ def run(request_path: Path) -> int:
     return _run_request(request_path, request)
 
 
-def _run_request(request_path: Path, request: dict, *, reviewer=None) -> int:
-    # This address is supplied by the actual process invocation, not the model's tools.
+class WorkerControlStopped(RuntimeError):
+    pass
+
+
+def _control(request_path: Path) -> None:
+    decision = forge.worker_control(str(request_path))
+    if not decision.get("allowed"):
+        raise WorkerControlStopped(str(decision.get("reason") or "worker control denied"))
+
+
+def _assistant(response, blocks=None):
+    helper = getattr(llm, "assistant_message", None)
+    selected = ((response.blocks or ([{"type": "text", "text": response.text}] if response.text else []))
+                if blocks is None else blocks)
+    return helper(response, selected) if callable(helper) else {"role": "assistant", "content": selected}
+
+
+def _loop(journal, request_path, request, adapter):
+    """Persist each intent before effects; move the cursor only after durable result."""
+    state = journal.state
+    while state["next_boundary"] != "finalize":
+        _control(request_path)
+        boundary = state["next_boundary"]
+        if boundary == "tools_ready":
+            pending = state["pending"]
+            if pending["next_call"] == len(pending["calls"]):
+                state["messages"].append(pending["assistant"])
+                state["messages"].append({"role": "user", "content": pending["results"]})
+                journal.save("model_ready", "ready", pending={})
+                continue
+            call = pending["calls"][pending["next_call"]]
+            args = {k: v for k, v in (call.get("input") or {}).items() if v is not None}
+            input_ref = journal.payload(json.dumps(args, ensure_ascii=False, sort_keys=True))
+            # Checkpoint in-flight FIRST. A crash before the event or after the
+            # external effect both leave an unknown, never a duplicate dispatch.
+            _control(request_path)
+            journal.save("tool_in_flight", "tool")
+            journal.event("tool_start", call_id=call["id"], tool=call["name"], input_ref=input_ref)
+            try:
+                output = (adapter.dispatch(request, call["name"], args) if adapter is not None
+                          else _dispatch(request, call["name"], args))
+            except Exception as exc:
+                output = f"Tool error {type(exc).__name__}: {exc}"
+            output = str(output)
+            output_ref = journal.payload(output)
+            event = journal.event("tool_result", call_id=call["id"], tool=call["name"],
+                                  input_ref=input_ref, output_ref=output_ref)
+            state["trace"].append({"tool": call["name"], "input_ref": input_ref,
+                                    "output_ref": output_ref, "call_id": call["id"],
+                                    "iteration": state["iteration"], "at": event["at"]})
+            # Complete result also goes to the model transcript; no invisible tail
+            # and no second lossy '30 calls / 2000 chars' terminal history.
+            pending["results"].append({"type": "tool_result", "tool_use_id": call["id"], "content": output})
+            pending["next_call"] += 1
+            journal.save("tools_ready", "ready")
+            continue
+        if boundary == "model_ready" and state["iteration"] >= state["max_iters"]:
+            journal.save("summary_ready", "finishing")
+            continue
+        if boundary not in {"model_ready", "summary_ready"}:
+            raise forge_runtime.ContinuationRefused("unexpected/unknown execution boundary")
+        summarizing = boundary == "summary_ready"
+        if not summarizing:
+            state["iteration"] += 1
+        system = adapter.system(request) if adapter is not None else _system(request)
+        journal.save("summary_in_flight" if summarizing else "model_in_flight", "model",
+                     system=system)
+        journal.event("model_start", summary=summarizing, model_requested=request.get("model", ""))
+        response = _chat_with_transport_retry(
+            request, system=system, messages=state["messages"],
+            tools=None if summarizing else state["tools"],
+            logical_iteration=state["iteration"] + int(summarizing),
+            call_options=state["call_options"], journal=journal,
+        )
+        state["model"] = response.model
+        response_ref = journal.payload(json.dumps({"text": response.text, "blocks": response.blocks,
+            "stop_reason": response.stop_reason, "model": response.model,
+            "usage": getattr(response, "usage", {}), "assistant": _assistant(response)}, ensure_ascii=False))
+        journal.event("model_result", output_ref=response_ref, summary=summarizing, model=response.model)
+        if summarizing or response.stop_reason != "tool_use":
+            state["reply"] = response.text.strip()
+            if not summarizing:
+                state["stopped_himself"] = (response.stop_reason == "end_turn" if adapter is not None else True)
+            state["messages"].append(_assistant(response))
+            journal.save("finalize" if state["reply"] or summarizing else "summary_ready", "finishing")
+            continue
+        blocks = [block for block in response.blocks if block.get("type") in {"text", "tool_use"}]
+        calls = [block for block in blocks if block.get("type") == "tool_use"]
+        if any(not call.get("id") or not call.get("name") for call in calls):
+            raise ValueError("model tool call missing identity")
+        journal.save("tools_ready", "ready", pending={"assistant": _assistant(response, blocks),
+                     "calls": calls, "next_call": 0, "results": []})
+
+
+def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=None) -> int:
+    # Historical keyword remains accepted; trusted adapters never inherit worker tools.
+    if reviewer is not None and adapter is not None:
+        raise ValueError("choose one trusted adapter")
+    adapter = adapter if adapter is not None else reviewer
     request = {**request, "_verified_request_path": str(request_path.resolve())}
-    trace: list[dict] = []
+    journal = None
     bindings = contextlib.ExitStack()
     try:
-        # Clear ambient authority even for legacy requests; always restore it.
+        journal = forge_runtime.Journal(request_path.parent)
+        prior = forge._read_json(request_path.parent / "result.json")
+        if isinstance(prior, dict) and prior.get("status") not in forge._LIVE_UNIT_STATES:
+            return 0  # terminal redelivery cannot start another model/tool turn
+        _control(request_path)
         bindings.enter_context(run_context.bind_run(None))
         captured = request.get("run_context")
-        # Empty dict is the historical serialized no-context marker.
         if captured is not None and captured != {}:
             if not isinstance(captured, dict):
                 raise TypeError("run_context must be an object or null")
@@ -340,123 +456,90 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None) -> int:
             context = replace(context, forge_task_id=str(request["task_id"]))
             bindings.enter_context(run_context.bind_run(context))
         role = request.get("role") or "worker"
-        call_options = reviewer.prepare(llm, request) if reviewer is not None else None
-        tools = reviewer.tools if reviewer is not None else [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
-        if role == "worker":
-            tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
-        messages: list[dict] = [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}]
-        max_iters = int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2)
-        reply = ""
-        final_model = ""
-        # ⚠ 10.08.2026. Цикл мог кончиться ДВУМЯ разными способами, а запись знала только
-        # один. Если модель остановилась сама — это «сделано». Если кончились ходы —
-        # это «упёрся в потолок», и воркеру при этом сказано «use as many tool turns as
-        # the job needs». Дальше forge.py:826 читал `status == "done"` и говорил ей
-        # «воркер закончил». Она узнавала о завершении там, где было исчерпание.
-        stopped_himself = False
-        used = 0
-        for _ in range(max_iters):
-            used += 1
-            # Re-orient for each logical model turn, but freeze that exact frame across
-            # transport retries of this turn. A retry must not observe a half-new system
-            # prompt; the next successful tool iteration may legitimately see new state.
-            system = reviewer.system(request) if reviewer is not None else _system(request)
-            response = _chat_with_transport_retry(
-                request, system=system, messages=messages, tools=tools,
-                logical_iteration=used, call_options=call_options,
-            )
-            final_model = response.model
-            if response.stop_reason != "tool_use":
-                reply = response.text.strip()
-                stopped_himself = (response.stop_reason == "end_turn" if reviewer is not None else True)
-                break
-            assistant_blocks, tool_results = [], []
-            for block in response.blocks:
-                if block.get("type") == "text":
-                    assistant_blocks.append(block)
-                elif block.get("type") == "tool_use":
-                    assistant_blocks.append(block)
-                    args = {k: v for k, v in (block.get("input") or {}).items() if v is not None}
-                    try:
-                        output = (reviewer.dispatch(request, block.get("name", ""), args)
-                                  if reviewer is not None else _dispatch(request, block.get("name", ""), args))
-                    except Exception as exc:
-                        output = f"Tool error {type(exc).__name__}: {exc}"
-                    trace.append({"tool": block.get("name"), "input": args,
-                                  "output": str(output)[:2000], "at": _now()})
-                    tool_results.append({"type": "tool_result", "tool_use_id": block.get("id", ""),
-                                         "content": _model_tool_result(output)})
-            # The Hélène adapter carries signed reasoning/Responses items in a
-            # route-bound sidecar. Legacy Praxis adapters have no such API.
-            assistant_message = getattr(llm, "assistant_message", None)
-            messages.append(assistant_message(response, assistant_blocks) if callable(assistant_message)
-                            else {"role": "assistant", "content": assistant_blocks})
-            messages.append({"role": "user", "content": tool_results})
-        if not reply:
-            system = reviewer.system(request) if reviewer is not None else _system(request)
-            summary_response = _chat_with_transport_retry(
-                request, system=system, messages=messages, tools=None,
-                logical_iteration=used + 1, call_options=call_options,
-            )
-            final_model = summary_response.model
-            reply = summary_response.text.strip()
-        diff = reviewer.diff() if reviewer is not None else forge.inspect(request["task_id"], "diff")
+        call_options = adapter.prepare(llm, request) if adapter is not None else None
+        if adapter is not None:
+            tools = list(adapter.tools)
+        else:
+            tools = [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
+            if role == "worker":
+                tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
+        adapter_id = (type(adapter).__module__ + "." + type(adapter).__qualname__) if adapter is not None else ""
+        state = journal.start(request, {
+            "next_boundary": "model_ready", "iteration": 0,
+            "max_iters": int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2),
+            "messages": [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}],
+            "tools": tools, "call_options": call_options, "adapter_id": adapter_id,
+            "trace": [], "pending": {}, "reply": "", "model": "", "stopped_himself": False,
+        })
+        _loop(journal, request_path, request, adapter)
+        _control(request_path)
+        trace = journal.trace()
+        diff = str(adapter.diff() if adapter is not None else forge.inspect(request["task_id"], "diff"))
+        diff_ref = journal.payload(diff)
+        stopped = state["stopped_himself"]
         data = {
-            "status": "done" if stopped_himself else "stalled",
-            "complete": bool(stopped_himself),
-            "stop": ("модель остановилась сама" if stopped_himself else
-                     "кончились ходы: %d из %d" % (used, max_iters)),
-            "iters_used": used, "iters_max": max_iters,
-            # Упавшие руки не делают прогон ошибкой — падение руки это сведение, а не
-            # провал. Но «done при десяти подряд упавших руках» — тоже неправда, поэтому
-            # число едет в запись и видно рядом со статусом.
-            "tool_errors": sum(1 for t in trace
-                               if str(t.get("output") or "").startswith("Tool error")),
-            "finished": _now(), "role": role,
-            "model_requested": str(request.get("model") or ""),
-            "model": final_model,
-            "result": reply, "tool_calls": len(trace), "trace": trace[-30:],
-            "diff_tail": diff[-8000:],
+            "status": "done" if stopped else "stalled", "complete": bool(stopped),
+            "stop": ("модель остановилась сама" if stopped else
+                     "кончились ходы: %d из %d" % (state["iteration"], state["max_iters"])),
+            "iters_used": state["iteration"], "iters_max": state["max_iters"],
+            "tool_errors": sum(str(row["output"]).startswith("Tool error") for row in trace),
+            "finished": _now(), "role": role, "model_requested": str(request.get("model") or ""),
+            "model": state["model"], "result": state["reply"], "tool_calls": len(trace),
+            "trace": trace, "diff_tail": diff[-8000:], "diff_ref": diff_ref,
+            "generation": state["generation"], "events_ref": {"file": "events.jsonl", "last_seq": journal.seq},
         }
-        if reviewer is not None:
-            data.update(reviewer.result_stamp())
+        if adapter is not None:
+            data.update(adapter.result_stamp())
         if not _publish_result(request_path, request["task_id"], data):
-            print(f"{request['id']} settled concurrently; original result retained", flush=True)
+            journal.progress("settled_elsewhere")
             return 0
+        journal.event("result_published", status=data["status"], diff_ref=diff_ref)
+        journal.save("settled", "finished", result_sha256=hashlib.sha256(
+            (request_path.parent / "result.json").read_bytes()).hexdigest())
         forge._event(request["task_id"], "agent_finished", agent_id=request["id"], role=role,
-                     summary=(f"{request['id']} done; tools={len(trace)}" if stopped_himself
-                              else f"{request['id']} исчерпал ходы {used}/{max_iters}; "
-                                   f"tools={len(trace)}"))
-        # PASS 30 Этап 1: завершение — входящее событие родительской петли, не повод
-        # ждать таймера. Пишем из СВОЕГО процесса, durable; best-effort (не роняет выход).
+                     summary=f"{request['id']} {data['status']}; tools={len(trace)}")
         forge.emit_unit_event(request["task_id"], request["id"], data, request=request)
-        print(f"{request['id']} " + ("done" if stopped_himself
-                                          else f"исчерпал ходы {used}/{max_iters}")
-              + f"; tools={len(trace)}", flush=True)
+        print(f"{request['id']} {data['status']}; tools={len(trace)}", flush=True)
         return 0
+    except forge_runtime.ContinuationRefused as exc:
+        # Do not overwrite a previous checkpoint or settle a still-live writer.
+        print(f"Continuation refused: {exc}", flush=True)
+        return 2
     except Exception as exc:
-        data = {"status": "error", "finished": _now(),
+        controlled = isinstance(exc, WorkerControlStopped)
+        data = {"status": "stopped" if controlled else "error", "finished": _now(),
                 "model_requested": str(request.get("model") or ""),
-                "model": str(locals().get("final_model") or ""),
-                "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()[-8000:],
-                "trace": trace[-20:]}
+                "model": (journal.state.get("model", "") if journal else ""),
+                "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc(),
+                "trace": journal.trace() if journal and journal.state else []}
         try:
+            if journal and journal.state:
+                journal.event("control_stopped" if controlled else "worker_error", error=data["error"])
+                journal.progress("stopped" if controlled else "error")
             if not _publish_result(request_path, request["task_id"], data):
                 return 2
         except Exception:
             print(data["traceback"], flush=True)
             return 2
         try:
-            forge._event(request["task_id"], "agent_error", agent_id=request.get("id"),
-                         summary=data["error"])
+            forge._event(request["task_id"], "agent_error", agent_id=request.get("id"), summary=data["error"])
         except Exception:
             pass
-        forge.emit_unit_event(request.get("task_id") or "", request.get("id") or "",
-                              data, request=request)
+        forge.emit_unit_event(request.get("task_id") or "", request.get("id") or "", data, request=request)
         print(data["traceback"], flush=True)
         return 2
     finally:
-        bindings.close()
+        try:
+            if journal is not None and journal.state:
+                # The model/tool loop is now over. Relinquish only task-root
+                # mutation; the immutable result/private journal stay intact.
+                release = getattr(forge, "release_worker_root", None)
+                if callable(release):
+                    release(request_path)
+        finally:
+            if journal is not None:
+                journal.close()
+            bindings.close()
 
 
 if __name__ == "__main__":

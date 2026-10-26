@@ -233,7 +233,7 @@ def run(request_path: Path) -> int:
     scope = str(request.get("scope") or "self")
     root = Path(request["root"]) if scope == "windows" else Path(request["root"]).resolve()
     checks = [row for row in (request.get("checks") or []) if str(row.get("command") or "").strip()]
-    parallel = max(1, min(int(request.get("max_parallel") or 2), 8))
+    parallel = max(1, min(int(request.get("max_parallel") or 4), 8))
     timeout = max(0, int(request.get("timeout") or MATRIX_DEADLINE_SEC))
     # Номер супервизора без метки рождения — это приглашение убить постороннего:
     # forge.verify(action="stop") шлёт killpg по нему, а номера в контейнере

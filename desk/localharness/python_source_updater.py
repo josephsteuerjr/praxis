@@ -49,91 +49,69 @@ def wait_owner(pid):
 
 
 def apply_files(source, target, recovery, *, consume=False, verified=None):
-    """Overlay package files only; retain overwritten bytes and a rollback map."""
-    source,target,recovery=(Path(p).resolve() for p in (source,target,recovery))
-    written=[]
-    recovery.mkdir()
-    def digest(path):
-        with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
-    def record():
-        path=recovery/'update-files.json';part=path.with_suffix('.tmp')
-        part.write_text(json.dumps(written,indent=2),encoding='utf-8')
-        deadline=time.monotonic()+3
-        while True:
-            try:
-                part.replace(path)
-                break
-            except PermissionError:
-                if time.monotonic()>=deadline:raise
-                time.sleep(.05)
-    try:
-        for item in sorted(source.rglob('*')):
-            if item.is_symlink():raise ValueError('Update contains a symlink: '+str(item))
-            if item.is_dir():continue
-            relative=item.relative_to(source)
-            if '__pycache__' in relative.parts or item.suffix=='.pyc':continue
-            destination=target/relative
-            if not destination.resolve().is_relative_to(target):
-                raise ValueError('Update destination leaves working folder')
-            if destination.is_symlink():raise ValueError('Update destination is a symlink')
-            previous=recovery/relative
-            existed=destination.exists()
-            incoming=(verified or {}).get(str(item)) or digest(item)
-            if (existed and destination.stat().st_size==item.stat().st_size and digest(destination)==incoming
-                    and (os.name == 'nt' or destination.stat().st_mode & 0o777 == item.stat().st_mode & 0o777)):
-                continue
-            if existed:
-                previous.parent.mkdir(parents=True,exist_ok=True)
-                shutil.copy2(destination,previous)
-            destination.parent.mkdir(parents=True,exist_ok=True)
-            written.append({'path':relative.as_posix(),'existed':existed,'incoming':incoming})
-        # Retain every preimage and the complete intent before changing program
-        # bytes. Rewriting an ever-growing JSON map after each dependency made
-        # large optional runtime installs quadratic in serialized journal size.
-        record()
-        for row in written:
-            relative=Path(row['path'])
-            item=source/relative
-            destination=target/relative
-            temporary=destination.with_name('.'+destination.name+'.update-part')
-            try:
-                if consume:
-                    item.replace(temporary)
-                elif relative.parts[:3]==('components','xtts','model') and item.suffix=='.pth' and item.stat().st_dev==destination.parent.stat().st_dev:
-                    temporary.unlink(missing_ok=True);os.link(item,temporary)
-                else:shutil.copy2(item,temporary)
-                temporary.replace(destination)
-            finally:temporary.unlink(missing_ok=True)
-        record()
-    except BaseException:
-        for row in reversed(written):
-            destination=target/row['path']
-            if row['existed']:shutil.copy2(recovery/row['path'],destination)
-            else:destination.unlink(missing_ok=True)
-        raise
+    """Compatibility entry: prepare complete preimages/intent, then stream-apply.
+
+    Desktop/CLI production paths prepare before closing the old window and call
+    the same overlay apply after a final quiescent validation instead.
+    """
+    from localharness import update_overlay
+    update_overlay.prepare(source, target, recovery, verified)
+    return update_overlay.apply(source, target, recovery, consume=consume)
 
 
 def rollback(target,recovery):
     """Restore only this update's changed files, retaining any later self-edit."""
+    from localharness.update_io import measured_digest, copy_verified, remove_created_file
+    target,recovery=Path(target).resolve(),Path(recovery).resolve()
     rows=json.loads((recovery/'update-files.json').read_text(encoding='utf-8'))
+    previous={}
+    # Check the entire recoverable set before the first restoration, including
+    # startup recovery after an uncatchable interruption.
+    for row in rows:
+        relative=Path(row['path'])
+        if relative.is_absolute() or '..' in relative.parts:raise ValueError('Invalid recovery path')
+        if row['existed']:
+            actual=measured_digest(recovery/relative)['sha256']
+            if row.get('previous') and actual!=row['previous']:
+                raise ValueError('Recovery preimage changed: '+row['path'])
+            previous[row['path']]=actual
     for row in reversed(rows):
         relative=Path(row['path'])
         if relative.is_absolute() or '..' in relative.parts:raise ValueError('Invalid recovery path')
         destination=target/relative
         if destination.is_file():
-            with destination.open('rb') as stream:current=hashlib.file_digest(stream,'sha256').hexdigest()
+            current=measured_digest(destination)['sha256']
             if current!=row['incoming']:
                 saved=recovery/'later-self-edits'/relative;saved.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copy2(destination,saved)
-        if row['existed']:shutil.copy2(recovery/relative,destination)
-        else:destination.unlink(missing_ok=True)
+        if row['existed']:
+            temporary=destination.with_name('.'+destination.name+'.restore-part')
+            try:
+                copy_verified(recovery/relative,temporary,previous[row['path']])
+                temporary.replace(destination)
+            finally:temporary.unlink(missing_ok=True)
+        else:remove_created_file(destination)
 
 
-def install(old, new):
-    recover_interrupted(old)
+def prepared_install_path(new):
+    new = Path(new).resolve()
+    identity = hashlib.sha256(str(new).encode()).hexdigest()[:16]
+    return new.parent / ('prepared-install-' + identity + '.json')
+
+
+def prepare_install(old, new, *, verified=None, progress=None):
+    """Prepare before switching; legacy helpers do this after old-owner exit."""
+    old, new = Path(old).resolve(), Path(new).resolve()
+    if active_update(old).is_file():
+        # Preparation runs beside a live owner. Never repair a mixed prior
+        # generation under its feet; ordinary startup recovery owns that path.
+        raise RuntimeError('An interrupted update requires startup recovery before another update; previous application remains open')
     sys.path.insert(0,str(new/'app'))
     from localharness import app_migration
+    from localharness import update_profile, update_overlay
+    from localharness.update_progress import atomic_json
     from localharness.essential_backup import configs
+    before = update_profile.selection(old)
     for config in configs(new):
         if config.is_file():config.unlink()
     # Existing migration moves internal data/source to independent preserved paths
@@ -141,8 +119,10 @@ def install(old, new):
     metadata=json.loads((new/'python-app.json').read_text(encoding='utf-8')) if (new/'python-app.json').is_file() else {}
     portable=metadata.get('delivery')=='portable'
     from localharness.update_profile import prepare as prepare_profile
-    note=prepare_profile(old,new)
+    if progress:progress.phase('backup')
+    note=prepare_profile(old,new,progress)
     from localharness.code_transition import prepare as prepare_code
+    if progress:progress.phase('code')
     prepare_code(old,new,note)
     def relocate(value):
         if isinstance(value,str):
@@ -168,22 +148,76 @@ def install(old, new):
     note['update_source']=str(new)
     app_migration.write_note(new,note)
     recovery=old.parent/('.helene-recovery-'+note['id'])
+    from localharness.code_transition import validate
+    validate(new)
+    if update_profile.selection(old) != before:
+        raise ValueError('Settings or selected source changed during update preparation; previous application remains open')
+    if progress:progress.phase('preimages')
+    update_overlay.prepare(new, old, recovery, verified, progress)
+    # This second check closes the source-copy/preimage preparation window. The
+    # helper repeats it while holding the lease and again after old-owner exit.
+    if update_profile.selection(old) != before:
+        raise ValueError('Settings or selected source changed before update handoff; retry')
+    prepared = {'format': 'helene-prepared-install.v1', 'old': str(old), 'new': str(new),
+                'recovery': str(recovery), 'selection': before, 'note': note,
+                'progress': str(progress.path) if progress else ''}
+    atomic_json(prepared_install_path(new), prepared)
+    if progress:progress.phase('prepared', preparation_completed=True)
+    return prepared
+
+
+def validate_prepared(old, new, progress=None):
+    from localharness import update_profile, update_overlay
+    from localharness.code_transition import validate
+    old, new = Path(old).resolve(), Path(new).resolve()
+    value = json.loads((prepared_install_path(new)).read_text(encoding='utf-8'))
+    if value['old'] != str(old) or value['new'] != str(new):
+        raise ValueError('Prepared update target differs')
+    recovery = Path(value['recovery']).resolve()
+    if recovery.parent != old.parent or recovery.name != '.helene-recovery-' + value['note']['id']:
+        raise ValueError('Prepared update recovery differs')
+    if update_profile.selection(old) != value['selection']:
+        raise ValueError('Settings or selected source changed after preparation; retry the update')
+    validate(new)
+    update_overlay.validate(new, old, recovery, progress)
+    return value
+
+
+def install(old, new):
+    """Final quiescent check and short switch; direct legacy callers prepare here."""
+    old, new = Path(old).resolve(), Path(new).resolve()
+    if not (prepared_install_path(new)).is_file():
+        recover_interrupted(old)  # this compatibility entry is already quiescent
+        prepare_install(old, new)
+    from localharness import update_overlay
+    from localharness.update_progress import Progress
+    value = json.loads((prepared_install_path(new)).read_text(encoding='utf-8'))
+    progress = Progress(value['progress']) if value.get('progress') else None
+    if progress:progress.phase('freshness')
+    value = validate_prepared(old, new, progress)
+    note, recovery = value['note'], Path(value['recovery'])
     pending=active_update(old)
     temporary=pending.with_suffix('.tmp')
     temporary.write_text(json.dumps({'target':str(old),'recovery':str(recovery),'migration_id':note['id']}),encoding='utf-8')
     temporary.replace(pending)
+    applied = False
     try:
-        from localharness.code_transition import validate
-        validate(new)
-        apply_files(new,old,recovery)
+        if progress:progress.phase('switching')
+        update_overlay.apply(new, old, recovery, progress=progress)
+        applied = True
         # A legacy main ZIP may retain only a manifest, not the optional
         # payload. Prepare a voice only when this update actually supplies it.
         if (new/'components/xtts/xtts-bundle.json').is_file():
             from localharness.xtts_install import install as install_xtts
             for tree in dict.fromkeys(note['data_paths']):install_xtts(Path(tree),program=old)
-    except BaseException:
-        if (recovery/'update-files.json').is_file():rollback(old,recovery)
-        pending.unlink(missing_ok=True)
+    except BaseException as failure:
+        # apply() can fail after its first replacement, including during its own
+        # restoration. An unreturned apply is NOT evidence of no effects.
+        restored = getattr(failure, 'restoration_completed', False)
+        if applied:
+            rollback(old,recovery)
+            restored = True
+        if restored:pending.unlink(missing_ok=True)
         raise
     return note,recovery
 
@@ -203,7 +237,10 @@ def recover_interrupted(old):
         note=json.loads(note_path.read_text(encoding='utf-8')) if note_path.is_file() else {}
         started=(value.get('migration_id') and note.get('id')==value['migration_id']
                  and note.get('state') in ('new_app_started','completed'))
-        if not value.get('committed') and not started and (recovery/'update-files.json').is_file():rollback(old,recovery)
+        if not value.get('committed') and not started:
+            if not (recovery/'update-files.json').is_file():
+                raise RuntimeError('Interrupted update recovery journal is missing; program restoration is unconfirmed')
+            rollback(old,recovery)
         pending.unlink()
 
 
@@ -243,15 +280,54 @@ def main():
     args=parser.parse_args()
     sys.path.insert(0,str(args.new.resolve()/'app'))
     if args.cleanup:return perform(args)
+    validate_staging(args)
     from python_migrate import installation_lock
     # Same kernel-backed target lock as migration, held across old-owner exit,
     # overlay, new generation confirmation, and any rollback.
-    with installation_lock(args.old):return perform(args)
+    with installation_lock(args.old):
+        prepared = prepared_install_path(args.new)
+        # An old owner's admission timer is only 15 seconds. It cannot wait for
+        # a new release's expensive preparation. Show the observer and accept
+        # custody first; perform prepares only after that owner actually exits.
+        if not prepared.is_file() and (args.new / 'python-app.json').is_file():
+            if active_update(args.old.resolve()).exists():
+                raise RuntimeError('An interrupted update requires startup recovery before another update; previous application remains open')
+            from localharness.update_progress import Progress
+            operation=args.staging.name.removeprefix('.helene-update-')
+            progress=Progress(args.staging.with_name(args.staging.name+'.progress.json'),operation,args.old)
+            progress.phase('waiting_owner', preparation_completed=False,
+                           label='Открываю окно обновления — подготовка ещё не выполнена')
+            args.progress_path = str(progress.path)
+        if prepared.is_file() or getattr(args, 'progress_path', ''):
+            from localharness.update_window import run
+            import threading
+            args.observer_ready = threading.Event()
+            receipt = (json.loads(prepared.read_text(encoding='utf-8')).get('progress')
+                       if prepared.is_file() else args.progress_path)
+            if not receipt:raise ValueError('Prepared update has no progress receipt')
+            return run(lambda: perform(args), receipt, args.observer_ready, browser=args.browser)
+        return perform(args)
+
+
+def validate_staging(args):
+    old,new,staging=args.old.resolve(),args.new.resolve(),args.staging.resolve()
+    if new!=staging/'Helene' or staging.parent!=old.parent or not staging.name.startswith('.helene-update-'):
+        raise ValueError('Unexpected update staging directory')
+    if any(p.resolve().parent!=old.parent for p in args.archive):
+        raise ValueError('Update archive must be beside Helene')
 
 
 def perform(args):
     old,new=args.old.resolve(),args.new.resolve()
     presentation=['--browser'] if args.browser else []
+    prepared_path = prepared_install_path(new)
+    progress_path = getattr(args, 'progress_path', '')
+    if not args.cleanup and prepared_path.is_file():
+        progress_path = json.loads(prepared_path.read_text(encoding='utf-8')).get('progress', '')
+    def report(stage, **details):
+        if progress_path:
+            from localharness.update_progress import Progress
+            Progress(progress_path).phase(stage, **details)
     def reopen_previous():
         executable=old/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
         with (old/'python-update-recovery.log').open('ab') as output:
@@ -264,30 +340,58 @@ def perform(args):
                 cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
                 creationflags=0x00000200 if os.name=='nt' else 0,start_new_session=os.name!='nt')
     staging=args.staging.resolve()
-    if new!=staging/'Helene' or staging.parent!=old.parent or not staging.name.startswith('.helene-update-'):
-        raise ValueError('Unexpected update staging directory')
-    if any(p.resolve().parent!=old.parent for p in args.archive):
-        raise ValueError('Update archive must be beside Helene')
+    validate_staging(args)
+    legacy_prepare = not args.cleanup and not prepared_path.is_file() and (new/'python-app.json').is_file()
     if not args.cleanup:
+        if legacy_prepare and active_update(old).exists():
+            raise RuntimeError('An interrupted update requires startup recovery before another update; previous application remains open')
+        if prepared_path.is_file():validate_prepared(old, new)
+        observer_ready = getattr(args, 'observer_ready', None)
+        if observer_ready is not None and not observer_ready.wait(15):
+            raise TimeoutError('Update progress window did not become ready; previous application remains open')
         admitted=staging/'updater-admitted.json'
         part=admitted.with_suffix('.tmp')
-        part.write_text(json.dumps({'pid':os.getpid(),'target':str(old)}),encoding='utf-8');part.replace(admitted)
+        part.write_text(json.dumps({'pid':os.getpid(),'target':str(old),
+            'preparation_completed':not legacy_prepare}),encoding='utf-8');part.replace(admitted)
+    report('waiting_owner', label='Закрываю прежнее окно')
     wait_owner(args.pid)
+    if not args.cleanup:report('freshness', old_exit_observed_at=time.time())
     if args.cleanup:
         # This second process uses the final runtime, after the staging runtime
         # has exited and Windows has released its DLLs/executable.
         shutil.rmtree(staging)
         for archive in args.archive:archive.unlink(missing_ok=True)
         return 0
+    if legacy_prepare:
+        from localharness.app_migration import discover
+        from localharness.migration_windows import owner_lease_available
+        # PID exit does not prove that a separately hosted profile owner left.
+        # Refuse before preparation without launching a duplicate previous app.
+        for agent in discover(old)['agents']:
+            if agent['value'].get('mode')!='remote' and not owner_lease_available(Path(agent['tree'])/'.desktop-owner.lock'):
+                report('failed', error='Previous Python owner still holds its data lease',
+                       previous_program_retained=True, previous_reopen_requested=False)
+                raise RuntimeError('Previous Python owner still holds its data lease; no update applied')
     try:
+        if legacy_prepare:
+            from localharness.update_progress import Progress
+            progress = Progress(progress_path) if progress_path else None
+            prepare_install(old,new,progress=progress)
         note,recovery=install(old,new)
-    except BaseException:
+    except BaseException as exc:
+        if active_update(old).exists():
+            report('failed', error=str(exc), rollback_completed=False, recovery_required=True,
+                   previous_program_retained=False, previous_reopen_requested=False)
+            raise
+        report('reopening', error=str(exc), previous_program_retained=True)
         reopen_previous()
+        report('failed', error=str(exc), previous_reopen_requested=True)
         raise
     executable=old/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
     log=old/'python-update-start.log'
     child=None
     try:
+        report('starting')
         from localharness.desktop_supervisor import JobChild
         child=JobChild.spawn([str(executable),str(old/'app/python_app.py'),'--root',str(old),'--migration',note['id'],*presentation],
                              cwd=old,env=dict(os.environ),log=log,stopped=lambda:False)
@@ -314,10 +418,12 @@ def perform(args):
                     child.stop()
         if graceful_error is not None:
             failure.add_note('Graceful exit failed; owned update Job stopped: ' + str(graceful_error))
+        report('rollback', error=str(failure))
         rollback(old,recovery)
         active_update(old).unlink(missing_ok=True)
         print('Update failed; previous program restored, recovery retained:',recovery,flush=True)
         reopen_previous()
+        report('failed', error=str(failure), rollback_completed=True, previous_reopen_requested=True)
         raise
     pending=active_update(old)
     if pending.is_file():
@@ -328,6 +434,7 @@ def perform(args):
     from localharness import app_migration
     app_migration.write_note(old,state)
     pending.unlink(missing_ok=True)
+    report('completed', new_ready_observed_at=time.time(), recovery=str(recovery))
     print('Python update launched',child.pid,'root',old,'recovery',recovery,flush=True)
     helper=recovery/'cleanup-update.py'
     shutil.copy2(Path(__file__),helper)

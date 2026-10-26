@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import python_source_updater as u
+from localharness import update_overlay
 
 class Journal(unittest.TestCase):
  def setUp(self):
@@ -55,14 +56,14 @@ class Journal(unittest.TestCase):
     (recovery/'update-files.json').write_text(json.dumps(rows))
     u.rollback(self.target,recovery);self.unchanged()
  def test_preimage_failure_publishes_no_program_change(self):
-  real=u.shutil.copy2;count=0
+  real=update_overlay.copy_verified;count=0
   def copy(source,dest,*a,**kw):
    nonlocal count
    if Path(source).parent==self.target:
     count+=1
     if count==2:raise OSError('preimage refused')
    return real(source,dest,*a,**kw)
-  with patch.object(u.shutil,'copy2',copy),self.assertRaisesRegex(OSError,'preimage refused'):u.apply_files(self.source,self.target,self.recovery)
+  with patch.object(update_overlay,'copy_verified',copy),self.assertRaisesRegex(OSError,'preimage refused'):u.apply_files(self.source,self.target,self.recovery)
   self.unchanged()
  def test_failed_intent_publishes_no_program_change(self):
   real=Path.write_text

@@ -1,4 +1,4 @@
-# Hélène 2.1.1 — a portable Python home for your agent
+# Hélène 2.2.0 candidate — a portable Python home for your agent
 
 Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
@@ -6,7 +6,19 @@ The agent can develop its own working code, while ordinary application updates k
 
 This release completes the move to an archive-first desktop on Windows x64, Apple Silicon, Debian and Fedora x86_64. Python owns the window, agent lifecycle, migration and update coordination. Platform runtimes and the existing native tools for operating-system access are included where needed.
 
-## What changed in 2.1
+## What changes in 2.2
+
+Forge separates execution from acceptance: dependent work waits for the coordinator's decision on the exact result. Roles retain enforced tool boundaries, shared-root writers serialize, and queued work, checkpoints and full worker output remain inspectable. An editing parent explicitly waits on one immediate editing child to yield the shared writer slot, then consumes its exact result before continuing; this does not permit two concurrent writers. The owner task panel reads these records and submits task/group controls without creating an ordinary agent turn.
+
+Source conflicts use an isolated merger plus the existing independent panel over exact A/L/B/M inventories. Changed candidates need new evidence; missing capabilities/materials keep the old program. Already-running 2.1.1 still executes its old updater; preserved authored Forge without the new adapter API reports unsupported.
+
+Routine updates back up settings and program/code preimages, not unchanged memory/models. Preparation precedes old-window closure; a progress observer follows the durable operation. POSIX timestamp-only freshness cannot skip hashing. Manual/periodic full backups remain separate.
+
+Application-owned XTTS and a narrow speak adapter support older authored code without overwriting it. WAV preview and actual Ogg/Opus voice-note output differ; the installed SoundFile/libsndfile codec capability is checked, without requiring an extra PyAV download. CPU synthesis needs substantial free memory: one measured Windows stock-voice run peaked near 4.9 GB worker RSS, with about 128 seconds for the first client call including loading and 9 seconds for a separate warm synthesis. These are scoped observations, not a minimum-memory or latency guarantee. Configured profiles open **Now** with empty browser storage; first setup and manual onboarding remain available.
+
+This source is a candidate, not a publication or installation receipt. Links below remain the last public 2.1.1 downloads until a separate release.
+
+## Previous changes in 2.1
 
 ### A simpler voice conversation
 

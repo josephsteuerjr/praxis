@@ -373,17 +373,28 @@ def main():
             from localharness.update_extensions import check
             progress('checking_extensions')
             check(a.dir,staged)
-            migration_windows.stop(a.dir);migration_windows.quiescent(a.dir)
             # This CLI already owns the installation lease. Run the shared
             # transaction in this process instead of asking a child to reacquire
             # the same non-reentrant kernel lock after the old owner was stopped.
             from localharness import python_source_updater
+            from localharness.update_progress import Progress
+            from localharness.update_window import run as observe_update
+            import threading
             from types import SimpleNamespace
             import contextlib
+            operation=staging.name.removeprefix('.helene-update-')
+            receipt=Progress(staging.with_name(staging.name+'.progress.json'),operation,a.dir)
+            python_source_updater.prepare_install(a.dir,staged,progress=receipt)
+            ready=threading.Event()
             updater_log=staging.with_suffix('.log')
-            with updater_log.open('w',encoding='utf-8') as output,contextlib.redirect_stdout(output):
-                python_source_updater.perform(SimpleNamespace(old=a.dir,new=staged,pid=0,
-                    staging=staging,archive=[],cleanup=False,browser=False))
+            def switch():
+                if not ready.wait(15):raise TimeoutError('Update observer did not open; previous application remains open')
+                python_source_updater.validate_prepared(a.dir,staged)
+                migration_windows.stop(a.dir);migration_windows.quiescent(a.dir)
+                with updater_log.open('w',encoding='utf-8') as output,contextlib.redirect_stdout(output):
+                    return python_source_updater.perform(SimpleNamespace(old=a.dir,new=staged,pid=0,
+                        staging=staging,archive=[],cleanup=False,browser=False,observer_ready=ready))
+            observe_update(switch,receipt.path,ready)
             note=json.loads((a.dir/'python-migration.json').read_text(encoding='utf-8'))
         elif a.fresh:
             note=fresh(package,a.new_dir or home/'Helene',a.data_home or home/'Helene-Data',

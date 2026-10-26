@@ -128,6 +128,8 @@ class Integration:
                   else "Selected preserved Forge lacks self-review API v1; shipped stock code is not the executing code.")
         self_review._write(_root(self.tree) / "runtime.json", {
             "at": time.time(), "supported": supported, "self_edit_supported": hook,
+            "source_update_supported": supported and getattr(self.service.forge, 'SOURCE_UPDATE_API', 0) == 1,
+            "app_root": str(self.app_root.resolve()),
             "reason": reason, "code": str(self.code_dir), "error": error,
             "self_edit_note": "hook installed" if hook else "Selected agent lacks self-edit review callback API v1."})
 

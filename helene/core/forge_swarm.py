@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import deque
 import json
 import os
 import re
@@ -45,7 +46,9 @@ def _node_id(value: str) -> str:
     return clean[:64]
 
 
-def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 3) -> dict:
+def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 8) -> dict:
+    if load(task_dir):
+        raise ValueError("a durable plan already exists; use rework, not replacement")
     if isinstance(raw_plan, str):
         try:
             raw_plan = json.loads(raw_plan)
@@ -75,7 +78,9 @@ def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 3
         deps = [_node_id(dep) for dep in (item.get("deps") or [])]
         owns = [str(path).replace("\\", "/") for path in (item.get("owns") or []) if str(path).strip()]
         nodes.append({"id": nid, "role": role, "brief": brief, "deps": deps,
-                      "owns": owns, "status": "pending", "agent_id": ""})
+                      "phase": str(item.get("phase") or ""),
+                      "success_criteria": list(item.get("success_criteria") or []),
+                      "owns": owns, "status": "pending", "agent_id": "", "attempts": []})
     for node in nodes:
         missing = [dep for dep in node["deps"] if dep not in ids]
         if missing:
@@ -99,30 +104,70 @@ def create(task_dir: Path, raw_plan: str | list | dict, *, max_parallel: int = 3
 
     for nid in graph:
         visit(nid)
-    plan = {"version": 1, "created": _now(), "updated": _now(),
-            "max_parallel": max(1, int(max_parallel or 3)), "nodes": nodes}
+    plan = {"version": 2, "created": _now(), "updated": _now(),
+            "max_parallel": max(1, min(int(max_parallel or 8), 32)), "nodes": nodes}
     _atomic(_plan_path(task_dir), plan)
     return plan
 
 
+def dependency_reason(node: dict, by_id: dict) -> str:
+    """Eligibility of the EXACT prerequisite revisions consumed by this attempt."""
+    bound = node.get("dependency_results") or {}
+    stale = [dep for dep in node.get("deps") or []
+             if by_id.get(dep, {}).get("status") != "done" or not bound.get(dep)
+             or bound[dep] != by_id.get(dep, {}).get("accepted_sha256")]
+    return "dependency result revision changed: " + ",".join(stale) if stale else ""
+
+
 def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
+    """Read/modify/write; callers serialize with Forge's task mutation mutex."""
     plan = load(task_dir)
     if not plan:
         return {}
-    changed = False
+    before = [dict(node) for node in plan.get("nodes") or []]
     for node in plan.get("nodes") or []:
         aid = str(node.get("agent_id") or "")
-        if not aid or node.get("status") not in {"starting", "running"}:
+        if not aid:
             continue
         state = agent_state(aid)
         status = str(state.get("status") or "lost")
-        mapped = {"done": "done", "error": "failed", "failed": "failed",
-                  "stopped": "stopped", "lost": "lost", "stalled": "stalled"}.get(status, "running")
-        if mapped != node.get("status"):
-            node["status"] = mapped
-            node["finished"] = state.get("finished", "") if mapped != "running" else ""
-            changed = True
-    if changed:
+        digest = str(state.get("result_sha256") or "")
+        decision = state.get("current_disposition") or {}
+        accepted = (status == "done" and bool(digest) and decision.get("disposition") == "integrated"
+                    and decision.get("result_sha256") == digest)
+        mapped = {"done": "done" if accepted else "awaiting_acceptance",
+                  "error": "failed", "failed": "failed", "timed_out": "failed",
+                  "stopped": "stopped", "lost": "lost", "unknown": "unknown",
+                  "queued": "queued", "stalled": "stalled"}.get(status, "running")
+        updates = {"status": mapped, "execution_status": status,
+                   "result_sha256": digest, "acceptance": decision.get("disposition") or "pending",
+                   "accepted_sha256": digest if accepted else "",
+                   "queued_reason": str(state.get("queued_reason") or ""),
+                   "finished": state.get("finished", "") if mapped not in {"running", "queued"} else ""}
+        if any(node.get(key) != value for key, value in updates.items()):
+            node.update(updates)
+    by_id = {node["id"]: node for node in plan.get("nodes", [])}
+    # Effective acceptance follows the DAG, not storage order. A stale B must
+    # invalidate C even if B's own immutable result/disposition did not change.
+    # The full receipts remain in the unit; accepted_sha256 is current eligibility.
+    children = {nid: [] for nid in by_id}
+    remaining = {nid: len(node.get("deps") or []) for nid, node in by_id.items()}
+    for nid, node in by_id.items():
+        for dep in node.get("deps") or []:
+            children[dep].append(nid)
+    ready = deque(nid for nid, count in remaining.items() if not count)
+    while ready:
+        nid = ready.popleft()
+        node = by_id[nid]
+        if node.get("status") == "done" and node.get("deps"):
+            if dependency_reason(node, by_id):
+                node.update(status="stale_dependencies", accepted_sha256="",
+                            queued_reason="dependency result revision changed")
+        for child in children[nid]:
+            remaining[child] -= 1
+            if not remaining[child]:
+                ready.append(child)
+    if plan.get("nodes") != before:
         plan["updated"] = _now()
         _atomic(_plan_path(task_dir), plan)
     return plan
@@ -130,21 +175,44 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
 
 def ready_nodes(plan: dict) -> list[dict]:
     nodes = plan.get("nodes") or []
-    status = {node.get("id"): node.get("status") for node in nodes}
-    running = sum(1 for node in nodes if node.get("status") in {"starting", "running"})
+    accepted = {node.get("id"): node.get("status") == "done"
+                and bool(node.get("result_sha256"))
+                and node.get("accepted_sha256") == node.get("result_sha256") for node in nodes}
+    running = sum(1 for node in nodes if node.get("status") in {"starting", "running", "queued", "unknown"})
     slots = max(0, int(plan.get("max_parallel") or 1) - running)
     ready = []
     for node in nodes:
         if node.get("status") != "pending":
             continue
         deps = node.get("deps") or []
-        if all(status.get(dep) == "done" for dep in deps):
+        if all(accepted.get(dep) for dep in deps):
             ready.append(node)
-        elif any(status.get(dep) in {"failed", "stopped", "lost", "blocked", "stalled",
-                                         "blocked_identity"} for dep in deps):
-            node["status"] = "blocked"
-            node["finished"] = _now()
+            node.pop("queued_reason", None)
+        else:
+            # A repair can satisfy this dependency later. Do not terminalize the
+            # dependent simply because the first execution failed or was deferred.
+            node["queued_reason"] = "awaiting accepted dependencies: " + ",".join(
+                dep for dep in deps if not accepted.get(dep))
     return ready[:slots]
+
+
+def rework(task_dir: Path, node_id: str, brief: str, result_sha256: str) -> dict:
+    """Keep the logical DAG node but retain every immutable previous unit/result."""
+    plan = load(task_dir)
+    node = next((n for n in plan.get("nodes", []) if n.get("id") == node_id), None)
+    if not node or not node.get("agent_id") or not brief.strip():
+        raise ValueError("rework needs an existing executed node and a concrete correction brief")
+    if (node.get("status") in {"starting", "running", "queued", "unknown"}
+            or not result_sha256 or node.get("result_sha256") != result_sha256):
+        raise ValueError("rework needs the current exact terminal result hash")
+    prior = {key: value for key, value in node.items() if key != "attempts"}
+    node.setdefault("attempts", []).append(prior)
+    node.update(previous_unit_id=node["agent_id"], previous_result_sha256=result_sha256,
+                agent_id="", brief=brief.strip(), status="pending", execution_status="pending",
+                result_sha256="", acceptance="pending", accepted_sha256="", finished="",
+                reserved_agent_id="")
+    save(task_dir, plan)
+    return plan
 
 
 def save(task_dir: Path, plan: dict) -> None:
@@ -209,7 +277,10 @@ def summary(plan: dict, messages: list[dict] | None = None) -> str:
         deps = ",".join(node.get("deps") or []) or "-"
         owns = ",".join(node.get("owns") or []) or "-"
         lines.append(f"- {node.get('id')} [{node.get('status')}] {node.get('role')} "
-                     f"agent={node.get('agent_id') or '-'} deps={deps} owns={owns}: {node.get('brief')}")
+                     f"phase={node.get('phase') or '-'} acceptance={node.get('acceptance') or 'pending'} "
+                     f"sha256={node.get('result_sha256') or '-'} "
+                     f"agent={node.get('agent_id') or '-'} deps={deps} owns={owns}: {node.get('brief')}"
+                     + (f"; queued: {node['queued_reason']}" if node.get('queued_reason') else ""))
     if messages:
         lines.append("mailbox:")
         for row in messages[-20:]:

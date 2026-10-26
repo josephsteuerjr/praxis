@@ -409,6 +409,21 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
   // Python обновляет рабочую папку собственным helper, без setup.
   const pythonUpdate = electron?.shell === 'python';
+  // Reconnecting the old UI reads the same operation, not a fresh invented
+  // progress counter. Poll only while that operation is nonterminal; leaving
+  // Settings ends the observer without retaining the removed view.
+  const restoreUpdateProgress = async () => {
+    if (!pythonUpdate) return;
+    try {
+      const row = await shell<{ stage: string; label?: string; error?: string; bytes?: number } | null>('update_progress');
+      if (!updOut.isConnected || !row) return;
+      updOut.textContent = [row.label || row.stage, row.error || ''].filter(Boolean).join(' · ');
+      if (!['completed', 'failed', 'needs_resolution'].includes(row.stage)) setTimeout(restoreUpdateProgress, 600);
+    } catch (error) {
+      if (updOut.isConnected) updOut.textContent = `Состояние обновления недоступно: ${humanError(error).text}`;
+    }
+  };
+  if (pythonUpdate) setTimeout(restoreUpdateProgress, 0);
   const legacyLinux = linux && !pythonUpdate;
   let updateHandedOff = false;
   const manualUpdate = button('Открыть выпуск и помощник', 'quiet', async () => {
@@ -426,6 +441,21 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     updOut.className = "receipt";
     updOut.textContent = pythonUpdate ? 'Скачиваю и проверяю обновление рядом с рабочей папкой…' : "Скачиваю в «Загрузки»…";
     let updateStage: 'download' | 'install' = 'download';
+    // The Python owner emits the durable operation receipt throughout preclose
+    // preparation. The small updater window keeps reading it after this exits.
+    let operationId = '';
+    const updateProgress = (event: Event) => {
+      if (!updOut.isConnected) return;
+      const row = (event as CustomEvent).detail;
+      if (!row || typeof row.id !== 'string' || typeof row.label !== 'string') return;
+      if (operationId && operationId !== row.id) return;
+      operationId = row.id;
+      const details: string[] = [];
+      if (typeof row.bytes === 'number' && row.bytes > 0) details.push(`${(row.bytes / 1048576).toFixed(1)} МиБ`);
+      if (typeof row.files === 'number' && row.files > 0) details.push(`${row.files} файлов`);
+      updOut.textContent = [row.label, ...details].join(' · ');
+    };
+    if (pythonUpdate) window.addEventListener('helene:package-progress', updateProgress);
     try {
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
       const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
@@ -455,6 +485,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       }
       manualUpdate.hidden = false;
     } finally {
+      window.removeEventListener('helene:package-progress', updateProgress);
       dlBtn.disabled = updateHandedOff;
     }
   });

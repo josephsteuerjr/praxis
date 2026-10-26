@@ -125,6 +125,26 @@ class MergeTests(unittest.TestCase):
         m.finish(self.plan)
         self.assertEqual((self.plan / 'result/image.bin').read_bytes(), b'\x00local')
 
+    def test_nested_directory_replaced_by_file_prunes_only_empty_ancestors(self):
+        for root in (self.base, self.local, self.new):
+            put(root, 'pkg/nested/mod.py', 'OLD = 1\n')
+        (self.new / 'pkg/nested/mod.py').unlink()
+        (self.new / 'pkg/nested').rmdir()
+        (self.new / 'pkg').rmdir()
+        put(self.new, 'pkg', 'replacement file\n')
+        self.create()
+        target = self.root / 'target'
+        shutil.copytree(self.local, target)
+        merge_target = self.root / 'target-with-unplanned-data'
+        shutil.copytree(self.local, merge_target)
+        put(merge_target, 'pkg/memory/keep.txt', 'unplanned data')
+        with self.assertRaises(OSError):
+            m.apply(self.plan, merge_target)
+        self.assertEqual((merge_target / 'pkg/memory/keep.txt').read_text(), 'unplanned data')
+        m.apply(self.plan, target)
+        self.assertEqual((target / 'pkg').read_text(), 'replacement file\n')
+        self.assertTrue((self.local / 'pkg/nested/mod.py').exists())
+
     def test_deleting_last_file(self):
         put(self.local, 'module.py', BASE)
         (self.new / 'module.py').unlink()
@@ -178,15 +198,16 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual((self.data / 'memory/chat.json').read_text(), '{"remember":"owner"}')
         self.assertNotEqual(original, before_second)
 
-    def test_conflict_agent_tool_and_retry_preserve_working_program(self):
+    def test_conflict_cannot_bypass_mandatory_panel_with_agent_tool(self):
         put(self.new / 'tree', 'module.py', BASE.replace('return 1', 'return 99'))
         before = (self.old / 'helene.json').read_bytes()
         self.assertEqual(c.preflight(self.old, self.new)['state'], 'needs_resolution')
-        sides = source_update.command(self.data, 'read', path='module.py')
-        self.assertEqual(sides['local']['text'], LOCAL)
-        source_update.command(self.data, 'resolve', path='module.py', content=BOTH)
-        self.assertEqual(source_update.command(self.data, 'finish')['state'], 'ready')
-        self.assertEqual(c.preflight(self.old, self.new)['state'], 'ready')
+        with self.assertRaisesRegex(ValueError, 'restricted'):
+            source_update.command(self.data, 'resolve', path='module.py', content=BOTH)
+        request = read(source_update.path(self.data))
+        m.resolve(request['directory'], 'module.py', BOTH)
+        m.finish(request['directory'])
+        self.assertEqual(c.preflight(self.old, self.new)['state'], 'needs_resolution')
         self.assertEqual((self.old / 'helene.json').read_bytes(), before)
         self.assertEqual((self.code / 'module.py').read_text(), LOCAL)
 
@@ -225,9 +246,8 @@ class UpdateTests(unittest.TestCase):
         put(self.new / 'tree', 'module.py', BASE.replace('return 1', 'return 99'))
         c.preflight(self.old, self.new)
         put(self.code, 'module.py', LOCAL + '\nnew_work = 123\n')
-        with self.assertRaisesRegex(ValueError, 'Live source changed'):
-            source_update.command(self.data, 'resolve', path='module.py', content=BOTH)
-        self.assertEqual(read(source_update.path(self.data))['state'], 'stale')
+        with self.assertRaisesRegex(ValueError, 'Local code changed'):
+            c.validate(self.new)
 
 
 if __name__ == '__main__':

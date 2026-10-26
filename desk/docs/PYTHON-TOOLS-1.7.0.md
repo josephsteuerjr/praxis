@@ -46,6 +46,12 @@ can create child tasks. Parent tasks retain links to their workers and results,
 so a completed child turn can be reviewed before its result is accepted.
 Worktrees, checkpoints and journals support continuation across turns.
 
+### Shared-root teams in 2.2
+
+Read-oriented scouts and reviewers may run concurrently. Editing workers share one writer slot per task root. If an editing worker delegates another editor, `delegate(action="wait", agent_id=...)` yields that slot to one immediate worker child and blocks the parent until its result is settled. The parent must first settle detached process/check jobs; parent Stop/Pause still fences the child. After the exact result returns, record its disposition before treating it as accepted work. A queued child is not already executing, and a completed result does not itself release dependent DAG nodes.
+
+Rework creates a new linked attempt, retaining the previous output and acceptance history. Invalidating an upstream acceptance also invalidates its transitive dependents' current eligibility without erasing their historical receipts. Worker journals retain full tool payloads and resumable checkpoints; an unknown in-flight call is not automatically replayed.
+
 For large files, focus reads return pages with a source fingerprint. Partial
 output remains marked as partial. A request to stop a process is recorded
 separately from confirmation that its descendants have stopped. POSIX process

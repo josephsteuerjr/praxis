@@ -1166,7 +1166,7 @@ def forge_tasks(limit: int = 30) -> list[dict]:
                 except OSError:
                     result_sha = ""
                 stop = _load_json(unit / "stop.json")
-                unresolved = stop.get("state") == "unresolved"
+                unresolved = stop.get("state") in {"pending", "unresolved"}
                 receipts = []
                 stale_receipts = 0
                 for path in sorted(unit.glob("disposition-*.json")):

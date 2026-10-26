@@ -63,9 +63,10 @@ class ServerDelivery(unittest.TestCase):
     def test_optional_xtts_is_owned_and_has_no_model_or_channel_secrets(self):
         python = self.base / "voice-python"
         python.write_bytes(b"fixture")
-        worker = self.base / "tree/xtts_tts_worker.py"
-        worker.parent.mkdir()
-        worker.write_text("pass", encoding="utf-8")
+        worker = self.base / "app/localharness/speech_worker.py"
+        worker.parent.mkdir(parents=True)
+        worker.write_bytes((DESK / "localharness/speech_worker.py").read_bytes())
+        worker.with_name("xtts_tts_worker.py").write_bytes((DESK.parent / "helene/core/xtts_tts_worker.py").read_bytes())
         model = self.tree / "models/xtts"
         model.mkdir(parents=True)
         for name in ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth"):
@@ -76,9 +77,28 @@ class ServerDelivery(unittest.TestCase):
         self.assertEqual(child.key, "xtts")
         self.assertEqual(child.user, 10001)
         self.assertEqual(child.argv[:3], [str(python), "-u", str(worker)])
+        self.assertEqual(child.argv[child.argv.index("--tree") + 1], str(self.tree))
         self.assertEqual(child.argv[-2:], ["--device", "cpu"])
         self.assertNotIn("HELENE_TOKEN", child.env)
         self.assertNotIn("RELAY_API_KEY", child.env)
+        self.assertEqual(child.env["HELENE_SUPERVISOR"], "serverboot")
+        self.assertEqual(child.env["HELENE_TREE"], str(self.tree))
+        with mock.patch.object(serverboot.subprocess, "Popen") as spawn:
+            child.spawn()
+            child.spawn()  # physical retry must not reuse an IPC generation
+        first, second = spawn.call_args_list
+        self.assertNotEqual(first.args[0][-1], second.args[0][-1])
+        for call in (first, second):
+            argv = call.args[0]
+            self.assertEqual(argv[-2], "--generation")
+            self.assertEqual(len(argv[-1]), 32)
+            self.assertEqual(argv.count("--generation"), 1)
+            self.assertTrue(call.kwargs["start_new_session"])
+            self.assertEqual(call.kwargs["user"], 10001)
+            self.assertEqual(call.kwargs["group"], 10000)
+            self.assertEqual(call.kwargs["extra_groups"], [])
+            self.assertEqual(call.kwargs["umask"], 0o002)
+        self.assertNotIn("--generation", child.argv)
         python.unlink()
         with contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertIsNone(serverboot.xtts_child(self.base, {"voice": {"speak": True}}, self.tree, {}))

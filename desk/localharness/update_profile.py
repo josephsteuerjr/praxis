@@ -2,17 +2,89 @@
 from pathlib import Path
 import shutil
 import uuid
+import hashlib
+import os
+import zipfile
 
 from . import app_migration
-from .essential_backup import snapshot, load
+from .essential_backup import configs
 from .package_notice import write
 
 
-def prepare(old, new):
+def settings_snapshot(old, operation, progress=None):
+    """Only settings changed by this update; manual/periodic backups stay full.
+
+    Authored code and Git get an independent candidate, original source stays
+    selected until switching, and program preimages live in the recovery map.
+    No memory/runs/media/session/model inventory is walked by this backup.
+    """
+    folder = old.parent / 'Helene-update-backups'
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (operation + '-settings.zip')
+    staged = path.with_suffix('.tmp')
+    total = 0
+    try:
+        with zipfile.ZipFile(staged, 'x', zipfile.ZIP_DEFLATED) as output:
+            for source in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'))]:
+                if source.is_file():
+                    content = source.read_bytes()
+                    output.writestr(source.relative_to(old).as_posix(), content)
+                    total += len(content)
+                    from .update_io import count
+                    count(progress, 'settings_backup', len(content))
+        staged.replace(path)
+    finally:staged.unlink(missing_ok=True)
+    return {'path': str(path), 'bytes': total, 'archive_bytes': path.stat().st_size,
+            'scope': 'update-settings', 'includes_memory': False, 'includes_models': False}
+
+
+def selection(old):
+    """Bind settings and executable/Git metadata, not the untouched profile.
+
+    code_transition.validate independently hashes the selected executable source
+    at the final quiescent boundary. Git metadata is included because index and
+    history can change without changing working source bytes.
+    """
+    from .source_merge import allowed
+    from .update_io import stamp
+    old = Path(old).resolve()
+    found = app_migration.discover(old)
+    result = {'settings': {}, 'sources': {}, 'git': {}}
+    for config in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'))]:
+        if config.is_file():
+            result['settings'][config.relative_to(old).as_posix()] = hashlib.sha256(config.read_bytes()).hexdigest()
+    for code in dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents'] if row['value'].get('mode') != 'remote'):
+        root = Path(code)
+        files = {}
+        for directory, dirs, names in os.walk(root, followlinks=False):
+            here = Path(directory)
+            dirs[:] = sorted(n for n in dirs if allowed((here / n).relative_to(root).as_posix()))
+            for name in sorted(names):
+                path = here / name
+                relative = path.relative_to(root).as_posix()
+                if allowed(relative):files[relative] = stamp(path)
+        result['sources'][code] = files
+        git = root / '.git'
+        roots = []
+        if git.is_file():
+            content = git.read_text(encoding='utf-8').strip()
+            if not content.startswith('gitdir: '):raise ValueError('Unrecognized Git pointer')
+            roots.append((root / content[8:]).resolve())
+            result['git'][str(git)] = stamp(git)
+            common = roots[0] / 'commondir'
+            if common.is_file():roots.append((roots[0] / common.read_text(encoding='utf-8').strip()).resolve())
+        elif git.is_dir():roots.append(git)
+        for repo in roots:
+            for path in sorted(repo.rglob('*')):
+                if path.is_file():result['git'][str(path)] = stamp(path)
+    return result
+
+
+def prepare(old, new, progress=None):
     old, new = Path(old).resolve(), Path(new).resolve()
     found = app_migration.discover(old)
     operation = uuid.uuid4().hex
-    backup = snapshot(old, old.parent / 'Helene-update-backups', 'before-source-update')
+    backup = settings_snapshot(old, operation, progress)
     sources, trees = [], []
     for row in found['agents']:
         value = dict(row['value'])
@@ -45,6 +117,7 @@ def prepare(old, new):
             'old_root': str(old), 'new_root': str(new), 'backup': backup['path'],
             'old_data_paths': trees, 'data_paths': trees, 'source_paths': sources,
             'copied_data': [], 'preserved_roots': {}, 'data_home': str(old / 'profile'),
-            'in_place_profile': True}
+            'in_place_profile': True, 'backup_scope': backup['scope'],
+            'backup_bytes': backup['bytes'], 'backup_archive_bytes': backup['archive_bytes']}
     app_migration.write_note(new, note)
     return note

@@ -77,7 +77,9 @@ export interface WindowOptions {
 export function start(opts: WindowOptions): void {
   setProductName(opts.productName);
   setLocalAgent(opts.localAgent !== false && cfg.local_agent !== false);
-  if (LOCAL_AGENT && localStorage.getItem('helene.onboarding.210') !== 'done') S.view = 'learn';
+  // The shell projects durable setup_complete as needs_local_setup; browser
+  // storage may be empty after an update/origin change without a new profile.
+  S.view = LOCAL_AGENT && cfg.needs_local_setup ? 'learn' : 'now';
 
 
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
@@ -723,6 +725,9 @@ export function start(opts: WindowOptions): void {
     }
     const gen = ++showSeq;
     const from = S.view;
+    // Plans owns mounted-only polling and in-flight detail reads. Its cached
+    // page survives navigation, its network/listeners must not survive it.
+    if (from === "plans" && id !== "plans") plans.dispose();
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
     // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
     if (from !== id && pages.get(from)?.parentNode === viewInner) {
@@ -1608,7 +1613,7 @@ export function start(opts: WindowOptions): void {
   const openFirst = (): void => {
     if (showSeq !== firstShowSeq) return;
     loadRooms()
-      .then(() => { if (showSeq === firstShowSeq) return show(LOCAL_AGENT && localStorage.getItem("helene.onboarding.210")!=="done" ? "learn" : "now"); })
+      .then(() => { if (showSeq === firstShowSeq) return show(LOCAL_AGENT && cfg.needs_local_setup ? "learn" : "now"); })
       .catch(() => {
         if (showSeq !== firstShowSeq) return;
         viewInner.innerHTML = `<div class="empty" data-first-wait><b>${esc(S.agent)} сейчас не на связи</b>Окно продолжит попытки само. Можно оставить его открытым.</div>`;
