@@ -7,6 +7,13 @@ import os
 from pathlib import Path
 import threading
 import time
+from contextlib import contextmanager, nullcontext
+
+# The native/browser observer and transaction share this module in one process.
+# Windows replace can deny an open destination even with share-delete handles;
+# close the complete read before publishing, not by retrying generic WinError 5.
+# POSIX retains its existing concurrent open/rename semantics.
+_publication_lock = threading.RLock() if os.name == 'nt' else nullcontext()
 
 LABELS = {
     'downloading': 'Скачиваю обновление', 'unpacking': 'Распаковываю проверенный архив',
@@ -28,16 +35,29 @@ def pointer(target):
     return target.parent / ('.helene-update-progress-' + identity + '.json')
 
 
+@contextmanager
+def _open_reader(path):
+    """Keep the Windows publisher outside the entire open/read/close interval."""
+    with _publication_lock, Path(path).open('r', encoding='utf-8') as stream:
+        yield stream
+
+
+def read_json(path):
+    """Read one complete published snapshot and release its handle even on error."""
+    with _open_reader(path) as stream:
+        return json.load(stream)
+
+
 def status(target):
     """Read a single target-bound operation, never scan an ever-growing folder."""
     target = Path(target).resolve()
     index = pointer(target)
     if not index.is_file():return None
-    ref = json.loads(index.read_text(encoding='utf-8'))
+    ref = read_json(index)
     path = Path(ref['receipt']).resolve()
     if path.parent != target.parent or not path.name.startswith('.helene-update-') or not path.name.endswith('.progress.json'):
         raise ValueError('Update progress receipt leaves installation parent')
-    value = json.loads(path.read_text(encoding='utf-8'))
+    value = read_json(path)
     if value.get('target') != str(target) or value.get('id') != ref['id']:
         raise ValueError('Update progress identity differs')
     return value
@@ -46,11 +66,12 @@ def status(target):
 def atomic_json(path, value):
     path = Path(path)
     part = path.with_suffix(path.suffix + '.tmp')
-    with part.open('w', encoding='utf-8') as stream:
-        json.dump(value, stream, ensure_ascii=False, indent=2)
-        stream.flush()
-        os.fsync(stream.fileno())
-    part.replace(path)
+    with _publication_lock:
+        with part.open('w', encoding='utf-8') as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        part.replace(path)
     if os.name != 'nt':
         fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:os.fsync(fd)
@@ -65,7 +86,7 @@ class Progress:
         self.event = event
         self.last_write = 0.0
         if self.path.is_file():
-            self.value = json.loads(self.path.read_text(encoding='utf-8'))
+            self.value = read_json(self.path)
             if operation_id and self.value['id'] != operation_id:
                 raise ValueError('Update receipt operation differs')
             if target and self.value['target'] != str(Path(target).resolve()):

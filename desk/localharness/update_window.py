@@ -51,7 +51,7 @@ def run(transaction, receipt, ready, *, browser=False):
     """
     if browser:return _browser(transaction, receipt, ready)
     import webview
-    from .update_progress import Progress
+    from .update_progress import Progress, read_json
     receipt = Path(receipt)
     progress = Progress(receipt)
     operation = progress.value['id']
@@ -59,7 +59,7 @@ def run(transaction, receipt, ready, *, browser=False):
     failure = []
     class Bridge:
         def status(self):
-            value = json.loads(receipt.read_text(encoding='utf-8'))
+            value = read_json(receipt)
             if value.get('id') != operation:raise ValueError('Update operation changed')
             return value
         def ready(self):
@@ -95,7 +95,7 @@ def _browser(transaction, receipt, ready):
     The page uses a one-operation random URL; no application/agent API exists.
     """
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from .update_progress import Progress
+    from .update_progress import Progress, read_json
     import secrets
     import webbrowser
     token = secrets.token_urlsafe(32)
@@ -109,7 +109,7 @@ def _browser(transaction, receipt, ready):
             if self.path == '/' + token:
                 content, mime = page, 'text/html; charset=utf-8'
             elif self.path == '/' + token + '/status':
-                value = json.loads(path.read_text(encoding='utf-8'))
+                value = read_json(path)
                 if value.get('id') != identity:
                     self.send_error(409);return
                 content, mime = json.dumps(value).encode(), 'application/json'
