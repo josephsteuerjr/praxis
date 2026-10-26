@@ -21,6 +21,9 @@ HTML = r'''<!doctype html><html lang="ru"><meta charset="utf-8">
 :root[data-theme=dark]{color-scheme:dark;--paper:#1d1914;--ink:#f1e4d0;--muted:#ab9982;--accent:#eda676;--line:rgba(241,228,208,.13)}
 *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15.5px/1.6 'Golos Text','Segoe UI',sans-serif;padding:28px 32px;overflow:auto;height:auto;min-height:100vh}
 body>main{position:relative;max-width:660px;margin:auto}small{color:var(--muted);font-size:11px;letter-spacing:.13em}h1{font-family:var(--hand);font-size:32px;font-weight:400;line-height:1.22;margin:18px 0 22px}
+#update-chrome{display:flex;align-items:center;justify-content:space-between;min-height:28px;gap:12px;margin:-12px -12px 0;padding-left:12px;user-select:none}
+.update-actions{display:flex;gap:2px}.update-actions button{font:20px/1 'Golos Text',sans-serif;width:30px;height:28px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}
+.update-actions button:hover:not(:disabled){background:var(--line);color:var(--ink)}.update-actions button:disabled{opacity:.3;cursor:default}
 p{margin:9px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-size:13px}#error{color:var(--ink);white-space:pre-wrap}#history{border-top:1px solid var(--line);padding-top:15px;margin-top:22px}
 .track{height:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden;margin:22px 0}
 .track:before{content:'';display:block;width:28%;height:100%;background:var(--accent);animation:moving 2s ease-in-out infinite}
@@ -28,7 +31,7 @@ p{margin:9px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-s
 body.done .track:before{animation:none;width:100%}body.failed .track:before{animation:none;width:0}
 @media(prefers-reduced-motion:reduce){.track:before{animation:none;transform:none}}
 @media(max-width:430px){body{padding:22px}h1{font-size:28px}}
-</style><!--shared-appearance--><main><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><h1 id="stage">Подготавливаю обновление</h1>
+</style><!--shared-appearance--><main><header id="update-chrome"><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><div class="update-actions"><button id="minimize" aria-label="Свернуть окно">−</button><button id="close" aria-label="Закрыть окно" disabled>×</button></div></header><h1 id="stage">Подготавливаю обновление</h1>
 <div class="track" aria-hidden="true"></div><p id="detail" role="status" aria-live="polite"></p><p id="error"></p>
 <p id="history"></p></main><script>
 const stage=document.getElementById('stage'),detail=document.getElementById('detail'),error=document.getElementById('error'),history=document.getElementById('history');
@@ -39,7 +42,9 @@ if(r.total_files)parts.push(`${r.files||0} / ${r.total_files} файлов`);
 if(r.bytes)parts.push(`${(r.bytes/1048576).toFixed(1)} МиБ${r.total_bytes?' / '+(r.total_bytes/1048576).toFixed(1)+' МиБ':''}`);
 detail.textContent=parts.join(' · '); error.textContent=r.error||'';
 history.textContent=r.stage==='completed'?'Новое окно подтвердило запуск.':r.stage==='failed'?'Подробности сохранены в журнале обновления.': 'Настройки и память остаются на своих путях.';
-document.body.className=r.stage==='completed'?'done':r.stage==='failed'?'failed':'';}
+document.body.className=r.stage==='completed'?'done':r.stage==='failed'?'failed':'';document.getElementById('close').disabled=!r.can_close;}
+document.getElementById('minimize').onclick=()=>window.pywebview.api.minimize();
+document.getElementById('close').onclick=()=>window.pywebview.api.dismiss();
 let timer;
 async function tick(){try{paint(await window.pywebview.api.status());}catch(e){error.textContent='Не удалось прочитать состояние: '+String(e);} }
 window.addEventListener('pywebviewready',async()=>{await tick();requestAnimationFrame(()=>requestAnimationFrame(()=>window.pywebview.api.ready()));timer=setInterval(tick,350)});
@@ -100,16 +105,26 @@ def run(transaction, receipt, ready, *, browser=False):
     content = page(progress.value['target'])
     result = []
     failure = []
+    finished = threading.Event()
     class Bridge:
         def status(self):
             value = read_json(receipt)
             if value.get('id') != operation:raise ValueError('Update operation changed')
-            return value
+            return dict(value, can_close=finished.is_set())
         def ready(self):
             ready.set()
             return True
+        def minimize(self):
+            window.minimize()
+        def dismiss(self):
+            if not finished.is_set():return False
+            window.destroy()
+            return True
+    webview.settings['DRAG_REGION_SELECTOR'] = '#update-chrome, #update-chrome small'
+    webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY'] = True
     window = webview.create_window('Hélène — обновление', html=content, js_api=Bridge(),
                                    width=560, height=390, min_size=(360, 300), resizable=True,
+                                   frameless=True, easy_drag=False,
                                    background_color='#f8eee0', text_select=True)
     def work():
         try:result.append(transaction())
@@ -117,6 +132,7 @@ def run(transaction, receipt, ready, *, browser=False):
             failure.append(exc)
             Progress(receipt).phase('failed', error=str(exc))
         finally:
+            finished.set()
             time.sleep(12 if failure else 2)
             window.destroy()
     thread = threading.Thread(target=work, name='update-transaction')
@@ -145,7 +161,8 @@ def _browser(transaction, receipt, ready):
     path = Path(receipt)
     identity = Progress(path).value['id']
     stub = """<script>window.pywebview={api:{status:async()=>{const r=await fetch(location.pathname+'/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()},ready:async()=>true}};window.addEventListener('DOMContentLoaded',()=>window.dispatchEvent(new Event('pywebviewready')));</script>"""
-    content = page(Progress(path).value['target']).replace('<small>', stub + '<small>', 1).encode('utf-8')
+    content = page(Progress(path).value['target']).replace('<small>', stub + '<small>', 1)
+    content = content.replace('<!--shared-appearance-->', '<style>.update-actions{display:none}</style>').encode('utf-8')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):pass  # random observer URL stays out of logs
         def do_GET(self):
