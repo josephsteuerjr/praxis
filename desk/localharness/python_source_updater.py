@@ -371,7 +371,14 @@ def perform(args):
     if args.cleanup:
         # This second process uses the final runtime, after the staging runtime
         # has exited and Windows has released its DLLs/executable.
-        shutil.rmtree(staging)
+        # Import while staging/app still exists: the callback may run after
+        # rmtree has already removed this helper's module source.
+        from localharness.update_io import remove_created_file
+        def remove_readonly_file(function, path, failure):
+            if function is not os.unlink or not isinstance(failure[1], PermissionError):
+                raise failure[1]
+            remove_created_file(path)  # retries only read-only Windows files
+        shutil.rmtree(staging, onerror=remove_readonly_file)
         for archive in args.archive:archive.unlink(missing_ok=True)
         return 0
     if legacy_prepare:
