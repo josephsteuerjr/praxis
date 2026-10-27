@@ -6,6 +6,7 @@ It admits custody only. No source merge or review is accepted by this step.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import shutil
@@ -19,15 +20,40 @@ from .package_notice import read, write
 FORMAT = 'helene-source-admission.v1'
 
 
-def _inventory(root):
+def _runtime_bytecode(root, path):
+    """Recognize only regular interpreter caches paired with allowed source.
+
+    Python imports sitecustomize before the helper entry can suppress bytecode.
+    Such caches never belong to the accepted source inventory and are retained
+    with the previous view rather than promoted or deleted.
+    """
+    if path.is_dir() and path.name == '__pycache__':
+        parent = path.parent
+        return parent == root or merge.allowed(parent.relative_to(root).as_posix())
+    if not path.is_file() or path.parent.name != '__pycache__':
+        return False
+    try:
+        source = Path(importlib.util.source_from_cache(str(path)))
+        relative = source.relative_to(root).as_posix()
+        if source.suffix != '.py' or not merge.allowed(relative) or not source.is_file():
+            return False
+        with path.open('rb') as stream:
+            return stream.read(4) == importlib.util.MAGIC_NUMBER
+    except (OSError, ValueError):
+        return False
+
+
+def _inventory(root, *, allow_bytecode=True):
     """A delivery view is sealed; excluded profile/cache data must not vanish."""
     files = merge.inventory(root)
     for path in Path(root).rglob('*'):
         if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
             raise ValueError('Linked source admission path')
+        if allow_bytecode and _runtime_bytecode(Path(root), path):
+            continue
         relative = path.relative_to(root).as_posix()
         if not merge.allowed(relative) or (path.is_file() and relative not in files):
-            raise ValueError('Source admission contains undeclared data; refusing replacement')
+            raise ValueError('Source admission contains undeclared data; refusing replacement: ' + relative)
     return files
 
 
@@ -135,7 +161,7 @@ def activate(program, *, lease_held=False):
         # uncertain/locked recovery rather than deleting a changed source tree.
         if previous.exists():
             try:
-                if _inventory(previous) == baseline:shutil.rmtree(previous)
+                if _inventory(previous, allow_bytecode=False) == baseline:shutil.rmtree(previous)
             except (OSError, ValueError):pass
         return True
 

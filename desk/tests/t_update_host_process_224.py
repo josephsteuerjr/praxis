@@ -40,6 +40,16 @@ class LegacyHostProcess(unittest.TestCase):
         write(old/'python-app.json',{'version':'2.1.1','delivery':'portable','target':'linux-x86_64'})
         version=json.loads((ROOT/'desk/app/package.json').read_text())['version']
         write(new/'python-app.json',{'version':version,'delivery':'portable','target':'linux-x86_64'})
+        for directory in (old/'tree',code):
+            shutil.copy2(new/'tree/sitecustomize.py',directory/'sitecustomize.py')
+        # Model bundled ._pth startup: incoming interpreter imports its shipped
+        # sitecustomize before the helper, with normal bytecode writes enabled.
+        launcher=new/'runtime/bin/python3'
+        launcher.write_text('#!/bin/sh\nunset PYTHONDONTWRITEBYTECODE PYTHONPYCACHEPREFIX\n'
+            'program=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)\n'
+            'export PYTHONPATH="$program/tree:$program/app:$program/app/localharness"\n'
+            'exec '+str(sys.executable)+' "\u0024@"\n')
+        launcher.chmod(0o755)
         # A controlled GUI-readiness fixture only; real transaction and child
         # processes run unchanged. No native desktop acceptance is asserted.
         (new/'app/python_app.py').write_text('''import json,time
@@ -89,6 +99,8 @@ while True:time.sleep(.1)
             self.assertIn('updater_pid',result,result)
             self.assertNotEqual(result.get('state'),'needs_resolution')
             progress=Path(result['staging']).with_name(Path(result['staging']).name+'.progress.json')
+            startup_cache=any(Path(result['staging']).rglob('sitecustomize.*.pyc'))
+            self.assertTrue(startup_cache,'Incoming interpreter must create startup bytecode before helper admission')
             deadline=time.monotonic()+160
             while time.monotonic()<deadline:
                 state=read(progress)
@@ -117,7 +129,7 @@ while True:time.sleep(.1)
             print('ONE_211_UPDATE_BUTTON_PASS',json.dumps({'update_invocations':1,'helper_admitted':True,
                 'actual_upstream_review':True,'semantic_repair':True,'install_and_rollback':True,
                 'manual_preparation':False,'ordinary_agent_started':False,'authored_source_preserved':True,
-                'profile_preserved':True,'native_gui':False}),flush=True)
+                'profile_preserved':True,'startup_bytecode_present':startup_cache,'native_gui':False}),flush=True)
         except BaseException:
             for p in root.glob('helene-update-*.log'):print(p,p.read_text(errors='replace')[-12000:],flush=True)
             for p in root.glob('**/source-review-*.log'):print(p,p.read_text(errors='replace')[-8000:],flush=True)
