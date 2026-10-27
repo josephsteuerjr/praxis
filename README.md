@@ -1,12 +1,12 @@
-# Hélène 2.2.7 — automatic source integration through Update
+# Hélène 2.2.8 — automatic source integration through Update
 
-2.2.7 fixes the normal interpreter startup cache that could stop2.2.6 before source materialization. Recognized bytecode stays with the previous delivery view; unexpected private data and linked paths are still refused. Ordinary Update remains the supported2.1.1 entry. [Release notes](desk/docs/RELEASE-2.2.7.md).
+2.2.8 keeps the configured local model relay alive after the previous window closes, so source integration and independent review can finish. Existing model settings, account and proxy are preserved. [Release notes](desk/docs/RELEASE-2.2.8.md).
 
-Use the ordinary **Update** button, including from the supported 2.1.1 baseline. The new updater takes custody, materializes verified incoming source, combines it with authored changes, obtains independent review and completes the transaction. Compatibility repairs can include automatically merged files. [Release notes](desk/docs/RELEASE-2.2.7.md).
+Use the ordinary **Update** button, including from the supported 2.1.1 baseline. The new updater takes custody, materializes verified incoming source, combines it with authored changes, obtains independent review and completes the transaction. Compatibility repairs can include automatically merged files. [Release notes](desk/docs/RELEASE-2.2.8.md).
 
-Windows starts in the tray at login and invokes its own bundled shell only for commands. Startup no longer probes the WSL launcher. [Release notes](desk/docs/RELEASE-2.2.7.md).
+Windows starts in the tray at login and invokes its own bundled shell only for commands. Startup no longer probes the WSL launcher. [Release notes](desk/docs/RELEASE-2.2.8.md).
 
-Updates now continue after reviewed conflict resolution, helpers run without a Windows console, the frameless update window follows the application theme, and every launch opens Now. [Release notes](desk/docs/RELEASE-2.2.7.md).
+Updates now continue after reviewed conflict resolution, helpers run without a Windows console, the frameless update window follows the application theme, and every launch opens Now. [Release notes](desk/docs/RELEASE-2.2.8.md).
 
 Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
@@ -24,7 +24,7 @@ Routine updates back up settings and program/code preimages, not unchanged memor
 
 Application-owned XTTS and a narrow speak adapter support older authored code without overwriting it. WAV preview and actual Ogg/Opus voice-note output differ; the installed SoundFile/libsndfile codec capability is checked, without requiring an extra PyAV download. CPU synthesis needs substantial free memory: one measured Windows stock-voice run peaked near 4.9 GB worker RSS, with about 128 seconds for the first client call including loading and 9 seconds for a separate warm synthesis. These are scoped observations, not a minimum-memory or latency guarantee. Every launch opens **Now**, including after updates and before initial setup; setup and manual onboarding remain available.
 
-Hélène 2.2.7 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.7.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
+Hélène 2.2.8 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.8.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
 
 ## Previous changes in 2.1
 
@@ -58,10 +58,10 @@ The subscription relay is a separate product: [praxis-relay 1.1.0](https://githu
 
 | Platform | Archive | Entry after extracting the whole folder |
 | --- | --- | --- |
-| Windows x64 | [Helene-2.2.7.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.7/Helene-2.2.7.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
-| macOS Apple Silicon | [Helene-2.2.7-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.7/Helene-2.2.7-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
-| Debian x86_64 | [Helene-2.2.7-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.7/Helene-2.2.7-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
-| Fedora x86_64 | [Helene-2.2.7-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.7/Helene-2.2.7-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Windows x64 | [Helene-2.2.8.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.8/Helene-2.2.8.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
+| macOS Apple Silicon | [Helene-2.2.8-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.8/Helene-2.2.8-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
+| Debian x86_64 | [Helene-2.2.8-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.8/Helene-2.2.8-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Fedora x86_64 | [Helene-2.2.8-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.8/Helene-2.2.8-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
 
 Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
 

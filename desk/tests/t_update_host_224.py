@@ -84,7 +84,7 @@ class IncomingCoordinator(unittest.TestCase):
     def test_runtime_validation_rejects_tampered_core_and_coordinator(self):
         f=self.f
         for name in ('forge.py','forge_worker.py','llm.py'):(f.new/'tree'/name).write_text('# trusted fixture\n')
-        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','self_review','self_review_worker')]
+        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay')]
         for name in names:
             p=f.new/'app'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('# trusted fixture\n')
         core={p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in (f.new/'tree').iterdir()}

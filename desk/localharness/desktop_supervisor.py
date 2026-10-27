@@ -216,6 +216,45 @@ def runner_required(cfg, agent_id):
         isinstance(model, dict) and isinstance(model.get('key'), str) and bool(model['key'].strip())))
 
 
+def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
+               install_base: Path, environ=None) -> Spec | None:
+    """The same private relay contract for desktop and incoming update custody."""
+    ambient = os.environ if environ is None else environ
+    relay = cfg.get("relay") or {}
+    images = cfg.get("images") or {}
+    if not isinstance(relay, dict) or not isinstance(images, dict):
+        raise ValueError("relay/images configuration is not an object")
+    relay_on = relay.get("enabled") is True
+    if not relay_on and images.get("enabled") is not True:
+        return None
+    from localharness.standalone_relay import executable as relay_executable
+    exe = relay_executable(install_base, cfg)
+    if not exe.is_file():
+        raise ValueError("Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле")
+    port = relay.get("port") or 5011
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("invalid relay port")
+    home = tree / "relay"
+    home.mkdir(parents=True, exist_ok=True)
+    env = dict(ambient, RELAY_PORT=str(port), RELAY_LOCAL="1", RELAY_AUTH_DIR=str(home/'local_auth'),
+               RELAY_INSTRUCTIONS=str(relay.get("instructions") or "minimal").strip(),
+               RELAY_TYPED_TERMINAL="field", RELAY_LOG_DIR=str(home / "logs"))
+    for secret in ("RELAY_API_KEY", "HELENE_TOKEN", "PRAXIS_DESK_TOKEN"):
+        env.pop(secret, None)
+    model = cfg.get("model") or {}
+    key = relay.get("key")
+    if not isinstance(key, str) or not key.strip():
+        key = model.get("key") if relay_on and isinstance(model, dict) else ""
+    if isinstance(key, str) and key:
+        env["RELAY_API_KEY"] = key
+    env["RELAY_PYTHON"] = str(python)
+    env.update(relay_environment(relay))
+    argv = ((str(exe), "--minimized", "--start-api", "--config", str(config.resolve()))
+            if os.name == 'nt' and exe.name.lower() == 'helene-relay.exe'
+            else (str(exe), 'serve', '--headless'))
+    return Spec("relay", argv, home, env, home / "logs/relay-console.log", port)
+
+
 def _specs(config: Path, *, session_host: bool = False,
            agent_id: str = BASE_ID, port_override: int | None = None,
            window_root: Path | None = None, environ=None) -> tuple[Path, dict[str, Spec]]:
@@ -261,46 +300,10 @@ def _specs(config: Path, *, session_host: bool = False,
             specs[f"{agent_id}:runner"] = Spec("runner", (str(python), "-u", str(runner),
                                                 "--config", str(config)), runner.parent,
                                     dict(common, HELENE_HOST="127.0.0.1"), tree / "runner.log", port)
-    relay = cfg.get("relay") or {}
-    images = cfg.get("images") or {}
-    if not isinstance(relay, dict) or not isinstance(images, dict):
-        raise ValueError("relay/images configuration is not an object")
-    relay_on = relay.get("enabled") is True
-    images_on = images.get("enabled") is True
-    if relay_on or images_on:
-        # Neighbor configs live under agents/<id>/, but the one packaged
-        # relay executable belongs to the installation, not each data tree.
-        install_base = base if agent_id == BASE_ID else base.parent.parent
-        from localharness.standalone_relay import executable as relay_executable
-        exe = relay_executable(install_base,cfg)
-        if not exe.is_file():
-            raise ValueError("Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле")
-        relay_port = relay.get("port") or 5011
-        if type(relay_port) is not int or not 1 <= relay_port <= 65535:
-            raise ValueError("invalid relay port")
-        home = tree / "relay"
-        home.mkdir(parents=True, exist_ok=True)
-        relay_env = dict(ambient, RELAY_PORT=str(relay_port), RELAY_LOCAL="1", RELAY_AUTH_DIR=str(home/'local_auth'),
-                         RELAY_INSTRUCTIONS=str(relay.get("instructions") or "minimal").strip(),
-                         RELAY_TYPED_TERMINAL="field", RELAY_LOG_DIR=str(home / "logs"))
-        # An ambient key cannot stand in for the configured key of this tree.
-        # Image-only relay must not inherit a provider/channel credential.
-        for secret in ("RELAY_API_KEY", "HELENE_TOKEN", "PRAXIS_DESK_TOKEN"):
-            relay_env.pop(secret, None)
-        # Same separation as common/relay_policy.rs: image-only relay cannot
-        # borrow an unrelated model credential; text relay keeps legacy key.
-        model = cfg.get("model") or {}
-        key = relay.get("key")
-        if not isinstance(key, str) or not key.strip():
-            key = model.get("key") if relay_on and isinstance(model, dict) else ""
-        if isinstance(key, str) and key:
-            relay_env["RELAY_API_KEY"] = key
-        relay_env["RELAY_PYTHON"] = str(python)
-        relay_env.update(relay_environment(relay))
-        relay_argv = ((str(exe), "--minimized", "--start-api", "--config", str(config.resolve()))
-                      if os.name=='nt' and exe.name.lower()=='helene-relay.exe' else (str(exe),'serve','--headless'))
-        specs[f"{agent_id}:relay"] = Spec("relay", relay_argv, home,
-                                   relay_env, home / "logs/relay-console.log", relay_port)
+    install_base = base if agent_id == BASE_ID else base.parent.parent
+    selected_relay = relay_spec(config, cfg, tree, python, install_base=install_base, environ=ambient)
+    if selected_relay is not None:
+        specs[f"{agent_id}:relay"] = selected_relay
     # XTTS is a sibling owned by this same process tree, not an agent-spawned
     # model thread or a second daemon outside Stop/owner-death custody.
     voice_cfg = cfg.get("voice") or {}

@@ -70,7 +70,7 @@ def relay_request(agent,path,payload=None):
         return json.load(response)
 
 
-def control(agent,op,**arguments):
+def control(agent,op,*,timeout_sec=20,**arguments):
     address=json.loads((agent.tree/'relay/local_auth/control.json').read_text(encoding='utf-8'))
     port=address['port']
     if type(port) is not int or not 1<=port<=65535:raise ValueError('Invalid relay control address')
@@ -79,7 +79,7 @@ def control(agent,op,**arguments):
         headers={'X-Relay-Control':address['token'],'Content-Type':'application/json'})
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self,*args,**kwargs):return None
-    with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(request,timeout=20) as response:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(request,timeout=timeout_sec) as response:
         return json.load(response)
 
 

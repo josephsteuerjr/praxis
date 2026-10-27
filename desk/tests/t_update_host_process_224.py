@@ -37,6 +37,15 @@ LOCAL_FEATURE='local_feature = True\n'
 class LegacyHostProcess(unittest.TestCase):
     def _one_click(self,root,old,new,code,home,requests,errors):
         from t_source_admission_225 import view
+        coupled=os.environ.get('HELENE_TEST_RELAY_CUSTODY')=='1'
+        if coupled:
+            import socket
+            with socket.socket() as sock:sock.bind(('127.0.0.1',0));relay_port=sock.getsockname()[1]
+            fixture=ROOT/'desk/tests/fixtures/update_relay_lifetime.py'
+            executable=old/'helene-relay';executable.write_bytes(('#!'+sys.executable+'\n').encode()+fixture.read_bytes());executable.chmod(0o755)
+            cfg=read(old/'helene.json');cfg['relay']={'enabled':True,'port':relay_port,'key':'fixture'};write(old/'helene.json',cfg)
+            settings=read(home/'memory/llm.json');upstream=settings['frameworks']['openai']['base_url'].removesuffix('/v1')
+            settings['frameworks']['openai']['base_url']=f'http://127.0.0.1:{relay_port}/v1';write(home/'memory/llm.json',settings)
         write(old/'python-app.json',{'version':'2.1.1','delivery':'portable','target':'linux-x86_64'})
         version=json.loads((ROOT/'desk/app/package.json').read_text())['version']
         write(new/'python-app.json',{'version':version,'delivery':'portable','target':'linux-x86_64'})
@@ -78,18 +87,36 @@ time.sleep(3)
             for p in new.rglob('*'):
                 if p.is_file() and '__pycache__' not in p.parts:z.write(p,'Helene/'+p.relative_to(new).as_posix())
         owner_script=root/'legacy-owner.py'
-        owner_script.write_text('''import json,sys,time
+        owner_script.write_text('''import json,sys,time,os,subprocess
 from pathlib import Path
 from types import SimpleNamespace
 root=Path(sys.argv[1]);sys.path.insert(0,str(root/'app'))
 from localharness.python_updates import update_install
-def close(): (root.parent/'old-closed.txt').write_text('closed by the existing old updater')
+relay=None
+if os.environ.get('HELENE_TEST_RELAY_CUSTODY')=='1':
+    from localharness.desktop_supervisor import relay_spec
+    from localharness.python_relay import control
+    cfg=json.loads((root/'helene.json').read_text());tree=Path(cfg['tree'])
+    spec=relay_spec(root/'helene.json',cfg,tree,Path(sys.executable),install_base=root)
+    relay=subprocess.Popen(list(spec.argv),cwd=spec.cwd,env=spec.env)
+    end=time.monotonic()+15
+    while True:
+        try:
+            assert control(SimpleNamespace(tree=tree),'status')['port']==cfg['relay']['port'];break
+        except Exception:
+            if time.monotonic()>end:raise
+            time.sleep(.05)
+    (root.parent/'old-relay-pid.txt').write_text(str(relay.pid))
+def close():
+    if relay is not None:relay.terminate();relay.wait(10)
+    (root.parent/'old-closed.txt').write_text('closed by the existing old updater')
 owner=SimpleNamespace(root=root,event=lambda *args:None,browser_mode=True,close=close)
 result=update_install(owner,sys.argv[2])
 (root.parent/'old-button-result.json').write_text(json.dumps(result))
 while True:time.sleep(.1)
 ''')
         env=dict(os.environ);env.pop('PYTHONPATH',None)
+        if coupled:env.update(FIXTURE_RELAY_UPSTREAM=upstream,FIXTURE_RELAY_LIFETIME_LOG=str(root/'relay-lifetime.jsonl'))
         with (root/'old-owner.log').open('wb') as output:
             owner=subprocess.Popen([sys.executable,'-B',str(owner_script),str(old),str(archive)],
                 cwd=root,env=env,stdout=output,stderr=subprocess.STDOUT,start_new_session=True)
@@ -117,6 +144,10 @@ while True:time.sleep(.1)
             for name,data in profile_before.items():self.assertEqual((home/name).read_bytes(),data)
             self.assertNotEqual(source_merge.inventory(old/'tree'),declaration['view_files'])
             self.assertTrue(requests)
+            if coupled:
+                operation=read(source_update.path(home));transport=read(Path(operation['directory'])/'relay-transport.json')
+                self.assertTrue(transport['owned']);self.assertEqual(transport['state'],'stopped')
+                self.assertNotEqual(transport['pid'],int((root/'old-relay-pid.txt').read_text()))
             self.assertEqual({tuple(r['tools']) for r in requests},{('merge_source',),('inspect',)})
             # Wait for the confirmed fixture app and cleanup helper to release
             # their files before exercising the real rollback entry.
@@ -129,7 +160,8 @@ while True:time.sleep(.1)
             print('ONE_211_UPDATE_BUTTON_PASS',json.dumps({'update_invocations':1,'helper_admitted':True,
                 'actual_upstream_review':True,'semantic_repair':True,'install_and_rollback':True,
                 'manual_preparation':False,'ordinary_agent_started':False,'authored_source_preserved':True,
-                'profile_preserved':True,'startup_bytecode_present':startup_cache,'native_gui':False}),flush=True)
+                'profile_preserved':True,'startup_bytecode_present':startup_cache,
+                'old_owner_owned_model_transport':coupled,'native_gui':False}),flush=True)
         except BaseException:
             for p in root.glob('helene-update-*.log'):print(p,p.read_text(errors='replace')[-12000:],flush=True)
             for p in root.glob('**/source-review-*.log'):print(p,p.read_text(errors='replace')[-8000:],flush=True)

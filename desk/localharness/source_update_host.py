@@ -39,7 +39,8 @@ def verified_runtime(new):
             raise ValueError('Incoming runtime source changed: ' + name)
     required = {'localharness/source_update_host.py', 'localharness/source_update.py',
                 'localharness/source_update_worker.py', 'localharness/self_review.py',
-                'localharness/self_review_worker.py'}
+                'localharness/self_review_worker.py', 'localharness/source_update_transport.py',
+                'localharness/desktop_supervisor.py', 'localharness/python_relay.py'}
     if not required <= set(app.get('files', {})):
         raise ValueError('Incoming distribution has no complete coordinator inventory')
     for name, digest in app['files'].items():
@@ -94,9 +95,13 @@ def coordinate(old, new, directory, cancel_file):
     # Review may read an older settings schema, but must not migrate the live
     # owner's model configuration before the installation has been accepted.
     os.environ['PRAXIS_LLM_READ_ONLY_CONFIG'] = '1'
+    os.environ['PYTHONUTF8'] = '1'
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
     os.environ['PYTHONPATH'] = str(new / 'app')
     sys.path.insert(0, str(new / 'tree'))
     import forge
+    import llm
+    from localharness.source_update_transport import review_transport
     if (Path(forge.__file__).resolve() != new / 'tree/forge.py'
             or forge.SOURCE_UPDATE_API != 1 or forge.SELF_REVIEW_API != 1):
         raise ValueError('Coordinator did not load the verified incoming Forge')
@@ -112,21 +117,28 @@ def coordinate(old, new, directory, cancel_file):
         if operation.get('coordinator') != binding or operation['state'] not in source_update.ACTIVE:
             raise RuntimeError(operation.get('error') or 'Existing update review requires attention')
         try:
-            while True:
-                if Path(cancel_file).exists() or source_update._owner_blocked(tree):
-                    raise RuntimeError('Owner cancelled, stopped or paused update review')
-                source_update.tick(tree, forge, service, coordinator=binding)
-                operation = read(directory / 'pipeline.json')
-                if operation.get('review_id'):
-                    service.tick(review_ids={operation['review_id']})
-                if operation['state'] == 'ready_to_apply':
-                    source_update.validate_ready(directory)
-                    return
-                if operation['state'] not in source_update.ACTIVE:
-                    raise RuntimeError(operation.get('error') or operation.get('reason') or 'Update review failed')
-                time.sleep(.25)
-        except BaseException:
-            _settle(tree, forge, service, directory, 'Incoming update coordinator stopped before acceptance')
+            stopped = lambda: Path(cancel_file).exists() or source_update._owner_blocked(tree)
+            with review_transport(agent, old, directory, llm._config(), stopped) as transport:
+                while True:
+                    if stopped():
+                        raise RuntimeError('Owner cancelled, stopped or paused update review')
+                    if transport is not None:
+                        transport.check()
+                    source_update.tick(tree, forge, service, coordinator=binding)
+                    operation = read(directory / 'pipeline.json')
+                    if operation.get('review_id'):
+                        service.tick(review_ids={operation['review_id']})
+                    if operation['state'] == 'ready_to_apply':
+                        source_update.validate_ready(directory)
+                        return
+                    if operation['state'] not in source_update.ACTIVE:
+                        raise RuntimeError(operation.get('error') or operation.get('reason') or 'Update review failed')
+                    time.sleep(.25)
+        except BaseException as primary:
+            try:
+                _settle(tree, forge, service, directory, 'Incoming update coordinator stopped before acceptance')
+            except Exception as cleanup:
+                raise RuntimeError(f'{type(primary).__name__}: {primary}; update cancellation remains unconfirmed: {cleanup}') from primary
             raise
 
 

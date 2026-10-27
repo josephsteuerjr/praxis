@@ -338,6 +338,10 @@ def _merge_tick(operation, directory, forge):
     result = json.loads(raw)
     plan = _fresh(operation, directory)
     candidate = merge.candidate_signature(directory)
+    if result.get('status') == 'error' and result.get('error'):
+        # Failure is never candidate acceptance. Preserve the worker's actual
+        # cause instead of presenting a network/auth error as stale source.
+        raise ValueError('Source merger failed: ' + str(result['error'])[:1200])
     if (state != 'done' or result.get('status') != 'done' or result.get('complete') is not True
             or result.get('tool_errors') or result.get('plan_id') != operation['id']
             or result.get('input_sha256') != operation['input_sha256']
