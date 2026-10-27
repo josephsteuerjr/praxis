@@ -88,6 +88,40 @@ class RemoteAdmission(unittest.TestCase):
         self.assertEqual(request['status'], 'unknown')
         self.assertFalse((forge._unit_dir(self.tid, 'processes', request['id'])/'result.json').exists())
 
+    def test_body_lost_admission_response_retains_custody_before_transport(self):
+        import body_client
+        import forge_remote_run
+        self.task['scope'] = 'windows'; forge._save_task(self.task)
+        self.patch('_remote_client', lambda _: body_client)
+        admissions = []; reads = []; cancelled = []
+        def wire(method, path, payload=None, **kwargs):
+            if method == 'POST':
+                cap = payload['capability']
+                if cap == 'process.start':
+                    saved = forge._units(self.tid, 'processes')[0]
+                    self.assertEqual(saved['backend_request_id'], payload['request_id'])
+                    self.assertEqual(saved['backend_operation_id'], payload['operation_id'])
+                    admissions.append(payload)
+                    return {'ok': True}
+                self.assertEqual(payload['args']['operation_id'], admissions[0]['operation_id'])
+                if cap == 'process.cancel':cancelled.append(payload)
+                reads.append(payload)
+                return {'ok': True}
+            if not reads:return {'ok': False, 'code': 'transport', 'error': 'lost admission response'}
+            query = reads[-1]
+            return {'ok': True, 'response': {'type': 'result', 'ok': True,
+                'result': {'operation_id': admissions[0]['operation_id'],
+                           'status': 'cancelled' if cancelled else 'running'}}}
+        with mock.patch.object(body_client, '_request', side_effect=wire), \
+             mock.patch.object(body_client, '_settings', return_value=('fixture', 'fixture', 'fixture')):
+            first = forge_remote_run.start_unlocked(forge, self.task, 'same', '.', 10)
+            self.assertEqual(first['status'], 'unknown')
+            directory = forge._unit_dir(self.tid, 'processes', first['id'])
+            settled = forge_remote_run.refresh(forge, directory, self.task, stop=True)
+        self.assertEqual(len(admissions), 1)
+        self.assertEqual(settled['status'], 'stopped')
+        self.assertEqual(settled['remote_id'], admissions[0]['operation_id'])
+
     def test_pause_and_terminal_task_admit_no_remote_command(self):
         remote = self.host()
         forge.control(self.tid, 'pause')
@@ -183,7 +217,8 @@ class RemoteAdmission(unittest.TestCase):
         remote.call.return_value = {'ok': True}
         self.assert_unresolved_poll(remote, payload)
         remote.process_start.assert_called_once_with(
-            command='echo test', shell='power_shell', cwd=self.task['root'], timeout=0)
+            command='echo test', shell='power_shell', cwd=self.task['root'], timeout=0,
+            request_id=mock.ANY, operation_id=mock.ANY)
         remote.process_status.assert_called_with('remote-123', 30000)
         self.assertTrue(all(c.args[0] == 'process.cancel' for c in remote.call.call_args_list))
 

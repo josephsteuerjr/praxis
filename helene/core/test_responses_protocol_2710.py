@@ -76,5 +76,27 @@ class ResponsesProtocol(unittest.TestCase):
         self.assertEqual(self.call(client).stop_reason,'max_tokens')
         client.responses.create.assert_called_once()
 
+    def test_transport_failure_before_output_keeps_empty_retry_classification(self):
+        def broken():
+            yield from ()
+            raise ConnectionError('fixture transport interrupted')
+        client = self.client([])
+        client.responses.create.return_value = broken()
+        with mock.patch.object(llm, '_stream_transport_error', return_value=True):
+            with self.assertRaises(llm.EmptyResponseError):
+                self.call(client)
+
+    def test_transport_failure_after_opaque_output_is_never_empty(self):
+        item = {'type': 'reasoning', 'id': 'opaque', 'encrypted_content': 'fixture'}
+        def broken():
+            yield types.SimpleNamespace(type='response.output_item.done', output_index=0, item=item)
+            raise ConnectionError('fixture transport interrupted')
+        client = self.client([])
+        client.responses.create.return_value = broken()
+        with mock.patch.object(llm, '_stream_transport_error', return_value=True):
+            with self.assertRaises(llm.TornStreamError) as caught:
+                self.call(client)
+        self.assertEqual(caught.exception.partial.continuation['payload'], [item])
+
 
 if __name__ == '__main__':unittest.main()

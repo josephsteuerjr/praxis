@@ -122,7 +122,7 @@ class RoutingCase(unittest.TestCase):
             def remote_call(action, params, **kwargs):
                 if action == 'op.start': return {'ok': True, 'id': next(operation_ids)}
                 self.assertEqual(action, 'op.poll')
-                self.assertEqual(params['operation_id'], 'op-sync123')
+                self.assertIn(params['operation_id'], ('op-sync123', 'op-detached123'))
                 return {'ok': True, 'status': 'done', 'code': 0}
             with mock.patch.object(forge.serverd_client, "workspace_inspect",
                                    return_value="root file"), \
@@ -139,6 +139,9 @@ class RoutingCase(unittest.TestCase):
                 self.assertEqual(started['remote_id'], 'op-detached123')
                 self.assertTrue(started['remote'])
                 self.assertEqual(len(forge._units(task_id, 'processes')), 2)
+                self.assertIn('shared-root', forge.checkpoint(task_id, "busy"))
+                polled = __import__('json').loads(forge.process(task_id, "poll", process_id=started['id']))
+                self.assertEqual(polled['status'], 'done')
                 self.assertEqual(forge.checkpoint(task_id, "cp"), "checkpointed")
                 spawned = forge.agent(task_id, "spawn", brief="inspect root", role="scout")
             self.assertIn("agent-", spawned)

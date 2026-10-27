@@ -3629,7 +3629,9 @@ def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thi
         if not _stream_transport_error(exc):
             raise
         partial = _responses_result({"status": "failed", "output": [items[index] for index in sorted(items)]}, model, scope)
-        raise TornStreamError("Responses transport interrupted", partial=partial) from exc
+        # The shared guard permits the established empty-response retry only
+        # before any output; opaque reasoning/tool items still fence replay.
+        return _guard_answer(partial)
     if final is None:
         final = {"status": "failed", "output": [items[index] for index in sorted(items)]}
     return _guard_answer(_responses_result(final, model, scope))

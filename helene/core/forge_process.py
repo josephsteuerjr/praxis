@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 import process_liveness
+from command_process import CommandProcess
 
 
 def _now() -> str:
@@ -72,6 +73,8 @@ def _terminate_tree(proc: subprocess.Popen) -> tuple[bool, str]:
     does not prove their death. Never fall back to killing only the leader and then
     report a terminal timeout. Windows taskkill's failure likewise is not proof.
     """
+    if isinstance(proc, CommandProcess):
+        return proc.stop_tree()
     if os.name == "nt":
         # A Popen handle refers to the original process, unlike its recyclable
         # PID. If that shell has already exited, taskkill could hit a stranger.
@@ -130,6 +133,10 @@ def run(request_path: Path) -> int:
     started = time.monotonic()
     state: dict = {}
     try:
+        if (directory / 'stop-request.json').exists():
+            _write(directory / 'stop.json', {'state':'settled', 'note':'stopped before command admission'})
+            _write(result_path, {'status':'stopped', 'code':-1, 'finished':_now()})
+            return 0
         with log_path.open("a", encoding="utf-8") as log:
             kwargs = {"shell": True, "cwd": str(request["cwd"]), "stdout": log,
                       "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL, "text": True}
@@ -138,7 +145,7 @@ def run(request_path: Path) -> int:
                                            | getattr(subprocess, "CREATE_NO_WINDOW", 0))
             else:
                 kwargs["start_new_session"] = True
-            proc = subprocess.Popen(str(request["command"]), **kwargs)
+            proc = CommandProcess(str(request["command"]), **kwargs)
             # Preserve the birth mark captured while this child is still ours:
             # later a recycled PID is not a safe target for an external stop.
             state = {"status": "running", "child_pid": proc.pid,
@@ -149,8 +156,21 @@ def run(request_path: Path) -> int:
             _write(state_path, state)
             timeout = int(request.get("timeout") or 0)
             try:
-                code = proc.wait(timeout=(timeout or None))
-                status = "done" if code == 0 else "failed"
+                while True:
+                    if (directory / 'stop-request.json').exists():
+                        stopped, note = _terminate_tree(proc)
+                        if not stopped:
+                            _unresolved(directory, state, note)
+                            return 2
+                        code, status = -1, 'stopped'
+                        break
+                    code = proc.poll()
+                    if code is not None:
+                        status = 'done' if code == 0 else 'failed'
+                        break
+                    if timeout and time.monotonic() - started >= timeout:
+                        raise subprocess.TimeoutExpired(request['command'], timeout)
+                    time.sleep(.05)
             except subprocess.TimeoutExpired:
                 stopped, note = _terminate_tree(proc)
                 if not stopped:
@@ -164,6 +184,8 @@ def run(request_path: Path) -> int:
         _write(result_path, {"status": status, "code": code, "finished": _now(),
                             "duration_s": round(time.monotonic() - started, 3),
                             "log": str(log_path)})
+        if (directory / 'stop-request.json').exists():
+            _write(directory / 'stop.json', {'state':'settled', 'note':'private command group exited'})
         return 0 if status == "done" else 1
     except Exception as exc:
         if state:

@@ -202,6 +202,7 @@ def call(capability: str, args: dict | None = None, *, execution: str = "interac
     if not started.get("ok"):
         return _observed(capability, call_args, execution, started)
     rid = str(started["request_id"])
+    identity = {"request_id": rid, "operation_id": started.get("operation_id")}
     deadline = time.monotonic() + max(0.1, timeout)
     while time.monotonic() < deadline:
         observed = response(rid, timeout=min(30.0, max(1.0, deadline - time.monotonic())))
@@ -211,19 +212,19 @@ def call(capability: str, args: dict | None = None, *, execution: str = "interac
             if kind == "error":
                 return _observed(capability, call_args, execution, {
                     "ok": False, "code": frame.get("code"),
-                    "error": frame.get("message"), **frame,
+                    "error": frame.get("message"), **identity, **frame,
                 })
             if kind == "result":
                 result = frame.get("result") if isinstance(frame.get("result"), dict) else {}
                 return _observed(capability, call_args, execution, {
-                    **frame, **result,
+                    **identity, **frame, **result,
                     "transport_ok": frame.get("ok") is True,
                     "ok": frame.get("ok") is True and result.get("ok", True) is True,
                 })
             if kind in {"accepted", "progress", "cancelled"}:
-                return _observed(capability, call_args, execution, {"ok": True, **frame})
+                return _observed(capability, call_args, execution, {"ok": True, **identity, **frame})
         if not observed.get("ok"):
-            return _observed(capability, call_args, execution, observed)
+            return _observed(capability, call_args, execution, {**identity, **observed})
         time.sleep(.1)
     return _observed(capability, call_args, execution, {
         "ok": False, "code": "timeout",
@@ -680,7 +681,7 @@ def process_start(*, program: str = "", args: list[str] | None = None,
                   command: str = "", shell: str = "direct", cwd: str = "",
                   env: dict[str, str] | None = None, timeout: int = 0,
                   name: str = "", execution: str = "interactive",
-                  request_id: str = "") -> dict:
+                  request_id: str = "", operation_id: str = "") -> dict:
     payload: dict[str, Any] = {
         "shell": shell, "args": args or [], "env": env or {}, "timeout_s": int(timeout or 0),
     }
@@ -693,7 +694,7 @@ def process_start(*, program: str = "", args: list[str] | None = None,
     if name:
         payload["name"] = name
     return call("process.start", payload, execution=execution,
-                request_id=request_id, timeout=60)
+                request_id=request_id, operation_id=operation_id, timeout=60)
 
 
 def process_status(operation_id: str, tail: int = 16000,
@@ -929,7 +930,10 @@ def _window_read_node_lines(node: object, out: list[str], indent: str, level: in
         if centre:
             # Именно этой точкой она и тыкает: центр — единственное, что можно отдать
             # в desktop.input.perform без пересчёта.
-            parts.append(f"@{centre.get('x')},{centre.get('y')}")
+            if rect.get('coordinate_space') not in (None, 'screen'):
+                parts.append('координаты экрана не подтверждены; используй native selector')
+            else:
+                parts.append(f"@{centre.get('x')},{centre.get('y')}")
         if all(key in rect for key in ("left", "top", "width", "height")):
             parts.append(f"rect={rect['left']},{rect['top']}+{rect['width']}x{rect['height']}")
         for key in sorted(set(rect) - {"left", "top", "width", "height", "center"}):

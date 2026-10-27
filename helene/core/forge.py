@@ -2887,6 +2887,9 @@ def _stop_foreground(proc: subprocess.Popen) -> tuple[bool, str]:
     subprocess.run(..., timeout=...) kills only its shell leader.  A child in
     the same session may outlive it; don't turn that into a terminal receipt.
     """
+    from command_process import CommandProcess
+    if isinstance(proc, CommandProcess):
+        return proc.stop_tree()
     if os.name == "nt":
         # The Popen handle is the only identity we retain on Windows. If the
         # shell already exited, its PID is not authority to taskkill a tree:
@@ -3019,7 +3022,8 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 if reason:
                     return f"Run refused: {reason}"
                 parent_id, _ = _worker_parent(task_id, _parent_request_path)
-                proc = subprocess.Popen(command, shell=True, cwd=str(place), stdout=log_file,
+                from command_process import CommandProcess
+                proc = CommandProcess(command, shell=True, cwd=str(place), stdout=log_file,
                                         stderr=subprocess.STDOUT,
                                         start_new_session=(os.name != "nt"),
                                         creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
@@ -3033,6 +3037,7 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                     "child_pid": proc.pid, "child_started_at": born})
             proc.wait(timeout=(seconds or None))
         code, status = proc.returncode, "ok" if proc.returncode == 0 else "failed"
+        if getattr(proc, '_stopped', False):status = 'stopped'
     except subprocess.TimeoutExpired:
         assert proc is not None
         stopped, detail = _stop_foreground(proc)
@@ -3612,6 +3617,7 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         d = _unit_dir(task_id, "processes", unit_id)
         request = {
             "id": unit_id, "task_id": task_id, "name": str(name or "").strip(),
+            "command_custody": "group-v1",
             "parent_unit_id": parent_unit_id,
             "command": command, "cwd": str(place), "timeout": max(0, int(timeout or 0)),
             "created": _now(), "status": "starting",
@@ -3653,6 +3659,21 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
             return f"{process_id}: результат уже сохранён ({prior.get('status') or 'unknown'}); Stop не послан."
         _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
                                         "note": "остановка начата; исход дерева не подтверждён"})
+        request = _read_json(d / 'request.json', {}) or {}
+        if request.get('command_custody') == 'group-v1':
+            # The independent supervisor owns an unreaped group/job handle.
+            # Ask that owner to stop; a child PID (possibly a zombie shell)
+            # cannot replace its authority over the remaining descendants.
+            _atomic_json(d / 'stop-request.json', {'requested': _now()})
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                outcome = _read_json(d / 'result.json')
+                if isinstance(outcome, dict):
+                    _atomic_json(d / 'stop.json', {'state':'settled', 'settled':_now(),
+                                                 'note':'private command group exited'})
+                    return f"{process_id}: остановлен; private command group exited"
+                time.sleep(.05)
+            return f"{process_id}: не остановлен; supervisor has not confirmed group exit"
         # A completion between the first read and the durable stop marker is
         # still natural completion: no signal has been sent. Resolve our own
         # marker before any PID lookup can misidentify its recycled number.

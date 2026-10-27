@@ -15,8 +15,7 @@ STATUS_ALIASES = {'ok': 'done', 'completed': 'done', 'succeeded': 'done',
 def _call(forge, task, action, request, *, command='', cwd='.', timeout=0):
     remote = forge._remote_client(task)
     ident = request.get('remote_id', '')
-    if task['scope'] == 'host':
-        ident = ident or request.get('backend_operation_id', '')
+    ident = ident or request.get('backend_operation_id', '')
     with forge._remote_observations(task):
         if task['scope'] == 'host':
             if action == 'start':
@@ -27,7 +26,9 @@ def _call(forge, task, action, request, *, command='', cwd='.', timeout=0):
                                {'operation_id': ident, **({'tail': 30000} if action != 'stop' else {})})
         if action == 'start':
             place = task['root'] if cwd in ('', '.') else ntpath.join(task['root'], cwd)
-            return remote.process_start(command=command, shell='power_shell', cwd=place, timeout=timeout)
+            return remote.process_start(command=command, shell='power_shell', cwd=place, timeout=timeout,
+                                        request_id=request['backend_request_id'],
+                                        operation_id=request['backend_operation_id'])
         return (remote.call('process.cancel', {'operation_id': ident, 'tail': 30000})
                 if action == 'stop' else remote.process_status(ident, 30000))
 
@@ -37,7 +38,7 @@ def refresh(forge, directory, task, *, stop=False):
     result = forge._read_json(directory / 'result.json', {}) or {}
     if result.get('status') in TERMINAL:
         return result
-    expected = request.get('backend_operation_id') if task['scope'] == 'host' else None
+    expected = request.get('backend_operation_id')
     if not request.get('remote_id') and not expected:
         return {**request, 'status': 'unknown', 'error': 'Remote admission has no confirmed operation identity'}
     try:
@@ -46,7 +47,8 @@ def refresh(forge, directory, task, *, stop=False):
     except Exception as exc:
         row = {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
     if not request.get('remote_id') and expected:
-        if row.get('ok') and row.get('id') == expected:
+        identity = row.get('id') if task['scope'] == 'host' else row.get('operation_id')
+        if row.get('ok') and identity == expected:
             request['remote_id'] = expected
             forge._atomic_json(directory / 'request.json', request)
         else:
@@ -74,13 +76,15 @@ def start_unlocked(forge, task, command, cwd, timeout, *, parent_unit_id='', nam
     request = {'id': unit, 'task_id': task_id, 'remote': True, 'scope': task['scope'],
                'parent_unit_id': parent_unit_id, 'name': name, 'command': command, 'cwd': cwd,
                'created': forge._now(), 'status': 'unknown'}
+    request['backend_request_id'] = uuid.uuid4().hex
     if task['scope'] == 'host':
-        request['backend_request_id'] = uuid.uuid4().hex
         # broker.dispatch derives this exact operation identity before op.start.
         # Persist it before transport so a lost reply can be polled/stopped without
         # replaying admission or borrowing an unrelated call's retry identity.
         request['backend_operation_id'] = 'op-' + hashlib.sha256(
             request['backend_request_id'].encode()).hexdigest()[:16]
+    else:
+        request['backend_operation_id'] = 'op-' + uuid.uuid4().hex
     forge._atomic_json(directory / 'request.json', request)
     try:
         row = _call(forge, task, 'start', request, command=command, cwd=cwd, timeout=timeout)

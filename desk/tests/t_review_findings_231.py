@@ -65,7 +65,7 @@ class Findings(unittest.TestCase):
         self.patch('_remote_client', lambda _: None)
         self.patch('_stop_foreground', lambda _: (False, 'group census unavailable'))
         self.patch('_RUNNERS', {})
-        with mock.patch.object(forge.subprocess, 'Popen', return_value=proc):
+        with mock.patch('command_process.CommandProcess', return_value=proc):
             result = forge.run(self.tid, 'echo test', timeout=1, _parent_request_path=str(parent/'request.json'))
         rows = forge._units(self.tid, 'processes')
         self.assertEqual(len(rows), 1, 'one admitted command must retain one owned identity')
