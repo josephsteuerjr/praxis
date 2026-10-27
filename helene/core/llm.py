@@ -2200,8 +2200,11 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
         # ⚠ Этот return уходил ДО сторожа: openai-совместимый сервер, отдавший единый объект
         # с пустым message, возвращался успешным 'end_turn'. Теперь сторож один на оба разбора.
         result = _openai_from_completion(resp, model)
-        result.continuation = {"scope": scope, "format": "chat_completions",
-                               "payload": _openai_replay_message(resp.choices[0].message)}
+        payload = _openai_replay_message(resp.choices[0].message)
+        # The assistant role alone is an empty envelope, not received output.
+        if any(value.strip() if isinstance(value, str) else value
+               for key, value in payload.items() if key != "role"):
+            result.continuation = {"scope": scope, "format": "chat_completions", "payload": payload}
         return _guard_answer(result)
     # итератор чанков (relay/реальный OpenAI stream); здоровье канала проверяет тот же сторож
     result = _openai_from_stream(resp, model)

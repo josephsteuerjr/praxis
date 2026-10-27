@@ -333,6 +333,19 @@ class WorkerDurability(unittest.TestCase):
         self.assertEqual(retained["blocks"], partial.blocks)
         self.assertEqual(retained["assistant"]["provider_continuation"]["payload"], "signed-carry")
 
+    def test_pause_during_transport_retry_delay_prevents_another_provider_call(self):
+        self.responses = [self.worker.llm.BrokenChannelError("transport failed"), self.response()]
+        adapter = Adapter()
+        adapter.dispatch = mock.Mock()
+        def pause_owner(_delay):
+            self.allowed = False
+        with mock.patch.object(self.worker.time, "sleep", side_effect=pause_owner):
+            self.assertEqual(self.run_worker(adapter), 2)
+        self.assertEqual(len(self.calls), 1)
+        adapter.dispatch.assert_not_called()
+        result = json.loads((self.request_path.parent / "result.json").read_text("utf-8"))
+        self.assertEqual(result["status"], "stopped")
+
     def test_unknown_model_boundary_never_replays_provider_call(self):
         self.responses = [Interrupted()]
         with self.assertRaises(Interrupted):

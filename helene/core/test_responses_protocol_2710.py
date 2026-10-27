@@ -98,5 +98,22 @@ class ResponsesProtocol(unittest.TestCase):
                 self.call(client)
         self.assertEqual(caught.exception.partial.continuation['payload'], [item])
 
+    def test_nonstream_empty_envelope_is_retryable_but_reasoning_is_not(self):
+        for content, reasoning, error in ((None, None, llm.EmptyResponseError),
+                                          ('   ', None, llm.EmptyResponseError),
+                                          (None, 'opaque reasoning', llm.TornStreamError)):
+            with self.subTest(content=content, reasoning=reasoning):
+                message = types.SimpleNamespace(content=content, tool_calls=[], reasoning_content=reasoning)
+                completion = types.SimpleNamespace(choices=[types.SimpleNamespace(
+                    message=message, finish_reason=None)], usage=None)
+                create = mock.Mock(return_value=completion)
+                client = types.SimpleNamespace(base_url='https://api.openai.com/v1', api_key='fixture',
+                    chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+                with mock.patch.object(llm, 'cache_address', return_value=None):
+                    with self.assertRaises(error):
+                        llm._call_openai(client, 'fixture', system='',
+                            messages=[{'role':'user','content':'Go'}], tools=None, max_tokens=100, thinking=False)
+                create.assert_called_once()
+
 
 if __name__ == '__main__':unittest.main()

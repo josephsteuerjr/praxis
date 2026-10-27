@@ -188,7 +188,12 @@ def ready_nodes(plan: dict) -> list[dict]:
     accepted = {node.get("id"): node.get("status") == "done"
                 and bool(node.get("result_sha256"))
                 and node.get("accepted_sha256") == node.get("result_sha256") for node in nodes}
-    running = sum(1 for node in nodes if node.get("status") in {"starting", "running", "queued", "unknown"})
+    by_id = {node["id"]: node for node in nodes}
+    # A queued attempt bound to an old dependency cannot start. Retain its
+    # identity/history, but let upstream repair use the otherwise idle slot.
+    running = sum(1 for node in nodes
+                  if node.get("status") in {"starting", "running", "unknown"}
+                  or (node.get("status") == "queued" and not dependency_reason(node, by_id)))
     slots = max(0, int(plan.get("max_parallel") or 1) - running)
     ready = []
     for node in nodes:

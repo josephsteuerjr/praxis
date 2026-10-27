@@ -48,7 +48,7 @@ def _bounded_env_float(name: str, default: float, *, low: float, high: float) ->
     return max(low, min(high, value))
 
 
-def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dict],
+def _chat_with_transport_retry(request: dict, *, request_path: Path, system: str, messages: list[dict],
                                tools: list[dict] | None, logical_iteration: int,
                                call_options: dict | None = None, journal=None):
     """Retry an LLM iteration only while no response/tool call has reached the worker.
@@ -62,6 +62,7 @@ def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dic
     pause = _bounded_env_float("PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC", 2.0,
                                low=0.0, high=60.0)
     for attempt in range(retries + 1):
+        _control(request_path)  # Pause/Stop may arrive during a failed call or retry delay.
         try:
             return llm.chat("voice", system=system, messages=messages, tools=tools,
                             model=str(request.get("model") or "").strip() or None,
@@ -407,7 +408,7 @@ def _loop(journal, request_path, request, adapter):
                      system=system)
         journal.event("model_start", summary=summarizing, model_requested=request.get("model", ""))
         response = _chat_with_transport_retry(
-            request, system=system, messages=state["messages"],
+            request, request_path=request_path, system=system, messages=state["messages"],
             tools=None if summarizing else state["tools"],
             logical_iteration=state["iteration"] + int(summarizing),
             call_options=state["call_options"], journal=journal,

@@ -3030,12 +3030,28 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 born = _proc_started_at(proc.pid)
                 _RUNNERS[int(proc.pid)] = proc
                 _atomic_json(directory / "request.json", {"id": unit_id, "task_id": task_id,
+                    "command_custody": "foreground-group-v1",
                     "command": command, "cwd": str(place), "created": _now(), "status": "running",
                     "supervisor_pid": proc.pid, "supervisor_started_at": born,
                     "parent_unit_id": parent_id, "log": str(log_path)})
                 _atomic_json(directory / "state.json", {"foreground": True,
                     "child_pid": proc.pid, "child_started_at": born})
-            proc.wait(timeout=(seconds or None))
+            deadline = time.monotonic() + seconds if seconds else None
+            while True:
+                denied = (_parent_request_path and not worker_control(_parent_request_path).get('allowed'))
+                if (directory / 'stop-request.json').exists() or denied:
+                    stopped, detail = _stop_foreground(proc)
+                    if not stopped:
+                        raise RuntimeError('command group stop unconfirmed: ' + detail)
+                    break
+                remaining = deadline - time.monotonic() if deadline is not None else None
+                if remaining is not None and remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, seconds)
+                try:
+                    proc.wait(timeout=min(.1, remaining) if remaining is not None else .1)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
         code, status = proc.returncode, "ok" if proc.returncode == 0 else "failed"
         if getattr(proc, '_stopped', False):status = 'stopped'
     except subprocess.TimeoutExpired:
@@ -3660,7 +3676,9 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
                                         "note": "остановка начата; исход дерева не подтверждён"})
         request = _read_json(d / 'request.json', {}) or {}
-        if request.get('command_custody') == 'group-v1':
+        owner_is_here = int(request.get('supervisor_pid') or 0) in _RUNNERS
+        if (request.get('command_custody') == 'group-v1'
+                or (request.get('command_custody') == 'foreground-group-v1' and not owner_is_here)):
             # The independent supervisor owns an unreaped group/job handle.
             # Ask that owner to stop; a child PID (possibly a zombie shell)
             # cannot replace its authority over the remaining descendants.
@@ -4643,6 +4661,24 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
         # Deepest children first: each Forge worker has its OWN process session.
         for unit in sorted(targets, key=lambda x: _worker_depth(task_id, x), reverse=True):
             directory = _unit_dir(task_id, "agents", unit)
+            # A synchronous command has its own process group, but its owning
+            # handle lives in this worker. Ask it to stop before killing that
+            # worker; an unresolved command must retain its live custodian.
+            commands = [row for row in _units(task_id, 'processes')
+                        if row.get('parent_unit_id') == unit
+                        and (_read_json(_unit_dir(task_id, 'processes', row['id']) / 'state.json', {}) or {}).get('foreground')]
+            for row in commands:
+                process(task_id, 'stop', process_id=row['id'])
+            unresolved_commands = [row['id'] for row in commands
+                if _unit_state(_unit_dir(task_id, 'processes', row['id'])).get('status')
+                not in {'done', 'stopped', 'failed', 'timed_out', 'error'}]
+            if unresolved_commands:
+                note = 'foreground command exit unproven; worker retained: ' + ','.join(unresolved_commands)
+                receipt = _read_json(directory / 'stop.json', {}) or {}
+                receipt.update(state='unresolved', observed_at=_now(), note=note)
+                _atomic_json(directory / 'stop.json', receipt)
+                receipts.append(f'{unit}: {note}')
+                continue
             prior = _read_json(directory / "result.json")
             request = _read_json(directory / "request.json", {}) or {}
             previous_stop = _read_json(directory / "stop.json", {}) or {}

@@ -78,8 +78,58 @@ class CommandCustody(unittest.TestCase):
             signal_group.assert_not_called()
 
 
-@unittest.skipIf(os.name == 'nt', 'Forge process suites run on the owned Linux stand')
+@unittest.skipUnless(sys.platform == 'linux', 'Forge process suites run on the owned Linux stand')
 class ForgeCustody(unittest.TestCase):
+    def test_subprocess_worker_stops_its_foreground_group_before_worker_exit(self):
+        import contextlib
+        import forge
+        for whole_task in (False, True):
+            with self.subTest(whole_task=whole_task), tempfile.TemporaryDirectory() as temp, contextlib.ExitStack() as stack:
+                root = Path(temp);tid = 'code-12345678';aid = 'agent-aaaaaaaa'
+                for name, value in [('TASKS_DIR',root/'memory/.forge/tasks'), ('BASE',root),
+                                    ('_RUNNERS',{}), ('_event',mock.Mock()),
+                                    ('_task_run_context',lambda _: {}), ('_remote_client',lambda _: None)]:
+                    stack.enter_context(mock.patch.object(forge,name,value))
+                forge._save_task({'id':tid,'root':str(root),'status':'active','goal':'test', 'max_active_workers':4})
+                request_path = forge._unit_dir(tid,'agents',aid)/'request.json'
+                request = {'id':aid,'task_id':tid,'root':str(root),'status':'running','role':'worker',
+                           'brief':'one command','max_iters':2,'fixture_command':command(root,10)}
+                forge._atomic_json(request_path,request)
+                script = '''import json,sys,time
+from pathlib import Path
+import forge,forge_worker,llm
+p=Path(sys.argv[1])
+while not (Path(forge.BASE)/'begin').exists():time.sleep(.01)
+r=json.loads(p.read_text())
+forge_worker._system=lambda request:'Fixture only'
+llm.chat=lambda *a,**k:llm.LLMResponse(text='',blocks=[{'type':'tool_use','id':'call-fixture','name':'run',
+ 'input':{'command':r['fixture_command'],'timeout':8}}],stop_reason='tool_use',model='fixture')
+sys.exit(forge_worker.run(p))
+'''
+                log = stack.enter_context((root/'worker.log').open('wb'))
+                env = dict(os.environ,PRAXIS_BASE=str(root),HOME=str(root),PYTHONDONTWRITEBYTECODE='1',
+                           PYTHONPATH=str(Path(__file__).resolve().parent))
+                worker = subprocess.Popen([sys.executable,'-B','-c',script,str(request_path)],
+                    env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+                forge._RUNNERS[worker.pid]=worker
+                request.update(supervisor_pid=worker.pid,supervisor_started_at=forge._proc_started_at(worker.pid))
+                forge._atomic_json(request_path,request);(root/'begin').touch()
+                try:
+                    until(lambda:(root/'ready').exists(),10)
+                    row=forge._units(tid,'processes')[0]
+                    self.assertEqual(row['parent_unit_id'],aid)
+                    self.assertNotIn(row['supervisor_pid'],forge._RUNNERS,'fixture must not share command custody')
+                    result=forge.control(tid,'stop') if whole_task else forge.agent(tid,'stop',agent_id=aid)
+                    if whole_task:self.assertEqual(result['status'],'settled',result)
+                    worker.wait(5)
+                    self.assertEqual(forge._units(tid,'processes')[0]['status'],'stopped')
+                    self.assertIs(forge._group_live_members(row['supervisor_pid']),False)
+                    self.assertFalse((root/'written').exists())
+                finally:
+                    forge.control(tid,'stop')
+                    if worker.poll() is None:
+                        os.killpg(worker.pid,9);worker.wait(5)
+
     def test_successful_shell_keeps_root_busy_until_group_stop(self):
         self.exercise(False)
 

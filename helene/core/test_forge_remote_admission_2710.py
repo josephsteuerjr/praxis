@@ -8,7 +8,10 @@ import forge
 import test_forge_coordination_2610 as fixtures
 
 class RemoteAdmission(unittest.TestCase):
-    setUp = fixtures.Coordination.setUp
+    def setUp(self):
+        fixtures.Coordination.setUp(self)
+        sink = mock.patch.object(forge.computer_memory, 'record', mock.Mock(return_value={}))
+        sink.start(); self.addCleanup(sink.stop)
     patch = fixtures.Coordination.patch
     unit = fixtures.Coordination.unit
 

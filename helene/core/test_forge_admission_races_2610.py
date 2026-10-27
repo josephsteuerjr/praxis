@@ -35,10 +35,10 @@ class AdmissionRaces(unittest.TestCase):
         self.assertEqual(receipt['disposition'], disposition)
         return digest
 
-    def queued_dependent(self):
+    def queued_dependent(self, max_parallel=8):
         forge.swarm(self.tid, 'plan', plan=json.dumps([
             {'id': 'A', 'role': 'scout', 'brief': 'prerequisite'},
-            {'id': 'B', 'role': 'worker', 'brief': 'dependent', 'deps': ['A']}]))
+            {'id': 'B', 'role': 'worker', 'brief': 'dependent', 'deps': ['A']}]), max_parallel=max_parallel)
         forge.swarm(self.tid, 'start')
         prerequisite = self.directory / 'agents' / self.nodes()['A']['agent_id']
         forge._atomic_json(prerequisite / 'result.json', {'status': 'done', 'result': 'revision A1'})
@@ -152,11 +152,12 @@ class AdmissionRaces(unittest.TestCase):
         self.assertEqual(self.nodes()['B']['dependency_results'], {'A': digest})
 
     def test_queued_dependency_rework_does_not_rebind_old_attempt(self):
-        prerequisite, dependent, digest = self.queued_dependent()
+        prerequisite, dependent, digest = self.queued_dependent(max_parallel=1)
         forge.swarm(self.tid, 'rework', node_id='A', message='correct candidate', result_sha256=digest)
         self.assertEqual(forge.tick_queued(self.tid), [])
         self.assertEqual(self.spawn.call_count, 1)
         forge.swarm(self.tid, 'tick')
+        self.assertTrue(self.nodes()['A']['agent_id'], 'stale queued B must leave a slot for replacement A')
         replacement = self.directory / 'agents' / self.nodes()['A']['agent_id']
         self.assertNotEqual(replacement.name, prerequisite.name)
         forge._atomic_json(replacement / 'result.json', {'status': 'done', 'result': 'revision A2'})
