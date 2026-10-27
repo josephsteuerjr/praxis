@@ -53,10 +53,9 @@ def _chat_with_transport_retry(request: dict, *, request_path: Path, system: str
                                call_options: dict | None = None, journal=None):
     """Retry an LLM iteration only while no response/tool call has reached the worker.
 
-    ``llm.chat`` either returns a complete response object or raises.  Tool dispatch starts
-    only after this helper returns, so repeating a ``BrokenChannelError`` cannot execute a
-    tool twice.  The retry budget is deliberately separate from ``max_iters``: a torn HTTP
-    body is not a model turn and must not consume the agent's reasoning budget.
+    Tool dispatch starts only after this helper returns. Received provider output
+    carried by TornStreamError is retained without replay: it may include opaque
+    reasoning or server-side work. Empty transport retries have a separate budget.
     """
     retries = _bounded_env_int("PRAXIS_FORGE_TRANSPORT_RETRIES", 2, low=0, high=8)
     pause = _bounded_env_float("PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC", 2.0,
@@ -68,6 +67,7 @@ def _chat_with_transport_retry(request: dict, *, request_path: Path, system: str
                             model=str(request.get("model") or "").strip() or None,
                             **(call_options or {}))
         except llm.BrokenChannelError as exc:
+            retry = attempt < retries and not isinstance(exc, llm.TornStreamError)
             if journal is not None:
                 partial = getattr(exc, "partial", None)
                 reference = None
@@ -76,9 +76,9 @@ def _chat_with_transport_retry(request: dict, *, request_path: Path, system: str
                         "stop_reason": partial.stop_reason, "model": partial.model,
                         "assistant": _assistant(partial)}, ensure_ascii=False))
                 journal.event("model_transport_error", error=f"{type(exc).__name__}: {exc}",
-                              output_ref=reference, attempt=attempt, retry=attempt < retries,
+                              output_ref=reference, attempt=attempt, retry=retry,
                               partial_not_dispatched=partial is not None)
-            if attempt >= retries:
+            if not retry:
                 raise
             retry_number = attempt + 1
             print(

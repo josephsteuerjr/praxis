@@ -116,4 +116,62 @@ class ResponsesProtocol(unittest.TestCase):
                 create.assert_called_once()
 
 
+    def test_completed_opaque_responses_output_never_retries_as_empty(self):
+        item = {'type': 'reasoning', 'id': 'opaque', 'encrypted_content': 'fixture'}
+        client = self.client([types.SimpleNamespace(type='response.completed',
+            response={'status': 'completed', 'output': [item]})])
+        with mock.patch.object(llm, '_call', side_effect=lambda *a, **kw: self.call(client)) as call:
+            with self.assertRaises(llm.TornStreamError) as caught:
+                llm._call_retrying_empty('openai', 'fixture', retries=2)
+        call.assert_called_once()
+        self.assertEqual(caught.exception.partial.continuation['payload'], [item])
+
+    def test_completed_opaque_chat_output_never_retries_as_empty(self):
+        for streaming in (False, True):
+            with self.subTest(streaming=streaming):
+                message = types.SimpleNamespace(content=None, tool_calls=[], reasoning_content='opaque')
+                choice = types.SimpleNamespace(message=message, delta=message, finish_reason='stop')
+                completion = types.SimpleNamespace(choices=[choice], usage=None)
+                create = mock.Mock(return_value=iter([completion]) if streaming else completion)
+                client = types.SimpleNamespace(base_url='https://api.openai.com/v1', api_key='fixture',
+                    chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+                def call(*args, **kw):
+                    return llm._call_openai(client, 'fixture', system='',
+                        messages=[{'role':'user','content':'Go'}], tools=None, max_tokens=100, thinking=False)
+                with mock.patch.object(llm, 'cache_address', return_value=None), \
+                     mock.patch.object(llm, '_call', side_effect=call) as invoke:
+                    with self.assertRaises(llm.TornStreamError) as caught:
+                        llm._call_retrying_empty('openai', 'fixture', retries=2)
+                invoke.assert_called_once()
+                create.assert_called_once()
+                self.assertTrue(caught.exception.partial.continuation['payload'])
+
+
+class ModelAccountSelection(unittest.TestCase):
+    def resolve(self, current, specs):
+        cfg = {'roles': {'voice': {'framework': current, 'model': 'other'}},
+               'frameworks': specs}
+        with mock.patch.object(llm, '_config', return_value=cfg), \
+             mock.patch.object(llm, '_available_models', side_effect=lambda fw: [] if fw == 'unrelated' else ['shared']), \
+             mock.patch.object(llm, '_protocol', return_value='openai'), \
+             mock.patch.object(llm, '_resolve_model', side_effect=lambda fw, model: model):
+            return llm._resolve_requested_model('voice', 'shared')
+
+    def test_distinct_accounts_require_explicit_endpoint(self):
+        for differing in ({'api_key': 'second'}, {'base_url': 'https://second.invalid/v1'},
+                          {'api_mode': 'responses'}):
+            with self.subTest(differing=differing):
+                first = {'api_key': 'first', 'base_url': 'https://first.invalid/v1'}
+                with self.assertRaisesRegex(ValueError, 'several configured accounts'):
+                    self.resolve('unrelated', {'unrelated': {}, 'a': first, 'b': {**first, **differing}})
+
+    def test_current_matching_account_wins(self):
+        self.assertEqual(self.resolve('b', {'a': {'api_key': 'first'}, 'b': {'api_key': 'second'}}),
+                         ('b', 'shared'))
+
+    def test_equivalent_aliases_select_configured_endpoint(self):
+        self.assertEqual(self.resolve('unrelated', {'openai': {'base_url': 'https://same.invalid/v1/'},
+            'account': {'base_url': 'https://same.invalid/v1'}, 'unrelated': {}}), ('account', 'shared'))
+
+
 if __name__ == '__main__':unittest.main()

@@ -1205,8 +1205,14 @@ def _guard_answer(out: LLMResponse) -> LLMResponse:
     # the incomplete response for the caller to persist and terminalize honestly.
     if str(out.stop_reason or "") == "max_tokens":
         return out
-    if str(out.stop_reason or "") == "error" and out.continuation.get("payload"):
-        raise TornStreamError(out.text[:200] or "stream ended before terminal completion", partial=out)
+    has_answer = bool(out.text.strip()) or any(
+        (b or {}).get("type") in {"tool_use", "tool_use_fragment"}
+        for b in (out.blocks or ()))
+    if out.continuation.get("payload") and (
+            str(out.stop_reason or "") == "error" or not has_answer):
+        # A normal terminal status does not make received opaque output empty.
+        # Keep its evidence on the non-retryable partial-response path.
+        raise TornStreamError(out.text[:200] or "provider output has no complete visible answer", partial=out)
     if not out.blocks and not out.text.strip():
         raise EmptyResponseError(out.text[:200] or "пустой ответ (ни текста, ни инструмента)")
     # ⚠ Три пути расходились ещё и ЗДЕСЬ, и это нашлось прогоном, а не глазами. Ответ из
@@ -2794,7 +2800,9 @@ def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
 
     A bare model name is addressable when it appears either in a provider's live
     catalogue or in the configured main/fallback slots.  If both frameworks expose
-    the same name, the role's configured framework wins.  Returning the resolved
+    the same name, the role's configured framework wins. Otherwise only equivalent
+    accounts may be inferred; distinct accounts require an explicit endpoint.
+    Returning the resolved
     slug keeps the ordinary provider-rotation compatibility while callers can retain
     the original request separately as provenance.
     """
@@ -2820,7 +2828,16 @@ def _resolve_requested_model(role: str, requested: str) -> tuple[str, str]:
         raise ValueError(f"llm: модель {requested!r} отсутствует в доступном каталоге")
     framework = str(rc.get("framework") or "")
     if framework not in matches:
-        framework = matches[0]
+        groups = {}
+        for candidate in matches:
+            spec = cfg["frameworks"][candidate]
+            identity = (_protocol(candidate), str(spec.get("base_url") or "").rstrip("/"),
+                        str(spec.get("api_key") or ""), str(spec.get("api_mode") or ""))
+            groups.setdefault(identity, []).append(candidate)
+        if len(groups) != 1:
+            raise ValueError("Model has several configured accounts; choose an endpoint: " + ", ".join(matches))
+        equivalent = next(iter(groups.values()))
+        framework = next((fw for fw in equivalent if fw not in FRAMEWORKS), equivalent[0])
     return framework, _resolve_model(framework, requested)
 
 

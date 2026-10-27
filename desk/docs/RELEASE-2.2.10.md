@@ -1,5 +1,9 @@
 # Hélène 2.2.10
 
+Before a conflict-review panel, the incoming coordinator runs the relevant integration battery on a disposable copy of the candidate. Exact source, application, runtime and runner identity bind its reusable results. Reviewers receive the report and bounded diagnostics as additional evidence: failed, skipped or unavailable checks direct attention, while neither red nor green test status determines the review verdict.
+
+Per-call model overrides reject ambiguous account selection unless the current account already offers that model. Opaque provider output is preserved even after a normal completion without a visible answer, and the worker does not replay that received output as an empty transport failure.
+
 Preserved-source updates now review the four actual merge inputs: base, local changes, incoming release and the selected agent's result. A compact index and paginated comparisons replace unrelated repository-sized diffs. Every assigned path remains covered, including deletions, modes and semantic repairs. Incoming application context is verified and frozen separately so reviewers can inspect core and desktop integration.
 
 The incoming coordinator owns update review. Its requests are isolated from older installed review workers, incomplete findings remain actionable, and acceptance requires complete evidence for the exact candidate. The selected agent resolves findings and continues the already authorized acceptance workflow, including headless checks when available. Installation, runtime checks and publication remain separately observable stages.

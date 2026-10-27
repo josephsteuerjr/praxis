@@ -39,7 +39,7 @@ def verified_runtime(new):
         if hashlib.sha256(path.read_bytes()).hexdigest() != row['sha256']:
             raise ValueError('Incoming runtime source changed: ' + name)
     required = {'localharness/source_update_host.py', 'localharness/source_update.py',
-                'localharness/source_update_worker.py', 'localharness/self_review.py',
+                'localharness/source_update_worker.py', 'localharness/source_update_battery.py', 'localharness/self_review.py',
                 'localharness/self_review_worker.py', 'localharness/source_update_transport.py',
                 'localharness/agent_source_update.py', 'localharness/update_source.py',
                 'localharness/desktop_supervisor.py', 'localharness/python_relay.py'}
@@ -54,6 +54,7 @@ def verified_runtime(new):
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise ValueError('Incoming application source changed: ' + name)
     return {'kind': 'incoming-update-runtime.v1', 'program': str(new), 'review_store': 'isolated-v1',
+            'test_battery': 1,
             'core_sha256': merge.signature(core['files']),
             'app_sha256': merge.signature(app['files'])}
 
@@ -121,6 +122,7 @@ def coordinate(old, new, directory, cancel_file):
             raise RuntimeError(operation.get('error') or 'Existing update review requires attention')
         try:
             stopped = lambda: Path(cancel_file).exists() or source_update._owner_blocked(tree)
+            service.battery_cancelled = stopped
             with review_transport(agent, old, directory, llm._config(), stopped) as transport:
                 while True:
                     if stopped():

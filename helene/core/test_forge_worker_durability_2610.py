@@ -72,6 +72,7 @@ class WorkerDurability(unittest.TestCase):
         fake_forge.inspect = lambda *args, **kw: "real diff"
         fake_llm = types.ModuleType("llm")
         fake_llm.BrokenChannelError = type("BrokenChannelError", (Exception,), {})
+        fake_llm.TornStreamError = type("TornStreamError", (fake_llm.BrokenChannelError,), {})
         fake_llm.limits = lambda: types.SimpleNamespace(max_tool_iters=20)
         fake_llm.chat = self.chat
         fake_llm.snapshot = lambda: {"voice": {"framework": "fake", "model": "snapshot-model"}}
@@ -345,6 +346,22 @@ class WorkerDurability(unittest.TestCase):
         adapter.dispatch.assert_not_called()
         result = json.loads((self.request_path.parent / "result.json").read_text("utf-8"))
         self.assertEqual(result["status"], "stopped")
+
+    def test_received_provider_output_is_retained_without_worker_retry(self):
+        partial = self.response("run", 99)
+        error = self.worker.llm.TornStreamError("opaque output without visible answer")
+        error.partial = partial
+        adapter = Adapter()
+        adapter.dispatch = mock.Mock()
+        self.responses = [error, self.response()]
+        self.assertEqual(self.run_worker(adapter), 2)
+        self.assertEqual(len(self.calls), 1)
+        adapter.dispatch.assert_not_called()
+        receipt = next(row for row in self.runtime._events(self.request_path.parent)
+                       if row["kind"] == "model_transport_error")
+        self.assertFalse(receipt["retry"])
+        retained = json.loads(self.runtime.read_payload_full(self.request_path.parent, receipt["output_ref"]))
+        self.assertEqual(retained["assistant"]["provider_continuation"]["payload"], "signed-carry")
 
     def test_unknown_model_boundary_never_replays_provider_call(self):
         self.responses = [Interrupted()]

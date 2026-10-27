@@ -606,6 +606,10 @@ class Service:
                  "Other units review other paths. Do not report their unassigned coverage as your gap; "
                  "do report any actual coupling defect you find. Full snapshot context remains available. "
                  if critic.get('coverage') else "") + navigation +
+                ("Read battery/report.md and the excerpts relevant to your assigned seams. "
+                 "Use failures/skips as attention cues, investigate their cause and relevance; "
+                 "do not mechanically map test status to your verdict or treat green tests as proof. "
+                 if 'battery' in record.get('sources', {}) else "") +
                 "quick: changed files and concrete regressions; normal: also readers/writers and tests; "
                 "deep: also integration and adversarial failure paths. No execution or live memory. "
                 "Return ONLY JSON: {subject_sha256, verdict: clear|findings|insufficient, summary, "
