@@ -1,3 +1,7 @@
+# 2.2.10
+
+Exact preserved-source review, delegated installed acceptance, readable command/argument/execution/result details, durable remote process identity and continuation recovery. See [release notes](docs/RELEASE-2.2.10.md).
+
 # 2.2.9
 
 Explicit preserved or pristine source update in the window and agent tool. The selected agent resolves preserved changes; independent review still accepts the candidate. Pristine mode selects exact verified release source while retaining prior code and all profile paths. See [release notes](docs/RELEASE-2.2.9.md).
