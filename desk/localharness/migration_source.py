@@ -19,19 +19,25 @@ def verify(program):
 
 
 def prepare(old, new, note):
-    from .app_migration import code_path
+    from .app_migration import code_path, preserve_source
     from .code_transition import baseline
     from .essential_backup import configs, load
     from .portable_profile import relative_config
     old, new = Path(old).resolve(), Path(new).resolve()
     actual = verify(new)
-    targets = {}
+    targets = {}; previous_copies={}
     for config in configs(new):
         if not config.is_file(): continue
         value = load(config)
         if value.get('mode') == 'remote': continue
         previous = code_path(config, value)
         if previous not in targets:
+            if previous.is_dir():
+                saved=previous
+                if not previous.is_relative_to(new):
+                    saved=new/'code-backup'/note['id']/str(len(targets))
+                    preserve_source(previous,saved,source_only=True)
+                previous_copies[previous]=saved
             target = new / 'code' / note['id'] / ('clean-' + str(len(targets)))
             target.mkdir(parents=True, exist_ok=False)
             baseline(new, target)
@@ -48,7 +54,8 @@ def prepare(old, new, note):
     for row in note['source_paths']:
         previous = Path(row['selected']).resolve()
         if previous in targets:
-            row['preserved_previous'] = str(previous)
+            if previous in previous_copies:row['preserved_previous'] = str(previous_copies[previous])
+            else:row['previous_code_absent'] = True
             row['selected'] = str(targets[previous])
     note.update(source_policy='clean', state='prepared', pristine_source_sha256=read(new / 'code-upstream.json')['sha256'])
     write(new / 'python-migration.json', note)

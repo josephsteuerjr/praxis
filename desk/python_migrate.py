@@ -138,6 +138,13 @@ def finish_retirement(old, package, new, note, progress):
     """Repeatable integration cleanup, never a second application launch."""
     migration_windows.quiescent(old)
     progress('retiring_old')
+    program_markers=('helene.exe','Helene.exe','helene-setup.exe','uninstall.exe',
+                     'python-app.json','app/python_app.py','app/deskapp.py','deskapp.py','runtime/python.exe')
+    if (note.get('startup_proof') and note.get('source_policy')=='clean'
+            and not any((old/name).exists() for name in program_markers)):
+        integrations=migration_windows.retire(old,new)
+        note.update(integrations=integrations,retirement={'ok':True,'method':'previous_program_already_absent','purge':False},state='completed')
+        app_migration.write_note(new,note);progress('completed');return note
     if note.get('startup_proof') and (command:=migration_windows.registered_uninstall(old)):
         retirement=migration_windows.uninstall_registered(old,command)
         integrations=migration_windows.retire(old,new)

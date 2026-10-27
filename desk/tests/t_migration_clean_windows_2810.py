@@ -54,6 +54,27 @@ class CleanMigration(unittest.TestCase):
                 with self.assertRaises(ValueError):python_migrate.migrate(old,package,package,package/'profile',prepared=True,source_mode='clean')
                 stop.assert_not_called()
 
+    def test_data_only_after_old_program_was_uninstalled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);old,package=self.fixture(root)
+            (old/'code/agent.py').unlink();(old/'code').rmdir()
+            with patch.object(python_migrate.migration_windows,'quiescent'),patch.object(python_migrate.migration_windows,'service',return_value=None):
+                note=python_migrate.migrate(old,package,package,package/'profile',prepared=True,
+                    portable=True,source_mode='clean',launch=False)
+            cfg=json.loads((package/'helene.json').read_text());tree=(package/cfg['tree']).resolve()
+            self.assertTrue((tree/'memory/history.jsonl').is_file())
+            self.assertTrue(note['source_paths'][0]['previous_code_absent'])
+            self.assertEqual((app_migration.code_path(package/'helene.json',cfg)/'agent.py').read_text(),'release_code = True\n')
+            # A real startup proof is still required before marking completion.
+            note['startup_proof']={'stopped':True,'root':str(package)}
+            with patch.object(python_migrate.migration_windows,'quiescent'), \
+                 patch.object(python_migrate.migration_windows,'registered_uninstall',side_effect=AssertionError('No old program to uninstall')), \
+                 patch.object(python_migrate.migration_windows,'retire',return_value={}) as retire:
+                result=python_migrate.finish_retirement(old,package,package,note,lambda _:None)
+            self.assertEqual(result['state'],'completed');self.assertFalse(result['retirement']['purge'])
+            self.assertEqual((old/'data/memory/history.jsonl').read_bytes(),b'{"private_history":"retained"}\n')
+            retire.assert_called_once()
+
     def test_windows_button_passes_clean_choice_and_selected_folder(self):
         import python_migration_window
         with tempfile.TemporaryDirectory() as tmp:

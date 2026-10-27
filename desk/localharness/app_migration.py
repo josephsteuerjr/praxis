@@ -199,11 +199,13 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
     return {'reused_files':reused,'copied_files':copied,'prior_delta':str(delta)}
 
 
-def preservation_roots(found, old_root, *, copy_external=False):
+def preservation_roots(found, old_root, *, copy_external=False, include_code=True):
     """One inventory for preservation and platform migration admission."""
     roots=set()
     for row in found['agents']:
-        roots.update(p for p in (Path(row['tree']),row['code']) if copy_external or p.is_relative_to(old_root))
+        paths=(Path(row['tree']),row['code']) if include_code else (Path(row['tree']),)
+        roots.update(p for p in paths if copy_external or p.is_relative_to(old_root))
+        if not include_code:continue
         for key in ('app','runner'):
             if not row['value'].get(key):continue
             script=Path(str(row['value'][key]))
@@ -213,6 +215,7 @@ def preservation_roots(found, old_root, *, copy_external=False):
             if ((copy_external or script.is_relative_to(old_root)) and script.is_file()
                     and not any(script==(old_root/p).resolve() for p in stock)):
                 roots.add(script.parent)
+    if not include_code:return roots
     for source in list(roots):
         for parent in (source,*source.parents):
             if not copy_external and not parent.is_relative_to(old_root):break
@@ -261,7 +264,7 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
         previous.update((Path(a).resolve(),Path(b).resolve()) for a,b in reuse.get('preserved_roots',{}).items())
     try:
         # Copy enclosing roots first so shared/nested data and code stay shared.
-        roots=preservation_roots(found,old_root,copy_external=copy_external or independent)
+        roots=preservation_roots(found,old_root,copy_external=copy_external or independent,include_code=source_policy!='clean')
         if independent:
             for source in roots:
                 if not source.is_dir() or source == Path(source.anchor) or new_root.is_relative_to(source):
