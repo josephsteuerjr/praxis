@@ -62,19 +62,21 @@ def install(config_path: Path | None) -> bool:
     if not callable(switch) or getattr(switch, "_helene_pin", False):
         return bool(getattr(switch, "_helene_pin", False))
 
-    def pinned_switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
+    def pinned_switch(role: str, model: str, *, why: str = "", by: str = "praxis",
+                      endpoint: str = "") -> dict:
         if pinned(config_path):
             return _refuse(brain, f"{role} → {model}", why)
-        return switch(role, model, why=why, by=by)
+        return switch(role, model, why=why, by=by, **({'endpoint': endpoint} if endpoint else {}))
 
     pinned_switch._helene_pin = True  # type: ignore[attr-defined]
     pinned_switch.__doc__ = switch.__doc__
     brain.switch = pinned_switch
     if callable(profile):
-        def pinned_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
+        def pinned_profile(name: str, *, why: str = "", by: str = "praxis",
+                           endpoint: str = "") -> dict:
             if pinned(config_path):
                 return _refuse(brain, f"профиль {name}", why)
-            return profile(name, why=why, by=by)
+            return profile(name, why=why, by=by, **({'endpoint': endpoint} if endpoint else {}))
 
         pinned_profile._helene_pin = True  # type: ignore[attr-defined]
         pinned_profile.__doc__ = profile.__doc__

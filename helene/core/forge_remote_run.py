@@ -1,7 +1,9 @@
 """Task-owned remote synchronous commands: admission is short, polling is unlocked."""
+import hashlib
 import json
 import ntpath
 import time
+import uuid
 
 TERMINAL = {'done', 'failed', 'error', 'stopped', 'timed_out'}
 STATUS_ALIASES = {'ok': 'done', 'completed': 'done', 'succeeded': 'done',
@@ -13,11 +15,14 @@ STATUS_ALIASES = {'ok': 'done', 'completed': 'done', 'succeeded': 'done',
 def _call(forge, task, action, request, *, command='', cwd='.', timeout=0):
     remote = forge._remote_client(task)
     ident = request.get('remote_id', '')
+    if task['scope'] == 'host':
+        ident = ident or request.get('backend_operation_id', '')
     with forge._remote_observations(task):
         if task['scope'] == 'host':
             if action == 'start':
                 return remote.call('op.start', {'root_value': task['root'], 'command': command,
-                                               'cwd': cwd, 'timeout': timeout})
+                                               'cwd': cwd, 'timeout': timeout},
+                                   request_id=request['backend_request_id'])
             return remote.call('op.' + ('stop' if action == 'stop' else 'poll'),
                                {'operation_id': ident, **({'tail': 30000} if action != 'stop' else {})})
         if action == 'start':
@@ -32,13 +37,21 @@ def refresh(forge, directory, task, *, stop=False):
     result = forge._read_json(directory / 'result.json', {}) or {}
     if result.get('status') in TERMINAL:
         return result
-    if not request.get('remote_id'):
+    expected = request.get('backend_operation_id') if task['scope'] == 'host' else None
+    if not request.get('remote_id') and not expected:
         return {**request, 'status': 'unknown', 'error': 'Remote admission has no confirmed operation identity'}
     try:
         if stop: _call(forge, task, 'stop', request)
         row = _call(forge, task, 'poll', request)
     except Exception as exc:
         row = {'ok': False, 'error': f'{type(exc).__name__}: {exc}'}
+    if not request.get('remote_id') and expected:
+        if row.get('ok') and row.get('id') == expected:
+            request['remote_id'] = expected
+            forge._atomic_json(directory / 'request.json', request)
+        else:
+            # A missing operation is still ambiguous; never replay admission.
+            row = {**row, 'ok': False}
     terminal = row.get('terminal') or {}
     if not isinstance(terminal, dict): terminal = {}
     status = str(terminal.get('status') or row.get('status') or 'unknown') if row.get('ok') else 'unknown'
@@ -61,6 +74,13 @@ def start_unlocked(forge, task, command, cwd, timeout, *, parent_unit_id='', nam
     request = {'id': unit, 'task_id': task_id, 'remote': True, 'scope': task['scope'],
                'parent_unit_id': parent_unit_id, 'name': name, 'command': command, 'cwd': cwd,
                'created': forge._now(), 'status': 'unknown'}
+    if task['scope'] == 'host':
+        request['backend_request_id'] = uuid.uuid4().hex
+        # broker.dispatch derives this exact operation identity before op.start.
+        # Persist it before transport so a lost reply can be polled/stopped without
+        # replaying admission or borrowing an unrelated call's retry identity.
+        request['backend_operation_id'] = 'op-' + hashlib.sha256(
+            request['backend_request_id'].encode()).hexdigest()[:16]
     forge._atomic_json(directory / 'request.json', request)
     try:
         row = _call(forge, task, 'start', request, command=command, cwd=cwd, timeout=timeout)
@@ -71,7 +91,8 @@ def start_unlocked(forge, task, command, cwd, timeout, *, parent_unit_id='', nam
         if row.get('ok') and identity:
             request['status'] = 'running'
         elif (not row.get('ok') and not identity and task['scope'] == 'host'
-              and (row.get('type') == 'result' or row.get('code') in {'unavailable', 'operation_cap', 'disk_low'})):
+              and ((row.get('type') == 'result' and not row.get('code'))
+                   or row.get('code') in {'unavailable', 'operation_cap', 'disk_low'})):
             # op.start's typed result refusal is pre-launch. Protocol/transport
             # errors can follow a spawn and must remain unknown.
             request['status'] = 'failed'

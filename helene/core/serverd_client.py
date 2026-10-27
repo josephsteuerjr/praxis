@@ -458,7 +458,8 @@ def call(verb: str, args: dict | None = None, *, stream: bool = False, on_chunk=
         # Не ретраим: ждать второй раз столько же — это удвоенное молчание, о котором ей никто
         # не сказал. Вместо ретрая запоминаем заявку, чтобы её собственный повтор не превратился
         # во вторую root-мутацию.
-        _remember_in_doubt(key, rid)
+        if not request_id:
+            _remember_in_doubt(key, rid)
         result["deadline_tier"] = tier
     elif resumed:
         result["resumed_request_id"] = rid

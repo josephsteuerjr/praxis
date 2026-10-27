@@ -107,6 +107,8 @@ class RoutingCase(unittest.TestCase):
         import tempfile
         from pathlib import Path
         old = forge.BASE, forge.STATE_DIR, forge.TASKS_DIR
+        for field, value in zip(('BASE', 'STATE_DIR', 'TASKS_DIR'), old):
+            self.addCleanup(setattr, forge, field, value)
         with tempfile.TemporaryDirectory() as tmp:
             forge.BASE = Path(tmp)
             forge.STATE_DIR = Path(tmp) / "state"
@@ -117,7 +119,7 @@ class RoutingCase(unittest.TestCase):
                 out = forge.start_host("host work", "/srv/project")
             task_id = out.split(":", 1)[0].replace("coding-задача ", "")
             operation_ids = iter(('op-sync123', 'op-detached123'))
-            def remote_call(action, params):
+            def remote_call(action, params, **kwargs):
                 if action == 'op.start': return {'ok': True, 'id': next(operation_ids)}
                 self.assertEqual(action, 'op.poll')
                 self.assertEqual(params['operation_id'], 'op-sync123')

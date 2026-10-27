@@ -268,7 +268,9 @@ class WorkerDurability(unittest.TestCase):
         path = origin/'events.jsonl'
         original = path.read_bytes()
         initial = json.loads((origin/'checkpoint.json').read_text())
-        for index, damaged in enumerate((original+b'{', original+b'{"seq":999999}\n', b'')):
+        prefix = original.splitlines(keepends=True)[0]
+        self.assertGreater(initial['event_seq'], 1)
+        for index, damaged in enumerate((original+b'{', original+b'{"seq":999999}\n', b'', prefix)):
             with self.subTest(corruption=index):
                 path.write_bytes(original)
                 target, request = self.make_request('agent-damaged-'+str(index), continuation_source={
@@ -283,6 +285,23 @@ class WorkerDurability(unittest.TestCase):
                         journal.start(request, initial)
                 self.assertFalse((target.parent/'checkpoint.json').exists())
         path.write_bytes(original)
+
+    def test_same_unit_resume_refuses_valid_journal_prefix_below_checkpoint(self):
+        self._crash_adapter_once()
+        directory = self.request_path.parent
+        self.authorize()
+        checkpoint = (directory/'checkpoint.json').read_bytes()
+        initial = json.loads(checkpoint)
+        path = directory/'events.jsonl'
+        prefix = path.read_bytes().splitlines(keepends=True)[0]
+        self.assertGreater(initial['event_seq'], 1)
+        path.write_bytes(prefix)
+        with contextlib.closing(self.runtime.Journal(directory)) as journal:
+            with self.assertRaisesRegex(self.runtime.ContinuationRefused, 'journal'):
+                journal.start(self.request, initial)
+        self.assertEqual(path.read_bytes(), prefix)
+        self.assertEqual((directory/'checkpoint.json').read_bytes(), checkpoint)
+        self.assertTrue((directory/'resume.json').is_file())
 
     def test_pause_during_final_diff_cannot_publish_success(self):
         adapter = Adapter()

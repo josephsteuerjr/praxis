@@ -181,15 +181,18 @@ def continuation_info(directory) -> dict:
     if not path.exists():
         return {"safe": False, "reason": "checkpoint missing"}
     try:
-        seen = False
-        for _ in _events(directory):
-            seen = True
-        if not seen:
+        last_seq = 0
+        for event in _events(directory):
+            last_seq = event['seq']
+        if not last_seq:
             raise ValueError('missing or empty event journal')
     except (OSError, ValueError) as exc:
         raise ContinuationRefused(f'source event journal is invalid: {exc}') from exc
     raw = path.read_bytes()
     checkpoint = json.loads(raw.decode("utf-8"))
+    committed = checkpoint.get('event_seq')
+    if type(committed) is not int or committed < 1 or last_seq < committed:
+        raise ContinuationRefused('source event journal is shorter than the committed checkpoint')
     recovered = _recover_result(directory, checkpoint)
     boundary = recovered.get("next_boundary")
     safe = boundary in {"model_ready", "tools_ready", "summary_ready", "finalize"}

@@ -67,6 +67,7 @@ def command(tree,action,**args):
             next_action='Read the exact review_evidence/error. Do not revive a cancelled plan or bypass review. Repair the cause and use update_request for a fresh authorized preserve update; explicit Stop remains binding.'
         return {**operation,'version':request['version'],'conflicts':plan['conflicts'],'resolved':plan['resolved'],
                 'candidate_state':plan['state'],'next_action':next_action,'acceptance_owner':'selected-agent',
+                'evidence_handling':'Frozen snapshots and incoming files are read-only evidence. Never import or execute them in place: Python may write __pycache__. Use AST or copy files to a separate temporary directory and run python -B there.',
                 'candidate_sha256':merge.candidate_signature(directory)}
     pipeline._fresh(operation,directory)
     if owner_stop.stopped() or operation.get('cancel_requested'):raise ValueError('Owner Stop cancelled source resolution')
@@ -121,6 +122,8 @@ def notify(tree,turn):
         'исправь кандидата и повтори finish. После finish проверенный входящий координатор запускает панель '
         'и автоматически продолжает разрешённое обновление; обычный self_review старого Forge для этого не нужен. '
         'Не перекладывай запуск или результат ревью на владельца и не проси повторное согласие на уже порученный этап. '
+        'Замороженные снимки и incoming только читай: не импортируй и не исполняй их на месте, иначе Python создаёт __pycache__. '
+        'Для пробы скопируй нужные файлы в отдельный временный каталог и запускай python -B там; для статической проверки используй AST. '
         'Смотри candidate_state, review_evidence и next_action в status; clear подтверждает только точные исходники, '
         'после перезапуска сам проверь установленное поведение и сообщи доказательства. '
         'Пройди пользовательский путь сам, в том числе headless при доступном браузере. '

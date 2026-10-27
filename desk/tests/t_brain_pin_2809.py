@@ -74,6 +74,24 @@ class BrainPinTest(unittest.TestCase):
         brain_pin.install(self.cfg)
         self.assertIs(self.brain.switch, first)
 
+    def test_explicit_endpoint_passes_through_both_installed_wrappers(self):
+        self._pin(False)
+        calls = []
+        self.brain.switch = lambda role, model, **kwargs: calls.append((role, model, kwargs)) or {'ok': True}
+        self.brain.apply_profile = lambda name, **kwargs: calls.append((name, kwargs)) or {'ok': True}
+        brain_pin.install(self.cfg)
+        self.assertTrue(self.brain.switch('voice', 'same-model', endpoint='account-b', why='choose account')['ok'])
+        self.assertTrue(self.brain.apply_profile('chat', endpoint='account-b', why='choose account')['ok'])
+        self.assertEqual(calls, [('voice', 'same-model', {'why': 'choose account', 'by': 'praxis', 'endpoint': 'account-b'}),
+                                 ('chat', {'why': 'choose account', 'by': 'praxis', 'endpoint': 'account-b'})])
+
+    def test_explicit_endpoint_cannot_bypass_owner_pin(self):
+        self._pin(True)
+        brain_pin.install(self.cfg)
+        self.assertTrue(self.brain.switch('voice', 'same-model', endpoint='account-b')['pinned'])
+        self.assertTrue(self.brain.apply_profile('chat', endpoint='account-b')['pinned'])
+        self.assertEqual(self.brain.calls, [])
+
 
 class PinAtStartTest(unittest.TestCase):
     def test_projection_returns_the_owner_model(self):

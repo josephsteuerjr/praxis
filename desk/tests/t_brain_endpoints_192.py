@@ -7,7 +7,7 @@ sys.path[:0]=[str(ROOT/'desk'),str(ROOT/'helene/core'),str(ROOT/'praxis')]
 import _sandbox
 _sandbox.activate_if_testing()
 import llm,brain,agent
-from localharness import boot
+from localharness import boot,brain_pin
 class Endpoints(unittest.TestCase):
     def configure(self,protocol='openai'):
         product={'model':{'framework':protocol,'base_url':'https://main.invalid/v1','key':'MAIN-TEST','model':'main','fallback_framework':protocol,'fallback_base_url':'https://spare.invalid/v1','fallback_key':'SPARE-TEST','fallback_model':'spare'},'evaluator':{'framework':protocol,'base_url':'https://judge.invalid/v1','key':'JUDGE-TEST','model':'judge'}}
@@ -50,4 +50,17 @@ class Endpoints(unittest.TestCase):
         self.assertIn('voice_fallback',result['frameworks']);self.assertIn('evaluator_primary',result['frameworks'])
         self.assertEqual(result['roles']['voice']['fallback_framework'],'voice_fallback')
         for key in ('MAIN-TEST','SPARE-TEST','JUDGE-TEST'):self.assertNotIn(key,json.dumps(result))
+
+    def test_installed_pin_wrappers_forward_endpoint_to_real_brain(self):
+        self.configure()
+        # Restore the real functions after installing exactly the runner's wrappers.
+        with patch.object(brain,'switch',brain.switch),patch.object(brain,'apply_profile',brain.apply_profile):
+            self.assertTrue(brain_pin.install(None))
+            answer=agent.tool_switch_brain('switch',role='voice',model='spare',endpoint='voice_fallback',why='fixture')
+            self.assertIn('voice_fallback/spare',answer)
+            target=brain.PROFILES['chat']['model']
+            with patch.object(llm,'_available_models',side_effect=lambda fw:[target] if fw=='evaluator_primary' else []):
+                answer=agent.tool_switch_brain('profile',profile='chat',endpoint='evaluator_primary',why='fixture')
+            self.assertIn('применён',answer)
+            self.assertEqual(llm._config()['roles']['voice']['framework'],'evaluator_primary')
 if __name__=='__main__':unittest.main()

@@ -31,7 +31,7 @@ class Findings(unittest.TestCase):
         remote = self.host()
         parent = self.unit()
         stopped = False
-        def call(action, params):
+        def call(action, params, **kwargs):
             nonlocal stopped
             if action == 'op.start': return {'ok': True, 'id': 'op-test123'}
             self.assertEqual(params['operation_id'], 'op-test123')

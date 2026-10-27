@@ -1,6 +1,7 @@
 """Real Forge control consumers with deterministic remote transport, no processes/network."""
 import json
 import threading
+import contextlib
 import unittest
 from unittest import mock
 import forge
@@ -16,6 +17,76 @@ class RemoteAdmission(unittest.TestCase):
         remote = mock.Mock(PROTOCOL='fake-test-only')
         self.patch('_remote_client', lambda _: remote)
         return remote
+
+    def test_real_client_lost_admission_cannot_transfer_command_to_another_task(self):
+        import serverd_client
+        import forge_remote_run
+        self.task['scope'] = 'host'; forge._save_task(self.task)
+        other = {**self.task, 'id': 'code-87654321'}; forge._save_task(other)
+        self.patch('_remote_client', lambda _: serverd_client)
+        admissions = []; operations = {}; stopped = []
+        def exchange(request, **kwargs):
+            args = request['args']; rid = request['request_id']
+            if request['verb'] == 'op.start':
+                admissions.append(rid)
+                ident = operations.setdefault(rid, 'remote-' + str(len(operations)))
+                if len(admissions) == 1:
+                    return {'ok': False, 'code': 'timeout'}
+                return {'ok': True, 'id': ident}
+            if request['verb'] == 'op.stop':
+                stopped.append(args['operation_id'])
+                return {'ok': True}
+            self.assertEqual(request['verb'], 'op.poll')
+            return {'ok': True, 'id': args['operation_id'],
+                    'status': 'stopped' if args['operation_id'] in stopped else 'running'}
+        with contextlib.ExitStack() as stack:
+            for name, value in [('available', lambda: True), ('_token', lambda: 'test'),
+                                ('_exchange', exchange), ('_IN_DOUBT', {})]:
+                stack.enter_context(mock.patch.object(serverd_client, name, value))
+            first = forge_remote_run.start_unlocked(forge, self.task, 'same', '.', 10)
+            second = forge_remote_run.start_unlocked(forge, other, 'same', '.', 10)
+            self.assertNotEqual(admissions[0], admissions[1], 'A new task inherited a lost admission')
+            self.assertEqual(first['status'], 'unknown')
+            self.assertEqual(second['status'], 'running')
+            self.assertEqual(serverd_client._IN_DOUBT, {}, 'Explicit custody leaked into global retry memory')
+
+    def test_lost_host_admission_is_reconciled_by_poll_without_launch(self):
+        import serverd_client
+        import forge_remote_run
+        import hashlib
+        self.task['scope'] = 'host'; forge._save_task(self.task)
+        self.patch('_remote_client', lambda _: serverd_client)
+        calls = []; allocated = []
+        def exchange(request, **kwargs):
+            calls.append(request['verb'])
+            if request['verb'] == 'op.start':
+                saved = forge._units(self.tid, 'processes')[0]
+                self.assertEqual(saved['backend_request_id'], request['request_id'])
+                ident = 'op-' + hashlib.sha256(request['request_id'].encode()).hexdigest()[:16]
+                self.assertEqual(saved['backend_operation_id'], ident)
+                allocated.append(ident)
+                return {'ok': False, 'code': 'timeout'}
+            self.assertEqual(request['args']['operation_id'], allocated[0])
+            return {'ok': True, 'id': allocated[0], 'status': 'stopped'}
+        with contextlib.ExitStack() as stack:
+            for name, value in [('available', lambda: True), ('_token', lambda: 'test'),
+                                ('_exchange', exchange), ('_IN_DOUBT', {})]:
+                stack.enter_context(mock.patch.object(serverd_client, name, value))
+            first = forge_remote_run.start_unlocked(forge, self.task, 'same', '.', 10)
+            directory = forge._unit_dir(self.tid, 'processes', first['id'])
+            settled = forge_remote_run.refresh(forge, directory, self.task, stop=True)
+            self.assertEqual(settled['status'], 'stopped')
+            self.assertEqual(settled['remote_id'], allocated[0])
+            self.assertEqual(calls, ['op.start', 'op.stop', 'op.poll'])
+            self.assertEqual(forge._read_json(directory/'request.json')['remote_id'], allocated[0])
+
+    def test_typed_uncertain_admission_is_not_a_prelaunch_refusal(self):
+        import forge_remote_run
+        remote = self.host()
+        remote.call.return_value = {'type': 'result', 'ok': False, 'code': 'in_doubt'}
+        request = forge_remote_run.start_unlocked(forge, self.task, 'same', '.', 10)
+        self.assertEqual(request['status'], 'unknown')
+        self.assertFalse((forge._unit_dir(self.tid, 'processes', request['id'])/'result.json').exists())
 
     def test_pause_and_terminal_task_admit_no_remote_command(self):
         remote = self.host()
@@ -34,7 +105,7 @@ class RemoteAdmission(unittest.TestCase):
 
     def test_group_stop_reaches_owned_remote_id_while_run_is_waiting(self):
         remote = self.host(); started=threading.Event(); cancelled=threading.Event()
-        def call(action, params):
+        def call(action, params, **kwargs):
             if action == 'op.start': started.set(); return {'ok':True,'id':'remote-123'}
             self.assertEqual(params['operation_id'], 'remote-123')
             if action == 'op.stop': cancelled.set(); return {'ok':True}
@@ -86,7 +157,7 @@ class RemoteAdmission(unittest.TestCase):
                    'supervisor_pid': 123, 'child_pid': 124, 'boot_id': 'old-boot',
                    'body': '', 'log': '/operations/remote-123/command.log',
                    'body_cut_chars': 0, 'body_tail_cap': 30000}
-        def call(action, params):
+        def call(action, params, **kwargs):
             if action == 'op.start':
                 self.assertEqual(params['timeout'], 0)
                 return {'ok': True, 'id': 'remote-123'}
