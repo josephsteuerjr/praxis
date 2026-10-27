@@ -13,6 +13,7 @@ import "./styles/app.css";
 import "./styles/paper.css";
 // Колонка ходов справа (28.09, переделана целиком).
 import "./styles/turns.css";
+import { reviewActivity } from "./review-activity";
 import { ApiError, api, cfg, channelURL, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { mountAutonomy, type AutonomyState } from "../autonomy";
 import { applyTheme } from "../../ui-kit/dom";
@@ -106,6 +107,8 @@ export function start(opts: WindowOptions): void {
   const headTitle = q<HTMLElement>("#head-title");
   const statePill = q<HTMLElement>("#state");
   const stateText = q<HTMLElement>("#state-text");
+  const refreshReviewActivity = reviewActivity(q<HTMLElement>("#review-activity"),
+    () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key);
   const stateAction = q<HTMLButtonElement>("#state-action");
   const pulseBox = q<HTMLElement>("#pulse");
   const alarmBox = q<HTMLElement>("#alarm");
@@ -1613,8 +1616,10 @@ export function start(opts: WindowOptions): void {
     .catch(() => { renderState(null, false); });
   void refreshPulse();
   void refreshOwner();
+  void refreshReviewActivity();
   setInterval(() => void refreshOwner(), 2000);
   setInterval(() => {
+    if (!document.hidden) void refreshReviewActivity();
     const active = !!engineOperation || (channelAvailable && !!S.agentState?.runner?.busy);
     if (Date.now() - lastStateAttempt >= (active ? 1500 : 8000)) void refreshState();
     // Lost/silent WS must not freeze passive messages while the agent is paused.

@@ -857,6 +857,18 @@ html.electron #chrome a {
 }
 
 /* состояние агента: одна фраза и одно действие */
+.review-activity {
+  flex: 0 0 auto;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 4px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font: 500 11px/1 var(--mono);
+  white-space: nowrap;
+}
+.review-activity[hidden] { display: none; }
+
 .state-pill {
   display: flex;
   align-items: center;

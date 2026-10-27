@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 import logging
 from pathlib import Path
 import re
@@ -58,6 +59,35 @@ def command(tree, body):
     self_review._write(_root(tree) / "commands" / (command_id + ".json"),
                        {**value, "command_id": command_id, "created": time.time(), "state": "queued"})
     return {"ok": True, "command_id": command_id, "state": "queued"}
+
+
+@lru_cache(maxsize=256)
+def _activity_counts(path, modified, size):
+    row = _read(Path(path))
+    if row.get("cancel_requested") or row.get("execution") not in {"queued", "running"}:
+        return 0, 0
+    critics = row.get("critics") or []
+    return (sum(c.get("execution") in {"starting", "running", "finishing"} for c in critics),
+            sum(c.get("execution") == "queued" for c in critics))
+
+
+def activity(tree):
+    """Small read-only projection; stale coordinator records cannot light the badge."""
+    root = _root(tree)
+    running = queued = 0
+    now = time.time()
+    for store in (root, root.with_name(".source-update-reviews")):
+        for path in store.glob("review-*/request.json"):
+            try:
+                stat = path.stat()
+                if not -5 <= now - stat.st_mtime < 30:
+                    continue
+                active, waiting = _activity_counts(str(path), stat.st_mtime_ns, stat.st_size)
+                running += active
+                queued += waiting
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+    return {"running": running, "queued": queued}
 
 
 def status(tree, config=None, review_id=""):

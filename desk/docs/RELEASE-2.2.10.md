@@ -1,5 +1,9 @@
 # Hélène 2.2.10
 
+A compact `review` indicator beside the connection status shows active reviewers in desktop and web windows. It clears when review finishes or fresh activity cannot be confirmed.
+
+Loss of a foreground command shell now leaves Forge custody unresolved until an explicit group-exit receipt is available. Task completion cannot silently pass while an orphaned descendant may still write to the workspace.
+
 Before a conflict-review panel, the incoming coordinator runs the relevant integration battery on a disposable copy of the candidate. Exact source, application, runtime and runner identity bind its reusable results. Reviewers receive the report and bounded diagnostics as additional evidence: failed, skipped or unavailable checks direct attention, while neither red nor green test status determines the review verdict.
 
 Per-call model overrides reject ambiguous account selection unless the current account already offers that model. Opaque provider output is preserved even after a normal completion without a visible answer, and the worker does not replay that received output as an empty transport failure.

@@ -3183,6 +3183,12 @@ def _unit_state(path: Path) -> dict:
     pid = int(request.get("supervisor_pid") or 0)
     born = str(request.get("supervisor_started_at") or "")
     state = {**request, "id": request.get("id") or path.name}
+    if request.get("command_custody") == "foreground-group-v1" and not _pid_alive(pid, born):
+        # This PID belongs to the shell, not to a durable group supervisor.
+        # Losing it does not prove that its descendants stopped writing.
+        # Only an explicit reconciliation/terminal receipt may release custody.
+        state.update(status="unknown", liveness="foreground command custody lost; group exit not confirmed")
+        return state
     if born or not pid:
         # ⚠ Та же болезнь, что чинил fb09430b в замке, но здесь она страшнее. В
         # контейнере номера маленькие: на проде четыре юнита висели `running` без

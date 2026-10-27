@@ -1102,6 +1102,8 @@ async def _r_self_review(c: Call):
         if c.body is not None:
             result = await asyncio.to_thread(self_review_integration.command, readers.tree(), c.body)
             return result
+        if c.query.get("activity") == "1":
+            return await asyncio.to_thread(self_review_integration.activity, readers.tree())
         config = agentcfg.state()
         return await asyncio.to_thread(self_review_integration.status, readers.tree(),
                                        config.get("config") or {}, str(c.query.get("id") or ""))
