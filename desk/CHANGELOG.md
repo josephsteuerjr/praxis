@@ -1,4 +1,8 @@
-# 2.2.6
+# 2.2.7
+
+Normal bundled Python can write sitecustomize bytecode before helper entry. Recognize paired regular caches, retain them with the previous view, and continue real source materialization. Unknown/private data and links remain refused. Regression now includes ordinary cache-enabled startup and the actual bundled Windows interpreter. See [release notes](docs/RELEASE-2.2.7.md).
+
+# 2.2.6 — withdrawn after startup-cache failure
 
 The normal Update button now hands custody from public2.1.1 to the incoming helper in one invocation. Real upstream source is verified/materialized before merge and independent frozen review. Manual preparation Python/VBS removed; source edits/profile/Pause/Stop/rollback remain protected. See [release notes](docs/RELEASE-2.2.6.md).
 
