@@ -218,9 +218,20 @@ class Application:
         with self.confirm_lock:
             if not self.confirmed_ui:
                 from localharness import app_migration, owner_stop
-                proof=({'stopped':True,'root':str(self.root)} if owner_stop.stopped()
-                       else migration_proof(self.host,self.root))
-                app_migration.confirm_started(self.root,self.migration_id,proof=proof)
+                from localharness.package_notice import read, write
+                note=read(self.root/'python-migration.json')
+                if note.get('id')!=self.migration_id:raise ValueError('Migration confirmation identity changed')
+                if note.get('state')=='failed_before_retirement':return {'confirmed':False,'terminal':True}
+                try:
+                    proof=({'stopped':True,'root':str(self.root)} if owner_stop.stopped()
+                           else migration_proof(self.host,self.root,timeout=5))
+                    confirmed=app_migration.confirm_started(self.root,self.migration_id,proof=proof)
+                    if confirmed.get('state') not in ('new_app_started','completed','retirement_incomplete'):
+                        return {'confirmed':False,'terminal':True}
+                except Exception as exc:
+                    write(self.root/'migration-ready.json',{'id':self.migration_id,'state':'pending','error':str(exc)[:2000]})
+                    raise
+                write(self.root/'migration-ready.json',{'id':self.migration_id,'state':'confirmed'})
                 self.confirmed_ui=True
         return {'confirmed':True,'migration_id':self.migration_id}
 
@@ -243,7 +254,14 @@ window.__HELENE__ = {shell:'python', platform:%s,
    'Content-Type':'application/json','X-Helene-Window':%s},body:JSON.stringify({command,args})});
   const v = await r.json(); if(!r.ok) throw new Error(v.error); return v.result;
  }, win(action){this.invoke('python_window',{action}).catch(console.error)}};
-window.addEventListener('helene:ui-ready',()=>window.__HELENE__.invoke('python_ready').catch(console.error),{once:true});
+window.addEventListener('helene:ui-ready',async()=>{
+ const deadline=performance.now()+60000;
+ do {
+  try {await window.__HELENE__.invoke('python_ready');return;}
+  catch(error){console.error(error);if(performance.now()>=deadline)return;}
+  await new Promise(resolve=>setTimeout(resolve,1000));
+ }while(performance.now()<deadline);
+},{once:true});
 (function preferences(saved){
  const store=window.localStorage, originalSet=Storage.prototype.setItem, originalRemove=Storage.prototype.removeItem;
  for(const [key,value] of Object.entries(saved)) originalSet.call(store,key,value);
@@ -572,11 +590,14 @@ def bind_native_reload(app):
     app.window.events.loaded += loaded
 
 
-def migration_proof(host, root):
+def migration_proof(host, root, timeout=60):
+    import time
     from localharness import agents
-    proof = host.readiness(timeout=60, require_runner=True,
-                           agent=agents.find(root, agents.BASE_ID))
-    proof['agents'] = [host.readiness(timeout=60, require_runner=True, agent=agent)
+    deadline=time.monotonic()+timeout
+    primary=agents.find(root, agents.BASE_ID)
+    proof = host.readiness(timeout=max(.2,deadline-time.monotonic()), require_runner=True,agent=primary)
+    proof['agents'] = [({k:v for k,v in proof.items() if k!='agents'} if agent.id==primary.id else
+                       host.readiness(timeout=max(.2,deadline-time.monotonic()), require_runner=True, agent=agent))
                        for agent in agents.raisable(root)]
     return proof
 

@@ -258,7 +258,10 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
                 return current
             if child.poll() is not None:raise RuntimeError('New app exited before channel/runner proof')
             time.sleep(.3)
-        raise RuntimeError('New startup not confirmed; old files retained')
+        from localharness.package_notice import read
+        ready=read(new/'migration-ready.json')
+        detail=str(ready.get('error') or '') if ready.get('id')==note['id'] else ''
+        raise RuntimeError('New startup not confirmed'+(': '+detail if detail else '')+'; old files retained')
     except BaseException:
         # Once retirement begins, the proven new owner is the only available
         # working owner. A failed shortcut/registry cleanup must not kill it.
