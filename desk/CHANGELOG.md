@@ -1,4 +1,8 @@
-# 2.2.7
+# 2.2.8
+
+Keep the configured managed relay alive through source integration and independent review after the old owner closes. Preserve route/account/proxy and original failure diagnostics. Coupled owner/transport regression passes the unmodified2.1.1 one-button transaction and rollback. See [release notes](docs/RELEASE-2.2.8.md).
+
+# 2.2.7 — withdrawn after relay-lifetime failure
 
 Normal bundled Python can write sitecustomize bytecode before helper entry. Recognize paired regular caches, retain them with the previous view, and continue real source materialization. Unknown/private data and links remain refused. Regression now includes ordinary cache-enabled startup and the actual bundled Windows interpreter. See [release notes](docs/RELEASE-2.2.7.md).
 
