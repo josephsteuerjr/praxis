@@ -18,12 +18,6 @@ import threading
 import time
 import uuid
 
-if __package__:
-    from .package_notice import replace_with_retry
-else:  # self_review_worker.py is also an executable adapter script
-    from package_notice import replace_with_retry
-
-
 TRIGGERS = ("after_update", "contested_overlay", "after_self_edit", "on_request")
 DEPTHS = ("quick", "normal", "deep")
 DEFAULTS = {"after_update": False, "after_self_edit": True, "depth": "normal",
@@ -74,6 +68,13 @@ def _read(path):
 
 
 def _write(path, value):
+    # A previous release's clean updater can import this incoming module while
+    # its old package_notice is still cached. Only the incoming review process
+    # writes review state, so resolve its writer when it is actually needed.
+    if __package__:
+        from .package_notice import replace_with_retry
+    else:  # self_review_worker.py is also an executable adapter script
+        from package_notice import replace_with_retry
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
@@ -673,9 +674,11 @@ class Service:
                                           result_path=str(result_path), result_sha256=_sha(raw),
                                           model_actual=str(result.get("model") or ""))
                             if (critic['execution'] == 'done' and result.get("status") == "done"
-                                    and result.get("complete") is True and not result.get("tool_errors")):
+                                    and result.get("complete") is True):
                                 if result.get("subject_sha256") == record["subject_sha256"] and result.get("snapshot_verified") is True:
                                     critic.update(_parse_verdict(result.get("result"), record["subject_sha256"]))
+                                    if result.get("tool_errors"):
+                                        critic.update(verdict="insufficient", reason="inspection tools failed; retained findings require attention")
                                 else:
                                     critic.update(verdict="insufficient", reason="worker result is not bound to verified snapshot")
                             else:

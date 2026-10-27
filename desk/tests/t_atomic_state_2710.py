@@ -3,6 +3,8 @@ import ctypes
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -12,6 +14,27 @@ from localharness import package_notice, self_review
 
 
 class AtomicState(unittest.TestCase):
+    def test_clean_transition_accepts_cached_previous_package_notice(self):
+        # The running public updater keeps its old package_notice cached while
+        # it points localharness.__path__ at the incoming app for validation.
+        script = '''
+import json, tempfile
+from pathlib import Path
+from unittest import mock
+from localharness import package_notice, code_transition, update_source
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    package_notice.write(root / 'code-transition-plan.json',
+                         {'format': 'helene-clean-code-plan.v1'})
+    del package_notice.replace_with_retry
+    with mock.patch.object(update_source, 'validate_clean', return_value='validated') as check:
+        assert code_transition.validate(root) == 'validated'
+        check.assert_called_once()
+'''
+        completed = subprocess.run([sys.executable, '-B', '-c', script],
+                                   capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
     def test_transient_windows_denial_retries_both_writers(self):
         original = os.replace
         denial = PermissionError('sharing violation')

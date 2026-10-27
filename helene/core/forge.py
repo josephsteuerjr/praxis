@@ -3281,7 +3281,31 @@ def _admission_reason(task_id: str, parent_request_path: str = "", *, general: b
                 return f"ancestor {parent_id} yielded to another child"
         below = parent_id
         parent_id = _parent_of(task_id, parent_id)
-    return "corrupt/cyclic worker ancestry" if parent_id else ""
+    if parent_id:
+        return "corrupt/cyclic worker ancestry"
+    return _shared_writer_reason(task_id, caller) if general else ""
+
+
+def _shared_writer_reason(task_id: str, caller: str) -> str:
+    """General tools obey the same root ownership as worker admission."""
+    writers = []
+    for row in _units(task_id, "agents"):
+        unit = str(row["id"])
+        if row.get("role") != "worker" or unit == caller:
+            continue
+        active = row.get("status") in (_LIVE_UNIT_STATES | {"unknown"})
+        active = active or (row.get("status") in (_TERMINAL_AGENT_STATES | {"lost"})
+                            and not _root_released(task_id, unit)
+                            and not _writer_ended(_unit_dir(task_id, "agents", unit)))
+        if active and not (caller and _yielded_to(task_id, unit, caller)):
+            writers.append(unit)
+    # Detached jobs own the root even when the caller is their parent. Polling
+    # and Stop remain available; starting another writer must wait for exit.
+    for kind in ("processes", "verifications"):
+        writers.extend(str(row["id"]) for row in _units(task_id, kind)
+                       if row.get("status") not in (_TERMINAL_AGENT_STATES | {
+                           "passed", "passed_with_skips", "stale"}))
+    return "shared-root writer occupied: " + ",".join(writers) if writers else ""
 
 
 def _worker_control_unlocked(request_path: str | Path) -> dict:

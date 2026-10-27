@@ -83,6 +83,13 @@ class SnapshotReviewer:
                 if left not in SIDES or right not in SIDES:
                     raise ValueError('Comparison requires frozen merge sides')
                 paths = [side + '/' + logical for side in (left, right)]
+                # read/list return side-qualified paths. Accept that spelling
+                # for diff too, while preferring an exact declared logical path.
+                prefix, separator, relative = logical.partition('/')
+                if any(path not in self.entries for path in paths) and separator and prefix in SIDES:
+                    alternative = [side + '/' + relative for side in (left, right)]
+                    if all(path in self.entries for path in alternative):
+                        logical, paths = relative, alternative
                 if any(path not in self.entries for path in paths):
                     raise ValueError('Not a declared merge input')
                 rows = [self.entries[path] for path in paths]

@@ -44,6 +44,15 @@ class UpdateReview(unittest.TestCase):
         self.assertIn('-VALUE=1',row['text']);self.assertIn('+VALUE=2',row['text'])
         with self.assertRaises(ValueError):self.reviewer().dispatch({},'inspect',{'action':'diff','path':'../outside','left':'mine','right':'resolved'})
 
+    def test_diff_accepts_declared_side_path_returned_by_read_and_list(self):
+        for side in ('base','mine','release','resolved'):
+            row=json.loads(self.reviewer().dispatch({},'inspect',{
+                'action':'diff','path':side+'/changed.py','left':'mine','right':'resolved'}))
+            self.assertEqual(row['path'],'changed.py')
+            self.assertIn('-VALUE=1',row['text']);self.assertIn('+VALUE=2',row['text'])
+        with self.assertRaises(ValueError):
+            self.reviewer().dispatch({},'inspect',{'action':'diff','path':'base/missing.py'})
+
     def test_status_is_bounded_and_manifest_remains_available_in_pages(self):
         adapter=self.reviewer();status=json.loads(adapter.dispatch({},'inspect',{'action':'status'}))
         self.assertNotIn('manifest',status);self.assertEqual(status['manifest_count'],13)

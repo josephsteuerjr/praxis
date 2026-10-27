@@ -113,6 +113,33 @@ class Coordination(unittest.TestCase):
         with mock.patch.object(forge, "_writer_ended", return_value=True):
             self.assertEqual(forge._agent_capacity(self.tid, request), "")
 
+    def test_general_writers_cannot_enter_an_active_worker_root(self):
+        owner = self.unit()
+        with mock.patch.object(forge, '_edit_unlocked') as edit, \
+             mock.patch.object(forge, '_checkpoint_unlocked') as checkpoint, \
+             mock.patch.object(forge, '_process_unlocked') as process, \
+             mock.patch.object(forge, '_verify_unlocked') as verify:
+            for answer in (forge.edit(self.tid, 'write', path='file.py', content='x'),
+                           forge.checkpoint(self.tid), forge.run(self.tid, 'echo forbidden'),
+                           forge.process(self.tid, 'start', command='echo forbidden'),
+                           forge.verify(self.tid, 'start', commands='echo forbidden')):
+                self.assertIn('shared-root', answer)
+            for call in (edit, checkpoint, process, verify):call.assert_not_called()
+        self.assertEqual(forge._admission_reason(self.tid, str(owner/'request.json'), general=True), '')
+        forge._atomic_json(owner/'result.json', {'status':'done'})
+        self.assertIn('shared-root', forge._admission_reason(self.tid, general=True))
+        forge.release_worker_root(owner/'request.json')
+        self.assertEqual(forge._admission_reason(self.tid, general=True), '')
+
+    def test_detached_job_blocks_general_writers_including_its_parent(self):
+        owner = self.unit()
+        forge._atomic_json(self.directory/'processes/proc-aaaaaaaa/request.json',
+                          {'id':'proc-aaaaaaaa','task_id':self.tid,'status':'running',
+                           'parent_unit_id':owner.name})
+        for caller in ('', str(owner/'request.json')):
+            self.assertIn('shared-root', forge._admission_reason(self.tid, caller, general=True))
+
+
     def test_selected_stop_ignores_live_sibling_and_its_jobs(self):
         selected = self.unit(status="queued")
         sibling = self.unit("agent-bbbbbbbb")

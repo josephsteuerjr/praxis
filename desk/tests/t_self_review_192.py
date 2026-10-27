@@ -73,6 +73,8 @@ class ReviewTests(unittest.TestCase):
                                       "summary": "source-only result", "findings": findings, "gaps": gaps or []})}
         directory.mkdir(parents=True, exist_ok=True)
         self_review._write(directory / "result.json", data)
+        if complete and status == 'done':
+            self.forge.release_worker_root(directory / 'request.json')
         return directory / "result.json"
 
     def test_four_triggers_and_contested_optional_off(self):
@@ -281,6 +283,24 @@ class ReviewTests(unittest.TestCase):
                 self_review._write(path, value)
                 self.service.tick()
                 self.assertEqual(self.service.status(row["id"])["verdict"], "insufficient")
+
+    def test_tool_error_keeps_findings_visible_without_accepting_clearance(self):
+        for verdict in ('findings', 'clear'):
+            # Each verdict is a new subject; identical frozen bytes correctly
+            # reuse their prior completed review even with a new operation ID.
+            (self.code/'agent.py').write_text('VALUE = '+repr(verdict)+'\n')
+            row = self.request(operation_id='tool-error-'+verdict)
+            self.service.tick()
+            path = self.result(row, verdict=verdict)
+            value = self_review._read(path);value['tool_errors'] = 1
+            self_review._write(path, value)
+            self.service.tick()
+            result = self.service.status(row['id'])
+            critic = result['critics'][0]
+            self.assertEqual(critic['verdict'], 'insufficient')
+            self.assertEqual(critic['summary'], 'source-only result')
+            self.assertEqual(bool(critic['findings']), verdict == 'findings')
+            self.assertNotEqual(result['verdict'], 'clear')
 
     def test_deep_disagreement_and_serial_forge_admission(self):
         row = self.request(depth="deep")
