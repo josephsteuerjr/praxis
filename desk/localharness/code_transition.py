@@ -66,6 +66,8 @@ def preflight(old, new, *, notify=True):
     sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
                                 if row['value'].get('mode') != 'remote'))
     incoming = merge.inventory(new / 'tree')
+    from . import update_source
+    source_choice=update_source.selected(old,new)
     exe = merge.executable(new, old)
     root = old / '.source-updates'
     root.mkdir(parents=True, exist_ok=True)
@@ -79,6 +81,7 @@ def preflight(old, new, *, notify=True):
             local_files = merge.inventory(source)
             identity = merge.signature({'base': base_files, 'local': local_files,
                                         'incoming': incoming, 'source': source,
+                                        'operation':source_choice['new'] if source_choice else '',
                                         'version': read(new / 'python-app.json').get('version', '')})
             directory = root / identity
             plan = read(directory / 'plan.json')
@@ -95,7 +98,12 @@ def preflight(old, new, *, notify=True):
             detail = {}
             if plan['conflicts'] or plan.get('repairs'):
                 agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
-                if notify:
+                from . import update_source
+                choice=update_source.selected(old,new)
+                if choice and choice['mode']=='preserve':
+                    from .agent_source_update import request as agent_request
+                    agent_request(agent['tree'],old,source,directory,read(new/'python-app.json').get('version',''))
+                elif notify:
                     source_update.ensure(agent['tree'], old, source, directory,
                                          read(new / 'python-app.json').get('version', ''))
                 try:
@@ -115,7 +123,7 @@ def preflight(old, new, *, notify=True):
     blocked = [row for row in pending if row['state'] in {'needs_attention', 'cancelled'}]
     message = ('Панель обновления требует внимания; старая версия сохранена. ' +
                '; '.join(row['error'] or row['state'] for row in blocked) if blocked else
-               'Изолированный исполнитель и независимая панель разбирают пересечения кода. '
+               'Агент разбирает пересечения кода; затем результат независимо проверят. '
                'Старая версия остаётся открытой. После проверки обновление продолжится автоматически.')
     return {'state': 'needs_resolution' if pending else 'ready', 'plans': plans,
             'message': message if pending else ''}
@@ -127,6 +135,9 @@ def validate(new):
     record = read(Path(new) / 'code-transition-plan.json')
     if not record:
         return
+    if record.get('format')=='helene-clean-code-plan.v1':
+        from .update_source import validate_clean
+        return validate_clean(new,record)
     found = discover(Path(record['old']))
     sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
                                 if row['value'].get('mode') != 'remote'))
@@ -149,8 +160,17 @@ def prepare(old, new, note, *, progress=None):
     if not note['source_paths']:
         seal(new)
         return
+    from . import update_source
+    choice=update_source.require(old,new,progress)
+    if choice['mode']=='clean':
+        update_source.clean_prepare(old,new,note,choice)
+        return
     result = preflight(old, new, notify=False)
     if result['state'] != 'ready':
+        from .agent_source_update import AgentResolutionPending
+        if any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
+               and read(Path(row['directory'])/'plan.json').get('state')!='ready' for row in result['plans']):
+            raise AgentResolutionPending('Агенту поручено разрешить пересечения в изолированной копии. После его сообщения повтори обновление; память и рабочий код сохранены.')
         from .source_update_host import review
         review(old, new, result['plans'], progress)
         validate(new)

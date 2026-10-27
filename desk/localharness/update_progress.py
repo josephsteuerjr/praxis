@@ -14,6 +14,8 @@ from contextlib import contextmanager, nullcontext
 _publication_lock = threading.RLock() if os.name == 'nt' else nullcontext()
 
 LABELS = {
+    'choosing_source': 'Как обновить код?',
+    'waiting_agent': 'Агент разрешает пересечения кода',
     'downloading': 'Скачиваю обновление', 'unpacking': 'Распаковываю проверенный архив',
     'extensions': 'Проверяю совместимость расширений', 'code': 'Подготавливаю код',
     'backup': 'Сохраняю настройки для отката', 'preimages': 'Подготавливаю прежние файлы',

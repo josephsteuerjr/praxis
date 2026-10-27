@@ -38,6 +38,7 @@ class LegacyHostProcess(unittest.TestCase):
     def _one_click(self,root,old,new,code,home,requests,errors):
         from t_source_admission_225 import view
         coupled=os.environ.get('HELENE_TEST_RELAY_CUSTODY')=='1'
+        mode=os.environ.get('HELENE_TEST_SOURCE_MODE','preserve')
         if coupled:
             import socket
             with socket.socket() as sock:sock.bind(('127.0.0.1',0));relay_port=sock.getsockname()[1]
@@ -77,6 +78,22 @@ time.sleep(3)
         # Old baseline A is genuine for this fixture, never authored L. The
         # shipped view only lets old211 admit the new helper; B remains exact.
         declaration=view(new,old/'tree')
+        if mode=='preserve':
+            # The selected agent prepares M using its normal isolated hand.
+            # No model/worker completion is manufactured by this fixture.
+            from localharness import agent_source_update,update_source
+            incoming=root/'frozen-agent-incoming';code_transition.baseline(new,incoming)
+            identity=source_merge.signature({'files':source_merge.inventory(incoming),'source':str(code),'actor':'selected-agent'})
+            directory=old/'.source-updates'/identity
+            source_merge.create(old/'tree',code,incoming,directory)
+            agent_source_update.request(home,old,code,directory,version)
+            status=source_update.command(home)
+            source_update.command(home,'resolve',path='upgrade_fixture.py',content=MERGED,
+                expected_candidate_sha256=status['candidate_sha256'])
+            status=source_update.command(home)
+            source_update.command(home,'resolve',path='compatibility_fixture.py',content=LOCAL_FEATURE+HELPER,
+                reason='Retain authored feature and incoming shared API',expected_candidate_sha256=status['candidate_sha256'])
+            source_update.command(home,'finish')
         before={p.name:p.read_bytes() for p in code.iterdir()}
         old_config=(old/'helene.json').read_bytes()
         profile_before={'memory/llm.json':(home/'memory/llm.json').read_bytes()}
@@ -129,8 +146,12 @@ while True:time.sleep(.1)
             startup_cache=any(Path(result['staging']).rglob('sitecustomize.*.pyc'))
             self.assertTrue(startup_cache,'Incoming interpreter must create startup bytecode before helper admission')
             deadline=time.monotonic()+160
+            choice_made=False
             while time.monotonic()<deadline:
                 state=read(progress)
+                if state.get('stage')=='choosing_source' and not choice_made:
+                    from localharness.update_window import choose_source
+                    choose_source(progress,mode);choice_made=True
                 if state.get('stage') in {'completed','failed'}:break
                 time.sleep(.2)
             self.assertEqual(state.get('stage'),'completed',state)
@@ -138,17 +159,18 @@ while True:time.sleep(.1)
             self.assertEqual(read(old/'python-app.json')['version'],version)
             selected=read(old/'helene.json')
             self.assertEqual(selected['tree'],str(home))
-            self.assertEqual((Path(selected['code'])/'upgrade_fixture.py').read_text(),MERGED)
-            self.assertEqual((Path(selected['code'])/'compatibility_fixture.py').read_text(),LOCAL_FEATURE+HELPER)
+            self.assertTrue(choice_made)
+            self.assertEqual((Path(selected['code'])/'upgrade_fixture.py').read_text(),INCOMING if mode=='clean' else MERGED)
+            self.assertEqual((Path(selected['code'])/'compatibility_fixture.py').read_text(),HELPER if mode=='clean' else LOCAL_FEATURE+HELPER)
             self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
             for name,data in profile_before.items():self.assertEqual((home/name).read_bytes(),data)
             self.assertNotEqual(source_merge.inventory(old/'tree'),declaration['view_files'])
-            self.assertTrue(requests)
-            if coupled:
+            self.assertEqual(bool(requests),mode=='preserve')
+            if coupled and mode=='preserve':
                 operation=read(source_update.path(home));transport=read(Path(operation['directory'])/'relay-transport.json')
                 self.assertTrue(transport['owned']);self.assertEqual(transport['state'],'stopped')
                 self.assertNotEqual(transport['pid'],int((root/'old-relay-pid.txt').read_text()))
-            self.assertEqual({tuple(r['tools']) for r in requests},{('merge_source',),('inspect',)})
+            self.assertEqual({tuple(r['tools']) for r in requests},{('inspect',)} if mode=='preserve' else set())
             # Wait for the confirmed fixture app and cleanup helper to release
             # their files before exercising the real rollback entry.
             time.sleep(4)
@@ -161,7 +183,7 @@ while True:time.sleep(.1)
                 'actual_upstream_review':True,'semantic_repair':True,'install_and_rollback':True,
                 'manual_preparation':False,'ordinary_agent_started':False,'authored_source_preserved':True,
                 'profile_preserved':True,'startup_bytecode_present':startup_cache,
-                'old_owner_owned_model_transport':coupled,'native_gui':False}),flush=True)
+                'old_owner_owned_model_transport':coupled,'source_mode':mode,'native_gui':False}),flush=True)
         except BaseException:
             for p in root.glob('helene-update-*.log'):print(p,p.read_text(errors='replace')[-12000:],flush=True)
             for p in root.glob('**/source-review-*.log'):print(p,p.read_text(errors='replace')[-8000:],flush=True)

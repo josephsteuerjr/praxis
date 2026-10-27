@@ -25,6 +25,7 @@ body>main{position:relative;max-width:660px;margin:auto}small{color:var(--muted)
 .update-actions{display:flex;gap:2px}.update-actions button{font:20px/1 'Golos Text',sans-serif;width:30px;height:28px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}
 .update-actions button:hover:not(:disabled){background:var(--line);color:var(--ink)}.update-actions button:disabled{opacity:.3;cursor:default}
 p{margin:9px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-size:13px}#error{color:var(--ink);white-space:pre-wrap}#history{border-top:1px solid var(--line);padding-top:15px;margin-top:22px}
+#source-choice{border:1px solid var(--line);border-radius:8px;padding:16px;margin:16px 0}#source-choice[hidden]{display:none}.source-options{display:flex;flex-wrap:wrap;gap:8px}.source-options button{font:inherit;border:1px solid var(--line);border-radius:6px;padding:9px 12px;background:transparent;color:var(--ink);cursor:pointer}.source-options button:first-child{background:var(--accent);color:var(--paper)}#source-choice p{font-size:13px;color:var(--muted)}
 .track{height:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden;margin:22px 0}
 .track:before{content:'';display:block;width:28%;height:100%;background:var(--accent);animation:moving 2s ease-in-out infinite}
 @keyframes moving{0%{transform:translateX(-110%)}100%{transform:translateX(460%)}}
@@ -33,9 +34,11 @@ body.done .track:before{animation:none;width:100%}body.failed .track:before{anim
 @media(max-width:430px){body{padding:22px}h1{font-size:28px}}
 </style><!--shared-appearance--><main><header id="update-chrome"><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><div class="update-actions"><button id="minimize" aria-label="Свернуть окно">−</button><button id="close" aria-label="Закрыть окно" disabled>×</button></div></header><h1 id="stage">Подготавливаю обновление</h1>
 <div class="track" aria-hidden="true"></div><p id="detail" role="status" aria-live="polite"></p><p id="error"></p>
+<section id="source-choice" hidden><strong id="source-version"></strong><p>Сохранить изменения — агент совместит ваши правки с выпуском. Чистое обновление заменит локальные изменения кода. Прежний код останется для отката; память, переписка и настройки сохранятся.</p><div class="source-options"><button data-source="preserve">Сохранить правки · поручить агенту</button><button data-source="clean">Установить чистый код выпуска</button><button id="cancel-choice">Отмена</button></div></section>
 <p id="history"></p></main><script>
 const stage=document.getElementById('stage'),detail=document.getElementById('detail'),error=document.getElementById('error'),history=document.getElementById('history');
 function paint(r){stage.textContent=r.label||r.stage||'Подготавливаю переключение';
+const choice=r.stage==='choosing_source'&&r.source_choice;document.getElementById('source-choice').hidden=!choice;if(choice)document.getElementById('source-version').textContent='Код Hélène '+(choice.version||'нового выпуска');
 const now=r.finished_at||Date.now()/1000, s=r.stages?.at(-1); const seconds=s?Math.max(0,now-s.started_at):0;
 const parts=[`Этап: ${Math.floor(seconds)} с`];
 if(r.total_files)parts.push(`${r.files||0} / ${r.total_files} файлов`);
@@ -45,11 +48,33 @@ history.textContent=r.stage==='completed'?'Новое окно подтверд�
 document.body.className=r.stage==='completed'?'done':r.stage==='failed'?'failed':'';document.getElementById('close').disabled=!r.can_close;}
 document.getElementById('minimize').onclick=()=>window.pywebview.api.minimize();
 document.getElementById('close').onclick=()=>window.pywebview.api.dismiss();
+document.querySelectorAll('[data-source]').forEach(button=>button.onclick=async()=>{try{await window.pywebview.api.choose_source(button.dataset.source);await tick();}catch(e){error.textContent=String(e);}});
+document.getElementById('cancel-choice').onclick=()=>window.pywebview.api.cancel_choice();
 let timer;
 async function tick(){try{paint(await window.pywebview.api.status());}catch(e){error.textContent='Не удалось прочитать состояние: '+String(e);} }
 window.addEventListener('pywebviewready',async()=>{await tick();requestAnimationFrame(()=>requestAnimationFrame(()=>window.pywebview.api.ready()));timer=setInterval(tick,350)});
 window.addEventListener('beforeunload',()=>clearInterval(timer));
 </script></html>'''
+
+
+def choose_source(receipt,mode):
+    from .update_progress import read_json
+    from .update_source import select
+    row=read_json(receipt)
+    if row.get('stage')!='choosing_source' or not row.get('source_choice'):
+        raise ValueError('Source choice is not active')
+    bound=row['source_choice'];new=Path(bound['new']).resolve();old=Path(bound['old']).resolve()
+    if str(old)!=row['target'] or new.parent!=Path(receipt).parent/('.helene-update-'+row['id']):
+        raise ValueError('Source choice leaves this update operation')
+    return select(old,new,mode,by='updater')
+
+
+def cancel_choice(receipt):
+    from .update_progress import Progress
+    progress=Progress(receipt)
+    if progress.value['stage']!='choosing_source':raise ValueError('Source choice is not active')
+    progress.phase('choosing_source',source_choice_cancelled=True)
+    return True
 
 
 def page(root):
@@ -107,6 +132,8 @@ def run(transaction, receipt, ready, *, browser=False):
     failure = []
     finished = threading.Event()
     class Bridge:
+        def choose_source(self,mode):return choose_source(receipt,mode)
+        def cancel_choice(self):return cancel_choice(receipt)
         def status(self):
             value = read_json(receipt)
             if value.get('id') != operation:raise ValueError('Update operation changed')
@@ -160,11 +187,22 @@ def _browser(transaction, receipt, ready):
     token = secrets.token_urlsafe(32)
     path = Path(receipt)
     identity = Progress(path).value['id']
-    stub = """<script>window.pywebview={api:{status:async()=>{const r=await fetch(location.pathname+'/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()},ready:async()=>true}};window.addEventListener('DOMContentLoaded',()=>window.dispatchEvent(new Event('pywebviewready')));</script>"""
+    stub = """<script>async function sourceChoice(mode){const r=await fetch(location.pathname+'/choice',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode})});if(!r.ok)throw Error(await r.text());return r.json()}window.pywebview={api:{status:async()=>{const r=await fetch(location.pathname+'/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);return r.json()},choose_source:sourceChoice,cancel_choice:()=>sourceChoice('cancel'),ready:async()=>true}};window.addEventListener('DOMContentLoaded',()=>window.dispatchEvent(new Event('pywebviewready')));</script>"""
     content = page(Progress(path).value['target']).replace('<small>', stub + '<small>', 1)
     content = content.replace('<!--shared-appearance-->', '<style>.update-actions{display:none}</style>').encode('utf-8')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):pass  # random observer URL stays out of logs
+        def do_POST(self):
+            if self.path!='/'+token+'/choice' or self.headers.get('Content-Type')!='application/json':self.send_error(404);return
+            if self.headers.get('Origin') not in (None,f'http://127.0.0.1:{self.server.server_port}'):self.send_error(403);return
+            try:
+                size=int(self.headers.get('Content-Length','0'))
+                if not 0<size<=512:raise ValueError('Invalid source choice')
+                mode=json.loads(self.rfile.read(size))['mode']
+                value=cancel_choice(path) if mode=='cancel' else choose_source(path,mode)
+                body=json.dumps(value).encode()
+            except (ValueError,KeyError,OSError) as exc:self.send_error(409,str(exc));return
+            self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         def do_GET(self):
             if self.path == '/' + token:
                 body, mime = content, 'text/html; charset=utf-8'

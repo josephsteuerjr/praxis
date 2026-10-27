@@ -409,6 +409,42 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
   // Python обновляет рабочую папку собственным helper, без setup.
   const pythonUpdate = electron?.shell === 'python';
+  let sourceMode: 'preserve' | 'clean' = 'preserve';
+  const sourceChoices = el('div', 'field');
+  const sourceLabel = el('label', '', 'Локальные изменения кода');
+  const sourceSelect = el('select');
+  for (const [value, label] of [['preserve', 'Сохранить правки · конфликты поручить агенту'], ['clean', 'Установить чистый код выпуска']]) {
+    const option = el('option', '', label); option.value = value; sourceSelect.append(option);
+  }
+  const sourceHint = el('p', 'field-hint', 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.');
+  sourceSelect.onchange = () => {
+    sourceMode = sourceSelect.value === 'clean' ? 'clean' : 'preserve';
+    sourceHint.textContent = sourceMode === 'clean'
+      ? 'Локальные изменения кода будут заменены чистым кодом выпуска. Прежний код останется для отката. Память, переписка и настройки сохранятся.'
+      : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.';
+  };
+  sourceChoices.append(sourceLabel, sourceSelect, sourceHint); sourceChoices.hidden = !pythonUpdate;
+  let agentProposalId = '';
+  const confirmAgentUpdate = button('Подтвердить предложение агента', 'primary', async () => {
+    if (!agentProposalId) return;
+    confirmAgentUpdate.disabled = true;
+    try {
+      await shell('update_agent_confirm', {id: agentProposalId, sourceMode});
+      updOut.textContent = 'Предложение подтверждено. Скачиваю и проверяю выбранный выпуск…';
+      confirmAgentUpdate.hidden = true;
+      setTimeout(restoreUpdateProgress, 600);
+    } catch (error) { confirmAgentUpdate.disabled = false; toast(humanError(error).text); }
+  });
+  confirmAgentUpdate.hidden = true;
+  sourceChoices.append(confirmAgentUpdate);
+  about.append(sourceChoices);
+  if (pythonUpdate) void shell<{id?: string; state?: string; source_mode?: string}>('update_agent_request').then(row => {
+    if (row.state !== 'awaiting' || !row.id || !sourceChoices.isConnected) return;
+    agentProposalId = row.id;
+    sourceSelect.value = row.source_mode === 'clean' ? 'clean' : 'preserve';
+    sourceSelect.dispatchEvent(new Event('change'));
+    confirmAgentUpdate.hidden = false;
+  }).catch(() => {});
   // Reconnecting the old UI reads the same operation, not a fresh invented
   // progress counter. Poll only while that operation is nonterminal; leaving
   // Settings ends the observer without retaining the removed view.
@@ -418,7 +454,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       const row = await shell<{ stage: string; label?: string; error?: string; bytes?: number } | null>('update_progress');
       if (!updOut.isConnected || !row) return;
       updOut.textContent = [row.label || row.stage, row.error || ''].filter(Boolean).join(' · ');
-      const waiting = row.stage === 'waiting_review';
+      const waiting = ['waiting_review','waiting_agent'].includes(row.stage);
       cancelUpdate.hidden = !waiting;
       const active = !['completed', 'failed', 'needs_resolution', 'cancelled'].includes(row.stage);
       dlBtn.disabled = active;
@@ -462,7 +498,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       if (!row || typeof row.id !== 'string' || typeof row.label !== 'string') return;
       if (operationId && operationId !== row.id) return;
       operationId = row.id;
-      cancelUpdate.hidden = row.stage !== 'waiting_review';
+      cancelUpdate.hidden = !['waiting_review','waiting_agent'].includes(row.stage);
       const details: string[] = [];
       if (typeof row.bytes === 'number' && row.bytes > 0) details.push(`${(row.bytes / 1048576).toFixed(1)} МиБ`);
       if (typeof row.files === 'number' && row.files > 0) details.push(`${row.files} файлов`);
@@ -478,7 +514,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
       // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
       updateStage = 'install';
-      const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt }) as { state?: string; message?: string } | null;
+      const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
       if (installed?.state === 'needs_resolution') {
         updOut.textContent = installed.message || 'Проверка слияния требует внимания. Старая версия остаётся открытой.';
         return;

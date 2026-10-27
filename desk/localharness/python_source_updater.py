@@ -112,6 +112,8 @@ def prepare_install(old, new, *, verified=None, progress=None):
     sys.path.insert(0,str(new/'app'))
     from localharness import app_migration
     from localharness import update_profile, update_overlay
+    from localharness import update_source
+    update_source.require(old,new,progress)
     from localharness.update_progress import atomic_json
     from localharness.essential_backup import configs
     before = update_profile.selection(old)
@@ -289,10 +291,14 @@ def main():
     parser.add_argument('--archive',type=Path,action='append',default=[])
     parser.add_argument('--cleanup',action='store_true')
     parser.add_argument('--browser',action='store_true')
+    parser.add_argument('--source-mode',choices=('preserve','clean'))
     args=parser.parse_args()
     sys.path.insert(0,str(args.new.resolve()/'app'))
     if args.cleanup:return perform(args)
     validate_staging(args)
+    if args.source_mode and not args.cleanup:
+        from localharness.update_source import select
+        select(args.old,args.new,args.source_mode,by='updater')
     from python_migrate import installation_lock
     # Same kernel-backed target lock as migration, held across old-owner exit,
     # overlay, new generation confirmation, and any rollback.
@@ -409,6 +415,14 @@ def perform(args):
             raise
         report('reopening', error=str(exc), previous_program_retained=True)
         reopen_previous()
+        from localharness.update_source import SourceChoiceCancelled
+        if isinstance(exc,SourceChoiceCancelled):
+            report('cancelled',error='',message=str(exc),previous_reopen_requested=True)
+            return 0
+        from localharness.agent_source_update import AgentResolutionPending
+        if isinstance(exc,AgentResolutionPending):
+            report('needs_resolution',error='',message=str(exc),previous_reopen_requested=True)
+            return 0
         report('failed', error=str(exc), previous_reopen_requested=True)
         raise
     executable=interpreter_for(old)

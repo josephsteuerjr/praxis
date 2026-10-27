@@ -18,6 +18,7 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from localharness import source_merge as merge, source_update, self_review
+from localharness.agent_source_update import AgentResolutionPending
 from localharness.package_notice import read, write
 
 
@@ -40,6 +41,7 @@ def verified_runtime(new):
     required = {'localharness/source_update_host.py', 'localharness/source_update.py',
                 'localharness/source_update_worker.py', 'localharness/self_review.py',
                 'localharness/self_review_worker.py', 'localharness/source_update_transport.py',
+                'localharness/agent_source_update.py', 'localharness/update_source.py',
                 'localharness/desktop_supervisor.py', 'localharness/python_relay.py'}
     if not required <= set(app.get('files', {})):
         raise ValueError('Incoming distribution has no complete coordinator inventory')
@@ -131,9 +133,13 @@ def coordinate(old, new, directory, cancel_file):
                     if operation['state'] == 'ready_to_apply':
                         source_update.validate_ready(directory)
                         return
+                    if operation['state']=='waiting_agent':
+                        raise AgentResolutionPending('Кандидат ожидает разрешений или исправлений от выбранного агента')
                     if operation['state'] not in source_update.ACTIVE:
                         raise RuntimeError(operation.get('error') or operation.get('reason') or 'Update review failed')
                     time.sleep(.25)
+        except AgentResolutionPending:
+            raise  # no producer admitted; preserve the selected-agent request
         except BaseException as primary:
             try:
                 _settle(tree, forge, service, directory, 'Incoming update coordinator stopped before acceptance')
@@ -175,6 +181,9 @@ def review(old, new, plans, progress=None, cancelled=None):
                 time.sleep(.2)
         if process.returncode:
             operation = read(directory / 'pipeline.json')
+            if process.returncode==75 and operation.get('state')=='waiting_agent':
+                from .agent_source_update import AgentResolutionPending
+                raise AgentResolutionPending('Агенту переданы замечания независимой проверки')
             raise RuntimeError((operation.get('error') or 'Изолированная проверка обновления не завершена')
                                + '. Log: ' + str(log))
         source_update.validate_ready(directory)
@@ -185,7 +194,9 @@ def main():
     for name in ('old', 'new', 'directory', 'cancel'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
-    coordinate(args.old, args.new, args.directory, args.cancel)
+    from localharness.agent_source_update import AgentResolutionPending
+    try:coordinate(args.old, args.new, args.directory, args.cancel)
+    except AgentResolutionPending:return 75
     return 0
 
 

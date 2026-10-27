@@ -1,0 +1,120 @@
+"""Explicit code-only update policy, bound to one selected delivery and target."""
+from pathlib import Path
+import time
+from .package_notice import read,write
+from . import source_merge as merge
+
+MODES=('preserve','clean')
+
+class SourceChoiceCancelled(RuntimeError):pass
+
+def choice_path(new):return Path(new).parent/'source-choice.json'
+
+def identity(old,new):
+    old,new=Path(old).resolve(),Path(new).resolve()
+    upstream=read(new/'code-upstream.json')
+    if not upstream.get('files') or not upstream.get('sha256'):
+        raise ValueError('Verified incoming source snapshot is required')
+    return {'old':str(old),'new':str(new),'version':read(new/'python-app.json').get('version'),
+            'upstream_sha256':upstream['sha256'],'files_sha256':merge.signature(upstream['files'])}
+
+def select(old,new,mode,*,by):
+    if mode not in MODES:raise ValueError('Choose preserve or clean source policy')
+    if by not in ('window','owner-words','updater'):raise ValueError('Source choice requires an explicit owner action')
+    from .app_migration import discover
+    local_sources={str(Path(a['code']).resolve()):merge.inventory(a['code']) for a in discover(Path(old))['agents'] if a['value'].get('mode')!='remote'}
+    value={'format':'helene-source-choice.v1',**identity(old,new),'mode':mode,'by':by,'at':time.time(),'local_sources':local_sources}
+    previous=read(choice_path(new))
+    if previous and previous!=value:
+        if {k:previous.get(k) for k in identity(old,new)}!=identity(old,new):raise ValueError('Update source choice belongs to another delivery')
+        if previous['mode']!=mode:raise ValueError('Source policy is already selected for this operation; start a new update')
+        return previous
+    write(choice_path(new),value);return value
+
+def selected(old,new):
+    value=read(choice_path(new))
+    if not value:return None
+    expected=identity(old,new)
+    if value.get('format')!='helene-source-choice.v1' or any(value.get(k)!=v for k,v in expected.items()) or value.get('mode') not in MODES:
+        raise ValueError('Update source choice is stale or changed')
+    return value
+
+def require(old,new,progress=None):
+    value=selected(old,new)
+    if value:return value
+    if progress is None:
+        raise ValueError('Choose whether to preserve changes or install clean incoming source')
+    bound=identity(old,new)
+    progress.phase('choosing_source',source_choice=bound,
+        message='Сохранить локальные правки с помощью агента или установить чистый код выпуска. Память и настройки сохранятся.')
+    deadline=time.monotonic()+7200
+    while time.monotonic()<deadline:
+        if read(progress.path).get('source_choice_cancelled'):raise SourceChoiceCancelled('Owner cancelled update source choice')
+        value=selected(old,new)
+        if value:
+            progress.phase('code',source_mode=value['mode'],source_choice=None);return value
+        time.sleep(.1)
+    raise TimeoutError('Source update choice was not made; previous application retained')
+
+def clean_prepare(old,new,note,choice):
+    """New code paths only. Old code, its Git and every profile remain intact."""
+    from .essential_backup import configs,load
+    from .code_transition import baseline
+    old,new=Path(old).resolve(),Path(new).resolve()
+    if selected(old,new)!=choice or choice['mode']!='clean':raise ValueError('Clean source choice changed')
+    from .app_migration import discover
+    current={str(Path(a['code']).resolve()):merge.inventory(a['code']) for a in discover(old)['agents'] if a['value'].get('mode')!='remote'}
+    if current!=choice.get('local_sources'):raise ValueError('Local code changed after clean update consent')
+    upstream=read(new/'code-upstream.json');actual=merge.inventory(new/'tree')
+    if actual!=upstream['files']:raise ValueError('Clean update requires exact pristine incoming source')
+    # Verify archive bytes and every source member independently before copying.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='clean-proof-',dir=new.parent) as tmp:
+        if merge.inventory(baseline(new,Path(tmp)))!=actual:raise ValueError('Pristine source archive differs')
+    targets={};receipts=[]
+    for row in note['source_paths']:
+        original=Path(row['old']).resolve()
+        if original not in targets:
+            target=new/'code'/note['id']/('clean-'+str(len(targets)))
+            if target.exists():raise ValueError('Clean candidate path already exists')
+            target.mkdir(parents=True)
+            for name,entry in actual.items():
+                path=target/name;path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_bytes((new/'tree'/name).read_bytes())
+                if merge.os.name!='nt':path.chmod(0o755 if entry['mode']=='100755' else 0o644)
+            if merge.inventory(target)!=actual:raise ValueError('Clean source copy differs')
+            exe=merge.executable(new,old);repo=target/'.git'
+            merge.git(repo,'init','--quiet',exe=exe)
+            merge.git(repo,'config','core.worktree','..',exe=exe)
+            commit=merge.snapshot(repo,target,actual,exe=exe,label='Pristine Hélène '+str(choice['version'])+' source '+upstream['sha256'])
+            merge.git(repo,'update-ref','refs/heads/upstream',commit,exe=exe)
+            merge.git(repo,'symbolic-ref','HEAD','refs/heads/upstream',exe=exe)
+            targets[original]=target
+            receipts.append({'source':str(original),'selected':str(target),'previous_files':merge.inventory(original),
+                             'incoming_files':actual,'upstream_sha256':upstream['sha256'],'clean_commit':commit})
+        row['selected']=str(targets[original])
+    for config in configs(new):
+        if not config.is_file():continue
+        value=load(config);previous=Path(value.get('code','')).resolve()
+        if previous in targets:value['code']=str(targets[previous]);write(config,value)
+    note['source_policy']='clean';note['source_choice']=choice
+    write(new/'code-transition-plan.json',{'format':'helene-clean-code-plan.v1','old':str(old),
+        'incoming':actual,'choice':choice,'sources':receipts})
+    write(new/'code-transition.json',{'format':'helene-code-transition.v3','source_policy':'clean','sources':receipts})
+
+def validate_clean(new,record):
+    new=Path(new).resolve();old=Path(record['old']).resolve()
+    choice=selected(old,new)
+    if not choice or choice['mode']!='clean' or choice!=record.get('choice'):raise ValueError('Clean update lacks its explicit source choice')
+    if merge.inventory(new/'tree')!=record['incoming'] or read(new/'code-upstream.json').get('files')!=record['incoming']:
+        raise ValueError('Pristine incoming source changed')
+    from .app_migration import discover
+    sources={str(Path(a['code']).resolve()) for a in discover(old)['agents'] if a['value'].get('mode')!='remote'}
+    if sources!={r['source'] for r in record['sources']}:raise ValueError('Selected local sources changed before clean update')
+    for row in record['sources']:
+        if merge.inventory(row['source'])!=row['previous_files']:raise ValueError('Local code changed after clean update choice')
+        target=Path(row['selected']).resolve()
+        if not target.is_relative_to(new/'code') or merge.inventory(target)!=record['incoming']:
+            raise ValueError('Clean candidate was changed')
+        if merge.git(target/'.git','rev-parse','HEAD',exe=merge.executable(new,old)).stdout.decode().strip()!=row['clean_commit']:
+            raise ValueError('Clean candidate commit was changed')

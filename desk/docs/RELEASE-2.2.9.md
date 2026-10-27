@@ -1,0 +1,13 @@
+# Hélène 2.2.9
+
+Choose how to update source: **preserve local changes** or **install pristine release code**. The choice is available in desktop settings, the incoming updater window (including the supported 2.1.1 transition), and the selected agent's `update_request` tool. Pristine updates replace local code changes across the installation; original code and Git remain available for rollback. Memory, conversations, models and provider settings remain on their existing paths.
+
+Preserved-source conflicts belong to the selected agent. Its isolated hand supports paginated reads and diffs, exact-fragment patches and complete resolutions, including semantic repairs outside text conflicts. The result still needs independent frozen-source review. An early prose response or syntax-ready candidate cannot approve or install an update. A previously completed agent candidate is carried forward only when its frozen A/L/B inputs and original source identity still match.
+
+For a legacy owner that already closed, the updater returns safely to the previous application when agent work is pending. The request survives; the next update reuses only the matching resolved candidate and then obtains independent review. A current owner stays open during agent preparation and continues automatically after review. The separate restricted merger that ended after six incomplete steps is no longer the default source-resolution path.
+
+Pristine mode uses the verified incoming source archive, creates a fresh selected code directory and independent clean Git commit, and checks every byte/mode against the declared upstream inventory. It does not merge or call a model. It never resets the active authored repository. Source consent is tied to this operation, delivery and local-code snapshot; changed inputs refuse the switch. There is no automatic pristine fallback after a merge or review error.
+
+Desktop agents can propose either policy. Without direct owner consent the proposal waits for confirmation in the updater; generic update consent does not silently authorize discarding local changes. The desktop consumer claims a confirmed request before effects and does not replay an interrupted execution. Ordinary window updates use the same existing verified download and handoff.
+
+The managed relay lifetime and normal-startup bytecode repairs remain included. Optional voice references and native runtimes retain qualified inputs. Platform and lifecycle qualification, exact archive checks and the scope of native UI evidence are recorded in release-evidence.json. Publication does not install or restart the owner's agent.

@@ -17,6 +17,14 @@ _update_guard = threading.Lock()
 _update_targets = set()
 _waiting_updates = {}
 
+def update_agent_request(owner):
+    from .desktop_update_request import status
+    return status(owner.current().tree)
+
+def update_agent_confirm(owner,id,sourceMode='preserve'):
+    from .desktop_update_request import request
+    return request(owner.current().tree,'confirm',root=owner.root,identity=id,source_mode=sourceMode,by='window')
+
 
 def cancel_waiting(owner):
     """Revoke only a pending review continuation, never interrupt a file switch."""
@@ -267,14 +275,14 @@ def _extract(archive, destination, progress=None, prefix='Helene/'):
     return extract(archive,destination,progress,prefix)
 
 
-def update_install(owner,path,forceExtensions=False):
+def update_install(owner,path,forceExtensions=False,sourceMode=None):
     target=os.path.normcase(str(owner.root.resolve()))
     with _update_guard:
         if target in _update_targets:
             raise RuntimeError('Python update is already preparing or handed off for this installation')
         _update_targets.add(target)
     try:
-        result = _update_install(owner,path,forceExtensions)
+        result = _update_install(owner,path,forceExtensions,sourceMode)
         if isinstance(result, dict) and result.get('state') in {'needs_resolution', 'cancelled'}:
             with _update_guard:_update_targets.discard(target)
         return result
@@ -304,7 +312,7 @@ def await_admission(child, staging, target, timeout=15):
         raise
 
 
-def _update_install(owner,path,forceExtensions=False):
+def _update_install(owner,path,forceExtensions=False,sourceMode=None):
     archive=Path(path).resolve(strict=True)
     folder=owner.root.resolve().parent
     if archive.suffix.lower()!='.zip' or archive.parent!=folder:
@@ -355,17 +363,19 @@ def _update_install(owner,path,forceExtensions=False):
         progress.phase('unpacking',staging=str(destination))
         for item in archives:
             verified.update(_extract(item,destination,progress))
-        return _prepare_handoff(owner,destination,verified,progress,forceExtensions)
+        return _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceMode)
     except BaseException as exc:
         progress.phase('failed',error=str(exc),previous_application_open=True)
         raise
 
 
-def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
+def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceMode=None):
     new_root=destination/'Helene'
     from . import source_admission
     if source_admission.activate(new_root):
         verified = source_admission.current_proofs(verified, new_root)
+    from . import update_source
+    update_source.select(owner.root,new_root,sourceMode or 'preserve',by='window')
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
     from .python_platform import require_runtime
@@ -378,7 +388,8 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
     check(owner.root, new_root, force=forceExtensions)
     from .code_transition import preflight
     progress.phase('code')
-    source_plan = preflight(owner.root, new_root, notify=False)
+    source_plan = ({'state':'ready','plans':[]} if sourceMode=='clean'
+                   else preflight(owner.root, new_root, notify=False))
     review_binding = None
     if source_plan['state'] != 'ready':
         from .source_update_host import review
@@ -393,7 +404,20 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions):
         with _update_guard:
             _waiting_updates[target] = cancelled
         try:
-            review(owner.root, new_root, source_plan['plans'], progress, cancelled)
+            from .agent_source_update import AgentResolutionPending
+            from .package_notice import read
+            deadline=time.monotonic()+7200
+            while True:
+                progress.phase('waiting_agent',message='Агент совмещает правки в отдельной копии. После проверки обновление продолжится.')
+                while any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
+                          and read(Path(row['directory'])/'plan.json').get('state')!='ready' for row in source_plan['plans']):
+                    if cancelled.wait(.5):raise RuntimeError('Owner cancelled the update before agent resolution')
+                    if time.monotonic()>=deadline:raise TimeoutError('Agent source resolution timed out; old application retained')
+                try:
+                    review(owner.root, new_root, source_plan['plans'], progress, cancelled)
+                    break
+                except AgentResolutionPending:
+                    if cancelled.is_set():raise RuntimeError('Owner cancelled update review')
         finally:
             with _update_guard:
                 if _waiting_updates.get(target) is cancelled:

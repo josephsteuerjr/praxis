@@ -19,17 +19,24 @@ from . import source_merge as merge, self_review
 
 _LOCK = threading.RLock()
 _OBSERVERS = {}  # disposable per-tree discovery signatures/current producers, never authority
-ACTIVE = {'queued', 'merging', 'reviewing'}
+ACTIVE = {'queued', 'merging', 'reviewing', 'waiting_agent'}
 MAX_ATTEMPTS = 3
 MAX_ITERS = 40
 MAX_SECONDS = 1800
 UNAVAILABLE = ('Running application/selected Forge lacks an available source-update coordinator API v1. '
                'Old application retained; no ordinary agent conflict turn or generic worker fallback.')
 TOOL = {'name': 'source_update', 'description':
-    'Read the isolated update pipeline status. Conflicts are handled by a restricted '
-    'merger and independent reviewers; this tool cannot edit, approve or install code.',
+    'Resolve the owner-requested update in its isolated candidate. status lists inputs; '
+    'diff shows A->local and A->incoming changes; read returns one side with pagination. '
+    'resolve supplies full UTF8 or a side; patch replaces one exact fragment using before/after. '
+    'Repairs outside conflicts need reason and expected_candidate_sha256 from status. '
+    'finish validates M but cannot approve or install it; independent review is still required.',
     'input_schema': {'type': 'object', 'properties': {
-        'action': {'type': 'string', 'enum': ['status']}}, 'required': ['action']}}
+        'action': {'type': 'string', 'enum': ['status','read','diff','resolve','patch','finish']},
+        'path':{'type':'string'},'content':{'type':'string'},'delete':{'type':'boolean'},
+        'side':{'type':'string','enum':['base','local','incoming','result']},'offset':{'type':'integer','minimum':0},
+        'before':{'type':'string'},'after':{'type':'string'},'reason':{'type':'string'},
+        'expected_candidate_sha256':{'type':'string'}}, 'required': ['action']}}
 
 
 def path(tree):
@@ -76,7 +83,7 @@ def _save_request(tree, request):
 
 def pending(tree):
     request = read(path(tree))
-    return request if request.get('state') in ACTIVE else None
+    return request if request.get('state') in ACTIVE or (request.get('resolution_owner')=='agent' and request.get('state')=='pending') else None
 
 
 def bound(tree):
@@ -100,9 +107,17 @@ def ensure(tree, program, source, directory, version, *, coordinator=None):
     """Queue once before shutdown; retries never revive a stopped or failed plan."""
     directory = Path(directory).resolve()
     plan = merge.validate_inputs(directory)
+    from .agent_source_update import marker
+    agent_proof=read(marker(directory))
+    agent_owned=bool(agent_proof)
+    if agent_owned and (agent_proof.get('format')!='helene-agent-resolution.v1'
+            or agent_proof.get('input_sha256')!=merge.input_signature(plan)
+            or agent_proof.get('source')!=str(Path(source).resolve())):
+        raise ValueError('Selected-agent source authority changed')
     request = {'id': directory.name, 'directory': str(directory), 'version': str(version),
                'source': str(Path(source).resolve()), 'program': str(Path(program).resolve()),
                'input_sha256': merge.input_signature(plan), 'state': 'queued'}
+    if agent_owned:request['resolution_owner']='agent'
     _bound(request)
     with _LOCK:
         current = read(path(tree))
@@ -121,7 +136,9 @@ def ensure(tree, program, source, directory, version, *, coordinator=None):
             operation = {**request, 'schema': 1, 'created': time.time(), 'attempts': [],
                          'max_attempts': MAX_ATTEMPTS, 'tree': str(Path(tree).resolve())}
             runtime = read(Path(tree) / 'memory/.self-review/runtime.json')
-            if coordinator is None and (runtime.get('source_update_supported') is not True
+            if agent_owned:
+                operation.update(state='waiting_agent',coordinator={'kind':'waiting-selected-agent'})
+            elif coordinator is None and (runtime.get('source_update_supported') is not True
                     or runtime.get('app_root') != str(Path(program).resolve())
                     or not 0 <= time.time() - float(runtime.get('at') or 0) < 60):
                 operation.update(state='needs_attention', error=UNAVAILABLE)
@@ -144,9 +161,11 @@ def ensure(tree, program, source, directory, version, *, coordinator=None):
                 operation.update(state='queued', created=time.time(), version=str(version))
                 operation.pop('error', None)
             prior = operation.get('coordinator')
-            if prior and prior != coordinator and operation['state'] != 'ready_to_apply':
+            transfer_agent=(agent_owned and operation['state']=='waiting_agent'
+                            and not operation.get('task_id') and not operation.get('review_id'))
+            if prior and prior != coordinator and operation['state'] != 'ready_to_apply' and not transfer_agent:
                 raise ValueError('Another incoming coordinator owns this source review; inspect its existing work')
-            if operation['state'] == 'queued' and not operation.get('attempts'):
+            if (operation['state'] == 'queued' and not operation.get('attempts')) or transfer_agent:
                 operation['coordinator'] = coordinator
         _persist(directory, operation)
         request['state'] = operation['state']
@@ -156,6 +175,9 @@ def ensure(tree, program, source, directory, version, *, coordinator=None):
 
 
 def command(tree, action='status', **args):
+    if read(path(tree)).get('resolution_owner')=='agent':
+        from .agent_source_update import command as selected_agent
+        return selected_agent(tree,action,**args)
     if action != 'status':
         raise ValueError('Source update edits are restricted to the isolated merger/panel pipeline')
     request = read(path(tree))
@@ -179,8 +201,8 @@ def install(agent, tree):
 
 
 def notify_due(tree, turn):
-    """Compatibility no-op: never turn an update conflict into owner-agent speech."""
-    return None
+    from .agent_source_update import notify
+    return notify(tree,turn)
 
 
 def _fresh(operation, directory):
@@ -372,11 +394,18 @@ def _review_request(operation, directory, service):
 
 
 def _advance(operation, directory, forge, service):
-    _fresh(operation, directory)
+    plan=_fresh(operation, directory)
     if _owner_blocked(operation['tree']):
         return
     if getattr(forge, 'SOURCE_UPDATE_API', 0) != 1 or getattr(service.forge, 'SELF_REVIEW_API', 0) != 1:
         raise ValueError('Selected preserved Forge lacks source-update/self-review API v1; no generic agent fallback')
+    if operation['state']=='waiting_agent':
+        if plan.get('state')!='ready':return
+        if merge.inventory(directory/'result')!=plan.get('result'):raise ValueError('Selected-agent candidate changed after finish')
+        operation['candidate_sha256']=merge.candidate_signature(directory)
+        operation['resolution_provenance']={'kind':'selected-agent','input_sha256':operation['input_sha256'],
+                                           'candidate_sha256':operation['candidate_sha256']}
+        _review_request(operation,directory,service)
     if operation['state'] == 'queued':
         _start_attempt(operation, directory, forge)
     if operation['state'] == 'merging' and _merge_tick(operation, directory, forge):
@@ -389,6 +418,15 @@ def _advance(operation, directory, forge, service):
             return
         if record.get('execution') == 'done' and record.get('verdict') == 'findings':
             operation['findings'] = [finding for critic in record['critics'] for finding in critic.get('findings', [])]
+            if operation.get('resolution_owner')=='agent':
+                rounds=operation.setdefault('agent_review_rounds',[])
+                rounds.append({'review_id':record['id'],'subject_sha256':record['subject_sha256']})
+                if len(rounds)>=MAX_ATTEMPTS:raise ValueError('Agent correction review budget exhausted; old application retained')
+                merge.reopen(directory);operation['state']='waiting_agent'
+                operation.pop('review_id',None);operation.pop('subject_sha256',None)
+                current=read(path(operation['tree']));current.update(state='pending',tries=0,retry_at=0)
+                write(path(operation['tree']),current)
+                return
             operation['attempts'][-1].update(review_id=record['id'], subject_sha256=record['subject_sha256'], verdict='findings')
             _start_attempt(operation, directory, forge)
             return

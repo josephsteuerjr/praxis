@@ -96,6 +96,8 @@ class Controller:
                 os.environ['HELENE_ORIGINS'] = self.origin
             self.thread = threading.Thread(target=own, name='helene-python-owner', daemon=True)
             self.thread.start()
+            from .desktop_update_request import watch
+            threading.Thread(target=watch,args=(self,self.stop),name='helene-update-requests',daemon=True).start()
             self.sync_publishers()
 
     def status(self):
