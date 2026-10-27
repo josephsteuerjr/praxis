@@ -1,3 +1,7 @@
+# 2.2.9
+
+Explicit preserved or pristine source update in the window and agent tool. The selected agent resolves preserved changes; independent review still accepts the candidate. Pristine mode selects exact verified release source while retaining prior code and all profile paths. See [release notes](docs/RELEASE-2.2.9.md).
+
 # 2.2.8
 
 Keep the configured managed relay alive through source integration and independent review after the old owner closes. Preserve route/account/proxy and original failure diagnostics. Coupled owner/transport regression passes the unmodified2.1.1 one-button transaction and rollback. See [release notes](docs/RELEASE-2.2.8.md).
