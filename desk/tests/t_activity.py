@@ -38,6 +38,29 @@ class Activity(unittest.TestCase):
         self.assertEqual(after[0]["status"], "received")
         self.assertEqual(after[0]["result"]["head"], "OK")
 
+    def test_request_dispatch_process_and_model_response_keep_their_own_evidence(self):
+        original = {'tool':'call', 'args':{'name':'shell', 'args_json':'{"command":"echo OK"}'}}
+        definition = {'description':'offered schema', 'input_schema':{'type':'object'}}
+        rows = [
+            {'kind':'tool_started','call_id':'a','tool':'shell','args':{'command':'echo OK'}},
+            {'kind':'tool_dispatch','call_id':'a','model_request':original,'definition':definition,
+             'receipt':{'handler':'agent.tool_shell','status':'entered'}},
+            {'kind':'tool_execution','call_id':'a','receipt':{'argv':['bash','-lc','cd /home && echo OK'],'status':'returned','exit_code':0}},
+            {'kind':'tool_result','call_id':'a','result':{'inline':{'head':'OK'}}},
+            {'kind':'tool_model_response','call_id':'a','text':'OK\n[ResultRef real]','image_count':1},
+        ]
+        tool = self.read(rows)['iterations'][0]['tools'][0]
+        self.assertEqual(tool['args']['command'], 'echo OK')
+        self.assertEqual(tool['model_request'], original)
+        self.assertEqual(tool['definition'], definition)
+        self.assertEqual(tool['operations'][0]['argv'][-1], 'cd /home && echo OK')
+        self.assertEqual(tool['result']['head'], 'OK')
+        self.assertEqual(tool['model_observation'], 'OK\n[ResultRef real]')
+        self.assertEqual(tool['model_response_image_count'], 1)
+        old = self.read([rows[0], rows[3]])['iterations'][0]['tools'][0]
+        self.assertNotIn('execution', old)
+        self.assertNotIn('model_observation', old)
+
     def test_model_failure_is_not_an_endless_wait(self):
         for prefix in ([], [{"kind": "model_started", "call_id": "m"}]):
             with self.subTest(prefix=bool(prefix)):

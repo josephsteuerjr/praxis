@@ -53,7 +53,7 @@ def verified_runtime(new):
             raise ValueError('Incoming coordinator source escapes its distribution')
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise ValueError('Incoming application source changed: ' + name)
-    return {'kind': 'incoming-update-runtime.v1', 'program': str(new),
+    return {'kind': 'incoming-update-runtime.v1', 'program': str(new), 'review_store': 'isolated-v1',
             'core_sha256': merge.signature(core['files']),
             'app_sha256': merge.signature(app['files'])}
 
@@ -107,8 +107,9 @@ def coordinate(old, new, directory, cancel_file):
     if (Path(forge.__file__).resolve() != new / 'tree/forge.py'
             or forge.SOURCE_UPDATE_API != 1 or forge.SELF_REVIEW_API != 1):
         raise ValueError('Coordinator did not load the verified incoming Forge')
+    review_config = {'max_parallel': 4, 'max_iters': 60, **agent['value'].get('self_review', {})}
     service = self_review.Service(tree, agent['code'], old, forge,
-                                  agent['value'].get('self_review', {}), coordinator=binding)
+                                  review_config, coordinator=binding)
     # A distinct plan lease does not contend with the parent's install lease.
     with installation_lock(directory, timeout_sec=1):
         operation = source_update.ensure(tree, old, agent['code'], directory,
@@ -168,10 +169,10 @@ def review(old, new, plans, progress=None, cancelled=None):
             process = subprocess.Popen(command, cwd=new, stdin=subprocess.DEVNULL,
                 stdout=output, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            deadline = time.monotonic() + source_update.MAX_SECONDS + 60
+            started = time.monotonic()
             cancel_deadline = None
             while process.poll() is None:
-                if (cancelled is not None and cancelled.is_set()) or time.monotonic() > deadline:
+                if (cancelled is not None and cancelled.is_set()) or time.monotonic() - started > source_update.budget_seconds(read(directory / 'pipeline.json')) + 60:
                     if not cancel.exists():
                         write(cancel, {'reason': 'Update preparation cancelled or timed out'})
                     if cancel_deadline is None:

@@ -185,7 +185,8 @@ def catalog() -> dict:
 # --------------------------------------------------------------------------- #
 #  switch_brain — её рука на своём мозге
 # --------------------------------------------------------------------------- #
-def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
+def switch(role: str, model: str, *, why: str = "", by: str = "praxis",
+           endpoint: str = "") -> dict:
     """Сменить модель роли (без одобрения; ключи не трогаются). -> {ok, ...}|{ok:False,error}.
 
     Тот же фреймворк — просто model; другой — swap-семантика: framework/model/fallback_model
@@ -203,12 +204,12 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
     cfg = llm._config()
     rc = dict((cfg.get("roles") or {}).get(role) or {})
     cur_fw, cur_model = rc.get("framework"), rc.get("model")
-    if model == cur_model:
-        return {"ok": False, "error": f"{model} и так основная модель роли {role}"}
     try:
-        target_fw = _target_framework(model, cur_fw)
+        target_fw = _target_framework(model, cur_fw, endpoint)
     except ValueError as error:
         return {"ok": False, "error": str(error)}
+    if model == cur_model and target_fw == cur_fw:
+        return {"ok": False, "error": f"{model} и так основная модель роли {role}"}
     prev = {"framework": cur_fw, "model": cur_model,
             "fallback_model": rc.get("fallback_model"),
             # Откат обязан вернуть и прибитый фреймворк запасной: пустая строка значит
@@ -230,12 +231,18 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
         log.warning("brain.switch: запись конфига не удалась", exc_info=True)
         return {"ok": False, "error": f"конфиг не записался: {type(e).__name__}"}
 
-    ok, err = llm.ping(role)
+    try:
+        ok, err = llm.ping(role)
+    except Exception as error:
+        ok, err = False, type(error).__name__
+    err = str(err or "")
     if not ok:
         try:  # наблюдение исполнения: рукопожатие не прошло — возвращаю как было
             llm.update_config({"roles": {role: prev}})
-        except Exception:
+        except Exception as rollback_error:
             log.warning("brain.switch: откат конфига не удался", exc_info=True)
+            return {"ok": False, "error": err, "stage": "ping",
+                    "rollback_error": type(rollback_error).__name__, "rolled_back": False}
         note_call(role, target_fw, model, ok=False, error=err or "ping failed")
         _journal(f"свитч {role} → {target_fw}/{model} НЕ прошёл рукопожатие ({err[:120]}) — "
                  "возвращено как было")
@@ -250,7 +257,8 @@ def switch(role: str, model: str, *, why: str = "", by: str = "praxis") -> dict:
             "was": f"{cur_fw}/{cur_model}"}
 
 
-def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
+def apply_profile(name: str, *, why: str = "", by: str = "praxis",
+                  endpoint: str = "") -> dict:
     """Atomically apply one explicit complexity profile to voice, with ping rollback."""
     import llm
     name = (name or "").strip().lower()
@@ -264,7 +272,7 @@ def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
     old_model = str(before.get("model") or "")
     old_effort = str(before.get("reasoning_effort") or "")
     try:
-        target_fw = _target_framework(spec["model"], old_fw)
+        target_fw = _target_framework(spec["model"], old_fw, endpoint)
     except ValueError as error:
         return {"ok": False, "error": str(error), "stage": "model"}
     before.setdefault("fallback_framework", "")  # чтобы откат вернул и отсутствие пина
@@ -279,7 +287,11 @@ def apply_profile(name: str, *, why: str = "", by: str = "praxis") -> dict:
         llm.update_config({"roles": {"voice": target}})
     except Exception as error:
         return {"ok": False, "error": f"{type(error).__name__}: {error}", "stage": "write"}
-    ok, err = llm.ping("voice")
+    try:
+        ok, err = llm.ping("voice")
+    except Exception as error:
+        ok, err = False, type(error).__name__
+    err = str(err or "")
     if not ok:
         try:
             llm.update_config({"roles": {"voice": before}})
@@ -497,10 +509,16 @@ def _frameworks():
     return list((llm._config().get('frameworks') or {}).keys())
 
 
-def _target_framework(model, current):
-    """Resolve an endpoint identity, never an arbitrary same-protocol account."""
+def _target_framework(model, current, endpoint=""):
+    """Resolve an exact configured endpoint, or safely infer an equivalent account."""
     import llm
     specs = llm._config().get('frameworks') or {}
+    if endpoint:
+        if not isinstance(endpoint, str) or endpoint not in specs:
+            raise ValueError('Unknown configured endpoint ID')
+        if model not in allowlist(endpoint):
+            raise ValueError(f'«{model}» is not available on endpoint {endpoint}')
+        return endpoint
     candidates = [fw for fw in specs if model in allowlist(fw)]
     if current in candidates:
         return current

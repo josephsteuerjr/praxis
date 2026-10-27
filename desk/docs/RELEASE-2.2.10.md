@@ -1,0 +1,11 @@
+# Hélène 2.2.10
+
+Preserved-source updates now review the four actual merge inputs: base, local changes, incoming release and the selected agent's result. A compact index and paginated comparisons replace unrelated repository-sized diffs. Every assigned path remains covered, including deletions, modes and semantic repairs. Incoming application context is verified and frozen separately so reviewers can inspect core and desktop integration.
+
+The incoming coordinator owns update review. Its requests are isolated from older installed review workers, incomplete findings remain actionable, and acceptance requires complete evidence for the exact candidate. The selected agent resolves findings and continues the already authorized acceptance workflow, including headless checks when available. Installation, runtime checks and publication remain separately observable stages.
+
+Desktop, web, phone and Mini App tool details now distinguish the requested command, its parameters, observed handler/process receipts, the tool result and the text prepared for the next model step. Commands can be copied without duplicated arguments; full output and manual expansion survive refreshes. Older turns explicitly identify missing execution receipts. Prepared observations do not claim that a provider accepted a subsequent request.
+
+Forge fixes cover remote process ownership, terminal-state normalization, uncertain foreground timeouts, continuation journal validation and recovery of never-started legacy blocked nodes. Automatic OpenAI Responses routing checks SDK support; an older compatible SDK retains Chat Completions, while an explicitly unsupported protocol fails clearly.
+
+Preserved and pristine source policies remain available. Memory, settings and history retain their existing paths; original authored code remains available for rollback. Native runtimes and optional voice components retain their qualified inputs. Exact platform archives, upgrade checks and acceptance limits will be recorded in release-evidence.json when qualification finishes.

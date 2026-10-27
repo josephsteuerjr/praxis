@@ -2627,7 +2627,10 @@ def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMRe
         return _call_anthropic(cli, model, **kw)
     spec = (_config().get("frameworks") or {}).get(framework) or {}
     mode = spec.get("api_mode")
-    if mode == "responses" or (not mode and _provider_family(cli) == "openai"):
+    supports_responses = callable(getattr(getattr(cli, 'responses', None), 'create', None))
+    if mode == 'responses' and not supports_responses:
+        raise RuntimeError('llm: configured SDK does not support Responses; upgrade the OpenAI SDK')
+    if mode == "responses" or (not mode and supports_responses and _provider_family(cli) == "openai"):
         return _call_responses(cli, model, **kw)
     return _call_openai(cli, model, **kw)
 

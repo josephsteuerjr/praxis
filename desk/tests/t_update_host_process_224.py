@@ -145,7 +145,10 @@ while True:time.sleep(.1)
             progress=Path(result['staging']).with_name(Path(result['staging']).name+'.progress.json')
             startup_cache=any(Path(result['staging']).rglob('sitecustomize.*.pyc'))
             self.assertTrue(startup_cache,'Incoming interpreter must create startup bytecode before helper admission')
-            deadline=time.monotonic()+160
+            # A full legacy upstream transition can require hundreds of frozen
+            # coverage units. Observe the complete real panel, not just its
+            # first workers; the small fake provider does not bypass coverage.
+            deadline=time.monotonic()+1800
             choice_made=False
             while time.monotonic()<deadline:
                 state=read(progress)

@@ -267,8 +267,16 @@ class TeamConsumers:
         self.assertEqual(len(self.nodes()["review"]["attempts"]), 1)
         # Production workers, not a second UI fixture schema, created these
         # records. Exercise the exact owner projection/event/payload readers.
-        sys.path.insert(0, str(CORE.parents[1] / "desk"))
-        from deskd import forge_reader
+        with self.subTest(component='desktop reader integration'):
+            self._assert_desktop_projection(repaired)
+
+    def _assert_desktop_projection(self, repaired):
+        app = next((parent / name for parent in CORE.parents for name in ('desk', 'app')
+                    if (parent / name / 'deskd/forge_reader.py').is_file()), None)
+        if app is None:
+            self.skipTest('Desktop reader integration requires the app; core consumer assertions ran above')
+        with mock.patch.object(sys, 'path', [str(app), *sys.path]):
+            from deskd import forge_reader
         detail = forge_reader.task_detail(self.root, self.tid)
         self.assertEqual({row["role"] for row in detail["agents"]}, {"scout", "worker", "reviewer"})
         projected = next(row for row in detail["agents"] if row["id"] == repaired)

@@ -271,6 +271,15 @@ def _mutation_lock(task_id: str, timeout: float = 60.0):
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(token)
             break
+        except PermissionError as exc:
+            # Windows can report a delete-pending/sharing race instead of EEXIST.
+            # Retry only within the existing acquisition deadline; never remove
+            # an unreadable lock or reinterpret access denial as a dead owner.
+            if os.name != "nt":
+                raise
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"task {task_id}: mutation lock access remained unavailable") from exc
+            time.sleep(.03)
         except FileExistsError:
             stale, raw, why, legacy = False, None, "", False
             try:
@@ -2935,19 +2944,29 @@ def _stop_foreground(proc: subprocess.Popen) -> tuple[bool, str]:
 
 
 def _retain_foreground_unknown(task_id: str, proc: subprocess.Popen, command: str,
-                               place: Path, log_path: Path, reason: str, born: str) -> str:
+                               place: Path, log_path: Path, reason: str, born: str,
+                               unit_id: str, parent_unit_id: str) -> str:
     """Unproven timeout remains a task-scoped process unit for poll/Stop/finish."""
-    unit_id = _id("proc")
     d = _unit_dir(task_id, "processes", unit_id)
-    _atomic_json(d / "request.json", {
-        "id": unit_id, "task_id": task_id, "command": command, "cwd": str(place),
-        "supervisor_pid": proc.pid, "supervisor_started_at": born,
-        "status": "running", "created": _now(),
-    })
-    _atomic_json(d / "state.json", {"child_pid": proc.pid, "foreground": True,
-                                     "child_started_at": born, "command": command})
-    _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
-                                    "note": reason})
+    with _mutation_lock(task_id):
+        # The admission record owns this command even when its outcome becomes
+        # uncertain. A second identity would orphan the first and lose ancestry.
+        if not (d / 'request.json').exists():
+            _atomic_json(d / 'request.json', {
+                'id': unit_id, 'task_id': task_id, 'command': command, 'cwd': str(place),
+                'supervisor_pid': proc.pid, 'supervisor_started_at': born,
+                'parent_unit_id': parent_unit_id, 'log': str(log_path),
+                'status': 'running', 'created': _now(),
+            })
+        # A concurrent Stop may already have proved the exit. Do not downgrade
+        # that exact receipt with our older failed census.
+        settled = _read_json(d / 'stop.json', {}) or {}
+        if settled.get('state') == 'settled' and (d / 'result.json').exists():
+            return unit_id
+        _atomic_json(d / "state.json", {"child_pid": proc.pid, "foreground": True,
+                                         "child_started_at": born, "command": command})
+        _atomic_json(d / "stop.json", {"state": "unresolved", "requested": _now(),
+                                        "note": reason})
     _RUNNERS[proc.pid] = proc
     _event(task_id, "command_timeout_unconfirmed", process_id=unit_id,
            summary=f"{unit_id}: {reason}; log {log_path}")
@@ -2975,14 +2994,9 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
             log.debug("рельс хардбота не отработал на forge.run", exc_info=True)
         asked = max(0, int(timeout or 0))
         given, deadline_note = _remote_run_deadline(asked)
-        with _remote_observations(task):
-            out = remote.run(str(root), command, cwd=cwd, timeout=given)
-        out = (out or "") + deadline_note
-        status = "failed" if out.startswith(("[serverd]", "[windows-body]")) else "ok"
-        _event(task_id, "command", command=command, cwd=f"{task.get('scope')}:{root}/{cwd}",
-               status=status, backend=remote.PROTOCOL,
-               summary=f"{task.get('scope')} {status}: {command[:120]}")
-        return out
+        import forge_remote_run
+        out = forge_remote_run.run(sys.modules[__name__], task_id, command, cwd, given, _parent_request_path)
+        return out + deadline_note
     place, path_err = _inside(root, cwd)
     if path_err or place is None or not place.is_dir():
         return path_err or f"Нет cwd {cwd}."
@@ -3025,12 +3039,12 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
         code, status = -1, "timed_out" if stopped else "unknown"
         if not stopped:
             unresolved = _retain_foreground_unknown(task_id, proc, command, place,
-                                                    log_path, detail, born)
+                                                    log_path, detail, born, unit_id, parent_id)
     except Exception as exc:
         code, status = -1, "unknown" if proc is not None else "error"
         if proc is not None:
             unresolved = _retain_foreground_unknown(task_id, proc, command, place,
-                                                    log_path, f"{type(exc).__name__}: {exc}", born)
+                                                    log_path, f"{type(exc).__name__}: {exc}", born, unit_id, parent_id)
         else:
             log_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
     duration = round(time.monotonic() - t0, 3)
@@ -3140,6 +3154,9 @@ def _unit_state(path: Path) -> dict:
             if local.poll() is not None:
                 _RUNNERS.pop(pid, None)
         return {**request, **result, "id": request.get("id") or path.name}
+    if request.get("remote"):
+        return {**request, **(_read_json(path / "state.json", {}) or {}),
+                "status": "unknown", "liveness": "remote process requires poll/stop reconciliation"}
     if request.get("status") == "queued":
         return {**request, "id": request.get("id") or path.name}
     pid = int(request.get("supervisor_pid") or 0)
@@ -3508,14 +3525,15 @@ def _kill_tree(pid: int, started_at: str = "", *, expect: str = "") -> str:
 def process(task_id: str, action: str, process_id: str = "", command: str = "",
             cwd: str = ".", name: str = "", timeout: int = 0, tail: int = 8000,
             _parent_request_path: str = "") -> str:
-    if str(action or "").lower() == "start":
+    action = str(action or "list").strip().lower()
+    if action == "start":
         try:
             with _mutation_lock(task_id) as beat:
                 reason = _admission_reason(task_id, _parent_request_path, general=True)
                 if reason:
                     return f"Process refused: {reason}"
                 parent, _ = _worker_parent(task_id, _parent_request_path)
-                beat(lease_sec=20)
+                beat(lease_sec=120)
                 return _process_unlocked(task_id, action, process_id, command, cwd, name, timeout, tail,
                                          parent_unit_id=parent)
         except (TimeoutError, ValueError) as exc:
@@ -3533,6 +3551,19 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
     action = str(action or "list").strip().lower()
     remote = _remote_client(task or {})
     if remote is not None:
+        if action == 'start':
+            import forge_remote_run
+            value = forge_remote_run.start_unlocked(sys.modules[__name__], task, command, cwd, timeout,
+                                                    parent_unit_id=parent_unit_id, name=name)
+            return json.dumps(value, ensure_ascii=False)
+        if action == 'list':
+            # Only task-owned identities may be handed back to poll/stop.
+            return json.dumps(_units(task_id, 'processes'), ensure_ascii=False)
+        directory = _unit_dir(task_id, "processes", process_id) if process_id else None
+        if directory is not None and (_read_json(directory / 'request.json', {}) or {}).get('remote'):
+            if action not in {'poll', 'stop'}: return 'action: poll | stop'
+            import forge_remote_run
+            return json.dumps(forge_remote_run.refresh(sys.modules[__name__], directory, task, stop=action=='stop'), ensure_ascii=False)
         with _remote_observations(task or {}):
             out = remote.process(
                 str(root), action, operation_id=process_id, command=command, cwd=cwd,
@@ -3661,7 +3692,8 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
 def verify(task_id: str, action: str = "plan", verification_id: str = "",
            commands: str = "", full: bool = False, max_parallel: int = 4,
            timeout: int = 900, tail: int = 12000, _parent_request_path: str = "") -> str:
-    if str(action or "").lower() == "start":
+    action = str(action or "plan").strip().lower()
+    if action == "start":
         try:
             with _mutation_lock(task_id) as beat:
                 reason = _admission_reason(task_id, _parent_request_path, general=True)
@@ -3905,6 +3937,26 @@ def _worker_script(task: dict) -> Path:
     return script
 
 
+def _snapshot_reviewer_has_no_children(task_id: str, request: dict) -> bool:
+    """The bound snapshot adapter can only read files in this process.
+
+    Unlike ordinary reviewers, it cannot execute inspect commands, spawn tools
+    or delegate. Its absent supervisor therefore has no untracked child tree.
+    Do not extend this exception to source-update workers or ordinary agents.
+    """
+    task = get(task_id) or {}
+    metadata = task.get("self_review")
+    if (not isinstance(metadata, dict) or metadata.get("schema") != 1
+            or request.get("role") != "reviewer" or request.get("parent_unit_id")
+            or request.get("self_review") != metadata or task.get("source_update")):
+        return False
+    try:
+        _worker_script(task)  # checks installed adapter, runtime and frozen root
+    except (ValueError, OSError, ImportError, KeyError):
+        return False
+    return True
+
+
 def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
                     task: dict | None = None) -> str:
     task = task if task is not None else (get(task_id) or {})
@@ -3912,7 +3964,8 @@ def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
         return units[kind] if units is not None else _units(task_id, kind)
     rows = [r for r in rows_of("agents") if r.get("id") != request.get("id")]
     active = [r for r in rows if r.get("status") in (_LIVE_UNIT_STATES | {"unknown"})
-              or (r.get("status") == "lost" and not _writer_ended(
+              or (r.get("status") in (_TERMINAL_AGENT_STATES | {"lost"})
+                  and not _root_released(task_id, str(r["id"])) and not _writer_ended(
                   _unit_dir(task_id, "agents", str(r["id"]))))]
     # A waiting worker has NO model/tool execution until its selected child
     # releases this root. Its slot is transferred only along that exact branch,
@@ -4306,14 +4359,19 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
     receipts = [agent(task_id, "stop", agent_id=unit) for unit in targets]
     # Detached commands/checks are part of group Stop. Unit Stop also owns the
     # jobs recorded from its subtree; legacy task-scoped jobs remain group-owned.
+    def owned(kind, row):
+        if not agent_id:
+            return True
+        owner = str(row.get("id") if kind == "agents" else row.get("parent_unit_id") or "")
+        return bool(owner) and _in_subtree(task_id, agent_id, owner)
+
     for kind, key, fn in (("processes", "process_id", process),
                           ("verifications", "verification_id", verify)):
         for row in _units(task_id, kind):
-            owner = str(row.get("parent_unit_id") or "")
-            if not agent_id or (owner and _in_subtree(task_id, agent_id, owner)):
+            if owned(kind, row):
                 receipts.append(fn(task_id, "stop", **{key: row["id"]}))
     unknown = [r["id"] for kind in ("agents", "processes", "verifications")
-               for r in _units(task_id, kind) if r.get("status") in
+               for r in _units(task_id, kind) if owned(kind, r) and r.get("status") in
                (_LIVE_UNIT_STATES | {"unknown", "lost", "queued"})]
     value = {"status": "unknown" if unknown else "settled", "action": action,
              "task_id": task_id, "agent_id": agent_id, "unknown_units": unknown, "receipts": receipts}
@@ -4559,6 +4617,17 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     _atomic_json(directory / "result.json", prior)
                 outcome = "queued unit never started; result retained"
                 stop_confirmed = True
+            elif (os.name == "nt" and request.get("supervisor_pid")
+                  and not _pid_alive(int(request["supervisor_pid"]), str(request.get("supervisor_started_at") or ""))
+                  and _snapshot_reviewer_has_no_children(task_id, request)):
+                outcome = "bound snapshot reviewer exited; executable tools and delegation were unavailable"
+                stop_confirmed = True
+                if not isinstance(prior, dict) or prior.get("status") not in _TERMINAL_AGENT_STATES:
+                    with _mutation_lock(task_id):
+                        current_result = _read_json(directory / "result.json", {}) or {}
+                        if current_result.get("status") not in _TERMINAL_AGENT_STATES:
+                            _atomic_json(directory / "result.json", {**current_result,
+                                "status": "stopped", "stopped": _now(), "finished": _now(), "note": outcome})
             elif isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
                 outcome = f"settled {prior.get('status')}; result retained (результат сохранён)"
                 # A result is not process-death evidence. The worker may still be

@@ -299,10 +299,20 @@ button.st-line:hover {
 }
 /* Руки — под своим шагом, с тонкой направляющей слева. */
 .st-hand {
-  margin-left: 13px;
-  padding-left: 10px;
-  border-left: var(--lw) solid var(--line);
+  margin: 12px 0;
+  padding: 10px;
+  border: var(--lw) solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
 }
+.st-hand .st-line { flex-wrap: wrap; gap: 6px 8px; }
+.st-hand .st-label { font-size: 14px; }
+.st-hand .st-what { flex-basis: 100%; padding-left: 23px; color: var(--ink-2); }
+.st-hand.open .st-what { display: none; }
+.st-toggle::after { content: '⌄'; margin-left: auto; color: var(--ink-3); }
+.st-toggle[aria-expanded="true"]::after { content: '⌃'; }
+.st-hand .st-state { font-style: normal; font-size: 11px; color: var(--ink-2); }
+.st-hand.is-failed .st-state { color: var(--err); }
 /* Слово (рука reply) — читается, а не сворачивается в одну строку. */
 .st-word .st-what {
   white-space: normal;
@@ -350,7 +360,7 @@ button.st-line:hover {
 }
 
 .st-detail {
-  margin: 2px 0 6px 28px;
+  margin: 8px 4px 6px;
 }
 .st-k {
   margin: 8px 0 3px;
@@ -358,7 +368,7 @@ button.st-line:hover {
   color: var(--muted);
 }
 .st-pre,
-.st .run-text-body {
+.st > .run-text .run-text-body {
   margin: 0;
   max-height: 22em;
   overflow: auto;

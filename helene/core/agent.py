@@ -2606,13 +2606,25 @@ def tool_shell(command: str) -> str:
             stderr=subprocess.STDOUT,
             timeout=SHELL_TIMEOUT,
         )
+        _tool_trace_event('tool_execution', receipt={
+            'kind': 'process', 'argv': list(proc.args), 'cwd': str(workdir),
+            'status': 'returned', 'exit_code': proc.returncode,
+        })
         out = _decode_shell_output(proc.stdout)
     except subprocess.TimeoutExpired as exc:
+        _tool_trace_event('tool_execution', receipt={
+            'kind': 'process', 'argv': list(exc.cmd), 'cwd': str(workdir),
+            'status': 'timed_out',
+        })
         partial = exc.stdout or b""
         if isinstance(partial, str):
             partial = partial.encode("utf-8", "replace")
         out = _decode_shell_output(partial) + f"\n[прервано по таймауту {SHELL_TIMEOUT}s]\n"
     except Exception as e:
+        _tool_trace_event('tool_execution', receipt={
+            'kind': 'process', 'requested_argv': ['bash', '-lc', shell_command],
+            'cwd': str(workdir), 'status': 'launch_failed', 'error': type(e).__name__,
+        })
         out = f"[ошибка shell] {e}"
     # PASS 24: never destroy command output here.  The run spine stores the exact result and
     # gives the model an honest head/tail ResultRef with cursor reads for arbitrarily large logs.
@@ -5806,7 +5818,7 @@ def tool_manage_perception(action: str, knob: str = "", value: str = "",
 
 
 def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "",
-                      effort: str = "", profile: str = "") -> str:
+                      effort: str = "", profile: str = "", endpoint: str = "") -> str:
     """PASS 22: мой мозг — мой выбор. status — каталог+наблюдаемые свойства;
     switch — сменить модель роли (рукопожатие после; ключи не мои — пульт);
     reasoning — её ступень рассуждения роли (19.08, реле-словарь)."""
@@ -5821,7 +5833,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
                        f"скоуп={_active_scope()}, профиль {profile}")
             return ("Не отсюда: профиль сложности я меняю как принципал — из своего "
                     "хода или из owner-скоупа.")
-        res = brain.apply_profile(profile, why=why)
+        res = brain.apply_profile(profile, why=why, **({"endpoint": endpoint} if endpoint else {}))
         if not res.get("ok"):
             return f"Профиль не применился ({res.get('stage', 'validation')}): {res.get('error')}"
         return (f"Профиль {res['profile']} применён: voice {res['model']}, "
@@ -5853,7 +5865,7 @@ def tool_switch_brain(action: str, role: str = "", model: str = "", why: str = "
                        f"скоуп={_active_scope()}, модель {model}")
             return ("Не отсюда: мозг я меняю как принципал — из своего хода или из "
                     "owner-скоупа, — а этот вызов пришёл без опознанного принципала.")
-        res = brain.switch(role, model, why=why)
+        res = brain.switch(role, model, why=why, **({"endpoint": endpoint} if endpoint else {}))
         if not res.get("ok"):
             return f"Свитч не применился: {res.get('error')}"
         return (f"Смена: {res['role']} теперь {res['framework']}/{res['model']} "
@@ -6902,6 +6914,9 @@ BASE_TOOLS = [
                        "свойствами на моих задачах (сбои, латентность, токены, остаток "
                        "провайдера); profile — применить именованный профиль сложности; "
                        "switch — сменить модель роли из каталога (why обязателен; "
+                       "endpoint для switch/profile — точный ID настроенного аккаунта, модель "
+                       "должна быть доступна на нём; без endpoint — текущий или однозначно "
+                       "эквивалентный аккаунт, неоднозначность требует выбора; "
                        "после — ping-рукопожатие, не прошло — верну как было). Дисциплина "
                        "сложности: рутина на дешёвой, сложное эскалирует. Ключи — не мои (пульт). "
                        "accounts — какие ПОДПИСКИ настроены и какая работает сейчас; "
@@ -6917,6 +6932,8 @@ BASE_TOOLS = [
                 "action": {"type": "string",
                            "enum": ["status", "profile", "switch", "reasoning",
                                     "accounts", "use_account"]},
+                "endpoint": {"type": "string",
+                             "description": "switch/profile: точный ID из frameworks каталога; необязательно; не URL и не протокол"},
                 "profile": {"type": "string",
                             "enum": ["chat", "routine-code", "deep-review"],
                             "description": "action=profile: именованный профиль сложности"},
@@ -15187,9 +15204,12 @@ class _AgentResumeRuntime:
             images = (tuple(dict(image) for image in output.images)
                       if isinstance(output, ToolObservation) else ())
             self.tool_trace.append(_tool_trace_line(name, call_input, output))
+            model_text = _result_for_model(result_ref)
+            _tool_trace_event('tool_model_response', context=execution, manager=self.manager,
+                              text=model_text, image_count=len(images))
             return {
                 "result_ref": result_ref,
-                "content": _result_for_model(result_ref),
+                "content": model_text,
                 "images": images,
             }
 
@@ -17070,6 +17090,46 @@ def _tool_args_mismatch(impl, call_input: dict) -> str:
     return ""
 
 
+def _tool_trace_event(kind: str, *, context=None, manager=None, **data) -> None:
+    """Display evidence only: a missing trace never changes execution authority."""
+    execution = context if context is not None else _TOOL_EXECUTION.get()
+    if not execution or not execution.get('run_id') or not execution.get('call_id'):
+        return
+    try:
+        (manager or _runs()).append_event(execution['run_id'], kind,
+            call_id=execution['call_id'], tool=execution['tool'], **data)
+    except Exception:
+        # Never log payloads or credentials when a display receipt fails.
+        log.warning('tool trace receipt unavailable: %s', kind)
+
+
+def _observed_tool_call(name: str, impl, call_input: dict):
+    """Record entry at the actual invocation, including the ceiling worker thread."""
+    execution = _TOOL_EXECUTION.get() or {}
+    handler = '.'.join(str(value) for value in
+        (getattr(impl, '__module__', ''), getattr(impl, '__qualname__', type(impl).__name__)) if value)
+    _tool_trace_event('tool_dispatch', receipt={'kind': 'python', 'handler': handler, 'status': 'entered'},
+                      **{key: execution[key] for key in ('model_request', 'definition') if key in execution})
+    return impl(**call_input)
+
+
+def _tool_request_projection(block: dict, tools: list, name: str, call_input: dict) -> dict:
+    """The offered schema and original call, using the existing durable redaction boundary."""
+    raw_name = str(block.get('name') or '')
+    safe_args = _durable_tool_input(name, call_input)
+    if name == 'telegram_account' and _critical_telegram_tool_input(call_input):
+        # A generic call wrapper contains serialized critical arguments too.
+        original = ({'name': name, 'args_json': json.dumps(safe_args, ensure_ascii=False)}
+                    if raw_name == 'call' else safe_args)
+    else:
+        original = copy.deepcopy(block.get('input') or {})
+    value = {'model_request': {'tool': raw_name, 'args': original}}
+    definition = next((row for row in tools if row.get('name') == raw_name), None)
+    if definition is not None:
+        value['definition'] = copy.deepcopy(definition)
+    return value
+
+
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
     import process_scope
     current = run_context.current_run()
@@ -17100,13 +17160,13 @@ def _call_tool_with_ceiling_inner(name: str, impl, call_input: dict):
                 f"{exc}. Снаружи ничего не изменилось. Повтори вызов с полным набором "
                 f"обязательных аргументов.")
     if TOOL_CEILING_SEC <= 0:
-        return impl(**call_input)
+        return _observed_tool_call(name, impl, call_input)
     # Копия контекста обязательна: тулы читают текущий ран, канал хода и запись
     # исполнения из contextvars, а новый поток их сам по себе не наследует.
     ctx = contextvars.copy_context()
     pool = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"tool-{name}")
     try:
-        future = pool.submit(ctx.run, functools.partial(impl, **call_input))
+        future = pool.submit(ctx.run, functools.partial(_observed_tool_call, name, impl, call_input))
         try:
             return future.result(timeout=TOOL_CEILING_SEC)
         except _futures.TimeoutError:
@@ -17643,6 +17703,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             if b["type"] != "tool_use":
                 continue
             assistant_blocks.append(b)
+            original_call = b
             # `call(name, args_json)` переписывается во внутреннюю руку ЗДЕСЬ — до
             # durable-записи, побочных эффектов и потолка времени: воронка одна на всех,
             # и в ленте модели остаётся её собственный вызов `call`.
@@ -17712,6 +17773,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 "args": dict(call_input),
                 "side_effect": bool(side_effect),
                 "idempotency_key": idempotency_key,
+                **_tool_request_projection(original_call, tools or [], b['name'], call_input),
             }
             outbound_before = _tool_outbound_snapshot()
             execution_token = _TOOL_EXECUTION.set(execution)
@@ -17809,6 +17871,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                     )
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
                                  "content": model_text})
+            _tool_trace_event('tool_model_response', context=execution, text=model_text,
+                              image_count=len(out.images) if isinstance(out, ToolObservation) else 0)
             if isinstance(out, ToolObservation):
                 tool_results.extend(dict(image) for image in out.images)
             if tool_trace is not None:

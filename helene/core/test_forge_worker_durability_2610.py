@@ -238,18 +238,51 @@ class WorkerDurability(unittest.TestCase):
         self.assertEqual((self.request_path.parent / "result.json").read_bytes(), old_result)
 
     def test_changed_checkpoint_or_missing_authority_refuses(self):
-        adapter = Adapter()
-        self.responses = [self.response("inspect", 1)]
-        adapter.dispatch = mock.Mock(side_effect=Interrupted())
-        with self.assertRaises(Interrupted):
-            self.run_worker(adapter)
-        self.assertEqual(self.run_worker(adapter), 2)
+        self._crash_adapter_once()
+        directory = self.request_path.parent
+        self.assertTrue(self.runtime.continuation_info(directory)['safe'])
+        original = (directory/'checkpoint.json').read_bytes()
+        initial = json.loads(original)
+        with contextlib.closing(self.runtime.Journal(directory)) as journal:
+            with self.assertRaisesRegex(self.runtime.ContinuationRefused, 'receipt required'):
+                journal.start(self.request, initial)
         self.authorize()
-        cp = json.loads((self.request_path.parent / "checkpoint.json").read_text("utf-8"))
+        cp = json.loads(original)
         cp["reply"] = "changed after authorization"
-        self.runtime.atomic_json(self.request_path.parent / "checkpoint.json", cp)
-        self.assertEqual(self.run_worker(adapter), 2)
-        self.assertEqual(adapter.dispatch.call_count, 1)
+        self.runtime.atomic_json(directory / "checkpoint.json", cp)
+        with contextlib.closing(self.runtime.Journal(directory)) as journal:
+            with self.assertRaisesRegex(self.runtime.ContinuationRefused, 'checkpoint changed'):
+                journal.start(self.request, initial)
+        (directory/'checkpoint.json').write_bytes(original)
+        adapter = Adapter()
+        adapter.dispatch = mock.Mock(side_effect=AssertionError('completed tool replayed'))
+        self.responses = [self.response(text='valid unchanged authorization')]
+        self.assertEqual(self.run_worker(adapter), 0)
+        adapter.dispatch.assert_not_called()
+
+    def test_cross_unit_resume_refuses_damaged_settled_source_journal(self):
+        self._crash_adapter_once()
+        origin = self.request_path.parent
+        info = self.runtime.continuation_info(origin)
+        self.assertTrue(info['safe'])
+        path = origin/'events.jsonl'
+        original = path.read_bytes()
+        initial = json.loads((origin/'checkpoint.json').read_text())
+        for index, damaged in enumerate((original+b'{', original+b'{"seq":999999}\n', b'')):
+            with self.subTest(corruption=index):
+                path.write_bytes(original)
+                target, request = self.make_request('agent-damaged-'+str(index), continuation_source={
+                    'unit_dir':str(origin), 'generation':info['generation'],
+                    'checkpoint_sha256':info['checkpoint_sha256']})
+                self.authorize(target.parent, origin)
+                path.write_bytes(damaged)
+                with self.assertRaisesRegex(self.runtime.ContinuationRefused, 'journal'):
+                    self.runtime.continuation_info(origin)
+                with contextlib.closing(self.runtime.Journal(target.parent)) as journal:
+                    with self.assertRaisesRegex(self.runtime.ContinuationRefused, 'journal'):
+                        journal.start(request, initial)
+                self.assertFalse((target.parent/'checkpoint.json').exists())
+        path.write_bytes(original)
 
     def test_pause_during_final_diff_cannot_publish_success(self):
         adapter = Adapter()
@@ -363,8 +396,13 @@ class WorkerDurability(unittest.TestCase):
             app = CORE.parent / "app" / "localharness"
         if not (app / "self_review.py").is_file():
             self.skipTest("App-owned reviewer is absent from this candidate-only source layout")
-        review_module = load("self_review", app / "self_review.py")
-        adapter_module = load("_actual_snapshot_reviewer", app / "self_review_worker.py")
+        # Exercise the actual package import, including its sibling modules.
+        # Loading only two files as unrelated top-level modules concealed the
+        # package's dependency contract once the merge inspector was extracted.
+        import importlib
+        with mock.patch.object(sys, 'path', [str(app.parent), *sys.path]):
+            review_module = importlib.import_module('localharness.self_review')
+            adapter_module = importlib.import_module('localharness.self_review_worker')
         frozen = self.base / "frozen"
         frozen.mkdir()
         content = b"- old\n+ new\n"

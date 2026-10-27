@@ -18,6 +18,11 @@ import threading
 import time
 import uuid
 
+if __package__:
+    from .package_notice import replace_with_retry
+else:  # self_review_worker.py is also an executable adapter script
+    from package_notice import replace_with_retry
+
 
 TRIGGERS = ("after_update", "contested_overlay", "after_self_edit", "on_request")
 DEPTHS = ("quick", "normal", "deep")
@@ -77,7 +82,7 @@ def _write(path, value):
             sink.write(_json(value))
             sink.flush()
             os.fsync(sink.fileno())
-        os.replace(temporary, path)
+        replace_with_retry(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -148,6 +153,10 @@ def _source_roots(sources):
                 result[label] = {'root': str(Path(source['root']).absolute()),
                                  'merge_files': source['merge_files'],
                                  'published_files': source.get('published_files', {})}
+                if source.get('inventory_scope'):
+                    if label != 'harness' or source['inventory_scope'] != 'python-context-v1':
+                        raise ValueError('Only incoming harness context may select a Python inventory')
+                    result[label]['inventory_scope'] = source['inventory_scope']
                 continue
             if not isinstance(source.get("files"), dict):
                 raise ValueError("explicit side projection requires a files mapping")
@@ -198,6 +207,10 @@ def _merge_projection(label, source, destination, used):
     declared = source['merge_files']
     manifest, gaps = [], []
     actual = source_merge.inventory(root)
+    if source.get('inventory_scope') == 'python-context-v1':
+        if label != 'harness' or any(not name.endswith('.py') for name in declared):
+            raise ValueError('Invalid Python harness context inventory')
+        actual = {name: entry for name, entry in actual.items() if name.endswith('.py')}
     if actual != {name: entry for name, entry in declared.items() if entry is not None}:
         raise ValueError('Frozen merge inventory changed: ' + label)
     for name, entry in sorted(declared.items()):
@@ -400,7 +413,11 @@ class Service:
         self.forge = forge
         self.config = settings(config)
         self.coordinator = coordinator
-        self.root = self.tree / "memory" / ".self-review"
+        # Old211 maintenance ignores coordinator identity and scans every record
+        # directly under .self-review. A field fence alone cannot stop that old
+        # process corrupting a new snapshot while its window remains open.
+        isolated = isinstance(coordinator, dict) and coordinator.get('review_store') == 'isolated-v1'
+        self.root = self.tree / "memory" / ('.source-update-reviews' if isolated else '.self-review')
         self._terminal_cache = {}
 
     def settings(self, config=None):
@@ -484,9 +501,18 @@ class Service:
             gaps.extend(_overlay_gaps(overlay, manifest))
             gaps.sort(key=lambda gap: (gap["path"], gap["reason"]))
             earlier = self.status()
-            previous = next((row for row in earlier if row.get("subject_sha256")), None)
+            from .self_review_merge import overview, index_text
+            merge_review = overview(manifest, overlay)
+            # A source update has its own A/L/B/M baseline. Ordinary historical
+            # reviews often have different labels/roots and would manufacture
+            # whole-tree additions/deletions unrelated to the actual update.
+            previous = next((row for row in earlier if row.get("subject_sha256")
+                             and row.get('sources') == source_roots
+                             and row.get('coordinator') == self.coordinator), None)
             changes = []
-            if previous:
+            if merge_review is not None:
+                changes.append(index_text(merge_review))
+            elif previous:
                 old_root = Path(previous["snapshot"])
                 try:
                     old = validate_snapshot(old_root, previous["subject_sha256"])
@@ -515,6 +541,10 @@ class Service:
                        "scope": "source-only; memory/config/credentials excluded; code is never executed"}
             if overlay.get('merge_identity'):
                 subject['merge_identity'] = overlay['merge_identity']
+            if merge_review is not None:
+                from .self_review_merge import coverage_units
+                merge_review['coverage_units'] = coverage_units(merge_review, snapshot)
+                subject['merge_review'] = merge_review
             raw = _json(subject)
             subject_sha = _sha(raw)
             code_identity = _sha(_json({"manifest": [row for row in manifest if row["path"] != "changes.diff"],
@@ -543,6 +573,9 @@ class Service:
             if selected_depth == "deep" and len(critics) == 1:
                 critics.append({"unit_id": "agent-" + uuid.uuid4().hex[:8], "model": models[0],
                                 "focus": "adversarial", "execution": "queued"})
+            if merge_review is not None:
+                critics = [{**critic, 'unit_id': 'agent-' + uuid.uuid4().hex[:8], 'coverage': unit}
+                           for unit in merge_review['coverage_units'] for critic in critics]
             record = {"schema": "helene.self-review.request.v1", "id": review_id,
                       "created": time.time(), "trigger": trigger, "triggers": [trigger],
                       "operations": [str(operation_id)] if operation_id else [], "required": required,
@@ -556,8 +589,22 @@ class Service:
             return record
 
     def _brief(self, record, critic):
+        merge_subject = all(isinstance(record.get('sources', {}).get(side), dict)
+                            and 'merge_files' in record['sources'][side]
+                            for side in ('base', 'mine', 'release', 'resolved'))
+        navigation = ("Start with inspect status and changes.diff (the compact A/L/B/M index). "
+                      "Use inspect diff with path and left/right sides for each changed/conflicted file; "
+                      "page all relevant hunks, then inspect readers/writers and tests. "
+                      "Preexisting local-only deletions are context, not newly introduced deletions. "
+                      if merge_subject else "Read subject.json, changes.diff and relevant source. ")
         return (f"Review subject {record['subject_sha256']}. Depth={record['policy']['depth']}; "
-                f"focus={critic['focus']}. Read subject.json, changes.diff and relevant source. "
+                f"focus={critic['focus']}. " +
+                ("This panel partitions mandatory coverage. Your exclusive assignment is " +
+                 json.dumps(critic['coverage'], ensure_ascii=False) +
+                 ". Fully review these paths, all three A->L/A->B/L->M comparisons and their dependencies/tests. "
+                 "Other units review other paths. Do not report their unassigned coverage as your gap; "
+                 "do report any actual coupling defect you find. Full snapshot context remains available. "
+                 if critic.get('coverage') else "") + navigation +
                 "quick: changed files and concrete regressions; normal: also readers/writers and tests; "
                 "deep: also integration and adversarial failure paths. No execution or live memory. "
                 "Return ONLY JSON: {subject_sha256, verdict: clear|findings|insufficient, summary, "
@@ -649,7 +696,7 @@ class Service:
             record.update(execution="running", state="pending", verdict="insufficient")
             return
         verdicts = [critic.get("verdict", "insufficient") for critic in critics]
-        verdict = ("findings" if "findings" in verdicts else
+        verdict = ("findings" if "findings" in verdicts or any(c.get("findings") for c in critics) else
                    "clear" if verdicts and all(value == "clear" for value in verdicts) and not record["gaps"]
                    else "insufficient")
         record.update(execution="done" if all(critic["execution"] == "done" for critic in critics) else "error",

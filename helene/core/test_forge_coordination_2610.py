@@ -94,10 +94,79 @@ class Coordination(unittest.TestCase):
         self.assertIn("Порождён", forge.agent(self.tid, "spawn", brief="read", role="reviewer", agent_id="agent-cccccccc"))
         self.assertEqual(self.spawn.call_count, 1)
         forge._atomic_json(first / "result.json", {"status": "done"})
+        self.assertEqual(forge.tick_queued(self.tid), [])
+        self.assertEqual(self.spawn.call_count, 1)
+        forge.release_worker_root(first / "request.json")
         self.assertEqual(forge.tick_queued(self.tid)[0]["agent_id"], "agent-bbbbbbbb")
         self.assertEqual(self.spawn.call_count, 2)
         forge.tick_queued(self.tid)
         self.assertEqual(self.spawn.call_count, 2)
+
+    def test_terminal_writer_requires_exact_release_or_proven_tree_exit(self):
+        first = self.unit(result={"status": "done", "result": "one"})
+        request = {"id": "agent-bbbbbbbb", "role": "worker"}
+        self.assertIn("shared-root", forge._agent_capacity(self.tid, request))
+        forge.release_worker_root(first / "request.json")
+        self.assertEqual(forge._agent_capacity(self.tid, request), "")
+        forge._atomic_json(first / "result.json", {"status": "done", "result": "two"})
+        self.assertIn("shared-root", forge._agent_capacity(self.tid, request))
+        with mock.patch.object(forge, "_writer_ended", return_value=True):
+            self.assertEqual(forge._agent_capacity(self.tid, request), "")
+
+    def test_selected_stop_ignores_live_sibling_and_its_jobs(self):
+        selected = self.unit(status="queued")
+        sibling = self.unit("agent-bbbbbbbb")
+        for kind, ident in (("processes", "proc-aaaaaaaa"), ("verifications", "verify-aaaaaaaa")):
+            forge._atomic_json(self.directory / kind / ident / "request.json", {
+                "id": ident, "task_id": self.tid, "parent_unit_id": sibling.name, "status": "running"})
+        with mock.patch.object(forge, "process") as process, mock.patch.object(forge, "verify") as verify:
+            receipt = forge.control(self.tid, "stop", selected.name)
+        self.assertEqual(receipt["status"], "settled")
+        self.assertEqual(receipt["unknown_units"], [])
+        self.assertEqual(forge._unit_state(sibling)["status"], "running")
+        process.assert_not_called(); verify.assert_not_called()
+
+    def test_selected_stop_retains_uncertain_owned_job(self):
+        selected = self.unit(status="queued")
+        sibling = self.unit("agent-bbbbbbbb")
+        for ident, owner in (("proc-aaaaaaaa", selected.name), ("proc-bbbbbbbb", sibling.name)):
+            forge._atomic_json(self.directory / "processes" / ident / "request.json", {
+                "id": ident, "task_id": self.tid, "parent_unit_id": owner, "status": "running"})
+        with mock.patch.object(forge, "process", return_value="unconfirmed") as process:
+            receipt = forge.control(self.tid, "stop", selected.name)
+        self.assertEqual(receipt["status"], "unknown")
+        self.assertEqual(receipt["unknown_units"], ["proc-aaaaaaaa"])
+        process.assert_called_once_with(self.tid, "stop", process_id="proc-aaaaaaaa")
+
+    def test_snapshot_review_stop_can_settle_absent_supervisor_only_for_bound_adapter(self):
+        metadata = {"schema": 1, "worker_script": "trusted-snapshot-adapter"}
+        forge._atomic_json(self.directory / "task.json", {**self.task, "self_review": metadata})
+        windows = types.SimpleNamespace(**{name: getattr(forge.os, name) for name in dir(forge.os)
+                                          if not name.startswith('__')})
+        windows.name = 'nt'
+        for index, prior in enumerate((None, {"status": "done", "result": "retained"})):
+            unit = self.unit(f"agent-aaaaaaa{index}", role="reviewer", result=prior)
+            request = forge._read_json(unit / "request.json")
+            forge._atomic_json(unit / "request.json", {**request, "self_review": metadata})
+            with mock.patch.object(forge, 'os', windows), \
+                 mock.patch.object(forge, '_worker_script', return_value=Path(__file__)), \
+                 mock.patch.object(forge, '_pid_alive', return_value=False), \
+                 mock.patch.object(forge, '_kill_tree', side_effect=AssertionError('no PID signal')):
+                receipt = forge.control(self.tid, 'stop', unit.name)
+            self.assertEqual(receipt['status'], 'settled')
+            result = forge._read_json(unit / 'result.json')
+            self.assertEqual(result, prior) if prior else self.assertEqual(result['status'], 'stopped')
+
+    def test_snapshot_review_identity_drift_does_not_certify_absent_tree(self):
+        metadata = {"schema": 1, "worker_script": "trusted-snapshot-adapter"}
+        forge._atomic_json(self.directory / "task.json", {**self.task, "self_review": metadata})
+        unit = self.unit(role="reviewer", result={"status": "done"})
+        request = forge._read_json(unit / "request.json")
+        forge._atomic_json(unit / "request.json", {**request, "self_review": {**metadata, "schema": 2}})
+        windows = types.SimpleNamespace(**{name: getattr(forge.os, name) for name in dir(forge.os)
+                                          if not name.startswith('__')}); windows.name = 'nt'
+        with mock.patch.object(forge, 'os', windows), mock.patch.object(forge, '_pid_alive', return_value=False):
+            self.assertEqual(forge.control(self.tid, 'stop', unit.name)['status'], 'unknown')
 
     def test_terminal_pause_and_nested_fences_refuse_admission(self):
         for status in ("done", "abandoned", "stopped"):
@@ -251,6 +320,7 @@ class Coordination(unittest.TestCase):
         d = self.directory / "agents" / first["agent_id"]
         self.assertEqual(forge._read_json(d / "request.json")["node_id"], "build")
         forge._atomic_json(d / "result.json", {"status": "done", "result": "bad"})
+        forge.release_worker_root(d / "request.json")
         digest = forge._result_identity(d / "result.json")
         forge.swarm(self.tid, "rework", node_id="build", message="fix defect", result_sha256=digest)
         node = forge_swarm.load(self.directory)["nodes"][0]
@@ -267,6 +337,7 @@ class Coordination(unittest.TestCase):
         # both historical requests still have the same logical node_id.
         second = self.directory / "agents" / updated["agent_id"]
         forge._atomic_json(second / "result.json", {"status": "done", "result": "still bad"})
+        forge.release_worker_root(second / "request.json")
         forge.swarm(self.tid, "rework", node_id="build", message="fix remaining defect",
                     result_sha256=forge._result_identity(second / "result.json"))
         forge.swarm(self.tid, "tick")

@@ -329,6 +329,13 @@ class RunIntegrationTests(unittest.TestCase):
         self.assertIn("ResultRef", inline)
         self.assertIn("HEAD", inline)
         self.assertIn("TAIL", inline)
+        events = list(self.manager.events(current.run_id))
+        dispatched = next(row for row in events if row['kind'] == 'tool_dispatch')
+        returned = next(row for row in events if row['kind'] == 'tool_model_response')
+        self.assertEqual(dispatched['model_request'], {'tool':'huge', 'args':{}})
+        self.assertEqual(dispatched['definition'], {'name':'huge'})
+        self.assertEqual(returned['text'], inline, 'display receipt must equal the actual next model input')
+        self.assertNotEqual(returned['text'], payload, 'externalization is a real harness transformation')
 
     def test_account_critical_tool_parameters_never_enter_durable_run_files(self):
         current = self._context("critical telegram redaction")

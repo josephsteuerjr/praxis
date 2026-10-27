@@ -170,7 +170,7 @@ def prepare(old, new, note, *, progress=None):
         from .agent_source_update import AgentResolutionPending
         if any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
                and read(Path(row['directory'])/'plan.json').get('state')!='ready' for row in result['plans']):
-            raise AgentResolutionPending('Агенту поручено разрешить пересечения в изолированной копии. После его сообщения повтори обновление; память и рабочий код сохранены.')
+            raise AgentResolutionPending('Агент разбирает пересечения в изолированной копии. После его исправлений и независимой проверки обновление продолжится автоматически; память и рабочий код сохранены.')
         from .source_update_host import review
         review(old, new, result['plans'], progress)
         validate(new)

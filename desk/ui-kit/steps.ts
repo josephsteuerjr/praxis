@@ -44,9 +44,20 @@ export interface RunDetail {
     tools?: Array<{
       call_id?: string; seq?: number; at?: string; status?: string; error?: string;
       tool?: string; args?: unknown;
+      definition?: { description?: string; input_schema?: unknown };
+      model_request?: { tool?: string; args?: unknown };
+      execution?: ExecutionReceipt;
+      operations?: ExecutionReceipt[];
+      model_observation?: string;
+      model_response_image_count?: number;
       result?: { head?: string; tail?: string; truncated?: boolean; result_id?: string; size?: number | null } | null;
     }>;
   }>;
+}
+
+interface ExecutionReceipt {
+  handler?: string; kind?: string; command?: string; argv?: string[]; requested_argv?: string[];
+  cwd?: string; pid?: number; status?: string; exit_code?: number; error?: string;
 }
 
 export interface StepsOptions {
@@ -117,6 +128,64 @@ export function suppliedCommand(args: unknown): string {
   const fields = args as Record<string, unknown>;
   return typeof fields.command === "string" ? fields.command :
     typeof fields.cmd === "string" ? fields.cmd : "";
+}
+
+type ToolDetail = NonNullable<NonNullable<RunDetail['iterations']>[number]['tools']>[number];
+
+/** A readable projection; the original input remains available below it. */
+export function toolParameters(args: unknown): Array<[string, unknown]> {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return [];
+  const command = suppliedCommand(args);
+  return Object.entries(args).filter(([key, value]) =>
+    !((key === 'command' || key === 'cmd') && typeof value === 'string' && value === command));
+}
+
+function traceBlock(key: string, label: string, content: string, kind: string, opts: Parameters<typeof textBox>[2] = {}): string {
+  return `<section class="tool-trace-block tool-trace-${kind}"><div class="tool-trace-heading"><span>${esc(label)}</span>` +
+    `<button type="button" class="tool-copy" data-copy-block aria-label="Копировать: ${esc(label)}">${opts.truncated ? 'Копировать фрагмент' : 'Копировать'}</button></div>` +
+    textBox(key, content, opts) + `</section>`;
+}
+
+/** Request, observed dispatch and response have separate provenance and presentation. */
+export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string {
+  const command = suppliedCommand(t.args);
+  const parameters = toolParameters(t.args);
+  const parts: string[] = [];
+  const rewritten = !!t.model_request?.tool && t.model_request.tool !== t.tool;
+  if (rewritten) parts.push(`<div class="tool-call-route"><code>${esc(t.model_request!.tool!)}</code><span>→</span><code>${esc(t.tool || '')}</code><span>разбор харнессом</span></div>`);
+  if (command) parts.push(traceBlock(key + ':command', rewritten ? 'Команда после разбора вызова' : 'Запрос модели · команда', command, 'request'));
+  if (parameters.length) parts.push(`<section class="tool-trace-block tool-trace-parameters"><div class="tool-trace-heading">Параметры вызова</div><dl class="tool-parameters">` +
+    parameters.map(([name, value]) => `<div><dt>${esc(name)}</dt><dd>${typeof value === 'object' || String(value).includes('\n')
+      ? textBox(key + ':arg:' + name, pretty(value)) : esc(String(value))}</dd></div>`).join('') + `</dl></section>`);
+  if (!command && !parameters.length && t.args != null) parts.push(traceBlock(key + ':input', 'Запрос модели', pretty(t.args), 'request'));
+  const executions = [t.execution, ...(t.operations || [])].filter((row): row is ExecutionReceipt => !!row);
+  if (executions.length) {
+    const states: Record<string, string> = { entered: 'Обработчик вызван', returned: 'Процесс завершился', timed_out: 'Время ожидания истекло', launch_failed: 'Запуск не состоялся' };
+    for (const [index, execution] of executions.entries()) {
+      const labels = [execution.handler, states[execution.status || ''] || execution.status,
+        execution.exit_code != null ? `Код выхода: ${execution.exit_code}` : '', execution.error,
+        execution.pid != null ? `PID ${execution.pid}` : '', execution.cwd ? `Рабочая папка: ${execution.cwd}` : ''].filter(Boolean);
+      const invocation = execution.argv ? JSON.stringify(execution.argv, null, 2) : execution.requested_argv
+        ? 'Попытка запуска:\n' + JSON.stringify(execution.requested_argv, null, 2) : execution.command || '';
+      parts.push(traceBlock(key + ':execution:' + index, execution.kind === 'process' ? 'Запуск процесса · квитанция' : 'Исполнение харнесса', [...labels, invocation].filter(Boolean).join('\n'), 'execution'));
+    }
+  } else {
+    parts.push(`<div class="tool-trace-unrecorded">Детали исполнения харнесса в этом ходе не записаны.</div>`);
+  }
+  const head = String(t.result?.head || t.result?.tail || '');
+  const result = t.result?.truncated ? [t.result.head, '… пропущена часть результата …', t.result.tail].filter(Boolean).join('\n') : head;
+  if (head) parts.push(traceBlock(key + ':result', 'Результат инструмента', resultText(result), 'response',
+    { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }));
+  if (t.model_observation != null && t.model_observation !== result) {
+    parts.push(traceBlock(key + ':model-result', 'Текст для следующего шага модели', t.model_observation, 'model-response'));
+  }
+  if (t.model_response_image_count) parts.push(`<div class="tool-trace-unrecorded">К ответу приложено изображений: ${t.model_response_image_count}</div>`);
+  if (t.error) parts.push(traceBlock(key + ':error', 'Ошибка', t.error, 'error'));
+  const original: Array<[string, string]> = [['Инструмент', t.tool || ''], ['Исходные аргументы', t.args != null ? pretty(t.args) : '']];
+  if (t.model_request) original.unshift(['Сохранённый запрос модели', pretty(t.model_request)]);
+  if (t.definition) original.unshift(['Описание для модели', t.definition.description || ''], ['Схема параметров', t.definition.input_schema ? pretty(t.definition.input_schema) : '']);
+  parts.push(details(key, original, t.definition ? 'Описание инструмента и исходный JSON' : 'Исходный вызов · JSON'));
+  return `<div class="tool-trace">${parts.join('')}</div>`;
 }
 
 function details(key: string, parts: Array<[string, string]>, label = "Подробности"): string {
@@ -214,6 +283,16 @@ function bindMore(): void {
   bound = true;
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement | null;
+    const copy = target?.closest<HTMLButtonElement>('button[data-copy-block]');
+    if (copy) {
+      e.preventDefault();
+      const text = copy.closest('.tool-trace-block')?.querySelector('.run-text-body')?.textContent;
+      if (text != null && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Скопировано'; },
+          () => { copy.textContent = 'Не скопировалось'; });
+      } else copy.textContent = 'Копирование недоступно';
+      return;
+    }
     // Ссылки с карточки: хозяин ленты (окно, телефон) решает, как открыть чат и композер.
     const open = target?.closest<HTMLAnchorElement>("a[data-open-room]");
     if (open) {
@@ -243,6 +322,8 @@ function bindMore(): void {
         if (text) {
           fetched.set(full, text);
           pre.textContent = text;
+          const copy = box.closest('.tool-trace-block')?.querySelector<HTMLButtonElement>('[data-copy-block]');
+          if (copy) copy.textContent = 'Копировать';
         }
         pre.classList.remove("clipped");
         btn.disabled = false;
@@ -291,9 +372,6 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
     parts.push(lesson(n === 1 ? "think_first" : "think"));
     for (const t of it.tools || []) {
       hands += 1;
-      const args = t.args != null ? pretty(t.args) : "";
-      const command = suppliedCommand(t.args);
-      const head = String(t.result?.head || t.result?.tail || "");
       const received = t.result != null || t.status === "received";
       const failed = t.status === "failed";
       const active = !received && !failed && live;
@@ -302,18 +380,12 @@ export function stepsHTML(d: RunDetail, opts: StepsOptions = {}): string {
       const emptyDelivery = t.tool === "telegram.deliver" && (t.args as { text_chars?: number } | null)?.text_chars === 0 && !(t.args as { media_count?: number } | null)?.media_count;
       const tstatus = failed ? "ошибка" : emptyDelivery ? "нечего доставлять" : received ? "результат получен" : active ? "выполняется" : "результат неизвестен";
       const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
-      const what = subject(t.args);
-      const result = t.result?.truncated ? [t.result.head, "… пропущена часть результата …", t.result.tail].filter(Boolean).join("\n") : head;
-      // Квитанции содержат инструкции раннеру; сохраняем их в подробностях.
-      const receipt = ["reply", "end_turn", "telegram.deliver"].includes(t.tool || "");
       const lessonKey = t.tool === "reply" ? "reply" : t.tool === "end_turn" ? "end_turn" : "hand";
       const tkey = "tool:" + (t.call_id || String(t.seq ?? key + ":" + hands));
       parts.push(
-        `<div class="hand ${active ? "action-active" : ""} ${failed ? "action-failed" : ""}">` +
+        `<div class="tool-action ${active ? "action-active" : ""} ${failed ? "action-failed" : ""}">` +
           `<div class="action-head"><b class="action-title">${esc(title)}</b><span class="action-status">${tstatus}</span></div>` +
-          `${what ? `<div class="action-subject">${esc(clip(what, 400))}</div>` : ""}` +
-          `${head && !receipt ? textBox(tkey + ":result", resultText(result), { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }) : ""}` +
-          details(tkey, [["Инструмент", t.tool || ""], [command ? "Передано инструменту (не системная argv)" : "", command], ["Параметры", args], [receipt ? (t.result?.truncated ? "Сохранённый фрагмент квитанции" : "Квитанция") : "", receipt ? result : ""], ["Ошибка", t.error || ""]]) +
+          `<code class="tool-name">${esc(t.tool || '')}</code>` + toolTraceHTML(t, tkey, runId) +
           lesson(lessonKey) +
           `</div>`,
       );

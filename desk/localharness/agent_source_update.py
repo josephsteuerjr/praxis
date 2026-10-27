@@ -55,8 +55,19 @@ def command(tree,action,**args):
     proof=read(marker(directory))
     if proof.get('input_sha256')!=merge.input_signature(plan):raise ValueError('No selected-agent resolution authority for these inputs')
     operation=read(directory/'pipeline.json')
-    if action=='status':return {**operation,'version':request['version'],'conflicts':plan['conflicts'],'resolved':plan['resolved'],
-                               'candidate_sha256':merge.candidate_signature(directory)}
+    if action=='status':
+        state=operation.get('state');ready=plan.get('state')=='ready'
+        if state=='waiting_agent' and not ready:
+            next_action='Read review_evidence/findings, resolve and patch the isolated candidate, then finish. Acceptance is delegated to you; no new owner confirmation.'
+        elif state in ('waiting_agent','queued','merging','reviewing'):
+            next_action='The incoming coordinator owns independent review and automatic continuation. Inspect status; do not start the ordinary live self_review panel or ask the owner to launch review.'
+        elif state=='ready_to_apply':
+            next_action='Exact candidate passed independent review. The authorized updater continues automatically; verify installed behavior and report evidence after restart.'
+        else:
+            next_action='Read the exact review_evidence/error. Do not revive a cancelled plan or bypass review. Repair the cause and use update_request for a fresh authorized preserve update; explicit Stop remains binding.'
+        return {**operation,'version':request['version'],'conflicts':plan['conflicts'],'resolved':plan['resolved'],
+                'candidate_state':plan['state'],'next_action':next_action,'acceptance_owner':'selected-agent',
+                'candidate_sha256':merge.candidate_signature(directory)}
     pipeline._fresh(operation,directory)
     if owner_stop.stopped() or operation.get('cancel_requested'):raise ValueError('Owner Stop cancelled source resolution')
     if operation.get('state') not in ('waiting_agent','queued'):raise ValueError('Agent candidate is frozen for independent review')
@@ -106,4 +117,12 @@ def notify(tree,turn):
         'source_update status, diff/read (с next_offset), resolve/patch и finish. '
         'Сохрани обе стороны намерений, проверь связи автоматически совмещённых файлов; '
         'семантический ремонт любого объявленного файла требует reason и текущий expected_candidate_sha256. '
-        'Живой код и настройки не меняй. Finish завершает только кандидата; затем его независимо проверят.')
+        'Живой код и настройки не меняй. Приёмка передана тебе: сам прочитай замечания независимой панели, '
+        'исправь кандидата и повтори finish. После finish проверенный входящий координатор запускает панель '
+        'и автоматически продолжает разрешённое обновление; обычный self_review старого Forge для этого не нужен. '
+        'Не перекладывай запуск или результат ревью на владельца и не проси повторное согласие на уже порученный этап. '
+        'Смотри candidate_state, review_evidence и next_action в status; clear подтверждает только точные исходники, '
+        'после перезапуска сам проверь установленное поведение и сообщи доказательства. '
+        'Пройди пользовательский путь сам, в том числе headless при доступном браузере. '
+        'Различай запрос модели, фактическое исполнение харнессом и вернувшийся модели результат; '
+        'прохождение исходных тестов не заменяет проверку установленного приложения. Stop/отмена остаются обязательны.')

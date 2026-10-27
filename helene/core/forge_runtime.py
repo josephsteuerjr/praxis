@@ -180,6 +180,14 @@ def continuation_info(directory) -> dict:
     path = directory / "checkpoint.json"
     if not path.exists():
         return {"safe": False, "reason": "checkpoint missing"}
+    try:
+        seen = False
+        for _ in _events(directory):
+            seen = True
+        if not seen:
+            raise ValueError('missing or empty event journal')
+    except (OSError, ValueError) as exc:
+        raise ContinuationRefused(f'source event journal is invalid: {exc}') from exc
     raw = path.read_bytes()
     checkpoint = json.loads(raw.decode("utf-8"))
     recovered = _recover_result(directory, checkpoint)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -10,17 +11,23 @@ import sys
 
 try:
     from .self_review import validate_snapshot
+    from .self_review_merge import SIDES
 except ImportError:
     from self_review import validate_snapshot
+    from self_review_merge import SIDES
 
 
 class SnapshotReviewer:
-    tools = [{"name": "inspect", "description": "Read the frozen code-only review subject, never the live installation.",
+    tools = [{"name": "inspect", "description": "Read frozen source. status is the update overview; list pages the manifest. diff(path,left,right) compares one A/L/B/M file; without path it reads the compact index. read/diff paginate with start/end and start_char; search paginates with offset/limit.",
               "input_schema": {"type": "object", "properties": {
                   "action": {"type": "string", "enum": ["status", "list", "read", "search", "diff"]},
                   "path": {"type": "string"}, "query": {"type": "string"},
                   "start": {"type": "integer"}, "end": {"type": "integer"},
-                  "start_char": {"type": "integer"}}, "required": ["action"]}}]
+                  "start_char": {"type": "integer"},
+                  "offset": {"type": "integer", "minimum": 0},
+                  "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                  "left": {"type": "string", "enum": ["base", "mine", "release", "resolved"]},
+                  "right": {"type": "string", "enum": ["base", "mine", "release", "resolved"]}}, "required": ["action"]}}]
 
     def __init__(self, metadata):
         self.root = Path(metadata["root"]).resolve()
@@ -61,12 +68,38 @@ class SnapshotReviewer:
         validate_snapshot(self.root, self.sha256)
         action = args.get("action", "status")
         if action == "status":
+            if self.subject.get('merge_review'):
+                return json.dumps({'subject_sha256': self.sha256,
+                    **{k: v for k, v in self.subject.items() if k not in ('manifest', 'merge_review')},
+                    'merge_review': {k: v for k, v in self.subject['merge_review'].items() if k != 'groups'},
+                    'manifest_count': len(self.entries), 'manifest_access': 'inspect list with path, offset, limit'}, ensure_ascii=False)
             return json.dumps({"subject_sha256": self.sha256, **self.subject}, ensure_ascii=False)
         logical = self._name(args.get("path", ""))
+        offset = max(0, int(args.get('offset') or 0))
+        limit = max(1, min(100, int(args.get('limit') or 50)))
         if action == "diff":
+            if logical and self.subject.get('merge_review'):
+                left, right = args.get('left', 'mine'), args.get('right', 'resolved')
+                if left not in SIDES or right not in SIDES:
+                    raise ValueError('Comparison requires frozen merge sides')
+                paths = [side + '/' + logical for side in (left, right)]
+                if any(path not in self.entries for path in paths):
+                    raise ValueError('Not a declared merge input')
+                rows = [self.entries[path] for path in paths]
+                if any(row.get('withheld') for row in rows):
+                    return json.dumps({'error': 'Comparison has withheld input', 'sides': rows})
+                texts = [(self.root / path).read_text(encoding='utf-8-sig').splitlines(True)
+                         if row.get('exists', True) else [] for path, row in zip(paths, rows)]
+                text = ''.join(difflib.unified_diff(*texts, fromfile=paths[0], tofile=paths[1]))
+                return self._page(logical, text, args, sides=rows)
             logical = "changes.diff"
             action = "read"
         if action == "list":
+            if self.subject.get('merge_review'):
+                rows = [row for name, row in sorted(self.entries.items())
+                        if not logical or name == logical or name.startswith(logical + '/')]
+                return json.dumps({'entries': rows[offset:offset+limit], 'total': len(rows), 'offset': offset,
+                                   'next_offset': offset+limit if offset+limit < len(rows) else None}, ensure_ascii=False)
             return json.dumps(sorted(path for path in self.files if not logical or path.startswith(logical + "/")))
         if action == "read":
             if logical not in self.files:
@@ -75,16 +108,7 @@ class SnapshotReviewer:
             if row.get('exists') is False or row.get('withheld'):
                 return json.dumps(row, ensure_ascii=False)
             text = (self.root / logical).read_text(encoding="utf-8-sig")
-            lines = text.splitlines(True)
-            start = max(1, int(args.get("start") or 1))
-            end = min(len(lines), int(args.get("end") or start + 99))
-            selected = "".join(lines[start - 1:end])
-            offset = max(0, int(args.get("start_char") or 0))
-            part = selected[offset:offset + 8000]
-            return json.dumps({"path": logical, "sha256": hashlib.sha256((self.root / logical).read_bytes()).hexdigest(),
-                               "text": part, "start": start, "end": end,
-                               "next_char": offset + len(part) if offset + len(part) < len(selected) else None,
-                               "next_line": end + 1 if end < len(lines) else None}, ensure_ascii=False)
+            return self._page(logical, text, args, sha256=hashlib.sha256((self.root / logical).read_bytes()).hexdigest())
         if action == "search":
             query = str(args.get("query") or "")
             if not query:
@@ -98,9 +122,23 @@ class SnapshotReviewer:
                     continue
                 for number, line in enumerate((self.root / path).read_text(encoding="utf-8-sig").splitlines(), 1):
                     if query in line:
-                        matches.append({"path": path, "line": number, "text": line})
+                        matches.append({"path": path, "line": number, "text": line[:1000]})
+            if self.subject.get('merge_review'):
+                return json.dumps({'matches': matches[offset:offset+limit], 'total': len(matches),
+                    'next_offset': offset+limit if offset+limit < len(matches) else None}, ensure_ascii=False)
             return json.dumps(matches, ensure_ascii=False)
         return "Refused: unknown snapshot inspect action"
+
+    def _page(self, logical, text, args, **metadata):
+        lines = text.splitlines(True)
+        start = max(1, int(args.get('start') or 1))
+        end = min(len(lines), int(args.get('end') or start + 99))
+        selected = ''.join(lines[start - 1:end])
+        offset = max(0, int(args.get('start_char') or 0))
+        part = selected[offset:offset + 8000]
+        return json.dumps({'path': logical, **metadata, 'text': part, 'start': start, 'end': end,
+                           'next_char': offset + len(part) if offset + len(part) < len(selected) else None,
+                           'next_line': end + 1 if end < len(lines) else None}, ensure_ascii=False)
 
     def diff(self):
         validate_snapshot(self.root, self.sha256)

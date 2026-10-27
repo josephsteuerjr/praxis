@@ -75,8 +75,8 @@ EN: dict[str, dict] = {
     # Эти две руки едут в КАЖДОМ кадре под указателями и открывают доступ ко всем
     # остальным: если они говорят по-русски, весь смысл английского набора теряется
     # ровно там, где модель решает, звать ли неизвестную ей руку.
-    "describe": {'d': "Show pointer schemas (name/purpose/arguments) for call; comma-separated names allowed. Results stay in this turn's accumulator: do not request a schema twice.", 'p': {'name': 'tool name from the pointer; several — comma-separated'}},
-    "call": {'d': 'Call a pointer tool RIGHT AWAY by signature without describe: name=fs_read,args_json=\'{"path":"soul/SOUL.md"}\' or coding_agent with task_id/action=spawn. args_json: JSON argument object, empty means none. Same rights/receipts/limits/result as native. describe only for missing enum/nested-object details, once per turn.', 'p': {'name': 'tool name from the pointer', 'args_json': 'the tool\'s arguments as a JSON object, e.g. {"path": "soul/SOUL.md"}'}},
+    "describe": {'d': "Get schemas for comma-separated pointer tool names. Reuse the result for this turn.", 'p': {'name': 'tool names, comma-separated'}},
+    "call": {'d': 'Call a pointer tool by name and JSON arguments (empty = {}). Native authority, limits and receipts apply. Use describe once for missing enum or nested-field details.', 'p': {'name': 'tool name from the pointer', 'args_json': 'JSON object, e.g. {"path":"soul/SOUL.md"}'}},
     # ─────────────────────────────────────────────────────────── память и самоописание
     "recall": {'d': 'Search memory/skills: people/journal/reflections/self/skills. report=true skips search, returns closed semantic-seed epitaph (ended03.08.2026, removed05.10.2026;680seed-only candidates,0reached output). History:git.', 'p': {'query': 'keywords to search for', 'report': 'show the closed-experiment epitaph instead of searching'}},
     "remember": {
@@ -514,14 +514,21 @@ EN: dict[str, dict] = {
         "d": ("Your brain. status — the model catalogue by role with properties observed on "
               "your own tasks (failures, latency, tokens, provider allowance); profile — "
               "apply a named complexity profile; switch — change a role's model from the "
-              "catalogue (why is required; a ping handshake follows, and if it fails the "
+              "catalogue (why is required; optional endpoint for switch/profile is an exact "
+              "configured account ID, with the model available there; omitted means the current "
+              "or unambiguously equivalent account, otherwise choose explicitly; "
+              "a ping handshake follows, and if it fails the "
               "previous model is restored). Complexity discipline: routine on the cheap one, "
               "hard work escalates. Keys are not yours (the panel holds them). accounts — "
               "which SUBSCRIPTIONS are configured and which one is working now; use_account "
               "(model=primary|secondary) moves the provider to another subscription: the "
-              "relay holds the slot in memory, so it takes effect at once."),
+              "relay holds the slot in memory, so it takes effect at once, not through file edits. "
+              "reasoning changes the role's background reasoning step (the relay defaults to none): "
+              "deeper means slower and more expensive; it applies from the next call without "
+              "breaking the prefix cache; empty clears the step."),
         "p": {"action": "status | profile | switch | reasoning | accounts | use_account",
               "profile": "action=profile: named complexity profile",
+              "endpoint": "switch/profile: optional exact configured ID from catalogue frameworks; not a URL or protocol",
               "role": "voice | evaluator",
               "model": "model name from the catalogue; for use_account, the slot name",
               "why": "why; required for profile, switch and reasoning",
@@ -799,7 +806,7 @@ BASE_SHA: dict[str, str] = {
     "shell": "29c62251",
     "speak": "f9d09b07",
     "stay_silent": "21f3f037",
-    "switch_brain": "e57f12ca",
+    "switch_brain": "70788327",
     "unschedule": "10ad8eb0",
     "update_profile": "e3f03532",
     "update_self": "36f4a639",

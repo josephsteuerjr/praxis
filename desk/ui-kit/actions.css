@@ -107,3 +107,50 @@
 .run-links { margin-top: 8px; font: 400 12px/1.6 var(--sans); color: var(--ink-3); }
 .run-links a { color: var(--accent); text-decoration: none; }
 .run-links a:hover { text-decoration: underline; }
+
+/* An action is a readable sequence: request, execution receipt, response. */
+.tool-action {
+  display: flex; flex-direction: column; gap: 10px; min-width: 0;
+  margin: 12px 0; padding: 16px; border: 1px solid var(--line-strong);
+  border-radius: 14px; background: var(--surface); font-family: var(--sans);
+}
+.tool-action .action-title { font-size: 16px; font-weight: 600; }
+.tool-action .action-status { font-size: 12px; color: var(--ink-2); }
+.tool-name { display: block; font: 12px/1.5 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.tool-call-route { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font: 12px/1.6 var(--sans); color: var(--ink-3); }
+.tool-call-route code { color: var(--ink); }
+.tool-trace { display: grid; gap: 16px; min-width: 0; margin-top: 10px; font-family: var(--sans); }
+.tool-trace-block { min-width: 0; }
+.tool-trace-heading {
+  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+  gap: 6px 12px; margin: 0 0 7px; color: var(--ink-2); font: 600 12px/1.5 var(--sans);
+}
+.tool-copy { border: 0; padding: 4px 0; color: var(--accent); background: transparent; cursor: pointer; font: 12px/1.5 var(--sans); }
+.tool-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+.tool-trace .run-text-body {
+  max-height: none; padding: 12px 14px; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--paper); color: var(--ink); font: 13px/1.65 var(--mono);
+  white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible;
+}
+.tool-trace .run-text-body.clipped { max-height: calc(1.65em * 12 + 26px); overflow: hidden; }
+.tool-trace-request .run-text-body { background: #2b2926; color: #fff6e8; border-color: #2b2926; }
+.tool-trace-response .run-text-body { border-left: 3px solid var(--ok); background: var(--surface); }
+.tool-trace-error .run-text-body { border-left: 3px solid var(--err); background: var(--err-soft); }
+.tool-trace-execution .run-text-body { background: var(--surface-2); }
+.tool-trace-unrecorded { font: 12px/1.6 var(--sans); color: var(--ink-3); padding-left: 10px; border-left: 2px solid var(--line-strong); }
+.tool-parameters { display: grid; gap: 0; margin: 0; padding: 0 12px; border: 1px solid var(--line); border-radius: 9px; }
+.tool-parameters > div { display: grid; grid-template-columns: minmax(75px, 28%) minmax(0, 1fr); gap: 12px; padding: 10px 0; }
+.tool-parameters > div + div { border-top: 1px solid var(--line); }
+.tool-parameters dt { color: var(--ink-3); font: 12px/1.65 var(--mono); overflow-wrap: anywhere; }
+.tool-parameters dd { margin: 0; color: var(--ink); font: 13px/1.65 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.tool-parameters dd .run-text-body { padding: 0; border: 0; background: none; }
+.tool-trace .action-details { padding-top: 9px; border-top: 1px solid var(--line); }
+.tool-trace .action-details summary { padding: 5px 0; font: 12px/1.6 var(--sans); color: var(--ink-2); cursor: pointer; }
+.tool-trace .action-details pre { font-size: 12px; color: var(--ink); }
+.step-head { padding: 8px 0; border-bottom: 1px solid var(--line-strong); }
+.step-n { color: var(--ink); font-size: 12px; font-weight: 600; }
+@media (max-width: 600px) {
+  .tool-action { padding: 14px; margin: 12px 0; }
+  .tool-trace .run-text-body { font-size: 13px; }
+  .tool-copy { min-height: 36px; }
+}

@@ -17,7 +17,7 @@ ACTIONS = {"request", "cancel", "disposition"}
 DECISIONS = {"accepted", "fix", "deferred", "continue-with-reason"}
 TOOL = {
     "name": "self_review",
-    "description": "Read source-review status or request independent Forge reviewers. Source-only review never proves installed behavior. Available only in an owner dialogue. A contested update requires review even when optional reviews are off. Use explicit disposition with the exact subject_sha256 and reason; this does not rewrite the critic verdict.",
+    "description": "Read source-review status or request independent Forge reviewers. Acceptance delegated by the owner is your task: run review, address findings and report evidence without asking the owner to perform it. For a source update use source_update status and its incoming coordinator, even when the old live Forge lacks this API; an ordinary self_review of live code does not accept an update candidate. Source-only review never proves installed behavior. Available only in an owner dialogue. Use explicit disposition with the exact subject_sha256 and reason; this does not rewrite the critic verdict.",
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["status", "request", "cancel", "disposition"]},
         "id": {"type": "string"}, "depth": {"type": "string", "enum": list(self_review.DEPTHS)},
@@ -63,7 +63,8 @@ def command(tree, body):
 def status(tree, config=None, review_id=""):
     root = _root(tree)
     runtime = _read(root / "runtime.json")
-    reviews = [_read(path) for path in root.glob("review-*/request.json")]
+    reviews = [_read(path) for store in (root, root.with_name('.source-update-reviews'))
+               for path in store.glob("review-*/request.json")]
     if review_id:
         reviews = [row for row in reviews if row.get("id") == review_id]
     commands = [_read(path) for path in (root / "commands").glob("command-*.json")]

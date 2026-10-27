@@ -938,6 +938,19 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
                            "call_id": None, "tools": [], "text": ""}
                 iterations.append(current)
             current["tools"].append(card)
+        elif kind in ('tool_dispatch', 'tool_execution', 'tool_model_response'):
+            card = tools_by_call.get(str(row.get('call_id') or ''))
+            if card is not None:
+                if kind == 'tool_dispatch':
+                    card['execution'] = row.get('receipt') or {}
+                    for key in ('model_request', 'definition'):
+                        if isinstance(row.get(key), dict):
+                            card[key] = row[key]
+                elif kind == 'tool_execution':
+                    card.setdefault('operations', []).append(row.get('receipt') or {})
+                elif isinstance(row.get('text'), str):
+                    card['model_observation'] = row['text']
+                    card['model_response_image_count'] = row.get('image_count', 0)
         elif kind == "tool_result":
             card = tools_by_call.get(str(row.get("call_id") or ""))
             preview = _inline_preview(row.get("result") or {})

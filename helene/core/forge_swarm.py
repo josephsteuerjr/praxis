@@ -125,6 +125,16 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
     if not plan:
         return {}
     before = [dict(node) for node in plan.get("nodes") or []]
+    legacy = plan.get('version', 1) == 1
+    if legacy:
+        # v1 made dependency failure terminal even before a node had run.
+        # Restore only those unexecuted reservations; owner Stop and every
+        # actual attempt remain fenced. ready_nodes still requires acceptance.
+        for node in plan.get('nodes') or []:
+            if (node.get('status') == 'blocked' and not node.get('agent_id')
+                    and not node.get('reserved_agent_id') and not node.get('attempts')):
+                node.update(status='pending', finished='', queued_reason='awaiting accepted dependencies')
+        plan['version'] = 2
     for node in plan.get("nodes") or []:
         aid = str(node.get("agent_id") or "")
         if not aid:
@@ -167,7 +177,7 @@ def refresh(task_dir: Path, agent_state: Callable[[str], dict]) -> dict:
             remaining[child] -= 1
             if not remaining[child]:
                 ready.append(child)
-    if plan.get("nodes") != before:
+    if legacy or plan.get("nodes") != before:
         plan["updated"] = _now()
         _atomic(_plan_path(task_dir), plan)
     return plan

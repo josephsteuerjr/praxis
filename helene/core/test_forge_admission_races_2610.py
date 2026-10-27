@@ -42,6 +42,7 @@ class AdmissionRaces(unittest.TestCase):
         forge.swarm(self.tid, 'start')
         prerequisite = self.directory / 'agents' / self.nodes()['A']['agent_id']
         forge._atomic_json(prerequisite / 'result.json', {'status': 'done', 'result': 'revision A1'})
+        forge.release_worker_root(prerequisite / 'request.json')
         digest = self.accept(prerequisite)
         blocker = self.unit('agent-eeeeeeee')
         forge.swarm(self.tid, 'tick')
@@ -50,6 +51,7 @@ class AdmissionRaces(unittest.TestCase):
         self.assertEqual(self.nodes()['B']['dependency_results'], {'A': digest})
         self.assertEqual(self.spawn.call_count, 1)
         forge._atomic_json(blocker / 'result.json', {'status': 'done'})
+        forge.release_worker_root(blocker / 'request.json')
         return prerequisite, dependent, digest
 
     def test_never_started_resume_is_idempotent_before_and_after_completion(self):
@@ -346,6 +348,7 @@ class AdmissionRaces(unittest.TestCase):
         self.assertIn('pause-fenced', forge._read_json(req)['queued_reason'])
         forge.control(self.tid, 'resume')
         forge._atomic_json(self.directory / 'agents/agent-aaaaaaaa/result.json', {'status': 'done'})
+        forge.release_worker_root(self.directory / 'agents/agent-aaaaaaaa/request.json')
         self.assertEqual(forge.tick_queued()[0]['agent_id'], 'agent-bbbbbbbb')
         self.assertEqual(forge.tick_queued(), [])
         self.assertEqual(self.spawn.call_count, 1)
@@ -358,11 +361,13 @@ class AdmissionRaces(unittest.TestCase):
         self.unit(status='queued')
         self.assertEqual(forge.tick_queued()[0]['agent_id'], partial.name)
         forge._atomic_json(partial / 'result.json', {'status': 'done'})
+        forge.release_worker_root(partial / 'request.json')
         # New public spawn into a previously scanned task must be noticed too.
         blocker = self.unit('agent-cccccccc')
         forge.agent(self.tid, 'spawn', brief='later', agent_id='agent-bbbbbbbb')
         forge.tick_queued()
         forge._atomic_json(blocker / 'result.json', {'status': 'done'})
+        forge.release_worker_root(blocker / 'request.json')
         self.assertEqual(forge.tick_queued()[0]['agent_id'], 'agent-bbbbbbbb')
         other = 'code-87654321'
         forge._atomic_json(forge._task_dir(other) / 'task.json', {**self.task, 'id': other})
@@ -388,6 +393,7 @@ class AdmissionRaces(unittest.TestCase):
         self.assertEqual(forge.tick_queued(), [])  # old stopped identity is discharged
         resumed = forge.control(self.tid, 'resume', 'agent-aaaaaaaa')
         forge._atomic_json(self.directory / 'agents/agent-cccccccc/result.json', {'status': 'done'})
+        forge.release_worker_root(self.directory / 'agents/agent-cccccccc/request.json')
         self.assertEqual(forge.tick_queued()[0]['agent_id'], resumed['agent_id'])
         self.assertEqual(forge.tick_queued(), [])
         self.assertEqual(self.spawn.call_count, 1)

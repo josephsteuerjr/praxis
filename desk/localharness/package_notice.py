@@ -13,6 +13,26 @@ def read(path):
         return value if isinstance(value,dict) else {}
     except (OSError,ValueError): return {}
 
+def replace_with_retry(source, target):
+    """Wait briefly for Windows readers that omit FILE_SHARE_DELETE.
+
+    Keep the old file intact until the one atomic replacement succeeds. A
+    permanent permission denial remains an error; no chmod/delete fallback.
+    """
+    deadline = time.monotonic() + 2.5
+    delay = .01
+    while True:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError as error:
+            remaining = deadline - time.monotonic()
+            if getattr(error, 'winerror', None) not in (5, 32, 33) or remaining <= 0:
+                raise
+            time.sleep(min(delay, remaining))
+            delay = min(delay * 2, .05)
+
+
 def write(path,value):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
@@ -20,7 +40,7 @@ def write(path,value):
         with os.fdopen(fd, 'w', encoding='utf-8') as target:
             json.dump(value, target, ensure_ascii=False, indent=2); target.write('\n')
             target.flush(); os.fsync(target.fileno())
-        os.replace(name, path)
+        replace_with_retry(name, path)
     finally:
         Path(name).unlink(missing_ok=True)
 

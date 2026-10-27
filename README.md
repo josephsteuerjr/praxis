@@ -1,12 +1,12 @@
-# Hélène 2.2.9 — automatic source integration through Update
+# Hélène 2.2.10 — automatic source integration through Update
 
-2.2.9 offers two explicit source policies: preserve local changes with the selected agent resolving conflicts, or install pristine release source. Profiles, memory and settings stay on their existing paths; previous code remains available for rollback. [Release notes](desk/docs/RELEASE-2.2.9.md).
+2.2.10 makes preserved-source update review operate on the actual base, local, incoming and resolved files. The selected agent owns conflict resolution and acceptance, with independent review before installation. Tool details now separate the model request, observed execution and the text prepared for its next step. [Release notes](desk/docs/RELEASE-2.2.10.md).
 
-Use the ordinary **Update** button, including from the supported 2.1.1 baseline. The new updater takes custody, materializes verified incoming source, combines it with authored changes, obtains independent review and completes the transaction. Compatibility repairs can include automatically merged files. [Release notes](desk/docs/RELEASE-2.2.9.md).
+Use the ordinary **Update** button, including from the supported 2.1.1 baseline. The new updater takes custody, materializes verified incoming source, combines it with authored changes, obtains independent review and completes the transaction. Compatibility repairs can include automatically merged files. [Release notes](desk/docs/RELEASE-2.2.10.md).
 
-Windows starts in the tray at login and invokes its own bundled shell only for commands. Startup no longer probes the WSL launcher. [Release notes](desk/docs/RELEASE-2.2.9.md).
+Windows starts in the tray at login and invokes its own bundled shell only for commands. Startup no longer probes the WSL launcher. [Release notes](desk/docs/RELEASE-2.2.10.md).
 
-Updates now continue after reviewed conflict resolution, helpers run without a Windows console, the frameless update window follows the application theme, and every launch opens Now. [Release notes](desk/docs/RELEASE-2.2.9.md).
+Updates now continue after reviewed conflict resolution, helpers run without a Windows console, the frameless update window follows the application theme, and every launch opens Now. [Release notes](desk/docs/RELEASE-2.2.10.md).
 
 Hélène runs from a folder that contains its own Python runtime, desktop application and agent code. That folder becomes the agent's home: its profile, memory, configuration and authored source stay with it. Extract the archive to a permanent, writable location and launch the entry for your operating system. A separate Python installation or compiler is not required.
 
@@ -24,7 +24,7 @@ Routine updates back up settings and program/code preimages, not unchanged memor
 
 Application-owned XTTS and a narrow speak adapter support older authored code without overwriting it. WAV preview and actual Ogg/Opus voice-note output differ; the installed SoundFile/libsndfile codec capability is checked, without requiring an extra PyAV download. CPU synthesis needs substantial free memory: one measured Windows stock-voice run peaked near 4.9 GB worker RSS, with about 128 seconds for the first client call including loading and 9 seconds for a separate warm synthesis. These are scoped observations, not a minimum-memory or latency guarantee. Every launch opens **Now**, including after updates and before initial setup; setup and manual onboarding remain available.
 
-Hélène 2.2.9 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.9.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
+Hélène 2.2.10 is delivered as four portable archives. See [the complete release notes](desk/docs/RELEASE-2.2.10.md) for the changes, transition advice and exact qualification limits. Publishing a release does not update your running agent.
 
 ## Previous changes in 2.1
 
@@ -58,10 +58,10 @@ The subscription relay is a separate product: [praxis-relay 1.1.0](https://githu
 
 | Platform | Archive | Entry after extracting the whole folder |
 | --- | --- | --- |
-| Windows x64 | [Helene-2.2.9.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.9/Helene-2.2.9.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
-| macOS Apple Silicon | [Helene-2.2.9-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.9/Helene-2.2.9-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
-| Debian x86_64 | [Helene-2.2.9-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.9/Helene-2.2.9-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
-| Fedora x86_64 | [Helene-2.2.9-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.9/Helene-2.2.9-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Windows x64 | [Helene-2.2.10.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.10/Helene-2.2.10.zip) | **Start Helene.vbs**; **Migrate Helene.vbs** for an existing installation |
+| macOS Apple Silicon | [Helene-2.2.10-macos-arm64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.10/Helene-2.2.10-macos-arm64.zip) | **Helene.app** or **Migrate Helene.app** |
+| Debian x86_64 | [Helene-2.2.10-linux-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.10/Helene-2.2.10-linux-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
+| Fedora x86_64 | [Helene-2.2.10-fedora-x86_64.zip](https://github.com/josephsteuerjr/praxis/releases/download/v2.2.10/Helene-2.2.10-fedora-x86_64.zip) | **Start Helene.sh**, using your file manager's “Run as a program” action |
 
 Keep the complete folder together, in a location you can write to. Use the in-app updater for subsequent updates; do not unpack a new archive over a running application. The Windows scripts use Windows Script Host and the bundled Python runtime. Linux desktops may ask you to trust a launcher. Operating-system permission prompts remain under your control.
 

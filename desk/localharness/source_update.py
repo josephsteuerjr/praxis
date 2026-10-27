@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import threading
 import time
@@ -30,7 +31,15 @@ TOOL = {'name': 'source_update', 'description':
     'diff shows A->local and A->incoming changes; read returns one side with pagination. '
     'resolve supplies full UTF8 or a side; patch replaces one exact fragment using before/after. '
     'Repairs outside conflicts need reason and expected_candidate_sha256 from status. '
-    'finish validates M but cannot approve or install it; independent review is still required.',
+    'finish validates M and hands it to the incoming update coordinator for independent review. '
+    'Acceptance is delegated to you: inspect the panel evidence, repair findings, finish again, '
+    'and verify installed behavior after the authorized update. Do not ask the owner to run review '
+    'or confirm it again. status supplies candidate_state, review_evidence and next_action. '
+    'Run the relevant user journey yourself, including headless UI checks when available. '
+    'Check offered tool/input, actual harness execution and returned model observation separately; '
+    'a request is not proof of execution, and source tests are not installed acceptance. '
+    'Use this update panel, not ordinary self_review on the old live Forge. '
+    'A clear panel binds exact source bytes; never manufacture approval or bypass Stop.',
     'input_schema': {'type': 'object', 'properties': {
         'action': {'type': 'string', 'enum': ['status','read','diff','resolve','patch','finish']},
         'path':{'type':'string'},'content':{'type':'string'},'delete':{'type':'boolean'},
@@ -226,19 +235,82 @@ def _materials(directory, plan):
                                 ('incoming', 'release'), ('result', 'resolved'))}
 
 
+def _harness_material(operation):
+    """Freeze the bound incoming Python app as context for core/app coupling."""
+    binding = operation.get('coordinator') or {}
+    if binding.get('kind') != 'incoming-update-runtime.v1':
+        return {}
+    program = Path(binding['program']).resolve()
+    files = read(program / 'source-inputs.json').get('files', {})
+    if merge.signature(files) != binding.get('app_sha256'):
+        raise ValueError('Incoming application inventory changed before review')
+    root = program / 'app'
+    inventory = {}
+    for name, digest in files.items():
+        merge.relative(name)
+        if not name.endswith('.py'):
+            continue
+        path = root / name
+        if path.is_symlink() or not path.resolve().is_relative_to(root):
+            raise ValueError('Incoming review context escapes the application')
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError('Incoming review context changed: ' + name)
+        inventory[name] = {'sha256': digest,
+                           'mode': '100755' if os.name != 'nt' and path.stat().st_mode & 0o111 else '100644'}
+    if not inventory:
+        raise ValueError('Incoming application review context is empty')
+    return {'harness': {'root': str(root), 'merge_files': inventory, 'inventory_scope':'python-context-v1',
+                        'published_files': {name: [row['sha256']] for name, row in inventory.items()}}}
+
+
+def review_evidence(record):
+    """Expose the actual verdict and gaps without copying source or worker traces."""
+    return {key: record.get(key) for key in ('id','subject_sha256','execution','verdict','error','gaps')} | {
+        'critics': [{key: critic.get(key) for key in
+                    ('unit_id','execution','verdict','summary','findings','gaps','reason','result_path')}
+                    for critic in record.get('critics', [])]}
+
+
+def budget_seconds(operation):
+    """Each serial wave keeps the original budget; explicit user concurrency wins."""
+    identity = str(operation.get('review_id') or '')
+    if not identity.startswith('review-') or '/' in identity or '\\' in identity:
+        return MAX_SECONDS
+    store = '.source-update-reviews' if (operation.get('coordinator') or {}).get('review_store') == 'isolated-v1' else '.self-review'
+    record = read(Path(operation['tree']) / 'memory' / store / identity / 'request.json')
+    if not record or record.get('subject_sha256') != operation.get('subject_sha256'):
+        return MAX_SECONDS
+    parallel = max(1, min(8, int(record.get('policy', {}).get('max_parallel') or 1)))
+    waves = max(1, (len(record.get('critics', [])) + parallel - 1) // parallel)
+    return MAX_SECONDS * waves
+
+
 def _clear(service, record, expected_subject):
     """Re-read canonical frozen evidence, not a stale cached green summary."""
     if (record.get('subject_sha256') != expected_subject or record.get('execution') != 'done'
             or record.get('verdict') != 'clear' or record.get('cancel_requested')
             or record.get('gaps') or not record.get('critics')):
-        raise ValueError('Mandatory contested review is not completed and clear')
+        reasons = [record.get('error') or ''] + [str(gap) for gap in record.get('gaps', [])]
+        for critic in record.get('critics', []):
+            reasons.extend(str(x) for x in critic.get('gaps', []))
+            reasons.extend([critic.get('reason') or '', critic.get('summary') or ''])
+        detail = '; '.join(dict.fromkeys(reason for reason in reasons if reason))[:4000]
+        raise ValueError('Mandatory contested review is not completed and clear: '
+                         + str(record.get('verdict') or 'insufficient')
+                         + ('; ' + detail if detail else ''))
     subject = self_review.validate_snapshot(record['snapshot'], expected_subject)
     if subject.get('gaps') or service.freshness(record['id'])['stale']:
         raise ValueError('Reviewed source material changed or has gaps')
+    from .self_review_merge import validate_coverage
+    validate_coverage(subject, record['critics'])
     for critic in record['critics']:
         if critic.get('execution') != 'done' or critic.get('verdict') != 'clear':
             raise ValueError('Critic is incomplete or not clear')
         result_path = Path(critic['result_path'])
+        if critic.get('coverage'):
+            executed = read(result_path.parent / 'request.json') or {}
+            if executed.get('brief') != service._brief(record, critic):
+                raise ValueError('Executed critic assignment differs from frozen panel coverage')
         raw = result_path.read_bytes()
         if hashlib.sha256(raw).hexdigest() != critic.get('result_sha256'):
             raise ValueError('Canonical critic result changed')
@@ -265,7 +337,8 @@ def validate_ready(directory):
             or merge.inventory(directory / 'result') != plan.get('result')
             or merge.candidate_signature(directory) != operation.get('candidate_sha256')):
         raise ValueError('Source update has no current reviewed candidate ready to apply')
-    service = self_review.Service(operation['tree'], operation['source'], operation['program'], None)
+    service = self_review.Service(operation['tree'], operation['source'], operation['program'], None,
+                                  coordinator=operation.get('coordinator'))
     record = service.status(operation['review_id'])
     subject = _clear(service, record, operation['subject_sha256'])
     expected = {'plan_id': operation['id'], 'input_sha256': operation['input_sha256'],
@@ -384,10 +457,12 @@ def _review_request(operation, directory, service):
     identity['plan_id'] = operation['id']
     record = service.request(trigger='contested_overlay',
         operation_id='source-update:' + operation['id'] + ':' + operation['candidate_sha256'],
-        overlay={'conflicts': plan['conflicts'], 'merge_identity': identity},
-        sources=_materials(directory, plan),
+        overlay={'conflicts': plan['conflicts'], 'merge_identity': identity,
+                 'repairs': [{'path': row['path'], 'reason': row.get('reason', '')} for row in plan.get('repairs', [])]},
+        sources={**_materials(directory, plan), **_harness_material(operation)},
         intent='Review isolated A/L/B/M source update. Preserve authored and upstream intent; never execute code.',
         criteria=['Inspect every conflicted path and the full candidate coupling.',
+                  'harness/ contains frozen incoming Python app context, including desktop readers; it is not a fifth merge side.',
                   'Absent entries mean explicit add/delete, not missing evidence. Modes and full inventories are binding.',
                   'Return findings for incorrect integration; any withheld or unverified material is insufficient.'])
     operation.update(state='reviewing', review_id=record['id'], subject_sha256=record['subject_sha256'])
@@ -412,6 +487,7 @@ def _advance(operation, directory, forge, service):
         _review_request(operation, directory, service)
     if operation['state'] == 'reviewing':
         record = service.status(operation['review_id'])
+        operation['review_evidence'] = review_evidence(record)
         if record.get('cancel_requested'):
             raise ValueError('Mandatory update panel was cancelled')
         if record.get('execution') in {'queued', 'running', 'unknown'}:
@@ -532,7 +608,7 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
                     operation['stop_error'] = str(exc)
             elif operation['state'] in ACTIVE and not paused:
                 try:
-                    if time.time() - operation['created'] > MAX_SECONDS:
+                    if time.time() - operation['created'] > budget_seconds(operation):
                         _cancel_marker(operation_path.parent, 'Source-update time budget exhausted')
                         operation['cancel_requested'] = True
                         raise ValueError('Source-update time budget exhausted; old application retained')

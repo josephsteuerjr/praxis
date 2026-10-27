@@ -64,6 +64,8 @@ class RoutingCase(unittest.TestCase):
         import tempfile
         from pathlib import Path
         old = forge.BASE, forge.STATE_DIR, forge.TASKS_DIR
+        for field, value in zip(('BASE', 'STATE_DIR', 'TASKS_DIR'), old):
+            self.addCleanup(setattr, forge, field, value)
         with tempfile.TemporaryDirectory() as tmp:
             forge.BASE = Path(tmp)
             forge.STATE_DIR = Path(tmp) / "state"
@@ -114,18 +116,27 @@ class RoutingCase(unittest.TestCase):
                                    return_value={"ok": True, "text": "HOST ROOT: /srv/project"}):
                 out = forge.start_host("host work", "/srv/project")
             task_id = out.split(":", 1)[0].replace("coding-задача ", "")
+            operation_ids = iter(('op-sync123', 'op-detached123'))
+            def remote_call(action, params):
+                if action == 'op.start': return {'ok': True, 'id': next(operation_ids)}
+                self.assertEqual(action, 'op.poll')
+                self.assertEqual(params['operation_id'], 'op-sync123')
+                return {'ok': True, 'status': 'done', 'code': 0}
             with mock.patch.object(forge.serverd_client, "workspace_inspect",
                                    return_value="root file"), \
                  mock.patch.object(forge.serverd_client, "workspace_edit",
                                    return_value="edited"), \
-                 mock.patch.object(forge.serverd_client, "run", return_value="ran"), \
-                 mock.patch.object(forge.serverd_client, "process", return_value="op-1"), \
+                 mock.patch.object(forge.serverd_client, "call", side_effect=remote_call), \
                  mock.patch.object(forge.serverd_client, "checkpoint", return_value="checkpointed"), \
                  mock.patch.object(forge, "_spawn_runner", return_value=4242):
                 self.assertEqual(forge.inspect(task_id, "read", path="x"), "root file")
                 self.assertEqual(forge.edit(task_id, "write", path="x", content="y"), "edited")
-                self.assertEqual(forge.run(task_id, "true"), "ran")
-                self.assertEqual(forge.process(task_id, "start", command="sleep 1"), "op-1")
+                ran = __import__('json').loads(forge.run(task_id, "true", timeout=10))
+                self.assertEqual((ran['status'], ran['remote_id']), ('done', 'op-sync123'))
+                started = __import__('json').loads(forge.process(task_id, "start", command="sleep 1"))
+                self.assertEqual(started['remote_id'], 'op-detached123')
+                self.assertTrue(started['remote'])
+                self.assertEqual(len(forge._units(task_id, 'processes')), 2)
                 self.assertEqual(forge.checkpoint(task_id, "cp"), "checkpointed")
                 spawned = forge.agent(task_id, "spawn", brief="inspect root", role="scout")
             self.assertIn("agent-", spawned)
@@ -133,7 +144,6 @@ class RoutingCase(unittest.TestCase):
             payload = __import__("json").loads(request.read_text(encoding="utf-8"))
             self.assertEqual(payload["task_id"], task_id)
             self.assertEqual(payload["root"], "/srv/project")
-        forge.BASE, forge.STATE_DIR, forge.TASKS_DIR = old
 
     @unittest.skipIf(sys.platform == "win32", "порт: hostd/брокер форжа не входят в v1 локального порта")
     def test_broker_has_no_second_model_or_agent_capability(self):

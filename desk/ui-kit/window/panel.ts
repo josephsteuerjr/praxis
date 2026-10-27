@@ -17,7 +17,7 @@ import type { Scroller } from "../feed/scroller";
 import { api } from "./api";
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
 import { fmtK } from "../text";
-import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, pretty, resultText, subject, suppliedCommand, terminalLabel, textBox, type RunDetail } from "../steps";
+import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, subject, toolTraceHTML, terminalLabel, textBox, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type Run } from "./state";
@@ -198,32 +198,15 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
       if (emptyDelivery && !(t.args as { media_count?: number } | null)?.media_count) return;
       const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
       const what = t.tool === "reply" ? String((t.args as { text?: string } | null)?.text || "") : subject(t.args);
-      const command = suppliedCommand(t.args);
-      const head = String(t.result?.head || t.result?.tail || "");
-      const result = t.result?.truncated ? [t.result.head, "… пропущена часть результата …", t.result.tail].filter(Boolean).join("\n") : head;
-      const receipt = ["reply", "end_turn", "telegram.deliver"].includes(t.tool || "");
-      const mark = failed ? "ошибка" : active ? "выполняется…" : emptyDelivery ? "нечего доставлять" : "";
-      const detail: string[] = [];
-      // The model's full command is already in the durable tool input. A
-      // 160-character headline / 4000-character JSON cut hid its useful text.
-      // Keep it behind the owner's existing expansion (inputs may be private),
-      // folded rather than truncated, and never call it observed process argv.
-      if (command) detail.push(`<div class="st-k">Передано инструменту (не системная argv)</div>` +
-                               textBox(tkey + ":command", command));
-      else if (t.tool === "fs_write" || t.tool === "fs_edit")
-        detail.push(`<div class="st-k">Операция Python · без shell; исход — в результате</div>`);
-      if (t.args != null && t.tool !== "reply") detail.push(`<div class="st-k">Параметры</div><pre class="st-pre">${esc(clip(pretty(t.args), 4000))}</pre>`);
-      if (head && !receipt) detail.push(`<div class="st-k">Результат</div>` + textBox(tkey + ":result", resultText(result), { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }));
-      if (receipt && result) detail.push(`<div class="st-k">Квитанция</div><pre class="st-pre">${esc(clip(result, 2000))}</pre>`);
-      if (t.error) detail.push(`<div class="st-k">Ошибка</div><pre class="st-pre">${esc(t.error)}</pre>`);
+      const mark = failed ? "ошибка" : active ? "выполняется…" : received ? "результат получен" : "результат неизвестен";
       const kind = failed ? "fail" : toolIcon(t.tool || "", t.args);
       const isWord = t.tool === "reply";
-      rows.push({ key: tkey, cls: `st st-hand${isWord ? " st-word" : ""}${active ? " is-live" : ""}${failed ? " is-failed" : ""}`, html:
-        (detail.length ? `<button type="button" class="st-line st-toggle" aria-expanded="false">` : `<div class="st-line">`) +
+      rows.push({ key: tkey, cls: `st st-hand open${isWord ? " st-word" : ""}${active ? " is-live" : ""}${failed ? " is-failed" : ""}`, html:
+        `<button type="button" class="st-line st-toggle" aria-expanded="true">` +
         `${icon(kind)}<span class="st-label">${esc(title)}</span>` +
         `<span class="st-what">${esc(clip(what.replace(/\s+/g, " "), isWord ? 400 : 160))}</span>` +
         (mark ? `<span class="st-state">${esc(mark)}</span>` : "") +
-        (detail.length ? `</button><div class="st-detail" hidden>${detail.join("")}</div>` : `</div>`) });
+        `</button><div class="st-detail"><code class="tool-name">${esc(t.tool || '')}</code>${toolTraceHTML(t, tkey, runId)}</div>` });
     });
     if (it.text || it.text_ref) {
       rows.push({ key: "text:" + key, cls: "st st-word", html:
@@ -267,9 +250,9 @@ interface Col {
   painted: boolean;
 }
 let col: Col | null = null;
-/** Раскрытые ходы и раскрытые руки внутри них (переживают перерисовку). */
+/** Details are readable on opening a turn; remember only the owner's collapses. */
 const openSteps = new Map<string, KeyedList<StepRow>>();
-const openHands = new Set<string>();
+const closedHands = new Set<string>();
 /** Раскрыты окном, а не владельцем: идущий ход. Закончился — сворачиваем сами. */
 const autoOpen = new Set<string>();
 let liveTimer = 0;
@@ -460,12 +443,12 @@ function stepEl(s: StepRow): HTMLElement {
   return node;
 }
 
-/** Раскрытая рука остаётся раскрытой, даже если её строка перерисовалась (статус сменился). */
+/** A manual collapse survives live receipt updates. */
 function restoreHand(node: HTMLElement, runId: string, key: string) {
-  if (!openHands.has(runId + "/" + key)) return;
+  if (!closedHands.has(runId + "/" + key)) return;
   const btn = node.querySelector<HTMLElement>(".st-toggle");
   const det = node.querySelector<HTMLElement>(".st-detail");
-  if (btn && det) { btn.setAttribute("aria-expanded", "true"); det.hidden = false; node.classList.add("open"); }
+  if (btn && det) { btn.setAttribute("aria-expanded", "false"); det.hidden = true; node.classList.remove("open"); }
 }
 
 /** Плавно раскрыть/свернуть по высоте (WAAPI); при reduced-motion — сразу. */
@@ -500,8 +483,8 @@ function onClick(e: MouseEvent) {
     const open = det.hidden === true;
     hand.setAttribute("aria-expanded", String(open));
     node.classList.toggle("open", open);
-    if (open) { det.hidden = false; slide(det, true); openHands.add(runId + "/" + key); }
-    else { openHands.delete(runId + "/" + key); slide(det, false, () => { if (!openHands.has(runId + "/" + key)) det.hidden = true; }); }
+    if (open) { det.hidden = false; slide(det, true); closedHands.delete(runId + "/" + key); }
+    else { closedHands.add(runId + "/" + key); slide(det, false, () => { if (closedHands.has(runId + "/" + key)) det.hidden = true; }); }
     return;
   }
   const head = t.closest<HTMLElement>(".turn-head");
