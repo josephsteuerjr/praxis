@@ -221,7 +221,7 @@ def preservation_roots(found, old_root, *, copy_external=False):
     return roots
 
 
-def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None,independent=False,copy_external=False,preserve_downloads=True):
+def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stopped=False, progress=None,reuse=None,preserve_voice=True,path_aliases=None,fresh_template=None,independent=False,copy_external=False,preserve_downloads=True,source_policy='preserve'):
     old_root, new_root, data_home = (p.resolve() for p in (old_root, new_root, data_home))
     if new_root == old_root or new_root.is_relative_to(old_root) or old_root.is_relative_to(new_root):
         raise ValueError("New and old program directories must be separate")
@@ -283,7 +283,7 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
             return source
         # Name every in-progress copy BEFORE its first data byte, so a killed
         # process can resume the same partial directories rather than orphan GBs.
-        pending={'format':'helene-python-migration.v1','id':operation,'state':'preserving',
+        pending={'format':'helene-python-migration.v1','id':operation,'state':'preserving','source_policy':source_policy,
                  'old_root':str(old_root),'new_root':str(new_root),'backup':backup['path'],
                  'old_data_paths':[row['tree'] for row in found['agents']],
                  'data_paths':[str(selected(Path(row['tree']))) for row in found['agents']],
@@ -340,6 +340,8 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
                 "old_data_paths": [r["tree"] for r in found["agents"]],
                 "copied_data": copied, "backup": backup["path"]}
         note['source_paths'] = source_paths
+        note['source_policy'] = source_policy
+        if source_policy == 'clean': note['state'] = 'preserving'
         note['preserved_roots']=pending['preserved_roots']
         note['data_home']=str(data_home);note['path_aliases']=path_aliases
         if independent:

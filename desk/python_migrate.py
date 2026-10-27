@@ -75,9 +75,9 @@ def copy_program(package, new, progress, extensions=None):
         if parts[0]=='voice' or parts[:2]==('components','whisper'):return 'whisper' in extensions
         return True
     files=[p for p in package.rglob('*') if p.is_file() and selected(p) and
-           p.relative_to(package).parts[0] not in ('data','agents','backups') and
+           p.relative_to(package).parts[0] not in ('data','agents','backups','profile','code','.migration-webview','.webview') and
            '__pycache__' not in p.relative_to(package).parts and
-           p.name not in ('helene.json','python-migration.json','owner-stop.json','install.log') and not p.name.endswith('.pyc')]
+           p.name not in ('helene.json','python-migration.json','owner-stop.json','install.log') and not p.name.startswith('.python-') and not p.name.endswith('.pyc')]
     total=sum(p.stat().st_size for p in files);done=0
     from concurrent.futures import ThreadPoolExecutor
     from localharness.parallel_files import WORKERS
@@ -190,14 +190,19 @@ def resume_retirement(old, package, new, note, progress):
 
 
 def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=False,
-            launch=True, progress=None, extensions=None,resume_copy=None,prepared=False):
+            launch=True, progress=None, extensions=None,resume_copy=None,prepared=False,source_mode='preserve',portable=False):
     old,package,new,data=(p.resolve() for p in (old,package,new,data))
     progress=progress or (lambda stage:None)
+    if source_mode not in ('preserve','clean'):raise ValueError('Choose preserve or clean migration source')
+    if new != package and new.is_relative_to(package):raise ValueError('Choose a working folder outside the unpacked source')
     app_migration.discover(old)  # read-only preflight; never reused as final state
     if new.is_relative_to(old) or old.is_relative_to(new) or (not prepared and (new==package or package.is_relative_to(new))):
         raise ValueError('Old, new and unpacked package must be separate')
     if prepared and new!=package:raise ValueError('Portable migration stays in this unpacked application')
     prior=transaction(old,new,prepared=prepared)
+    if prior.get('state')!='copying_program' and prior.get('source_policy','preserve')!=source_mode:
+        raise ValueError('Continue this migration with its original code choice')
+    prior['source_policy']=source_mode;app_migration.write_note(new,prior)
     if prior['state']=='completed':return prior
     if prior['state'] in ('new_app_started','retirement_incomplete'):
         return resume_retirement(old,package,new,prior,progress)
@@ -206,6 +211,9 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         copy_program(package,new,progress,extensions)
     from localharness.source_admission import activate
     activate(new,lease_held=True)  # migration CLI owns this target lease
+    if source_mode=='clean':
+        from localharness.migration_source import verify
+        verify(new)  # Reject invalid incoming code before stopping the old owner.
     from localharness.update_extensions import check
     progress('checking_extensions')
     check(old,new)
@@ -224,7 +232,10 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         progress('preserving')
         retain_attempt_configs(new,prior)
         note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse,
-                                   independent=prepared,copy_external=prepared)
+                                   independent=prepared or portable,copy_external=prepared or portable,source_policy=source_mode)
+        if source_mode=='clean':
+            from localharness.migration_source import prepare as prepare_clean_code
+            note=prepare_clean_code(old,new,note)
         install_selected_extensions(new,note,extensions,progress)
         if not launch:return note
         interpreter=new/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')

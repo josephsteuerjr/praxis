@@ -5,14 +5,14 @@ from python_app import Application,window_geometry
 from localharness import portable_start
 
 class MigrationWindow(Application):
-    def __init__(self,root,old=''):
+    def __init__(self,root,old='',target=''):
         super().__init__(root,root/'app/resources',None,root)
-        self.old=old;self.running=threading.Lock();self.last_progress=0.0
+        self.old=old;self.target=target or str(root);self.running=threading.Lock();self.last_progress=0.0
         self.control_file=root/f'.python-migrator-{os.getpid()}.json'
     def invoke(self,command,args):
         if command=='migration_defaults':
             candidates=portable_start.previous_installations(self.root)
-            return {'old':self.old or (str(candidates[0]) if candidates else ''),'target':str(self.root),'mode':'migrate',
+            return {'old':self.old or (str(candidates[0]) if candidates else ''),'target':self.target,'mode':'migrate',
                     'default_target':str(self.root),'portable':True,'version':json.loads((self.root/'python-app.json').read_text(encoding='utf-8'))['version']}
         if command=='migration_pick_path':
             import webview
@@ -25,18 +25,22 @@ class MigrationWindow(Application):
             if not self.running.acquire(blocking=False):raise RuntimeError('Перенос уже выполняется')
             try:
                 old=Path(args.get('old','')).resolve()
+                target=Path(args.get('target') or self.root).resolve()
+                source_mode=args.get('sourceMode','preserve')
+                if source_mode not in ('preserve','clean'):raise ValueError('Choose preserve or clean migration source')
                 if not (old/'helene.json').is_file():raise ValueError('Выбери прежнюю папку Hélène')
                 from localharness import migration_windows
                 import ctypes
                 if migration_windows.service(old) and not ctypes.windll.shell32.IsUserAnAdmin():
-                    parameters=subprocess.list2cmdline(['-s',str(self.root/'app/python_migration_window.py'),'--root',str(self.root),'--old',str(old)])
+                    parameters=subprocess.list2cmdline(['-s',str(self.root/'app/python_migration_window.py'),'--root',str(self.root),'--old',str(old),'--target',str(target)])
                     outcome=ctypes.windll.shell32.ShellExecuteW(None,'runas',str(self.root/'runtime/pythonw.exe'),parameters,str(self.root),0)
                     if outcome<=32:raise RuntimeError('Windows не подтвердил права для переноса прежней службы')
                     self.event('exit',{});return {'elevated':True}
                 import python_migrate
-                with python_migrate.installation_lock(self.root):
-                    return python_migrate.migrate(old,self.root,self.root,self.root/'profile',stop_service=True,
-                        prepared=True,progress=self.progress,extensions=args.get('extensions') or [])
+                with python_migrate.installation_lock(target):
+                    return python_migrate.migrate(old,self.root,target,target/'profile',stop_service=True,
+                        prepared=target==self.root,portable=True,source_mode=source_mode,
+                        progress=self.progress,extensions=args.get('extensions') or [])
             finally:self.running.release()
         if command=='python_ready':return {'confirmed':False}
         if command in ('python_window','appearance_read'):return super().invoke(command,args)
@@ -65,10 +69,10 @@ class MigrationWindow(Application):
         self.backup_thread=threading.Thread(target=lambda:None);self.backup_thread.start()
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,required=True);p.add_argument('--old',default='');args=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,required=True);p.add_argument('--old',default='');p.add_argument('--target',default='');args=p.parse_args(argv)
     if sys.platform!='win32':raise RuntimeError('This entry is for Windows')
     import webview
-    root=args.root.resolve();app=MigrationWindow(root,args.old);app.serve()
+    root=args.root.resolve();app=MigrationWindow(root,args.old,args.target);app.serve()
     try:
         geometry=window_geometry(webview.screens[0]);geometry.update(width=min(720,geometry['width']),height=min(720,geometry['height']))
         app.window=webview.create_window('Hélène · перенос',app.origin,**geometry,min_size=(420,360),frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
