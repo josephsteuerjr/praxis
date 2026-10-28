@@ -25,6 +25,7 @@ class PosixSetup(unittest.TestCase):
                 children.append(subprocess.Popen([sys.executable,'worker.py'],cwd=old))
                 children.append(subprocess.Popen([sys.executable,'worker.py'],cwd=other))
                 children.append(subprocess.Popen([sys.executable,'-c','import time;time.sleep(90)'],cwd=old))
+                children.append(subprocess.Popen([sys.executable,str(other/'worker.py'),'--watched-file',str(old/'worker.py')],cwd=old))
                 with chdir(old),patch.object(lifecycle,'service',return_value=None):lifecycle.stop(old)
                 for child in children[:2]:self.assertIsNotNone(child.poll())
                 for child in children[2:]:self.assertIsNone(child.poll())

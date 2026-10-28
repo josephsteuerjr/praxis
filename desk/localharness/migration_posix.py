@@ -25,16 +25,17 @@ def _inside(value, root, *, cwd=None):
 
 
 def _script_inside(info,root,process):
-    args=info['cmdline'] or [];inline=False
-    for arg in args[1:]:
-        if inline:inline=False;continue
-        if arg in ('-c','--eval','-e','-m'):inline=True;continue
+    args=iter((info['cmdline'] or [])[1:])
+    for arg in args:
+        if arg in ('-c','--eval','-e','-m','-p','--print'):return False
+        if arg in ('-W','-X','-r','--require','--loader','--rcfile'):
+            next(args,None);continue
         if arg.startswith('-'):continue
         path=Path(arg)
-        if path.is_absolute():
-            if path.resolve()!=root and _inside(arg,root):return True
-        elif path.suffix.lower() in {'.py','.pyw','.js','.mjs','.cjs','.sh','.bash'}:
-            if _inside(arg,root,cwd=process.cwd()):return True
+        # Only the entry script identifies an externally hosted interpreter.
+        # Later data/status filenames do not grant authority to stop it.
+        if not path.is_absolute():path=Path(process.cwd())/path
+        return path.is_file() and path.resolve()!=root and _inside(path,root)
     return False
 
 
