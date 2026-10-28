@@ -24,16 +24,28 @@ def _processes(old):
     import psutil
     old=Path(old).resolve();ancestors={os.getpid()}
     result=[]
-    for process in psutil.process_iter(['pid','exe','cmdline','create_time']):
+    for process in psutil.process_iter(['pid','exe','cmdline','create_time','status']):
         try:
             info=process.info
-            if process.pid in ancestors:continue
+            if process.pid in ancestors or info['status'] in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD):continue
             executable=Path(info['exe'] or '').name.lower()
             script_owner=(executable.startswith(('python','node')) or executable in {'sh','bash'})
             if _inside(info['exe'],old) or script_owner and any(_inside(arg,old) and Path(arg).resolve()!=old for arg in (info['cmdline'] or [])[1:] if not arg.startswith('-')):
                 result.append((process,info))
         except (psutil.NoSuchProcess,psutil.AccessDenied):continue
     return result
+
+
+def _wait_closed(process,timeout):
+    """Non-child zombies retain a PID until their parent reaps, but no files."""
+    import psutil
+    deadline=time.monotonic()+timeout
+    while True:
+        try:
+            if not process.is_running() or process.status() in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD):return True
+        except psutil.NoSuchProcess:return True
+        if time.monotonic()>=deadline:return False
+        time.sleep(.05)
 
 
 def _run(args, *, elevated=False):
@@ -94,8 +106,9 @@ def stop(old):
         try:
             if process.create_time()!=info['create_time'] or process.cmdline()!=info['cmdline']:raise RuntimeError('Old process identity changed')
             process.terminate()
-            try:process.wait(timeout=8)
-            except psutil.TimeoutExpired:process.kill();process.wait(timeout=5)
+            if not _wait_closed(process,8):
+                process.kill()
+                if not _wait_closed(process,5):raise RuntimeError('Прежний процесс не завершился: '+str(process.pid))
         except psutil.NoSuchProcess:pass
     quiescent(old)
     return {'service':before}
