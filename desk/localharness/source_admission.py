@@ -142,10 +142,11 @@ def activate(program, *, lease_held=False):
         if declaration.get('pristine'):
             # Both immutable inputs and the still-unmodified custody tree have
             # been checked before restoring legacy updater's derived files.
-            restored = program / '.code-upstream.restore-part'
-            shutil.copyfile(archive, restored)
-            restored.replace(program / 'code-upstream.zip')
-            write(program / 'code-upstream.json', upstream)
+            for source,name in ((archive,'code-upstream.zip'),
+                                (program/'source-admission-upstream.json','code-upstream.json')):
+                restored = program / ('.'+name+'.restore-part')
+                shutil.copyfile(source, restored)
+                restored.replace(program / name)
         if current != target:
             if staged.exists():
                 # Retain an interrupted extraction, including any later edit.

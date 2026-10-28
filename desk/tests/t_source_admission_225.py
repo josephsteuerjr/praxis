@@ -159,6 +159,7 @@ class SourceAdmission(unittest.TestCase):
         self.assertNotEqual((self.program/'code-upstream.zip').read_bytes(),pristine)
         self.assertTrue(admission.activate(self.program))
         self.assertEqual((self.program/'code-upstream.zip').read_bytes(),pristine)
+        self.assertEqual((self.program/'code-upstream.json').read_bytes(),manifest)
         self.assertEqual((self.program/'tree/module.py').read_bytes(),self.real)
 
     def test_protected_pristine_does_not_authorize_unknown_resealed_contents(self):

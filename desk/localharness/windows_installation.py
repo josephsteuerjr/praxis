@@ -230,7 +230,7 @@ def in_place(package, old, *, data=None, progress,source_mode='preserve',cancell
         migration_source.verify(package)
         from .python_updates import prepare_code
         prepare_code(old,package,WizardProgress(progress),source_mode,cancelled=cancelled,
-                     require_review=source_mode=='preserve',forceExtensions=force_extensions)
+                     require_review=source_mode=='preserve',resolution_owner='incoming',forceExtensions=force_extensions)
         progress('stopping_old')
         before = migration_windows.service(old)
         migration_windows.stop(old); migration_windows.quiescent(old)
