@@ -1,0 +1,112 @@
+{
+  "version": "2.2.14",
+  "implementation_commit": "cfef862a7a39a0573cba0b995adb3a8b3618b25e",
+  "source_commit": "c47c9fd63f637559973ce999a4436397493c6767",
+  "windows_path_regression": {
+    "passed": true,
+    "tests": 3,
+    "red_before_fix": true,
+    "cases": [
+      "Extended path appears after successful preflight",
+      "Equivalent drive and UNC forms",
+      "Resolved destination outside root remains rejected"
+    ]
+  },
+  "real_windows_payload_copy": {
+    "failure_reproduced": true,
+    "fixed_resume_passed": true,
+    "source": "2.2.13 qualified Windows payload, copied with corrected 2.2.14 engine",
+    "scope": "Program copy into disposable versioned folder; no model/provider call"
+  },
+  "legacy_migration_unit_suite": {
+    "baseline_tests": 21,
+    "current_tests": 24,
+    "unchanged_fixture_errors": [
+      "test_failed_prepared_attempt_can_resnapshot_without_losing_prior_data",
+      "test_failure_after_stop_restores_previous_service",
+      "test_final_snapshot_follows_quiescence_not_discovery",
+      "test_portable_archive_migrates_profile_without_copying_program",
+      "test_retirement_failure_keeps_proven_new_owner"
+    ],
+    "note": "Five existing fixtures lack verified incoming source snapshots or a referenced live-code directory; same errors reproduced on unmodified 2.2.13 source"
+  },
+  "platform_sources": {
+    "windows": {
+      "commit": "d623b9231159f42876df121138a181d7a1c68762",
+      "tree": "e9ab95c547b80d03e4c834b2acca15a0b3362dcb",
+      "tag": "source/helene-2.2.14-windows",
+      "archive": "Helene-2.2.14.zip",
+      "sha256": "4a369c872765ee92baba9af9fffedf967c4124e65a4f84885162fc40ea5506cf",
+      "size": 140584391,
+      "source_file_count": 723
+    },
+    "macos": {
+      "commit": "e7e380ede59818da829af555958644b85d137738",
+      "tree": "47b98efe4e0ce16b04bdf50b93e20edae65cba10",
+      "tag": "source/helene-2.2.14-macos",
+      "archive": "Helene-2.2.14-macos-arm64.zip",
+      "sha256": "4de0091abaec86b5f01b5d364abbfd947aad74572dbd60c944f326352c10c4ed",
+      "size": 127873489,
+      "source_file_count": 1050
+    },
+    "debian": {
+      "commit": "85470def49e092eab4a6c1cb81425c59b0ec373c",
+      "tree": "668d328eaddf8b4d11851ec174370faa5180fe9f",
+      "tag": "source/helene-2.2.14-debian",
+      "archive": "Helene-2.2.14-linux-x86_64.zip",
+      "sha256": "4690902005fc7547f882a0bcc1e6d59f1fe59615d49ef3f7fcc51b62f91f1ffc",
+      "size": 666593581,
+      "source_file_count": 728
+    },
+    "fedora": {
+      "commit": "fababa894df419b72702297f934ceee12211d7ae",
+      "tree": "5b0dbead229bbe7d2a29b9b40f3219cf6483f48d",
+      "tag": "source/helene-2.2.14-fedora",
+      "archive": "Helene-2.2.14-fedora-x86_64.zip",
+      "sha256": "13e2603b283d0800f90cfe98802f8adeb5b9ebf3c65b6d82ea70abb18826826a",
+      "size": 681484244,
+      "source_file_count": 727
+    }
+  },
+  "construction": "Four archives rebuilt with corrected Python source; qualified native runtimes and compiled frontends reused; ZIP CRC and source/passport identities checked",
+  "frontend_source_unchanged_except_version": true,
+  "other_os_runtime_tests": "Deferred as requested by owner",
+  "limits": [
+    "No new native runtime tests on macOS/Linux",
+    "No external provider request or affected-user acceptance claimed",
+    "No owner installation changed",
+    "2.2.13 native active-runner proof retained; runner code unchanged"
+  ],
+  "privacy": {
+    "windows": {
+      "source_files": 1084,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1736,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1089,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "fedora": {
+      "source_files": 1088,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "cfef862a7a39a0573cba0b995adb3a8b3618b25e": {
+      "files": 2248,
+      "matches": [],
+      "known_private_values": 4
+    },
+    "c47c9fd63f637559973ce999a4436397493c6767": {
+      "files": 2252,
+      "matches": [],
+      "known_private_values": 4
+    }
+  }
+}
