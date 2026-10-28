@@ -848,31 +848,6 @@ def filter_tree(root, args):
     return {**root,'children':children}, count+1
 
 
-def accessibility_window_binding(named, bounds):
-    roots = [pointer for pointer, rect in named if not ((rect['x'],rect['y']) == (0,0) and (bounds['x'],bounds['y']) != (0,0)) and abs(rect['x']-bounds['x']) <= 40 and abs(rect['y']-bounds['y']) <= 60]
-    if len(roots) == 1:
-        return roots[0], False
-    if not roots and len(named) == 1:
-        pointer, rect = named[0]
-        if (rect['x'], rect['y']) == (0, 0) and all(rect[k] == bounds[k] for k in ('width', 'height')):
-            return pointer, True
-    raise RuntimeError('AT-SPI window binding is absent or ambiguous; no action performed')
-
-
-def equivalent_x11_windows(pid, title, bounds):
-    handles = re.findall(r'0x[0-9a-fA-F]+', command(['xprop','-root','_NET_CLIENT_LIST_STACKING']))
-    if len(handles) > 10000:
-        raise RuntimeError('X11 peer observation exceeds its supported window limit')
-    matches = []
-    for value in handles:
-        hwnd = handle(value)
-        if pid_of(hwnd) == pid and window_title(hwnd) == title:
-            rect = geometry(hwnd)
-            if all(rect[k] == bounds[k] for k in ('width','height')):
-                matches.append(hwnd)
-    return matches
-
-
 def accessible(args, capability):
     # The Linux branch receives raw JSON rather than the Windows serde plan.
     # Validate selection and action fields before even observing the target.
@@ -914,7 +889,7 @@ def accessible(args, capability):
            if name in read_args and read_args[name]!=value]
     text_bytes=0
     try:
-        desktop = spi.own(spi.fn["get_desktop"](0)); named = []
+        desktop = spi.own(spi.fn["get_desktop"](0)); roots = []
         if not desktop: raise RuntimeError("AT-SPI desktop unavailable")
         applications=spi.fn['accessible_get_child_count'](desktop,None)
         if not 0<=applications<=500: raise RuntimeError('AT-SPI application binding is incomplete; no action performed')
@@ -928,18 +903,9 @@ def accessible(args, capability):
                 window = spi.own(spi.fn["accessible_get_child_at_index"](app, child_index, None))
                 if not window: continue
                 name, rectangle = spi.text("accessible_get_name", window, None), spi.rect(window)
-                if name == title and rectangle:
-                    named.append((window, rectangle))
-        # GTK4 on X11 may report a window-local origin even for SCREEN extents.
-        # Bind a native pattern only when PID+title identify exactly one root
-        # and its client size agrees with the independently observed X window.
-        # Never reinterpret these reported element positions as screen pixels.
-        bound_window, local_coordinates = accessibility_window_binding(named, bounds)
-        if local_coordinates:
-            equivalent = equivalent_x11_windows(pid, title, bounds)
-            if equivalent != [hwnd]:
-                raise RuntimeError('X11 window identity is ambiguous for AT-SPI origin-unverified binding; no action performed')
-            notes.append('AT-SPI root origin is unverified; element rectangles must not be used as screen coordinates')
+                if name == title and rectangle and abs(rectangle["x"]-bounds["x"]) <= 40 and abs(rectangle["y"]-bounds["y"]) <= 60:
+                    roots.append(window)
+        if len(roots) != 1: raise RuntimeError("AT-SPI window binding is absent or ambiguous; no action performed")
 
         def walk(pointer, depth, path):
             nonlocal text_bytes
@@ -952,7 +918,7 @@ def accessible(args, capability):
             enabled = bool(states and spi.fn["state_set_contains"](states, 8))
             rectangle = spi.rect(pointer)
             if rectangle:
-                rectangle.update(left=rectangle['x'], top=rectangle['y'], center={'x':rectangle['x']+rectangle['width']//2,'y':rectangle['y']+rectangle['height']//2}, coordinate_space='reported_origin_unverified' if local_coordinates else 'screen')
+                rectangle.update(left=rectangle['x'], top=rectangle['y'], center={'x':rectangle['x']+rectangle['width']//2,'y':rectangle['y']+rectangle['height']//2})
             editable, action, text_iface = spi.iface(pointer, "editable_text"), spi.iface(pointer, "action"), spi.iface(pointer, "text")
             patterns = (["set_value"] if editable else []) + (["invoke"] if action else [])
             text_length = max(0, spi.fn['text_get_character_count'](text_iface, None)) if text_iface else 0
@@ -982,7 +948,7 @@ def accessible(args, capability):
                     break
             return row
 
-        root = walk(bound_window, 0, "0")
+        root = walk(roots[0], 0, "0")
         result = {"ok": True, "platform": "linux", "backend": "atspi", "hwnd": "0x%X" % hwnd, "pid": pid,
                   "shape":args.get('shape','tree'), "partial": bool(truncated), "truncated": bool(truncated),
                   "truncated_by":sorted(set(truncated)), "total_known":not truncated,
@@ -1066,7 +1032,7 @@ def accessible(args, capability):
         else: raise ValueError("unsupported AT-SPI element action; use invoke/set_value/focus/toggle")
         if not ok: raise RuntimeError("AT-SPI did not confirm element action")
         result.update(action=operation, did=operation, element_before=items[selected], element_after=None,
-                      waited_ms=result['elapsed_ms'], notes=[*notes, 'Native pattern was called; resulting state is not independently observed.'])
+                      waited_ms=result['elapsed_ms'], notes=['Native pattern was called; resulting state is not independently observed.'])
         return result
     finally: spi.close()
 

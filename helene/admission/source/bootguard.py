@@ -1,0 +1,391 @@
+"""
+Praxis — boot-супервизор для безопасного само-изменения любой глубины.
+
+Запускает mtproto_runner подпроцессом и стережёт загрузку, чтобы её правки своего кода
+нельзя было «закопать» себя насмерть:
+
+- preflight (импорт ядра в отдельном процессе) ловит синтаксис/импорт-ошибки ДО запуска;
+- если правка не прошла preflight или ядро падает на старте (раньше grace-окна) —
+  откат `git reset --hard` на последний здоровый коммит и перезапуск на нём;
+- в дневник ей пишется внятная строка: что упало, на что откатилась, как глянуть diff
+  (`git show <bad>`). Не мусор, а сообщение, которое она прочитает на следующем старте.
+
+«Здоровым» считается коммит, проживший >= PRAXIS_BOOT_GRACE секунд. `restart_self`
+завершает runner кодом 42 — это намеренный перезапуск, не падение.
+
+Контейнерный entrypoint: `python bootguard.py` (вместо `python mtproto_runner.py`).
+Модуль самодостаточен (только stdlib) — битая правка ядра не ломает сам супервизор.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import praxis_time
+import json
+import logging
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("praxis-boot")
+
+BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
+
+# файловый хвост для панели устройства — инлайном (НЕ через logsink: супервизор обязан
+# оставаться самодостаточным, битая правка чужого модуля не должна его ронять)
+try:
+    from logging.handlers import RotatingFileHandler
+    _logs = BASE / "memory" / ".logs"
+    _logs.mkdir(parents=True, exist_ok=True)
+    _h = RotatingFileHandler(_logs / "boot.log", maxBytes=500_000, backupCount=1, encoding="utf-8")
+    _h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(_h)
+except Exception:
+    pass
+RUNNER = "mtproto_runner.py"
+STATE = BASE / "memory" / ".boot.json"
+JOURNAL_DIR = BASE / "memory" / "journal"
+
+RESTART_CODE = 42
+CORE_MODULES = ["agent", "consolidate", "heartbeat", "mtproto_runner"]
+PANIC_SENTINEL = BASE / "memory" / ".panic"
+
+
+def panic_active() -> bool:
+    return PANIC_SENTINEL.exists()
+
+
+def _env_float(name: str, default: str) -> float:
+    try:
+        return float(os.getenv(name, default))
+    except ValueError:
+        return float(default)
+
+
+# --------------------------------------------------------------------------- #
+#  git / состояние / журнал
+# --------------------------------------------------------------------------- #
+
+def _git(*args: str):
+    return subprocess.run(["git", "-C", str(BASE), *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+
+
+def head_sha() -> str:
+    try:
+        return _git("rev-parse", "--short", "HEAD").stdout.strip()
+    except Exception:
+        return ""
+
+
+def rollback(sha: str) -> bool:
+    try:
+        return _git("reset", "--hard", sha).returncode == 0
+    except Exception:
+        log.warning("rollback на %s не удался", sha, exc_info=True)
+        return False
+
+
+def load_state() -> dict:
+    try:
+        d = json.loads(STATE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_state(state: dict) -> None:
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        log.debug("save_state не удался", exc_info=True)
+
+
+def journal(msg: str) -> None:
+    """Внятная строка ей в дневник (она читает его на старте). Не зависит от ядра."""
+    try:
+        JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+        # ⚠ День — ЕЁ: см. praxis_time.
+        day = praxis_time.day_key()
+        p = JOURNAL_DIR / f"{day}.md"
+        if not p.exists():
+            p.write_text(f"# {day}\n\n", encoding="utf-8")
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write(f"- {praxis_time.now():%H:%M} (s3) [boot] {msg}\n")
+    except Exception:
+        log.debug("journal не удался", exc_info=True)
+
+
+# --------------------------------------------------------------------------- #
+#  preflight
+# --------------------------------------------------------------------------- #
+
+def preflight(cwd: Path = BASE, modules: list[str] | None = None) -> tuple[bool, str]:
+    """Импортировать ядро в отдельном процессе. -> (ок, первая строка ошибки)."""
+    mods = modules if modules is not None else CORE_MODULES
+    code = "import " + ", ".join(mods)
+    try:
+        # PYTHONUTF8: ребёнок с трубой пишет в кодировке локали (cp1251 на Windows), а
+        # читаем мы его как UTF-8 — русский текст ошибки импорта приезжал бы кашей.
+        r = subprocess.run([sys.executable, "-c", code], cwd=str(cwd),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           env={**os.environ, "PYTHONUTF8": "1"}, timeout=120)
+    except Exception as e:
+        return False, str(e)
+    if r.returncode == 0:
+        return True, ""
+    err = (r.stderr or r.stdout or "").strip().splitlines()
+    return False, (err[-1] if err else "preflight failed")
+
+
+# --------------------------------------------------------------------------- #
+#  Чистые политики (тестируемые)
+# --------------------------------------------------------------------------- #
+
+def boot_blocked_reason(env) -> str:
+    """Почему боевой старт выполнять нельзя. Пустая строка — можно.
+
+    Симметрия к забору стенда (_sandbox): 06.07.2026 прогон тестов пошёл по ЖИВОЙ
+    /app/memory и завёл ей комнату -100500 с фальшивым досье. Обратная ошибка тише
+    и хуже: боевой процесс, поднятый с PRAXIS_TEST=1, уведёт PRAXIS_BASE в
+    одноразовый /tmp — она проснётся без памяти, без людей, без дневника и НИЧЕГО
+    об этом не узнает; к следующему рестарту каталог уже вычищен. Такое обязано
+    падать громко, а не подниматься молча.
+    """
+    if env.get("PRAXIS_TEST"):
+        return ("PRAXIS_TEST=1 в боевом окружении: под тестовым режимом её база уходит "
+                "в одноразовый каталог, и она поднимется без памяти. Убери PRAXIS_TEST "
+                "из .deploy.env / окружения контейнера — или, если это был прогон "
+                "стенда, запускай его через `python praxis_test.py`, а не через "
+                "`python bootguard.py`.")
+    return ""
+
+
+def decide_preflight(ok: bool, head: str, last_good: str | None) -> tuple[str, str | None]:
+    if ok:
+        return ("launch", None)
+    if last_good and last_good != head:
+        return ("rollback", last_good)
+    return ("stuck", None)
+
+
+def decide_after(rc: int, elapsed: float, launch_sha: str, last_good: str | None,
+                 early_fails: int, grace: float, max_fails: int) -> dict:
+    """Решение после выхода runner. Возвращает action + что пометить хорошим / куда откатить."""
+    if rc == 0:
+        return {"action": "stop", "early_fails": early_fails}
+    if elapsed >= grace:
+        # прожил достаточно — код здоров; намеренный рестарт или поздний сбой не повод к откату
+        return {"action": "relaunch", "mark_good": launch_sha, "early_fails": 0}
+    if rc == RESTART_CODE:
+        # быстрый, но намеренный перезапуск — не падение
+        return {"action": "relaunch", "early_fails": early_fails}
+    early_fails += 1
+    if last_good and last_good != launch_sha and early_fails >= max_fails:
+        return {"action": "rollback", "to": last_good, "bad": launch_sha, "early_fails": 0}
+    return {"action": "relaunch", "early_fails": early_fails}
+
+
+# --------------------------------------------------------------------------- #
+#  Цикл супервизора
+# --------------------------------------------------------------------------- #
+
+def _run_runner() -> int:
+    """Запустить раннер и, пока он жив, хоронить осиротевших внуков.
+
+    ⚠ ЧТО БЫЛО. Здесь стоял `subprocess.run`, который БЛОКИРУЕТ до выхода раннера,
+    а `_reap_orphans()` звался только ПОСЛЕ. То есть пока она работает — часами —
+    сирот не подбирал никто, хотя PID 1 обязан. Замер на проде 28.08: через 56 минут
+    после её перезапуска в контейнере висело 1797 зомби из 1807 процессов, 1716 из
+    них — `git`, прирост 31 в минуту. Источником оказались не самоперезапуски (так
+    было написано в комментарии ниже), а форж: рабочий процесс порождает git, выходит
+    не дождавшись, и дети переезжают к PID 1.
+
+    ⚠⚠ И ПОЧЕМУ ЭТО НЕЛЬЗЯ БЫЛО СДЕЛАТЬ ПРОСТО. `waitpid(-1)` не выбирает, кого ждать:
+    он одинаково охотно снимет и осиротевшего внука, и самого раннера — а на коде
+    выхода раннера висит вся логика отката. Прежний код обходил это тем, что жал
+    только там, где своих живых детей нет. Здесь вместо обхода — разбор: поймав pid
+    раннера, забираем его статус себе и отдаём наверх, вместо того чтобы потерять.
+    """
+    proc = subprocess.Popen([sys.executable, RUNNER], cwd=str(BASE))
+    return _wait_runner_reaping(proc)
+
+
+def _runner_status_or_restart(proc) -> int:
+    """Код выхода раннера, не доверяя нулю из ПОТЕРЯННОГО статуса.
+
+    subprocess.Popen при ECHILD (ребёнка уже снял кто-то другой: чужой waitpid(-1),
+    SIGCHLD-хендлер) молча подставляет returncode=0 — «мы не смогли узнать, значит
+    считаем, что всё хорошо». Здесь этот ноль означает «остановиться навсегда»
+    (decide_after: rc==0 -> stop, PID 1 выходит, контейнер умирает) — решение,
+    которого никто не принимал. Потерянный статус — это «перезапустить», не «стоп»:
+    честный ноль Popen узнаёт только из СВОЕГО waitpid, и тогда returncode уже
+    стоит до всякого ECHILD.
+    """
+    if proc.returncode is not None:
+        return proc.returncode
+    try:
+        _pid, status = os.waitpid(proc.pid, 0)
+    except ChildProcessError:
+        log.warning("статус раннера потерян (ребёнка снял не супервизор) — "
+                    "перезапускаю, а не останавливаюсь")
+        proc.returncode = RESTART_CODE
+        return RESTART_CODE
+    except OSError:
+        log.warning("waitpid по раннеру не удался — перезапускаю, не останавливаюсь",
+                    exc_info=True)
+        proc.returncode = RESTART_CODE
+        return RESTART_CODE
+    try:
+        code = os.waitstatus_to_exitcode(status)
+    except ValueError:
+        code = RESTART_CODE
+    proc.returncode = code
+    return code
+
+
+def _wait_runner_reaping(proc, *, poll: float = 0.5) -> int:
+    """Ждать именно `proc`, попутно сжимая всех прочих детей."""
+    if not hasattr(os, "WNOHANG"):  # не-POSIX: зомби там не бывает
+        return proc.wait()
+    reaped = 0
+    while True:
+        try:
+            pid, status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            # Детей не осталось вовсе — раннер сжат не нами, и его статус мог
+            # потеряться. Прежний `proc.wait()` в этой ветке возвращал подставной
+            # ноль Popen-а — и супервизор «чисто останавливался» по чужой ошибке.
+            return _runner_status_or_restart(proc)
+        except OSError:
+            log.debug("waitpid в ожидании раннера не удался", exc_info=True)
+            return _runner_status_or_restart(proc)
+        if pid == 0:
+            time.sleep(poll)   # дети есть, все живые — не жжём процессор
+            continue
+        if pid == proc.pid:
+            try:
+                code = os.waitstatus_to_exitcode(status)
+            except ValueError:
+                # Остановлен, а не завершён: продолжаем ждать настоящего конца.
+                continue
+            # Popen не знает, что мы сняли его ребёнка сами. Скажем ему, иначе он
+            # будет ждать уже несуществующий процесс и ругаться в деструкторе.
+            proc.returncode = code
+            if reaped:
+                log.info("сжато осиротевших процессов: %d", reaped)
+            return code
+        reaped += 1
+        if reaped % 500 == 0:
+            log.info("сжато осиротевших процессов: %d (раннер жив)", reaped)
+
+
+def _reap_orphans() -> int:
+    """Сжать осиротевших внуков: в контейнере супервизор — это PID 1.
+
+    Раннер порождает git, тесты, форж, любой subprocess-тул. Когда раннер умирает
+    (её `restart_self` после смёрженного proposal — рядовое событие), его дети
+    переезжают к PID 1, а PID 1 их никогда не ждал: каждый самоперезапуск оставлял
+    ~200 зомби, и держались они до пересоздания контейнера. Упереться в cgroup
+    `pids.max` означает, что у неё разом и молча отваливаются ВСЕ руки, которым
+    нужен fork — а вылечит это только тот самый разрыв, которого весь контур
+    непрерывности избегает.
+
+    Зовём только там, где своих живых детей у нас нет (сразу после subprocess.run
+    и в паузах ожидания), поэтому `waitpid(-1)` не может украсть код выхода
+    раннера — а на нём висит вся логика отката.
+    """
+    if not hasattr(os, "WNOHANG"):  # не-POSIX: зомби там не бывает
+        return 0
+    reaped = 0
+    # Потолок итераций: осиротевший процесс, который непрерывно порождает и хоронит
+    # детей (обычный `while true` из форж-сессии), иначе удержит нас здесь навсегда —
+    # а вызов стоит между выходом раннера и решением о перезапуске, то есть она бы
+    # просто не поднялась. Остаток сожнём на следующем круге.
+    for _ in range(4096):
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break  # детей не осталось вовсе
+        except OSError:
+            log.debug("waitpid осиротевших не удался", exc_info=True)
+            break
+        if pid == 0:
+            break  # дети есть, но все живые
+        reaped += 1
+    if reaped:
+        log.info("сжато осиротевших процессов: %d", reaped)
+    return reaped
+
+
+def run() -> None:
+    blocked = boot_blocked_reason(os.environ)
+    if blocked:
+        # Не в дневник: под PRAXIS_TEST дневник лежит не там, где она его будет читать,
+        # и запись сама станет частью подделки. Громко в лог и наружу кодом выхода.
+        log.critical("боевой старт отменён — %s", blocked)
+        raise SystemExit(f"bootguard: {blocked}")
+
+    grace = _env_float("PRAXIS_BOOT_GRACE", "60")
+    max_fails = int(_env_float("PRAXIS_BOOT_MAX_FAILS", "3"))
+    stuck_sleep = _env_float("PRAXIS_BOOT_STUCK_SLEEP", "15")
+    state = load_state()
+    panicked = False
+
+    while True:
+        if panic_active():
+            if not panicked:
+                journal("я остановлена (panic). Подниму себя, когда Егор уберёт memory/.panic.")
+                log.warning("PANIC sentinel — простаиваю, жду снятия (%s)", PANIC_SENTINEL)
+                panicked = True
+            _reap_orphans()
+            time.sleep(stuck_sleep)
+            continue
+        panicked = False
+
+        head = head_sha()
+        ok, err = preflight()
+        if not ok:
+            act, target = decide_preflight(ok, head, state.get("last_good"))
+            if act == "rollback":
+                if rollback(target):
+                    journal(f"откатила свою правку {head}: код не прошёл preflight — {err}. "
+                            f"Вернулась на {target}. Посмотреть, что я сломала: git show {head}")
+                state["early_fails"] = 0
+                save_state(state)
+                continue
+            journal(f"моя правка {head} не проходит preflight ({err}), а откатываться некуда — "
+                    f"нужна твоя рука, Егор.")
+            _reap_orphans()
+            time.sleep(stuck_sleep)
+            continue
+
+        launch_sha = head
+        start = time.time()
+        log.info("launch runner @ %s", launch_sha)
+        rc = _run_runner()
+        elapsed = time.time() - start
+        # Раннер уже сжат самим subprocess.run — здесь остаются только его осиротевшие дети.
+        _reap_orphans()
+
+        d = decide_after(rc, elapsed, launch_sha, state.get("last_good"),
+                         int(state.get("early_fails", 0)), grace, max_fails)
+        state["early_fails"] = d["early_fails"]
+        if d.get("mark_good"):
+            state["last_good"] = d["mark_good"]
+        if d["action"] == "stop":
+            save_state(state)
+            log.info("runner вышел чисто (rc=0) — останавливаюсь")
+            return
+        if d["action"] == "rollback":
+            if rollback(d["to"]):
+                journal(f"моя правка {d['bad']} падает на старте (rc={rc}, прожила {elapsed:.0f}s) — "
+                        f"откатила на {d['to']}. Посмотреть diff: git show {d['bad']}")
+        save_state(state)
+
+
+if __name__ == "__main__":
+    run()
