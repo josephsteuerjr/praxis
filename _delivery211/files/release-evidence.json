@@ -1,0 +1,343 @@
+{
+  "format": "helene-release-evidence.v1",
+  "version": "2.2.11",
+  "implementation_commit": "2465377b54ba40cf8810b33ec8a0cd19d0529c11",
+  "source_commit": "2632f338b269bfe12859efa368c6c452c7c3827f",
+  "source_tree": "c6c5c9f101fbdb520302d8886095ae206ad84a26",
+  "platform_sources": {
+    "fedora": {
+      "commit": "e7bdd1f891358f00cae9bf577f973ab3425bb886",
+      "tree": "6f48d44fcfb137662f459c7e2b9aa165980e5c35",
+      "tag": "source/helene-2.2.11-fedora",
+      "archive": "Helene-2.2.11-fedora-x86_64.zip",
+      "sha256": "b56459b5f31172b909889e03d7a606b4d479397519c197c3d6a9c99c4ffb74fc",
+      "size": 681482362,
+      "source_file_count": 727
+    },
+    "windows": {
+      "commit": "d379b6158e97e4b14deeefa7d9c7e64e81a57141",
+      "tree": "4c67acf2464eeb9d885e6536c9096daef3a5c8aa",
+      "tag": "source/helene-2.2.11-windows",
+      "archive": "Helene-2.2.11.zip",
+      "sha256": "81606b63f6f923c5f90414214d9e7e798d136a15e1828a9c259386e83de8a319",
+      "size": 140582519,
+      "source_file_count": 723
+    },
+    "macos": {
+      "commit": "4e9191776e9044c20abc19a039d16bfe4c1220bb",
+      "tree": "4c2b3423cd68c7a126f75d8333aff3ec12103e4d",
+      "tag": "source/helene-2.2.11-macos",
+      "archive": "Helene-2.2.11-macos-arm64.zip",
+      "sha256": "1bcdca0eb251e62ad76452c37c6fcb8cd418a31d9db46464f9bf2f2b341dd46a",
+      "size": 127871530,
+      "source_file_count": 1050
+    },
+    "debian": {
+      "commit": "8fb33c02c8d8d894a837ebe7b1f80b68b464ea16",
+      "tree": "bd074f938723df44984b7b5c1291f6d747156cd3",
+      "tag": "source/helene-2.2.11-debian",
+      "archive": "Helene-2.2.11-linux-x86_64.zip",
+      "sha256": "da025ec8842239fd29ae9012662a13af887044f77aa58ac5db19636deb544fcc",
+      "size": 666591699,
+      "source_file_count": 728
+    }
+  },
+  "source_tests": {
+    "passed": true,
+    "tests": 27,
+    "modules": {
+      "t_native_migration_merge_2810": 4,
+      "t_posix_setup_2810": 7,
+      "t_controller_typing_startup_2810": 1,
+      "t_source_admission_225": 15
+    }
+  },
+  "causal_regression": {
+    "issue": "cold typing import raced desktop dataclasses",
+    "before": "same typing.ClassVar failure reproduced with real paused stdlib import",
+    "after": "import completes before desktop dataclasses; native Windows and Fedora fresh starts pass"
+  },
+  "frontends": {
+    "app": {
+      "exit_code": 0,
+      "log": "front-app.log"
+    },
+    "remote": {
+      "exit_code": 0,
+      "log": "front-remote.log"
+    },
+    "mobile": {
+      "exit_code": 0,
+      "log": "front-mobile.log"
+    },
+    "miniapp": {
+      "exit_code": 0,
+      "log": "front-miniapp.log"
+    },
+    "setup/ui": {
+      "exit_code": 0,
+      "log": "front-setup-ui.log"
+    }
+  },
+  "native_first_launch_and_fresh": {
+    "windows": {
+      "passed": true,
+      "native_qualified_archive_sha256": "57128f95bd76c1bad40eab60f97bde451e5a4f92658cdb8f1c81810466f34ead",
+      "final_archive_sha256": "81606b63f6f923c5f90414214d9e7e798d136a15e1828a9c259386e83de8a319",
+      "qualification": "retained native fresh start plus explicit final protected-upstream delta qualification",
+      "final_delta": {
+        "archive_sha256": "81606b63f6f923c5f90414214d9e7e798d136a15e1828a9c259386e83de8a319",
+        "native_qualified_archive_sha256": "57128f95bd76c1bad40eab60f97bde451e5a4f92658cdb8f1c81810466f34ead",
+        "changed_paths": [
+          "app/desk.json",
+          "app/localharness/code_transition.py",
+          "app/localharness/migration_posix.py",
+          "app/localharness/python_updates.py",
+          "app/localharness/source_admission.py",
+          "app/localharness/upstream_recovery.py",
+          "app/localharness/windows_installation.py",
+          "python-package-files.json",
+          "repack-source.json",
+          "source-admission-upstream.json",
+          "source-admission-upstream.zip",
+          "source-admission.json",
+          "source-inputs.json"
+        ],
+        "unchanged_compressed_members": 12892,
+        "pristine_upstream_unchanged": true,
+        "packaged_module_reseal_activation_and_idempotency": true,
+        "native_runtime_rebuilt": false
+      },
+      "first_launch_wizard": true,
+      "fresh_transaction": true,
+      "selected_data_folder": true,
+      "live_channel_proof": true,
+      "shortcut_destination": "temporary fixture Desktop"
+    },
+    "fedora": {
+      "passed": true,
+      "native_qualified_archive_sha256": "3284b2a3c6889aa7af0d2cbff468c0ec6843e2e24c8ae9a8c03aba7bcc0a9558",
+      "final_archive_sha256": "b56459b5f31172b909889e03d7a606b4d479397519c197c3d6a9c99c4ffb74fc",
+      "qualification": "retained native fresh start plus explicit final protected-upstream delta qualification",
+      "final_delta": {
+        "archive_sha256": "b56459b5f31172b909889e03d7a606b4d479397519c197c3d6a9c99c4ffb74fc",
+        "native_qualified_archive_sha256": "3284b2a3c6889aa7af0d2cbff468c0ec6843e2e24c8ae9a8c03aba7bcc0a9558",
+        "changed_paths": [
+          "app/desk.json",
+          "app/localharness/code_transition.py",
+          "app/localharness/migration_posix.py",
+          "app/localharness/python_updates.py",
+          "app/localharness/source_admission.py",
+          "app/localharness/upstream_recovery.py",
+          "app/localharness/windows_installation.py",
+          "python-package-files.json",
+          "repack-source.json",
+          "source-admission-upstream.json",
+          "source-admission-upstream.zip",
+          "source-admission.json",
+          "source-inputs.json"
+        ],
+        "unchanged_compressed_members": 19564,
+        "pristine_upstream_unchanged": true,
+        "packaged_module_reseal_activation_and_idempotency": true,
+        "native_runtime_rebuilt": false
+      },
+      "first_launch_wizard": true,
+      "fresh_transaction": true,
+      "selected_data_folder": true,
+      "live_channel_proof": true,
+      "shortcut_destination": "temporary fixture Desktop"
+    },
+    "debian": {
+      "passed": true,
+      "native_qualified_archive_sha256": "b822b7643d56f73fe7d26c68609f2b84e1faf96083722f016f0e4d8de2fed2e0",
+      "final_archive_sha256": "da025ec8842239fd29ae9012662a13af887044f77aa58ac5db19636deb544fcc",
+      "qualification": "retained native fresh start plus explicit final protected-upstream delta qualification",
+      "final_delta": {
+        "archive_sha256": "da025ec8842239fd29ae9012662a13af887044f77aa58ac5db19636deb544fcc",
+        "native_qualified_archive_sha256": "b822b7643d56f73fe7d26c68609f2b84e1faf96083722f016f0e4d8de2fed2e0",
+        "changed_paths": [
+          "app/desk.json",
+          "app/localharness/code_transition.py",
+          "app/localharness/migration_posix.py",
+          "app/localharness/python_updates.py",
+          "app/localharness/source_admission.py",
+          "app/localharness/upstream_recovery.py",
+          "app/localharness/windows_installation.py",
+          "build-source.json",
+          "python-package-files.json",
+          "repack-source.json",
+          "source-admission-upstream.json",
+          "source-admission-upstream.zip",
+          "source-admission.json",
+          "source-inputs.json"
+        ],
+        "unchanged_compressed_members": 19357,
+        "pristine_upstream_unchanged": true,
+        "packaged_module_reseal_activation_and_idempotency": true,
+        "native_runtime_rebuilt": false
+      },
+      "first_launch_wizard": true,
+      "fresh_transaction": true,
+      "selected_data_folder": true,
+      "live_channel_proof": true,
+      "shortcut_destination": "temporary fixture Desktop"
+    },
+    "macos": {
+      "passed": true,
+      "native_qualified_archive_sha256": "9db51654a3f778af6a0beb7e62eabd358b462e4ad2cf208fde6835f35f331193",
+      "final_archive_sha256": "1bcdca0eb251e62ad76452c37c6fcb8cd418a31d9db46464f9bf2f2b341dd46a",
+      "qualification": "retained native fresh start plus explicit final protected-upstream delta qualification",
+      "final_delta": {
+        "archive_sha256": "1bcdca0eb251e62ad76452c37c6fcb8cd418a31d9db46464f9bf2f2b341dd46a",
+        "native_qualified_archive_sha256": "9db51654a3f778af6a0beb7e62eabd358b462e4ad2cf208fde6835f35f331193",
+        "changed_paths": [
+          "app/desk.json",
+          "app/localharness/code_transition.py",
+          "app/localharness/migration_posix.py",
+          "app/localharness/python_updates.py",
+          "app/localharness/source_admission.py",
+          "app/localharness/upstream_recovery.py",
+          "app/localharness/windows_installation.py",
+          "python-package-files.json",
+          "repack-source.json",
+          "source-admission-upstream.json",
+          "source-admission-upstream.zip",
+          "source-admission.json",
+          "source-inputs.json"
+        ],
+        "unchanged_compressed_members": 13198,
+        "pristine_upstream_unchanged": true,
+        "packaged_module_reseal_activation_and_idempotency": true,
+        "native_runtime_rebuilt": false
+      },
+      "first_launch_wizard": true,
+      "fresh_transaction": true,
+      "selected_data_folder": true,
+      "live_channel_proof": true,
+      "shortcut_destination": "temporary fixture Desktop"
+    }
+  },
+  "previous_public_update": {
+    "previous_public_update": {
+      "passed": true,
+      "from": "2.2.4",
+      "to": "2.2.11",
+      "data_directly_attached": true,
+      "memory_model_pause_source_git_retained": true,
+      "startup_proof": {
+        "stopped": true,
+        "root": "/task/upgrade-work/prior-public-211-1dmgeh3m/old/Helene"
+      }
+    },
+    "upstream_recovery": {
+      "passed": true,
+      "memory_and_pause_retained": true,
+      "new_native_pid": 1517
+    }
+  },
+  "licensing_and_module_closure": {
+    "fedora": {
+      "archive_sha256": "b56459b5f31172b909889e03d7a606b4d479397519c197c3d6a9c99c4ffb74fc",
+      "local_modules": 86,
+      "missing": [],
+      "license_text_sha256": {
+        "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "NOTICE": "5922130a0cc9482f0605a333600bb459d558857e7f88389e3e7d96db400c191b",
+        "relay/LICENSE": "0f23e25ad4156b4edb9a895e70758d62a2a8150ea87d7f01dfef9f140b75abaa",
+        "relay/NOTICE": "9de6c63e712d69c37ff6ae8b56170f572381af3dab4a7f43099caacb38506ead",
+        "xtts/CPML.txt": "190f6d7c19b8984f91b97712b94ce92d2b2e640fc677dacab966e955ece9d043",
+        "xtts/NOTICE": "0dc265866c4f819ea670c08c35952beac2aefbd38ceb6fa188742fccac9c69ed",
+        "README.md": "af725e4b5b89d43752cc7f5fbd2bc0da57fafee0d9aaef1ade3a48af6fa9dee1"
+      }
+    },
+    "windows": {
+      "archive_sha256": "81606b63f6f923c5f90414214d9e7e798d136a15e1828a9c259386e83de8a319",
+      "local_modules": 86,
+      "missing": [],
+      "license_text_sha256": {
+        "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "NOTICE": "5922130a0cc9482f0605a333600bb459d558857e7f88389e3e7d96db400c191b",
+        "relay/LICENSE": "0f23e25ad4156b4edb9a895e70758d62a2a8150ea87d7f01dfef9f140b75abaa",
+        "relay/NOTICE": "9de6c63e712d69c37ff6ae8b56170f572381af3dab4a7f43099caacb38506ead",
+        "xtts/CPML.txt": "190f6d7c19b8984f91b97712b94ce92d2b2e640fc677dacab966e955ece9d043",
+        "xtts/NOTICE": "0dc265866c4f819ea670c08c35952beac2aefbd38ceb6fa188742fccac9c69ed",
+        "README.md": "af725e4b5b89d43752cc7f5fbd2bc0da57fafee0d9aaef1ade3a48af6fa9dee1"
+      }
+    },
+    "macos": {
+      "archive_sha256": "1bcdca0eb251e62ad76452c37c6fcb8cd418a31d9db46464f9bf2f2b341dd46a",
+      "local_modules": 86,
+      "missing": [],
+      "license_text_sha256": {
+        "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "NOTICE": "5922130a0cc9482f0605a333600bb459d558857e7f88389e3e7d96db400c191b",
+        "relay/LICENSE": "0f23e25ad4156b4edb9a895e70758d62a2a8150ea87d7f01dfef9f140b75abaa",
+        "relay/NOTICE": "9de6c63e712d69c37ff6ae8b56170f572381af3dab4a7f43099caacb38506ead",
+        "xtts/CPML.txt": "190f6d7c19b8984f91b97712b94ce92d2b2e640fc677dacab966e955ece9d043",
+        "xtts/NOTICE": "0dc265866c4f819ea670c08c35952beac2aefbd38ceb6fa188742fccac9c69ed",
+        "README.md": "af725e4b5b89d43752cc7f5fbd2bc0da57fafee0d9aaef1ade3a48af6fa9dee1"
+      }
+    },
+    "debian": {
+      "archive_sha256": "da025ec8842239fd29ae9012662a13af887044f77aa58ac5db19636deb544fcc",
+      "local_modules": 86,
+      "missing": [],
+      "license_text_sha256": {
+        "LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+        "NOTICE": "5922130a0cc9482f0605a333600bb459d558857e7f88389e3e7d96db400c191b",
+        "relay/LICENSE": "0f23e25ad4156b4edb9a895e70758d62a2a8150ea87d7f01dfef9f140b75abaa",
+        "relay/NOTICE": "9de6c63e712d69c37ff6ae8b56170f572381af3dab4a7f43099caacb38506ead",
+        "xtts/CPML.txt": "190f6d7c19b8984f91b97712b94ce92d2b2e640fc677dacab966e955ece9d043",
+        "xtts/NOTICE": "0dc265866c4f819ea670c08c35952beac2aefbd38ceb6fa188742fccac9c69ed",
+        "README.md": "af725e4b5b89d43752cc7f5fbd2bc0da57fafee0d9aaef1ade3a48af6fa9dee1"
+      }
+    }
+  },
+  "construction": {
+    "qualified_base_commit": "63682382f50c0031f791fd31760502a0fd4d2dd9",
+    "native_runtime_rebuilt": false,
+    "archives_crc_source_passports_and_unchanged_compressed_runtime_records": true,
+    "construction_flags": "Historical local_candidate/public_release fields are construction provenance; publication is recorded by this release receipt."
+  },
+  "optional_components": "Existing pinned bytes copied from withdrawn v2.1.1 assets into this release; older releases remain withdrawn",
+  "privacy": {
+    "fedora": {
+      "source_files": 1088,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "windows": {
+      "source_files": 1084,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1736,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1089,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "2465377b54ba40cf8810b33ec8a0cd19d0529c11": {
+      "files": 2246,
+      "matches": [],
+      "known_private_values": 6
+    },
+    "2632f338b269bfe12859efa368c6c452c7c3827f": {
+      "files": 2247,
+      "matches": [],
+      "known_private_values": 6
+    }
+  },
+  "limits": [
+    "Synthetic profiles and bridge calls; no physical pointer acceptance claimed",
+    "Temporary Desktop destination used during native fixture installation",
+    "Real service credential prompts and owner/fan installation not exercised",
+    "Provider/critic executions in source-merge tests are controlled fixtures; no live owner model used",
+    "Full unchanged Core/native build suites were not repeated; inherited runtime qualification is separate"
+  ]
+}
