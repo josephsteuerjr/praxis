@@ -14,6 +14,25 @@ from localharness.package_notice import write
 
 @unittest.skipIf(os.name=='nt','POSIX lifecycle runs on the owned Linux stand')
 class PosixSetup(unittest.TestCase):
+    def test_service_discovery_rejects_foreign_monitoring_and_inline_commands(self):
+        import plistlib,shlex
+        with tempfile.TemporaryDirectory() as tmp:
+            home=Path(tmp);old=home/'old';other=home/'other';old.mkdir();other.mkdir()
+            for folder in (old,other):(folder/'worker.py').write_text('# fixture')
+            commands={'own':[sys.executable,str(old/'worker.py')],
+                'monitor':[sys.executable,str(other/'worker.py'),'--status',str(old/'status.json')],
+                'inline':[sys.executable,'-c','print(1)',str(old/'status.json')]}
+            for platform in ('linux','darwin'):
+                with self.subTest(platform=platform):
+                    directory=home/('.config/systemd/user' if platform=='linux' else 'Library/LaunchAgents');directory.mkdir(parents=True)
+                    for name,args in commands.items():
+                        path=directory/(name+('.service' if platform=='linux' else '.plist'))
+                        if platform=='linux':path.write_text('[Service]\nWorkingDirectory='+str(old)+'\nExecStart='+shlex.join(args)+'\n')
+                        else:path.write_bytes(plistlib.dumps({'Label':name,'WorkingDirectory':str(old),'ProgramArguments':args}))
+                    with patch.object(sys,'platform',platform),patch.object(Path,'home',return_value=home),patch.object(lifecycle.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout='active',stderr='')):
+                        found=lifecycle.service(old)
+                    self.assertEqual([Path(row['path']).stem for row in found['services']],['own'])
+
     def test_installer_cwd_cannot_claim_foreign_inline_or_relative_python(self):
         from contextlib import chdir
         with tempfile.TemporaryDirectory() as tmp:

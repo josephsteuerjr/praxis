@@ -24,8 +24,8 @@ def _inside(value, root, *, cwd=None):
     except (OSError,ValueError,TypeError):return False
 
 
-def _script_inside(info,root,process):
-    args=iter((info['cmdline'] or [])[1:])
+def _entry_inside(args,root,cwd):
+    args=iter(args)
     for arg in args:
         if arg in ('-c','--eval','-e','-m','-p','--print'):return False
         if arg in ('-W','-X','-r','--require','--loader','--rcfile'):
@@ -34,9 +34,20 @@ def _script_inside(info,root,process):
         path=Path(arg)
         # Only the entry script identifies an externally hosted interpreter.
         # Later data/status filenames do not grant authority to stop it.
-        if not path.is_absolute():path=Path(process.cwd())/path
+        if not path.is_absolute():
+            base=cwd() if callable(cwd) else cwd
+            if not base:return False
+            path=Path(base)/path
         return path.is_file() and path.resolve()!=root and _inside(path,root)
     return False
+
+
+def _command_inside(args,root,cwd=None):
+    if not args:return False
+    executable=args[0].lstrip('-:@+!')
+    if _inside(executable,root):return True
+    name=Path(executable).name.lower()
+    return (name.startswith(('python','node')) or name in {'sh','bash'}) and _entry_inside(args[1:],root,cwd)
 
 
 def _processes(old):
@@ -49,7 +60,7 @@ def _processes(old):
             if process.pid in ancestors or info['status'] in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD):continue
             executable=Path(info['exe'] or '').name.lower()
             script_owner=(executable.startswith(('python','node')) or executable in {'sh','bash'})
-            if _inside(info['exe'],old) or script_owner and _script_inside(info,old,process):
+            if _inside(info['exe'],old) or script_owner and _entry_inside((info['cmdline'] or [])[1:],old,process.cwd):
                 result.append((process,info))
         except (psutil.NoSuchProcess,psutil.AccessDenied):continue
     return result
@@ -88,8 +99,9 @@ def service(old):
                 (Path('/Library/LaunchAgents'),f'gui/{os.getuid()}',True),(Path('/Library/LaunchDaemons'),'system',True)):
             for path in directory.glob('*.plist'):
                 try:
-                    value=plistlib.loads(path.read_bytes());args=[value.get('Program',''),*value.get('ProgramArguments',[])]
-                    if not any(_inside(arg,old) for arg in args if arg):continue
+                    value=plistlib.loads(path.read_bytes());args=list(value.get('ProgramArguments') or [])
+                    if value.get('Program'):args=[value['Program'],*args[1:]]
+                    if not _command_inside(args,old,value.get('WorkingDirectory')):continue
                     label=value['Label'];target=domain+'/'+label
                     state=subprocess.run(['launchctl','print',target],capture_output=True,text=True,timeout=10)
                     found.append({'kind':'launchctl','path':str(path),'target':target,'elevated':elevated,'running':state.returncode==0})
@@ -99,8 +111,10 @@ def service(old):
             for path in directory.glob('*.service'):
                 if path.is_symlink():continue
                 try:
-                    text=path.read_text();commands=[line.partition('=')[2] for line in text.splitlines() if line.startswith('ExecStart=')]
-                    if not any(_inside(arg.lstrip('-:@+!'),old) for command in commands for arg in shlex.split(command)):continue
+                    lines=[line.strip() for line in path.read_text().splitlines()]
+                    commands=[line.partition('=')[2] for line in lines if line.startswith('ExecStart=')]
+                    cwd=next((line.partition('=')[2] for line in lines if line.startswith('WorkingDirectory=')),None)
+                    if not any(_command_inside(shlex.split(command),old,cwd) for command in commands):continue
                     command=['systemctl',*(['--user'] if user else [])]
                     active=subprocess.run([*command,'is-active',path.name],capture_output=True,timeout=10)
                     found.append({'kind':'systemd','path':str(path),'unit':path.name,'command':command,'elevated':not user,'running':active.returncode==0})
