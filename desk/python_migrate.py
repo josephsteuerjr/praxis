@@ -275,8 +275,9 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         log=new/'migration-start.log'
         from localharness.desktop_process import JobChild
         progress('starting_new')
-        child=JobChild.spawn([str(interpreter),'-s',str(new/'app/python_app.py'),'--root',str(new),
-                             '--migration',note['id']],cwd=new,env=dict(os.environ),log=log,stopped=lambda:False)
+        from localharness.python_platform import desktop_argv
+        child=JobChild.spawn(desktop_argv(new,['--root',str(new),'--migration',note['id']]),
+                             cwd=new,env=dict(os.environ),log=log,stopped=lambda:False)
         # The transaction holds an outer Job until the new Python owner proves its
         # own children. Failure kills it before any return to the previous owner.
         deadline=time.monotonic()+120
@@ -367,7 +368,8 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
     child=None;started=False
     try:
         progress('starting_new')
-        child=JobChild.spawn([str(new/(('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')),'-s',str(new/'app/python_app.py'),'--root',str(new),'--migration',note['id']],
+        from localharness.python_platform import desktop_argv
+        child=JobChild.spawn(desktop_argv(new,['--root',str(new),'--migration',note['id']]),
                              cwd=new,env=dict(os.environ),log=new/'migration-start.log',stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
