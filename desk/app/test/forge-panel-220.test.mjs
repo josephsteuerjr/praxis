@@ -23,18 +23,19 @@ const find=(root,text)=>walk(root).find(n=>n.tag==='button' && n.textContent===t
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const source=readFileSync(new URL('../../ui-kit/window/views/forge-panel.ts',import.meta.url),'utf8');
 const code=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
-const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout',code+';return {forgePanel};');
+const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg',code+';return {forgePanel};');
 const sha='d'.repeat(64);
 function task() {return {id:'code-fixture',goal:'Implement a parser → independent review → repair',status:'active',agents:[{id:'agent-fixture',role:'worker',model:'fixture-model',subtask:'Preserve authored edits while fixing parser.py',status:'unknown',request_status:'running',custody:'unknown',observation:{generation:'g-one',phase:'tool',tool:'coding_verify',observed_at:'2026-10-26T02:20:00Z'},result_ref:{kind:'result',sha256:sha}}]};}
-function stand() {
+function stand(options={}) {
   const root=new Element('section'),calls=[],timers=new Map();let seq=0;
-  const state={tasks:[task()],error:'',eventError:'',delay:null,payloadDelay:null,commandError:false,commandState:'queued',receiptDelay:null};
+  const state={tasks:[task()],recent:[],recentPage:[],nextCursor:null,scope:'one',eventPage:null,error:'',eventError:'',delay:null,payloadDelay:null,commandError:false,commandState:'queued',receiptDelay:null};
   const content='<script>inert output</script>\n'+'complete text 🐍\n'.repeat(900);
   const read=async(path,signal,body)=>{
     calls.push({path,signal,body});
     if(body) {if(state.commandError)throw Error('lost reply');return {command_id:body.command_id,state:state.commandState};}
-    if(path==='/api/forge/tasks'){if(state.delay)return await state.delay;if(state.error)throw Error(state.error);return structuredClone(state.tasks);}
+    if(path==='/api/forge/tasks?view=active'){if(state.delay)return await state.delay;if(state.error)throw Error(state.error);return {active:structuredClone(state.tasks),recent:structuredClone(state.recent),next_cursor:state.nextCursor};}
     const url=new URL(path,'http://fixture.invalid');
+    if(url.pathname==='/api/forge/tasks')return {active:structuredClone(state.tasks),recent:structuredClone(state.recentPage),next_cursor:null};
     if(url.pathname==='/api/forge/control') {
       if(url.searchParams.has('task_id'))return {commands:[]};
       if(state.receiptDelay)return await state.receiptDelay;
@@ -42,18 +43,19 @@ function stand() {
     }
     if(url.pathname==='/api/forge/events'){
       if(state.eventError)throw Error(state.eventError);
+      if(state.eventPage)return state.eventPage;
       const offset=Number(url.searchParams.get('offset'));
       return {events:offset?[]:[{seq:1,kind:'tool_result',tool:'coding_verify',at:'2026-10-26T02:20:00Z',output_ref:{sha256:sha}}],next_offset:100,has_more:false,generation:'g-one'};
     }
     if(url.pathname==='/api/forge/payload'){
       if(state.payloadDelay)return await state.payloadDelay;
-      const offset=Number(url.searchParams.get('offset')),end=Math.min(offset+8000,content.length);
-      return {sha256:sha,text:content.slice(offset,end),offset,total_chars:content.length,next_offset:end<content.length?end:null};
+      const points=Array.from(content),offset=Number(url.searchParams.get('offset')),end=Math.min(offset+8000,points.length);
+      return {sha256:sha,text:points.slice(offset,end).join(''),offset,total_chars:points.length,next_offset:end<points.length?end:null};
     }
     throw Error(path);
   };
-  const impl=factory(document,{randomUUID},Error,path=>path,(fn)=>{const id=++seq;timers.set(id,fn);return id;},id=>timers.delete(id));
-  const panel=impl.forgePanel(root,read,10);
+  const impl=factory(document,{randomUUID},Error,path=>path,(fn)=>{const id=++seq;timers.set(id,fn);return id;},id=>timers.delete(id),{});
+  const panel=impl.forgePanel(root,read,10,{scope:()=>state.scope,...options});
   return {root,calls,state,panel,timers,content};
 }
 async function open(test) {
@@ -64,11 +66,11 @@ async function open(test) {
 {
   const t=stand();t.panel.start();await tick();
   assert.match(t.root.textContent,/fixture-model/);assert.match(t.root.textContent,/состояние не подтверждено/);
-  assert.match(t.root.textContent,/инструмент: coding_verify/);assert.match(t.root.textContent,/живость процесса не проверялась/);
+  assert.match(t.root.textContent,/инструмент: coding_verify/);assert.match(t.root.textContent,/живость процесса неизвестна/);
   const {team,unit}=await open(t);
   await find(unit,'Результат вызова').click();await tick();
   const payload=walk(unit).find(n=>n.tag==='pre');
-  assert.equal(payload.textContent,t.content.slice(0,8000));
+  assert.equal(payload.textContent,Array.from(t.content).slice(0,8000).join(''));
   await find(unit,'Следующие 8000 знаков').click();await tick();
   assert.equal(payload.textContent,t.content);
   assert.equal(find(unit,'Следующие 8000 знаков').hidden,true);
@@ -86,7 +88,7 @@ async function open(test) {
   const t=stand();let release;t.state.delay=new Promise(resolve=>release=resolve);
   t.panel.start();await tick();const before=t.root.textContent;
   t.panel.stop();assert.equal(t.calls[0].signal.aborted,true);
-  release([task()]);await tick();
+  release({active:[task()],recent:[],next_cursor:null});await tick();
   assert.equal(t.root.textContent,before,'late list cannot paint after leaving the tab');assert.equal(t.timers.size,0);
   t.state.delay=null;t.panel.start();await tick();assert.match(t.root.textContent,/fixture-model/);t.panel.stop();
 }
@@ -139,6 +141,34 @@ async function open(test) {
   t.panel.stop();
 }
 // The real switch hook is intentionally a narrow, checked integration hunk.
+{
+  const t=stand({compact:true});t.state.tasks[0].status='done';
+  t.state.tasks[0].agents.push({...t.state.tasks[0].agents[0],id:'grandchild',parent_unit_id:'agent-fixture',depth:1,status:'stop_pending'});
+  const done=n=>({...task(),id:'done-'+n,goal:'done-'+n,status:'done',agents:[{...task().agents[0],status:'done'}]});
+  t.state.recent=Array.from({length:20},(_,n)=>done(n));t.state.recentPage=Array.from({length:15},(_,n)=>done(n+20));t.state.nextCursor='exact-cursor';
+  t.panel.start();await tick();
+  assert.match(t.root.textContent,/остановка не подтверждена/);
+  assert.equal(find(t.root,'Остановить участника'),undefined,'compact shared viewer is read-only, Plans retains controls');
+  await find(t.root,'Ещё завершённые').click();await tick();
+  assert.match(t.root.textContent,/done-34/);assert.match(t.root.textContent,/grandchild/);
+  assert.match(t.calls.at(-1).path,/cursor=exact-cursor/);
+  assert.equal(find(t.root,'Ещё завершённые').hidden,true);t.panel.stop();
+}
+{
+  const t=stand();t.panel.start();await tick();const {unit}=await open(t);
+  const selected=find(unit,'Итог участника');await t.panel.refresh();await tick();
+  assert.equal(find(unit,'Итог участника'),selected,'stable reference retains focus identity across polls');
+  let release;t.state.payloadDelay=new Promise(resolve=>release=resolve);
+  await selected.click();await tick();
+  t.state.scope='different-owner';t.state.tasks[0].agents[0].model='NEW_OWNER_MODEL';t.panel.start();await tick();
+  release({sha256:sha,offset:0,text:'OLD_PRIVATE_PAYLOAD',total_chars:19,next_offset:null});await tick();
+  assert.doesNotMatch(t.root.textContent,/OLD_PRIVATE_PAYLOAD|fixture-model/);assert.match(t.root.textContent,/NEW_OWNER_MODEL/);t.panel.stop();
+}
+{
+  const t=stand();t.state.eventPage={generation:'g-one',events:[{seq:3,kind:'tool_result',tool:'SHOULD_NOT_PAINT'}],next_offset:99,has_more:false};
+  t.panel.start();await tick();await open(t);assert.match(t.root.textContent,/Нарушена последовательность истории/);assert.doesNotMatch(t.root.textContent,/SHOULD_NOT_PAINT/);t.panel.stop();
+}
 const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'utf8');
 assert.match(main,/if \(from === "plans" && id !== "plans"\) plans\.dispose\(\);/);
+assert.match(main,/if \(from === 'talk' && id !== 'talk'\) panel\.dispose\(\);/);
 console.log('Forge production panel: pagination, inert content, stable expansion, failure preservation, abort/late-response fences, controls/generation/unknown delivery, one poll lifetime PASS');

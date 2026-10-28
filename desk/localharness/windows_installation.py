@@ -21,8 +21,8 @@ from .essential_backup import configs, load, tree_path
 from .package_notice import read, write
 
 ARCHIVE_BEFORE = (2, 2, 1)
-POLICY = ('Сохраним прежний код в архиве. Мастер обновления автоматически совместит изменения. Оставшиеся пересечения разберёт ваш агент. '
-          'Затем независимые ревьюеры проверят результат. '
+POLICY = ('Сохраним прежний код в архиве. Агент получит долговечное задание и будет вести совмещение, полную проверку и независимое ревью. '
+          'Этот мастер закроется после подтверждённого принятия задания, работа продолжится без окна. '
           'Можно также установить чистый код, сохранив данные агента.')
 
 
@@ -47,7 +47,9 @@ def archived_version(text):
 
 
 def default_data(old):
-    if not old or not (Path(old) / 'helene.json').is_file(): return ''
+    if not old or not (Path(old) / 'helene.json').is_file():
+        from .portable_profile import default_data as new_default
+        return str(new_default())
     path = Path(old) / 'helene.json'
     return str(tree_path(path, load(path)))
 
@@ -55,10 +57,10 @@ def default_data(old):
 def blank_config(program, data):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
-    return {'mode': 'local', 'tree': str(data), 'code': str(program / 'tree'),
-            'port': port, 'python': str(program / (('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')),
-            'app': str(program / 'app/deskapp.py'),
-            'runner': str(program / 'app/localharness/runner.py'),
+    return {'mode': 'local', 'tree': str(data), 'code': 'tree',
+            'port': port, 'python': 'runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3',
+            'app': 'app/deskapp.py',
+            'runner': 'app/localharness/runner.py',
             'setup_complete': False, 'installed': {'service': False},
             'model': {'framework': 'openai', 'base_url': '', 'model': '', 'key': ''},
             'relay': {'enabled': False}, 'voice': {'enabled': False}}
@@ -127,9 +129,12 @@ def prepare_attached(old, new, data, operation, *, previous_sources=None,source_
             raise ValueError('Не найдена папка данных: ' + str(selected_data))
         if value.get('mode') != 'remote' and not migration_windows.owner_lease_available(selected_data / '.desktop-owner.lock'):
             raise RuntimeError('Папку данных ещё использует другой процесс Hélène')
-        value.update(tree=str(selected_data), code=str(row['code']),
-                     python=str(new / (('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')), app=str(new / 'app/deskapp.py'),
-                     runner=str(new / 'app/localharness/runner.py'))
+        value.update(tree=str(selected_data), code=str(row['code']))
+        for key,default in (('python','runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'),
+                            ('app','app/deskapp.py'),('runner','app/localharness/runner.py')):
+            prior=Path(str(value.get(key) or ''))
+            if not (old and prior.is_absolute() and not prior.is_relative_to(old)):
+                value[key]=str(new/default)
         value['installed'] = dict(value.get('installed') or {}, service=False)
         backup = value.get('backup')
         if old and isinstance(backup, dict) and backup.get('dir'):
@@ -190,7 +195,7 @@ def finish(new, note, *, remove_old, progress):
 
 
 def run(package, target, *, old=None, data=None, fresh=False, remove_old=False,
-        launch=True, progress=None, source_mode=None, cancelled=None,force_extensions=False):
+        launch=True, progress=None, source_mode=None, cancelled=None,force_extensions=False,bootstrap_id=''):
     """Connect the existing migration/fresh/update lifecycles, not another one."""
     import python_migrate
     package,target=Path(package).resolve(),Path(target).resolve()
@@ -198,7 +203,7 @@ def run(package, target, *, old=None, data=None, fresh=False, remove_old=False,
     progress=progress or (lambda _:None)
     mode=source_mode or ('preserve' if old else 'clean')
     if mode not in ('preserve','clean'):raise ValueError('Choose preserve or clean source')
-    selected_data=Path(data).resolve() if data else Path(default_data(old)) if old else target/'profile/main'
+    selected_data=Path(data).resolve() if data else Path(default_data(old))
     if old and target==old:
         return in_place(package,old,data=selected_data,progress=progress,source_mode=mode,cancelled=cancelled,force_extensions=force_extensions)
     with python_migrate.installation_lock(target):
@@ -207,7 +212,7 @@ def run(package, target, *, old=None, data=None, fresh=False, remove_old=False,
                 prepared=target==package,portable=True,source_mode=mode,launch=launch,progress=progress,
                 attached_data=selected_data,remove_old=remove_old,review_cancelled=cancelled,force_extensions=force_extensions)
         return python_migrate.fresh(package,target,selected_data,launch=launch,progress=progress,
-            prepared=target==package,data_exact=True,connect_data=not fresh,desktop_shortcut=True)
+            prepared=target==package,data_exact=True,connect_data=not fresh,desktop_shortcut=True,bootstrap_id=bootstrap_id)
 
 
 def in_place(package, old, *, data=None, progress,source_mode='preserve',cancelled=None,force_extensions=False):

@@ -8,16 +8,40 @@ import secrets
 import threading
 import time
 import typing  # Complete before GUI imports and owner-thread dataclasses can race.
+import contextvars
+from contextlib import contextmanager
 
 from . import agents, config_cli
 from .essential_backup import load
 
 
 class Controller:
+    @property
+    def selected(self):
+        scoped = self._selection.get() if hasattr(self, '_selection') else None
+        return scoped if scoped is not None else self._selected
+
+    @selected.setter
+    def selected(self, value):
+        if hasattr(self, '_selection') and self._selection.get() is not None:
+            self._selection.set(value)
+        else:
+            self._selected = value
+
+    @contextmanager
+    def selection(self, identity):
+        """Each attached observer selects independently; no cross-window race."""
+        token = self._selection.set(identity)
+        try:
+            yield
+        finally:
+            self._selection.reset(token)
+
     def __init__(self, root: Path, event, origin='', agent=''):
         self.root = root.resolve()
         self.event = event
         self.origin = origin
+        self._selection = contextvars.ContextVar('helene_observer_agent', default=None)
         self.selected = agent or self._default()
         self.thread = None
         self.stop = threading.Event()
@@ -83,7 +107,8 @@ class Controller:
                 try:
                     from . import desktop_supervisor
                     desktop_supervisor.run(self.root/'helene.json', stop=self.stop,
-                        desktop_roster=True, status_nonce=self.nonce, commands=self.commands)
+                        desktop_roster=True, status_nonce=self.nonce, commands=self.commands,
+                        runtime_program=getattr(self,'runtime_program',None))
                 except BaseException as exc:
                     # Transfer the same uncertain handles, not just their text.
                     # Do not take self.lock: close() may be joining this thread.

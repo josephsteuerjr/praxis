@@ -59,7 +59,7 @@ def uninstall_registered(old,argv):
     raise RuntimeError('Old installation removal has not yet been confirmed')
 
 
-def request_python_exit(old, pid):
+def request_python_exit(old, pid, *, observer_only=False):
     """Ask this installation's existing authenticated window, never close-to-tray."""
     import urllib.request
     from urllib.parse import urlsplit
@@ -78,7 +78,8 @@ def request_python_exit(old, pid):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs): return None
     http = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
-    body = json.dumps({'command': 'python_window', 'args': {'action': 'exit', 'relaunch': False}}).encode()
+    body = json.dumps({'command': 'python_window', 'args': {'action': 'exit', 'relaunch': False,
+                      'observer_only': bool(observer_only)}}).encode()
     request = urllib.request.Request(origin + '/__python__/invoke', data=body,
         headers={'Content-Type': 'application/json', 'X-Helene-Window': value['token']})
     with http.open(request, timeout=3) as response:

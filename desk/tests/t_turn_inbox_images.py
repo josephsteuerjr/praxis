@@ -53,12 +53,14 @@ class ActiveImages(unittest.TestCase):
         self.patch(patch.object(agent, '_runs', lambda: self.manager))
         self.archived, self.done = [], []
         desk = SimpleNamespace(archive=lambda text, **kw: self.archived.append(text), life=lambda *a, **kw: None)
+        self.patch(patch.object(runner, '_room', return_value=desk))
         self.r = SimpleNamespace(
             _tree=self.root, _speaker='owner', transport=SimpleNamespace(is_room=lambda r: r == 'window'),
             _inbox_target=lambda stem: 'window', _note_bytes=lambda p: p.read_bytes(),
             _seal_claim=lambda p, **kw: (True, ''), _message_text=runner._message_text,
             _split_attachments=runner._split_attachments, _hear_attachments=runner._hear_attachments,
             _IMAGE_EXT=runner._IMAGE_EXT, _batch_files=runner._batch_files,
+            _archive_inputs=runner._archive_inputs,
             _batch_images=runner._batch_images, _room=lambda room: desk, _now=lambda: None,
             _mark_done=lambda p, n, why: (self.done.append(n), (p/(n+'.done')).write_text(why)))
         self.note = self.inbox / '001.md'
@@ -96,7 +98,7 @@ class ActiveImages(unittest.TestCase):
         self.assertTrue(artifact.is_relative_to(self.manager.path(self.current.run_id)))
         self.assertEqual(artifact.read_bytes(), PNG)
         self.assertTrue(self.source.exists(), 'precheckpoint replay still needs source')
-        self.assertIn(str(artifact), self.archived[0])
+        self.assertIn(str(artifact), self.archived[-1])
         # Simulate cleanup of the original upload; the durable input still works.
         self.source.unlink()
         checkpoint = json.loads(json.dumps(agent._durable_model_messages(batch)))
@@ -161,21 +163,22 @@ class ActiveImages(unittest.TestCase):
 
     def test_voice_and_image_in_one_note_deliver_words_and_pixels(self):
         picture = self.add_picture('snap.png', (10, 20, 30))
-        (self.inbox / 'attachments/one/a.webm').write_bytes(b'synthetic media')
-        self.note_with([('a.webm', 'audio/webm'), ('snap.png', 'image/png')], 'Глянь снимок')
+        (self.inbox / 'attachments/one/a.ogg').write_bytes(b'synthetic audio; decoder is mocked')
+        self.note_with([('a.ogg', 'audio/ogg'), ('snap.png', 'image/png')], 'Глянь снимок')
         self.patch(patch.dict(sys.modules, media_audio=SimpleNamespace(
-            transcribe=lambda p: 'сними показания со снимка')))
+            transcribe=lambda p: 'сними показания со снимка', set_default_backend=lambda value: None)))
+        self.patch(patch.object(runner, '_voice_config_path', None))
         self.patch(patch.object(runner, '_voice_state', {'ready': True}))
         self.patch(patch.object(runner, '_low_priority', nullcontext))
         batch, _ = turn_inbox.collect(self.r, self.current, [])
         blocks = batch[0]['content']
         self.assertEqual(blocks[0]['type'], 'text')
-        self.assertIn('[голосовое]: сними показания со снимка', blocks[0]['text'])
+        self.assertIn('[Транскрипт голосового]: сними показания со снимка', blocks[0]['text'])
         self.assertIn('Глянь снимок', blocks[0]['text'])
         image = next(b for b in blocks if b['type'] == 'image')
         self.assertEqual(Path(image['path']).read_bytes(), picture)
-        self.assertIn('[голосовое]: сними показания со снимка', self.archived[0])
-        self.assertIn('[изображение: ', self.archived[0])
+        self.assertIn('[Транскрипт голосового]: сними показания со снимка', self.archived[-1])
+        self.assertIn('[изображение: ', self.archived[-1])
 
     def test_turn_cap_overflow_names_dropped_images_instead_of_silent_cut(self):
         red = self.add_picture('first.png', (255, 0, 0))
@@ -194,7 +197,7 @@ class ActiveImages(unittest.TestCase):
         self.assertEqual([Path(b['path']).read_bytes() for b in images], [green, blue])
         self.assertNotIn(red, [Path(b['path']).read_bytes() for b in images])
         # Отрезанное от модели всё равно архивируется и находимо в следующем ходе.
-        self.assertEqual(self.archived[0].count('[изображение: '), 3)
+        self.assertEqual(self.archived[-1].count('[изображение: '), 3)
 
 
 if __name__ == '__main__':

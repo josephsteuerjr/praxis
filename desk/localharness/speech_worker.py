@@ -19,6 +19,11 @@ import uuid
 if __package__:
     from . import speech_protocol as ipc, speech_encode
 else:
+    # The optional Windows runtime is embeddable: python311._pth deliberately
+    # excludes argv[0]'s directory (also true for -I). Bootstrap only this
+    # application-owned sibling directory, never the authored agent tree.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     import speech_protocol as ipc
     import speech_encode
 
@@ -37,7 +42,7 @@ def engine_module():
 
 def _remove(paths):
     for path in paths:
-        path.unlink(missing_ok=True)
+        ipc.unlink(path)
 
 
 def _artifacts(home, identity):
@@ -95,7 +100,7 @@ def process(home, tree, path, generation, synthesize, stopped, *, encoder=speech
         result = {'ok': False, 'request_id': identity, 'generation': generation,
                   'error': str(exc)}
     finally:
-        path.unlink(missing_ok=True)
+        ipc.unlink(path)
         # Keep lease/cancel until the publication check below: they also fence a
         # caller abandoning work between the final chunk and receipt write.
     if result is None or cancelled():
@@ -120,7 +125,7 @@ def serve(home: Path, model: Path, tree: Path, *, device='cpu', generation=None,
     for folder in (incoming, output):
         for path in folder.iterdir():
             if ipc.identity(path.name.lstrip('.').split('.')[0]) and path.is_file():
-                path.unlink()
+                ipc.unlink(path)
     state = {'schema': 2, 'pid': os.getpid(), 'generation': generation, 'ready': False}
     ipc.write(home / 'ready.json', state)
     try:
@@ -151,12 +156,12 @@ def serve(home: Path, model: Path, tree: Path, *, device='cpu', generation=None,
             time.sleep(.05)
     finally:
         if ipc.read(home / 'ready.json').get('generation') == generation:
-            (home / 'ready.json').unlink(missing_ok=True)
+            ipc.unlink(home / 'ready.json')
         # Teardown never leaves late audio or pending requests to replay.
         for folder in (incoming, output):
             for path in folder.iterdir():
                 if ipc.identity(path.name.lstrip('.').split('.')[0]) and path.is_file():
-                    path.unlink()
+                    ipc.unlink(path)
 
 
 def main():

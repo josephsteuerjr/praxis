@@ -76,7 +76,10 @@ class DurableStatusTest(unittest.TestCase):
             for action in ('read', 'list', 'search', 'diff', 'model', 'orientation'):
                 with self.subTest(status=status, action=action):
                     self.assertEqual(forge.inspect(self.task_id, action, path='x'), err)
-            self.assertEqual(forge.edit(self.task_id, 'write', path='x', content='no'), err)
+            # Terminal-task admission now refuses before resolving its root;
+            # active file operations still report the missing worktree exactly.
+            edit = forge.edit(self.task_id, 'write', path='x', content='no')
+            self.assertEqual(edit, 'Edit refused: task is terminal or missing' if status == 'done' else err)
             self.assertFalse(self.root.exists())
 
     def test_unknown_task_still_fails(self):

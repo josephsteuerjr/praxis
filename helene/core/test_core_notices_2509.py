@@ -119,7 +119,9 @@ class RoomEvents(Base):
         core_notices.note_node(task_id="t1", unit_id="agent-7c1d", status="done", goal="LRX")
         self.assertEqual(len(core_notices.pending()), 1)
         self.assertIn("узел agent-7c1d задачи t1 закончил: done", self.block(owner=True))
-        self.assertIn("Forge · узел agent-7c1d закончил", self.block(run="run-P", owner=False))
+        public = self.block(run="run-P", owner=False)
+        self.assertIn("Forge · узел закончил", public)
+        self.assertNotIn("agent-7c1d", public, "private work identity is also a locator")
         self.assertNotIn("LRX", self.block(run="run-P2", owner=False), "заказ владельца — не в чужую комнату")
 
     def test_ttl_and_cap(self):

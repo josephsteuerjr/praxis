@@ -64,6 +64,8 @@ class SpeechApplication(unittest.TestCase):
                     synthesis=synthesis or (lambda req, path, cancelled: wav(path)),
                     catalogue={'speakers': ['A', 'B'], 'languages': ['en', 'ru']}, codec=False)
             except BaseException as exc:
+                import traceback
+                traceback.print_exc()
                 errors.append(exc)
         thread = threading.Thread(target=run)
         thread.start()

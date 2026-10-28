@@ -929,6 +929,27 @@ def tail_block(n: int = 3, scope: str = "owner", chat_id=None, budget: int = 900
     return "\n".join(clipped)[:budget]
 
 
+def recent_work_note(chat_id, scope: str, budget: int = 6000) -> dict | None:
+    """One authored note in this exact conversation and disclosure scope.
+
+    A newer empty turn supersedes an older note; neither tool traces nor a
+    neighbouring room's owner-visible note are substitutes for authorship.
+    """
+    if chat_id is None or budget <= 0:
+        return None
+    with _LOCK:
+        row = next((dict(t) for t in reversed(_load_ring())
+                    if str(t.get('chat_id')) == str(chat_id)
+                    and t.get('scope') == scope and t.get('kind') == 'chat'), None)
+    if not row or not str(row.get('note') or '').strip():
+        return None
+    note = str(row['note'])
+    return dict(authored_note=note[:budget], truncated=len(note) > budget,
+                ts=row.get('ts'), run_id=row.get('run_id'), delivery=row.get('delivery'),
+                source='memory/.state/turns.jsonl',
+                read_more='recent_turns; full results via read_run_result(run_id, result_id)')
+
+
 def state_line(boot_ts: float | None = None) -> str:
     """Одна строка для STATE (owner tier-0): самое свежее прожитое — факт, не припоминание."""
     with _LOCK:

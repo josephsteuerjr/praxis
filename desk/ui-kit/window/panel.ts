@@ -20,6 +20,8 @@ import { fmtK } from "../text";
 import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, subject, toolTraceHTML, terminalLabel, textBox, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
+import { forgePanel } from './views/forge-panel';
+import './views/forge-panel.css';
 import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type Run } from "./state";
 
 interface Turn {
@@ -250,6 +252,8 @@ interface Col {
   painted: boolean;
 }
 let col: Col | null = null;
+let forgeRoot: HTMLElement | null = null;
+let forgeView: ReturnType<typeof forgePanel> | null = null;
 /** Details are readable on opening a turn; remember only the owner's collapses. */
 const openSteps = new Map<string, KeyedList<StepRow>>();
 const closedHands = new Set<string>();
@@ -267,6 +271,13 @@ function panelBox(): HTMLElement {
 function mountCol(): Col {
   const box = panelBox();
   col?.scroller.destroy();
+  // This subtree belongs to the selected agent, not the selected conversation.
+  // Keep its keyed expansions/payload cursor when only the room changes.
+  if (!forgeRoot) {
+    forgeRoot = document.createElement('section'); forgeRoot.className = 'turns-forge';
+    forgeView = forgePanel(forgeRoot, undefined, 2500, {compact: true,
+      onPlans: () => dispatchEvent(new CustomEvent('frame-go', {detail: 'plans'}))});
+  }
   box.innerHTML = `<div class="turns-inner">
     <div class="turns-head"><span class="turns-title">Ходы</span><span class="turns-room"></span><span class="turns-n"></span></div>
     <details class="turns-context" hidden><summary>Контекст и расход</summary><div class="turns-strip"></div></details>
@@ -274,6 +285,8 @@ function mountCol(): Col {
     <div class="turns-empty" hidden></div>
   </div>`;
   const inner = box.querySelector<HTMLElement>(".turns-inner")!;
+  inner.prepend(forgeRoot);
+  forgeView!.start();
   const c: Col = {
     box,
     room: S.room,
@@ -538,6 +551,7 @@ export async function render(): Promise<void> {
   }
   const c = col;
   c.head.querySelector(".turns-room")!.textContent = S.roomName;
+  forgeView?.start();
   let turns: Turn[];
   try {
     turns = await api<Turn[]>("/api/chat-turns/" + encodeURIComponent(S.room));
@@ -651,4 +665,10 @@ export async function revealLiveRun() {
 export function onRunEvent(runId: string) {
   S.evCache.delete(runId);
   onLlm();
+}
+
+/** Leaving chat detaches observation only; Forge work is owned by the runtime. */
+export function dispose() {
+  clearTimeout(liveTimer);
+  forgeView?.stop();
 }

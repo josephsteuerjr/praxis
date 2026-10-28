@@ -251,6 +251,9 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
         внутри него нет; serverd отвечал 14.5 минуты при норме в секунды. Пробой до
         правки: держатель работал, второй вошёл (ПЕРЕКРЫТИЕ=True) и начал вторую
         транзакцию по той же задаче."""
+        # Exercise a supported admitted task, not an early missing-task refusal.
+        (self.tmp / 'task.json').write_text(json.dumps({'id': 't1', 'status': 'active',
+                                                       'root': str(self.tmp)}), encoding='utf-8')
         holder_done = threading.Event()
 
         def slow(task_id, message=""):
@@ -276,6 +279,8 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
     def test_but_the_lease_is_not_a_blank_cheque(self):
         """Граница с другой стороны: объявленный лизинг кончается, и брошенный замок
         снова снимается — иначе лизинг был бы просто отменой порога."""
+        (self.tmp / 'task.json').write_text(json.dumps({'id': 't1', 'status': 'active',
+                                                       'root': str(self.tmp)}), encoding='utf-8')
         with mock.patch.object(forge, "_checkpoint_unlocked",
                                lambda tid, message="": (time.sleep(3), "Checkpoint x")[1]), \
              mock.patch.object(forge, "_remote_step_lease", lambda task: 0.5), \
@@ -289,6 +294,8 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
 
     def test_edit_declares_its_lease_too(self):
         """Тот же путь у правки: `workspace.edit` — один вызов, ударить внутри нечем."""
+        (self.tmp / 'task.json').write_text(json.dumps({'id': 't1', 'status': 'active',
+                                                       'root': str(self.tmp)}), encoding='utf-8')
         leases = []
         with mock.patch.object(forge, "_edit_unlocked", lambda *a, **k: "ok"), \
              mock.patch.object(forge, "_remote_step_lease", lambda task: 77.0):

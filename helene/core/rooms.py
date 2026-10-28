@@ -273,6 +273,8 @@ HEADER_KEYS = ("mode", "mode_reason", "mode_until", "mode_set_by",
                # последний раз сверялся голосом с живой лентой. Пишет только
                # инструментальная рука внутри голосового хода сверки.
                "last_verified",
+               # Explicit deployment CLI provenance; reading never runs migration.
+               "compaction_policy", "compaction_set_by",
                # disclosure меняет ЕЁ голос (визитка), поэтому у него тот же провенанс,
                # что у режима: она вправе знать, сама ли открылась здесь или это не она.
                "disclosure", "disclosure_set_by",
@@ -301,7 +303,7 @@ _HEADER_RE = re.compile(
     # disclosure_set_by стоит ПЕРЕД disclosure: альтернатива выбирается первой подошедшей,
     # и «disclosure» съело бы префикс более длинного ключа.
     r"^(mode|mode_reason|mode_until|mode_set_by|last_verified|disclosure_set_by|disclosure|"
-    r"membership|left_at|drift|drift_seen|drift_sig|greeted|"
+    r"membership|left_at|drift|drift_seen|drift_sig|greeted|compaction_policy|compaction_set_by|"
     r"engagement|context_hot|context_summary_chars|cross_topics|backfill_limit|"
     # transfer_set_by/transfer_at раньше transfer — то же правило префикса, что у
     # disclosure_set_by выше: короткий ключ съел бы начало длинного.

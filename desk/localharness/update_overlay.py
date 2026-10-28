@@ -57,22 +57,33 @@ def _program_files(source):
             if item.is_file():yield item
 
 
+def _source_map(source):
+    """Compose declared M app repairs without editing running verifier B."""
+    from .update_composition import selected_files
+    result = {item.relative_to(source).as_posix(): item for item in _program_files(source)}
+    for name, row in selected_files(source).items():
+        result[name] = None if row.get('delete') else Path(row['source'])
+    return result
+
+
 def prepare(source, target, recovery, verified=None, progress=None):
     source, target, recovery = (Path(p).resolve() for p in (source, target, recovery))
     recovery.mkdir()
     rows = []
     inventory = {}
-    for item in _program_files(source):
-        relative = item.relative_to(source)
-        if '__pycache__' in relative.parts or item.suffix == '.pyc':continue
+    for name, item in sorted(_source_map(source).items()):
+        relative = Path(name)
+        if '__pycache__' in relative.parts or relative.suffix == '.pyc':continue
         destination = _destination(target, relative)
-        incoming = proof(item, (verified or {}).get(str(item)), progress)
+        incoming = proof(item, (verified or {}).get(str(item)), progress) if item is not None else None
         prior = measured_digest(destination, progress, 'existing') if destination.exists() else None
         inventory[relative.as_posix()] = {'incoming': incoming, 'prior': prior}
-        if prior and prior['sha256'] == incoming['sha256'] and (os.name == 'nt' or prior['stat']['mode'] == incoming['stat']['mode']):
+        if incoming is None and prior is None:
+            continue
+        if incoming and prior and prior['sha256'] == incoming['sha256'] and (os.name == 'nt' or prior['stat']['mode'] == incoming['stat']['mode']):
             continue
         row = {'path': relative.as_posix(), 'existed': prior is not None,
-               'incoming': incoming['sha256'], 'previous': prior['sha256'] if prior else None}
+               'incoming': incoming['sha256'] if incoming else None, 'previous': prior['sha256'] if prior else None}
         if prior:
             previous = recovery / relative
             previous.parent.mkdir(parents=True, exist_ok=True)
@@ -100,12 +111,12 @@ def validate(source, target, recovery, progress=None):
     value = json.loads((recovery / 'prepared-overlay.json').read_text(encoding='utf-8'))
     if value['source'] != str(source) or value['target'] != str(target):
         raise ValueError('Prepared update identity differs')
-    actual = {p.relative_to(source).as_posix() for p in _program_files(source)}
-    if actual != set(value['inventory']):raise ValueError('Prepared update file inventory changed')
+    actual = _source_map(source)
+    if set(actual) != set(value['inventory']):raise ValueError('Prepared update file inventory changed')
     for name, record in value['inventory'].items():
-        item = source / name
+        item = actual[name]
         target_file = _destination(target, name)
-        incoming = proof(item, record['incoming'], progress)
+        incoming = proof(item, record['incoming'], progress) if item is not None else None
         if incoming != record['incoming']:raise ValueError('Prepared incoming file changed: ' + name)
         before = record['prior']
         if before is None:
@@ -120,15 +131,21 @@ def validate(source, target, recovery, progress=None):
     return value
 
 
-def apply(source, target, recovery, *, consume=False, progress=None):
+def apply(source, target, recovery, *, consume=False, progress=None, stopped=lambda:False):
     source, target, recovery = (Path(p).resolve() for p in (source, target, recovery))
     changed = []
     try:
         value = validate(source, target, recovery, progress)
+        sources = _source_map(source)
         for row in value['rows']:
+            if stopped():raise InterruptedError('Owner stopped the mechanical file switch')
             relative = Path(row['path'])
-            item, destination = source / relative, _destination(target, relative)
+            item, destination = sources[row['path']], _destination(target, relative)
             destination.parent.mkdir(parents=True, exist_ok=True)
+            if item is None:
+                remove_created_file(destination)
+                changed.append(row)
+                continue
             temporary = destination.with_name('.' + destination.name + '.update-part')
             try:
                 # Even consume=True must prove the real stream, not move a file
@@ -139,6 +156,7 @@ def apply(source, target, recovery, *, consume=False, progress=None):
                 if consume:item.unlink()
             finally:temporary.unlink(missing_ok=True)
             if progress:progress({'stage': 'switching', 'files': len(changed), 'total_files': len(value['rows']), 'file': row['path']})
+        if stopped():raise InterruptedError('Owner stopped before file-switch commit')
         journal(recovery, value['rows'])
     except BaseException as failure:
         # Only paths actually replaced are restored. A failed preimage/journal

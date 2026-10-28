@@ -38,6 +38,12 @@ def cancel_waiting(owner):
 
 
 def update_cancel(owner):
+    from . import desktop_update_request as jobs
+    job = jobs.status(owner.current().tree)
+    if job.get('state') in jobs.ACTIVE:
+        jobs.request(owner.current().tree, 'cancel', root=owner.root, identity=job['id'], by='window')
+        cancel_waiting(owner)
+        return {'ok': True, 'id': job['id'], 'cancel_requested': True}
     if not cancel_waiting(owner):
         raise RuntimeError('Ожидание ревью уже завершено; переключение версии не прерывается.')
     return {'ok': True}
@@ -46,71 +52,25 @@ def update_cancel(owner):
 def update_progress(owner):
     from .update_progress import status
     value = status(owner.root)
-    target = os.path.normcase(str(owner.root.resolve()))
-    with _update_guard:
-        waiting = target in _waiting_updates
-    if value and value['stage'] == 'waiting_review' and not waiting:
-        return dict(value, stage='cancelled', label='Автопродолжение остановлено',
-                    error='Окно было закрыто. Начни обновление снова, когда будет удобно.')
+    if not value:
+        from .desktop_update_request import status as job_status
+        job = job_status(owner.current().tree)
+        if job.get('state') != 'none':
+            return {'id':job['id'],'stage':job.get('phase',job['state']),
+                    'label':'Обновление · '+job['state'],'error':job.get('error','')}
     return value
 
 
-def _wait_for_review(owner, new_root, progress):
-    """Keep the original Update invocation alive, independent of its UI page.
+def update_start(owner, url, sha256=None, sourceMode=None):
+    from .desktop_update_request import admit_download
+    return admit_download(owner, url, sha256, sourceMode)
 
-    Never re-plan while waiting: a different local/config/release snapshot needs
-    a new owner action. Closing the application revokes this invocation.
-    """
-    from . import code_transition, source_update, update_profile
-    from .package_notice import read
-    target = os.path.normcase(str(owner.root.resolve()))
-    record = read(new_root / 'code-transition-plan.json')
-    def selection_now():
-        value = update_profile.selection(owner.root)
-        # Opening the panel/changing its appearance is not a new source input.
-        # prepare_install snapshots the latest window preferences before handoff.
-        value['settings'].pop('window-preferences.json', None)
-        return value
-    selection = selection_now()
-    cancelled = threading.Event()
-    with _update_guard:
-        _waiting_updates[target] = cancelled
-    try:
-        progress.phase('waiting_review', message='После независимой проверки обновление продолжится автоматически.')
-        deadline = time.monotonic() + 7200
-        while True:
-            if cancelled.is_set():
-                progress.phase('cancelled', label='Автопродолжение отменено', previous_application_open=True)
-                return False
-            if time.monotonic() >= deadline:
-                raise TimeoutError('Проверка кода не завершилась за два часа; старая версия остаётся открытой.')
-            ready = True
-            for row in record['plans']:
-                directory = Path(row['directory'])
-                if (directory / 'cancel.json').exists():
-                    raise ValueError('Проверка обновления отменена или заменена новой.')
-                if not read(directory / 'plan.json').get('conflicts'):
-                    continue
-                operation = read(directory / 'pipeline.json')
-                state = operation.get('state')
-                if state not in source_update.ACTIVE | {'ready_to_apply'}:
-                    raise ValueError(operation.get('error') or operation.get('reason') or 'Панель обновления требует внимания.')
-                if state != 'ready_to_apply' or operation.get('paused') or source_update._owner_blocked(operation['tree']):
-                    ready = False
-            if ready:
-                code_transition.validate(new_root)
-                if selection_now() != selection:
-                    raise ValueError('Настройки или код изменились во время ревью. Начни обновление снова.')
-                # Cancellation and the final handoff decision share one lock.
-                with _update_guard:
-                    if cancelled.is_set():
-                        continue
-                    _waiting_updates.pop(target, None)
-                return True
-            cancelled.wait(.5)
-    finally:
-        with _update_guard:
-            _waiting_updates.pop(target, None)
+
+def update_resume(owner,id):
+    from . import desktop_update_request as jobs
+    return jobs.request(owner.current().tree,'resume',root=owner.root,identity=id)
+
+
 
 EXTENSION_ASSETS = {'xtts':('Helene-components-xtts-model.zip','Helene-components-xtts-runtime.zip'),
                     'whisper':('Helene-components-whisper.zip',)}
@@ -171,8 +131,12 @@ def version(root):
 
 def parts(value):
     text=value.strip().lstrip('vV')
-    if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',text):raise ValueError('Unrecognized release version')
-    return tuple(int(v) for v in text.split('-')[0].split('.')[:3])
+    matched=re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:[-.]([A-Za-z0-9.]+))?',text)
+    if not matched:raise ValueError('Unrecognized release version')
+    numeric=tuple(int(v) for v in matched.groups()[:3])
+    suffix=matched[4]
+    prerelease=tuple((0,int(v)) if v.isdecimal() else (1,v.lower()) for v in suffix.split('.')) if suffix else ()
+    return (*numeric, 0 if suffix else 1, prerelease)
 
 
 def update_check(owner,url):
@@ -186,7 +150,8 @@ def update_check(owner,url):
     asset=candidates[0] if len(candidates)==1 else {}
     address=value.get('url') if value.get('version') else asset.get('browser_download_url',value.get('html_url',''))
     notes=value.get('notes') or value.get('body','')
-    sha=asset.get('digest','').removeprefix('sha256:')
+    sha=str(value.get('sha256') or asset.get('digest','')).removeprefix('sha256:')
+    if sha and not re.fullmatch('[a-fA-F0-9]{64}',sha):raise ValueError('Invalid update feed SHA256')
     if not sha and asset:
         for line in notes.splitlines():
             if asset['name'] in line:
@@ -194,6 +159,22 @@ def update_check(owner,url):
                 if found:sha=found[0].lower();break
     return {'current':current,'latest':latest.lstrip('vV'),'newer':parts(latest)>parts(current),
             'url':address,'notes':next((s.strip() for s in notes.splitlines() if s.strip() and not s.startswith('#')),'')[:200],'sha256':sha}
+
+
+def release_endpoint(owner, selected_version='latest'):
+    """Use the existing per-agent update.url; stable defaults stay unchanged."""
+    from .essential_backup import load
+    configured = str((load(owner.current().config).get('update') or {}).get('url') or '').strip()
+    default = 'https://api.github.com/repos/josephsteuerjr/praxis/releases/latest'
+    endpoint = secure_url(configured or default)
+    if selected_version != 'latest':
+        parts(selected_version)
+        parsed = urllib.parse.urlsplit(endpoint)
+        if parsed.hostname == 'api.github.com' and parsed.path.endswith('/releases/latest'):
+            endpoint = urllib.parse.urlunsplit(parsed._replace(path=parsed.path.removesuffix('/latest')+'/tags/v'+selected_version.lstrip('vV')))
+        else:
+            raise ValueError('This configured feed exposes latest only; choose a version-specific feed explicitly')
+    return endpoint
 
 
 def _download(url, target, expected='', progress=None):
@@ -245,7 +226,8 @@ def update_download(owner,url,sha256=None,extensions=None):
         raise ValueError('Expected an update archive for this application target')
     folder=owner.root.resolve().parent
     from .update_progress import Progress
-    operation=uuid.uuid4().hex
+    job = getattr(owner, 'update_job', None)
+    operation=job['id'] if job else uuid.uuid4().hex
     report=Progress(folder/('.helene-update-'+operation+'.progress.json'),operation,owner.root,event=owner.event)
     report.phase('downloading')
     selected=installed_extensions(owner.root) if extensions is None else extensions
@@ -277,6 +259,8 @@ def _extract(archive, destination, progress=None, prefix='Helene/'):
 
 
 def update_install(owner,path,forceExtensions=False,sourceMode=None):
+    if forceExtensions:
+        raise ValueError('Incompatible-extension override is obsolete; resolve compatibility before ordinary Update')
     target=os.path.normcase(str(owner.root.resolve()))
     with _update_guard:
         if target in _update_targets:
@@ -303,6 +287,16 @@ def await_admission(child, staging, target, timeout=15):
                 value=json.loads(receipt.read_text(encoding='utf-8'))
                 if value.get('pid')!=child.pid or Path(value.get('target','')).resolve()!=Path(target).resolve():
                     raise ValueError('Updater admission identity differs')
+                if value.get('birth') is not None:
+                    from .session_host import process_state
+                    if process_state(value) != 'alive':
+                        raise ValueError('Updater admission process birth is not current')
+                if value.get('process_exit_allowed'):
+                    from .session_host import process_state
+                    job=json.loads(Path(value['job_path']).read_text(encoding='utf-8'))
+                    if (process_state(value.get('durable_owner') or {})!='alive' or job.get('id')!=value.get('job_id')
+                            or job.get('admission')!=value.get('durable_owner')):
+                        raise ValueError('Legacy handoff has no current durable process owner')
                 return value
             if child.poll() is not None:raise RuntimeError('Updater refused admission; previous application remains open')
             if time.monotonic()>=deadline:raise TimeoutError('Updater admission was not confirmed; previous application remains open')
@@ -318,11 +312,24 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
     folder=owner.root.resolve().parent
     if archive.suffix.lower()!='.zip' or archive.parent!=folder:
         raise ValueError('Choose the update ZIP beside the working Helene folder')
-    destination=folder/('.helene-update-'+uuid.uuid4().hex)
-    destination.mkdir()
+    job = getattr(owner, 'update_job', None)
+    destination=Path(job['staging']) if job and job.get('staging') else folder/('.helene-update-'+(job['id'] if job else uuid.uuid4().hex))
+    if destination.parent != folder or not destination.name.startswith('.helene-update-'):
+        raise ValueError('Durable update staging identity differs')
+    resumed = bool(job and job.get('staging') and (destination/'extraction.json').is_file())
+    destination.mkdir(exist_ok=resumed)
+    if job:
+        from .desktop_update_request import checkpoint
+        checkpoint(owner, job, staging=str(destination), phase='preparing' if resumed else 'unpacking')
     from .update_progress import Progress
     operation=destination.name.removeprefix('.helene-update-')
     progress=Progress(folder/(destination.name+'.progress.json'),operation,owner.root,event=owner.event)
+    if resumed:
+        from .package_notice import read
+        state = read(destination / 'extraction.json')
+        if state.get('archive_sha256') != job['archive_sha256']:
+            raise ValueError('Retained extraction does not match the admitted package')
+        return _prepare_handoff(owner, destination, state['verified'], progress, forceExtensions, sourceMode)
     archives=[archive]
     receipt=archive.with_name(archive.name+'.download.json')
     if receipt.is_file():
@@ -364,6 +371,10 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
         progress.phase('unpacking',staging=str(destination))
         for item in archives:
             verified.update(_extract(item,destination,progress))
+        if job:
+            from .package_notice import write
+            write(destination / 'extraction.json', {'archive_sha256':job['archive_sha256'], 'verified':verified})
+            checkpoint(owner, job, phase='staged')
         return _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceMode)
     except BaseException as exc:
         progress.phase('failed',error=str(exc),previous_application_open=True)
@@ -372,25 +383,66 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
 
 def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceMode=None):
     new_root=destination/'Helene'
+    _wait_pause(owner,progress)
     from . import source_admission
     if source_admission.activate(new_root):
         verified = source_admission.current_proofs(verified, new_root)
-    if (new_root/'app/helene_setup.py').is_file() and not getattr(owner,'browser_mode',False):
-        return _open_installation_wizard(owner,new_root,destination,progress,sourceMode,forceExtensions)
-    review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions)
+    # Ordinary Update belongs to the selected agent/session host. The migration
+    # wizard is never a parallel owner of this work.
+    job = getattr(owner, 'update_job', None)
+    if job:
+        from .desktop_update_request import checkpoint,bind_incoming
+        bind_incoming(job,new_root)
+        checkpoint(owner, job, phase='preparing', staging=str(destination))
+    predicate = getattr(owner, 'update_cancelled', None)
+    cancellation = _Cancellation(predicate) if predicate else None
+    review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions,cancelled=cancellation)
+    _wait_pause(owner,progress)
     # No old window closes on preparation failure. The helper independently
     # reacquires the lease and binds the snapshot identity before admission.
     # Full mutable-byte validation follows old-owner exit, before any replacement.
     from python_migrate import installation_lock
     from .python_source_updater import prepare_install
     with installation_lock(owner.root):
-        prepare_install(owner.root,new_root,verified=verified,progress=progress)
+        prepare_install(owner.root,new_root,verified=verified,progress=progress,
+                        attached_data=getattr(owner,'migration_data',None))
         if review_binding is not None:
             from .package_notice import read
             final = read(new_root / 'code-transition-plan.json')
             if [(row['source'], row['directory']) for row in final['plans']] != review_binding:
                 raise ValueError('Состав обновления изменился после ревью. Старая версия остаётся открытой.')
     return _launch_handoff(owner, destination, new_root, interpreter, progress)
+
+
+def _wait_pause(owner,progress=None):
+    from . import owner_stop
+    from .desktop_update_request import status as job_status
+    job=getattr(owner,'update_job',None)
+    if not job:return
+    marker=Path(job['tree'])/'memory/.control/autonomy-paused.json'
+    announced=False
+    while marker.exists() or job_status(job['tree']).get('state')=='paused':
+        cancelled=getattr(owner,'update_cancelled',None)
+        if owner_stop.stopped() or (cancelled and cancelled()):raise InterruptedError('Owner stopped paused update')
+        if progress and not announced:
+            progress.phase('paused',message='Задание сохранено до явного продолжения владельцем');announced=True
+        time.sleep(.1)
+
+
+class _Cancellation:
+    """Event-shaped adapter over the durable owner intent and local Stop."""
+    def __init__(self, predicate):
+        self.event = threading.Event()
+        self.predicate = predicate
+    def is_set(self):
+        return self.event.is_set() or self.predicate()
+    def set(self):
+        self.event.set()
+    def wait(self, seconds):
+        deadline = time.monotonic() + seconds
+        while not self.is_set() and time.monotonic() < deadline:
+            self.event.wait(min(.1, max(0, deadline-time.monotonic())))
+        return self.is_set()
 
 
 def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
@@ -415,8 +467,15 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
 def _prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
     """Shared native-migration/update merge and incoming-panel preparation."""
     old,new_root=Path(old).resolve(),Path(new_root).resolve()
+    if forceExtensions:
+        raise ValueError('Incompatible-extension override is obsolete')
     from . import update_source
-    update_source.select(old,new_root,sourceMode or 'preserve',by='window',require_review=require_review,resolution_owner=resolution_owner)
+    resolution_runtime=os.environ.get('HELENE_SOURCE_UPDATE_RUNTIME')
+    if resolution_runtime:
+        from .source_update_host import verified_runtime
+        verified_runtime(Path(resolution_runtime))
+    update_source.select(old,new_root,sourceMode or 'preserve',by='window',require_review=require_review,
+        resolution_owner=resolution_owner,resolution_runtime=resolution_runtime)
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
     from .python_platform import require_runtime
@@ -453,25 +512,25 @@ def _prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,ca
         try:
             from .agent_source_update import AgentResolutionPending
             from .package_notice import read
-            deadline=time.monotonic()+7200
             while True:
                 progress.phase('waiting_agent',message='Агент совмещает правки в отдельной копии. После проверки обновление продолжится.')
-                while any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
-                          and read(Path(row['directory'])/'plan.json').get('state')!='ready' for row in source_plan['plans']):
-                    if cancelled.wait(.5):raise RuntimeError('Owner cancelled the update before agent resolution')
-                    if time.monotonic()>=deadline:raise TimeoutError('Agent source resolution timed out; old application retained')
                 try:
                     review(old, new_root, source_plan['plans'], progress, cancelled)
                     break
                 except AgentResolutionPending:
                     if cancelled.is_set():raise RuntimeError('Owner cancelled update review')
+                    while any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
+                              for row in source_plan['plans']):
+                        if cancelled.wait(.5):raise RuntimeError('Owner cancelled the update before agent resolution')
         except BaseException:
             from . import source_update
             from .package_notice import read,write
             for row in source_plan['plans']:
                 directory=Path(row['directory']);operation=read(directory/'pipeline.json')
                 if operation.get('resolution_owner')!='agent':continue
-                source_update._cancel_marker(directory,'Selected-agent update preparation ended before acceptance')
+                if not cancelled.is_set():
+                    continue  # a blocked executor/failed check retains this exact job
+                source_update._cancel_marker(directory,'Owner cancelled selected-agent update preparation')
                 operation.update(state='cancelled',cancel_requested=True)
                 source_update._persist(directory,operation)
                 request=read(source_update.path(operation['tree']))
@@ -497,43 +556,6 @@ def _prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,ca
     return review_binding,interpreter
 
 
-def _open_installation_wizard(owner,new_root,destination,progress,sourceMode=None,forceExtensions=False):
-    """Update and helene.exe present the same clean-code/data-folder choices."""
-    from .migration_source import verify
-    from .update_process import interpreter_for,background_flags
-    from .python_platform import require_runtime
-    require_runtime(new_root,owner.root);verify(new_root)
-    entry=new_root/'app/helene_setup.py'
-    if not entry.is_file():raise ValueError('Incoming application has no installation wizard')
-    command=[str(interpreter_for(new_root)),'-s',str(entry),'--root',str(new_root),
-             '--old',str(owner.root.resolve()),'--target',str(owner.root.resolve()),'--source-mode',sourceMode or 'preserve']
-    if forceExtensions:command.append('--force-extensions')
-    if sys.platform=='darwin':
-        from .python_platform import desktop_argv
-        arguments=['--root',str(new_root),'--migration-wizard','--setup-old',str(owner.root.resolve()),
-                   '--setup-target',str(owner.root.resolve()),'--setup-source-mode',sourceMode or 'preserve']
-        if forceExtensions:arguments.append('--setup-force-extensions')
-        command=desktop_argv(new_root,arguments)
-    with (destination/'installation-wizard.log').open('ab') as output:
-        child=subprocess.Popen(command,cwd=new_root,stdin=subprocess.DEVNULL,
-            stdout=output,stderr=subprocess.STDOUT,creationflags=background_flags(),start_new_session=os.name!='nt')
-    # A live control descriptor proves the window opened. It grants no file
-    # switch; closing/cancelling the wizard leaves the current owner running.
-    deadline=time.monotonic()+15
-    while time.monotonic()<deadline:
-        descriptor=new_root/f'.python-migrator-{child.pid}.json'
-        if descriptor.is_file():break
-        if child.poll() is not None:raise RuntimeError('Не удалось открыть мастер установки. Прежняя Hélène продолжает работать.')
-        time.sleep(.05)
-    else:
-        child.terminate();child.wait(timeout=5)
-        raise TimeoutError('Мастер установки не открылся. Прежняя Hélène продолжает работать.')
-    progress.phase('prepared',label='Мастер установки открыт',message='Выбери папку данных и подтверди установку чистого кода в новом окне.')
-    def release_guard():
-        child.wait()
-        with _update_guard:_update_targets.discard(os.path.normcase(str(owner.root.resolve())))
-    threading.Thread(target=release_guard,daemon=True).start()
-    return {'state':'installer_opened','message':'Мастер установки открыт. Подключи прежние данные или создай нового агента.'}
 
 
 def _discard_extraction(owner, destination):
@@ -560,6 +582,11 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
     shutil.copy2(new_root/'app/localharness/python_source_updater.py',helper)
     argv=[str(interpreter),str(helper),'--old',str(owner.root),'--new',str(new_root),
           '--pid',str(os.getpid()),'--staging',str(destination)]
+    job = getattr(owner, 'update_job', None)
+    if job:
+        from .desktop_update_request import path as job_path, checkpoint
+        write_path = job_path(job['tree'])
+        argv.extend(['--job',str(write_path),'--job-id',job['id']])
     if getattr(owner,'browser_mode',False):argv.append('--browser')
     # Verified input ZIPs remain a reusable cache, not disposable updater output.
     log=folder/('helene-update-'+destination.name.removeprefix('.helene-update-')+'.log')
@@ -568,8 +595,20 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
             stdout=output,stderr=subprocess.STDOUT,
             creationflags=background_flags(),
             start_new_session=os.name!='nt')
-    await_admission(child,destination,owner.root)
+    admitted = await_admission(child,destination,owner.root)
+    if job:
+        checkpoint(owner, job, phase='handoff', helper=admitted)
+    predicate = getattr(owner, 'update_cancelled', None)
     def exit_old():
+        if predicate and predicate():
+            return
+        if getattr(owner, 'session_host', False):
+            from .session_host import retire_observers
+            retire_observers(owner.root)
+        if getattr(owner,'bootstrap',False):
+            from . import migration_lifecycle
+            migration_lifecycle.stop(owner.root)
+            migration_lifecycle.quiescent(owner.root)
         owner.close()
         os._exit(0)
     timer=threading.Timer(2,exit_old);timer.daemon=True;timer.start()

@@ -669,6 +669,8 @@ def _missing_root_reason(task: dict, root: Path) -> str:
     Праксис прочитала «пропал», сделала единственный вывод, который из этого слова следует
     («восстанавливать потерянный worktree цель прямо запрещала»), и закрыла задачу по
     ложной причине. Слово, которое сообщает о причине, обязано её знать."""
+    close_hint = ("" if task.get("status") in {"done", "abandoned"}
+                  else " Закрыть запись — coding_session(action='abandon').")
     wt_raw = str(task.get("worktree_root") or "")
     if wt_raw:
         try:
@@ -685,13 +687,10 @@ def _missing_root_reason(task: dict, root: Path) -> str:
                     f"в нём нет «{rel}», потому что worktree это чекаут HEAD, а git этот путь "
                     f"не отслеживает (обычно он в .gitignore). Такого корня не было ни разу с "
                     f"момента открытия задачи: это не пропажа, а изоляция, которая не могла "
-                    f"состояться. Восстанавливать нечего; закрыть запись — "
-                    f"coding_session(action='abandon').")
+                    f"состояться. Восстанавливать нечего.{close_hint}")
         if inside and wt is not None:
-            return (f"корень задачи пропал вместе с worktree: нет ни {root}, ни {wt}. "
-                    f"Закрыть запись — coding_session(action='abandon').")
-    return (f"корень задачи пропал: {root}. Закрыть запись — "
-            f"coding_session(action='abandon').")
+            return f"корень задачи пропал вместе с worktree: нет ни {root}, ни {wt}.{close_hint}"
+    return f"корень задачи пропал: {root}.{close_hint}"
 
 
 def _manifest_hints(root: Path) -> list[str]:
@@ -1111,9 +1110,19 @@ def emit_unit_event(task_id: str, unit_id: str, result: dict | None,
     # ближайшем вводе модели, не дожидаясь Пробуждения. Best-effort, как и событие.
     try:
         from core import notices as core_notices
+        # This is the actual retained result, not a model-supplied path or recap.
+        result_path = unit_dir / "result.json"
+        result_ref = {}
+        if result_path.is_file():
+            raw_result = result_path.read_bytes()
+            result_ref = {"path": str(result_path),
+                          "sha256": hashlib.sha256(raw_result).hexdigest(),
+                          "bytes": len(raw_result)}
         core_notices.note_node(
             task_id=str(task_id), unit_id=str(unit_id), status=str(payload.get("status") or ""),
-            goal=str(payload.get("goal") or ""), origin_chat=str(payload.get("origin_chat") or ""))
+            goal=str(payload.get("goal") or ""), origin_chat=str(payload.get("origin_chat") or ""),
+            run_id=str(payload.get("run_id") or ""), work_ref=payload["work_ref"],
+            audience=str(payload.get("audience") or "owner"), result_ref=result_ref)
     except Exception:
         log.debug("уведомление об узле %s/%s не легло", task_id, unit_id, exc_info=True)
 
@@ -2559,11 +2568,15 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
     if str(action or "").strip().lower() in ("watch", "unwatch", "watching"):
         return upstream_lever(action, task_id=task_id, arg=query or path)
     task, root, err = _task_root(task_id)
-    if err:
-        return err
-    assert task is not None and root is not None
     action = str(action or "status").strip().lower()
-    remote = _remote_client(task)
+    # Durable observations survive disposable worktrees; file and mutation
+    # operations still require the ordinary root admission below.
+    if err and (task is None or action not in {"status", "history"}):
+        return err
+    assert task is not None
+    if action == "history":
+        return json.dumps(_events(task_id, max(1, min(int(end or 30), 200))), ensure_ascii=False, indent=2)
+    remote = _remote_client(task) if root is not None else None
     if action == "orientation":
         return _orientation_text(task)
     if action == "coordination":
@@ -2571,15 +2584,23 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
     if action == "status":
         # Refresh writes the graph. Reading before the lock would let a slow
         # status observer overwrite a later rework/reservation transaction.
-        with _mutation_lock(task_id):
+        if err:
             agents = _worker_tree(task_id)
             jobs = _units(task_id, "processes")
             checks = _units(task_id, "verifications")
-            snapshots = {row["id"]: row for row in agents}
-            swarm_plan = forge_swarm.refresh(
-                _task_dir(task_id), lambda aid: snapshots.get(aid, {"status": "lost"}))
-        git = _git_root(root) if remote is None else None
-        if remote is not None:
+            swarm_plan = forge_swarm.load(_task_dir(task_id))
+        else:
+            with _mutation_lock(task_id):
+                agents = _worker_tree(task_id)
+                jobs = _units(task_id, "processes")
+                checks = _units(task_id, "verifications")
+                snapshots = {row["id"]: row for row in agents}
+                swarm_plan = forge_swarm.refresh(
+                    _task_dir(task_id), lambda aid: snapshots.get(aid, {"status": "lost"}))
+        git = _git_root(root) if root is not None and remote is None else None
+        if err:
+            git_block = "недоступен (нет рабочего дерева)"
+        elif remote is not None:
             with _remote_observations(task):
                 git_block = remote.workspace_inspect(str(root), "status")
         else:
@@ -2588,7 +2609,8 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
         return _cap("\n".join([
             f"{task_id} [{task.get('status')}] {task.get('goal')}",
             "coordination: " + json.dumps(_coordinator_state(task), ensure_ascii=False),
-            f"root: {root}; isolation: {task.get('isolation')}",
+            f"root: {task.get('root')}; isolation: {task.get('isolation')}",
+            *([f"⚠ Рабочее дерево недоступно: {err}"] if err else []),
             f"agents: {_unit_counts(agents)}; processes: {_unit_counts(jobs)}; "
             f"verification: {_unit_counts(checks)}",
             f"worker slots: {sum(r.get('status') in (_LIVE_UNIT_STATES | {'unknown'}) for r in agents)}"
@@ -2605,8 +2627,7 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
                 for e in _events(task_id, 12)
             ),
         ]) + _upstream_note(task))
-    if action == "history":
-        return json.dumps(_events(task_id, max(1, min(int(end or 30), 200))), ensure_ascii=False, indent=2)
+    assert root is not None
     if action == "lessons":
         return forge_learning.format_recall(
             forge_learning.recall(STATE_DIR, query or str(task.get("goal") or ""), root,
@@ -2618,6 +2639,12 @@ def inspect(task_id: str, action: str = "status", path: str = "", query: str = "
         return json.dumps(forge_swarm.mailbox(_task_dir(task_id), end or 100),
                           ensure_ascii=False, indent=2)
     if remote is not None:
+        # Neither serverd brokerops.inspect nor the Windows fs.read adapter
+        # supports the local revision/cursor protocol. Never silently downgrade
+        # an exact continuation into an unguarded remote read.
+        if start_char or expected_sha256:
+            return ("Remote Forge backend does not support paged reads: "
+                    "start_char/expected_sha256 are unavailable. No read was performed.")
         with _remote_observations(task):
             return remote.workspace_inspect(
                 str(root), action, path=path, query=query, glob=glob, start=start, end=end,
@@ -3297,8 +3324,14 @@ def _admission_reason(task_id: str, parent_request_path: str = "", *, general: b
         directory = _unit_dir(task_id, "agents", parent_id)
         if (directory / "stop.json").exists():
             return f"ancestor {parent_id} is stop-fenced"
-        if (directory / "result.json").exists():
-            return f"ancestor {parent_id} is terminal"
+        result_path = directory / "result.json"
+        if result_path.exists():
+            result = _read_json(result_path)
+            # Older workers checkpoint partial observations in result.json.
+            # Only explicit live statuses may advance; missing/corrupt/unknown
+            # results remain fenced just like settled results.
+            if not isinstance(result, dict) or str(result.get("status") or "") not in _LIVE_UNIT_STATES:
+                return f"ancestor {parent_id} is terminal or result status is unknown"
         handoff = _read_json(directory / "handoff.json", {}) or {}
         if handoff.get("state") == "waiting":
             if parent_id == caller:
@@ -4170,7 +4203,10 @@ def _launch_agent_unlocked(task_id: str, directory: Path, request: dict, beat) -
         emit_unit_event(task_id, request["id"], failure, request=request)
         raise
     request.update(supervisor_pid=pid, supervisor_started_at=_proc_started_at(pid), status="running")
+    import forge_liveness
+    request['process_identity'] = forge_liveness.capture(pid)
     _atomic_json(directory / "request.json", request)
+    forge_liveness.observe(directory, request, _atomic_json)
     return pid
 
 
@@ -4250,8 +4286,15 @@ def _queued_dependency_reason(request: dict, by_id: dict) -> str:
     return forge_swarm.dependency_reason(node, by_id)
 
 
+def observe_liveness() -> None:
+    """Publish dated process facts; no admission/control or model invocation."""
+    import forge_liveness
+    forge_liveness.refresh(TASKS_DIR, _atomic_json)
+
+
 def tick_queued(task_id: str = "") -> list[dict]:
     """Drain current admitted identities; never recreate/retry a lost execution."""
+    observe_liveness()
     directories = (sorted((_task_dir(task_id) / "agents").glob("agent-*"))
                    if task_id else _queued_identities())
     by_task: dict[str, list[Path]] = {}
@@ -5149,15 +5192,14 @@ def _finish_survey(task_id: str, beat=None) -> dict:
 
 
 def _reviewer_evidence(task_id: str) -> str:
-    """След адверсарного ревьюера (гнома) из леджера задачи — для гейта submit.
+    """Optional adversarial critic evidence from this task, not submit authority.
 
-    #43746: пока запуск ревью — отдельное решение, оно конкурирует с решением его
-    пропустить; след, который инструмент ставит сам, надёжнее. finish берёт свежий
-    done-вердикт reviewer-юнита и подставляет его в reviewer= сам; она вправе
-    перезаписать это явным reviewer= в coding_session(finish) или задать skip.
+    finish retains a recent done opinion if one was requested; absence is normal.
+    The complete unit results stay in the task ledger even if no recent opinion
+    applies to this diff. Explicit reviewer text remains possible for compatibility.
 
     Свежесть — юниту не больше 48ч и он done ПОСЛЕ последнего коммита worktree-ветки:
-    гном, смотревший старую версию диффа, не освобождает новую.
+    old source evidence is not silently relabelled as a review of new bytes.
     """
     try:
         rows = _units(task_id, "agents")
@@ -5195,7 +5237,7 @@ def _reviewer_evidence(task_id: str) -> str:
         result = str(r.get("result") or "").strip()
         if result:
             best = result
-    return best[:6000]
+    return best
 
 
 def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: str = "",
@@ -5227,9 +5269,8 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
     elif submit and task.get("proposal_id"):
         if not str(review or "").strip():
             return "Для submit собственного кода нужен review: твой вердикт после coding_inspect(diff)."
-        # 28.09, гномье ревью в рельсе (#43746): finish подставляет свежий вердикт
-        # reviewer-юнита этой же задачи сам — след, который инструмент ставит без
-        # «не забыть». Она вправе перезаписать: coding_session(finish, reviewer=…).
+        # Retain a voluntarily requested critic's evidence. An absent critic or
+        # BLOCKED opinion does not require skip/override for ordinary finish.
         reviewer_evidence = str(reviewer or "").strip() or _reviewer_evidence(task_id)
         # Объявленный долгый шаг: внутри submit крутится гейт тестов
         # (PRAXIS_PROPOSAL_TEST_TIMEOUT, по умолчанию 600с), полтора десятка вызовов git и
@@ -5244,7 +5285,7 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
         # Классификатор статуса по тексту ответа submit. Порядок важен: сначала
         # блокировки («НЕ смёржено», «Стоп», «отказ», «нет изменений») — только потом
         # «смёрж». Раньше «НЕ смёржено» матчилось в «смёрж» и штамповало done
-        # поверх заблокированного гейтом мёржа (красные тесты, BLOCKED гнома).
+        # поверх мёржа, удержанного проверками (например, красными тестами).
         # Регрессия закреплена тестом test_forge_contract_0610 (06.10).
         if (lower.startswith("не ") or lower.startswith("стоп")
                 or "отказ" in lower or "нет изменений" in lower

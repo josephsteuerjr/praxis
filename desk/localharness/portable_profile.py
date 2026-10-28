@@ -3,6 +3,88 @@ from pathlib import Path
 import hashlib
 import os
 import shutil
+import uuid
+
+
+def default_data():
+    """New data default only; existing configured profiles never move silently."""
+    return Path.home() / 'Helene'
+
+
+def bind_program(root):
+    """Keep recognized program-owned paths relocatable and preserve profile ID.
+
+    Only named path fields are transformed. Absolute external overrides remain
+    external; a missing old data pointer asks for explicit reconnection rather
+    than creating a new identity after a folder move.
+    """
+    from .essential_backup import configs, load
+    from .package_notice import read, write
+    from .config_transaction import transaction
+    root = Path(root).resolve()
+    marker = root / 'portable-program.json'
+    with transaction(marker):
+        previous = read(marker)
+        if previous and previous.get('format') != 'helene-portable-program.v1':
+            raise ValueError('Unknown program/profile binding; choose the existing profile explicitly')
+        old = Path(previous.get('program', str(root)))
+        if previous and not (root / 'helene.json').is_file():
+            raise ValueError('Saved data pointer is missing; select your existing profile, do not create another identity')
+        profiles = {}
+        pending = []
+        for config in configs(root):
+            if not config.is_file():
+                continue
+            value = load(config)
+            if value.get('mode') == 'remote':
+                continue
+            revised = dict(value)
+            for key in ('tree', 'code', 'python', 'app', 'runner'):
+                raw = revised.get(key)
+                if not isinstance(raw, str) or not raw:
+                    continue
+                path = Path(raw)
+                if path.is_absolute() and path.is_relative_to(old):
+                    revised[key] = os.path.relpath(root / path.relative_to(old), config.parent)
+            backup = revised.get('backup')
+            if isinstance(backup, dict) and isinstance(backup.get('dir'), str):
+                path = Path(backup['dir'])
+                if path.is_absolute() and path.is_relative_to(old):
+                    revised['backup'] = dict(backup, dir=os.path.relpath(root / path.relative_to(old), config.parent))
+            relay=revised.get('relay')
+            if isinstance(relay,dict) and isinstance(relay.get('executable'),str):
+                path=Path(relay['executable']).expanduser()
+                if path.is_absolute() and path.is_relative_to(old):
+                    # Relay resolver uses installation root, not agent config dir.
+                    revised['relay']=dict(relay,executable=path.relative_to(old).as_posix())
+            raw = revised.get('tree')
+            if not isinstance(raw, str) or not raw:
+                raise ValueError('Profile pointer missing; select the existing data folder')
+            tree = Path(raw)
+            tree = (tree if tree.is_absolute() else config.parent / tree).resolve()
+            name = config.relative_to(root).as_posix()
+            prior = (previous.get('profiles') or {}).get(name)
+            if not tree.is_dir():
+                raise ValueError('Configured data folder is unavailable; reconnect it explicitly: ' + str(tree))
+            identity_file = tree / 'memory/.control/profile-identity.json'
+            identity = read(identity_file)
+            if prior and identity.get('id') != prior.get('id'):
+                raise ValueError('Configured data identity changed; explicitly select the intended profile')
+            if not identity:
+                identity = {'format': 'helene-profile-identity.v1', 'id': uuid.uuid4().hex}
+                write(identity_file, identity)
+            if any(row['id'] == identity['id'] for row in profiles.values()):
+                raise ValueError('Two agents select the same writable profile; choose separate data folders')
+            profiles[name] = {'id': identity['id'], 'path': str(tree)}
+            if revised != value:
+                pending.append((config, revised))
+        for config, value in pending:
+            write(config, value)
+        value = {'format': 'helene-portable-program.v1', 'id': previous.get('id') or uuid.uuid4().hex,
+                 'program': str(root), 'profiles': profiles}
+        if value != previous:
+            write(marker, value)
+        return value
 
 
 def digest(path):

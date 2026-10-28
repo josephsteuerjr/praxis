@@ -1590,39 +1590,31 @@ class TheBuilderIsOneAndSaysWhoItIs(ShadowCase):
                          {k: v for k, v in after.items() if k != "serializer"},
                          "поехало не то поле: сдвинулся один байт сборщика")
 
-    @unittest.skip("заготовка switch: живой путь ещё не зовёт сборщик. Снять skip в том "
-                   "же коммите, где _voice_impl начнёт строить system из "
-                   "frame_shadow.prepare()/build(), и GOLDEN станет 'live==shadow'.")
-    def test_the_live_frame_equals_the_shadow_byte_for_byte(self):
-        """Обязательство на момент switch, дословно.
+    def test_live_voice_keeps_shadow_capture_observational(self):
+        """The unshipped frame_for/GOLDEN switch is retired, not falsely PASSed.
 
-        На ОДНОЙ фикстуре (ctx, history, speaker, user_msg, tools, now) живой путь и
-        тень обязаны дать один и тот же байтовый кадр — не «эквивалентный», а тот же,
-        потому что источник байтов один:
-
-            plan   = frame_shadow.prepare(ctx=…, history=…, tools=…, now=NOW)
-            shadow = frame_shadow.build(…, plan=plan).text
-            live   = agent.frame_for(…)      # шов, который появится при switch и
-                                             # внутри зовёт ту же пару prepare+build
-            assert live.encode("utf-8") == shadow.encode("utf-8")
-
-        И вторым утверждением — что источник вправду один: identity() живого и
-        теневого совпадает по всем шести полям, а поле golden читается «live==shadow».
-        Пока этого шва нет, тест обязан стоять со skip и НЕ считаться зелёным: молчащая
-        заготовка честнее зелёного теста, который ничего не сравнивает.
+        Actual voice input stays the live builder's bytes even when the shadow
+        returns a different candidate. No private persona is opened by this test.
         """
         import agent
-        tools = [{"name": "reply", "description": "Сказать."}]
-        with patch.dict(os.environ, {"PRAXIS_FRAME_SHADOW": "on"}):
-            plan = frame_shadow.prepare(ctx=_ctx(), history=_history(),
-                                        tools=tools, now=NOW)
-        shadow = frame_shadow.build(ctx=_ctx(), history=_history(), speaker="Егор",
-                                    user_msg="как ты?", tools=tools, now=NOW, plan=plan)
-        live = agent.frame_for(ctx=_ctx(), history=_history(), speaker="Егор",
-                               user_msg="как ты?", tools=tools, now=NOW)
-        self.assertEqual(live.encode("utf-8"), shadow.text.encode("utf-8"))
-        self.assertEqual(frame_shadow.GOLDEN, "live==shadow",
-                         "поле golden обязано смениться ровно этим коммитом")
+        seen = {}
+        def loop(**kwargs):
+            seen.update(kwargs)
+            return 'synthetic draft'
+        with patch.object(agent, '_build_prompt_parts', return_value=('synthetic persona', 'live contract', 'evidence')), \
+                patch.object(agent, '_terminal_tool_loop', side_effect=loop), \
+                patch.object(agent.frame_shadow, 'enabled', return_value=True), \
+                patch.object(agent.frame_shadow, 'capture', return_value='SHADOW CANDIDATE MUST NOT BE SENT') as capture, \
+                patch.object(agent, '_arm_private_floor', return_value=0):
+            result = agent._voice_impl('synthetic question', [], 'Synthetic speaker',
+                                       ctx=agent.ChannelContext(chat_id='synthetic-shadow',
+                                           is_dm=False, owner=False, known=True, principal_id='2'),
+                                       tools_override=[])
+        self.assertEqual(result, 'synthetic draft')
+        self.assertEqual(capture.call_count, 1)
+        self.assertIn('synthetic persona', str(seen['system']))
+        self.assertIn('live contract', str(seen['system']))
+        self.assertNotIn('SHADOW CANDIDATE MUST NOT BE SENT', str(seen))
 
 
 class TheNineDecisionsAreHerWord(ShadowCase):

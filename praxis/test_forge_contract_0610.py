@@ -186,7 +186,38 @@ class SkipRowBecomesReceiptInMatrix(unittest.TestCase):
     """Supervisor пишет расписку, не спавня процесс; матрица остаётся зелёной."""
 
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.tmp = Path(folder.name)
+
+    def matrix(self):
+        """Real clean Git reuse key and exact prior receipt outside the root."""
+        import subprocess
+        root = self.tmp / 'project'
+        root.mkdir()
+        (root / 'source.txt').write_text('exact source\n', encoding='utf-8')
+        for args in (['init', '-q'], ['add', '-A'],
+                     ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                      'commit', '-q', '-m', 'fixture']):
+            subprocess.run(['git', '-C', str(root), *args], check=True,
+                           capture_output=True, text=True)
+        tree = forge._task_tree_sha(root)
+        self.assertRegex(tree, r'^[0-9a-f]{40}$')
+        patch = mock.patch.object(forge, 'TASKS_DIR', self.tmp / 'tasks')
+        patch.start()
+        self.addCleanup(patch.stop)
+        _green_unit('code-x', 'verify-old', tree, 'echo hi')
+        checks, notes = forge._dedup_against_green('code-x', tree,
+                         [{'id': 'c1', 'command': 'echo hi', 'cwd': '.'}])
+        self.assertTrue(notes)
+        self.assertTrue(checks[0]['skip'])
+        directory = self.tmp / 'matrix'
+        directory.mkdir()
+        req = directory / 'request.json'
+        req.write_text(json.dumps({'id': 'verify-ddd', 'task_id': 'code-x', 'root': str(root),
+            'scope': 'self', 'max_parallel': 1, 'timeout': 30, 'created': 'now',
+            'tree_sha': tree, 'checks': checks}), encoding='utf-8')
+        return root, req, tree
 
     def test_run_one_skip_row_is_a_receipt(self):
         import forge_verify
@@ -210,22 +241,31 @@ class SkipRowBecomesReceiptInMatrix(unittest.TestCase):
     def test_deduped_counts_as_passed_in_matrix_result(self):
         """Полностью дедупнутая матрица — passed, а не «с пропусками»."""
         import forge_verify
-        req = self.tmp / "request.json"
-        req.write_text(json.dumps({
-            "id": "verify-ddd", "task_id": "code-x", "root": str(self.tmp),
-            "scope": "self", "max_parallel": 1, "timeout": 30, "created": "now",
-            "tree_sha": "t" * 40,
-            "checks": [{"id": "c1", "command": "echo hi", "skip": True,
-                        "skip_status": "skipped_already_green",
-                        "skip_reference": "verify-old/c1"}],
-        }, ensure_ascii=False), encoding="utf-8")
-        code = forge_verify.run(req)
+        root, req, tree = self.matrix()
+        with mock.patch.object(forge_verify.subprocess, 'Popen',
+                               wraps=forge_verify.subprocess.Popen) as spawn:
+            code = forge_verify.run(req)
+        self.assertTrue(all(call.args[0][0] == 'git' for call in spawn.call_args_list),
+                        'a dedup receipt must not spawn the check; Git freshness probes remain real')
         self.assertEqual(code, 0)
-        result = json.loads((self.tmp / "result.json").read_text(encoding="utf-8"))
+        result = json.loads((req.parent / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["passed"], 1)
         self.assertEqual(result["skipped"], 0)
         self.assertEqual(result["checks"][0]["status"], "skipped_already_green")
+        self.assertEqual(result['checks'][0]['skip_reference'], 'verify-old/c1')
+        self.assertEqual(result['tree_sha'], tree)
+
+    def test_dirty_tree_cannot_publish_reused_green(self):
+        import forge_verify
+        root, req, tree = self.matrix()
+        (root / 'source.txt').write_text('changed source\n', encoding='utf-8')
+        self.assertEqual(forge._task_tree_sha(root), '')
+        self.assertEqual(forge_verify.run(req), 1)
+        result = json.loads((req.parent / 'result.json').read_text(encoding='utf-8'))
+        self.assertEqual(result['status'], 'stale')
+        self.assertEqual(result['tree_sha'], '')
+        self.assertTrue(result['tree_changed_during_checks'])
 
 
 def threading_lock():

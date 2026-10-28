@@ -20,7 +20,7 @@ import uuid
 
 TRIGGERS = ("after_update", "contested_overlay", "after_self_edit", "on_request")
 DEPTHS = ("quick", "normal", "deep")
-DEFAULTS = {"after_update": False, "after_self_edit": True, "depth": "normal",
+DEFAULTS = {"after_update": False, "after_self_edit": False, "depth": "normal",
             "models": [], "max_parallel": 1, "max_iters": 20}
 TERMINAL = {"done", "error", "failed", "stalled", "stopped", "cancelled", "lost"}
 LIVE = {"starting", "running", "finishing", "unknown"}
@@ -144,7 +144,7 @@ def _relative_code_name(value):
     return path
 
 
-def _source_roots(sources):
+def _source_roots(sources, *, opaque_published=False, composition_sha256=''):
     result = {}
     for label, source in sources.items():
         if isinstance(source, dict):
@@ -155,16 +155,44 @@ def _source_roots(sources):
                                  'merge_files': source['merge_files'],
                                  'published_files': source.get('published_files', {})}
                 if source.get('inventory_scope'):
-                    if label != 'harness' or source['inventory_scope'] != 'python-context-v1':
-                        raise ValueError('Only incoming harness context may select a Python inventory')
+                    if label != 'harness' or source['inventory_scope'] not in {'python-context-v1', 'full-composed-app-v1'}:
+                        raise ValueError('Only declared incoming/composed harness context may select an inventory scope')
                     result[label]['inventory_scope'] = source['inventory_scope']
+                    evidence = source.get('release_evidence')
+                    if evidence is not None:
+                        hashes = ('composition_sha256', 'package_manifest_sha256', 'source_inputs_sha256')
+                        if (source['inventory_scope'] != 'full-composed-app-v1' or not isinstance(evidence, dict)
+                                or evidence.get('format') != 'helene-distribution-evidence.v1'
+                                or any(not re.fullmatch(r'[0-9a-f]{64}', str(evidence.get(key, ''))) for key in hashes)
+                                or evidence.get('package_manifest_ref') != 'distribution/python-package-files.json'
+                                or evidence.get('source_inputs_ref') != 'distribution/source-inputs.json'):
+                            raise ValueError('Invalid frozen distribution evidence')
+                        result[label]['release_evidence'] = {key: evidence[key] for key in
+                            ('format', *hashes, 'package_manifest_ref', 'source_inputs_ref')}
+                        if opaque_published and evidence['composition_sha256'] == composition_sha256:
+                            result[label]['opaque_published'] = True
                 continue
             if not isinstance(source.get("files"), dict):
                 raise ValueError("explicit side projection requires a files mapping")
             result[label] = {"root": str(Path(source["root"]).absolute()),
                              "files": {str(logical): str(actual) for logical, actual in source["files"].items()}}
+            if label == 'distribution' and opaque_published:
+                names = {'python-package-files.json', 'source-inputs.json'}
+                hashes = source.get('published_files', {})
+                if (result[label]['files'] != {name: name for name in names} or
+                        any(not isinstance(hashes.get(name), list) or len(hashes[name]) != 1 or
+                            not re.fullmatch(r'[0-9a-f]{64}', str(hashes[name][0])) for name in names)):
+                    raise ValueError('Distribution context needs its two exact published manifest hashes')
+                result[label]['distribution_files'] = {name: hashes[name][0] for name in names}
         else:
             result[label] = str(Path(source).absolute())
+    harness = result.get('harness', {})
+    if isinstance(harness, dict) and harness.get('opaque_published'):
+        wanted = harness['release_evidence']
+        distribution = result.get('distribution', {}).get('distribution_files', {})
+        if distribution != {'python-package-files.json': wanted['package_manifest_sha256'],
+                            'source-inputs.json': wanted['source_inputs_sha256']}:
+            harness.pop('opaque_published')  # No resolvable frozen release proof: binaries stay gaps.
     return result
 
 
@@ -193,7 +221,7 @@ def _overlay_gaps(overlay, manifest):
 
 
 def _has_content(row):
-    return row.get('exists', True) and not row.get('withheld')
+    return row.get('exists', True) and not row.get('withheld') and not row.get('opaque')
 
 
 def _merge_projection(label, source, destination, used):
@@ -207,7 +235,12 @@ def _merge_projection(label, source, destination, used):
     root = Path(source['root']).absolute()
     declared = source['merge_files']
     manifest, gaps = [], []
-    actual = source_merge.inventory(root)
+    full_app = label == 'harness' and source.get('inventory_scope') == 'full-composed-app-v1'
+    if full_app:
+        from .update_composition import app_inventory
+        actual = app_inventory(root)
+    else:
+        actual = source_merge.inventory(root)
     if source.get('inventory_scope') == 'python-context-v1':
         if label != 'harness' or any(not name.endswith('.py') for name in declared):
             raise ValueError('Invalid Python harness context inventory')
@@ -215,7 +248,8 @@ def _merge_projection(label, source, destination, used):
     if actual != {name: entry for name, entry in declared.items() if entry is not None}:
         raise ValueError('Frozen merge inventory changed: ' + label)
     for name, entry in sorted(declared.items()):
-        if not source_merge.allowed(name):
+        source_merge.relative(name)
+        if not full_app and not source_merge.allowed(name):
             raise ValueError('Non-code path in merge material')
         logical = label + '/' + name
         if entry is None:
@@ -225,9 +259,12 @@ def _merge_projection(label, source, destination, used):
         raw = path.read_bytes()
         row = {'path': logical, 'exists': True, 'size': len(raw),
                'sha256': _sha(raw), 'mode': entry['mode']}
+        public = row['sha256'] in source.get('published_files', {}).get(name, [])
         reason = ''
         try:
-            if any(part.lower() in PRIVATE_NAMES for part in Path(name).parts):
+            factory_text = full_app and (name.startswith('resources/soul/') or
+                                         name in {'resources/SOUL.md', 'resources/self-day-zero.md'})
+            if not factory_text and any(part.lower() in PRIVATE_NAMES for part in Path(name).parts):
                 reason = 'private input withheld; inventory retained'
             elif len(raw) > 16 * 1024 * 1024 or used + len(raw) > 64 * 1024 * 1024:
                 reason = 'source exceeds projection byte budget'
@@ -240,13 +277,22 @@ def _merge_projection(label, source, destination, used):
                 # not make every complete release impossible to review. This
                 # exception never applies to a changed authored/candidate blob
                 # or a private path, and does not affect ordinary home reviews.
-                public = row['sha256'] in source.get('published_files', {}).get(name, [])
                 if source_credential(text, published=public):
                     reason = 'possible embedded credential; entire file withheld'
                 elif SECRET.search(text):
                     row['published_source'] = True
         except UnicodeError:
-            reason = 'binary or non-UTF-8 input; inventory retained'
+            if (label == 'harness' and source.get('inventory_scope') == 'full-composed-app-v1'
+                    and source.get('opaque_published') is True and public
+                    and Path(name).suffix.lower() in {'.ico', '.png', '.jpg', '.jpeg', '.gif', '.webp',
+                                                      '.woff', '.woff2', '.ttf', '.otf'}):
+                # The strict coordinator binds this exact unchanged B digest.
+                # Opaque means identity evidence, never synthetic text reading.
+                row.update(opaque='unchanged published application asset; bytes not decoded',
+                           published_source=True, distribution_path=name,
+                           release_evidence=source['release_evidence'])
+            else:
+                reason = 'binary or non-UTF-8 input; inventory retained'
         if row['sha256'] != entry['sha256']:
             raise ValueError('Frozen merge bytes changed: ' + logical)
         if reason:
@@ -254,7 +300,7 @@ def _merge_projection(label, source, destination, used):
             gaps.append({'path': logical, 'reason': reason})
         else:
             used += len(raw)
-            if destination is not None:
+            if destination is not None and not row.get('opaque'):
                 target = Path(destination) / logical
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(raw)
@@ -264,12 +310,39 @@ def _merge_projection(label, source, destination, used):
     return manifest, gaps, used
 
 
+def _distribution_projection(source, destination):
+    root = Path(source['root']).absolute()
+    rows = []
+    for name, digest in sorted(source['distribution_files'].items()):
+        path = root / name
+        if (_linked(root) or _linked(path) or not path.is_file() or path.stat().st_size > 16 * 1024 * 1024):
+            raise ValueError('Invalid frozen distribution manifest')
+        raw = path.read_bytes()
+        if _sha(raw) != digest:
+            raise ValueError('Frozen distribution manifest changed: ' + name)
+        text = raw.decode('utf-8-sig')
+        if SECRET.search(text) or not isinstance(json.loads(text), dict):
+            raise ValueError('Private or invalid distribution manifest')
+        logical = 'distribution/' + name
+        if destination is not None:
+            target = Path(destination) / logical
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+        rows.append({'path': logical, 'size': len(raw), 'sha256': digest})
+    return rows
+
+
 def collect(sources, destination=None):
     manifest, gaps = [], []
     total = 0
     for label, raw_root in sorted(sources.items()):
         if not re.fullmatch(r"[a-z][a-z0-9_-]*", label):
             raise ValueError("invalid logical source name")
+        if label == 'distribution' and isinstance(raw_root, dict) and raw_root.get('distribution_files'):
+            rows = _distribution_projection(raw_root, destination)
+            manifest.extend(rows)
+            total += sum(row['size'] for row in rows)
+            continue
         if isinstance(raw_root, dict) and 'merge_files' in raw_root:
             rows, missing, total = _merge_projection(label, raw_root, destination, total)
             manifest.extend(rows)
@@ -408,6 +481,17 @@ def _validate_material_text(intent, criteria):
         raise ValueError("review intent or criteria contains a possible credential")
 
 
+def _critics(policy):
+    """Same configured voice models/Forge authority; author chooses ordinary count."""
+    models = policy['models'] or ['']
+    count = policy.get('critic_count') or (2 if policy['depth'] == 'deep' and len(models) == 1 else len(models))
+    if type(count) is not int or not 1 <= count <= 8:
+        raise ValueError('critic count must be 1..8')
+    return [{'unit_id': 'agent-' + uuid.uuid4().hex[:8], 'model': models[index % len(models)],
+             'focus': 'integration' if index == 0 else 'adversarial', 'execution': 'queued'}
+            for index in range(count)]
+
+
 class Service:
     def __init__(self, tree, code_dir, app_root, forge, config=None, *, coordinator=None):
         self.tree, self.code_dir, self.app_root = map(Path, (tree, code_dir, app_root))
@@ -461,9 +545,16 @@ class Service:
         return sorted(rows, key=lambda row: row["created"], reverse=True)
 
     def request(self, trigger="on_request", operation_id="", depth=None, intent="", criteria=None,
-                overlay=None, sources=None, retry=False):
+                overlay=None, sources=None, retry=False, subject=None, critics=None):
         if trigger not in TRIGGERS:
             raise ValueError("unknown self-review trigger")
+        if critics is not None and (type(critics) is not int or not 1 <= critics <= 8 or
+                                   trigger != 'on_request' or self.coordinator is not None or overlay):
+            raise ValueError('critics must be 1..8 for an explicit ordinary review request')
+        if subject is not None:
+            if trigger != "on_request" or overlay or sources or self.coordinator is not None or intent or criteria:
+                raise ValueError("typed subjects are explicit ordinary requests, not source-update reviews")
+            return self._request_typed(subject, operation_id, depth, retry, critics)
         criteria = criteria or []
         _validate_material_text(intent, criteria)
         overlay = overlay or {}
@@ -479,13 +570,23 @@ class Service:
         selected_depth = depth or self.config["depth"]
         if selected_depth not in DEPTHS:
             raise ValueError("unknown self-review depth")
+        merge_identity = overlay.get('merge_identity') or {}
+        composition_sha256 = str(merge_identity.get('composition_sha256', '')) if isinstance(merge_identity, dict) else ''
+        opaque_published = (required and isinstance(self.coordinator, dict)
+                            and self.coordinator.get('kind') == 'incoming-update-runtime.v1'
+                            and bool(re.fullmatch(r'[0-9a-f]{64}', composition_sha256)))
         source_roots = _source_roots(sources or {"agent": self.code_dir,
-                                  "app": self.app_root / "app" if (self.app_root / "app").is_dir() else self.app_root})
+                                  "app": self.app_root / "app" if (self.app_root / "app").is_dir() else self.app_root},
+                                    opaque_published=opaque_published, composition_sha256=composition_sha256)
         policy = {**self.config, "depth": selected_depth}
+        if critics is not None:
+            policy['critic_count'] = critics
         with _LOCK:
             if operation_id:
                 for prior in self.status():
                     if str(operation_id) in prior["operations"] and prior.get('coordinator') == self.coordinator:
+                        if prior.get('subject_kind', 'source') != 'source':
+                            raise ValueError('operation already belongs to a different review subject')
                         prior["required"] = prior["required"] or required
                         prior["triggers"] = list(dict.fromkeys(prior["triggers"] + [trigger]))
                         _write(self._path(prior["id"]), prior)
@@ -567,13 +668,7 @@ class Service:
                     shutil.rmtree(folder)
                     return prior
             (snapshot / "subject.json").write_bytes(raw)
-            models = policy["models"] or [""]
-            critics = [{"unit_id": "agent-" + uuid.uuid4().hex[:8], "model": model,
-                        "focus": "integration" if index == 0 else "adversarial", "execution": "queued"}
-                       for index, model in enumerate(models)]
-            if selected_depth == "deep" and len(critics) == 1:
-                critics.append({"unit_id": "agent-" + uuid.uuid4().hex[:8], "model": models[0],
-                                "focus": "adversarial", "execution": "queued"})
+            critics = _critics(policy)
             if merge_review is not None:
                 critics = [{**critic, 'unit_id': 'agent-' + uuid.uuid4().hex[:8], 'coverage': unit}
                            for unit in merge_review['coverage_units'] for critic in critics]
@@ -589,7 +684,64 @@ class Service:
             _write(self._path(review_id), record)
             return record
 
+    def _request_typed(self, subject, operation_id, depth, retry, critics):
+        from . import self_review_subjects as typed
+        selected_depth = depth or self.config['depth']
+        if selected_depth not in DEPTHS:
+            raise ValueError('unknown self-review depth')
+        policy = {**self.config, 'depth': selected_depth}
+        if critics is not None:
+            policy['critic_count'] = critics
+        # Verify hashes even for retries: never silently select old material.
+        value = typed.capture(subject, typed.roots(self))
+        identity = _sha(_json({'subject': value, 'policy': policy}))
+        with _LOCK:
+            earlier = self.status()
+            for prior in earlier:
+                same_operation = bool(operation_id) and str(operation_id) in prior['operations']
+                if same_operation and prior.get('identity') != identity:
+                    raise ValueError('operation already belongs to a different review subject')
+                if prior.get('identity') != identity:
+                    continue
+                if retry:
+                    if (prior['execution'] in {'queued', 'running', 'unknown'} or
+                            (prior.get('cancel_requested') and not all(c.get('cancel_confirmed') for c in prior['critics']))):
+                        raise ValueError('retry requires a settled previous attempt')
+                    if not same_operation:
+                        continue
+                    raise ValueError('retry needs a new operation id')
+                prior['operations'] = list(dict.fromkeys(prior['operations'] + ([str(operation_id)] if operation_id else [])))
+                _write(self._path(prior['id']), prior)
+                return prior
+            review_id = 'review-' + uuid.uuid4().hex[:16]
+            snapshot = self.root / review_id / 'subject'
+            snapshot.mkdir(parents=True)
+            try:
+                captured = typed.capture(subject, typed.roots(self), snapshot)
+                if captured != value:
+                    raise ValueError('typed material changed during capture')
+                raw = _json(captured)
+                (snapshot / 'subject.json').write_bytes(raw)
+            except Exception:
+                shutil.rmtree(snapshot.parent)
+                raise
+            critics = _critics(policy)
+            record = {'schema': 'helene.self-review.request.v1', 'id': review_id, 'created': time.time(),
+                      'subject_kind': value['subject_kind'], 'audience': 'owner',
+                      'trigger': 'on_request', 'triggers': ['on_request'], 'required': False,
+                      'operations': [str(operation_id)] if operation_id else [],
+                      'policy': policy, 'identity': identity, 'subject_sha256': _sha(raw),
+                      'snapshot': str(snapshot.absolute()), 'sources': {}, 'coordinator': None,
+                      'task_id': 'code-' + uuid.uuid4().hex[:8], 'critics': critics,
+                      'execution': 'queued', 'state': 'pending', 'verdict': 'insufficient',
+                      'dispositions': [], 'gaps': []}
+            _write(self._path(review_id), record)
+            return record
+
     def _brief(self, record, critic):
+        if record.get('subject_kind') in ('plan', 'change', 'task_result'):
+            from .self_review_subjects import brief
+            return brief(record)
         merge_subject = all(isinstance(record.get('sources', {}).get(side), dict)
                             and 'merge_files' in record['sources'][side]
                             for side in ('base', 'mine', 'release', 'resolved'))
@@ -610,6 +762,10 @@ class Service:
                  "Use failures/skips as attention cues, investigate their cause and relevance; "
                  "do not mechanically map test status to your verdict or treat green tests as proof. "
                  if 'battery' in record.get('sources', {}) else "") +
+                ("Unchanged published binary app assets may be declared opaque by exact frozen-distribution digest. "
+                 "Inspect their metadata/locator and coupling; they have NOT been decoded or read as source. "
+                 "Changed/unknown binary material stays a gap. Report insufficient when identity evidence cannot answer your question. "
+                 if any(isinstance(source, dict) and source.get('opaque_published') for source in record.get('sources', {}).values()) else "") +
                 "quick: changed files and concrete regressions; normal: also readers/writers and tests; "
                 "deep: also integration and adversarial failure paths. No execution or live memory. "
                 "Return ONLY JSON: {subject_sha256, verdict: clear|findings|insufficient, summary, "
@@ -711,7 +867,10 @@ class Service:
 
     def freshness(self, review_id):
         record = self.status(review_id)
-        validate_snapshot(record["snapshot"], record["subject_sha256"])
+        frozen = validate_snapshot(record["snapshot"], record["subject_sha256"])
+        if record.get('subject_kind') in ('plan', 'change', 'task_result'):
+            from .self_review_subjects import stale
+            return {'subject_sha256': record['subject_sha256'], 'stale': stale(self, frozen)}
         current, gaps = collect(record["sources"])
         subject = _read(Path(record["snapshot"]) / "subject.json")
         original = [row for row in subject["manifest"] if row["path"] != "changes.diff"]

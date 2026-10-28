@@ -26,6 +26,7 @@ class MigrationWindow(Application):
     def invoke(self,command,args):
         if command=='migration_defaults':
             from localharness import windows_installation as installation
+            from localharness.portable_profile import default_data as new_data_default
             candidates=portable_start.previous_installations(self.root)
             old='' if self.resume_fresh else self.old or (str(candidates[0]) if candidates else '')
             target=self.target
@@ -33,7 +34,8 @@ class MigrationWindow(Application):
             if old and Path(old)==Path(target) and not (Path(old)/'python-app.json').is_file():target=str(Path(old).with_name(Path(old).name+'-new'))
             return {'old':old,'target':target,'data':data,'mode':'connect' if old else 'fresh',
                     'default_target':str(self.root),'policy':installation.POLICY,'version':installation.version(self.root),
-                    'source_mode':self.source_mode,'can_restore':(self.root/'helene.json').is_file()}
+                    'source_mode':self.source_mode,'can_restore':(self.root/'helene.json').is_file(),
+                    'data_default':str(new_data_default())}
         if command=='migration_restore':
             from localharness.upstream_recovery import launch
             if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
@@ -63,18 +65,23 @@ class MigrationWindow(Application):
                 from localharness import windows_installation as installation
                 cancelled=getattr(self,'review_cancelled',None)
                 if cancelled:cancelled.clear()
-                self.progress('checking_extensions')
-                from localharness.source_admission import activate
-                from localharness.migration_source import verify
-                activate(self.root);verify(self.root)
-                if cancelled and cancelled.is_set():raise RuntimeError('Обновление отменено; прежняя программа сохранена')
-                return installation.run(self.root,target,old=old,data=args.get('data') or (None if fresh else installation.default_data(old)),
+                self.progress('admitting')
+                from localharness.migration_job import admit
+                result=admit(self.root,target,old=old,data=args.get('data') or (None if fresh else installation.default_data(old)),
                     fresh=fresh,remove_old=args.get('removeOld') is True,progress=self.progress,
-                    source_mode=args.get('sourceMode'),cancelled=cancelled,force_extensions=getattr(self,'force_extensions',False))
+                    source_mode=args.get('sourceMode'),force_extensions=getattr(self,'force_extensions',False))
+                self.admitted_job=result['job']['id']
+                self.progress({'stage':'admitted','job_id':self.admitted_job})
+                def leave():
+                    self.exiting=True
+                    if self.window is not None:self.window.destroy()
+                    else:self.stopping.set()
+                timer=threading.Timer(.5,leave);timer.daemon=True;timer.start()
+                return result
             finally:self.running.release()
         if command=='python_ready':return {'confirmed':False}
         if command=='python_window' and args.get('action') in ('close','exit') and self.running.locked():
-            self.review_cancelled.set();self.progress('cancelling');return {'cancelling':True}
+            self.progress('admitting');return {'admission_pending':True}
         if command in ('python_window','appearance_read'):return super().invoke(command,args)
         raise ValueError('Unavailable migration command')
     def progress(self,value):

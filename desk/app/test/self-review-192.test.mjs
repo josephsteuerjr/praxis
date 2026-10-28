@@ -47,7 +47,7 @@ function stand({available=true,reviews=[],saveError='',postError=''}={}) {
 }
 {
   const test=stand();await tick();assert.equal(test.reads,2);
-  assert.match(text(test.node),/Спорное наложение/);
+  assert.match(text(test.node),/совмещения изменённого агента/);
   assert.equal(find(test.node,'Сохранить саморевью').disabled,true);
   find(test.node,'После обычного обновления').click();
   await find(test.node,'Сохранить саморевью').click();
@@ -97,7 +97,7 @@ function stand({available=true,reviews=[],saveError='',postError=''}={}) {
 {
   const review={id:'review-1',required:true,execution:'running',state:'pending',verdict:'clear',subject_sha256:subject,dispositions:[]};
   const test=stand({reviews:[review]});await tick();
-  assert.doesNotMatch(text(test.node),/Замечаний к исходникам нет/);
+  assert.doesNotMatch(text(test.node),/Замечаний к предмету проверки нет/);
   const select=walk(test.node).find(node=>node.tag==='select');
   assert.equal(select.children[0].disabled,true);
   await find(test.node,'Записать решение').click();assert.equal(test.calls.length,0);

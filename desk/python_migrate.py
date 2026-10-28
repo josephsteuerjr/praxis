@@ -329,7 +329,7 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
 
 
 def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress=None,shortcuts=None,
-          prepared=False,data_exact=False,connect_data=False,desktop_shortcut=False):
+          prepared=False,data_exact=False,connect_data=False,desktop_shortcut=False,bootstrap_id=''):
     """New ordinary app; no previous service and no model work before first setup."""
     package,new,data=(Path(p).resolve() for p in (package,new,data))
     progress=progress or (lambda value:None)
@@ -343,7 +343,10 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
         if prior.get('data_paths') and not recorded:raise ValueError('Этот мастер уже привязан к другой папке данных; выбери новую рабочую папку')
         if connect_data:
             if not data.is_dir():raise ValueError('Выбери существующую папку данных агента')
-        elif not recorded and data.exists() and any(data.iterdir()):raise ValueError('Для нового агента выбери пустую папку данных')
+        elif not recorded and data.exists() and any(data.iterdir()):
+            from localharness import migration_job
+            if not migration_job.owns_empty_seed(data,bootstrap_id):
+                raise ValueError('Для нового агента выбери пустую папку данных')
     receipt=new/'python-migration.json'
     if receipt.is_file():
         note=json.loads(receipt.read_text(encoding='utf-8'))
@@ -374,9 +377,12 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
                'runner':str(new/'app/localharness/runner.py'),'setup_complete':False,
                'model':{'framework':'openai','base_url':'','model':'','key':''},
                'relay':{'enabled':False},'voice':{'enabled':False},'installed':{'service':False}}
+        from localharness.portable_profile import relative_config
+        value=relative_config(value,config,new)
         config.write_text(json.dumps(value,indent=2),encoding='utf-8')
     value=json.loads(config.read_text(encoding='utf-8'))
-    note.update(data_paths=[str(Path(value['tree']).resolve())],source_paths=[{'old':'','selected':str(Path(value['code']).resolve())}])
+    from localharness.essential_backup import tree_path
+    note.update(data_paths=[str(tree_path(config,value))],source_paths=[{'old':'','selected':str(app_migration.code_path(config,value))}])
     note['state']='prepared';app_migration.write_note(new,note)
     install_selected_extensions(new,note,extensions,progress)
     if not launch:return note

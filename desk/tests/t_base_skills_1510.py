@@ -20,6 +20,25 @@ STOCK = DESK / "resources" / "soul" / "skills"
 
 
 class IncidentStarterSkills(unittest.TestCase):
+    def test_public_before_sending_seed_is_revisable_not_a_private_persona_requirement(self):
+        # Only the application's public stock template, never source soul/ or
+        # an installed agent profile. Core test_say_hand exercises write_skill.
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            boot._seed_kit(tree, {})
+            skill = tree / 'soul/skills/before_sending.md'
+            text = skill.read_text(encoding='utf-8')
+            self.assertEqual(skill.read_bytes(), (STOCK/'before_sending.md').read_bytes())
+            self.assertIn('write_skill', text)
+            self.assertIn('законный ответ', text)
+            index=(tree/'soul/skills/INDEX.md').read_text(encoding='utf-8')
+            self.assertEqual(index.count('](before_sending.md)'),1)
+            authored = '# A synthetic later norm\n\nI did not check; I say so.\n'
+            skill.write_text(authored, encoding='utf-8', newline='\n')
+            boot._seed_kit(tree, {})
+            boot.refresh_kit(tree, {})
+            self.assertEqual(skill.read_text(encoding='utf-8'), authored)
+
     def test_fresh_seed_places_real_files_and_index_describes_each(self):
         with tempfile.TemporaryDirectory() as directory:
             tree = Path(directory)

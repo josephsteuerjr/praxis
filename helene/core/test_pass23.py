@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -257,7 +258,7 @@ new file mode 100644
         self.assertEqual(result["model"], "gpt-5.6-terra")
         self.assertEqual(result["status"], "done")
 
-    def test_worker_retries_torn_iteration_before_dispatching_any_tool(self):
+    def test_worker_retains_received_partial_without_replay_or_tool_dispatch(self):
         import forge_worker
         import llm
 
@@ -288,20 +289,59 @@ new file mode 100644
                 mock.patch.object(forge_worker.llm, "chat",
                                   side_effect=[torn, tool_call, final]) as chat:
             code = forge_worker.run(request_path)
-        self.assertEqual(code, 0)
-        self.assertEqual(chat.call_count, 3)
+        self.assertEqual(code, 2)
+        self.assertEqual(chat.call_count, 1)
         file_text = (self.project / "app.py").read_text(encoding="utf-8")
-        self.assertIn("return 42", file_text)
+        self.assertIn("return 41", file_text)
         self.assertNotIn("return 99", file_text,
                          "tool-looking partial from TornStreamError must never be dispatched")
         result = forge._read_json(request_path.parent / "result.json")
-        self.assertEqual(result["status"], "done")
-        self.assertEqual(result["tool_calls"], 1,
-                         "retry before response must not dispatch either partial or final tool twice")
-        first_system = chat.call_args_list[0].kwargs["system"]
-        retry_system = chat.call_args_list[1].kwargs["system"]
-        self.assertEqual(first_system, retry_system,
-                         "transport retry must reuse the exact logical-turn frame")
+        self.assertEqual(result['status'], 'error')
+        self.assertEqual(result['trace'], [])
+        import forge_runtime
+        event = next(e for e in forge_runtime.read_events(request_path.parent)['events']
+                     if e['kind'] == 'model_transport_error')
+        self.assertFalse(event['retry'])
+        self.assertTrue(event['partial_not_dispatched'])
+        retained = json.loads(forge_runtime.read_payload_full(request_path.parent, event['output_ref']))
+        self.assertEqual(retained['text'], partial.text)
+        self.assertEqual(retained['blocks'], partial.blocks)
+        self.assertEqual(retained['stop_reason'], partial.stop_reason)
+        # A later delivery of the same settled request is observation, not a new
+        # generation. The unused complete replies above must stay unused.
+        with mock.patch.object(forge_worker.llm, 'chat') as replay:
+            self.assertEqual(forge_worker.run(request_path), 0)
+        replay.assert_not_called()
+
+    def test_worker_retries_empty_transport_before_dispatch_once_with_same_frame(self):
+        import copy
+        import forge_worker
+        import llm
+        task_id = self.start()
+        path = forge._unit_dir(task_id, 'agents', 'agent-empty-retry') / 'request.json'
+        forge._atomic_json(path, {'id': path.parent.name, 'task_id': task_id, 'role': 'worker',
+            'brief': 'change answer once', 'max_iters': 3, 'root': str(self.project)})
+        tool = llm.LLMResponse(blocks=[{'type': 'tool_use', 'id': 'call-once', 'name': 'edit',
+            'input': {'action': 'replace', 'path': 'app.py', 'old': 'return 41', 'new': 'return 42'}}],
+            stop_reason='tool_use', model='offline')
+        final = llm.LLMResponse(text='changed once', stop_reason='end_turn', model='offline')
+        replies = iter([llm.BrokenChannelError('empty transport EOF'), tool, final])
+        frames = []
+        def chat(*args, **kwargs):
+            frames.append(copy.deepcopy((kwargs['system'], kwargs['messages'])))
+            answer = next(replies)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        with mock.patch.dict(os.environ, {'PRAXIS_FORGE_TRANSPORT_RETRIES': '1',
+                                         'PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC': '0'}), \
+             mock.patch.object(forge_worker.llm, 'chat', side_effect=chat) as call:
+            self.assertEqual(forge_worker.run(path), 0)
+        self.assertEqual(call.call_count, 3)
+        self.assertEqual(frames[0], frames[1])
+        self.assertIn('return 42', (self.project / 'app.py').read_text(encoding='utf-8'))
+        result = forge._read_json(path.parent / 'result.json')
+        self.assertEqual((result['status'], result['tool_calls']), ('done', 1))
 
     def test_worker_retries_the_no_tools_final_summary(self):
         import forge_worker

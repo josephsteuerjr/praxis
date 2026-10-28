@@ -1,5 +1,5 @@
 // Owner Forge viewer. Persisted observations are not process-liveness probes.
-import { ApiError, channelURL } from "../api";
+import { ApiError, channelURL, cfg } from "../api";
 
 export interface ForgeRef { kind: "payload" | "result" | "request"; sha256: string; size_bytes?: number }
 export interface ForgeUnit {
@@ -8,15 +8,18 @@ export interface ForgeUnit {
   custody?: string; current_disposition?: string; stale_dispositions?: number;
   observation?: { generation?: string; phase?: string; tool?: string; observed_at?: string; iteration?: number };
   result_ref?: ForgeRef; request_ref?: ForgeRef; payload_refs?: Record<string, ForgeRef>;
+  liveness?: {state: string; observed_at?: string; basis?: string}; process_liveness?: string;
 }
 export interface ForgeTask { id: string; goal?: string; status?: string; agents: ForgeUnit[]; max_active_workers?: number; control?: {action?: string} }
 interface EventRow { seq: number; kind: string; at?: string; tool?: string; generation?: string; input_ref?: ForgeRef; output_ref?: ForgeRef }
 interface EventPage { events: EventRow[]; next_offset: number; next_after_seq: number; has_more: boolean; pending_tail?: boolean; generation: string }
 interface PayloadPage { sha256: string; text: string; offset: number; total_chars: number; next_offset: number | null }
+interface ActivityPage { active: ForgeTask[]; recent: ForgeTask[]; next_cursor: string | null }
+interface PanelOptions { compact?: boolean; scope?: () => string; onPlans?: () => void }
 interface Command { command_id: string; state: string; task_id?: string; agent_id?: string; action?: string; reason?: string; result?: unknown }
 type Read = <T>(path: string, signal: AbortSignal, body?: unknown) => Promise<T>;
 
-const STATUS: Record<string, string> = { active: "в работе", running: "выполняется", queued: "в очереди", pending: "в очереди", done: "завершено", completed: "завершено", paused: "на паузе", cancelled: "отменено", stopped: "остановлено", failed: "ошибка", error: "ошибка", unknown: "состояние не подтверждено", abandoned: "оставлено", awaiting_acceptance: "ждёт приёмки" };
+const STATUS: Record<string, string> = { active: "в работе", running: "выполняется", queued: "в очереди", pending: "в очереди", done: "завершено", completed: "завершено", paused: "на паузе", waiting: "ожидает", stop_pending: "остановка не подтверждена", lost: "связь потеряна", cancelled: "отменено", stopped: "остановлено", failed: "ошибка", error: "ошибка", unknown: "состояние не подтверждено", abandoned: "оставлено", awaiting_acceptance: "ждёт приёмки" };
 const PHASE: Record<string, string> = { starting: "начало", model: "ожидание модели", tool: "инструмент", waiting: "ожидание", finishing: "сохранение результата", finished: "результат сохранён", ready: "граница продолжения", stopped: "остановка по записи", error: "ошибка по записи", checkpoint: "контрольная точка", queued: "очередь" };
 const ACCEPTED: Record<string, string> = { integrated: "принят", irrelevant: "не нужен", deferred: "отложен" };
 const label = (v = "") => STATUS[v] || v || "нет записи";
@@ -29,6 +32,7 @@ const button = (title: string, action: () => void) => {
 };
 const query = (path: string, data: Record<string, string | number>) => path + "?" + new URLSearchParams(Object.entries(data).map(([k,v]) => [k, String(v)]));
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
+const shortGoal = (text: string, limit = 130) => { const chars = Array.from(text.split('\n')[0]); return chars.slice(0, limit).join('') + (chars.length > limit ? '…' : ''); };
 
 // HTTP deliberately: AbortController owns each mounted read (the shared tunnel
 // has no cancellation API). Same authenticated URL and route authorization.
@@ -41,27 +45,41 @@ export const readForge: Read = async <T>(path: string, signal: AbortSignal, body
 };
 
 interface UnitView {
-  details: HTMLDetailsElement; title: HTMLElement; meta: HTMLElement; brief: HTMLElement;
+  details: HTMLDetailsElement; title: HTMLElement; meta: HTMLElement; brief: HTMLElement; goalSummary: HTMLElement; stateSummary: HTMLElement;
   controls: HTMLElement; refs: HTMLElement; log: HTMLElement; logStatus: HTMLElement; more: HTMLButtonElement;
   content: HTMLElement; contentMeta: HTMLElement; contentMore: HTMLButtonElement;
   unit: ForgeUnit; task: ForgeTask; generation: string; eventsLoaded: boolean; eventOffset: number;
   hasMore: boolean; eventBusy: boolean; eventSeq: Set<number>; contentRef?: ForgeRef; contentOffset: number;
-  contentBusy: boolean; contentEpoch: number;
+  contentBusy: boolean; contentEpoch: number; refsKey: string;
 }
 interface TaskView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; goal: HTMLElement; controls: HTMLElement; commands: HTMLElement; units: HTMLElement; views: Map<string, UnitView>; task: ForgeTask }
 
 /** Exported controller is also the production-fragment test seam. */
-export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2500) {
+export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2500, options: PanelOptions = {}) {
   const message = el("p", "muted", "Читаю записи Forge…"); message.setAttribute("role", "status");
   const teams = el("div", "forge-teams");
+  const recentTeams = el("div", "forge-teams forge-recent-teams");
+  const recent = document.createElement('details'); recent.className = 'forge-recent';
+  recent.append(el('summary', '', 'Недавно завершены'), recentTeams);
+  const next = button('Ещё завершённые', () => void loadRecent()); next.hidden = true; recent.append(next);
   const refreshButton = button("Обновить", () => void refresh());
-  const heading = el("div", "forge-heading"); heading.append(el("h3", "section-title", "Команды разработки"), refreshButton);
-  root.replaceChildren(heading, message, teams);
+  const heading = el("div", "forge-heading"); heading.append(el("h3", "section-title", options.compact ? 'Субагенты' : "Команды разработки"), refreshButton);
+  if (options.onPlans) heading.append(button('Все планы →', options.onPlans));
+  root.className += options.compact ? ' forge-compact' : '';
+  root.replaceChildren(heading, message, teams, recent);
   const tasks = new Map<string, TaskView>();
   const controllers = new Set<AbortController>();
   let running = false, epoch = 0, timer: ReturnType<typeof setTimeout> | undefined, busy = false;
+  const getScope = options.scope || (() => JSON.stringify([cfg.base, cfg.key, cfg.agent]));
+  let scope = getScope(), activeRows: ForgeTask[] = [], recentRows: ForgeTask[] = [], nextCursor: string | null = null, recentBusy = false;
   const pending = new Map<string, { command: Command; feedback: HTMLElement }>();
-  const valid = (captured: number) => running && captured === epoch && root.isConnected;
+  const valid = (captured: number) => running && captured === epoch && scope === getScope() && root.isConnected;
+  function resetScope() {
+    epoch++; for (const controller of controllers) controller.abort(); controllers.clear();
+    scope = getScope(); tasks.clear(); pending.clear(); teams.replaceChildren(); recentTeams.replaceChildren();
+    activeRows = []; recentRows = []; nextCursor = null; next.hidden = true; recentBusy = false; busy = false;
+    message.textContent = 'Читаю записи выбранного агента…';
+  }
   async function request<T>(path: string, body?: unknown): Promise<T> {
     const controller = new AbortController(); controllers.add(controller);
     try { return await read<T>(path, controller.signal, body); }
@@ -122,6 +140,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       const page = await request<PayloadPage>(query("/api/forge/payload", { task_id: view.task.id, unit_id: view.unit.id, sha256: ref.sha256, kind: ref.kind, offset, limit: 8000 }));
       if (!valid(captured) || contentEpoch !== view.contentEpoch) return;
       if (page.sha256 !== ref.sha256 || page.offset !== offset) throw Error("Страница не совпала с выбранным результатом");
+      const end = offset + Array.from(page.text).length;
+      if (end > page.total_chars || (page.next_offset !== null ? page.next_offset !== end || end <= offset : end !== page.total_chars)) throw Error('Нарушен Unicode-курсор результата');
       view.content.textContent += page.text;
       view.contentOffset = page.next_offset ?? page.total_chars;
       view.contentMeta.textContent = `SHA-256 ${page.sha256} · прочитано ${view.contentOffset} из ${page.total_chars} знаков`;
@@ -139,6 +159,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     try {
       const page = await request<EventPage>(query("/api/forge/events", { task_id: view.task.id, unit_id: view.unit.id, offset: view.eventOffset, after_seq: Math.max(0, ...view.eventSeq), limit: 50, generation }));
       if (!valid(captured) || generation !== view.generation) return;
+      if (generation && page.generation !== generation) throw Error('История принадлежит другому поколению');
+      let seq = Math.max(0, ...view.eventSeq);
+      for (const row of page.events) if (row.seq !== ++seq) throw Error('Нарушена последовательность истории');
       for (const row of page.events) {
         if (view.eventSeq.has(row.seq)) continue;
         view.eventSeq.add(row.seq);
@@ -160,15 +183,18 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   function unitView(task: ForgeTask, unit: ForgeUnit): UnitView {
     const details = document.createElement("details"); details.className = "fold forge-unit";
     const summary = document.createElement("summary"), title = el("b"), meta = el("div", "muted");
-    summary.append(title, meta);
+    const goalSummary = el('div', 'forge-unit-goal'), stateSummary = el('div', 'forge-unit-status');
+    if (options.compact) summary.append(title, stateSummary, goalSummary);
+    else summary.append(title, meta);
     const body = el("div", "fold-body"), brief = el("p", "forge-brief"), actions = el("div"), refs = el("div", "forge-actions");
     const log = el("div"), logStatus = el("p", "muted"), content = el("pre", "forge-payload"), contentMeta = el("p", "muted forge-hash");
-    const view: UnitView = { details, title, meta, brief, controls: actions, refs, log, logStatus,
+    const view: UnitView = { details, title, meta, brief, goalSummary, stateSummary, controls: actions, refs, log, logStatus,
       more: button("Прочитать шаги", () => void loadEvents(view)), content, contentMeta,
       contentMore: button("Следующие 8000 знаков", () => void loadContent(view)),
       task, unit, generation: unit.observation?.generation || "", eventsLoaded: false, eventOffset: 0, hasMore: false,
-      eventBusy: false, eventSeq: new Set(), contentOffset: 0, contentBusy: false, contentEpoch: 0 };
+      eventBusy: false, eventSeq: new Set(), contentOffset: 0, contentBusy: false, contentEpoch: 0, refsKey: '' };
     view.contentMore.hidden = true;
+    if (options.compact) body.append(meta);
     body.append(brief, actions, refs, logStatus, log, view.more, contentMeta, content, view.contentMore);
     details.append(summary, body);
     details.addEventListener("toggle", () => { if (details.open && running && !view.eventsLoaded) void loadEvents(view); });
@@ -182,37 +208,53 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       view.generation = generation;
     }
     view.unit = unit; view.task = task;
-    view.details.style.marginLeft = Math.min(unit.depth || 0, 8) * 14 + "px";
-    view.title.textContent = `${unit.role || "участник"} · ${unit.model || "модель не записана"} · ${label(unit.status)}`;
+    view.details.style.marginLeft = Math.min(unit.depth || 0, 4) * (options.compact ? 8 : 14) + "px";
+    view.title.textContent = `${unit.role || "участник"} · ${unit.model || "модель не записана"}` +
+      (options.compact ? '' : ' · ' + label(unit.status));
+    view.goalSummary.textContent = shortGoal(unit.subtask || 'Подзадача не записана.', 85);
+    view.stateSummary.textContent = label(unit.status);
+    view.stateSummary.setAttribute('data-state', unit.status || 'unknown');
     const o = unit.observation || {};
+    const live = unit.liveness;
+    const liveText = live?.state === 'alive' ? 'процесс наблюдался живым' : live?.state === 'exited' ? 'выход процесса наблюдался' : live?.state === 'not_started' ? 'процесс ещё не запускался' : 'живость процесса неизвестна';
     view.meta.textContent = `${unit.id} · родитель: ${unit.parent_unit_id || "основная задача"}${unit.ancestry_unknown ? " (связь не подтверждена)" : ""}\n` +
-      `${o.phase ? (PHASE[o.phase] || o.phase) + (o.tool ? ": " + o.tool : "") : "фаза не записана"} · запрос: ${label(unit.request_status)} · последняя запись: ${o.observed_at || "нет"} · живость процесса не проверялась` +
+      `${o.phase ? (PHASE[o.phase] || o.phase) + (o.tool ? ": " + o.tool : "") : "фаза не записана"} · запрос: ${label(unit.request_status)} · последняя запись: ${o.observed_at || "нет"} · ${liveText}${live?.observed_at ? ': ' + live.observed_at : ''}` +
       (unit.current_disposition ? " · приёмка: " + (ACCEPTED[unit.current_disposition] || unit.current_disposition) : unit.result_ref ? " · ждёт приёмки" : "") +
       (unit.custody === "unresolved_stop" ? " · остановка не подтверждена" : "") +
       (unit.stale_dispositions ? ` · несовпавших расписок: ${unit.stale_dispositions}` : "");
     view.brief.textContent = unit.subtask || "Подзадача не записана.";
     // Controls keep their in-flight feedback while the next observation arrives.
-    if (!view.controls.firstChild) controls(() => [view.task, view.unit], view.controls);
-    view.refs.replaceChildren();
-    if (unit.result_ref) view.refs.append(refButton(view, "Итог участника", unit.result_ref));
-    if (unit.request_ref) view.refs.append(refButton(view, "Полное задание", unit.request_ref));
-    const names: Record<string, string> = { diff_ref: "Изменения и дифф", files_ref: "Файлы", checks_ref: "Проверки", review_ref: "Ревью" };
-    for (const [name, ref] of Object.entries(unit.payload_refs || {})) view.refs.append(refButton(view, names[name] || name, ref));
+    if (!options.compact && !view.controls.firstChild) controls(() => [view.task, view.unit], view.controls);
+    const refsKey = JSON.stringify([unit.result_ref, unit.request_ref, unit.payload_refs]);
+    if (refsKey !== view.refsKey) {
+      view.refsKey = refsKey; view.refs.replaceChildren();
+      if (unit.result_ref) view.refs.append(refButton(view, "Итог участника", unit.result_ref));
+      if (unit.request_ref) view.refs.append(refButton(view, "Полное задание", unit.request_ref));
+      const names: Record<string, string> = { diff_ref: "Изменения и дифф", files_ref: "Файлы", checks_ref: "Проверки", review_ref: "Ревью" };
+      for (const [name, ref] of Object.entries(unit.payload_refs || {})) view.refs.append(refButton(view, names[name] || name, ref));
+    }
   }
-  function updateTask(task: ForgeTask) {
+  function updateTask(task: ForgeTask, host: HTMLElement) {
     let view = tasks.get(task.id);
     if (!view) {
       const details = document.createElement("details"); details.className = "fold forge-task";
+      details.open = !!options.compact;
       const summary = document.createElement("summary"), title = el("b"), state = el("span", "muted"), goal = el("p", "forge-brief");
       const body = el("div", "fold-body"), actions = el("div"), commands = el("div", "muted forge-command"), units = el("div");
-      summary.append(title, state); body.append(goal, actions, commands, units); details.append(summary, body); teams.append(details);
+      summary.append(title, state);
+      if (options.compact) {
+        const assignment = document.createElement('details'); assignment.className = 'forge-assignment';
+        assignment.append(el('summary', '', 'Полное задание команды'), goal); body.append(assignment);
+      } else body.append(goal);
+      body.append(actions, commands, units); details.append(summary, body); host.append(details);
       view = { details, title, state, goal, controls: actions, commands, units, views: new Map(), task }; tasks.set(task.id, view);
     }
+    if (view.details.parentNode !== host) host.append(view.details);
     view.task = task;
-    view.title.textContent = (task.goal || task.id).split("\n")[0];
+    view.title.textContent = options.compact ? shortGoal(task.goal || task.id) : (task.goal || task.id).split("\n")[0];
     view.state.textContent = ` · ${label(task.status)}${task.control?.action === "pause" ? " · допуск на паузе" : ""} · участников ${task.agents.length}`;
     view.goal.textContent = task.goal || task.id;
-    if (!view.controls.firstChild) controls(() => [view!.task, undefined], view.controls);
+    if (!options.compact && !view.controls.firstChild) controls(() => [view!.task, undefined], view.controls);
     const present = new Set(task.agents.map(a => a.id));
     for (const [id, unit] of view.views) if (!present.has(id)) { unit.details.remove(); view.views.delete(id); }
     for (const unit of task.agents) {
@@ -223,19 +265,43 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     }
     return view;
   }
+  function paintTasks() {
+    const rows = [...activeRows, ...recentRows.filter(t => !activeRows.some(a => a.id === t.id))];
+    const present = new Set(rows.map(t => t.id));
+    for (const [id, view] of tasks) if (!present.has(id)) { view.details.remove(); tasks.delete(id); }
+    for (const task of activeRows) updateTask(task, teams);
+    for (const task of recentRows) if (!activeRows.some(a => a.id === task.id)) updateTask(task, recentTeams);
+    next.hidden = !nextCursor;
+    message.textContent = activeRows.length ? `Незавершённых команд: ${activeRows.length}` : 'Сейчас незавершённых участников нет.';
+  }
+  async function loadRecent() {
+    if (!running || recentBusy || !nextCursor) return;
+    const captured = epoch, cursor = nextCursor; recentBusy = true; next.disabled = true;
+    try {
+      const page = await request<ActivityPage>(query('/api/forge/tasks', {view: 'active', cursor, limit: 20}));
+      if (!valid(captured)) return;
+      recentRows.push(...page.recent.filter(row => !recentRows.some(old => old.id === row.id)));
+      nextCursor = page.next_cursor; paintTasks();
+    } catch (e) { if (valid(captured)) message.textContent = 'Не удалось прочитать завершённые: ' + errorText(e); }
+    finally { if (captured === epoch) { recentBusy = false; next.disabled = false; } }
+  }
   async function refresh() {
     if (!running || !root.isConnected || busy) return;
+    if (scope !== getScope()) resetScope();
     clearTimeout(timer);
     const captured = epoch; busy = true;
     try {
-      const rows = await request<ForgeTask[]>("/api/forge/tasks");
+      const page = await request<ActivityPage>('/api/forge/tasks?view=active');
       if (!valid(captured)) return;
-      if (!Array.isArray(rows)) throw Error("Некорректный список Forge");
-      const present = new Set(rows.map(t => t.id));
-      for (const [id, view] of tasks) if (!present.has(id)) { view.details.remove(); tasks.delete(id); }
-      for (const task of rows) {
-        const view = updateTask(task);
-        if (view.details.open) {
+      if (!Array.isArray(page.active) || !Array.isArray(page.recent)) throw Error("Некорректный список Forge");
+      activeRows = page.active;
+      const current = new Map(page.recent.map(t => [t.id, t]));
+      recentRows = [...page.recent, ...recentRows.filter(t => !current.has(t.id) && !activeRows.some(a => a.id === t.id))];
+      if (!nextCursor || recentRows.length <= page.recent.length) nextCursor = page.next_cursor;
+      paintTasks();
+      for (const task of [...activeRows, ...recentRows]) {
+        const view = tasks.get(task.id)!;
+        if (!options.compact && view.details.open) {
           const commands = await request<{commands: Command[]}>(query("/api/forge/control", { task_id: task.id }));
           if (!valid(captured)) return;
           view.commands.textContent = commands.commands.map(c => `${c.agent_id || "Группа"}: ${commandText(c)}`).join("\n");
@@ -251,7 +317,6 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
           if (!["queued", "processing"].includes(current.state)) pending.delete(key);
         } catch { /* Unconfirmed transport is retained; never resubmit effects. */ }
       }
-      message.textContent = rows.length ? "Последние задачи · записи обновляются, пока открыт раздел" : "Команд разработки пока нет.";
     } catch (e) {
       if (valid(captured)) message.textContent = "Не удалось обновить Forge: " + errorText(e) + (tasks.size ? ". Предыдущие записи сохранены." : "");
     } finally {
@@ -259,7 +324,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     }
   }
   return {
-    start() { if (running) { void refresh(); return; } running = true; epoch++; busy = false; void refresh(); },
+    start() { if (scope !== getScope()) resetScope(); if (running) { void refresh(); return; } running = true; epoch++; busy = false; void refresh(); },
     stop() { running = false; epoch++; clearTimeout(timer); for (const controller of controllers) controller.abort(); controllers.clear(); busy = false; },
     refresh,
   };

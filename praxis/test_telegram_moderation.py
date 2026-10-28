@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import tempfile
 import types
@@ -11,6 +12,10 @@ from unittest import mock
 import agent
 import mtproto_runner
 import telegram_moderation
+
+
+SYNTHETIC_ROOT = -100999999999999999
+SYNTHETIC_ENTITY = int(str(SYNTHETIC_ROOT)[4:])
 
 
 class FakeClient:
@@ -23,7 +28,7 @@ class FakeClient:
         self.sent = []
 
     async def get_entity(self, peer):
-        return types.SimpleNamespace(id=1240718803, title="AbstractDL")
+        return types.SimpleNamespace(id=SYNTHETIC_ENTITY, title="AbstractDL")
 
     async def get_messages(self, entity, ids):
         return types.SimpleNamespace(id=ids, sender_id=self.sender)
@@ -48,12 +53,15 @@ class ModerationActionTests(unittest.TestCase):
         self.ledger = Path(self.tmp.name) / "moderation.jsonl"
         self.patch = mock.patch.object(telegram_moderation, "LEDGER", self.ledger)
         self.patch.start()
+        env = mock.patch.dict(os.environ, {'PRAXIS_ABSTRACTDL_ROOT_CHAT_ID': str(SYNTHETIC_ROOT)})
+        env.start()
+        self.addCleanup(env.stop)
 
     def tearDown(self):
         self.patch.stop()
         self.tmp.cleanup()
 
-    def run_action(self, client, *, peer=-1001240718803, message=77, sender=88,
+    def run_action(self, client, *, peer=SYNTHETIC_ROOT, message=77, sender=88,
                    action="delete"):
         with mock.patch.object(mtproto_runner, "client", client), \
              mock.patch.object(mtproto_runner, "_marked_peer_id", return_value=int(peer)):
@@ -65,6 +73,20 @@ class ModerationActionTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.run_action(client, peer=-100999)
         self.assertEqual(client.deleted, [])
+
+    def test_absent_or_malformed_root_never_reaches_transport(self):
+        for value in (None, "", "not-a-peer", " -100999999999999999", "true"):
+            with self.subTest(config=value), mock.patch.dict(os.environ):
+                if value is None:
+                    os.environ.pop("PRAXIS_ABSTRACTDL_ROOT_CHAT_ID", None)
+                else:
+                    os.environ["PRAXIS_ABSTRACTDL_ROOT_CHAT_ID"] = value
+                client = FakeClient()
+                with mock.patch.object(client, "get_entity", wraps=client.get_entity) as lookup:
+                    with self.assertRaises(PermissionError):
+                        self.run_action(client)
+                lookup.assert_not_called()
+                self.assertEqual((client.deleted, client.banned, client.sent), ([], [], []))
 
     def test_sender_mismatch_is_fail_closed_and_receipted(self):
         client = FakeClient(sender=999)
@@ -87,8 +109,8 @@ class ModerationActionTests(unittest.TestCase):
     def test_tampered_completed_receipt_cannot_suppress_transport(self):
         forged = {"schema": "praxis.telegram.moderation.v1", "ts": 1,
                   "previous_sha256": "", "idempotency_key":
-                  telegram_moderation.operation_key(-1001240718803, 77, 88, "delete"),
-                  "actor": "attacker", "peer_id": -1001240718803, "message_id": 77,
+                  telegram_moderation.operation_key(SYNTHETIC_ROOT, 77, 88, "delete"),
+                  "actor": "attacker", "peer_id": SYNTHETIC_ROOT, "message_id": 77,
                   "sender_id": 88, "action": "delete", "status": "completed",
                   "deleted": True, "banned": False, "error": "",
                   "receipt_sha256": "attacker"}
@@ -101,12 +123,12 @@ class ModerationActionTests(unittest.TestCase):
         async def race():
             with mock.patch.object(mtproto_runner, "client", client), \
                  mock.patch.object(mtproto_runner, "_marked_peer_id",
-                                   return_value=-1001240718803):
+                                   return_value=SYNTHETIC_ROOT):
                 return await asyncio.gather(
                     mtproto_runner._moderate_abstractdl(
-                        -1001240718803, 91, 92, "delete", "praxis:self"),
+                        SYNTHETIC_ROOT, 91, 92, "delete", "praxis:self"),
                     mtproto_runner._moderate_abstractdl(
-                        -1001240718803, 91, 92, "delete", "praxis:self"))
+                        SYNTHETIC_ROOT, 91, 92, "delete", "praxis:self"))
         results = asyncio.run(race())
         self.assertEqual(len(client.deleted), 1)
         self.assertTrue(any(result.get("replayed") for result in results))
@@ -116,10 +138,10 @@ class ModerationActionTests(unittest.TestCase):
             async def get_messages(self, entity, ids):
                 return None
         key = telegram_moderation.operation_key(
-            -1001240718803, 93, 94, "delete_and_ban")
+            SYNTHETIC_ROOT, 93, 94, "delete_and_ban")
         telegram_moderation.append_receipt({
             "idempotency_key": key, "actor": "praxis:self",
-            "peer_id": -1001240718803, "message_id": 93, "sender_id": 94,
+            "peer_id": SYNTHETIC_ROOT, "message_id": 93, "sender_id": 94,
             "action": "delete_and_ban", "status": "verified",
             "deleted": False, "banned": False, "sender_verified": True, "error": ""})
         client = CrashLedgerClient()
@@ -181,7 +203,7 @@ class ToolBoundaryTests(unittest.TestCase):
              }, clear=False):
             out = agent.tool_telegram_account(
                 action="moderate_abstractdl",
-                params_json=json.dumps({"peer_id": -1001240718803, "message_id": 1,
+                params_json=json.dumps({"peer_id": SYNTHETIC_ROOT, "message_id": 1,
                                         "sender_id": 2, "decision": "delete"}))
         self.assertIn('"message_id": 1', out)
 
@@ -200,13 +222,16 @@ class HistoryOfMeasuresAgainstOneSender(unittest.TestCase):
     появиться не может по построению. Это её забор, и он сильнее любого пина.
     """
 
-    PEER = telegram_moderation.TARGET_PEER_ID
+    PEER = SYNTHETIC_ROOT
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.ledger = Path(self.tmp.name) / "moderation.jsonl"
         self.patch = mock.patch.object(telegram_moderation, "LEDGER", self.ledger)
         self.patch.start()
+        env = mock.patch.dict(os.environ, {'PRAXIS_ABSTRACTDL_ROOT_CHAT_ID': str(SYNTHETIC_ROOT)})
+        env.start()
+        self.addCleanup(env.stop)
         self.addCleanup(self.patch.stop)
         self.addCleanup(self.tmp.cleanup)
 

@@ -13,6 +13,23 @@
 .forge-hash { font-size: .82em; overflow-wrap: anywhere; }
 .forge-command { white-space: pre-wrap; font-size: .88em; }
 .forge-teams .fold-body { min-width: 0; }
+.turns-forge { min-width: 0; border-bottom: 1px solid var(--line, currentColor); padding-bottom: 14px; margin-bottom: 14px; }
+.forge-compact .forge-heading { flex-wrap: wrap; gap: 6px 10px; }
+.forge-compact .forge-heading .section-title { flex: 1 0 100%; margin: 0 0 4px; font-size: 1em; }
+.forge-compact .forge-heading .btn { min-height: 30px; font-size: .82em; padding: 4px 8px; }
+.forge-compact .forge-task > summary b { font-size: .92em; }
+.forge-compact .forge-task > summary, .forge-compact .forge-unit > summary { line-height: 1.45; }
+.forge-compact .forge-unit > summary b { font-size: .88em; font-weight: 550; }
+.forge-compact .forge-unit-goal { font-size: .88em; font-weight: normal; color: var(--ink-2); margin-top: 4px; }
+.forge-compact .forge-unit-status { font-size: .86em; font-weight: 550; color: var(--ink-2); margin-top: 3px; }
+.forge-compact .forge-unit-status[data-state="stop_pending"] { color: var(--accent); }
+.forge-compact .forge-assignment { font-size: .85em; margin-bottom: 8px; }
+.forge-compact .forge-assignment > summary { cursor: pointer; color: var(--ink-2); }
+.forge-compact .fold-body { padding: 8px; }
+.forge-compact .forge-unit > summary .muted { font-size: .78em; }
+.forge-compact .forge-payload { max-height: 24em; }
+.forge-recent > summary { cursor: pointer; margin: 10px 0; font-size: .88em; }
+.forge-heading, .forge-teams, .forge-unit, .forge-task, .forge-payload { min-width: 0; max-width: 100%; box-sizing: border-box; }
 @media (max-width: 650px) {
   .forge-unit { margin-left: 0 !important; }
   .forge-actions { gap: 6px; }

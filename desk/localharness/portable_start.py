@@ -13,11 +13,21 @@ def previous_installations(root):
 
 def initialize(root):
     root=Path(root).resolve();path=root/'helene.json'
-    if path.exists():return
+    if path.exists():
+        from .portable_profile import bind_program
+        bind_program(root)
+        return
+    if (root/'portable-program.json').exists():
+        raise RuntimeError('The saved profile pointer is missing; select your existing data folder before starting')
     if (root/'python-migration.json').exists():raise RuntimeError('Finish the recorded migration before first startup')
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-    value={'mode':'local','tree':'profile/main','code':'tree','port':port,'python':'runtime/python.exe',
+    from .portable_profile import default_data
+    data=default_data()
+    if data.exists() and any(data.iterdir()):
+        raise RuntimeError('The default data folder already contains an agent; connect it explicitly in the migration window')
+    data.mkdir(parents=True,exist_ok=True)
+    value={'mode':'local','tree':str(data),'code':'tree','port':port,'python':'runtime/python.exe',
            'app':'app/deskapp.py','runner':'app/localharness/runner.py','setup_complete':False,
            'model':{'framework':'openai','base_url':'','model':'','key':''},'relay':{'enabled':False},
            'voice':{'enabled':False},'installed':{'service':False}}

@@ -1,8 +1,8 @@
 """PASS 19: append-only life journal, provenance compacts and 50↔100 hot memory.
 
 Markdown is the canonical interpreted layer; JSONL is the append-only evidence spine.
-Everything under ``memory/.state/life`` is a rebuildable cursor/cache.  No SQLite and no
-vector store is required for continuity.
+``memory/.state/life`` holds derived cursors and quarantined, unproved state-only
+content that rebuilds must retain. No SQLite or vector store is required.
 """
 from __future__ import annotations
 
@@ -456,6 +456,8 @@ def _same_conversation(a, b) -> bool:
     Это НЕ то же, что «лежат в одном месте» (`_same_place`): группировка живых событий
     вправе уточняться, привязка уже написанного компакта — нет.
     """
+    if str(a) == str(b):
+        return True
     return memory_provenance.same_conversation(a, b, bindings())
 
 
@@ -539,10 +541,9 @@ def estimate_tokens(text: str) -> int:
 def _state_path(chat_id: str | int) -> Path:
     """Одно состояние на МЕСТО, а не на ключ ветки.
 
-    Состояние — производное (горячее кольцо + курсор свёртки + дедуп); его в любой
-    момент восстанавливает `rebuild_state` из событий и компактов. Поэтому переезд
-    ключа здесь ничего не теряет, а вот 174 отдельных курсора на одну комнату теряли
-    ровно то, ради чего курсор существует.
+    Каноническое кольцо, курсор свёртки и дедуп восстанавливаются из событий и
+    компактов; недоказуемый остаток прежнего состояния пересборка сохраняет отдельно.
+    Один курсор места не разносит одну комнату по 174 независимым состояниям.
     """
     return STATE_DIR / f"{_safe(place_key(chat_id))}.json"
 
@@ -631,6 +632,11 @@ def _append_record(record: dict) -> None:
             os.close(fd)
 
 
+def canonical_event_text(text, direction) -> str:
+    """Existing ingress policy, shared by life writer and exact archive receipts."""
+    return str(text or "").strip() if str(direction or "internal") == "in" else str(text or "")
+
+
 def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "Praxis",
                  direction: str = "internal", text: str = "", source: str = "runtime",
                  source_id: str | int | None = None, salience: int = 2,
@@ -646,18 +652,11 @@ def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "P
         "kind": str(kind), "stream": _safe(chat_id) if chat_id is not None else "global",
         "chat_id": str(chat_id) if chat_id is not None else None,
         "actor": str(actor or "unknown"), "direction": str(direction or "internal"),
-        # ВХОДЯЩЕЕ пишется в каноническом виде. Индекс доказательств принимает строку
-        # только пока `value == value.strip()`, а чужое сообщение с висящим по краям
-        # пробелом (в том числе `\xa0`, которым щедры агенты) не попадает в индекс
-        # вообще — и каждая свёртка, куда оно попало, невалидна навсегда: события не
-        # считаются покрытыми, кольцо не двигается, ярус мелет одно и то же (21.09).
-        #
-        # ⚠ ТОЛЬКО входящее. У ИСХОДЯЩЕГО пробел по краям несёт смысл: разбитый на
-        # куски ответ склеивается обратно по сохранённому тексту, и `strip()` там
-        # склеивает «first chunk » с «second chunk» без шва
-        # (test_keat_native_ingress, 8 красных на первой попытке подровнять всё).
-        "text": (str(text or "").strip() if str(direction or "internal") == "in"
-                 else str(text or "")),
+        # Existing ingress normalization stays in the writer. Provenance accepts
+        # exact nonblank conversation content, including historical/native chunks
+        # whose edge whitespace is meaningful. In particular, never strip outgoing
+        # chunks: "first chunk " + "second chunk" needs its original separator.
+        "text": canonical_event_text(text, direction),
         "source": str(source or "runtime"),
         "source_id": str(source_id) if source_id is not None else None,
         "salience": sal, "refs": [str(x) for x in refs if str(x)],
@@ -974,6 +973,73 @@ def _legacy_summary(chat_id: str | int) -> str:
         except OSError:
             pass
     return ""
+
+
+def epoch_snapshot(chat_id: str | int, *, summary_max_chars: int = 7000) -> dict:
+    """One coherent read of uncovered bytes and independently proved coverage.
+
+    Absence in hot is not evidence of a fold. State-only/changed residuals and
+    unindexable events are preserved; this reader neither folds nor repairs them.
+    """
+    import copy
+
+    place = str(place_key(chat_id))
+    with _state_write_guard(place):
+        messages = iter_events(chat_id=place, kinds={"conversation_message"})
+        presentable, coverage, _legacy = _both_graphs(place)
+        covered = {str(eid) for meta, _text in coverage.values()
+                   for eid in meta.get("source_event_ids") or ()}
+        current = memory_provenance.current_conversation_events(messages)
+        current_ids = {str(row.get("id")) for row in current}
+        by_id = {str(row.get("id")): row for row in messages}
+        hot, identities = [], set()
+
+        def append(item, *, residual=False):
+            direction = str(item.get("direction") or "")
+            actor = str(item.get("actor") or "")
+            if direction not in ("in", "out"):
+                direction = "out" if actor.casefold() in _OWN_NAMES else "in"
+            row = dict(id=item.get("id"), source_id=item.get("source_id"),
+                       source=item.get("source"), chat=item.get("chat"),
+                       line=str(item.get("line", "")), actor=actor,
+                       direction=direction, ts=item.get("ts"),
+                       meta=copy.deepcopy(item.get("meta") or {}),
+                       unprovable=bool(item.get("unprovable") or residual),
+                       state_residual=residual)
+            identity = (str(row["id"]), str(row["source_id"]), direction, row["line"])
+            if identity not in identities:
+                identities.add(identity)
+                hot.append(row)
+
+        for event in current:
+            if str(event.get("id")) not in covered:
+                append(dict(event, line=event.get("text", ""), chat=event.get("chat_id"),
+                            unprovable=not memory_provenance.event_row_indexable(event)))
+        for item in _load_state(place, rebuild=False).get("hot") or ():
+            if not isinstance(item, dict):
+                continue
+            event = by_id.get(str(item.get("id")))
+            exact = event is not None and all(
+                str(event.get(a) or "") == str(item.get(b) or "")
+                for a, b in (("text", "line"), ("direction", "direction"),
+                             ("source_id", "source_id")))
+            if exact and str(event.get("id")) not in current_ids:
+                continue
+            if not (exact and str(event.get("id")) in covered):
+                append(item, residual=not exact)
+        material = {"place": place, "members": sorted(map(str, _member_keys(place))),
+                    "coverage": [[cid, meta, hashlib.sha256(text.encode()).hexdigest()]
+                                 for cid, (meta, text) in sorted(coverage.items())]}
+        boundary = hashlib.sha256(json.dumps(
+            material, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+        # Reuse ROOM recap policy against THIS graph, not a second disk read.
+        # All uncovered source bytes above remain intact; only the historical
+        # recap projection uses the existing widest+recent disclosure policy.
+        summary = render_context_summary(presentable, max_chars=summary_max_chars)
+        return copy.deepcopy(dict(place=place, boundary=boundary, hot=hot,
+                                  events=messages, covered_event_ids=sorted(covered),
+                                  current_event_ids=sorted(current_ids),
+                                  summary=summary))
 
 
 def bootstrap_legacy(chat_id: str | int, lines: list[str], *, summary: str = "",
@@ -2211,7 +2277,8 @@ def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
                     "surface": "episodic_memory_not_current_tool_history"}
         state["hot" if payload["kind"] == "hot" else "frontier"] = [
             row for row in state["hot" if payload["kind"] == "hot" else "frontier"]
-            if str(row.get("id")) not in set(ids)]
+            if str(row.get("id")) not in set(ids)
+            or (payload["kind"] == "hot" and row.get("state_residual"))]
         state["frontier"].append(meta)
         append_event("memory_compact", chat_id=chat, text=f"Author → {meta['id']}",
                      source="acting_agent", refs=ids,
@@ -2455,7 +2522,7 @@ def _filter_compact_graph(parsed: dict[str, tuple[dict, str]], evidence: dict, *
 
 
 def rebuild_state(chat_id: str | int) -> dict:
-    """Reconstruct hot/frontier solely from JSONL events and immutable Markdown compacts.
+    """Reconstruct canonical hot/frontier, retaining unproved state-only content.
 
     Восстанавливается состояние МЕСТА: события собираются по всем его ключам, покрытыми
     считаются те, что уже вошли в любой канонический компакт места. Событие не может
@@ -2497,6 +2564,7 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
     # реестре: он вправе уточниться, и блок молча выпал бы из её сводки — при том что
     # сам компакт остаётся каноническим (вторая адверсарка 25.07).
     bind_place(chat_id, _member_keys(chat_id))
+    previous_hot = _load_state(chat_id, rebuild=False).get("hot") or []
     state = _default_state(chat_id)
     messages = iter_events(chat_id=chat_id, kinds={"conversation_message"})
     current_messages = memory_provenance.current_conversation_events(messages)
@@ -2538,6 +2606,25 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
             "место %s: %d событий индекс доказательств не принимает — в ленте они "
             "остаются, в свёртку не идут (%s)", chat_id, len(unprovable),
             ", ".join(sorted(marked)[:3]))
+    # Canonical coverage cannot prove coverage of changed/state-only bytes in the
+    # previous cursor. Keep those explicitly quarantined, never foldable. Compare
+    # content and its provenance, not ID alone; exact old revisions remain governed
+    # by the canonical graph and must not be resurrected after edits or folds.
+    fields = (("id", "id"), ("text", "line"), ("direction", "direction"),
+              ("source_id", "source_id"), ("actor", "actor"),
+              ("source", "source"), ("chat_id", "chat"))
+    canonical = {
+        tuple(str(event.get(source) or "") for source, _ in fields)
+        for event in messages
+    }
+    residuals = set()
+    for item in previous_hot:
+        if not isinstance(item, dict):
+            continue
+        identity = tuple(str(item.get(target) or "") for _, target in fields)
+        if identity not in canonical and identity not in residuals:
+            state["hot"].append(dict(item, unprovable=True, state_residual=True))
+            residuals.add(identity)
     state["frontier"] = [m for m in shown_metas
                          if str(m.get("id")) not in consumed_compacts]
     state["dedupe"] = [{"key": r.get("dedupe_key"), "id": r.get("id")} for r in messages
@@ -2619,10 +2706,15 @@ def has_life_memory(chat_id: str | int) -> bool:
 
 
 def context_summary(chat_id: str | int, max_chars: int = 7000) -> str:
-    """Current logarithmic frontier for the prompt. No raw event is treated as more truthful."""
+    """Current frontier, using the same pure projection as an epoch snapshot."""
     if not has_life_memory(chat_id):
-        return ""  # cold pre-PASS19/test tree: do not create runtime state merely by reading
+        return ""
     canonical, _legacy_seen = _canonical_compact_graph(chat_id)
+    return render_context_summary(canonical, max_chars=max_chars)
+
+
+def render_context_summary(canonical: dict, max_chars: int = 7000) -> str:
+    """Pure recap projection over one already-read presentable graph."""
     consumed = {
         source_id for meta, _recap in canonical.values()
         for source_id in meta["source_compact_ids"]
@@ -2725,12 +2817,21 @@ def _refresh_current_targets(events: dict, current_ids, chat: str) -> dict[str, 
     """
     chat = str(chat)
     current: dict[str, dict] = {}
+    # One membership lookup per distinct origin in THIS snapshot. A later call
+    # observes new durable bindings; no process-global membership cache is valid.
+    membership: dict[str, bool] = {}
     for event_id in current_ids:
         row = events.get(str(event_id))
         if not isinstance(row, dict) or row.get("kind") != "conversation_message":
             continue
         logical_id, peer = _refresh_logical_target(row)
-        if (peer and peer == chat) or _same_conversation(row.get("chat_id"), chat):
+        if peer and peer == chat:
+            current[logical_id] = row
+            continue
+        origin = str(row.get("chat_id"))
+        if origin not in membership:
+            membership[origin] = _same_conversation(origin, chat)
+        if membership[origin]:
             current[logical_id] = row
     return current
 

@@ -483,13 +483,18 @@ def _valid_event(row: dict[str, Any], path: Path) -> bool:
             or not _id_matches_timestamp(event_id, timestamp, _EVENT_ID_RE)
             or path.name != f"{timestamp[:10]}.jsonl"):
         return False
+    text = row.get("text")
+    # Conversation text is captured content, not a canonical identifier. Native
+    # chunks need their exact edge whitespace; other event kinds stay canonical.
+    text_valid = (type(text) is str and bool(text.strip()) and len(text) <= 20_000
+                  if row.get("kind") == "conversation_message" else _nonempty_string(text))
     if (row.get("schema") != "praxis.life.event.v1"
             or not _nonempty_string(row.get("kind"), limit=100)
             or not re.fullmatch(r"[a-z][a-z0-9_]{0,99}", row["kind"])
             or not _nonempty_string(row.get("stream"), limit=300)
             or not _nonempty_string(row.get("actor"), limit=1000)
             or row.get("direction") not in {"in", "out", "internal"}
-            or not _nonempty_string(row.get("text"))
+            or not text_valid
             or not _nonempty_string(row.get("source"), limit=200)
             or not re.fullmatch(r"[a-z][a-z0-9_.:-]{0,199}", row["source"])
             or type(row.get("salience")) is not int

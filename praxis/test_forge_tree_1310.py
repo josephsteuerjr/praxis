@@ -187,11 +187,14 @@ class WorkerTree(unittest.TestCase):
         request = json.loads((a / "request.json").read_text())
         request["node_id"] = "one"
         (a / "request.json").write_text(json.dumps(request), encoding="utf-8")
+        before = (a / 'request.json').read_bytes()
         with mock.patch.object(forge, "_spawn_runner") as spawn:
             answer = self.call("spawn", agent_id="agent-bbbbbbbb", brief="same node",
                                node_id="one", role="scout")
-        self.assertIn("already has unit agent-aaaaaaaa", answer)
+        self.assertEqual(answer, "Spawn refused: swarm reservation identity changed.")
         spawn.assert_not_called()
+        self.assertEqual((a / 'request.json').read_bytes(), before)
+        self.assertFalse((self.dir / 'agents/agent-bbbbbbbb').exists())
 
     def test_exact_result_disposition_separate_and_parent_bound(self):
         a = self.unit("agent-aaaaaaaa")
@@ -207,8 +210,14 @@ class WorkerTree(unittest.TestCase):
                                     _parent_request_path=str(a / "request.json")).split("--- worker log ---")[0])
         self.assertEqual(poll["result_sha256"], digest)
         self.assertEqual(poll["dispositions"][0]["disposition"], "integrated")
-        self.assertIn("Existing disposition retained", self.call("disposition", **{
-            **kwargs, "disposition": "irrelevant"}))
+        prior = poll['dispositions'][0]
+        revised = json.loads(self.call("disposition", **{**kwargs, "disposition": "irrelevant"}))
+        self.assertEqual((revised['disposition'], revised['revision'], revised['supersedes']),
+                         ('irrelevant', 2, prior['record']))
+        self.assertEqual(json.loads((b / prior['record']).read_text()), prior)
+        self.assertEqual(json.loads(self.call("disposition", **{**kwargs, 'disposition': 'irrelevant'})), revised)
+        self.assertEqual(len(list(b.glob('disposition-*.json'))), 2)
+        self.assertEqual((b / 'result.json').read_bytes(), original)
         self.assertIn("identity changed", self.call("disposition", **{
             **kwargs, "result_sha256": "0" * 64}))
         c = self.unit("agent-cccccccc")
@@ -251,14 +260,21 @@ class WorkerTree(unittest.TestCase):
         self.assertIn("unknown: stop acknowledged but supervisor remains alive", answer)
         unit = self.dir / "agents/agent-aaaaaaaa"
         self.assertFalse((unit / "result.json").exists())
-        self.assertIn("unknown", json.loads((unit / "stop.json").read_text())["state"])
+        self.assertEqual(json.loads((unit / "stop.json").read_text())["state"], 'unresolved')
+        self.assertEqual(forge._unit_state(unit)['status'], 'unknown')
 
     def test_settled_result_is_preserved_while_live_process_is_stopped(self):
         unit = self.unit("agent-aaaaaaaa", result={"status": "done", "result": "kept"})
         original = (unit / "result.json").read_bytes()
-        with mock.patch.object(forge, "_pid_alive", side_effect=[True, False]), \
-             mock.patch.object(forge, "_group_live_members", return_value=False), \
-             mock.patch.object(forge, "_kill_tree", return_value="остановлен") as kill:
+        live = [True]
+        def stop(*args, **kwargs):
+            live[0] = False
+            return 'остановлен'
+        # Native Windows checks the supervisor before the settled-result branch
+        # too; model actual alive->signal->exit facts, not a fixed call count.
+        with mock.patch.object(forge, "_pid_alive", side_effect=lambda *a: live[0]), \
+             mock.patch.object(forge, "_group_live_members", side_effect=lambda *a: live[0]), \
+             mock.patch.object(forge, "_kill_tree", side_effect=stop) as kill:
             message = self.call("stop", agent_id="agent-aaaaaaaa")
         self.assertIn("result retained (результат сохранён); supervisor group stop: остановлен", message)
         self.assertEqual((unit / "result.json").read_bytes(), original)

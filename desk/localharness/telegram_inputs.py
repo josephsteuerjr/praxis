@@ -234,7 +234,7 @@ class PendingInputs:
                     break
             return result
 
-    def bind(self, prepared, current):
+    def bind(self, prepared, current, *, late=False):
         old = prepared["record"]
         with self.lock:
             value = self.items.get(identity(old))
@@ -244,12 +244,12 @@ class PendingInputs:
                 raise ValueError("Telegram input belongs to another run")
             if (str(current.delivery_chat_id) != value["room"]
                     or str(current.origin_chat_id) != value["room"]
-                    or str(current.principal_id) != value["sender_id"]):
+                    or (not late and str(current.principal_id) != value["sender_id"])):
                 raise ValueError("Telegram run changed room or principal")
             month = dt.datetime.fromisoformat(
                 str(current.created_at).replace("Z", "+00:00")).strftime("%Y-%m")
             value = deepcopy(value)
-            value.update(run_id=current.run_id,
+            value.update(run_id=current.run_id, bound_principal_id=str(current.principal_id), late=bool(late),
                          run_path=month + "/" + current.run_id,
                          speech_sha256=prepared.get("speech_sha256") or "")
             self._save(value)
@@ -356,13 +356,20 @@ def collect(runner, current, messages):
     if owner_stop.paused():
         return [], lambda: None
     ready, additions = [], []
-    for record in store.batch(room=room, principal=principal, run_id=current.run_id):
+    late_taken = False
+    for record in store.batch(room=room, run_id=current.run_id):
         if not record["published"] or not permitted(runner._bot, record):
             continue
         if record["run_id"] == current.run_id and included(record, messages):
             ready.append(record)  # Exact checkpoint replay: do not recognize again.
             continue
         bound = record["run_id"] == current.run_id
+        # Late media belongs to a normal media-aware pass, not a text marker.
+        # It remains durably pending and cannot be covered by later text IDs.
+        media = bool(record['row'].get('media_kind') or record['row'].get('media_source')
+                     or record['row'].get('media_path'))
+        if not bound and (media or late_taken):
+            continue
         try:
             item = prepare(runner, record, bound=bound)
         except (runner.voice_admission.VoicePending, OSError, ValueError):
@@ -376,9 +383,13 @@ def collect(runner, current, messages):
                 owner_stop.require_admission()
                 if not permitted(runner._bot, record):
                     continue
-                record = store.bind(item, current)
+                record = store.bind(item, current, late=True)
+                late_taken = True
         ready.append(record)
         additions.append(item["message"])
+        observation = getattr(getattr(runner, '_agent', None), 'addressed_replies', None)
+        if observation is not None and not media:
+            observation.stage([item['message']], [record['message_id']])
 
     def acknowledge():
         for record in ready:
@@ -430,10 +441,10 @@ def reconcile(runner, records):
                     channel, _snapshot = runner._agent._load_exact_run_channel(manager, current)
                     if (str(current.delivery_chat_id) != record["room"]
                             or str(current.origin_chat_id) != record["room"]
-                            or str(current.principal_id) != record["sender_id"]
+                            or str(current.principal_id) != record.get('bound_principal_id', record['sender_id'])
                             or bool(channel.is_dm) != record["is_dm"]
                             or bool(channel.owner) != (
-                                record["sender_id"] == str(runner._bot.owner_id))):
+                                record.get('bound_principal_id', record['sender_id']) == str(runner._bot.owner_id))):
                         raise ValueError("Telegram pending/run authority differs")
                     evidence[run_id] = (
                         "present", current, _checkpoint(runner._agent, manager, current))

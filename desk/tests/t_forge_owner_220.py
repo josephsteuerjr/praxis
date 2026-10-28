@@ -68,11 +68,11 @@ class OwnerForge(unittest.TestCase):
         self.assertEqual(unit["current_disposition"], "integrated")
         self.assertEqual(unit["observation"]["phase"], "ready")
         self.assertEqual(unit["status"], "done")
-        self.assertEqual(unit["process_liveness"], "not_probed")
+        self.assertEqual(unit["process_liveness"], "unknown")
         self.assertEqual(unit["payload_refs"]["diff_ref"]["sha256"], self.ref["sha256"])
         self.assertNotIn(self.output, json.dumps(row))
         put(self.unit / "stop.json", {"state": "pending"})
-        self.assertEqual(reader.tasks(self.base)[0]["agents"][0]["status"], "unknown")
+        self.assertEqual(reader.tasks(self.base)[0]["agents"][0]["status"], "stop_pending")
         with mock.patch.object(readers, "tree", return_value=self.base):
             self.assertEqual(readers.forge_tasks()[0]["agents"][0]["custody"], "unresolved_stop")
 

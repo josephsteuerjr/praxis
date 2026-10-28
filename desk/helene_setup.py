@@ -24,6 +24,13 @@ def main(argv=None):
         if not args.confirmed:parser.error('Confirm restoring upstream code; existing data stays connected')
         from localharness.upstream_recovery import restore
         return restore(args.root,operation=args.operation)
+    if args.old and args.target and Path(args.old).resolve()==Path(args.target).resolve():
+        old=Path(args.old).resolve();root=args.root.resolve()
+        if root==root.parent/'Helene' and root.parent.parent==old.parent and root.parent.name.startswith('.helene-update-'):
+            from localharness.migration_job import legacy_update
+            legacy_update(old,root,source_mode=args.source_mode,admission=args.admission,
+                          force_extensions=args.force_extensions)
+            return 0
     from python_migration_window import main as wizard
     arguments=['--root',str(args.root)]
     for flag,value in (('--old',args.old),('--target',args.target),('--admission',args.admission)):

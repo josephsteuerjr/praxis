@@ -53,8 +53,16 @@ def verified_runtime(new):
             raise ValueError('Incoming coordinator source escapes its distribution')
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise ValueError('Incoming application source changed: ' + name)
+    from localharness.source_verification_bundle import load as load_bundle
+    bundle_digest = read(new / 'python-package-files.json').get('files', {}).get('verification/manifest.json')
+    if isinstance(bundle_digest, dict):
+        bundle_digest = bundle_digest.get('sha256')
+    if not bundle_digest:
+        raise ValueError('Incoming package has no bound full verification bundle')
+    load_bundle(new / 'verification', bundle_digest, read(new / 'python-app.json').get('version'))
     return {'kind': 'incoming-update-runtime.v1', 'program': str(new), 'review_store': 'isolated-v1',
             'test_battery': 1,
+            'verification_bundle_sha256': bundle_digest,
             'core_sha256': merge.signature(core['files']),
             'app_sha256': merge.signature(app['files'])}
 
@@ -71,13 +79,58 @@ def _settle(tree, forge, service, directory, reason):
         time.sleep(.2)
 
 
+class CoordinatorProcess:
+    """Rejoin a named local producer after UI/host crash; never retry its model."""
+    def __init__(self, directory, descriptor, process=None):
+        self.directory=Path(directory)
+        self.descriptor=descriptor
+        self.process=process
+        self.returncode=None
+    def poll(self):
+        from localharness.session_host import process_state
+        if self.process is not None:
+            self.returncode=self.process.poll()
+            return self.returncode
+        observed=process_state(self.descriptor)
+        if observed=='alive':return None
+        if observed=='unknown':raise RuntimeError('Incoming coordinator process observation is unknown; work retained')
+        result=read(self.directory/'coordinator-result.json')
+        if (result.get('invocation')!=self.descriptor.get('invocation')
+                or result.get('pid')!=self.descriptor.get('pid') or result.get('birth')!=self.descriptor.get('birth')):
+            raise RuntimeError('Incoming coordinator exited without a bound terminal receipt; inspect retained producer before resume')
+        self.returncode=result['returncode']
+        return self.returncode
+
+
+def _producer(command, new, directory, cancel, log):
+    from localharness.session_host import process_state
+    prior=read(directory/'coordinator-process.json')
+    if prior:
+        state=process_state(prior)
+        if state=='alive':
+            return CoordinatorProcess(directory,prior),Path(prior['cancel']),Path(prior['log'])
+        if state=='unknown':
+            raise RuntimeError('Earlier coordinator admission is unknown; do not start a replacement')
+    invocation=__import__('uuid').uuid4().hex
+    intent={'invocation':invocation,'state':'starting','program':str(new),'directory':str(directory),
+        'cancel':str(cancel),'log':str(log),'command_sha256':hashlib.sha256(json.dumps(command).encode()).hexdigest()}
+    write(directory/'coordinator-process.json',intent)
+    command=[*command,'--invocation',invocation,'--producer-log',str(log)]
+    with log.open('ab') as output:
+        process=subprocess.Popen(command,cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0),start_new_session=os.name!='nt')
+    import psutil
+    descriptor={**intent,'pid':process.pid,'birth':psutil.Process(process.pid).create_time(),'state':'running'}
+    current=read(directory/'coordinator-process.json')
+    if current.get('pid')!=process.pid:write(directory/'coordinator-process.json',descriptor)
+    return CoordinatorProcess(directory,descriptor,process),cancel,log
+
+
 def coordinate(old, new, directory, cancel_file):
     from localharness import app_migration, boot
     from python_migrate import installation_lock
     old, new, directory = map(lambda p: Path(p).resolve(), (old, new, directory))
     binding = verified_runtime(new)
-    if directory.parent != old / '.source-updates':
-        raise ValueError('Review plan is outside this installation')
     plan = merge.validate_inputs(directory)
     if merge.inventory(new / 'tree') != plan['files']['incoming']:
         raise ValueError('Incoming review runtime differs from the bound release')
@@ -87,9 +140,21 @@ def coordinate(old, new, directory, cancel_file):
     if agent is None:
         raise ValueError('Selected authored code changed before review')
     tree = Path(agent['tree']).resolve()
-    if source_update._owner_blocked(tree):
-        raise RuntimeError('Owner Stop/Pause forbids update review; previous application retained')
+    if directory.parent not in (old / '.source-updates', tree / 'memory/.source-updates'):
+        raise ValueError('Review plan is outside this installation/data identity')
+    from localharness import owner_stop
+    owner_stop.configure(tree)
+    if owner_stop.stopped():
+        raise RuntimeError('Owner Stop forbids update review; previous application retained')
     binding['plan_id'] = directory.name
+    from localharness import desktop_update_request as jobs
+    job_ref=read(jobs.incoming_reference(new))
+    if job_ref:
+        job=read(job_ref['path'])
+        if (job_ref.get('program')!=str(old) or job_ref.get('incoming')!=str(new)
+                or job.get('id')!=job_ref.get('id') or jobs.path(job['tree']).resolve()!=Path(job_ref['path']).resolve()):
+            raise ValueError('Incoming work is bound to another durable update job')
+        binding['job_control']={'id':job['id'],'path':job_ref['path'],'tree':job['tree']}
     # No dotenv or imports from the authored source. The same profile model
     # settings remain in memory/llm.json; only trusted distribution code runs.
     boot.apply_env(boot.env_knobs(agent['value']), where='isolated update review')
@@ -115,18 +180,33 @@ def coordinate(old, new, directory, cancel_file):
     with installation_lock(directory, timeout_sec=1):
         operation = source_update.ensure(tree, old, agent['code'], directory,
                     read(new / 'python-app.json').get('version', ''), coordinator=binding)
+        from localharness import update_composition
+        update_composition.prepare(directory, operation)
         if operation['state'] == 'ready_to_apply':
             source_update.validate_ready(directory)
             return
         if operation.get('coordinator') != binding or operation['state'] not in source_update.ACTIVE:
             raise RuntimeError(operation.get('error') or 'Existing update review requires attention')
         try:
-            stopped = lambda: Path(cancel_file).exists() or source_update._owner_blocked(tree)
-            service.battery_cancelled = stopped
+            from localharness import owner_stop
+            def job_state():
+                control=binding.get('job_control')
+                if not control:return {}
+                value=read(control['path'])
+                if value.get('id')!=control['id']:raise ValueError('Durable update job changed')
+                return value
+            stopped = lambda: Path(cancel_file).exists() or owner_stop.stopped() or job_state().get('cancel_requested') is True
+            paused = lambda: owner_stop.paused() or job_state().get('state')=='paused'
+            service.battery_cancelled = lambda:stopped() or paused()
             with review_transport(agent, old, directory, llm._config(), stopped) as transport:
                 while True:
                     if stopped():
-                        raise RuntimeError('Owner cancelled, stopped or paused update review')
+                        raise RuntimeError('Owner cancelled or stopped update review')
+                    if paused():
+                        operation['paused'] = True
+                        source_update._persist(directory, operation)
+                        time.sleep(.25)
+                        continue
                     if transport is not None:
                         transport.check()
                     source_update.tick(tree, forge, service, coordinator=binding)
@@ -144,10 +224,17 @@ def coordinate(old, new, directory, cancel_file):
         except AgentResolutionPending:
             raise  # no producer admitted; preserve the selected-agent request
         except BaseException as primary:
-            try:
-                _settle(tree, forge, service, directory, 'Incoming update coordinator stopped before acceptance')
-            except Exception as cleanup:
-                raise RuntimeError(f'{type(primary).__name__}: {primary}; update cancellation remains unconfirmed: {cleanup}') from primary
+            if stopped():
+                try:
+                    _settle(tree, forge, service, directory, 'Owner stopped the update')
+                except Exception as cleanup:
+                    raise RuntimeError(f'{type(primary).__name__}: {primary}; update cancellation remains unconfirmed: {cleanup}') from primary
+            else:
+                # Infrastructure/verification failure retains the exact job,
+                # revisions and any producer evidence. It is not owner cancel.
+                operation = read(directory / 'pipeline.json')
+                operation.update(state='needs_attention', error=f'{type(primary).__name__}: {primary}')
+                source_update._persist(directory, operation)
             raise
 
 
@@ -167,32 +254,29 @@ def review(old, new, plans, progress=None, cancelled=None):
             progress.phase('code', message='Подготавливаю совмещение кода')
         command = [str(interpreter_for(new)), '-s', str(new / 'app/localharness/source_update_host.py'),
                    '--old', str(old), '--new', str(new), '--directory', str(directory), '--cancel', str(cancel)]
-        with log.open('ab') as output:
-            process = subprocess.Popen(command, cwd=new, stdin=subprocess.DEVNULL,
-                stdout=output, stderr=subprocess.STDOUT,
-                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            started = time.monotonic()
-            cancel_deadline = None
-            last_stage = None
-            while process.poll() is None:
-                operation = read(directory / 'pipeline.json')
-                stage = {'queued': 'code', 'merging': 'waiting_agent',
-                         'waiting_agent': 'waiting_agent', 'reviewing': 'waiting_review',
-                         'ready_to_apply': 'code_ready'}.get(operation.get('state'))
-                if progress and stage and stage != last_stage:
-                    progress.phase(stage)
-                    last_stage = stage
-                if (cancelled is not None and cancelled.is_set()) or time.monotonic() - started > source_update.budget_seconds(read(directory / 'pipeline.json')) + 60:
-                    if not cancel.exists():
-                        write(cancel, {'reason': 'Update preparation cancelled or timed out'})
-                    if cancel_deadline is None:
-                        cancel_deadline = time.monotonic() + 90
-                    if time.monotonic() > cancel_deadline:
-                        raise RuntimeError('Update review process has not confirmed exit; no installation applied. Log: ' + str(log))
-                time.sleep(.2)
+        process,cancel,log = _producer(command,new,directory,cancel,log)
+        cancel_deadline = None
+        last_stage = None
+        while process.poll() is None:
+            operation = read(directory / 'pipeline.json')
+            stage = {'queued': 'code', 'merging': 'waiting_agent',
+                     'waiting_agent': 'waiting_agent', 'reviewing': 'waiting_review',
+                     'verification_requested':'verifying', 'review_requested':'waiting_review',
+                     'ready_to_apply': 'code_ready'}.get(operation.get('state'))
+            if progress and stage and stage != last_stage:
+                progress.phase(stage)
+                last_stage = stage
+            if cancelled is not None and cancelled.is_set():
+                if not cancel.exists():
+                    write(cancel, {'reason': 'Owner cancelled update preparation'})
+                if cancel_deadline is None:
+                    cancel_deadline = time.monotonic() + 90
+                if time.monotonic() > cancel_deadline:
+                    raise RuntimeError('Update review process has not confirmed exit; no installation applied. Log: ' + str(log))
+            time.sleep(.2)
         if process.returncode:
             operation = read(directory / 'pipeline.json')
-            if process.returncode==75 and operation.get('state')=='waiting_agent':
+            if process.returncode==75 and operation.get('state') in {'waiting_agent','verification_requested','review_requested'}:
                 from .agent_source_update import AgentResolutionPending
                 raise AgentResolutionPending('Агенту переданы замечания независимой проверки')
             raise RuntimeError((operation.get('error') or 'Изолированная проверка обновления не завершена')
@@ -204,11 +288,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('old', 'new', 'directory', 'cancel'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--invocation',default='')
+    parser.add_argument('--producer-log',default='')
     args = parser.parse_args()
     from localharness.agent_source_update import AgentResolutionPending
-    try:coordinate(args.old, args.new, args.directory, args.cancel)
-    except AgentResolutionPending:return 75
-    return 0
+    import psutil
+    identity={'invocation':args.invocation,'pid':os.getpid(),'birth':psutil.Process().create_time()}
+    if args.invocation:
+        write(args.directory/'coordinator-process.json',{**identity,'state':'running','program':str(args.new),
+            'directory':str(args.directory),'cancel':str(args.cancel),'log':args.producer_log})
+    code=1
+    try:
+        coordinate(args.old, args.new, args.directory, args.cancel)
+        code=0
+    except AgentResolutionPending:
+        code=75
+    finally:
+        if args.invocation:write(args.directory/'coordinator-result.json',{**identity,'returncode':code,'at':time.time()})
+    return code
 
 
 if __name__ == '__main__':

@@ -65,7 +65,7 @@ const depths = [
   { value: "normal" as const, title: "Обычно", text: "Также связи, читатели и тесты" },
   { value: "deep" as const, title: "Глубоко", text: "Также интеграция и аварийные пути" },
 ];
-const defaults: Policy = { after_update: false, after_self_edit: true, depth: "normal", models: [], max_parallel: 1, max_iters: 20 };
+const defaults: Policy = { after_update: false, after_self_edit: false, depth: "normal", models: [], max_parallel: 1, max_iters: 20 };
 const execution: Record<string, string> = {
   queued: "в очереди", starting: "запускается", running: "работает", finishing: "завершается",
   done: "завершено", error: "ошибка", unavailable: "недоступно", unknown: "состояние неизвестно",
@@ -85,7 +85,7 @@ export function validateReviewPolicy(policy: Policy): string {
 
 export function reviewVerdict(review: Pick<Review, "verdict" | "execution">): string {
   if (review.execution !== "done") return "Вывод не подтверждён";
-  return review.verdict === "clear" ? "Замечаний к исходникам нет" : review.verdict === "findings" ? "Есть замечания" : "Доказательств недостаточно";
+  return review.verdict === "clear" ? "Замечаний к предмету проверки нет" : review.verdict === "findings" ? "Есть замечания" : "Доказательств недостаточно";
 }
 
 export function selfReviewCard(context?: Pick<EditionContext, "draft" | "freshness">): HTMLElement {
@@ -93,8 +93,8 @@ export function selfReviewCard(context?: Pick<EditionContext, "draft" | "freshne
   body.style.overflowWrap = "anywhere";
   const node = card("Саморевью", body);
   node.dataset.selfReview = "";
-  body.append(el("p", "field-hint", "Независимые субагенты читают зафиксированный снимок исходников. Они не меняют код и не проверяют установленную программу запуском. Решение владельца хранится отдельно от их вывода."));
-  body.append(el("p", "notice", "Спорное наложение правок всегда требует ревью, даже если проверка после обычного обновления выключена. Это не блокировка запуска приложения."));
+  body.append(el("p", "field-hint", "Независимый взгляд на зафиксированный план, изменение или итог задачи — добровольный помощник. Критики читают точные материалы, не меняют код и не подтверждают эффекты одним описанием. Решение автора хранится отдельно от их вывода."));
+  body.append(el("p", "notice", "Для совмещения изменённого агента при обновлении действует отдельный обязательный протокол: полная проверка состава перед независимым ревью. Обычное завершение без панели не открывает этот переход."));
   const health = el("p", "receipt", "Статус ещё не прочитан.");
   health.setAttribute("aria-live", "polite");
   const receipt = el("p", "receipt");
@@ -134,7 +134,7 @@ export function selfReviewCard(context?: Pick<EditionContext, "draft" | "freshne
     const triggers = el("div", "form-grid");
     triggers.append(
       toggle("После обычного обновления", policy.after_update, value => edit({ after_update: value })),
-      toggle("После самоправок агента", policy.after_self_edit, value => edit({ after_self_edit: value })),
+      toggle("Автоматически после самоправок (по желанию)", policy.after_self_edit, value => edit({ after_self_edit: value })),
     );
     settingsBox.append(
       triggers, el("p", "field-label", "Глубина по умолчанию"), picker.el,

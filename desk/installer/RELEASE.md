@@ -1,6 +1,6 @@
 # Releasing portable Hélène
 
-The current desktop delivery is a portable archive with bundled Python. Reuse the qualified runtime and unchanged native OS tools. For a Python/UI change, update the selected source, build only changed frontend assets, refresh the program inventories and package the matching platform archive. Windows uses `installer/windows_archive_entry.py` and the Python migration window; a Rust launcher/setup rebuild is not part of ordinary portable publication.
+The current desktop delivery is a portable archive with bundled Python. The source-only verified ZIP refresh and exact frontend/bundle recipes are in [PORTABLE-REFRESH.md](PORTABLE-REFRESH.md). Reuse the qualified runtime and unchanged native OS tools. For a Python/UI change, update the selected source, build only changed frontend assets, refresh the program inventories and package the matching platform archive. Windows uses `installer/windows_archive_entry.py` and the Python migration window; a Rust launcher/setup rebuild is not part of ordinary portable publication.
 
 Optional large components are Whisper and XTTS only. Keep their immutable, size/SHA-pinned release asset objects available. Reuse their existing release record when consolidating a sole-version publication, and bind all component URLs to its final tag. The standalone relay has its own repository and release lifecycle. Existing installed components and authored code are preserved.
 

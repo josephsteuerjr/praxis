@@ -23,6 +23,7 @@
 import { api, cfg, electron, inTauri, post, shell } from "../api";
 import { componentsCard } from "../components-card";
 import { updateError } from "../../update-error";
+import { requestAgentUpdate } from '../update-admission';
 import { keepBlock } from "../config";
 import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
@@ -398,18 +399,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // ряд, и она оставалась висеть даже рядом с «Это последняя версия».
   let updUrl = "";
   let updSha = "";
-  // 25.09 (K): «обновить, даже если моё расширение не пройдёт» — явное слово
-  // владельца. Без него установщик остановится до подмены папок и назовёт причину;
-  // отчёт репетиции — в карточке «Расширения».
-  let forceExt = false;
-  const forceToggle = toggle("Обновлять, даже если мои расширения не пройдут проверку", false, (v) => { forceExt = v; });
   // Скачать и поставить — оболочка (КОНТРАКТ A→B §5: update_download →
   // update_install). Несовпадение суммы оболочка отвергает сама (throw, файл
   // удалён); `sha_ok: null` — сверять было не с чем. Установщик гасит
   // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
   // Python обновляет рабочую папку собственным helper, без setup.
   const pythonUpdate = electron?.shell === 'python';
-  const installationWizard = pythonUpdate;
   let sourceMode: 'preserve' | 'clean' = 'preserve';
   const sourceChoices = el('div', 'field');
   const sourceLabel = el('label', '', 'Локальные изменения кода');
@@ -417,12 +412,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   for (const [value, label] of [['preserve', 'Сохранить правки · конфликты поручить агенту'], ['clean', 'Установить чистый код выпуска']]) {
     const option = el('option', '', label); option.value = value; sourceSelect.append(option);
   }
-  const sourceHint = el('p', 'field-hint', installationWizard
-    ? 'Откроется мастер: перенос и совмещение кода с ревью нового Python, включая версии до 2.2.1. Чистый код с текущими данными можно выбрать отдельно.'
-    : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.');
+  const sourceHint = el('p', 'field-hint', 'Обновление ведёт агент вне окна. Он совместит локальные правки с новым выпуском; память и настройки сохранятся. Мастер обычному обновлению не нужен.');
   sourceSelect.onchange = () => {
     sourceMode = sourceSelect.value === 'clean' ? 'clean' : 'preserve';
-    if (installationWizard) return;
     sourceHint.textContent = sourceMode === 'clean'
       ? 'Локальные изменения кода будут заменены чистым кодом выпуска. Прежний код останется для отката. Память, переписка и настройки сохранятся.'
       : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.';
@@ -484,6 +476,23 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   manualUpdate.hidden = true;
   const dlBtn = button(legacyLinux ? "Открыть выпуск Linux" : pythonUpdate ? 'Обновить Hélène' : "Скачать и установить", "primary", async () => {
     if (!updUrl) return;
+    if (pythonUpdate) {
+      dlBtn.disabled = true;
+      updOut.className = 'receipt'; updOut.textContent = 'Передаю задание владельцу процессов…';
+      try {
+        const admitted = await requestAgentUpdate(shell, updUrl, updSha, sourceMode);
+        updateHandedOff = true;
+        updOut.textContent = `Обновление ${admitted.job.id} принято вне окна. Его можно закрыть: агент продолжит работу; повторное открытие покажет это же задание.`;
+        setTimeout(restoreUpdateProgress, 600);
+      } catch (error) {
+        // A lost reply is not permission to submit another job or silently
+        // fall back to the old window-owned download/installer path.
+        updOut.className = 'receipt err';
+        updOut.textContent = `Принятие не подтверждено: ${humanError(error).text} Перечитываю состояние без повторной отправки.`;
+        setTimeout(restoreUpdateProgress, 600);
+      }
+      return;
+    }
     if (legacyLinux) {
       await shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
       updOut.textContent = "Установи новый .deb/.rpm через пакетный менеджер. Данные останутся в твоём доме.";
@@ -513,12 +522,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
       const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
       updOut.textContent = `Скачано (${checked}). Подготавливаю обновление…`;
-      // 25.09 (K): установщик сначала репетирует расширения владельца под новой
-      // версией и без явного слова не подменяет папки, если хоть одно не грузится.
-      // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
-      // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
+      // Compatibility belongs to the current agent-owned update protocol.
+      // The obsolete extension-incompatibility bypass is no longer an action.
       updateStage = 'install';
-      const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
+      const installed = await shell("update_install", { path: got.path, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
       if (installed?.state === 'installer_opened') {
         updOut.textContent = installed.message || 'Мастер установки открыт. Выбери папку данных и подтверди обновление.';
         return;
@@ -566,9 +573,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     });
     modal.footer.append(button('Отмена', 'quiet', () => modal.dialog.close()), apply);
   });
-  restoreUpstream.hidden = !installationWizard;
+  restoreUpstream.hidden = !pythonUpdate;
   about.append(manualUpdate);
-  forceToggle.hidden = true;
   aboutRow.append(
     ver,
     button("Проверить обновления", "quiet", async () => {
@@ -584,26 +590,22 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updUrl = r.url || "";
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
-          forceToggle.hidden = legacyLinux || !updUrl;
         } else {
           updOut.textContent = `Это последняя версия (${r.current}).`;
           updUrl = "";
           updSha = "";
           dlBtn.hidden = true;
-          forceToggle.hidden = true;
         }
       } catch (e) {
         updOut.className = "receipt err";
         updOut.textContent = humanError(e).text;
         updUrl = "";
         dlBtn.hidden = true;
-        forceToggle.hidden = true;
       }
     }),
     dlBtn,
     restoreUpstream,
     cancelUpdate,
-    forceToggle,
     updOut,
   );
   const logsRow = el("div", "actions");

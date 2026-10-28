@@ -132,10 +132,21 @@ def normalize(task_id: str, agent_id: str, result: dict | None,
     # случаях авторство её контура; способ выбирал сам субагент (его тул-цикл).
     delegated = bool(request.get("spawned_by") or request.get("node_id")
                      or request.get("owns"))
+    # Disclosure is captured by the host task, never taken from result prose.
+    # Legacy tasks did not capture an audience and remain owner-private.
+    origin_chat = str(task.get("origin_chat") or "")
+    audience = str(task.get("audience") or "owner")
+    if audience != "owner" and (not origin_chat or audience != f"chat:{origin_chat}"):
+        audience = "owner"
+    captured = request.get("run_context")
+    run_id = str(captured.get("run_id") or "") if isinstance(captured, dict) else ""
     return {
         "schema": SCHEMA,
         "task_id": str(task_id),
         "agent_id": str(agent_id),
+        "run_id": run_id,
+        "work_ref": event_key(task_id, agent_id),
+        "audience": audience,
         "role": role,
         "status": status,
         "forge_status": raw_status,
@@ -270,7 +281,23 @@ def _lost_task_lines(payload: dict) -> list[str]:
     return [head, "   " + "; ".join(facts) + ".", "   " + tail]
 
 
-def invitation(payloads: list[dict]) -> str:
+def project(payload: dict, *, owner: bool = True, chat_id: str = "",
+            audience: str = "") -> dict:
+    """Audience-safe receipt projection; private identities are locators too.
+
+    The legacy event wake is explicitly owner-scoped. External consumers must
+    pass their current authority before serializing receipts or invitations.
+    """
+    import authored_notes
+    admission = dict(payload, chat_id=payload.get("origin_chat") or payload.get("chat_id") or "")
+    if authored_notes.visible(admission, owner=owner, chat_id=chat_id, audience=audience):
+        return dict(payload)
+    return {"schema": SCHEMA, "status": payload.get("status") or "",
+            "finished_at": payload.get("finished_at") or "", "redacted": True}
+
+
+def invitation(payloads: list[dict], *, owner: bool = True, chat_id: str = "",
+               audience: str = "") -> str:
     """Кадр-приглашение для её хода: плод пришёл, не повинность. С машинными id —
     её тулы (coding_agent poll/inspect) достают артефакты без гаданий.
 
@@ -280,6 +307,9 @@ def invitation(payloads: list[dict]) -> str:
     """
     if not payloads:
         return ""
+    projected = [project(p, owner=owner, chat_id=chat_id, audience=audience) for p in payloads]
+    redacted = sum(bool(p.get("redacted")) for p in projected)
+    payloads = [p for p in projected if not p.get("redacted")]
     lost = [p for p in payloads if _is_lost_task(p)]
     units = [p for p in payloads if not _is_lost_task(p)]
     blocks = []
@@ -288,4 +318,6 @@ def invitation(payloads: list[dict]) -> str:
     if lost:
         blocks.append(_LOST_HEAD + "\n"
                       + "\n".join(line for p in lost for line in _lost_task_lines(p)))
+    if redacted:
+        blocks.append(f"Forge: {redacted} completion notice(s); details remain in their original audience.")
     return "\n\n".join(blocks)

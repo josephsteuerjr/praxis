@@ -237,6 +237,10 @@ def finish(directory, *, exe='git'):
                       (value['commits']['local'], value['commits']['incoming']), exe=exe, label='merge upstream into local source')
     git(repo, 'update-ref', 'refs/heads/merged', commit, exe=exe)
     value.update(state='ready', result=actual, merged_commit=commit)
+    revisions = value.setdefault('revisions', [])
+    identity = signature(actual)
+    if not revisions or revisions[-1]['candidate_sha256'] != identity:
+        revisions.append({'candidate_sha256': identity, 'merged_commit': commit, 'at': time.time()})
     write(directory / 'plan.json', value)
     return value
 
@@ -285,8 +289,8 @@ def resolve(directory, name, content=None, *, delete=False, side='', reason='', 
 def apply(directory, target):
     directory, target = Path(directory), Path(target).resolve()
     value = validate_inputs(directory)
-    if value['conflicts'] or value.get('repairs'):
-        from .source_update import validate_ready
+    from .source_update import validate_ready, requires_gate
+    if requires_gate(value):
         validate_ready(directory)
     if value.get('state') != 'ready' or inventory(directory / 'result') != value['result']:
         raise ValueError('Source merge is not ready or its result changed')

@@ -159,14 +159,16 @@ def vision_frames(tree: Path, source: Path, max_frames: int = 4) -> list:
         header = subprocess.run([ffprobe, '-v', 'error', *inputs,
                                  '-nofind_stream_info', '-select_streams', 'v:0',
                                  '-show_entries', 'stream=width,height', '-of', 'json', str(source)],
-                                capture_output=True, timeout=3, check=True)
+                                capture_output=True, timeout=3, check=True,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         stream = json.loads(header.stdout)['streams'][0]
         width, height = int(stream['width']), int(stream['height'])
         if not (0 < width <= 4096 and 0 < height <= 4096 and width * height <= 1920 * 1080):
             return []
         probe = subprocess.run([ffprobe, '-v', 'error', *inputs, '-show_entries',
                                 'format=duration', '-of', 'json', str(source)],
-                               capture_output=True, timeout=3, check=True)
+                               capture_output=True, timeout=3, check=True,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         duration = float(json.loads(probe.stdout)['format']['duration'])
         if not math.isfinite(duration) or not 0 < duration <= 86400:
             return []
@@ -181,7 +183,8 @@ def vision_frames(tree: Path, source: Path, max_frames: int = 4) -> list:
                                 '-vf', 'scale=1024:1024:force_original_aspect_ratio=decrease',
                                 '-threads', '1', '-filter_threads', '1', '-y', str(output)],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=3, check=True)
+                               timeout=3, check=True,
+                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 if not output.is_file() or not 0 < output.stat().st_size <= LIMIT:
                     return []
                 # Content addressing prevents stale samples after source replacement.

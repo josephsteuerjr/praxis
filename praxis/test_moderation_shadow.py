@@ -5,6 +5,7 @@ for provenance hashes and is never opened by this test suite.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,7 +38,11 @@ class FrozenCorpusContractTests(unittest.TestCase):
     def test_fixture_is_complete_and_privacy_minimal(self):
         corpus = _corpus()
         self.assertEqual(corpus["schema"], "praxis.moderation.frozen-corpus.v1")
-        self.assertEqual(corpus["peer_id"], TARGET_PEER_ID)
+        # The archive's peer is provenance, not this installation's root. Keep
+        # the frozen fixture exact; _detect replays only to the configured peer.
+        self.assertEqual(hashlib.sha256(CORPUS_PATH.read_text(encoding="utf-8").encode()).hexdigest(),
+                         "048ebe72a1359657edf10f839490c98bd7ec617ae6bb758f1edb4a10caf97360")
+        self.assertEqual(type(corpus["peer_id"]), int)
         cases = corpus["cases"]
         spam = [case for case in cases if case["label"] == "spam"]
         ham = [case for case in cases if case["label"] == "ham"]
@@ -71,6 +76,14 @@ class FrozenCorpusContractTests(unittest.TestCase):
             if result.verdict != "pass":
                 flagged.append((case["case_id"], result.verdict, result.matched_features))
         self.assertEqual(flagged, [])
+
+    def test_frozen_source_peer_is_not_runtime_authority(self):
+        case = next(row for row in _corpus()["cases"] if row["label"] == "spam")
+        with mock.patch.dict(os.environ, {
+                "PRAXIS_ABSTRACTDL_ROOT_CHAT_ID": "-100999999999999999"}):
+            self.assertNotEqual(_detect(case, peer_id=-100999999999999999).verdict, "pass")
+            result = _detect(case, peer_id=_corpus()["peer_id"])
+            self.assertEqual((result.verdict, result.matched_features), ("pass", ()))
 
 
 class DetectorThresholdTests(unittest.TestCase):

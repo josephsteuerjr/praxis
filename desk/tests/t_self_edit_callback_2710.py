@@ -25,7 +25,7 @@ class InstalledCallback(unittest.TestCase):
             tree.mkdir();code.mkdir();(program/'app').mkdir(parents=True)
             (code/'agent.py').write_text('changed = True\n')
             (program/'app/runner.py').write_text('runner = True\n')
-            config=root/'helene.json';config.write_text(json.dumps({'self_review':{'depth':'quick'}}))
+            config=root/'helene.json';config.write_text(json.dumps({'self_review':{'depth':'quick','after_self_edit':True}}))
             for name,value in [('SELF_EDIT_REVIEW_HOOK',None),('BASE_TOOLS',list(agent.BASE_TOOLS)),
                                ('TOOL_IMPL',dict(agent.TOOL_IMPL)),('HAND_PURPOSE',dict(agent.HAND_PURPOSE))]:
                 stack.enter_context(mock.patch.object(agent,name,value))

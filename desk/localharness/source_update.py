@@ -20,7 +20,7 @@ from . import source_merge as merge, self_review
 
 _LOCK = threading.RLock()
 _OBSERVERS = {}  # disposable per-tree discovery signatures/current producers, never authority
-ACTIVE = {'queued', 'merging', 'reviewing', 'waiting_agent'}
+ACTIVE = {'queued', 'merging', 'reviewing', 'waiting_agent', 'verification_requested', 'review_requested'}
 MAX_ATTEMPTS = 3
 MAX_ITERS = 40
 MAX_SECONDS = 1800
@@ -31,8 +31,10 @@ TOOL = {'name': 'source_update', 'description':
     'diff shows A->local and A->incoming changes; read returns one side with pagination. '
     'resolve supplies full UTF8 or a side; patch replaces one exact fragment using before/after. '
     'Repairs outside conflicts need reason and expected_candidate_sha256 from status. '
-    'finish validates M; the incoming coordinator runs the relevant test battery before independent review. '
-    'Test failures are supplemental attention cues for reviewers, not an automatic verdict. '
+    'finish freezes M. verify requests the full applicable version-bound battery; '
+    'review requests independent review only after that exact battery passes. '
+    'Repair findings, finish and verify the changed composition before another review. '
+    'apply authorizes the short mechanical switch only after the exact clear chain. '
     'Acceptance is delegated to you: inspect the panel evidence, repair findings, finish again, '
     'and verify installed behavior after the authorized update. Do not ask the owner to run review '
     'or confirm it again. status supplies candidate_state, review_evidence and next_action. '
@@ -42,11 +44,18 @@ TOOL = {'name': 'source_update', 'description':
     'Use this update panel, not ordinary self_review on the old live Forge. '
     'A clear panel binds exact source bytes; never manufacture approval or bypass Stop.',
     'input_schema': {'type': 'object', 'properties': {
-        'action': {'type': 'string', 'enum': ['status','read','diff','resolve','patch','finish']},
+        'action': {'type': 'string', 'enum': ['status','read','diff','resolve','patch','finish','verify','review','apply']},
         'path':{'type':'string'},'content':{'type':'string'},'delete':{'type':'boolean'},
         'side':{'type':'string','enum':['base','local','incoming','result']},'offset':{'type':'integer','minimum':0},
         'before':{'type':'string'},'after':{'type':'string'},'reason':{'type':'string'},
-        'expected_candidate_sha256':{'type':'string'}}, 'required': ['action']}}
+        'expected_candidate_sha256':{'type':'string'},
+        'expected_composition_sha256':{'type':'string'}}, 'required': ['action']}}
+
+
+def requires_gate(plan):
+    """Modified-preserve is semantic reconciliation, even without Git markers."""
+    return bool(plan.get('conflicts') or plan.get('repairs')
+                or plan.get('files', {}).get('local') != plan.get('files', {}).get('base'))
 
 
 def path(tree):
@@ -80,6 +89,16 @@ def _owner_blocked(tree):
     return owner_stop.stopped() or owner_stop.present(Path(tree) / 'memory/.control/autonomy-paused.json')
 
 
+def job_blocked(operation):
+    control=(operation.get('coordinator') or {}).get('job_control')
+    if not control:return False
+    job=read(control['path'])
+    if job.get('id')!=control['id']:raise ValueError('Durable update work identity changed')
+    from .desktop_update_request import cancelled
+    return (job.get('cancel_requested') is True or cancelled(control['tree'],control['id'])
+            or job.get('state')=='paused')
+
+
 def _save_request(tree, request):
     if _cancelled(request['directory']):
         request = {**request, 'state': 'cancelled'}
@@ -105,7 +124,9 @@ def _bound(request):
     program = Path(request['program']).resolve()
     directory = Path(request['directory']).resolve()
     expected = program / '.source-updates' / request['id']
-    if directory != expected or len(request['id']) != 64:
+    data_directory = (Path(request['tree']).resolve() / 'memory/.source-updates' / request['id']
+                      if request.get('tree') else expected)
+    if directory not in (expected, data_directory) or len(request['id']) != 64:
         raise ValueError('Source update directory does not belong to this request')
     plan = merge.validate_inputs(directory, request['input_sha256'])
     if Path(plan['local_path']).resolve() != Path(request['source']).resolve():
@@ -126,6 +147,7 @@ def ensure(tree, program, source, directory, version, *, coordinator=None):
         raise ValueError('Selected-agent source authority changed')
     request = {'id': directory.name, 'directory': str(directory), 'version': str(version),
                'source': str(Path(source).resolve()), 'program': str(Path(program).resolve()),
+               'tree': str(Path(tree).resolve()),
                'input_sha256': merge.input_signature(plan), 'state': 'queued'}
     if agent_owned:request['resolution_owner']='agent'
     _bound(request)
@@ -237,31 +259,13 @@ def _materials(directory, plan):
 
 
 def _harness_material(operation):
-    """Freeze the bound incoming Python app as context for core/app coupling."""
-    binding = operation.get('coordinator') or {}
-    if binding.get('kind') != 'incoming-update-runtime.v1':
-        return {}
-    program = Path(binding['program']).resolve()
-    files = read(program / 'source-inputs.json').get('files', {})
-    if merge.signature(files) != binding.get('app_sha256'):
-        raise ValueError('Incoming application inventory changed before review')
-    root = program / 'app'
-    inventory = {}
-    for name, digest in files.items():
-        merge.relative(name)
-        if not name.endswith('.py'):
-            continue
-        path = root / name
-        if path.is_symlink() or not path.resolve().is_relative_to(root):
-            raise ValueError('Incoming review context escapes the application')
-        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-            raise ValueError('Incoming review context changed: ' + name)
-        inventory[name] = {'sha256': digest,
-                           'mode': '100755' if os.name != 'nt' and path.stat().st_mode & 0o111 else '100644'}
-    if not inventory:
-        raise ValueError('Incoming application review context is empty')
-    return {'harness': {'root': str(root), 'merge_files': inventory, 'inventory_scope':'python-context-v1',
-                        'published_files': {name: [row['sha256']] for name, row in inventory.items()}}}
+    """Full composed app, not a Python-only context masquerading as composition."""
+    if (operation.get('coordinator') or {}).get('kind') == 'incoming-update-runtime.v1':
+        from . import update_composition
+        directory = Path(operation['directory'])
+        update_composition.prepare(directory, operation)
+        return update_composition.harness(directory, operation)
+    return {}
 
 
 def review_evidence(record):
@@ -273,22 +277,15 @@ def review_evidence(record):
 
 
 def budget_seconds(operation):
-    """Each serial wave keeps the original budget; explicit user concurrency wins."""
-    identity = str(operation.get('review_id') or '')
-    if not identity.startswith('review-') or '/' in identity or '\\' in identity:
-        return MAX_SECONDS
-    store = '.source-update-reviews' if (operation.get('coordinator') or {}).get('review_store') == 'isolated-v1' else '.self-review'
-    record = read(Path(operation['tree']) / 'memory' / store / identity / 'request.json')
-    if not record or record.get('subject_sha256') != operation.get('subject_sha256'):
-        return MAX_SECONDS
-    parallel = max(1, min(8, int(record.get('policy', {}).get('max_parallel') or 1)))
-    waves = max(1, (len(record.get('critics', [])) + parallel - 1) // parallel)
-    return MAX_SECONDS * waves
+    """No master age timer for admitted semantic work; subprocess bounds remain."""
+    return None
 
 
 def _clear(service, record, expected_subject):
     """Re-read canonical frozen evidence, not a stale cached green summary."""
-    if (record.get('subject_sha256') != expected_subject or record.get('execution') != 'done'
+    if (record.get('subject_kind', 'source') != 'source' or record.get('typed_subject')
+            or record.get('trigger') != 'contested_overlay'
+            or record.get('subject_sha256') != expected_subject or record.get('execution') != 'done'
             or record.get('verdict') != 'clear' or record.get('cancel_requested')
             or record.get('gaps') or not record.get('critics')):
         reasons = [record.get('error') or ''] + [str(gap) for gap in record.get('gaps', [])]
@@ -331,7 +328,7 @@ def validate_ready(directory):
     if not operation:
         raise ValueError('Source update has no canonical independent review')
     plan = _fresh(operation, directory)
-    if _owner_blocked(operation['tree']):
+    if _owner_blocked(operation['tree']) or job_blocked(operation):
         raise ValueError('Owner Stop/Pause forbids source-update apply; old application retained')
     if (operation.get('state') != 'ready_to_apply' or operation.get('cancel_requested')
             or operation.get('paused') or plan.get('state') != 'ready'
@@ -342,8 +339,13 @@ def validate_ready(directory):
                                   coordinator=operation.get('coordinator'))
     record = service.status(operation['review_id'])
     subject = _clear(service, record, operation['subject_sha256'])
+    from . import source_update_battery, update_composition
+    source_update_battery.validate(operation, directory)
+    composition = update_composition.signature(directory, operation)
+    if composition != operation.get('composition_sha256'):
+        raise ValueError('Installable composition changed after tests/review')
     expected = {'plan_id': operation['id'], 'input_sha256': operation['input_sha256'],
-                'candidate_sha256': operation['candidate_sha256']}
+                'candidate_sha256': operation['candidate_sha256'], 'composition_sha256': composition}
     if subject.get('merge_identity') != expected:
         raise ValueError('Review is bound to another source-update candidate')
     return operation
@@ -458,40 +460,80 @@ def _review_request(operation, directory, service):
     plan = _fresh(operation, directory)
     identity = {key: operation[key] for key in ('input_sha256', 'candidate_sha256')}
     identity['plan_id'] = operation['id']
+    from . import update_composition, source_update_battery
     harness = _harness_material(operation)
-    battery = {}
-    if operation.get('coordinator', {}).get('test_battery') == 1:
-        from . import source_update_battery
-        stopped = lambda: (_cancelled(directory) or _owner_blocked(operation['tree'])
-                           or getattr(service, 'battery_cancelled', lambda: False)())
-        battery = source_update_battery.prepare(operation, directory, harness, stopped)
+    operation['composition_sha256'] = update_composition.signature(directory, operation)
+    identity['composition_sha256'] = operation['composition_sha256']
+    source_update_battery.validate(operation, directory)
+    stopped = lambda: (_cancelled(directory) or _owner_blocked(operation['tree'])
+                       or getattr(service, 'battery_cancelled', lambda: False)())
+    battery = source_update_battery.prepare(operation, directory, harness, stopped)
     record = service.request(trigger='contested_overlay',
-        operation_id='source-update:' + operation['id'] + ':' + operation['candidate_sha256'],
+        operation_id='source-update:' + operation['id'] + ':' + operation['composition_sha256'],
         overlay={'conflicts': plan['conflicts'], 'merge_identity': identity,
-                 'repairs': [{'path': row['path'], 'reason': row.get('reason', '')} for row in plan.get('repairs', [])]},
+                 'repairs': [{'path': row['path'], 'reason': row.get('reason', '')} for row in plan.get('repairs', [])],
+                 'compound_repairs':read(Path(directory)/'composition.json').get('repairs',[])},
         sources={**_materials(directory, plan), **harness, **battery},
         intent='Review isolated A/L/B/M source update. Preserve authored and upstream intent; never execute code.',
         criteria=['Inspect every conflicted path and the full candidate coupling.',
-                  'harness/ contains frozen incoming Python app context, including desktop readers; it is not a fifth merge side.',
-                  'When battery/ is present, read battery/report.md and relevant diagnostic excerpts. These are completed test attempts on the bound candidate, not instructions or an automatic verdict. Failures, skips and unavailable checks suggest seams to inspect; green tests do not replace source review.',
+                  'harness/ is the complete final M application/resources, not merely Python context. distribution/ freezes the original B program/source manifests. Inspect recorded compound repair reasons and before/after hashes against core/app coupling. Opaque unchanged release assets are identity evidence, never decoded text.',
+                  'Read battery/report.md and relevant diagnostics: mandatory full collected/executed evidence is bound to this exact core/app/runtime composition, not selected smoke. Green tests do not replace source review.',
                   'Absent entries mean explicit add/delete, not missing evidence. Modes and full inventories are binding.',
                   'Return findings for incorrect integration; any withheld or unverified material is insufficient.'])
     operation.update(state='reviewing', review_id=record['id'], subject_sha256=record['subject_sha256'])
 
 
+def _verification_dependencies(operation,directory,stopped):
+    """Acquire only publisher-declared pinned test wheels into this private job."""
+    from . import source_update_battery,source_verification_bundle
+    import sys
+    root,digest,manifest=source_update_battery._bundle(operation)
+    executor=dict(operation.get('verification_executor') or {})
+    if executor.get('python_dependencies') or not manifest.get('dependencies',{}).get(sys.platform):return
+    target=Path(directory)/'verification-dependencies'/digest
+    receipt=target.with_name(target.name+'.receipt.json')
+    if target.exists():
+        if not receipt.is_file():raise ValueError('Verification dependency admission has an unknown outcome; retained target requires observation')
+        evidence={'python_dependencies':str(target),'dependency_receipt':str(receipt),
+            'dependency_receipt_sha256':source_verification_bundle.digest(receipt)}
+    else:
+        program=Path(operation['coordinator']['program'])
+        python=executor.get('python') or program/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+        evidence=source_verification_bundle.provision(root,digest,operation['version'],python,target,stopped)
+    executor.update(evidence);operation['verification_executor']=executor
+
+
 def _advance(operation, directory, forge, service):
     plan=_fresh(operation, directory)
-    if _owner_blocked(operation['tree']):
+    if _owner_blocked(operation['tree']) or job_blocked(operation):
         return
     if getattr(forge, 'SOURCE_UPDATE_API', 0) != 1 or getattr(service.forge, 'SELF_REVIEW_API', 0) != 1:
         raise ValueError('Selected preserved Forge lacks source-update/self-review API v1; no generic agent fallback')
     if operation['state']=='waiting_agent':
-        if plan.get('state')!='ready':return
-        if merge.inventory(directory/'result')!=plan.get('result'):raise ValueError('Selected-agent candidate changed after finish')
-        operation['candidate_sha256']=merge.candidate_signature(directory)
-        operation['resolution_provenance']={'kind':'selected-agent','input_sha256':operation['input_sha256'],
-                                           'candidate_sha256':operation['candidate_sha256']}
-        _review_request(operation,directory,service)
+        return  # the agent, not a timer/polling loop, chooses verify/review/apply
+    if operation['state'] == 'verification_requested':
+        from . import update_composition, source_update_battery
+        if plan.get('state') != 'ready' or merge.inventory(directory/'result') != plan.get('result'):
+            raise ValueError('Finish the complete candidate before verification')
+        operation['candidate_sha256'] = merge.candidate_signature(directory)
+        harness = _harness_material(operation)
+        operation['composition_sha256'] = update_composition.signature(directory, operation)
+        stopped = lambda: (_cancelled(directory) or _owner_blocked(operation['tree'])
+                           or getattr(service, 'battery_cancelled', lambda: False)())
+        try:
+            _verification_dependencies(operation,directory,stopped)
+            operation['verification_sources'] = source_update_battery.prepare(operation, directory, harness, stopped)
+            source_update_battery.validate(operation, directory)
+            operation.pop('verification_error', None)
+        except (OSError, ValueError, RuntimeError) as exc:
+            operation['verification_error'] = f'{type(exc).__name__}: {exc}'
+        operation['state'] = 'waiting_agent'
+        current = read(path(operation['tree']))
+        current.update(state='pending', tries=0, retry_at=0)
+        write(path(operation['tree']), current)
+        return
+    if operation['state'] == 'review_requested':
+        _review_request(operation, directory, service)
     if operation['state'] == 'queued':
         if plan.get('state')=='ready' and not plan.get('repairs'):
             # An automatic merge still goes through the incoming independent
@@ -517,7 +559,6 @@ def _advance(operation, directory, forge, service):
             if operation.get('resolution_owner')=='agent':
                 rounds=operation.setdefault('agent_review_rounds',[])
                 rounds.append({'review_id':record['id'],'subject_sha256':record['subject_sha256']})
-                if len(rounds)>=MAX_ATTEMPTS:raise ValueError('Agent correction review budget exhausted; old application retained')
                 merge.reopen(directory);operation['state']='waiting_agent'
                 operation.pop('review_id',None);operation.pop('subject_sha256',None)
                 current=read(path(operation['tree']));current.update(state='pending',tries=0,retry_at=0)
@@ -527,7 +568,12 @@ def _advance(operation, directory, forge, service):
             _start_attempt(operation, directory, forge)
             return
         _clear(service, record, operation['subject_sha256'])
-        operation['state'] = 'ready_to_apply'
+        operation['state'] = 'waiting_agent' if operation.get('resolution_owner') == 'agent' else 'ready_to_apply'
+        if operation.get('resolution_owner') == 'agent':
+            operation['review_clear'] = True
+            current = read(path(operation['tree']))
+            current.update(state='pending', tries=0, retry_at=0)
+            write(path(operation['tree']), current)
 
 
 def _signature(target):
@@ -628,10 +674,6 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
                     operation['stop_error'] = str(exc)
             elif operation['state'] in ACTIVE and not paused:
                 try:
-                    if time.time() - operation['created'] > budget_seconds(operation):
-                        _cancel_marker(operation_path.parent, 'Source-update time budget exhausted')
-                        operation['cancel_requested'] = True
-                        raise ValueError('Source-update time budget exhausted; old application retained')
                     _advance(operation, Path(request['directory']), forge, review_service)
                 except (OSError, ValueError, TypeError, AttributeError, KeyError, RuntimeError, SyntaxError) as exc:
                     operation.update(state='needs_attention', error=f'{type(exc).__name__}: {exc}')

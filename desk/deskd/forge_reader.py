@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import codecs
+import base64
 import hashlib
 import json
 import re
@@ -19,6 +20,7 @@ _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _RECORDS = {"result": "result.json", "request": "request.json"}
 _MAX_RECORD = 16 * 1024 * 1024
 _RESULT_CACHE: dict[str, tuple[tuple, dict, dict]] = {}
+_TERMINAL = frozenset({'done', 'completed', 'cancelled', 'canceled', 'stopped', 'failed', 'error', 'lost', 'abandoned', 'closed'})
 
 
 class ReadError(ValueError):
@@ -153,17 +155,30 @@ def _unit(folder: Path, task_id: str) -> dict:
     receipts.sort(key=lambda r: (int(r.get("revision") or 0), str(r.get("at") or r.get("created") or "")))
     current = receipts[-1].get("disposition") if receipts else None
     observation = {k: progress[k] for k in ("generation", "phase", "iteration", "model", "tool", "call_id", "observed_at", "seq", "status") if k in progress}
+    # This record is published by Forge's process owner. A phase/timestamp or
+    # terminal result alone is not a fresh probe of the worker's OS identity.
+    live = _read(folder, 'liveness.json')
+    live = live if (live.get('schema') == 1 and live.get('unit_id') == folder.name
+                    and live.get('task_id') == task_id
+                    and live.get('supervisor_pid') == request.get('supervisor_pid')
+                    and live.get('process_identity') == request.get('process_identity')) else {}
+    liveness = {k: live[k] for k in ('state', 'observed_at', 'basis') if k in live}
+    if liveness.get('state') not in {'alive', 'exited', 'unknown', 'not_started'}:
+        liveness = {'state': 'unknown', 'basis': 'no_owner_observation'}
+    effective = ('stop_pending' if unresolved else str(result.get('status') or 'unknown') if result else
+                 'paused' if request.get('status') == 'paused' else
+                 'waiting' if progress.get('phase') == 'waiting' else
+                 'queued' if request.get('status') == 'queued' else 'unknown')
     return {
         "id": folder.name, "parent_unit_id": str(request.get("parent_unit_id") or ""),
         "role": request.get("role") or result.get("role"),
         "model": progress.get("model") or request.get("model") or result.get("model"),
         "subtask": request.get("brief") or request.get("goal") or "",
-        "status": "unknown" if unresolved else str(result.get("status") or "unknown") if result else
-                  "queued" if request.get("status") == "queued" else "unknown",
+        "status": effective,
         "request_status": str(request.get("status") or ""),
         "custody": "unresolved_stop" if unresolved else "result" if result else "unknown",
         "created": request.get("created"), "finished": result.get("finished"),
-        "observation": observation, "process_liveness": "not_probed",
+        "observation": observation, "process_liveness": liveness['state'], "liveness": liveness,
         "result_ref": ref, "request_ref": _ref(folder, "request"),
         "dispositions": [{k: r.get(k) for k in ("parent_unit_id", "disposition", "result_sha256", "revision")} for r in receipts],
         "current_disposition": current, "stale_dispositions": stale,
@@ -198,6 +213,8 @@ def task_detail(tree: Path, task_id: str) -> dict:
     except OSError as exc:
         raise ReadError(f"Forge participants unreadable: {exc}", 503) from exc
     return {"id": task_id, "goal": task.get("goal") or "", "status": task.get("status") or "unknown",
+            "created": task.get('created') or '',
+            "finished": max([str(task.get('finished') or '')] + [str(unit.get('finished') or '') for unit in agents]),
             "priority": task.get("priority"), "control": _read(folder, "control.json"),
             "max_active_workers": task.get("max_active_workers"),
             "agents": _ancestry(agents), "observed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -214,6 +231,51 @@ def tasks(tree: Path, limit: int = 30) -> list[dict]:
     except OSError as exc:
         raise ReadError(f"Forge tasks unreadable: {exc}", 503) from exc
     return [task_detail(tree, p.name) for p in folders[:min(max(int(limit), 1), 100)]]
+
+
+def activity(tree: Path, limit: int = 20, cursor: str = '') -> dict:
+    """All unfinished participants, plus keyset-paged terminal teams.
+
+    Discovery is not cropped by the recent-task page. In particular a terminal
+    parent does not hide an unfinished child. Unknown/missing outcomes stay in
+    the active set; neither old mtime nor a missing heartbeat buries a worker.
+    """
+    root = Path(tree) / 'memory' / '.forge' / 'tasks'
+    _inside(Path(tree).resolve(), root)
+    after = None
+    if cursor:
+        try:
+            value = json.loads(base64.urlsafe_b64decode(cursor.encode('ascii')).decode('utf-8'))
+            if not (isinstance(value, list) and len(value) == 2 and all(isinstance(x, str) for x in value)):
+                raise ValueError('invalid key')
+            after = tuple(value)
+        except (ValueError, UnicodeError, TypeError) as exc:
+            raise ReadError('Invalid Forge activity cursor') from exc
+    try:
+        folders = sorted(p for p in root.iterdir() if p.is_dir())
+    except FileNotFoundError:
+        return {'active': [], 'recent': [], 'next_cursor': None}
+    except OSError as exc:
+        raise ReadError(f'Forge tasks unreadable: {exc}', 503) from exc
+    active, recent = [], []
+    for folder in folders:
+        row = task_detail(tree, folder.name)
+        if not row['agents']:
+            continue
+        if any(unit['status'] not in _TERMINAL for unit in row['agents']):
+            active.append(row)
+        else:
+            recent.append(row)
+    key = lambda row: (str(row.get('finished') or row.get('created') or ''), row['id'])
+    active.sort(key=lambda row: (str(row.get('created') or ''), row['id']), reverse=True)
+    recent.sort(key=key, reverse=True)
+    if after is not None:
+        recent = [row for row in recent if key(row) < after]
+    count = min(max(int(limit), 1), 100)
+    page = recent[:count]
+    next_cursor = (base64.urlsafe_b64encode(json.dumps(key(page[-1]), ensure_ascii=False).encode('utf-8')).decode('ascii')
+                   if len(recent) > count else None)
+    return {'active': active, 'recent': page, 'next_cursor': next_cursor}
 
 
 def payload(tree: Path, task_id: str, unit_id: str, sha256: str, kind: str = "payload", offset: int = 0, limit: int = 8000) -> dict:

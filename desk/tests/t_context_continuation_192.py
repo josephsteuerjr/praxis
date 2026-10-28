@@ -61,18 +61,19 @@ class Continuation(unittest.TestCase):
         # Later iterations cannot overwrite the first checkpoint.
         self.assertEqual(len(fc._load(second.path)['messages']),len(second.messages))
 
-    def test_repeated_large_evidence_resets_only_derived_cache(self):
-        resets=0
+    def test_repeated_large_evidence_never_resets_successful_first_anchor(self):
+        previous=[]
         for turn in range(15):
             history,current=fc.dialogue(self.rows)
             normal=history+[{'role':'user','content':current+'\nMEMORY EVIDENCE '+('x'*100000)}]
             plan=self.prepare(messages=normal)
-            self.assertLessEqual(len(fc._json(plan.messages)),2*len(fc._json(normal))+100)
+            self.assertEqual(plan.messages[:len(previous)],previous)
             self.assertIn('old input',fc._json(plan.messages))
-            if turn and plan.reused==0:resets+=1
+            if turn:self.assertGreater(plan.reused,0)
             self.observe(plan)
+            previous=copy.deepcopy(plan.messages)
             self.rows += [row(4+turn*2,'accepted '+str(turn),True),row(5+turn*2,'next '+str(turn))]
-        self.assertGreater(resets,0)
+        self.assertGreater(len(fc._json(plan.messages)),2*len(fc._json(normal)))
 
     def test_edits_delete_reorder_frontier_and_audience_reset(self):
         first=self.prepare();self.observe(first)
@@ -96,6 +97,15 @@ class Continuation(unittest.TestCase):
         self.observe(plan);self.assertFalse(plan.path.exists())
         plan=self.prepare();self.rows[0]['line']='changed during call'
         self.observe(plan);self.assertFalse(plan.path.exists())
+
+    def test_actual_fallback_provider_change_is_explicit_invalidation(self):
+        first=self.prepare(expected_provider=['primary','model-A'])
+        with fc.bind(first):
+            fc.observe(system='stable system',messages=first.messages,tools=[{'name':'read'}],provider_route=['fallback','model-B'])
+        self.rows += [row(4,'accepted fallback answer',True),row(5,'next')]
+        second=self.prepare(expected_provider=['primary','model-A'])
+        self.assertEqual(second.reason,'provider_route_changed')
+        self.assertEqual(second.reused,0)
 
     def test_no_identity_media_and_shortened_history_decline(self):
         self.assertIsNone(self.prepare(user_msg=[]))

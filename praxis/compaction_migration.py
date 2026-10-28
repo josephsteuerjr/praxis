@@ -90,7 +90,7 @@ def _rows(base: Path) -> list[dict]:
                 os.fsync(stream.fileno())
         else:
             rows.append(row)
-            fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0))
             try:
                 _write_all(fd, b"\n")
                 os.fsync(fd)
@@ -104,7 +104,7 @@ def _append(base: Path, row: dict) -> None:
     path = _ledger(base)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (json.dumps(row, ensure_ascii=False) + "\n").encode()
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o600)
     try:
         _write_all(fd, data)
         os.fsync(fd)

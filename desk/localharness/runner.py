@@ -211,22 +211,24 @@ def _dialogue(chat_id: str, sidecar: dict | None = None, *, continuation: dict |
     if continuation is not None:
         continuation.clear()
     try:
-        records = _life.hot_records(chat_id, _life.hot_bounds(chat_id)[2])
+        records = _life.hot_records(chat_id, None if continuation is not None else _life.hot_bounds(chat_id)[2])
         import dialogue_continuity
         tree = globals().get('_tree')
-        archive_lines = (_tail_lines(Path(tree) / 'memory/groups' / (str(chat_id) + '.jsonl'), _last_n(chat_id))
+        archive_lines = (_tail_lines(Path(tree) / 'memory/groups' / (str(chat_id) + '.jsonl'), max(_last_n(chat_id), len(records) + 32))
                          if tree is not None and dialogue_continuity.safe_chat(chat_id) else [])
         records = dialogue_continuity.reconcile(records, archive_lines,
             is_room=transport.is_room(chat_id) if archive_lines else False,
             is_dm=bool(_bot.rooms.meta(chat_id).get('is_dm', True)) if archive_lines and globals().get('_bot') is not None else True,
-            birth=bool(globals().get('_birth_active', False)))
+            birth=bool(globals().get('_birth_active', False)),
+            recover_missing=not bool(continuation is not None and _life._load_state(chat_id).get('frontier')))
         # ⚠ ПОТОЛОК ЛЕНТЫ В ЗНАКАХ (КЕАТ, 12.09). Сто двадцать пять записей — это
         # потолок ПАМЯТИ, а не кадра: замер ядра дал 43,5 тыс. знаков ленты при
         # договорённых 5 500. Свёртка подтянется следом сама (`compact_if_due`), но
         # кадр этого хода обязан уместиться СЕЙЧАС. Для группы потолок свой: там
         # лента — это и есть разговор, и общий порог оставлял от неё десять реплик.
         import owner_context
-        records = owner_context.window(_life, chat_id, records)
+        if continuation is None:
+            records = owner_context.window(_life, chat_id, records)
     except Exception:
         log.warning("горячий слой не прочитался [%s] — иду сплошным текстом",
                     chat_id, exc_info=True)
@@ -239,8 +241,8 @@ def _dialogue(chat_id: str, sidecar: dict | None = None, *, continuation: dict |
     for i, (is_self, _text) in enumerate(rows):
         if is_self:
             last_self = i
-    if last_self < 0:
-        return [], ""
+    # A first-ever conversation also has a FIRST checkpoint. It need not wait
+    # for an earlier accepted assistant turn merely to become source-bound.
     history: list[dict] = []
     run_role, run_lines = "", []
 
@@ -257,7 +259,7 @@ def _dialogue(chat_id: str, sidecar: dict | None = None, *, continuation: dict |
         run_lines.append(text)
     flush()
     current = "\n".join(text for _is_self, text in rows[last_self + 1:])
-    if not history or not current.strip():
+    if not current.strip():
         return [], ""
     if sidecar is not None:
         refs = [(r.get("meta") or {}).get("keat_occurrence") for r in admitted]
@@ -281,7 +283,10 @@ def _dialogue(chat_id: str, sidecar: dict | None = None, *, continuation: dict |
                             'bounds': _life.hot_bounds(chat_id),
                             'chars': _life.tape_chars_for(chat_id),
                             'profile': getattr(_life, 'helene_owner_context', {}),
-                            'renderer': 'helene-local-dialogue-v1'}, rows=admitted)
+                            'renderer': 'helene-local-dialogue-v2'}, rows=admitted,
+                admission={'owner': str(getattr(globals().get('_bot'), 'owner_id', '') or ''),
+                           'local_owner': (globals().get('_continuity').owner_stamp()
+                                           if globals().get('_continuity') is not None else '')})
         except (OSError, ValueError, AttributeError):
             continuation.clear()
     return history, current
@@ -701,7 +706,8 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
     sidecar: dict | None = {} if keat_stream else None
     continuation_api = getattr(_agent, 'frame_continuation', None)
     source = {}
-    if continuation_api is not None and not media_refs and not keat_stream:
+    continuation_enabled = os.getenv('PRAXIS_FRAME_CONTINUATION', 'on') == 'on'
+    if continuation_api is not None and continuation_enabled and not media_refs and not keat_stream:
         history, current = _dialogue(chat_id, sidecar, continuation=source)
     else:
         history, current = (_dialogue(chat_id, sidecar) if sidecar is not None
@@ -738,9 +744,18 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         if priority_note:
             turn_orient = str(priority_note) + "\n\n" + str(orient or "")
         from contextlib import nullcontext
-        source_binding = (continuation_api.bind_source(source, lambda: _continuation_snapshot(chat_id))
+        continuation_gap = ('media_adapter_not_qualified' if media_refs else
+                            'keat_adapter' if keat_stream or os.getenv('PRAXIS_KEAT') == 'serve' else
+                            'disabled' if not continuation_enabled else
+                            'canonical_source_unavailable' if not source else '')
+        source_binding = (continuation_api.bind_source(source, lambda: _continuation_snapshot(chat_id), reason=continuation_gap)
                           if continuation_api is not None else nullcontext())
-        with source_binding:
+        from contextlib import ExitStack
+        with ExitStack() as admission:
+            admission.enter_context(source_binding)
+            observations = getattr(_agent, 'addressed_replies', None)
+            if observations is not None and _tree is not None:
+                admission.enter_context(observations.bind(_tree, chat_id))
             envelope = _agent.voice_turn_envelope(
                 chat_id, convo, speaker, ctx=ctx, history=history, current_text=current,
                 orient=turn_orient, **extra)
@@ -1193,6 +1208,10 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
             # Рычаг речи опущен (или ход закрылся текстом): реплика — возврат хода,
             # доставляем её мы. Под поднятым рычагом сюда не попадаем: слово ушло рукой.
             desk.deliver(text, source_id=source_id)
+            observation = getattr(_agent, 'addressed_replies', None)
+            if observation is not None:
+                observation.safe_accepted(_tree, run_id, room, desk.last_delivery_id,
+                                          delivery_key=desk.last_delivery_key)
         elif not spoken and not text:
             # Владелец обязан видеть либо слово, либо явную пометку — пустое окно
             # после долгого хода читается как поломка. Пометка — плашка продукта
@@ -1511,8 +1530,9 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
         delivered_boundary = ""
         if not spoken and text:
             try:
-                _bot.deliver_text(chat_id, text)
-                delivered_boundary = text
+                receipt = _bot.deliver_text(chat_id, text, reply_evidence=True, run_id=run_id)
+                if not isinstance(receipt, _agent.DirectSendRefusal):
+                    delivered_boundary = text
             except Exception:
                 log.exception("возврат хода не доставился [%s]", chat_id)
         elif not spoken and not text and not media_count:
@@ -2589,6 +2609,14 @@ def _forge_maintenance_tick(tree, forge, review) -> None:
         forge_control.consume_pending(tree, control)
     except Exception:
         log.exception("Forge control consumer failed; durable intent/claim retained")
+    # Observation belongs to the runtime owner, not the viewer or admission.
+    # Pause/Stop keep their meanings; this only publishes dated process facts.
+    try:
+        observe = getattr(forge, 'observe_liveness', None)
+        if callable(observe):
+            observe()
+    except Exception:
+        log.exception('Forge process observation unavailable; last facts retained')
     if not owner_stop.stopped() and not owner_stop.paused():
         drain = getattr(forge, "tick_queued", None)
         if callable(drain):

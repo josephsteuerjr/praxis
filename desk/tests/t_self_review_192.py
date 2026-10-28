@@ -83,6 +83,8 @@ class ReviewTests(unittest.TestCase):
             row = self.request(trigger="after_update", operation_id=key, overlay={key: ["agent.py"]})
             self.assertTrue(row["required"])
             self.assertIn("contested_overlay", row["triggers"])
+        self.assertEqual(self.request(trigger="after_self_edit")["state"], "disabled")
+        self.service.settings({"after_self_edit": True})
         self.assertEqual(self.request(trigger="after_self_edit")["trigger"], "after_self_edit")
         self.assertIn("on_request", self.request()["triggers"])
         self.service.settings({"after_update": True})

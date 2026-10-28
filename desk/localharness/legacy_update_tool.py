@@ -1,5 +1,6 @@
 """Give the existing agent the incoming update hand without another model."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 import hashlib,json,os,subprocess,sys,urllib.request
 from urllib.parse import urlsplit
@@ -7,6 +8,23 @@ if __package__ in (None,''):
     sys.path.insert(0,str(Path(__file__).resolve().parents[1]));__package__='localharness'
 from .package_notice import read,write
 from .agent_source_update import require_patch_tool,AgentResolutionUnavailable
+
+_CONTROLLER=ContextVar('helene_legacy_update_owner',default=None)
+
+
+@contextmanager
+def controller_scope(owner):
+    """A native migration job reloads its own runner, never resurrects an old UI."""
+    token=_CONTROLLER.set(owner)
+    try:yield
+    finally:_CONTROLLER.reset(token)
+
+
+def _restart_selected(old):
+    owner=_CONTROLLER.get()
+    if owner is not None and owner.root.resolve()==Path(old).resolve():
+        owner.close();owner.start()
+    else:restart_engine(old)
 
 
 def replace_owned(path,expected,data):
@@ -109,9 +127,9 @@ def notify_due(tree,turn):
     request.update(tries=int(request.get('tries',0))+1,retry_at=time.time()+120);write(path(tree),request)
     return turn('source-update-'+request['id'],speaker='Hélène',origin_text=
         'Владелец начал обновление с сохранением правок. Новая сборка предоставила тебе source_update: '
-        'status, diff/read с пагинацией, patch(before/after, expected_candidate_sha256), finish. '
+        'status, diff/read с пагинацией, patch(before/after, expected_candidate_sha256), finish, verify, review, apply. '
         'Разреши оставшиеся конфликты точечными патчами в изолированной копии, сохраняя оба намерения. '
-        'Живой код не меняй. После finish новый координатор проведёт независимое ревью и продолжит обновление. '
+        'Живой код не меняй. После finish запроси verify для полной применимой батареи, затем review; исправь findings и повтори verify перед новым review. После clear запроси apply с expected_composition_sha256 из status. '
         'Приёмка передана тебе: сам исправляй замечания панели и повторяй finish; не проси владельца запускать ревью. '
         'Stop и отмена обязательны.')
 '''
@@ -141,13 +159,17 @@ def provide(old,new):
     import uuid,time
     bridge_id=uuid.uuid4().hex
     trees=[Path(a['tree']) for a in app_migration.discover(old)['agents'] if a['value'].get('mode')!='remote']
-    original=target.read_bytes();patched=original+shim(new,interpreter_for(new),source_update.TOOL,bridge_id).encode('utf-8')
+    interpreter=new/'runtime/python.exe' if os.name=='nt' else interpreter_for(new)
+    original=target.read_bytes();patched=original+shim(new,interpreter,source_update.TOOL,bridge_id).encode('utf-8')
     backup=new.parent/'legacy-update-tool-backup.py';backup.write_bytes(original)
     try:replace_owned(target,original,patched)
     except OSError as error:
         raise AgentResolutionUnavailable('SELECTED_AGENT_UPDATE_UNAVAILABLE: Нет доступа для подключения инструмента к прежней программе. Прежний файл сохранён; можно установить чистый код с текущими данными.') from error
     try:
-        if ensure_agent_window(old,new):restart_engine(old)
+        controller=_CONTROLLER.get()
+        if controller is not None and controller.root.resolve()==old:
+            _restart_selected(old)
+        elif ensure_agent_window(old,new):restart_engine(old)
         deadline=time.monotonic()+30
         while not all(read(source_update.path(tree).with_name('source-update-hand-ready.json')).get('bridge')==bridge_id for tree in trees):
             if owner_stop.stopped() or owner_stop.paused():raise AgentResolutionUnavailable('SELECTED_AGENT_UPDATE_UNAVAILABLE: Подключение инструмента остановлено владельцем.')
@@ -157,7 +179,7 @@ def provide(old,new):
     finally:
         if target.read_bytes()==patched:
             replace_owned(target,patched,original)
-            if not owner_stop.stopped() and not owner_stop.paused():restart_engine(old)
+            if not owner_stop.stopped() and not owner_stop.paused():_restart_selected(old)
         else:raise RuntimeError('Temporary update hand changed; original retained at '+str(backup))
         for tree in trees:
             receipt=source_update.path(tree).with_name('source-update-hand-ready.json')

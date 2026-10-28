@@ -16,14 +16,34 @@ log = logging.getLogger("helene.self-review")
 SCHEMA = "helene.self-review.status.v1"
 ACTIONS = {"request", "cancel", "disposition"}
 DECISIONS = {"accepted", "fix", "deferred", "continue-with-reason"}
+SUBJECT_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {
+    "kind": {"type": "string", "enum": ["plan", "change", "task_result"]},
+    "task_id": {"type": "string"}, "question": {"type": "string"},
+    "criteria": {"type": "array", "items": {"type": "string"}},
+    "text": {"type": "string", "description": "plan: exact authored plan text"},
+    "assignment": {"type": "string", "description": "task_result: original assignment"},
+    "answer": {"type": "string", "description": "task_result: exact answer, not a summary substituted later"},
+    "observed_effects": {"type": "array", "items": {"type": "string"}, "description": "author claims, not host attestations"},
+    "checks": {"type": "array", "items": {"type": "string"}, "description": "author claims; attach exact evidence as materials"},
+    "materials": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {
+        "name": {"type": "string", "description": "logical name, same on both change sides"},
+        "side": {"type": "string", "enum": ["base", "candidate", "context"]},
+        "root": {"type": "string", "enum": ["workspace", "agent", "app"]},
+        "path": {"type": "string", "description": "explicit relative UTF-8 file; no memory/config/credentials or links"},
+        "sha256": {"type": "string", "description": "exact bytes; absent material omits SHA"},
+        "exists": {"type": "boolean"}}, "required": ["name", "root", "path"]}}},
+    "required": ["kind", "question", "criteria"]}
 TOOL = {
     "name": "self_review",
-    "description": "Read source-review status or request independent Forge reviewers. Acceptance delegated by the owner is your task: run review, address findings and report evidence without asking the owner to perform it. For a source update use source_update status and its incoming coordinator, even when the old live Forge lacks this API; an ordinary self_review of live code does not accept an update candidate. Source-only review never proves installed behavior. Available only in an owner dialogue. Use explicit disposition with the exact subject_sha256 and reason; this does not rewrite the critic verdict.",
+    "description": "Voluntary independent Forge review: choose your question, criteria, materials and depth when criticism helps. Ordinary work may finish without review or a skip ritual. Omit subject for legacy source-only review; otherwise freeze typed plan (text), change (matching base/candidate material refs, explicit absences), or task_result (assignment/exact answer/artifacts/effect and check claims). All refs require exact SHA and remain owner-only; no ambient memory or execution. For conflict updates use source_update and its strict full-battery panel, never ordinary disposition. Verdicts and author decisions stay separate; source/material clear is not installed proof. Owner dialogue only.",
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["status", "request", "cancel", "disposition"]},
         "id": {"type": "string"}, "depth": {"type": "string", "enum": list(self_review.DEPTHS)},
         "intent": {"type": "string"}, "decision": {"type": "string", "enum": sorted(DECISIONS)},
         "retry": {"type": "boolean"},
+        "critics": {"type": "integer", "minimum": 1, "maximum": 8,
+                    "description": "ordinary request: choose critic count on existing configured voice models; default follows policy/depth"},
+        "subject": SUBJECT_SCHEMA,
         "reason": {"type": "string"}, "subject_sha256": {"type": "string"}},
         "required": ["action"]},
 }
@@ -41,7 +61,14 @@ def command(tree, body):
     if not isinstance(body, dict) or body.get("action") not in ACTIONS:
         raise ValueError("action must be request, cancel or disposition")
     value = {key: body[key] for key in
-             ("action", "id", "depth", "intent", "decision", "reason", "subject_sha256", "retry") if key in body}
+             ("action", "id", "depth", "intent", "decision", "reason", "subject_sha256", "retry", "subject", "critics") if key in body}
+    if 'critics' in value and (value['action'] != 'request' or type(value['critics']) is not int or not 1 <= value['critics'] <= 8):
+        raise ValueError('critics must be 1..8 for a review request')
+    if 'subject' in value:
+        if value['action'] != 'request' or value.get('intent'):
+            raise ValueError('typed subject belongs to request and supplies its own question')
+        from localharness.self_review_subjects import normalize
+        value['subject'] = normalize(value['subject'])
     if "retry" in value and not isinstance(value["retry"], bool):
         raise ValueError("retry must be a boolean")
     if value.get("depth") is not None and value["depth"] not in self_review.DEPTHS:
@@ -148,14 +175,14 @@ class Integration:
                 tools.append(TOOL)
             purposes = getattr(self.agent, "HAND_PURPOSE", None)
             if isinstance(purposes, dict):
-                purposes[TOOL["name"]] = "request independent source review and read its exact evidence"
+                purposes[TOOL["name"]] = "voluntary independent source/plan/change/task_result criticism with exact frozen evidence"
         self.publish()
         return self
 
     def publish(self, error=""):
         supported = getattr(self.service.forge, "SELF_REVIEW_API", 0) == 1
         hook = getattr(self.agent, "SELF_EDIT_REVIEW_API", 0) == 1
-        reason = ("Source-only Forge review; installed/runtime checks remain separate." if supported
+        reason = ("Voluntary frozen source/plan/change/task_result Forge review; installed/runtime checks remain separate." if supported
                   else "Selected preserved Forge lacks self-review API v1; shipped stock code is not the executing code.")
         self_review._write(_root(self.tree) / "runtime.json", {
             "at": time.time(), "supported": supported, "self_edit_supported": hook,
@@ -276,7 +303,8 @@ class Integration:
                         if record is None:
                             record = self.service.request(operation_id=asked["command_id"],
                                                           depth=asked.get("depth"), intent=asked.get("intent", ""),
-                                                          retry=asked.get("retry", False))
+                                                          retry=asked.get("retry", False), subject=asked.get('subject'),
+                                                          critics=asked.get('critics'))
                     elif action == "cancel":
                         record = self.service.cancel(asked["id"])
                     else:

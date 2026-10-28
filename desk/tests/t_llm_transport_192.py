@@ -413,7 +413,7 @@ class ResponsesTests(unittest.TestCase):
             assert bodies[1]['messages'][0]['content'] == raw, bodies[1]
             print('installed-sdk-wire-ok',openai.__version__,anthropic.__version__)
         ''')
-        result = subprocess.run([sys.executable, "-I", "-c", script,
+        result = subprocess.run([sys.executable, "-X", "utf8", "-I", "-c", script,
                                  str(ROOT / "helene/core"), str(ROOT / "praxis")],
                                 capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -11,9 +11,10 @@ const win = join(desk, "ui-kit", "window");
 const code = (text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 const read = (...p) => code(readFileSync(join(...p), "utf8"));
 
-// A4/A7 F1: имена аргументов команд Tauri — camelCase; snake_case молча становится None.
+// Legacy argument naming remains camelCase. Owner28Oct removed the obsolete
+// incompatible-extension update action entirely, rather than keeping a bypass.
 const frame = read(win, "views", "settings-frame.ts");
-assert.match(frame, /shell\("update_install", \{ path: [^}]*forceExtensions: /, "update_install без forceExtensions (camelCase)");
+assert.doesNotMatch(frame, /forceExtensions|forceToggle|не пройдут проверку/);
 assert.ok(!/force_extensions:/.test(frame), "в вызовах shell() snake_case-ключ force_extensions");
 for (const m of frame.matchAll(/shell(?:<[^>]*>)?\("(\w+)",\s*\{([^}]*)\}/g)) {
   const keys = [...m[2].matchAll(/(\w+)\s*:/g)].map((k) => k[1]);

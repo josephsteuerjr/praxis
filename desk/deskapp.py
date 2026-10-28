@@ -266,6 +266,11 @@ def _origin_ok(request: web.Request) -> tuple[bool, str]:
         return True, ""
     if origin in _ALLOWED_ORIGINS:
         return True, origin
+    # Reopened disposable windows register an exact origin with the persistent
+    # session host. No wildcard loopback CORS and no channel/agent restart.
+    from localharness.session_host import configured_origin
+    if configured_origin(os.environ.get('HELENE_CONFIG'), origin):
+        return True, origin
     # tauri.localhost — внутренний хост оболочки, из веба на него не попасть.
     # По имени, а не по точной строке: Tauri может отдавать окно и по http, и
     # по https (useHttpsScheme), а неверная строка означала бы пустое окно.
@@ -887,6 +892,9 @@ async def _forge_owner(c: Call, fn, *args, **kwargs):
 
 
 async def _r_forge_tasks(c: Call):
+    if c.query.get('view') == 'active':
+        return await _forge_owner(c, forge_reader.activity,
+                                  _int_arg(c.query, 'limit', 20, 1, 100), c.query.get('cursor') or '')
     return await _forge_owner(c, forge_reader.tasks, _int_arg(c.query, "limit", 30, 1, 100))
 
 

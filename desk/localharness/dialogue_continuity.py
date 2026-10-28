@@ -34,7 +34,7 @@ def identity(row):
     return (str(source), row.get('direction')) if source is not None and str(source) else None
 
 
-def reconcile(rows, lines, *, is_room=False, is_dm=True, birth=False):
+def reconcile(rows, lines, *, is_room=False, is_dm=True, birth=False, recover_missing=True):
     live = list(rows)
     archived = []
     deleted = set()
@@ -57,7 +57,9 @@ def reconcile(rows, lines, *, is_room=False, is_dm=True, birth=False):
         try: stamp = datetime.datetime.fromisoformat(str(row.get('timestamp') or '').replace('Z', '+00:00')).timestamp()
         except (ValueError, OverflowError, OSError): stamp = 0
         archived.append({'line': text, 'actor': actor, 'direction': 'out' if outgoing else 'in',
-            'ts': stamp, 'source_id': source})
+            'ts': stamp, 'source_id': source,
+            'meta': {key: row[key] for key in ('media_kind', 'media_path', 'media_source', 'source_audience',
+                     'reply_to_message_id', 'reply_to_text', 'reply_to_sender', 'reply_to_quote') if key in row}})
     canonical = {identity(r): r for r in archived if identity(r)}
     reconciled = []
     for row in live:
@@ -66,13 +68,15 @@ def reconcile(rows, lines, *, is_room=False, is_dm=True, birth=False):
         saved = canonical.get(key)
         if saved and epoch(saved.get('ts')) >= epoch(row.get('ts')) and saved['line'] != row.get('line'):
             row = saved
+        elif saved and saved.get('meta'):
+            row = dict(row, meta=dict(row.get('meta') or {}, **saved['meta']))
         reconciled.append(row)
     live = reconciled
     recent = next((r for r in reversed(archived) if r['direction'] == 'out'), None)
     hot = next((r for r in reversed(live) if r.get('direction') == 'out'), None)
     recover = recent and (hot is None or recent['ts'] > epoch(hot.get('ts')) or
         (recent['ts'] == epoch(hot.get('ts')) and identity(recent) and identity(recent) != identity(hot)))
-    if recover:
+    if recover and recover_missing:
         # Canonical rows restore missing history, while hot may already contain
         # newer input or system notices that have not reached the archive yet.
         merged = list(archived)

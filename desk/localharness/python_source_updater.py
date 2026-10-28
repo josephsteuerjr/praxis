@@ -16,7 +16,7 @@ import sys
 import time
 
 
-def wait_owner(pid):
+def wait_owner(pid, stopped=lambda:False):
     if pid <= 0:return  # explicit already-quiescent CLI transaction
     if os.name == 'nt':
         import ctypes
@@ -32,12 +32,15 @@ def wait_owner(pid):
             if ctypes.get_last_error()==87:return
             raise ctypes.WinError(ctypes.get_last_error())
         try:
-            if kernel.WaitForSingleObject(handle,60000)!=0:
-                raise TimeoutError('Old Python owner did not exit; no update applied')
+            deadline = time.monotonic()+60
+            while kernel.WaitForSingleObject(handle,100)!=0:
+                if stopped():raise InterruptedError('Owner stopped before cutover')
+                if time.monotonic()>=deadline:raise TimeoutError('Old Python owner did not exit; no update applied')
         finally:kernel.CloseHandle(handle)
     else:
         deadline=time.monotonic()+60
         while time.monotonic()<deadline:
+            if stopped():raise InterruptedError('Owner stopped before cutover')
             try:os.kill(pid,0)
             except ProcessLookupError:return
             import psutil
@@ -103,6 +106,8 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
     """Prepare before switching; legacy helpers do this after old-owner exit."""
     old, new = Path(old).resolve(), Path(new).resolve()
     from localharness import source_admission
+    if prepared_install_path(new).is_file():
+        return validate_prepared(old,new,progress)
     if source_admission.activate(new):
         verified = source_admission.current_proofs(verified, new)
     if active_update(old).is_file():
@@ -142,6 +147,8 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
             if key in value:value[key]=relocate(value[key])
         if isinstance(value.get('backup'),dict) and 'dir' in value['backup']:
             value['backup']['dir']=relocate(value['backup']['dir'])
+        from localharness.portable_profile import relative_config
+        value=relative_config(value,old/config.relative_to(new),old)
         config.write_text(json.dumps(value,ensure_ascii=False,indent=2),encoding='utf-8')
     note['new_root']=str(old)
     if portable or note.get('in_place_profile'):
@@ -197,7 +204,7 @@ def validate_prepared(old, new, progress=None):
     return value
 
 
-def install(old, new):
+def install(old, new, *, stopped=lambda:False):
     """Final quiescent check and short switch; direct legacy callers prepare here."""
     old, new = Path(old).resolve(), Path(new).resolve()
     if not (prepared_install_path(new)).is_file():
@@ -217,7 +224,7 @@ def install(old, new):
     applied = False
     try:
         if progress:progress.phase('switching')
-        update_overlay.apply(new, old, recovery, progress=progress)
+        update_overlay.apply(new, old, recovery, progress=progress, stopped=stopped)
         applied = True
         # A legacy main ZIP may retain only a manifest, not the optional
         # payload. Prepare a voice only when this update actually supplies it.
@@ -292,49 +299,31 @@ def main():
     parser.add_argument('--cleanup',action='store_true')
     parser.add_argument('--browser',action='store_true')
     parser.add_argument('--source-mode',choices=('preserve','clean'))
+    parser.add_argument('--job',type=Path)
+    parser.add_argument('--job-id',default='')
     args=parser.parse_args()
     sys.path.insert(0,str(args.new.resolve()/'app'))
     if args.cleanup:return perform(args)
     validate_staging(args)
-    if not args.browser:
-        # Old installed versions invoke this entry directly. They must reach
-        # the same wizard too, rather than silently selecting a source merge.
-        # The legacy parent allows only 15 seconds for the shown-window
-        # receipt. Source activation/verification belongs after the user's
-        # wizard action, while progress is visible, before any old writer stops.
-        from helene_setup import main as installation_window
-        return installation_window(['--root',str(args.new),'--old',str(args.old),
-            '--target',str(args.old),'--admission',str(args.staging/'updater-admitted.json'),
-            '--source-mode',args.source_mode or 'preserve'])
-    if args.source_mode and not args.cleanup:
-        from localharness.update_source import select
-        select(args.old,args.new,args.source_mode,by='updater')
+    mechanical = prepared_install_path(args.new).is_file()
+    if not mechanical:
+        from localharness.migration_job import legacy_update
+        legacy_update(args.old,args.new,source_mode=args.source_mode or 'preserve',
+                      admission=args.staging/'updater-admitted.json')
+        return 0  # the confirmed persistent owner continues; browser/native alike
+    if args.source_mode:
+        from localharness.update_source import selected
+        choice=selected(args.old,args.new)
+        if not choice or choice['mode']!=args.source_mode:
+            raise ValueError('Prepared source policy differs from the mechanical invocation')
     from python_migrate import installation_lock
-    # Same kernel-backed target lock as migration, held across old-owner exit,
-    # overlay, new generation confirmation, and any rollback.
+    # No UI or model work occurs while this short switch owns the target lock.
     with installation_lock(args.old):
-        prepared = prepared_install_path(args.new)
-        # An old owner's admission timer is only 15 seconds. It cannot wait for
-        # a new release's expensive preparation. Show the observer and accept
-        # custody first; perform prepares only after that owner actually exits.
-        if not prepared.is_file() and (args.new / 'python-app.json').is_file():
-            if active_update(args.old.resolve()).exists():
-                raise RuntimeError('An interrupted update requires startup recovery before another update; previous application remains open')
-            from localharness.update_progress import Progress
-            operation=args.staging.name.removeprefix('.helene-update-')
-            progress=Progress(args.staging.with_name(args.staging.name+'.progress.json'),operation,args.old)
-            progress.phase('waiting_owner', preparation_completed=False,
-                           label='Открываю окно обновления — подготовка ещё не выполнена')
-            args.progress_path = str(progress.path)
-        if prepared.is_file() or getattr(args, 'progress_path', ''):
-            from localharness.update_window import run
-            import threading
-            args.observer_ready = threading.Event()
-            receipt = (json.loads(prepared.read_text(encoding='utf-8')).get('progress')
-                       if prepared.is_file() else args.progress_path)
-            if not receipt:raise ValueError('Prepared update has no progress receipt')
-            return run(lambda: perform(args), receipt, args.observer_ready, browser=args.browser)
-        return perform(args)
+        try:
+            return perform(args)
+        except BaseException as exc:
+            _job_report(args,'attention',error=f'{type(exc).__name__}: {exc}')
+            raise
 
 
 def validate_staging(args):
@@ -345,11 +334,42 @@ def validate_staging(args):
         raise ValueError('Update archive must be beside Helene')
 
 
+def _job_report(args,state,**details):
+    job=getattr(args,'job',None)
+    if not job:return
+    from localharness import desktop_update_request as jobs
+    value=json.loads(Path(job).read_text(encoding='utf-8'))
+    if value.get('id')!=args.job_id or jobs.path(value['tree']).resolve()!=Path(job).resolve():
+        raise ValueError('Terminal cutover job identity differs')
+    from localharness import owner_stop
+    if owner_stop.stopped() and not jobs.cancelled(value['tree'],value['id']):
+        jobs.request(value['tree'],'cancel',root=args.old,identity=value['id'],reason='Owner Stop',by='window')
+    cancelled=jobs.cancelled(value['tree'],value['id'])
+    value.update(details,state='cancelled' if cancelled and state!='completed' else state,
+                 phase=state,terminal_at=time.time())
+    if cancelled:value['cancel_requested']=True
+    jobs._save(value['tree'],value)
+
+
 def perform(args):
     if not args.cleanup:
         from localharness.update_process import interpreter_for, background_flags
     old,new=args.old.resolve(),args.new.resolve()
     presentation=['--browser'] if args.browser else []
+    def stopped():
+        from localharness import owner_stop
+        if owner_stop.stopped():return True
+        job = getattr(args, 'job', None)
+        if job:
+            from localharness.desktop_update_request import cancelled
+            current = json.loads(Path(job).read_text(encoding='utf-8'))
+            if current.get('id') != args.job_id:raise ValueError('Cutover job identity changed')
+            pause=Path(current['tree'])/'memory/.control/autonomy-paused.json'
+            while pause.exists():
+                if owner_stop.stopped() or cancelled(current['tree'],args.job_id):return True
+                time.sleep(.1)
+            return cancelled(current['tree'], args.job_id) or current.get('cancel_requested') is True
+        return False
     prepared_path = prepared_install_path(new)
     progress_path = getattr(args, 'progress_path', '')
     if not args.cleanup and prepared_path.is_file():
@@ -373,6 +393,7 @@ def perform(args):
     validate_staging(args)
     legacy_prepare = not args.cleanup and not prepared_path.is_file() and (new/'python-app.json').is_file()
     if not args.cleanup:
+        if stopped():raise InterruptedError('Owner stopped before mechanical handoff')
         if legacy_prepare and active_update(old).exists():
             raise RuntimeError('An interrupted update requires startup recovery before another update; previous application remains open')
         # Admission is a bounded custody acknowledgement, not the expensive
@@ -384,10 +405,14 @@ def perform(args):
             raise TimeoutError('Update progress window did not become ready; previous application remains open')
         admitted=staging/'updater-admitted.json'
         part=admitted.with_suffix('.tmp')
-        part.write_text(json.dumps({'pid':os.getpid(),'target':str(old),
+        import psutil
+        part.write_text(json.dumps({'pid':os.getpid(),'birth':psutil.Process().create_time(),'target':str(old),
+            'job_id':getattr(args,'job_id',''),'runtime':str(Path(sys.executable).resolve()),
+            'helper_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'preparation_completed':not legacy_prepare}),encoding='utf-8');part.replace(admitted)
     report('waiting_owner', label='Закрываю прежнее окно')
-    wait_owner(args.pid)
+    wait_owner(args.pid, stopped=stopped)
+    if stopped():raise InterruptedError('Owner stopped before program replacement')
     if not args.cleanup:report('freshness', old_exit_observed_at=time.time())
     if args.cleanup:
         # This second process uses the final runtime, after the staging runtime
@@ -417,7 +442,7 @@ def perform(args):
             from localharness.update_progress import Progress
             progress = Progress(progress_path) if progress_path else None
             prepare_install(old,new,progress=progress)
-        note,recovery=install(old,new)
+        note,recovery=install(old,new,stopped=stopped)
     except BaseException as exc:
         if active_update(old).exists():
             report('failed', error=str(exc), rollback_completed=False, recovery_required=True,
@@ -441,10 +466,12 @@ def perform(args):
     try:
         report('starting')
         from localharness.desktop_supervisor import JobChild
+        from localharness.update_process import permanent_environment
         child=JobChild.spawn([str(executable),str(old/'app/python_app.py'),'--root',str(old),'--migration',note['id'],*presentation],
-                             cwd=old,env=dict(os.environ),log=log,stopped=lambda:False)
+                             cwd=old,env=permanent_environment(),log=log,stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
+            if stopped():raise InterruptedError('Owner stopped updated startup; restoring previous version')
             state=json.loads((old/'python-migration.json').read_text(encoding='utf-8'))
             if state.get('id')==note['id'] and state.get('state')=='new_app_started':break
             if child.poll() is not None:raise RuntimeError('Updated application exited before startup confirmation')
@@ -474,6 +501,11 @@ def perform(args):
         report('failed', error=str(failure), rollback_completed=True, previous_reopen_requested=True)
         raise
     pending=active_update(old)
+    if stopped():
+        if child is not None and child.handle is not None:child.stop()
+        rollback(old,recovery);pending.unlink(missing_ok=True)
+        reopen_previous()
+        raise InterruptedError('Owner stopped before startup commit; previous version restored')
     if pending.is_file():
         value=json.loads(pending.read_text(encoding='utf-8'));value['committed']=True
         temporary=pending.with_suffix('.tmp');temporary.write_text(json.dumps(value),encoding='utf-8');temporary.replace(pending)
@@ -483,6 +515,8 @@ def perform(args):
     app_migration.write_note(old,state)
     pending.unlink(missing_ok=True)
     report('completed', new_ready_observed_at=time.time(), recovery=str(recovery))
+    _job_report(args,'completed',result={'installed_root':str(old),'recovery':str(recovery),
+                                       'startup_receipt':note['id'],'effect':'committed'})
     print('Python update launched',child.pid,'root',old,'recovery',recovery,flush=True)
     helper=recovery/'cleanup-update.py'
     shutil.copy2(Path(__file__),helper)

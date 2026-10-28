@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import pathlib
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -388,7 +389,9 @@ class TestHisDataNeverLeaves(Base):
         """А состояние — ровно то, ради чего рука и нужна."""
         self._enter(STRANGER)
         with mock.patch.object(st, "log"),                 mock.patch("subprocess.run") as run,                 mock.patch.object(agent, "_autocommit_self_edit"),                 mock.patch.object(agent, "selfgit"):
-            run.return_value = mock.Mock(stdout="hardbot2-bot-1  Up 44 hours")
+            run.return_value = subprocess.CompletedProcess(
+                args=["bash", "-lc", "docker ps --filter name=hardbot2"],
+                returncode=0, stdout=b"hardbot2-bot-1  Up 44 hours", stderr=b"")
             out = agent.tool_shell("docker ps --filter name=hardbot2")
         run.assert_called_once()
         self.assertIn("Up 44 hours", out)

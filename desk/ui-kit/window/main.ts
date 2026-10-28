@@ -731,6 +731,7 @@ export function start(opts: WindowOptions): void {
     // Plans owns mounted-only polling and in-flight detail reads. Its cached
     // page survives navigation, its network/listeners must not survive it.
     if (from === "plans" && id !== "plans") plans.dispose();
+    if (from === 'talk' && id !== 'talk') panel.dispose();
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
     // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
     if (from !== id && pages.get(from)?.parentNode === viewInner) {

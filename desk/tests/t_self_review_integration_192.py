@@ -53,7 +53,7 @@ class Runtime(unittest.TestCase):
         (self.code / "agent.py").write_text("value = 1\n")
         (self.app / "app" / "runner.py").write_text("value = 2\n")
         self.config = self.root / "helene.json"
-        self.config.write_text(json.dumps({"self_review": {"depth": "quick"}}))
+        self.config.write_text(json.dumps({"self_review": {"depth": "quick", "after_self_edit": True}}))
         self.agent = types.SimpleNamespace(SELF_EDIT_REVIEW_API=1, TOOL_IMPL={}, BASE_TOOLS=[],
                                            _TURN_CHANNEL=ContextVar("owner-channel", default=None))
         self.forge = Forge(self.root / "forge")
@@ -251,7 +251,7 @@ class Settings(unittest.TestCase):
             self.assertEqual(config.read_text(), '{"retained":true}')
             result = config_cli.save(config, '{"self_review":{"depth":"quick"}}', None)
             self.assertTrue(result["ok"])
-            self.assertTrue(json.loads(config.read_text())["self_review"]["after_self_edit"])
+            self.assertFalse(json.loads(config.read_text())["self_review"]["after_self_edit"])
 
     def test_existing_cas_writer_validates_all_settings_before_any_write(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -288,6 +288,8 @@ class Channel(unittest.IsolatedAsyncioTestCase):
                         response = await client.post("/api/self-review", json={"action": "request"},
                                                      headers={"Authorization": "Bearer " + token})
                         self.assertEqual(response.status, 403)
+                        response = await client.get("/api/self-review", headers={"Authorization": "Bearer " + token})
+                        self.assertEqual(response.status, 403)
                     response = await client.post("/api/self-review", json={"action": "request", "depth": "quick"},
                                                  headers={"Authorization": "Bearer owner-fixture"})
                     self.assertEqual(response.status, 200)
@@ -297,6 +299,7 @@ class Channel(unittest.IsolatedAsyncioTestCase):
                     tunnel = await deskapp._tunnel_dispatch("GET", "/api/self-review", None, role="owner")
                     self.assertEqual(tunnel["body"]["commands"][0]["command_id"], queued["command_id"])
                     self.assertEqual((await deskapp._tunnel_dispatch("POST", "/api/self-review", {"action": "request"}, role="device"))["status"], 403)
+                    self.assertEqual((await deskapp._tunnel_dispatch("GET", "/api/self-review", None, role="device"))["status"], 403)
 
 
 if __name__ == "__main__":

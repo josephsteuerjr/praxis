@@ -133,7 +133,7 @@ def _events(directory):
 def request_identity(request: dict) -> str:
     # Core adds PID/birth/status after spawning; none changes the assignment.
     stable = {k: v for k, v in request.items() if k not in {
-        "supervisor_pid", "supervisor_started_at", "status", "_verified_request_path"}}
+        "supervisor_pid", "supervisor_started_at", "process_identity", "status", "_verified_request_path"}}
     return hashlib.sha256(_json_bytes(stable)).hexdigest()
 
 

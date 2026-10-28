@@ -370,7 +370,7 @@ EN: dict[str, dict] = {
     "my_agenda": {"d": "What you have set yourself for a deadline — your intentions, not a backlog."},
     "unschedule": {"d": "Drop a scheduled intention by id.",
                    "p": {"task_id": "id of the intention to drop"}},
-    "memory_compact": {'d': 'In THIS turn: prepare gives exact complete bounded sources and selection. Read them, author your own recap, then fold(selection,text). Originals and unselected tail remain. No auxiliary generation or hard-threshold bypass. list/read inspect; rewrite preserves prior text. Episodic memory only, not tool history.', 'p': {'action': 'prepare | fold | list | read | rewrite | status | stop', 'place': 'chat_id/place; empty = current chat; refold accepts all', 'compact_id': 'compact id (cmp-…) for read/rewrite', 'text': 'Your own recap for fold/rewrite; no helper authors it', 'tier': 'compact tier: 1 over messages, higher over compacts', 'since': 'ISO date: only compacts ending no earlier than it', 'limit': 'Maximum selected rows or listed compacts', 'selection': 'Exact selection returned by prepare, required for fold'}},
+    "memory_compact": {'d': 'In THIS turn: prepare gives exact complete bounded sources and selection. Read them, author your own recap, then fold(selection,text). Originals and unselected tail remain. No auxiliary generation or hard-threshold bypass. list/read inspect; rewrite preserves prior text. read returns one exact page with sha256, next_start_char and eof; continue with start_char=next_start_char and expected_sha256=sha256. A version_conflict requires restarting at 0. Episodic memory only, not tool history.', 'p': {'action': 'prepare | fold | list | read | rewrite | status | stop', 'place': 'chat_id/place; empty = current chat; refold accepts all', 'compact_id': 'compact id (cmp-…) for read/rewrite', 'text': 'Your own recap for fold/rewrite; no helper authors it', 'tier': 'compact tier: 1 over messages, higher over compacts', 'since': 'ISO date: only compacts ending no earlier than it', 'limit': 'Maximum selected rows or listed compacts', 'selection': 'Exact selection returned by prepare, required for fold', 'start_char': 'read only: exact Unicode character offset; use next_start_char', 'expected_sha256': 'read only: sha256 from the first page; required for continuation'}},
     "manage_loop": {
         "d": ("Your tool on voluntary marks of attention. A thread exists only because you "
               "decided to come back to something; it is not a task, not a transport retry, "
@@ -574,7 +574,8 @@ EN: dict[str, dict] = {
     "start_proposal": {"p": {"reason": "why this change is worth a proposal"}},
     "submit_proposal": {"p": {"id": "the open proposal id",
                               "title": "what the change does, in one line",
-                              "why": "the grounds for the change"}},
+                              "why": "the grounds for the change",
+                              "reviewer": "optional exact critic evidence; ordinary completion needs no reviewer or skip"}},
     "proposal_diff": {"p": {"id": "the open proposal id"}},
     "git": {
         "d": ('Git in your home. repo=self: running source; public: GitHub mirror. Read with status/log/diff/fetch; publish with pull/add/commit/push. push fetches first and reports remote advancement. Repository instructions define unpublished content.'),
@@ -596,7 +597,8 @@ EN: dict[str, dict] = {
               "title": "finish: what the change does",
               "review": "finish: your own verdict on your diff",
               "checked": "finish: what you actually checked",
-              "submit": "finish: submit it as a proposal"},
+              "submit": "finish: submit it as a proposal",
+              "reviewer": "finish: optional critic evidence, not completion permission"},
     },
     "coding_edit": {
         "p": {"task_id": "the coding task",
@@ -781,7 +783,7 @@ BASE_SHA: dict[str, str] = {
     "manage_identity": "ffe60eb9",
     "manage_loop": "fec3c953",
     "manage_notes": "f01e8839",
-    "memory_compact": "a58e1cea",
+    "memory_compact": "b570b5bd",
     "manage_perception": "50b390c8",
     "manage_room": "0c663583",
     "my_agenda": "7219f5cf",
@@ -1004,7 +1006,7 @@ POINTER_PURPOSE: dict[str, str] = {
     "speak": "voice the answer and attach audio to the chat",
     "start_proposal": "open a proposal to change my code: branch and working copy",
     "stay_silent": "deliberately stay silent, noting the reason to myself",
-    "submit_proposal": "submit a proposal: commit, full gate, record",
+    "submit_proposal": "submit a proposal: own review and tests; independent criticism is optional",
     "switch_brain": "my brain: models by role and switching",
     "task_control": "close a working turn with my own word",
     "telegram_account": "my account: join / leave / requests / confirmations",
@@ -1149,7 +1151,7 @@ POINTER_SHA: dict[str, str] = {
     "speak": "d05ffbe5",
     "start_proposal": "63f7259b",
     "stay_silent": "760bfa4e",
-    "submit_proposal": "ce7343e9",
+    "submit_proposal": "11b16cab",
     "switch_brain": "eb955130",
     "task_control": "7ba01828",
     "telegram_account": "a2b2f090",

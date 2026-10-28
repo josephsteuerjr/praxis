@@ -72,7 +72,7 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
             raise TimeoutError('XTTS worker is not ready; install/enable XTTS and wait for model loading')
         time.sleep(.05)
     if format == 'ogg_opus' and ready.get('ogg_opus') is not True:
-        raise RuntimeError('XTTS runtime has no Ogg/Opus encoder (PyAV/libopus); voice note unavailable')
+        raise RuntimeError('XTTS runtime has no Ogg/Opus encoder (libsndfile OPUS capability); voice note unavailable')
     if speaker not in (ready.get('speakers') or []):
         raise ValueError('Выбери голос из каталога установленной модели')
     if language not in (ready.get('languages') or []):
@@ -133,8 +133,8 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
             cancel.touch()
             final.unlink(missing_ok=True)
         partial.unlink(missing_ok=True)
-        request.unlink(missing_ok=True)
+        ipc.unlink(request)
         source.unlink(missing_ok=True)
-        receipt.unlink(missing_ok=True)
+        ipc.unlink(receipt)
         if succeeded:
-            lease.unlink(missing_ok=True)
+            ipc.unlink(lease)

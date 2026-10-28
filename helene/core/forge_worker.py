@@ -273,6 +273,7 @@ Operating contract:
 - Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
 - Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
 - Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
+- Independent reviewers are voluntary help for ordinary tasks, not permission to finish. Retain their exact findings; an author's decision does not rename BLOCKED/findings to clear. Conflicting source updates have a separate mandatory battery/panel protocol.
 - End with a compact but complete result: what you learned/changed, exact verification, remaining risks, and the next useful integration step. Do not merely narrate intentions.
 """
 
@@ -414,6 +415,7 @@ def _loop(journal, request_path, request, adapter):
             call_options=state["call_options"], journal=journal,
         )
         state["model"] = response.model
+        state["model_stop_reason"] = str(response.stop_reason or "")
         response_ref = journal.payload(json.dumps({"text": response.text, "blocks": response.blocks,
             "stop_reason": response.stop_reason, "model": response.model,
             "usage": getattr(response, "usage", {}), "assistant": _assistant(response)}, ensure_ascii=False))
@@ -422,7 +424,7 @@ def _loop(journal, request_path, request, adapter):
             # A textual answer is not completion of an adapter-owned transaction.
             # Keep the same journal and budget; never replay tools or reset turns.
             continuation = getattr(adapter, "completion_feedback", None)
-            if not summarizing and callable(continuation):
+            if not summarizing and response.stop_reason == "end_turn" and callable(continuation):
                 feedback = continuation(request)
                 if feedback:
                     state["messages"].append(_assistant(response))
@@ -432,9 +434,12 @@ def _loop(journal, request_path, request, adapter):
                     continue
             state["reply"] = response.text.strip()
             if not summarizing:
-                state["stopped_himself"] = (response.stop_reason == "end_turn" if adapter is not None else True)
+                state["stopped_himself"] = response.stop_reason == "end_turn"
             state["messages"].append(_assistant(response))
-            journal.save("finalize" if state["reply"] or summarizing else "summary_ready", "finishing")
+            # Explicit incomplete output (including hidden-only max_tokens) is
+            # retained, not an empty response to replay or summarize as success.
+            journal.save("finalize" if state["reply"] or summarizing or response.stop_reason != "end_turn"
+                         else "summary_ready", "finishing")
             continue
         blocks = [block for block in response.blocks if block.get("type") in {"text", "tool_use"}]
         calls = [block for block in blocks if block.get("type") == "tool_use"]
@@ -453,12 +458,13 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
     journal = None
     bindings = contextlib.ExitStack()
     try:
+        # Journal/control admission can fail before captured context is parsed.
+        # None of those failures may borrow the caller's ambient identity.
+        bindings.enter_context(run_context.bind_run(None))
         journal = forge_runtime.Journal(request_path.parent)
         prior = forge._read_json(request_path.parent / "result.json")
         if isinstance(prior, dict) and prior.get("status") not in forge._LIVE_UNIT_STATES:
             return 0  # terminal redelivery cannot start another model/tool turn
-        _control(request_path)
-        bindings.enter_context(run_context.bind_run(None))
         captured = request.get("run_context")
         if captured is not None and captured != {}:
             if not isinstance(captured, dict):
@@ -467,6 +473,7 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
             from dataclasses import replace
             context = replace(context, forge_task_id=str(request["task_id"]))
             bindings.enter_context(run_context.bind_run(context))
+        _control(request_path)
         role = request.get("role") or "worker"
         call_options = adapter.prepare(llm, request) if adapter is not None else None
         if adapter is not None:
@@ -489,10 +496,13 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
         diff = str(adapter.diff() if adapter is not None else forge.inspect(request["task_id"], "diff"))
         diff_ref = journal.payload(diff)
         stopped = state["stopped_himself"]
+        model_stop = str(state.get("model_stop_reason") or "")
         data = {
             "status": "done" if stopped else "stalled", "complete": bool(stopped),
             "stop": ("модель остановилась сама" if stopped else
-                     "кончились ходы: %d из %d" % (state["iteration"], state["max_iters"])),
+                     (f"ответ не завершён: stop_reason={model_stop}" if model_stop != "end_turn" else
+                      "кончились ходы: %d из %d" % (state["iteration"], state["max_iters"]))),
+            "stop_reason": model_stop,
             "iters_used": state["iteration"], "iters_max": state["max_iters"],
             "tool_errors": sum(str(row["output"]).startswith("Tool error") for row in trace),
             "finished": _now(), "role": role, "model_requested": str(request.get("model") or ""),

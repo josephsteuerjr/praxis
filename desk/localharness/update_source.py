@@ -18,7 +18,7 @@ def identity(old,new):
     return {'old':str(old),'new':str(new),'version':read(new/'python-app.json').get('version'),
             'upstream_sha256':upstream['sha256'],'files_sha256':merge.signature(upstream['files'])}
 
-def select(old,new,mode,*,by,require_review=False,resolution_owner='agent'):
+def select(old,new,mode,*,by,require_review=False,resolution_owner='agent',resolution_runtime=None):
     if mode not in MODES:raise ValueError('Choose preserve or clean source policy')
     if by not in ('window','owner-words','updater'):raise ValueError('Source choice requires an explicit owner action')
     if resolution_owner not in ('agent','incoming'):raise ValueError('Unknown source-resolution owner')
@@ -27,6 +27,7 @@ def select(old,new,mode,*,by,require_review=False,resolution_owner='agent'):
     value={'format':'helene-source-choice.v1',**identity(old,new),'mode':mode,'by':by,'at':time.time(),'local_sources':local_sources}
     if require_review:value['require_review']=True
     if resolution_owner=='incoming':value['resolution_owner']='incoming'
+    if resolution_runtime is not None:value['resolution_runtime']=str(Path(resolution_runtime).resolve())
     previous=read(choice_path(new))
     if (previous and previous.get('mode')=='preserve' and mode=='clean'
             and read(Path(new)/'source-resolution-unavailable.json')==identity(old,new)):
@@ -40,6 +41,7 @@ def select(old,new,mode,*,by,require_review=False,resolution_owner='agent'):
         if previous['mode']!=mode:raise ValueError('Source policy is already selected for this operation; start a new update')
         if bool(previous.get('require_review'))!=bool(require_review):raise ValueError('Review policy is already bound to this operation; start a new update')
         if previous.get('resolution_owner','agent')!=resolution_owner:raise ValueError('Source-resolution owner is already bound; start a new update')
+        if previous.get('resolution_runtime')!=value.get('resolution_runtime'):raise ValueError('Resolution runtime is already bound to this operation')
         return previous
     write(choice_path(new),value);return value
 
@@ -109,7 +111,8 @@ def clean_prepare(old,new,note,choice):
         if not config.is_file():continue
         value=load(config);previous=Path(value.get('code','')).resolve()
         if previous in targets:
-            value.update(code=str(targets[previous]),app=str(new/'app/deskapp.py'),runner=str(new/'app/localharness/runner.py'))
+            value.update(code=str(targets[previous]))
+            value.setdefault('app',str(new/'app/deskapp.py'));value.setdefault('runner',str(new/'app/localharness/runner.py'))
             value['installed']=dict(value.get('installed') or {},service=False)
             write(config,value)
     note['source_policy']='clean';note['source_choice']=choice

@@ -257,13 +257,13 @@ def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
 
 def _specs(config: Path, *, session_host: bool = False,
            agent_id: str = BASE_ID, port_override: int | None = None,
-           window_root: Path | None = None, environ=None) -> tuple[Path, dict[str, Spec]]:
+           window_root: Path | None = None, environ=None, runtime_program=None) -> tuple[Path, dict[str, Spec]]:
     cfg = _config(config)
     ambient = os.environ if environ is None else environ
     installed = cfg.get("installed") or {}
     if not isinstance(installed, dict):
         raise ValueError("installed settings are not an object")
-    if cfg.get("mode", "local") != "local" or (not session_host and
+    if cfg.get("mode", "local") != "local" or (not session_host and runtime_program is None and
             installed.get("service") is True):
         raise ValueError("opt-in Python supervisor needs local mode and session-host for a service installation")
     base = config.parent
@@ -274,9 +274,17 @@ def _specs(config: Path, *, session_host: bool = False,
     # exact interpreter the native launcher resolved for that PATH request.
     selected_python = cfg.get("python")
     python = Path(sys.executable) if selected_python in (None, "", "python") else _resolve(base, str(selected_python))
+    runner_python=python
     app = _resolve(base, str(cfg.get("app") or "deskapp.py"))
     runner = _resolve(base, str(cfg["runner"])) if cfg.get("runner") else None
-    if not python.is_file() or not app.is_file() or (runner is not None and not runner.is_file()):
+    if runtime_program is not None:
+        # Current B owns the channel/host; the selected agent keeps its existing
+        # compatible runner/interpreter until M passes the update gate.
+        from .update_process import interpreter_for
+        runtime_program=Path(runtime_program).resolve()
+        python=interpreter_for(runtime_program)
+        app=runtime_program/'app/deskapp.py'
+    if not python.is_file() or not app.is_file() or (runner is not None and (not runner.is_file() or not runner_python.is_file())):
         raise ValueError("python, channel or runner file missing")
     port = port_override if port_override is not None else cfg.get("port") or 8094
     if type(port) is not int or not 1 <= port <= 65535:
@@ -297,7 +305,7 @@ def _specs(config: Path, *, session_host: bool = False,
         # A neighboring agent without a configured model may expose its channel
         # but not silently start a model process (the native roster contract).
         if runner_required(cfg, agent_id):
-            specs[f"{agent_id}:runner"] = Spec("runner", (str(python), "-u", str(runner),
+            specs[f"{agent_id}:runner"] = Spec("runner", (str(runner_python), "-u", str(runner),
                                                 "--config", str(config)), runner.parent,
                                     dict(common, HELENE_HOST="127.0.0.1"), tree / "runner.log", port)
     install_base = base if agent_id == BASE_ID else base.parent.parent
@@ -326,7 +334,7 @@ def _specs(config: Path, *, session_host: bool = False,
 
 
 def _plans(config: Path, *, session_host: bool,
-           desktop_roster: bool = False, environ=None) -> dict[str, tuple[Path, dict[str, Spec]]]:
+           desktop_roster: bool = False, environ=None, runtime_program=None) -> dict[str, tuple[Path, dict[str, Spec]]]:
     """One complete desired generation from the installation's roster owner.
 
     A malformed/remote neighbor is never turned into a default local agent.
@@ -335,7 +343,7 @@ def _plans(config: Path, *, session_host: bool,
     """
     base = config.parent
     window_root=base if desktop_roster else None
-    plans = {BASE_ID: _specs(config, session_host=session_host,window_root=window_root,environ=environ)}
+    plans = {BASE_ID: _specs(config, session_host=session_host,window_root=window_root,environ=environ,runtime_program=runtime_program)}
     if not (session_host or desktop_roster):
         return plans
     occupied = {plans[BASE_ID][0].resolve(strict=True)}
@@ -350,7 +358,7 @@ def _plans(config: Path, *, session_host: bool,
                    for section in ("agent", "telegram")):
                 raise ValueError("agent/telegram settings are not objects")
             tree, specs = _specs(agent.config, session_host=session_host, agent_id=agent.id,
-                                 port_override=agent.port,window_root=window_root,environ=environ)
+                                 port_override=agent.port,window_root=window_root,environ=environ,runtime_program=runtime_program)
             physical = tree.resolve(strict=True)
             if physical in occupied:
                 raise ValueError("another agent already owns this data tree")
@@ -475,7 +483,7 @@ def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
 
 def run(config: Path, *, stop=None, session_host: bool = False,
         desktop_roster: bool = False, status_nonce: str | None = None,
-        commands: Queue | None = None) -> int:
+        commands: Queue | None = None, runtime_program=None) -> int:
     """Run one owner generation; errors never fall back to another spawner."""
     if os.name != 'nt' and not (sys.platform.startswith('linux') or sys.platform == 'darwin'):
         raise RuntimeError('Desktop child custody has no qualified adapter for this OS')
@@ -488,7 +496,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
     # GUI libraries mutate process-wide environment during initialization. They
     # are not configuration edits and must not retire a healthy agent generation.
     ambient = dict(os.environ)
-    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient)
+    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient,runtime_program=runtime_program)
     tree, specs = desired[BASE_ID]
     wake = stop if stop is not None else Event()
     def stopped():
@@ -543,7 +551,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     # Re-read the actual roster/config, not a startup snapshot.
                     # Failure to read the base is terminal rather than an empty
                     # desired set that could release its ownership accidentally.
-                    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient)
+                    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient,runtime_program=runtime_program)
                     # Relay network/auth policy belongs to the relay child, not
                     # to the channel or an in-flight agent turn. Keep their Jobs
                     # and retry history when only relay specs were changed.

@@ -86,6 +86,9 @@ class Application:
         self.start_in_tray = False
         self.voice_keys = None
         self.exiting = False
+        # Closing a view detaches it. Only an explicit application Exit owns
+        # the session lifetime; an update/relaunch retires this observer.
+        self.exit_session = False
         self.token = secrets.token_urlsafe(32)
         self.events: list[dict] = []
         self.stopping = threading.Event()
@@ -175,12 +178,16 @@ class Application:
                 return component_downloads.install(self.program,[name],lambda value:self.event('package-progress',value),tree=tree)
             from localharness import app_components
             if self.host is not None:
-                self.host.close()
+                # Component replacement retires executable readers, unlike a
+                # window detach. Do not overwrite under a surviving session.
+                shutdown = getattr(self.host, 'shutdown', self.host.close)
+                shutdown()
                 self.host = None
             return app_components.install(self.program, self.root, str(args.get("name", "")))
         if command == "components_start":
             if self.host is None:
-                host = Controller(self.root, self.event, self.origin)
+                from localharness.session_host import attach
+                host = attach(self.root, self.event, self.origin, browser_mode=self.browser_mode)
                 try:
                     host.start()
                     channel = host.channel()
@@ -199,6 +206,7 @@ class Application:
             action = args.get("action")
             if action == "exit":
                 self.exiting = True
+                self.exit_session = not args.get('observer_only', False) and not self.relaunch
                 if args.get('relaunch') is False:
                     self.relaunch = False
                 if self.window is None:
@@ -219,7 +227,6 @@ class Application:
                 elif action == "close" and self.tray is not None and not self.exiting:
                     self.window.hide()
                 elif action in ("close", "exit"):
-                    self.exiting = True
                     self.window.destroy()
             return None
         if self.host is None:
@@ -469,7 +476,10 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
             self.server.server_close()
             self.thread.join()
             if self.host:
-                self.host.close()
+                if self.exit_session and callable(getattr(self.host, 'shutdown', None)):
+                    self.host.shutdown()
+                else:
+                    self.host.close()
         finally:
             self.control_file.unlink(missing_ok=True)
 
@@ -648,6 +658,9 @@ def _main(argv=None):
         return 0
     if program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
+    if (root/'helene.json').is_file():
+        from localharness.portable_profile import bind_program
+        bind_program(root)
     if not args.migration and not args.browser:
         from localharness import portable_start
         incomplete=root/'python-migration.json'
@@ -678,8 +691,8 @@ def _main(argv=None):
     app = Application(root, ui, None, program)
     app.migration_id=args.migration
     app.browser_mode=args.browser
-    host = Controller(root, app.event, app.origin, args.agent)
-    host.browser_mode=args.browser
+    from localharness.session_host import attach
+    host = attach(root, app.event, app.origin, args.agent, browser_mode=args.browser)
     try:
         host.start()
         from localharness import owner_stop

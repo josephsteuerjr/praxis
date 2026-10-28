@@ -70,9 +70,9 @@ TOOL = {
 TOOL_DESK = {
     "name": TOOL_NAME,
     "description": "Обновление Hélène на этом компьютере. status — состояние; plan — предложить обновление (version: latest или номер). source_mode: preserve сохраняет правки, а конфликты разрешаешь ты в изолированном кандидате; clean устанавливает чистый код выпуска вместо локальных изменений кода всей установки. Память, переписка и настройки сохраняются; прежний код остаётся для отката. Чистый режим выбирается только явно. Передай точные owner_words из прямого поручения владельца; уже разрешённое обновление и его приёмка не требуют повторного согласия. Сам проходи source_update, независимую панель входящего координатора, исправления и проверку поведения после перезапуска; результаты предъяви как доказательства. Без согласия предложение ждёт кнопки в обновляторе. confirm/decline — решение владельца по текущему предложению. Не устанавливай и не сбрасывай код другими инструментами в обход этого выбора.",
-    "input_schema": {"type":"object","properties":{"action":{"type":"string","enum":["status","plan","confirm","decline"]},
+    "input_schema": {"type":"object","properties":{"action":{"type":"string","enum":["status","plan","confirm","decline","cancel","resume"]},
         "source_mode":{"type":"string","enum":["preserve","clean"]},"version":{"type":"string"},
-        "reason":{"type":"string"},"owner_words":{"type":"string"}},"required":["action"]},
+        "reason":{"type":"string"},"owner_words":{"type":"string"},"identity":{"type":"string"}},"required":["action"]},
 }
 
 
@@ -143,13 +143,13 @@ def make_hand(tree: Path, owner_spoke: Callable[[], bool], chat_of: Callable[[],
     tree = Path(tree)
 
     def update_request(action: str = "status", version: str = "latest", backup: str = "full",
-                       reason: str = "", owner_words: str = "", report: str = "",source_mode=None) -> str:
+                       reason: str = "", owner_words: str = "", report: str = "",source_mode=None,identity='') -> str:
         try:
             if desktop:
                 import json
                 from .desktop_update_request import request
                 return json.dumps(request(tree,action,version=version,source_mode=source_mode,reason=reason,
-                    owner_words=owner_words,owner_spoke=owner_spoke()),ensure_ascii=False)
+                    owner_words=owner_words,owner_spoke=owner_spoke(),identity=identity),ensure_ascii=False)
             control = _control()
             action = str(action or "status").strip().lower()
             state = control.update_state(tree)

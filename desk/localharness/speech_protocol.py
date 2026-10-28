@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import time
 import uuid
 
 
@@ -24,9 +25,27 @@ def write(path: Path, value: dict) -> None:
     temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex + '.tmp')
     try:
         temporary.write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
-        os.replace(temporary, path)
+        _publish(lambda: os.replace(temporary, path))
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _publish(operation):
+    # CPython file reads on Windows can briefly deny delete-sharing. The
+    # ready/receipt reader must not crash its writer during an atomic replace.
+    # Retry only these concrete sharing/access failures, never hide a lasting
+    # denial or retry synthesis/model effects.
+    for attempt in range(21):
+        try:
+            return operation()
+        except PermissionError as exc:
+            if os.name != 'nt' or getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == 20:
+                raise
+            time.sleep(.01)
+
+
+def unlink(path: Path):
+    return _publish(lambda: path.unlink(missing_ok=True))
 
 
 def identity(value) -> bool:

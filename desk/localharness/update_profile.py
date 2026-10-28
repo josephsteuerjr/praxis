@@ -95,7 +95,9 @@ def prepare(old, new, progress=None, *, attached_data=None):
         trees.append(value['tree'])
         if value.get('mode') != 'remote':
             sources.append({'old': value['code'], 'selected': value['code']})
-        value['python'] = str(new / ('runtime/python.exe' if app_migration.os.name == 'nt' else 'runtime/bin/python3'))
+        prior_python=Path(str(value.get('python') or ''))
+        if not (prior_python.is_absolute() and not prior_python.is_relative_to(old)):
+            value['python'] = str(new / ('runtime/python.exe' if app_migration.os.name == 'nt' else 'runtime/bin/python3'))
         for key, default, names in (('app', 'app/deskapp.py', ('deskapp.py', 'app/deskapp.py')),
                                      ('runner', 'app/localharness/runner.py', ('localharness/runner.py', 'app/localharness/runner.py'))):
             prior = value.get(key)

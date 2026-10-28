@@ -84,7 +84,8 @@ def main() -> int:
         with path.open('wb') as output:
             try:
                 result = subprocess.run(command, cwd=cwd, env=env, stdout=output,
-                                        stderr=subprocess.STDOUT, timeout=3600)
+                                        stderr=subprocess.STDOUT, timeout=3600,
+                                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
                 code = result.returncode
             except subprocess.TimeoutExpired:
                 code = 124

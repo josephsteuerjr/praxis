@@ -92,43 +92,45 @@ class CallingItSatisfiesTheLook(unittest.TestCase):
         work_loop._STATE.clear()
 
 
-def _sanitized_tree() -> bool:
-    """Публичное зеркало: в `soul/skills/` остались только `*.example.md`.
+class TheNormIsAuthoredNotARequiredPrivateProfile(unittest.TestCase):
+    """Portable synthetic authoring, never inspection of an owner's living soul.
 
-    ⚠ Условие именно такое, а не «нет файла навыка». Зеркало ОСТАВЛЯЕТ каталог с одним
-    примером — проверка на `is_dir()` там проходит и тест всё равно краснеет. А пропавший
-    `before_sending.md` при живых навыках обязан краснеть, и краснеет.
+    Fixed-persona byte assertions belonged to a private installation. The public
+    seed is checked by desk/tests/t_base_skills_1510; the core contract is that
+    the agent can write and revise this norm, including an honest noncheck.
     """
-    if not agent.SKILLS_DIR.is_dir():
-        return True
-    real = [p for p in agent.SKILLS_DIR.glob("*.md")
-            if not p.name.endswith(".example.md") and p.name != "INDEX.md"]
-    return not real
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.skills = Path(temp.name) / 'skills'
+        self.enterContext(mock.patch.object(agent, 'SKILLS_DIR', self.skills))
+        self.enterContext(mock.patch.object(agent, '_reindex'))
+        self.enterContext(mock.patch.object(agent.selfgit, 'snapshot', return_value=''))
+        self.enterContext(mock.patch.object(agent.immune, 'enqueue'))
 
+    def write(self, text):
+        agent.tool_write_skill('before_sending', text)
+        return (self.skills / 'before_sending.md').read_text(encoding='utf-8')
 
-@unittest.skipIf(_sanitized_tree(),
-                 "санитизированное дерево: живых навыков здесь нет по построению")
-class TheNormLivesInASkillSheOwns(unittest.TestCase):
-    """Егор: «то, что сообщения нужно проверять, должно быть записано в скиллах».
+    def test_the_skill_exists_and_is_listed_after_actual_authoring(self):
+        text = self.write('# Before sending\n\nAn authored synthetic norm.')
+        self.assertIn('An authored synthetic norm.', text)
+        index = (self.skills / 'INDEX.md').read_text(encoding='utf-8')
+        self.assertIn('](before_sending.md)', index)
 
-    ⚠ Пропуск завязан на ОТСУТСТВИЕ ВСЕЙ `soul/skills/`, а не одного файла: в публичном
-    зеркале `soul/` вырезан целиком, и краснеть там не на что. А вот пропавший
-    `before_sending.md` при живой папке — настоящий красный, и он таким и останется.
-    """
+    def test_its_author_can_rewrite_it_without_duplicate_index_rows(self):
+        self.write('# Before sending\n\nwrite_skill may revise this norm.')
+        text = self.write('# Before sending\n\nA later authored position.')
+        self.assertIn('A later authored position.', text)
+        self.assertNotIn('may revise', text)
+        index = (self.skills / 'INDEX.md').read_text(encoding='utf-8')
+        self.assertEqual(index.count('](before_sending.md)'), 1)
 
-    def test_the_skill_exists_and_is_listed(self):
-        skill = agent.SKILLS_DIR / "before_sending.md"
-        self.assertTrue(skill.is_file())
-        index = (agent.SKILLS_DIR / "INDEX.md").read_text(encoding="utf-8")
-        self.assertIn("before_sending", index)
-
-    def test_it_says_out_loud_that_she_may_rewrite_it(self):
-        text = (agent.SKILLS_DIR / "before_sending.md").read_text(encoding="utf-8")
-        self.assertIn("write_skill", text)
-
-    def test_it_names_not_checking_as_a_legitimate_answer(self):
-        text = (agent.SKILLS_DIR / "before_sending.md").read_text(encoding="utf-8")
-        self.assertIn("законный ответ", text)
+    def test_honest_noncheck_is_retainable_authored_text_not_machine_veto(self):
+        text = self.write('# Before sending\n\nНе проверяла — законный ответ. say sends nothing.')
+        self.assertIn('законный ответ', text)
+        self.assertIn('say sends nothing.', text)
 
 
 if __name__ == "__main__":

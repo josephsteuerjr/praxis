@@ -58,6 +58,9 @@ import computer_memory
 import context_envelope
 import desires
 import frame_epoch
+import frame_continuation
+import frame_dossiers
+import addressed_replies
 import frame_layout
 import frame_shadow
 import frame_measure
@@ -1539,7 +1542,8 @@ def _notices_block(*, mid_turn: bool = False) -> str:
 
 
 def build_state_evidence_block(*, hide_identity_load: bool = False,
-                               self_only: bool = False) -> str:
+                               self_only: bool = False,
+                               include_deployment_notice: bool = False) -> str:
     """Mutable state continuity at lower prompt priority, never SYSTEM authority.
 
     `self_only` — комната не владельческая: молчит только то, что описывает ДРУГИХ
@@ -1663,10 +1667,20 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
             add("self_git_recent_commits", selfgit.recent(3))
     except Exception:
         pass
-    return "".join(
-        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
-        for record in records
-    )
+    def render(deployment_notice: str = "") -> str:
+        rows = records + ([{"label": "compaction_deployment_change",
+                            "content": deployment_notice}] if deployment_notice else [])
+        return "".join(
+            json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for record in rows
+        )
+
+    if include_deployment_notice:
+        import compaction_migration
+        # Serialize before acknowledging construction. This is neither inference
+        # nor transport delivery; probes and frozen-epoch previews do not consume it.
+        return compaction_migration.context_once(BASE, render=render)
+    return render()
 
 
 # --------------------------------------------------------------------------- #
@@ -1952,11 +1966,19 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     return "Записано в дневник."
 
 
+# Normal and resumed execution persist a 4000-character inline ResultRef view.
+# A page includes its metadata, so its cursor never skips externalized content.
+_MEMORY_COMPACT_READ_INLINE_CHARS = 4000
+
+
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
-                        tier: int | None = None, since: str = "", limit: int = 0, selection: str = "") -> str:
+                        tier: int | None = None, since: str = "", limit: int = 0, selection: str = "",
+                        start_char: int = 0, expected_sha256: str = "") -> str:
     """Её руки на своих свёртках памяти: list / read / rewrite / refold / status / stop / fold."""
     op = str(action or "").strip().casefold()
     where = str(place or "").strip() or str(_active_chat() or "")
+    if op != "read" and (start_char != 0 or expected_sha256):
+        return json.dumps({"ok": False, "reason": "paging_only_for_read"})
     if op in {"prepare", "fold"}:
         if not where:
             return "Не вижу места: укажи place (chat_id)."
@@ -1981,15 +2003,40 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
     if op == "read":
         if not compact_id:
             return "Для read нужен compact_id."
+        if type(start_char) is not int or start_char < 0:
+            return json.dumps({"ok": False, "reason": "invalid_start_char"})
+        expected = str(expected_sha256 or "").strip().lower()
+        if expected and not re.fullmatch(r"[0-9a-f]{64}", expected):
+            return json.dumps({"ok": False, "reason": "invalid_expected_sha256"})
+        if start_char and not expected:
+            return json.dumps({"ok": False, "reason": "expected_sha256_required",
+                               "instruction": "Continue with sha256 from the first page."})
         out = memory_life.read_compact(compact_id, where or None)
         if not out.get("ok"):
             return f"Свёртка {compact_id} не найдена ({out.get('reason')})."
         m = out["meta"]
         body = str(out.get("text") or "")
-        if len(body) > 12000:
-            body = body[:12000] + "\n…[обрезано]"
-        return (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n\n"
-                + body)
+        digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if expected and expected != digest:
+            return json.dumps({"ok": False, "reason": "version_conflict", "sha256": digest,
+                               "instruction": "Compact text changed; restart read at start_char=0."})
+        total = len(body)
+        if start_char > total:
+            return json.dumps({"ok": False, "reason": "start_char_out_of_range",
+                               "total_chars": total})
+        header = (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n")
+        end = min(total, start_char + _MEMORY_COMPACT_READ_INLINE_CHARS)
+        while True:
+            page = {"ok": True, "compact_id": m["id"], "sha256": digest,
+                    "start_char": start_char, "end_char": end, "total_chars": total,
+                    "next_start_char": end if end < total else None, "eof": end == total}
+            prefix = header + json.dumps(page, ensure_ascii=False) + "\n\n"
+            overflow = len(prefix) + end - start_char - _MEMORY_COMPACT_READ_INLINE_CHARS
+            if overflow <= 0:
+                return prefix + body[start_char:end]
+            end -= overflow
+            if end <= start_char:
+                return json.dumps({"ok": False, "reason": "read_metadata_too_large"})
     if op == "rewrite":
         if not compact_id or not str(text or "").strip():
             return "Для rewrite нужны compact_id и text — новая суть твоими словами."
@@ -2021,7 +2068,8 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
 
 def tool_manage_notes(action: str, text: str = "", kind: str = "",
                       scope: str = "", note_id: str = "",
-                      status: str = "open", reason: str = "", limit: int = 20) -> str:
+                      status: str = "open", reason: str = "", limit: int = 20,
+                      work_ref: str = "") -> str:
     """Explicit authored scratch/notes; never an implicit task, memory fact, or self claim."""
     ledger = authored_notes.AuthoredNoteLedger(BASE)
     operation = str(action or "").strip().casefold()
@@ -2029,10 +2077,20 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
     ctx = _TURN_CHANNEL.get()
     run_id = current.run_id if current is not None else ""
     chat_id = _active_chat() or ""
+    owner_audience = bool(ctx.owner_audience if ctx is not None else
+                          current is not None and current.scope == 'owner')
+    audience = 'owner' if owner_audience else 'chat:' + str(chat_id)
     message_id = (ctx.origin_message_id if ctx is not None else
                   (current.origin_message_ids[-1] if current and current.origin_message_ids else None))
     try:
+        # Lessons can resolve a known skill without first loading its note. Both
+        # paths must check the audience before entering that private source.
+        if operation in {'chain', 'decline'} and not owner_audience:
+            return 'Заметка не найдена в этой аудитории.'
         if operation == "write":
+            if not chat_id and not owner_audience:
+                return 'Нет подтверждённой аудитории для заметки.'
+            reference = authored_notes.work_reference(work_ref or (f'run:{run_id}' if run_id else ''))
             validate_locked = None
             if (scope or "global") == "run" and current is not None:
                 def validate_locked():
@@ -2044,12 +2102,12 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
             row = ledger.write(
                 text, kind=kind or "note", scope=scope or "global", run_id=run_id, chat_id=chat_id,
                 message_id=message_id, source_ref=_active_memory_source_ref(),
-                validate_locked=validate_locked,
+                validate_locked=validate_locked, work_ref=reference, audience=audience,
             )
             return f"Записано: {row['kind']} `{row['id']}` ({row['scope']}, {row['status']})."
         if operation in {"read", "close"}:
             row = ledger.get(note_id)
-            if row is None:
+            if row is None or not authored_notes.visible(row, owner=owner_audience, chat_id=chat_id, audience=audience):
                 return "Заметка не найдена."
             if row["scope"] == "chat" and row["chat_id"] != chat_id:
                 return "Заметка относится к другому чату."
@@ -2062,7 +2120,8 @@ def tool_manage_notes(action: str, text: str = "", kind: str = "",
         if operation == "list":
             rows = ledger.list(status=status, kind=kind if kind in authored_notes.KINDS else "",
                                scope=scope if scope in authored_notes.SCOPES else "", limit=100)
-            rows = [row for row in rows if (
+            rows = [row for row in rows if authored_notes.visible(
+                row, owner=owner_audience, chat_id=chat_id, audience=audience) and (
                 row["scope"] == "global"
                 or (row["scope"] == "chat" and row["chat_id"] == chat_id)
                 or (row["scope"] == "run" and row["run_id"] == run_id)
@@ -2202,16 +2261,19 @@ def _summary_budget(chat_id: str | int) -> int:
     return 7_000
 
 
+def _summary_context_budget(chat_id) -> int:
+    """One effective recap budget for ordinary reads and frozen epoch selection."""
+    budget = _summary_budget(chat_id)
+    if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
+        budget = min(budget, SUMMARY_FRAME_CHARS)
+    return budget
+
+
 def read_summary(chat_id: str | int) -> str:
     """PASS 19 frontier; плоская сводка — только fallback холодной миграции."""
     try:
         modern = memory_life.has_life_memory(chat_id)
-        budget = _summary_budget(chat_id)
-        if dossier_contract_enabled() and SUMMARY_FRAME_CHARS > 0:
-            # 25.09: потолок кадра применяется здесь, ЦЕЛЫМИ блоками, — срез хвоста в
-            # сборке тиров резал по знакам и первым терял верхний ярус.
-            budget = min(budget, SUMMARY_FRAME_CHARS)
-        current = memory_life.context_summary(chat_id, max_chars=budget)
+        current = memory_life.context_summary(chat_id, max_chars=_summary_context_budget(chat_id))
         if current or modern:
             return current
     except Exception:
@@ -5415,8 +5477,8 @@ def tool_start_proposal(reason: str = "") -> str:
     return (f"Предложение {r['id']} открыто. Твоя рабочая копия: {r['path']} — правь файлы там "
             f"(shell, полные пути). Живой код не тронется. Когда всё готово: "
             f"submit_proposal(id=\"{r['id']}\", title=..., why=...) — тесты прогонятся сами; "
-            "перед submit прогони гнома: coding_agent(role=\"reviewer\") по диффу, вердикт в "
-            "reviewer= (гейт с 28.09).")
+            "независимый coding_agent(role=\"reviewer\") — добровольный взгляд, не разрешение "
+            "завершиться; reviewer= хранит его точный отзыв, без обязательного skip.")
 
 
 def tool_submit_proposal(id: str, title: str, why: str = "", review: str = "",
@@ -7561,12 +7623,11 @@ SUBMIT_PROPOSAL_TOOL = {
         "sandbox, and records its risk zone. YOU review your own code first: read the diff "
         "(proposal_diff), then pass review= — your own verdict in your own words (what changes, "
         "what could break, why it's right; empty or token reviews are refused). checked= — how "
-        "you verified it (tests / ran it / read it through). reviewer= — gnome gate: a fresh "
-        "adversarial reviewer verdict on THIS diff or 'skip: <reason>'; empty or skip-without-"
-        "reason is refused like red tests (BLOCKED needs override_reason). Your completed review decides the "
-        "merge in every zone: green, red and timed-out checks remain visible evidence reported "
-        "to Yegor post-factum, never an approval request. override_reason= records a known "
-        "explanation for a red check when you have one; it is provenance, not permission. Immune "
+        "you verified it (tests / ran it / read it through). reviewer= is OPTIONAL exact independent "
+        "critic evidence. No reviewer or formal skip is required; BLOCKED stays visible but does not "
+        "require an override for ordinary work. Your own review decides the merge, subject to existing "
+        "test/execution constraints: timeouts hold it, red checks need override_reason. "
+        "This ordinary proposal does not clear the separate strict source-update gate. Immune "
         "review is advice, never a veto. title — short name; why — the reasoning he will read."
     ),
     "input_schema": {"type": "object", "properties": {
@@ -7576,7 +7637,7 @@ SUBMIT_PROPOSAL_TOOL = {
         "checked": {"type": "string",
                     "description": "how you verified it: tests, ran it, read the diff"},
         "reviewer": {"type": "string",
-                     "description": "fresh adversarial reviewer verdict on this diff, or 'skip: <reason>'"},
+                     "description": "optional exact critic evidence; no review/skip is required for ordinary submit"},
         "override_reason": {"type": "string",
                             "description": "explicit reason to merge despite red checks"}},
         "required": ["id", "title", "review"]},
@@ -7891,7 +7952,7 @@ FORGE_TOOLS = [
          "title": {"type": "string"}, "review": {"type": "string"},
          "checked": {"type": "string"}, "submit": {"type": "boolean"},
          "reviewer": {"type": "string",
-                      "description": "finish: reviewer verdict or 'skip: <reason>'; empty = fetch fresh"},
+                      "description": "finish: optional exact critic evidence; empty retains any existing task critic, never gates ordinary finish"},
      }, ["action"])} ,
     {"name": "coding_inspect",
      "description": (
@@ -8207,6 +8268,7 @@ MANAGE_NOTES_TOOL = {
         "kind": {"type": "string", "enum": ["scratch", "note", "reflection", "question"]},
         "scope": {"type": "string", "enum": ["global", "chat", "run"]},
         "note_id": {"type": "string"},
+        "work_ref": {"type": "string", "description": "Stable work identity (run:/forge:task:/forge:unit:); audience is derived by the host, never caller supplied."},
         "status": {"type": "string", "enum": ["open", "closed"]},
         "reason": {"type": "string"},
         "limit": {"type": "integer"},
@@ -8221,6 +8283,9 @@ MEMORY_COMPACT_TOOL = {
         "and selection; read all of them, then fold with that selection and your own text. "
         "Unselected sources remain hot. Originals remain readable. Hard pressure never calls a helper. "
         "list/read inspect compacts; rewrite updates an existing recap with history. "
+        "read returns one exact page with sha256, next_start_char and eof. Continue using "
+        "start_char=next_start_char and expected_sha256=sha256 until eof; version_conflict "
+        "means the compact changed and you must restart at 0. "
         "This folds episodic memory, not current tool history."),
     "input_schema": _obj({
         "action": {"type": "string",
@@ -8237,6 +8302,10 @@ MEMORY_COMPACT_TOOL = {
                   "description": "ISO-дата: только свёртки, чей конец не раньше неё"},
         "limit": {"type": "integer",
                   "description": "сколько показать (list) или перевыпустить (refold)"},
+        "start_char": {"type": "integer", "minimum": 0,
+                       "description": "read only: exact Unicode character offset; use next_start_char."},
+        "expected_sha256": {"type": "string",
+                            "description": "read only: sha256 from first page; required for continuation."},
     }, ["action"]),
 }
 
@@ -9050,7 +9119,7 @@ HAND_PURPOSE = {
     "project_list": "проекты мастерской и их размер",
     "project_status": "git status и размер проекта",
     "start_proposal": "открыть предложение на правку своего кода: ветка и копия",
-    "submit_proposal": "подать предложение: коммит, полный гейт, запись",
+    "submit_proposal": "подать предложение: собственный review и тесты; независимое ревью добровольно",
     "proposal_diff": "полный дифф открытого предложения",
     "list_proposals": "мои предложения и их судьба",
     "restart_self": "перезапустить себя на новом коде",
@@ -10168,7 +10237,10 @@ def _participant_memory_block(speaker: str | None, ctx: "ChannelContext") -> str
         cards[path.stem] = card
         if path.stem in live_only:
             continue
-        rows.append(card)
+        if frame_dossiers.collect(f'memory/people/{path.name}', card):
+            rows.append(f'— {title} · memory/people/{path.name} — admitted snapshot follows as context evidence')
+        else:
+            rows.append(card)
         total += len(body)
         keat_economy.source("dossier", body, f"memory/people/{path.name}")
     # ⚠ МОЛЧАНИЕ ВМЕСТО НАЗВАННОЙ НЕИЗВЕСТНОСТИ — ЭТО ШАГ НАЗАД, И ТЕСТ ЭТО ПОЙМАЛ.
@@ -10539,7 +10611,7 @@ def _frame_absent_branch(*names: str) -> None:
         frame_trace.absent(name, "dynamic", "text", "branch")
 
 
-def _epoch_serve(chat_id, anchor, blocks, chosen) -> None:
+def _epoch_serve(chat_id, anchor, blocks, chosen, ctx=None) -> None:
     """Поднять или заморозить эпоху комнаты, разметить её, живую справку — в конверт.
 
     Стабильные ярусы этого хода едут в frame_epoch.serve как «то, что собралось бы сейчас»;
@@ -10549,7 +10621,10 @@ def _epoch_serve(chat_id, anchor, blocks, chosen) -> None:
     ходе, а реестр объявленного живёт ход. Расписка — в снимке зоны «СЕЙЧАС» и в живом
     ярусе-справке, чтобы она видела номер эпохи и что изменилось после заморозки."""
     frozen, receipt = frame_epoch.serve(
-        chat_id, anchor, [(title, kind, block) for title, kind, block, _c, _s in blocks])
+        chat_id, anchor, [(title, kind, block) for title, kind, block, _c, _s in blocks],
+        admission_key=({'audience': 'owner' if ctx.owner_audience else 'chat:' + str(ctx.chat_id),
+                        'private_in_rooms': dossier_private_in_rooms(),
+                        'scope': ctx.scope} if ctx is not None else None))
     causes = {title: (cause, sign) for title, _kind, _block, cause, sign in blocks}
     head = frame_trace.mark("epoch.head", "epoch", "text", frame_epoch.head(receipt),
                             first=True, cause="эпоха")
@@ -10605,6 +10680,7 @@ def _build_prompt_parts(
     is_dm: bool = True,
     scope: str | None = None,
     ctx: "ChannelContext | None" = None,
+    include_deployment_notice: bool = False,
 ) -> tuple[str, str, str]:
     """Return cacheable persona, typed system context and full lower-role evidence.
 
@@ -10769,12 +10845,14 @@ def _build_prompt_parts(
     audience_key = ""
     room_stable = _room_head_stable(ctx)
     own_stable = _own_run_head_stable(ctx)
-    state_moved = room_stable or own_stable
+    local_stable = frame_continuation.source_bound()
+    state_moved = room_stable or own_stable or local_stable
     # ⚑ ЭПОХА КОМНАТЫ (PRAXIS_FRAME_EPOCH, frame_epoch.py, 15.09): стабильные ярусы конверта
     # замораживаются файлом на границе свёртки и едут ПЕРВЫМ сообщением кадра, живые — как и
     # прежде, последним. Якорь — тот, с которого раннер собрал ленту (frame_epoch.bind); без
     # привязки считается по горячему окну. Нет якоря — нет эпохи на этот ход, и это названо.
     frame_epoch.reset()
+    selected_epoch = frame_epoch.bound_tape(chat_id)
     room_epoch = frame_epoch.applies(ctx)
     epoch_anchor = None
     if room_epoch and frame_epoch.refused(chat_id):
@@ -10786,7 +10864,8 @@ def _build_prompt_parts(
     if room_epoch:
         epoch_anchor = frame_epoch.bound_anchor(chat_id)
         if epoch_anchor is None:
-            epoch_anchor = frame_epoch.anchor_for(chat_id)
+            epoch_anchor = (selected_epoch["anchor"] if selected_epoch is not None
+                            else frame_epoch.anchor_for(chat_id))
         if epoch_anchor is None:
             room_epoch = False
             log.info("эпоха [%s]: якоря нет — конверт прежним порядком", chat_id)
@@ -10845,7 +10924,7 @@ def _build_prompt_parts(
         )
         # STATE is tier-0.  Raw diary prose is deliberately not injected: it is
         # preserved for explicit episodic recall, never automatic orientation.
-        if own_stable:
+        if state_moved:
             # STATE её собственного хода уезжает из головы в ярус «Состояние сейчас» (ниже):
             # живые счётчики в system рвали префикс кэша каждого окна (runs_head_stable_enabled).
             frame_trace.absent("state.state_block", "dynamic", "text", "moved")
@@ -10921,7 +11000,7 @@ def _build_prompt_parts(
     key_fact = f"; audience_key={audience_key}" if audience_key else ""
     # Под стабильной головой число участников из system снимается: оно уже стоит в зоне
     # «СЕЙЧАС» («~1 014 человек», frame_layout._place) и менялось между соседними кадрами.
-    members_fact = "" if room_stable else f"; members={members}"
+    members_fact = "" if room_stable or local_stable else f"; members={members}"
     tail.append(frame_trace.mark("state.channel_facts", "dynamic", "text",
         f"\nChannel facts: kind={ctx.kind}; audience_scope={scope_fact}; "
         f"room_id={room_id}{members_fact}{key_fact}.\n"
@@ -10961,6 +11040,7 @@ def _build_prompt_parts(
         state_evidence = build_state_evidence_block(
             hide_identity_load=ctx.hide_identity_load,
             self_only=not owner_context,
+            include_deployment_notice=include_deployment_notice,
         )
     if state_evidence:
         tiers.append(("Mutable operational continuity",
@@ -10980,7 +11060,8 @@ def _build_prompt_parts(
     # остаётся, тело не печатается, подпись называет причину. Список закрыт намеренно, и
     # пустота печатается только там, где решение о тире вообще принималось.
     with pre_model_timing.span("old_context.summary"):
-        summary = read_summary(chat_id) if chat_id is not None else ""
+        summary = (selected_epoch["summary"] if room_epoch and selected_epoch is not None
+                   else read_summary(chat_id) if chat_id is not None else "")
     if chat_id is not None:
         # ⚑ ЕЁ ПЯТЫЙ ПУНКТ 09.08: «compact-recap не должен постоянно ехать всем архивом.
         # Живая лента остаётся каноном текущего разговора; старые recap доступны
@@ -10990,11 +11071,6 @@ def _build_prompt_parts(
         # понятный указатель на продолжение истории». Поэтому сводка не выбрасывается —
         # она ОБРЕЗАЕТСЯ с головы (свежее важнее давнего) и обрыв называется вслух,
         # вместе с рукой, которой достаётся остальное.
-        if summary and dossier_contract_enabled() and len(summary) > SUMMARY_FRAME_CHARS:
-            kept = summary[-SUMMARY_FRAME_CHARS:]
-            summary = (f"[сводка обрезана: показано {len(kept)} знаков из {len(summary)}, "
-                       f"давнее осталось за кадром и достаётся рукой `recall` или "
-                       f"чтением compact-документов по карте памяти]" + chr(10) + kept)
         keat_economy.source("recap", summary, "conversation:current:recap")
         tiers.append(("Ранее в этом диалоге (сводка)",
                       summary or frame_layout.void("сводки этого разговора ещё нет")))
@@ -11223,7 +11299,7 @@ def _build_prompt_parts(
     pre_model_timing.add("old_context.tiers", (time.monotonic() - _tiers_started) * 1000)
     if room_epoch:
         with pre_model_timing.span("old_context.epoch"):
-            _epoch_serve(chat_id, epoch_anchor, epoch_blocks, chosen)
+            _epoch_serve(chat_id, epoch_anchor, epoch_blocks, chosen, ctx=ctx)
     frame_trace.note_budget(limit=budget, used_start=len(persona) + len(tail_text),
                             used_final=used, offered=len(tiers), included=len(chosen),
                             dropped=len(dropped))
@@ -12094,6 +12170,9 @@ def _presence_evidence(ctx: "ChannelContext") -> str:
             "label": "telegram_reply_targets",
             "content": [list(row) for row in list(ctx.reply_targets)[-8:]],
         })
+    recent = turns.recent_work_note(ctx.chat_id, ctx.scope, budget=6000)
+    if recent:
+        records.append({'label': 'recent_work_note', 'content': recent})
     note = notes.read(ctx.chat_id) if ctx.chat_id is not None else ""
     if note:
         records.append({"label": "running_chat_note", "content": note})
@@ -12678,6 +12757,11 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
     except Exception:
         pass  # no exception text: the meter has seen private model input
     pre_model_timing.mark(phase_timer, "measure")
+    continuation_receipt = frame_continuation.receipt()
+    if continuation_receipt is not None:
+        frame_meta = dict(frame_meta or {}, frame_continuation=continuation_receipt)
+        if continuation_receipt['reused_messages']:
+            frame_meta['variant'] = 'first_input_continuation'
     live_system = system
     system, served = frame_serve.select(system=system, messages=messages, tools=tools)
     if served is not None:
@@ -12821,8 +12905,16 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         # канала: без этого пустота уходила в ретраи и фолбэк, и свежая модель слала
         # ту же реплику заново — четыре копии за две минуты. Под опущенным рычагом
         # spoken() пуст всегда, и поведение байт-в-байт прежнее.
+        frame_continuation.dispatch(system=system, messages=provider_messages,
+                                    tools=tools, critical=bool(prior_secrets))
+        addressed_replies.safe_dispatch(current.run_id if current is not None else '', provider_messages)
         response = _chat_cancellable(
             "voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
+        frame_continuation.observe(system=system, messages=provider_messages,
+                                   tools=tools, critical=bool(prior_secrets),
+                                   provider_route=[getattr(response, 'account_route', '') or getattr(response, 'framework', ''),
+                                                   getattr(response, 'model', '')])
+        addressed_replies.safe_presented(current.run_id if current is not None else '', provider_messages)
     except Exception as exc:
         # RunStopped — останов по воле владельца или дюрабельность, не сбой
         # модели: писать model_failed и бампать ревизию терминального манифеста
@@ -13024,9 +13116,15 @@ def _archive_run_media(run_id: str, items, *, prefix: str,
             continue
         mime = str(getattr(item, "mime", "") or "application/octet-stream")
         try:
+            if strict and isinstance(item, media.MediaRef):
+                _media_spool().validate_ref(item)
             ref = _runs().store_artifact(
                 run_id, path, name=f"{prefix}-{index}-{path.name}", media_type=mime,
             )
+            if strict and isinstance(item, media.MediaRef):
+                if (ref.get("size") != item.size
+                        or item.sha256 and ref.get("sha256") != item.sha256):
+                    raise DurableExecutionError("archived media differs from the validated reference")
             archived[str(path)] = _runs().path(run_id) / str(ref["path"])
         except Exception as exc:
             log.warning("run media не архивировалось [%s] %s", run_id, path, exc_info=True)
@@ -18035,6 +18133,7 @@ def _voice_impl(
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
     chat_id, is_dm, is_owner, known, scope = ctx.chat_id, ctx.is_dm, ctx.owner, ctx.known, ctx.scope
+    history, user_msg = frame_continuation.admit_bound(ctx, history, user_msg)
     # Issue only the delivered original; history has opaque references, not lookup.
     capture_state = _KEAT_CAPTURE_STATE.get()
     if capture_state is _KEAT_CAPTURE_UNSET and _KEAT_ORIGINAL_INGRESS.get():
@@ -18075,7 +18174,7 @@ def _voice_impl(
     recall_query = str(getattr(ctx, "origin_text", "") or "").strip() or query_text
     with keat_economy.collect() as economy_sources:
         persona, dynamic, memory_evidence = _build_prompt_parts(
-            speaker, query=recall_query, ctx=ctx,
+            speaker, query=recall_query, ctx=ctx, include_deployment_notice=True,
         )
     pre_model_timing.mark(preparation_timer, "old_context")
     evidence_parts = [memory_evidence.strip()] if memory_evidence.strip() else []
@@ -18106,8 +18205,9 @@ def _voice_impl(
     # сообщений, граница выборки, источник и ЯВНАЯ пометка об обрезке. Считается ровно
     # здесь, где обе величины ещё видны: `history` — всё, что дал источник, срез — то, что
     # вправду уедет. Число тиров на этот вопрос не отвечает и отвечать не имеет права.
-    frame_layout.stash(tape_delivered=len(history[-HISTORY_TURNS:]),
-                       tape_available=len(history), tape_limit=HISTORY_TURNS,
+    complete_history = frame_continuation.source_bound() or frame_epoch.bound_tape(chat_id) is not None
+    frame_layout.stash(tape_delivered=len(history if complete_history else history[-HISTORY_TURNS:]),
+                       tape_available=len(history), tape_limit=(None if complete_history else HISTORY_TURNS),
                        tape_source=("ролевая лента разговора" if history else ""))
     # Пятая зона кадра. Строится ЗДЕСЬ: только отсюда видно, есть ли у неё дом (конверт
     # evidence) и предложены ли руки — от второго зависит, вправе ли прибор сказать «последней».
@@ -18118,9 +18218,13 @@ def _voice_impl(
     # действовала один ход: история клалась сюда как есть, и подделка, приехавшая ходом
     # раньше, стояла в колонке 0 следующие сто ролевых блоков. Хранилище не трогается —
     # `memory_life`, кольцо ходов и расписки держат дословный текст без единого «>».
+    # Source-complete local continuation keeps the complete admitted dialogue.
+    # A normal sliding renderer is not an authored fold or a capacity verdict.
+    history_view = (history if frame_continuation.source_bound() or frame_epoch.bound_tape(chat_id) is not None
+                    else history[-HISTORY_TURNS:])
     role_history = [{key: value for key, value in row.items()
                      if key != "_keat_occurrence"}
-                    for row in history[-HISTORY_TURNS:]]
+                    for row in history_view]
     # 15.09, эпоха комнаты (frame_epoch): замороженный документ E — ПЕРВЫМ сообщением, до
     # ленты; лента с якоря — ролями как раньше; живой конверт — последним. Нет эпохи — список
     # прежний байт-в-байт. Порядок и есть смысл: ничто, что меняется чаще, не стоит выше того,
@@ -18194,6 +18298,27 @@ def _voice_impl(
                 getattr(capture_state, 'provider_current', user_msg),
                 "\n\n".join(evidence_parts), situation),
         }]
+    continuation = None
+    if frame_continuation.source_bound() and capture_state is None:
+        voice_route = llm._config()['roles']['voice']
+        messages = frame_dossiers.project(
+            ctx=ctx, messages=messages,
+            additions=frame_layout.snapshot().get('dossier_additions') or [],
+            private_in_rooms=dossier_private_in_rooms())
+        continuation = frame_continuation.prepare(
+            ctx=ctx, history=role_history, user_msg=user_msg, messages=messages,
+            system=system, tools=tools,
+            model_key=[llm.role_model('voice'), llm._config_stamp()],
+            prefix_messages=epoch_messages, hands=tape_hands, render=frame_layout.tape,
+            capture_state=capture_state,
+            expected_provider=[voice_route['framework'], llm._resolve_model(voice_route['framework'], voice_route['model'])],
+            render_current=lambda text: {'role': 'user', 'content': _with_context_evidence(
+                text, '\n\n'.join(evidence_parts), situation)})
+        if continuation is not None:
+            messages = continuation.messages
+        selected = frame_continuation.source_selection()
+        if selected is not None:
+            addressed_replies.stage_initial(messages, selected['rows'])
     if legacy_current is None:
         binding = (keat_live.bind_turn(
             capture_state, messages=messages, candidate_messages=candidate_messages)
@@ -18207,7 +18332,8 @@ def _voice_impl(
          _bind_tool_catalog(ctx), \
          frame_measure.bind(system=system, ctx=ctx, live_sections=frame_trace.sections), \
          frame_serve.bind(system=system, ctx=ctx, dynamic=dynamic), \
-         keat_economy.bind(ctx, current_user, "\n\n".join(evidence_parts), economy_sources), binding:
+         keat_economy.bind(ctx, current_user, "\n\n".join(evidence_parts), economy_sources), \
+         frame_continuation.bind(continuation), binding:
         return _terminal_tool_loop(
             system=system, messages=messages, tools=tools,
             max_iters=max_iters, tool_trace=tool_trace,
@@ -18239,6 +18365,7 @@ def _voice(
         )
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
+    history, user_msg = frame_continuation.admit_bound(ctx, history, user_msg)
     owned_run = None
     if run_context.current_run() is None:
         if isinstance(user_msg, str):
@@ -19013,9 +19140,41 @@ def _keat_exact_or_fallback(receipt, messages=None, *, system=None, tools=None,
 _MODEL_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 
+def _historical_inbound_ids(ctx: "ChannelContext") -> set[str]:
+    """Canonical source history before a prior outgoing row, never proof of seeing it.
+
+    IDs older than the trigger alone include earlier photos in the SAME new
+    batch. Use the existing role/history boundary and recheck its canonical
+    events so state-only residuals or inferred legacy directions grant nothing.
+    """
+    origin = ctx.origin_message_id
+    if type(origin) is not int or origin <= 0 or ctx.chat_id is None:
+        return set()
+    proved: list[tuple[str, str]] = []
+    for row in memory_life.hot_records(ctx.chat_id):
+        mid = str(row.get("source_id") or "")
+        if not mid.isascii() or not mid.isdecimal() or not 0 < int(mid) < origin:
+            continue
+        event = memory_life.get_event(str(row.get("id") or ""))
+        if (not event or event.get("kind") != "conversation_message"
+                or event.get("source") != "telegram"
+                or str(event.get("chat_id")) != str(ctx.chat_id)
+                or str(event.get("source_id")) != mid
+                or event.get("direction") not in {"in", "out"}
+                or event.get("direction") != row.get("direction")
+                or event.get("text") != row.get("line")):
+            continue
+        proved.append((mid, event["direction"]))
+    last_out = next((i for i in range(len(proved) - 1, -1, -1)
+                     if proved[i][1] == "out"), -1)
+    return {mid for mid, direction in proved[:last_out] if direction == "in"
+            and int(mid) < int(proved[last_out][0])} if last_out >= 0 else set()
+
+
 def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                   ctx: "ChannelContext",
-                  model_text: str | None = None) -> tuple[str, str | list[dict]]:
+                  model_text: str | None = None,
+                  unavailable_refs: list | None = None) -> tuple[str, str | list[dict]]:
     """Проверить вложения, расшифровать аудио и собрать канонический multimodal user content.
 
     Возвращает ДВА разных текста, и это намеренно:
@@ -19026,15 +19185,27 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
     показать его дважды. Расшифровка аудио при этом снимается ОДИН раз и приклеивается к
     обоим: платить за STT дважды нельзя, а терять расшифровку в расписке — тем более."""
     spool = _media_spool()
-    refs = tuple(media_refs or ())[-spool.max_turn_media:]
+    refs = tuple(media_refs or ())
+    selected_start = max(0, len(refs) - spool.max_turn_media)
     photos: list[dict] = []
     additions: list[str] = []
+    historical_ids: set[str] | None = None
     audio_n = photo_n = 0
-    for ref in refs:
+    for index, ref in enumerate(refs):
         try:
             spool.validate_ref(ref, expected_scope=ctx.scope, expected_chat_id=ctx.chat_id)
-        except media.MediaError:
-            log.warning("отброшено чужое/испорченное медиа [%s]", ctx.chat_id, exc_info=True)
+        except media.MediaMissingError:
+            if historical_ids is None:
+                historical_ids = _historical_inbound_ids(ctx)
+            if str(ref.message_id or "") not in historical_ids:
+                raise
+            additions.append(
+                f"[Вложение #{index + 1} ({ref.kind}) недоступно: локальный файл "
+                "отсутствует; содержимое не просмотрено и не восстановлено.]")
+            if unavailable_refs is not None:
+                unavailable_refs.append(ref)
+            continue
+        if index < selected_start:
             continue
         if ref.kind == "photo":
             photo_n += 1
@@ -19058,10 +19229,13 @@ def _media_prompt(convo_text: str, media_refs: tuple[media.MediaRef, ...],
                 f"[Аудио #{audio_n}, расшифровка]: {transcript}"
                 if transcript else f"[Аудио #{audio_n}: речь не распознана]")
     def _with_additions(text: str) -> str:
-        base = (text or "").strip()
+        exact_source = (frame_epoch.applies(ctx) and frame_epoch.bound_tape(ctx.chat_id) is not None
+                        or frame_continuation.source_bound())
+        base = (text or "") if exact_source else (text or "").strip()
         if not additions:
             return base
-        return (base + "\n\n" + "\n".join(additions)).strip() if base else "\n".join(additions)
+        combined = base + "\n\n" + "\n".join(additions) if base else "\n".join(additions)
+        return combined if exact_source else combined.strip()
 
     augmented = _with_additions(convo_text)
     for_model = augmented if model_text is None else _with_additions(model_text)
@@ -19434,14 +19608,23 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
         ctx = ChannelContext.from_legacy(chat_id, is_dm=is_dm, owner=is_owner, known=known, scope=scope)
     elif ctx.chat_id is None and chat_id is not None:
         ctx = replace(ctx, chat_id=chat_id)
+    if frame_continuation.source_bound() and not media_refs and str(current_text or '').strip():
+        history, current_text = frame_continuation.admit_bound(ctx, list(history or []), current_text)
+        admitted_source = frame_continuation.source_selection()
+        if admitted_source is not None:
+            # Durable origin/guard/view sources must be re-admitted too, not
+            # merely the provider's role list after a private-to-public restart.
+            convo_text = '\n'.join(str(row.get('line') or '') for row in admitted_source['rows'])
     dialogue = [dict(item) for item in (history or [])
                 if isinstance(item, dict) and item.get("role") in ("user", "assistant")
                 and str(item.get("content") or "").strip()]
     if dialogue and not str(current_text or "").strip():
         dialogue = []           # без «сейчас» роли собрать нечестно — идём старым путём
+    unavailable_inbound: list[media.MediaRef] = []
     grounded_text, user_content = _media_prompt(
         convo_text, tuple(media_refs or ()), ctx,
-        model_text=(current_text if dialogue else None))
+        model_text=(current_text if dialogue or frame_continuation.source_bound() or (frame_epoch.bound_tape(chat_id) is not None and str(current_text or '').strip()) else None),
+        unavailable_refs=unavailable_inbound)
     grounding_images = tuple(
         block for block in user_content
         if isinstance(user_content, list) and isinstance(block, dict)
@@ -19475,8 +19658,18 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     # проставлялся, поэтому связать намерение с транспортом было нечем.
     turn["run_id"] = durable_id
     try:
+        if unavailable_inbound:
+            if not durable_id:
+                raise DurableExecutionError("missing-media evidence requires a durable run")
+            _runs().append_event(
+                durable_id, "inbound_media_unavailable", reason="local_file_missing",
+                attachments=[{"kind": ref.kind, "message_id": ref.message_id,
+                              "sha256": ref.sha256, "size": ref.size}
+                             for ref in unavailable_inbound],
+            )
         archived_inbound = _archive_run_media(
-            durable_id, media_refs, prefix="inbound", strict=True)
+            durable_id, tuple(ref for ref in media_refs if ref not in unavailable_inbound),
+            prefix="inbound", strict=True)
     except Exception as exc:
         turn["held"] = "error"
         turns.record(turn)

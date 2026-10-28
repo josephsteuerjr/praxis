@@ -64,7 +64,7 @@ def collect(runner, current, messages):
     processed.mkdir(parents=True, exist_ok=True)
     ready = []
     # Snapshot once: messages arriving later stay for the next boundary.
-    paths = sorted(inbox.glob('*.md')) + sorted(processed.glob('*.md'))
+    paths = sorted([*inbox.glob('*.md'), *processed.glob('*.md')], key=lambda p: p.name)
     for path in paths:
         if path.name.startswith('.tmp-') or runner._inbox_target(path.stem) != room:
             continue
@@ -104,6 +104,11 @@ def collect(runner, current, messages):
             desk.archive(archive, outgoing=False, now=runner._now(), source_id='note:' + path.stem)
             desk.life(archive, direction='in', actor=runner._speaker, source_id='note:' + path.stem, now=runner._now())
         ready.append((target, message))
+        observation = getattr(getattr(runner, '_agent', None), 'addressed_replies', None)
+        if observation is not None and not runner._split_attachments(text)[1]:
+            observation.stage([message], ['note:' + path.stem])
+        # Preserve the local inbox's existing FIFO batch semantics. Every
+        # occurrence gets its own exact observation; none is a max-ID frontier.
     additions = [m for _, m in ready if m not in messages]
     def ack():
         for path, _ in ready:

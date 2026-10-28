@@ -380,6 +380,11 @@ class LLMResponse:
 
     provider_observation: dict = field(default_factory=dict)
     continuation: dict = field(default_factory=dict)
+    # Local selected configured connection ID, NOT a provider-reported physical
+    # credential/account identity. Wire protocol and returned model stay separate.
+    # Appended for positional compatibility; chat() binds it from its actual leg,
+    # never a post-response config read. Low-level adapter calls leave it unknown.
+    account_route: str = ""
 
 @dataclass(frozen=True)
 class Limits:
@@ -1312,11 +1317,33 @@ def _openai_reasoning_effort(thinking) -> str | None:
     return "high"
 
 
-# Словарь ступеней — ДОСЛОВНО словарь реле (REASONING_EFFORTS в chat_completions.rs):
-# своя копия имён разъехалась бы молча, поэтому список закреплён тестом на исходник
-# реле в _relay_prod_src. Реле по умолчанию гасит рассуждение (effort=none);
-# per-request поле сильнее его дефолта, чужой openai-сервер молча проигнорирует.
+# Canonical role vocabulary, not a claim about every compatible endpoint.
+# GLM and direct providers use max. The explicitly configured embedded relay has
+# a narrower LOCAL integration policy; its retained donor binary is unqualified.
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+EMBEDDED_RELAY_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+
+
+class UnsupportedReasoningEffort(ValueError):
+    """Local endpoint-policy refusal before SDK preparation, never a downshift."""
+
+    def __init__(self, account: str, requested: str):
+        self.account = account
+        self.requested = requested
+        self.supported = EMBEDDED_RELAY_EFFORTS
+        self.policy = "embedded-relay-local-six-tier-v1"
+        super().__init__(f"llm: account {account}: reasoning effort {requested!r} "
+                         f"unsupported by local embedded-relay integration policy; "
+                         f"supported: {', '.join(self.supported)}; donor binary support unknown")
+
+
+def _validate_endpoint_effort(account: str, thinking, reasoning_effort) -> None:
+    spec = (_config().get("frameworks") or {}).get(account) or {}
+    effort = _effective_effort(thinking, reasoning_effort)
+    if (str(spec.get("provider") or "").casefold() == "relay"
+            and _protocol(account) == "openai" and effort
+            and effort not in EMBEDDED_RELAY_EFFORTS):
+        raise UnsupportedReasoningEffort(account, effort)
 # 25.08: проекция ступеней реле в словарь z.ai для glm-* (GLM-5.3: low/high/max,
 # СЕРВЕРНЫЙ ДЕФОЛТ — max на каждый вызов; thinking обязателен и невыключаем,
 # поэтому «none/minimal» глубже low не проецируются — выключить нечего).
@@ -2627,6 +2654,8 @@ def _resolve_fallback_model(primary_framework: str, primary_model: str,
 
 
 def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMResponse:
+    spec = (_config().get("frameworks") or {}).get(framework) or {}
+    _validate_endpoint_effort(framework, kw.get("thinking"), kw.get("reasoning_effort"))
     cli = _client_for(framework)
     if cli is None:
         raise RuntimeError(f"llm: фреймворк {framework} не настроен (нет ключа)")
@@ -2634,7 +2663,6 @@ def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMRe
         model = _resolve_model(framework, model)  # ротация наименований провайдера
     if _protocol(framework) == "anthropic":
         return _call_anthropic(cli, model, **kw)
-    spec = (_config().get("frameworks") or {}).get(framework) or {}
     mode = spec.get("api_mode")
     supports_responses = callable(getattr(getattr(cli, 'responses', None), 'create', None))
     if mode == 'responses' and not supports_responses:
@@ -2983,6 +3011,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         st["on_fallback"], st["last_error"] = False, ""
         # 9.1: расход копится; сбой записи вызова не роняет. PASS 22: по ФАКТИЧЕСКОМУ имени
         # (после ротации _resolve_model конфигное имя может врать в by-model разрезе).
+        resp.account_route = fw
         resp.vision = bool(vision_used)
         if pixels_omitted:
             # 05.10 (гном-ревью, блокер №1): слепая нога в prepass-режиме тоже маркируется —
@@ -3129,6 +3158,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _journal(f"{_ROLE_RU[role]} упал ({type(e).__name__}), уход на фолбэк "
                      f"{other}/{resolved_fb_model}")
         st["on_fallback"] = True
+        resp.account_route = other
         resp.vision = bool(fallback_vision_used)
         if fallback_omitted:
             _mark_no_pixels_response(resp)

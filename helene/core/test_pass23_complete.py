@@ -188,9 +188,23 @@ class CompleteForgeCase(unittest.TestCase):
         task_id = self._start()
         forge.swarm(task_id, "plan", plan=json.dumps({"nodes": [
             {"id": "map", "role": "scout", "brief": "map seams"}]}))
-        with mock.patch.object(forge, "agent", return_value="spawned pid 42"):
+        with mock.patch.object(forge, "agent", return_value="spawned pid 42") as spawn:
             result = forge.swarm(task_id, "start")
-        self.assertIn("blocked_identity", result)
+            first = forge_swarm.load(forge._task_dir(task_id))['nodes'][0]
+            self.assertIn('[pending]', result)
+            self.assertEqual(first['status'], 'pending')
+            self.assertEqual(first['agent_id'], '')
+            self.assertIn('spawned pid 42', first['error'])
+            reserved = first['reserved_agent_id']
+            self.assertTrue(reserved.startswith('agent-'))
+            self.assertFalse(forge._unit_dir(task_id, 'agents', reserved).exists())
+            forge.swarm(task_id, 'tick')
+            second = forge_swarm.load(forge._task_dir(task_id))['nodes'][0]
+        self.assertEqual(second['reserved_agent_id'], reserved)
+        self.assertEqual(second['agent_id'], '')
+        self.assertEqual(spawn.call_count, 2)
+        self.assertEqual({c.kwargs['agent_id'] for c in spawn.call_args_list}, {reserved})
+        self.assertEqual(list((forge._task_dir(task_id) / 'agents').glob('*/request.json')), [])
 
     def test_owner_surface_contains_completed_engineering_cycle(self):
         import agent

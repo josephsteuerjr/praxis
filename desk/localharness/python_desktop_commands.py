@@ -109,7 +109,9 @@ def invoke(owner, command, args):
     if command=='tailscale_ip':
         binary=Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Tailscale/tailscale.exe'
         if not binary.is_file():return None
-        result=subprocess.run([str(binary),'ip','-4'],capture_output=True,timeout=5)
+        from .update_process import background_flags
+        result=subprocess.run([str(binary),'ip','-4'],capture_output=True,timeout=5,
+                              creationflags=background_flags())
         return result.stdout.decode().strip().splitlines()[0] if result.returncode==0 and result.stdout else None
     if command.startswith('update_'):
         from . import python_updates

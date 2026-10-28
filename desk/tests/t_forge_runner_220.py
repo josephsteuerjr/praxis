@@ -53,7 +53,7 @@ class RunnerTests(unittest.TestCase):
         self.owner = types.SimpleNamespace(stopped=mock.Mock(return_value=False), paused=mock.Mock(return_value=False))
         self.runner["owner_stop"] = self.owner
         self.core = types.SimpleNamespace(control=mock.Mock(return_value={"ok": True, "status": "stopped"}),
-                                          tick_queued=mock.Mock())
+                                          tick_queued=mock.Mock(), observe_liveness=mock.Mock())
         self.review = types.SimpleNamespace(tick=mock.Mock(), service=object())
         self.task = "code-12345678"
         write(self.tree / "memory/.forge/tasks" / self.task / "task.json", {"id": self.task})
@@ -88,10 +88,12 @@ class RunnerTests(unittest.TestCase):
                 self.enqueue("stop", "d" * 32 if stopped else "e" * 32)
                 self.core.control.reset_mock()
                 self.core.tick_queued.reset_mock()
+                self.core.observe_liveness.reset_mock()
                 self.review.tick.reset_mock()
                 with mock.patch.object(source_update, "tick") as pipeline:
                     self.tick()
                 self.core.tick_queued.assert_not_called()
+                self.core.observe_liveness.assert_called_once_with()
                 self.assertEqual([call.args[1] for call in self.core.control.call_args_list], ["stop"])
                 pipeline.assert_called_once_with(self.tree, self.core, self.review.service, paused=True, stopped=stopped)
                 if stopped:
@@ -197,11 +199,12 @@ class RunnerTests(unittest.TestCase):
         source = (ROOT / "desk/localharness/runner.py").read_text(encoding="utf-8")
         self.assertIn("speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop)", source)
 
-    def test_old_conflict_notifier_never_called(self):
+    def test_selected_agent_update_notifier_owns_the_pending_request(self):
         self.runner.update(_tree=self.tree, _desk=object(), updates=mock.Mock(), _turn_in_window=mock.Mock())
         with mock.patch.object(source_update, "pending", return_value={"state": "queued"}):
-            with mock.patch.object(source_update, "notify_due", side_effect=AssertionError("ordinary wake forbidden")):
+            with mock.patch.object(source_update, "notify_due") as notify:
                 self.runner["_update_report_due"]()
+        notify.assert_called_once_with(self.tree,self.runner['_turn_in_window'])
         self.runner["updates"].pending_report.assert_not_called()
         self.runner["_turn_in_window"].assert_not_called()
 

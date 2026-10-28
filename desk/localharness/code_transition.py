@@ -82,7 +82,8 @@ def preflight(old, new, *, notify=True):
     from . import update_source
     source_choice=update_source.selected(old,new)
     exe = merge.executable(new, old)
-    root = old / '.source-updates'
+    # Work/evidence belong to persistent selected data, never replaceable app/UI.
+    root = Path(found['agents'][0]['tree']).resolve() / 'memory/.source-updates'
     root.mkdir(parents=True, exist_ok=True)
     plans = []
     if not sources:
@@ -91,16 +92,19 @@ def preflight(old, new, *, notify=True):
         base = baseline(old, Path(temporary), sources)
         base_files = merge.inventory(base)
         for source in sources:
+            agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
+            plan_root = Path(agent['tree']).resolve() / 'memory/.source-updates'
+            plan_root.mkdir(parents=True, exist_ok=True)
             local_files = merge.inventory(source)
             identity = merge.signature({'base': base_files, 'local': local_files,
                                         'incoming': incoming, 'source': source,
                                         'operation':source_choice['new'] if source_choice else '',
                                         'version': read(new / 'python-app.json').get('version', '')})
-            directory = root / identity
+            directory = plan_root / identity
             plan = read(directory / 'plan.json')
             if not plan:
                 if directory.exists():
-                    directory.rename(root / (identity + '-incomplete-' + uuid.uuid4().hex))
+                    directory.rename(plan_root / (identity + '-incomplete-' + uuid.uuid4().hex))
                 plan = merge.create(base, source, new / 'tree', directory, exe=exe)
             if (plan['files'] != {'base': base_files, 'local': local_files, 'incoming': incoming}
                     or Path(plan['local_path']).resolve() != Path(source).resolve()):
@@ -109,14 +113,12 @@ def preflight(old, new, *, notify=True):
                 raise ValueError('Local code changed during preparation; retry the update')
             state = plan['state']
             detail = {}
-            if plan['conflicts'] or plan.get('repairs') or (source_choice or {}).get('require_review'):
-                agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
+            if source_update.requires_gate(plan):
                 from . import update_source
                 choice=update_source.selected(old,new)
-                if (choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming'
-                        and plan['state']!='ready'):
+                if (choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming'):
                     from .agent_source_update import request as agent_request, require_patch_tool
-                    require_patch_tool(old)
+                    require_patch_tool(choice.get('resolution_runtime') or old)
                     agent_request(agent['tree'],old,source,directory,read(new/'python-app.json').get('version',''))
                 elif notify:
                     source_update.ensure(agent['tree'], old, source, directory,
@@ -169,8 +171,11 @@ def validate(new):
         plan = merge.validate_inputs(row['directory'])
         if merge.inventory(row['source']) != plan['files']['local']:
             raise ValueError('Local code changed before applying the update; retry')
-        if plan['conflicts'] or plan.get('repairs') or record.get('require_review'):
+        if source_update.requires_gate(plan):
             source_update.validate_ready(row['directory'])
+    from . import update_composition
+    if (Path(new).parent / 'compound-overlay.json').exists():
+        update_composition.selected_files(new)
 
 
 def prepare(old, new, note, *, progress=None):
@@ -201,6 +206,8 @@ def prepare(old, new, note, *, progress=None):
     from .essential_backup import configs, load
     selected = {}
     receipts = []
+    from . import update_composition
+    update_composition.overlay(new, result['plans'])
     for row in note['source_paths']:
         original, target = Path(row['old']).resolve(), Path(row['selected']).resolve()
         if original in selected:
