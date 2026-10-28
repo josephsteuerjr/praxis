@@ -101,6 +101,13 @@ def run(root):
             self.open=QtWidgets.QPushButton('Открыть приложение');self.open.setVisible(False);self.open.clicked.connect(self.open_current);row.addWidget(self.open)
             self.close_button=QtWidgets.QPushButton('Закрыть');self.close_button.clicked.connect(self.reject);row.addWidget(self.close_button)
             self.setObjectName('migrationWizard')
+            from .wizard_style import apply
+            apply(self,root)
+            self.resize(min(780,self.screen().availableGeometry().width()-48),min(680,self.screen().availableGeometry().height()-64))
+            outer.setContentsMargins(28,24,28,24)
+            title.setObjectName('headline')
+            self.start.setProperty('primary',True)
+            self.open.setProperty('primary',True)
             for name,widget in {'source':self.source,'destination':self.destination,'dataHome':self.home,'offline':self.offline,'resume':self.resume,'preview':self.check,'start':self.start,'open':self.open,'status':self.status,'report':self.report,'fresh':self.fresh}.items():widget.setObjectName(name)
             try:
                 pending=saved_request(root)
