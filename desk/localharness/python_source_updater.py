@@ -99,7 +99,7 @@ def prepared_install_path(new):
     return new.parent / ('prepared-install-' + identity + '.json')
 
 
-def prepare_install(old, new, *, verified=None, progress=None):
+def prepare_install(old, new, *, verified=None, progress=None, attached_data=None):
     """Prepare before switching; legacy helpers do this after old-owner exit."""
     old, new = Path(old).resolve(), Path(new).resolve()
     from localharness import source_admission
@@ -125,7 +125,7 @@ def prepare_install(old, new, *, verified=None, progress=None):
     portable=metadata.get('delivery')=='portable'
     from localharness.update_profile import prepare as prepare_profile
     if progress:progress.phase('backup')
-    note=prepare_profile(old,new,progress)
+    note=prepare_profile(old,new,progress,attached_data=attached_data)
     from localharness.code_transition import prepare as prepare_code
     if progress:progress.phase('code')
     prepare_code(old,new,note,progress=progress)
@@ -296,6 +296,16 @@ def main():
     sys.path.insert(0,str(args.new.resolve()/'app'))
     if args.cleanup:return perform(args)
     validate_staging(args)
+    if os.name=='nt':
+        # Old installed versions invoke this entry directly. They must reach
+        # the same wizard too, rather than silently selecting a source merge.
+        from localharness.source_admission import activate
+        from localharness.migration_source import verify
+        activate(args.new);verify(args.new)
+        from helene_setup import main as installation_window
+        return installation_window(['--root',str(args.new),'--old',str(args.old),
+            '--target',str(args.old),'--admission',str(args.staging/'updater-admitted.json'),
+            '--source-mode',args.source_mode or 'preserve'])
     if args.source_mode and not args.cleanup:
         from localharness.update_source import select
         select(args.old,args.new,args.source_mode,by='updater')

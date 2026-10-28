@@ -5,44 +5,71 @@ from python_app import Application,window_geometry
 from localharness import portable_start
 
 class MigrationWindow(Application):
-    def __init__(self,root,old='',target=''):
+    def __init__(self,root,old='',target='',source_mode='preserve',force_extensions=False):
         super().__init__(root,root/'app/resources',None,root)
+        self.resume_fresh=False
+        if not old and (root/'helene.json').is_file():
+            from localharness.package_notice import read
+            pending=read(root/'python-migration.json')
+            interrupted=pending.get('state') not in (None,'completed','new_app_started')
+            if interrupted and pending.get('kind')=='fresh':
+                self.resume_fresh=True
+            elif interrupted and pending.get('old_root'):
+                old=pending['old_root']
+            else:
+                old=str(root)
+                target=target or str(root.with_name(root.name+'-new'))
         self.old=old;self.target=target or str(root);self.running=threading.Lock();self.last_progress=0.0
         self.control_file=root/f'.python-migrator-{os.getpid()}.json'
+        self.source_mode=source_mode;self.review_cancelled=threading.Event()
+        self.force_extensions=force_extensions
     def invoke(self,command,args):
         if command=='migration_defaults':
+            from localharness import windows_installation as installation
             candidates=portable_start.previous_installations(self.root)
-            return {'old':self.old or (str(candidates[0]) if candidates else ''),'target':self.target,'mode':'migrate',
-                    'default_target':str(self.root),'portable':True,'version':json.loads((self.root/'python-app.json').read_text(encoding='utf-8'))['version']}
+            old='' if self.resume_fresh else self.old or (str(candidates[0]) if candidates else '')
+            target=self.target
+            data=installation.default_data(self.root if self.resume_fresh else old)
+            if old and Path(old)==Path(target) and not (Path(old)/'python-app.json').is_file():target=str(Path(old).with_name(Path(old).name+'-new'))
+            return {'old':old,'target':target,'data':data,'mode':'connect' if old else 'fresh',
+                    'default_target':str(self.root),'policy':installation.POLICY,'version':installation.version(self.root),
+                    'source_mode':self.source_mode,'can_restore':(self.root/'helene.json').is_file()}
+        if command=='migration_restore':
+            from localharness.upstream_recovery import launch
+            if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
+            return launch(self.root)
+        if command=='migration_recovery_status':
+            from localharness.upstream_recovery import receipt
+            from localharness.package_notice import read
+            return read(receipt(self.root,args.get('operation','')))
+        if command=='migration_inspect':
+            from localharness import windows_installation as installation
+            old=Path(args.get('old','')).resolve()
+            if not (old/'helene.json').is_file():raise ValueError('В этой папке нет настроек прежней Hélène')
+            return {'data':installation.default_data(old),'version':installation.version(old)}
         if command=='migration_pick_path':
             import webview
             chosen=self.window.create_file_dialog(webview.FOLDER_DIALOG)
             return str(chosen[0]) if chosen else None
-        if command=='migration_fresh':
-            portable_start.initialize(self.root)
-            self.open_app();return {'ok':True}
-        if command=='migration_run':
+        if command in ('migration_install','migration_run','migration_fresh'):
             if not self.running.acquire(blocking=False):raise RuntimeError('Перенос уже выполняется')
             try:
-                old=Path(args.get('old','')).resolve()
+                old=Path(args['old']).resolve() if args.get('old') else None
                 target=Path(args.get('target') or self.root).resolve()
-                source_mode=args.get('sourceMode','preserve')
-                if source_mode not in ('preserve','clean'):raise ValueError('Choose preserve or clean migration source')
-                if not (old/'helene.json').is_file():raise ValueError('Выбери прежнюю папку Hélène')
-                from localharness import migration_windows
-                import ctypes
-                if migration_windows.service(old) and not ctypes.windll.shell32.IsUserAnAdmin():
-                    parameters=subprocess.list2cmdline(['-s',str(self.root/'app/python_migration_window.py'),'--root',str(self.root),'--old',str(old),'--target',str(target)])
-                    outcome=ctypes.windll.shell32.ShellExecuteW(None,'runas',str(self.root/'runtime/pythonw.exe'),parameters,str(self.root),0)
-                    if outcome<=32:raise RuntimeError('Windows не подтвердил права для переноса прежней службы')
-                    self.event('exit',{});return {'elevated':True}
-                import python_migrate
-                with python_migrate.installation_lock(target):
-                    return python_migrate.migrate(old,self.root,target,target/'profile',stop_service=True,
-                        prepared=target==self.root,portable=True,source_mode=source_mode,
-                        progress=self.progress,extensions=args.get('extensions') or [])
+                fresh=command=='migration_fresh' or args.get('mode')=='fresh'
+                if args.get('sourceMode') not in (None,'preserve','clean'):raise ValueError('Choose preserve or clean source')
+                if old and not (old/'helene.json').is_file():raise ValueError('Выбери прежнюю папку Hélène или укажи только папку данных')
+                if fresh:old=None
+                from localharness import windows_installation as installation
+                cancelled=getattr(self,'review_cancelled',None)
+                if cancelled:cancelled.clear()
+                return installation.run(self.root,target,old=old,data=args.get('data') or (None if fresh else installation.default_data(old)),
+                    fresh=fresh,remove_old=args.get('removeOld') is True,progress=self.progress,
+                    source_mode=args.get('sourceMode'),cancelled=cancelled,force_extensions=getattr(self,'force_extensions',False))
             finally:self.running.release()
         if command=='python_ready':return {'confirmed':False}
+        if command=='python_window' and args.get('action') in ('close','exit') and self.running.locked():
+            self.review_cancelled.set();self.progress('cancelling');return {'cancelling':True}
         if command in ('python_window','appearance_read'):return super().invoke(command,args)
         raise ValueError('Unavailable migration command')
     def progress(self,value):
@@ -69,14 +96,19 @@ class MigrationWindow(Application):
         self.backup_thread=threading.Thread(target=lambda:None);self.backup_thread.start()
 
 def main(argv=None):
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,required=True);p.add_argument('--old',default='');p.add_argument('--target',default='');args=p.parse_args(argv)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,required=True);p.add_argument('--old',default='');p.add_argument('--target',default='');p.add_argument('--admission',type=Path);p.add_argument('--source-mode',choices=('preserve','clean'),default='preserve');p.add_argument('--force-extensions',action='store_true');args=p.parse_args(argv)
     if sys.platform!='win32':raise RuntimeError('This entry is for Windows')
     import webview
-    root=args.root.resolve();app=MigrationWindow(root,args.old,args.target);app.serve()
+    root=args.root.resolve();app=MigrationWindow(root,args.old,args.target,args.source_mode,args.force_extensions);app.serve()
     try:
         geometry=window_geometry(webview.screens[0]);geometry.update(width=min(720,geometry['width']),height=min(720,geometry['height']))
-        app.window=webview.create_window('Hélène · перенос',app.origin,**geometry,min_size=(420,360),frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
+        app.window=webview.create_window('Hélène · установка',app.origin,**geometry,min_size=(420,360),frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
         app.window.events.shown+=app.publish_control
+        if args.admission:
+            if args.admission.resolve()!=root.parent/'updater-admitted.json' or not root.parent.name.startswith('.helene-update-'):
+                raise ValueError('Unexpected legacy updater admission path')
+            from localharness.package_notice import write
+            app.window.events.shown+=lambda:write(args.admission,{'pid':os.getpid(),'target':str(Path(args.old).resolve()),'preparation_completed':False,'wizard_opened':True})
         from python_app import set_window_icon
         app.window.events.shown+=lambda:set_window_icon(app)
         app.window.events.maximized+=lambda:setattr(app,'window_maximized',True)

@@ -374,66 +374,9 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
     from . import source_admission
     if source_admission.activate(new_root):
         verified = source_admission.current_proofs(verified, new_root)
-    from . import update_source
-    update_source.select(owner.root,new_root,sourceMode or 'preserve',by='window')
-    if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
-        raise ValueError('Update ZIP must contain Helene Python application')
-    from .python_platform import require_runtime
-    require_runtime(new_root)
-    from .update_process import interpreter_for
-    interpreter=interpreter_for(new_root)
-    if not interpreter.is_file():raise ValueError('Python application runtime is missing')
-    from .update_extensions import check
-    progress.phase('extensions')
-    check(owner.root, new_root, force=forceExtensions)
-    from .code_transition import preflight
-    progress.phase('code')
-    source_plan = ({'state':'ready','plans':[]} if sourceMode=='clean'
-                   else preflight(owner.root, new_root, notify=False))
-    review_binding = None
-    if source_plan['state'] != 'ready':
-        from .source_update_host import review
-        from . import update_profile, code_transition
-        def selected():
-            value = update_profile.selection(owner.root)
-            value['settings'].pop('window-preferences.json', None)
-            return value
-        before_review = selected()
-        cancelled = threading.Event()
-        target = os.path.normcase(str(owner.root.resolve()))
-        with _update_guard:
-            _waiting_updates[target] = cancelled
-        try:
-            from .agent_source_update import AgentResolutionPending
-            from .package_notice import read
-            deadline=time.monotonic()+7200
-            while True:
-                progress.phase('waiting_agent',message='Агент совмещает правки в отдельной копии. После проверки обновление продолжится.')
-                while any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
-                          and read(Path(row['directory'])/'plan.json').get('state')!='ready' for row in source_plan['plans']):
-                    if cancelled.wait(.5):raise RuntimeError('Owner cancelled the update before agent resolution')
-                    if time.monotonic()>=deadline:raise TimeoutError('Agent source resolution timed out; old application retained')
-                try:
-                    review(owner.root, new_root, source_plan['plans'], progress, cancelled)
-                    break
-                except AgentResolutionPending:
-                    if cancelled.is_set():raise RuntimeError('Owner cancelled update review')
-        finally:
-            with _update_guard:
-                if _waiting_updates.get(target) is cancelled:
-                    _waiting_updates.pop(target, None)
-        if cancelled.is_set():
-            raise RuntimeError('Update review was cancelled; previous application remains open')
-        code_transition.validate(new_root)
-        if selected() != before_review:
-            raise ValueError('Settings or selected source changed during update review; retry Update')
-        source_plan = preflight(owner.root, new_root, notify=False)
-        if source_plan['state'] != 'ready':
-            raise RuntimeError(source_plan['message'])
-        review_binding = [(row['source'], row['directory']) for row in source_plan['plans']]
-        # The isolated material is still pinned to the original click. No
-        # download, extraction, or new merge request is needed after approval.
-        check(owner.root, new_root, force=forceExtensions)
+    if os.name=='nt':
+        return _open_installation_wizard(owner,new_root,destination,progress,sourceMode,forceExtensions)
+    review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions)
     # No old window closes on preparation failure. The helper independently
     # reacquires the lease and binds the snapshot identity before admission.
     # Full mutable-byte validation follows old-owner exit, before any replacement.
@@ -447,6 +390,105 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
             if [(row['source'], row['directory']) for row in final['plans']] != review_binding:
                 raise ValueError('Состав обновления изменился после ревью. Старая версия остаётся открытой.')
     return _launch_handoff(owner, destination, new_root, interpreter, progress)
+
+
+def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
+    """Shared native-migration/update merge and incoming-panel preparation."""
+    old,new_root=Path(old).resolve(),Path(new_root).resolve()
+    from . import update_source
+    update_source.select(old,new_root,sourceMode or 'preserve',by='window',require_review=require_review,resolution_owner=resolution_owner)
+    if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
+        raise ValueError('Update ZIP must contain Helene Python application')
+    from .python_platform import require_runtime
+    require_runtime(new_root)
+    from .update_process import interpreter_for
+    interpreter=interpreter_for(new_root)
+    if not interpreter.is_file():raise ValueError('Python application runtime is missing')
+    from .update_extensions import check
+    progress.phase('extensions')
+    check(old, new_root, force=forceExtensions)
+    from .code_transition import preflight
+    progress.phase('code')
+    source_plan = ({'state':'ready','plans':[]} if sourceMode=='clean'
+                   else preflight(old, new_root, notify=False))
+    review_binding = None
+    if source_plan['state'] != 'ready':
+        from .source_update_host import review
+        from . import update_profile, code_transition
+        def selected():
+            value = update_profile.selection(old)
+            value['settings'].pop('window-preferences.json', None)
+            return value
+        before_review = selected()
+        cancelled = cancelled or threading.Event()
+        target = os.path.normcase(str(old.resolve()))
+        with _update_guard:
+            _waiting_updates[target] = cancelled
+        try:
+            from .agent_source_update import AgentResolutionPending
+            from .package_notice import read
+            deadline=time.monotonic()+7200
+            while True:
+                progress.phase('waiting_agent',message='Агент совмещает правки в отдельной копии. После проверки обновление продолжится.')
+                while any(read(Path(row['directory'])/'pipeline.json').get('state')=='waiting_agent'
+                          and read(Path(row['directory'])/'plan.json').get('state')!='ready' for row in source_plan['plans']):
+                    if cancelled.wait(.5):raise RuntimeError('Owner cancelled the update before agent resolution')
+                    if time.monotonic()>=deadline:raise TimeoutError('Agent source resolution timed out; old application retained')
+                try:
+                    review(old, new_root, source_plan['plans'], progress, cancelled)
+                    break
+                except AgentResolutionPending:
+                    if cancelled.is_set():raise RuntimeError('Owner cancelled update review')
+        finally:
+            with _update_guard:
+                if _waiting_updates.get(target) is cancelled:
+                    _waiting_updates.pop(target, None)
+        if cancelled.is_set():
+            raise RuntimeError('Update review was cancelled; previous application remains open')
+        code_transition.validate(new_root)
+        if selected() != before_review:
+            raise ValueError('Settings or selected source changed during update review; retry Update')
+        source_plan = preflight(old, new_root, notify=False)
+        if source_plan['state'] != 'ready':
+            raise RuntimeError(source_plan['message'])
+        review_binding = [(row['source'], row['directory']) for row in source_plan['plans']]
+        # The isolated material is still pinned to the original click. No
+        # download, extraction, or new merge request is needed after approval.
+        check(old, new_root, force=forceExtensions)
+    return review_binding,interpreter
+
+
+def _open_installation_wizard(owner,new_root,destination,progress,sourceMode=None,forceExtensions=False):
+    """Update and helene.exe present the same clean-code/data-folder choices."""
+    from .migration_source import verify
+    from .update_process import interpreter_for,background_flags
+    from .python_platform import require_runtime
+    require_runtime(new_root);verify(new_root)
+    entry=new_root/'app/helene_setup.py'
+    if not entry.is_file():raise ValueError('Incoming application has no installation wizard')
+    command=[str(interpreter_for(new_root)),'-s',str(entry),'--root',str(new_root),
+             '--old',str(owner.root.resolve()),'--target',str(owner.root.resolve()),'--source-mode',sourceMode or 'preserve']
+    if forceExtensions:command.append('--force-extensions')
+    with (destination/'installation-wizard.log').open('ab') as output:
+        child=subprocess.Popen(command,cwd=new_root,stdin=subprocess.DEVNULL,
+            stdout=output,stderr=subprocess.STDOUT,creationflags=background_flags())
+    # A live control descriptor proves the window opened. It grants no file
+    # switch; closing/cancelling the wizard leaves the current owner running.
+    deadline=time.monotonic()+15
+    while time.monotonic()<deadline:
+        descriptor=new_root/f'.python-migrator-{child.pid}.json'
+        if descriptor.is_file():break
+        if child.poll() is not None:raise RuntimeError('Не удалось открыть мастер установки. Прежняя Hélène продолжает работать.')
+        time.sleep(.05)
+    else:
+        child.terminate();child.wait(timeout=5)
+        raise TimeoutError('Мастер установки не открылся. Прежняя Hélène продолжает работать.')
+    progress.phase('prepared',label='Мастер установки открыт',message='Выбери папку данных и подтверди установку чистого кода в новом окне.')
+    def release_guard():
+        child.wait()
+        with _update_guard:_update_targets.discard(os.path.normcase(str(owner.root.resolve())))
+    threading.Thread(target=release_guard,daemon=True).start()
+    return {'state':'installer_opened','message':'Мастер установки открыт. Подключи прежние данные или создай нового агента.'}
 
 
 def _discard_extraction(owner, destination):

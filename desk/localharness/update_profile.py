@@ -80,7 +80,7 @@ def selection(old):
     return result
 
 
-def prepare(old, new, progress=None):
+def prepare(old, new, progress=None, *, attached_data=None):
     old, new = Path(old).resolve(), Path(new).resolve()
     found = app_migration.discover(old)
     operation = uuid.uuid4().hex
@@ -88,7 +88,9 @@ def prepare(old, new, progress=None):
     sources, trees = [], []
     for row in found['agents']:
         value = dict(row['value'])
-        value['tree'] = str(Path(row['tree']).resolve())
+        value['tree'] = str(Path(attached_data).resolve() if attached_data and row['relative']=='helene.json' else Path(row['tree']).resolve())
+        if attached_data and value.get('mode')!='remote' and not Path(value['tree']).is_dir():
+            raise ValueError('Selected agent data folder does not exist')
         value['code'] = str(Path(row['code']).resolve())
         trees.append(value['tree'])
         if value.get('mode') != 'remote':
@@ -115,7 +117,7 @@ def prepare(old, new, progress=None):
             shutil.copy2(old / name, new / name)
     note = {'format': 'helene-python-migration.v1', 'id': operation, 'state': 'prepared',
             'old_root': str(old), 'new_root': str(new), 'backup': backup['path'],
-            'old_data_paths': trees, 'data_paths': trees, 'source_paths': sources,
+            'old_data_paths': [r['tree'] for r in found['agents']], 'data_paths': trees, 'source_paths': sources,
             'copied_data': [], 'preserved_roots': {}, 'data_home': str(old / 'profile'),
             'in_place_profile': True, 'backup_scope': backup['scope'],
             'backup_bytes': backup['bytes'], 'backup_archive_bytes': backup['archive_bytes']}

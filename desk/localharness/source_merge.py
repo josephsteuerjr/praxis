@@ -20,7 +20,7 @@ from .package_notice import read, write
 
 EXCLUDED = {'.git', '__pycache__', '.venv', 'venv', 'node_modules', 'memory',
             'soul', 'dossiers', 'graph', 'state', 'workspace', 'models', 'data',
-            'profile', 'backups', 'cache', '.cache', '.secrets', 'local_auth',
+            'profile', 'backups', 'archives', 'recovery', 'cache', '.cache', '.secrets', 'local_auth',
             '.pytest_cache', 'logs', '.source-updates'}
 PRIVATE = {'helene.json', 'auth.json', 'credentials.json', 'owner-stop.json'}
 

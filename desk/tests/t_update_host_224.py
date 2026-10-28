@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import t_source_update_pipeline_220 as fixtures
 from localharness import source_update as pipeline, source_update_host as host, self_review
+from localharness import source_merge
 from localharness.package_notice import read, write
 
 
@@ -24,6 +25,12 @@ class IncomingCoordinator(unittest.TestCase):
         operation.update(state='needs_attention', error=pipeline.UNAVAILABLE, created=time.time()-7200)
         write(f.directory/'pipeline.json', operation)
         self.binding={'kind':'incoming-update-runtime.v1', 'program':str(f.new), 'plan_id':f.directory.name}
+        # Current incoming panels freeze the app/core seam as well as A/L/B/M.
+        context=f.new/'app/context.py';context.parent.mkdir(parents=True,exist_ok=True)
+        context.write_text('trusted_fixture = True\n')
+        app={'context.py':hashlib.sha256(context.read_bytes()).hexdigest()}
+        write(f.new/'source-inputs.json',{'files':app})
+        self.binding['app_sha256']=source_merge.signature(app)
 
     def admit(self):
         f=self.f
@@ -84,7 +91,7 @@ class IncomingCoordinator(unittest.TestCase):
     def test_runtime_validation_rejects_tampered_core_and_coordinator(self):
         f=self.f
         for name in ('forge.py','forge_worker.py','llm.py'):(f.new/'tree'/name).write_text('# trusted fixture\n')
-        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay','agent_source_update','update_source')]
+        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','source_update_battery','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay','agent_source_update','update_source')]
         for name in names:
             p=f.new/'app'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('# trusted fixture\n')
         core={p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in (f.new/'tree').iterdir()}

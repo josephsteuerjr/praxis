@@ -409,6 +409,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
   // Python обновляет рабочую папку собственным helper, без setup.
   const pythonUpdate = electron?.shell === 'python';
+  const windowsInstaller = pythonUpdate && platformOf(electron) === 'windows';
   let sourceMode: 'preserve' | 'clean' = 'preserve';
   const sourceChoices = el('div', 'field');
   const sourceLabel = el('label', '', 'Локальные изменения кода');
@@ -416,9 +417,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   for (const [value, label] of [['preserve', 'Сохранить правки · конфликты поручить агенту'], ['clean', 'Установить чистый код выпуска']]) {
     const option = el('option', '', label); option.value = value; sourceSelect.append(option);
   }
-  const sourceHint = el('p', 'field-hint', 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.');
+  const sourceHint = el('p', 'field-hint', windowsInstaller
+    ? 'Откроется мастер: перенос и совмещение кода с ревью нового Python, включая версии до 2.2.1. Чистый код с текущими данными можно выбрать отдельно.'
+    : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.');
   sourceSelect.onchange = () => {
     sourceMode = sourceSelect.value === 'clean' ? 'clean' : 'preserve';
+    if (windowsInstaller) return;
     sourceHint.textContent = sourceMode === 'clean'
       ? 'Локальные изменения кода будут заменены чистым кодом выпуска. Прежний код останется для отката. Память, переписка и настройки сохранятся.'
       : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.';
@@ -515,6 +519,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
       updateStage = 'install';
       const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
+      if (installed?.state === 'installer_opened') {
+        updOut.textContent = installed.message || 'Мастер установки открыт. Выбери папку данных и подтверди обновление.';
+        return;
+      }
       if (installed?.state === 'needs_resolution') {
         updOut.textContent = installed.message || 'Проверка слияния требует внимания. Старая версия остаётся открытой.';
         return;
@@ -544,6 +552,21 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }
   });
   dlBtn.hidden = true;
+  const restoreUpstream = button('Вернуть код к upstream', 'quiet', () => {
+    const modal = paperDialog('Восстановить upstream-код');
+    modal.body.append(el('p', '', 'Вернём чистый код текущей установки. Программа перезапустится. Текущие папки данных, память, переписка и настройки сохранятся; прежние правки останутся для отката.'));
+    const apply = button('Восстановить код', 'primary', async () => {
+      apply.disabled = true;
+      try {
+        await shell('restore_upstream', {confirmed: true});
+        restoreUpstream.disabled = true;
+        updOut.textContent = 'Подготавливаю чистый upstream-код. После проверки программа перезапустится с прежними данными.';
+        modal.dialog.close();
+      } catch (error) { apply.disabled = false; toast(humanError(error).text); }
+    });
+    modal.footer.append(button('Отмена', 'quiet', () => modal.dialog.close()), apply);
+  });
+  restoreUpstream.hidden = !windowsInstaller;
   about.append(manualUpdate);
   forceToggle.hidden = true;
   aboutRow.append(
@@ -578,6 +601,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       }
     }),
     dlBtn,
+    restoreUpstream,
     cancelUpdate,
     forceToggle,
     updOut,

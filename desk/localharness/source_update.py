@@ -491,7 +491,16 @@ def _advance(operation, directory, forge, service):
                                            'candidate_sha256':operation['candidate_sha256']}
         _review_request(operation,directory,service)
     if operation['state'] == 'queued':
-        _start_attempt(operation, directory, forge)
+        if plan.get('state')=='ready' and not plan.get('repairs'):
+            # An automatic merge still goes through the incoming independent
+            # panel. It needs no legacy agent API or redundant merger worker.
+            if merge.inventory(directory/'result')!=plan.get('result'):
+                raise ValueError('Automatic merge candidate changed before review')
+            operation['candidate_sha256']=merge.candidate_signature(directory)
+            operation['attempts'].append({'kind':'automatic-merge','before_sha256':operation['candidate_sha256']})
+            _review_request(operation,directory,service)
+        else:
+            _start_attempt(operation, directory, forge)
     if operation['state'] == 'merging' and _merge_tick(operation, directory, forge):
         _review_request(operation, directory, service)
     if operation['state'] == 'reviewing':

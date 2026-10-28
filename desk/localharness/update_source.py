@@ -18,16 +18,21 @@ def identity(old,new):
     return {'old':str(old),'new':str(new),'version':read(new/'python-app.json').get('version'),
             'upstream_sha256':upstream['sha256'],'files_sha256':merge.signature(upstream['files'])}
 
-def select(old,new,mode,*,by):
+def select(old,new,mode,*,by,require_review=False,resolution_owner='agent'):
     if mode not in MODES:raise ValueError('Choose preserve or clean source policy')
     if by not in ('window','owner-words','updater'):raise ValueError('Source choice requires an explicit owner action')
+    if resolution_owner not in ('agent','incoming'):raise ValueError('Unknown source-resolution owner')
     from .app_migration import discover
     local_sources={str(Path(a['code']).resolve()):merge.inventory(a['code']) for a in discover(Path(old))['agents'] if a['value'].get('mode')!='remote'}
     value={'format':'helene-source-choice.v1',**identity(old,new),'mode':mode,'by':by,'at':time.time(),'local_sources':local_sources}
+    if require_review:value['require_review']=True
+    if resolution_owner=='incoming':value['resolution_owner']='incoming'
     previous=read(choice_path(new))
     if previous and previous!=value:
         if {k:previous.get(k) for k in identity(old,new)}!=identity(old,new):raise ValueError('Update source choice belongs to another delivery')
         if previous['mode']!=mode:raise ValueError('Source policy is already selected for this operation; start a new update')
+        if bool(previous.get('require_review'))!=bool(require_review):raise ValueError('Review policy is already bound to this operation; start a new update')
+        if previous.get('resolution_owner','agent')!=resolution_owner:raise ValueError('Source-resolution owner is already bound; start a new update')
         return previous
     write(choice_path(new),value);return value
 
@@ -96,7 +101,10 @@ def clean_prepare(old,new,note,choice):
     for config in configs(new):
         if not config.is_file():continue
         value=load(config);previous=Path(value.get('code','')).resolve()
-        if previous in targets:value['code']=str(targets[previous]);write(config,value)
+        if previous in targets:
+            value.update(code=str(targets[previous]),app=str(new/'app/deskapp.py'),runner=str(new/'app/localharness/runner.py'))
+            value['installed']=dict(value.get('installed') or {},service=False)
+            write(config,value)
     note['source_policy']='clean';note['source_choice']=choice
     write(new/'code-transition-plan.json',{'format':'helene-clean-code-plan.v1','old':str(old),
         'incoming':actual,'choice':choice,'sources':receipts})

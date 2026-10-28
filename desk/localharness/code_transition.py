@@ -96,11 +96,11 @@ def preflight(old, new, *, notify=True):
                 raise ValueError('Local code changed during preparation; retry the update')
             state = plan['state']
             detail = {}
-            if plan['conflicts'] or plan.get('repairs'):
+            if plan['conflicts'] or plan.get('repairs') or (source_choice or {}).get('require_review'):
                 agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
                 from . import update_source
                 choice=update_source.selected(old,new)
-                if choice and choice['mode']=='preserve':
+                if choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming':
                     from .agent_source_update import request as agent_request
                     agent_request(agent['tree'],old,source,directory,read(new/'python-app.json').get('version',''))
                 elif notify:
@@ -118,6 +118,7 @@ def preflight(old, new, *, notify=True):
             plans.append({'source': source, 'directory': str(directory), 'state': state,
                           'error': str(detail.get('error') or detail.get('reason') or '')})
     write(new / 'code-transition-plan.json', {'format': 'helene-code-plan.v1', 'old': str(old),
+          'require_review':bool((source_choice or {}).get('require_review')),'choice':source_choice,
           'sources': sources, 'incoming': incoming, 'plans': plans})
     pending = [row for row in plans if row['state'] != 'ready']
     blocked = [row for row in pending if row['state'] in {'needs_attention', 'cancelled'}]
@@ -139,6 +140,10 @@ def validate(new):
         from .update_source import validate_clean
         return validate_clean(new,record)
     found = discover(Path(record['old']))
+    if record.get('require_review'):
+        from .update_source import selected
+        if record.get('choice')!=selected(Path(record['old']),Path(new)):
+            raise ValueError('Bound migration review policy changed')
     sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
                                 if row['value'].get('mode') != 'remote'))
     if sources != record.get('sources'):
@@ -149,7 +154,7 @@ def validate(new):
         plan = merge.validate_inputs(row['directory'])
         if merge.inventory(row['source']) != plan['files']['local']:
             raise ValueError('Local code changed before applying the update; retry')
-        if plan['conflicts'] or plan.get('repairs'):
+        if plan['conflicts'] or plan.get('repairs') or record.get('require_review'):
             source_update.validate_ready(row['directory'])
 
 

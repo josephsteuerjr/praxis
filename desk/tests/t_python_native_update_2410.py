@@ -91,11 +91,16 @@ class NativeUpdate(unittest.TestCase):
                 try:
                     with python_migrate.installation_lock(old):updater.install(old,new)
                 except ValueError as exc:errors.append(str(exc))
-            with patch('localharness.update_profile.prepare',side_effect=prepare):
+            # This fixture tests the pre-overlay lease after source consent.
+            # The choice gate itself is covered by t_update_modes_229.
+            with patch('localharness.update_source.require',return_value={'mode':'clean'}),patch('localharness.update_profile.prepare',side_effect=prepare):
                 thread=threading.Thread(target=work);thread.start()
                 try:
                     self.assertTrue(entered.wait(2));self.assertFalse(updater.active_update(old).exists())
-                    child=subprocess.run([sys.executable,'-B',str(old/'app/python_app.py'),'--root',str(old)],capture_output=True,timeout=5)
+                    # Exercise the startup fence without a modal Windows error
+                    # dialog keeping this disposable failed process alive.
+                    child_code="import ctypes,runpy,sys;from pathlib import Path;ctypes.windll.user32.MessageBoxW=lambda *a:0;sys.path.insert(0,str(Path(sys.argv[1]).parent));sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')" if os.name=='nt' else "import runpy,sys;sys.argv=sys.argv[1:];runpy.run_path(sys.argv[0],run_name='__main__')"
+                    child=subprocess.run([sys.executable,'-B','-c',child_code,str(old/'app/python_app.py'),'--root',str(old)],capture_output=True,timeout=5)
                     self.assertNotEqual(child.returncode,0)
                     self.assertNotIn(b'CONTROLLER_DURING_PREPARATION',child.stderr)
                 finally:release.set();thread.join(5)
@@ -220,7 +225,10 @@ class UpdateHandoff(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);app=python_app.Application(root,root);app.migration_id='one'
             calls=[];entered=threading.Event();release=threading.Event();errors=[]
-            def confirm(*args,**kwargs):entered.set();release.wait(2);calls.append(1)
+            app_migration.write_note(root,{'id':'one','state':'prepared','new_root':str(root)})
+            def confirm(*args,**kwargs):
+                entered.set();release.wait(2);calls.append(1)
+                return {'state':'new_app_started'}
             from localharness import owner_stop
             def request():
                 try:app.invoke('python_ready',{})

@@ -18,7 +18,7 @@ def verify(program):
     return actual
 
 
-def prepare(old, new, note):
+def prepare(old, new, note, *, preserve_previous=True):
     from .app_migration import code_path, preserve_source
     from .code_transition import baseline
     from .essential_backup import configs, load
@@ -32,7 +32,7 @@ def prepare(old, new, note):
         if value.get('mode') == 'remote': continue
         previous = code_path(config, value)
         if previous not in targets:
-            if previous.is_dir():
+            if preserve_previous and previous.is_dir():
                 saved=previous
                 if not previous.is_relative_to(new):
                     saved=new/'code-backup'/note['id']/str(len(targets))

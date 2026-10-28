@@ -75,7 +75,7 @@ def copy_program(package, new, progress, extensions=None):
         if parts[0]=='voice' or parts[:2]==('components','whisper'):return 'whisper' in extensions
         return True
     files=[p for p in package.rglob('*') if p.is_file() and selected(p) and
-           p.relative_to(package).parts[0] not in ('data','agents','backups','profile','code','.migration-webview','.webview') and
+           p.relative_to(package).parts[0] not in ('data','agents','backups','profile','code','code-backup','archives','recovery','.migration-webview','.webview') and
            '__pycache__' not in p.relative_to(package).parts and
            p.name not in ('helene.json','python-migration.json','owner-stop.json','install.log') and not p.name.startswith('.python-') and not p.name.endswith('.pyc')]
     total=sum(p.stat().st_size for p in files);done=0
@@ -136,6 +136,9 @@ def install_selected_extensions(program,note,extensions,progress):
 
 def finish_retirement(old, package, new, note, progress):
     """Repeatable integration cleanup, never a second application launch."""
+    if note.get('installation_flow')=='attached':
+        from localharness.windows_installation import finish
+        return finish(new,note,remove_old=note.get('remove_old',False),progress=progress)
     migration_windows.quiescent(old)
     progress('retiring_old')
     program_markers=('helene.exe','Helene.exe','helene-setup.exe','uninstall.exe',
@@ -197,7 +200,8 @@ def resume_retirement(old, package, new, note, progress):
 
 
 def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=False,
-            launch=True, progress=None, extensions=None,resume_copy=None,prepared=False,source_mode='preserve',portable=False):
+            launch=True, progress=None, extensions=None,resume_copy=None,prepared=False,source_mode='preserve',portable=False,
+            attached_data=None,remove_old=False,review_cancelled=None,force_extensions=False):
     old,package,new,data=(p.resolve() for p in (old,package,new,data))
     progress=progress or (lambda stage:None)
     if source_mode not in ('preserve','clean'):raise ValueError('Choose preserve or clean migration source')
@@ -218,12 +222,21 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         copy_program(package,new,progress,extensions)
     from localharness.source_admission import activate
     activate(new,lease_held=True)  # migration CLI owns this target lease
-    if source_mode=='clean':
+    if source_mode=='clean' or attached_data is not None:
         from localharness.migration_source import verify
         verify(new)  # Reject invalid incoming code before stopping the old owner.
+    if attached_data is not None:
+        from localharness.windows_installation import WizardProgress
+        selected_data=Path(attached_data).resolve()
+        if not selected_data.is_dir():raise ValueError('Выбери существующую папку данных агента')
+        if selected_data==new or new.is_relative_to(selected_data):raise ValueError('Папка данных не должна содержать новую программу')
+        if source_mode=='preserve':
+            from localharness.python_updates import prepare_code
+            prepare_code(old,new,WizardProgress(progress),source_mode,cancelled=review_cancelled,
+                         require_review=True,resolution_owner='incoming',forceExtensions=force_extensions)
     from localharness.update_extensions import check
     progress('checking_extensions')
-    check(old,new)
+    check(old,new,force=force_extensions)
     progress('stopping_old')
     before=migration_windows.service(old) if os.name=='nt' else None
     if before and not stop_service:
@@ -238,9 +251,16 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
             migration_windows.quiescent(Path(reuse['new_root']))
         progress('preserving')
         retain_attempt_configs(new,prior)
-        note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse,
-                                   independent=prepared or portable,copy_external=prepared or portable,source_policy=source_mode)
-        if source_mode=='clean':
+        if attached_data is not None:
+            from localharness.windows_installation import archive_sources,prepare_attached
+            archives=archive_sources(old,new,prior['id'],progress)
+            note=prepare_attached(old,new,selected_data,prior['id'],previous_sources=archives,source_mode=source_mode,progress=progress)
+            note.update(remove_old=bool(remove_old),installation_flow='attached')
+            app_migration.write_note(new,note)
+        else:
+            note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse,
+                                       independent=prepared or portable,copy_external=prepared or portable,source_policy=source_mode)
+        if source_mode=='clean' and attached_data is None:
             from localharness.migration_source import prepare as prepare_clean_code
             note=prepare_clean_code(old,new,note)
         install_selected_extensions(new,note,extensions,progress)
@@ -285,11 +305,22 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         raise
 
 
-def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress=None,shortcuts=None):
+def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress=None,shortcuts=None,
+          prepared=False,data_exact=False,connect_data=False,desktop_shortcut=False):
     """New ordinary app; no previous service and no model work before first setup."""
     package,new,data=(Path(p).resolve() for p in (package,new,data))
     progress=progress or (lambda value:None)
-    if new==package or new.is_relative_to(package) or package.is_relative_to(new):raise ValueError('Use a separate permanent application folder')
+    if not prepared and (new==package or new.is_relative_to(package) or package.is_relative_to(new)):raise ValueError('Use a separate permanent application folder')
+    if prepared and new!=package:raise ValueError('Prepared application must stay in its selected folder')
+    from localharness.package_notice import read
+    prior=read(new/'python-migration.json')
+    if data_exact:
+        if data==new or new.is_relative_to(data):raise ValueError('Data folder must not contain the program')
+        recorded=prior.get('kind')=='fresh' and prior.get('new_root')==str(new) and str(data) in prior.get('data_paths',[])
+        if prior.get('data_paths') and not recorded:raise ValueError('Этот мастер уже привязан к другой папке данных; выбери новую рабочую папку')
+        if connect_data:
+            if not data.is_dir():raise ValueError('Выбери существующую папку данных агента')
+        elif not recorded and data.exists() and any(data.iterdir()):raise ValueError('Для нового агента выбери пустую папку данных')
     receipt=new/'python-migration.json'
     if receipt.is_file():
         note=json.loads(receipt.read_text(encoding='utf-8'))
@@ -297,21 +328,24 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
         if note['state']=='completed':return note
         if note['state']=='new_app_started':
             retained_startup(new,note)
-            note.update(shortcuts=migration_windows.install_shortcuts(new,shortcuts),state='completed')
+            note.update(shortcuts=migration_windows.install_shortcuts(new,shortcuts,desktop_only=desktop_shortcut),state='completed')
             app_migration.write_note(new,note);return note
     else:
-        note=transaction(None,new)
+        note=transaction(None,new,prepared=prepared)
         note.update(kind='fresh',old_root='',data_paths=[],source_paths=[])
         app_migration.write_note(new,note)
-    copy_program(package,new,progress,extensions)
+    if not prepared:copy_program(package,new,progress,extensions)
     from localharness.source_admission import activate
     activate(new,lease_held=True)  # before any fresh profile/source seeding
+    if data_exact:
+        from localharness.migration_source import verify
+        verify(new)
     config=new/'helene.json'
     if not config.exists():
         import socket
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-        tree=data/note['id'];tree.mkdir(parents=True,exist_ok=True)
+        tree=data if data_exact else data/note['id'];tree.mkdir(parents=True,exist_ok=True)
         value={'mode':'local','tree':str(tree),'code':str(new/'tree'),'port':port,
                'python':str(new/'runtime/python.exe'),'app':str(new/'app/deskapp.py'),
                'runner':str(new/'app/localharness/runner.py'),'setup_complete':False,
@@ -334,7 +368,7 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
             current=json.loads(receipt.read_text(encoding='utf-8'))
             if current.get('state')=='new_app_started':
                 started=True
-                current.update(shortcuts=migration_windows.install_shortcuts(new,shortcuts),state='completed')
+                current.update(shortcuts=migration_windows.install_shortcuts(new,shortcuts,desktop_only=desktop_shortcut),state='completed')
                 app_migration.write_note(new,current);child.release();progress('completed');return current
             if child.poll() is not None:raise RuntimeError('Fresh application exited; installation retained for retry')
             time.sleep(.3)

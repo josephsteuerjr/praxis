@@ -138,6 +138,10 @@ class Application:
             return [standalone_relay.status(self.program)]+component_downloads.status(self.program)
         if command == 'python_ready':
             return self.confirm_ui()
+        if command == 'restore_upstream':
+            if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
+            from localharness.upstream_recovery import launch
+            return launch(self.root)
         if command == 'migration_wizard':
             if not sys.platform.startswith('linux'):
                 raise ValueError('This offline migration wizard is available in the Linux application')
@@ -634,8 +638,8 @@ def _main(argv=None):
         from localharness import portable_start
         incomplete=root/'python-migration.json'
         needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started')
-        if args.migration_wizard or needs_migration or (not (root/'helene.json').exists() and portable_start.previous_installations(root)):
-            from python_migration_window import main as migration_window
+        if args.migration_wizard or needs_migration or not (root/'helene.json').exists():
+            from helene_setup import main as migration_window
             return migration_window(['--root',str(root)])
         portable_start.initialize(root)
     ui = program / "app" / "static"

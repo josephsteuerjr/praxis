@@ -46,6 +46,8 @@ def refresh(donor,output,version,*,libraries=None,setup=None,downloads=None):
     if sys.platform=='win32':
         from windows_archive_entry import write
         install(DESK/'python_migration_window.py','app/python_migration_window.py')
+        install(DESK/'helene_setup.py','app/helene_setup.py')
+        install(DESK/'installer/windows_launcher.rs','app/installer/windows_launcher.rs')
         write(output)
     elif setup:raise ValueError('Portable archives use the bundled Python migrator')
     if sys.platform=='darwin':
