@@ -27,7 +27,8 @@ class NativeBridge(unittest.TestCase):
         # A native-style predecessor older than 2.2.1, with a retained stock tree.
         (f.old/'python-app.json').unlink();write(f.old/'build.json',{'version':'1.7.0'})
         put(f.old,'helene.exe','native fixture')
-        write(f.new/'python-app.json',{'version':'2.2.10','delivery':'portable'})
+        from localharness.python_platform import runtime_target
+        write(f.new/'python-app.json',{'version':'2.2.11','delivery':'portable','target':runtime_target()})
         for name in ('app/python_app.py','app/deskapp.py',('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')):put(f.new,name,'fixture')
         code_transition.seal(f.new)
         put(f.tree,'memory/history.jsonl','retained-private-history\n')
