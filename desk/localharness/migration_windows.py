@@ -518,7 +518,7 @@ def remove_program(old,new,note):
         folder=old/name
         if folder.is_dir() and not folder.is_symlink():
             names.update(p.relative_to(old).as_posix() for p in folder.rglob('*') if p.is_file())
-    names.update(name for name in ('helene.exe','Helene.exe','helene-setup.exe','helene-service.exe',
+    names.update(name for name in ('helene.exe','Helene.exe','helene-setup.exe','helene-svc.exe','helene-service.exe',
         'helene-host.exe','uninstall.exe','python-app.json','python-package-files.json','Start Helene.vbs','Migrate Helene.vbs') if (old/name).is_file())
     files={};seen=set()
     for name in sorted(names):

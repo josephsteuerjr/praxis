@@ -90,6 +90,7 @@ class Installation(unittest.TestCase):
             root=Path(tmp);old,new=self.fixture(root)
             (old/'app').mkdir();(old/'app/python_app.py').write_text('old app')
             (old/'helene.exe').write_bytes(b'fixture launcher')
+            (old/'helene-svc.exe').write_bytes(b'fixture service executable')
             (old/'components/xtts/model').mkdir(parents=True)
             (old/'components/xtts/model/weights.pth').write_bytes(b'model-data')
             note={'id':'id','state':'new_app_started','startup_proof':{'root':str(new)},'old_root':str(old),
@@ -98,6 +99,7 @@ class Installation(unittest.TestCase):
             with patch.object(windows,'uninstall_registered',side_effect=AssertionError('legacy uninstaller forbidden')):
                 result=windows.remove_program(old,new,note)
             self.assertTrue(result['ok']);self.assertFalse((old/'helene.exe').exists())
+            self.assertFalse((old/'helene-svc.exe').exists())
             self.assertTrue((old/'helene.json').is_file());self.assertTrue((old/'code/agent.py').is_file())
             self.assertTrue((old/'data/memory/history.jsonl').is_file())
             self.assertEqual((old/'components/xtts/model/weights.pth').read_bytes(),b'model-data')
