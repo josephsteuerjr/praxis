@@ -34,7 +34,7 @@ class NativeBridge(unittest.TestCase):
         put(f.tree,'memory/history.jsonl','retained-private-history\n')
         return f
 
-    def exercise(self,conflict):
+    def exercise(self,conflict,copy_data=False):
         f=self.setup_fixture(conflict);events=[]
         original=code_transition.preflight
         def preflight(*args,**kwargs):
@@ -67,23 +67,35 @@ class NativeBridge(unittest.TestCase):
         with patch.object(code_transition,'preflight',side_effect=preflight), \
              patch('localharness.source_update_host.review',side_effect=incoming_review), \
              patch('localharness.migration_lifecycle.service',return_value=None), \
-             patch('localharness.migration_lifecycle.stop',side_effect=lambda _:events.append('stop-old')), \
+             patch('localharness.migration_lifecycle.stop',side_effect=lambda _:events.append('stop-old') or {'service':None}), \
              patch('localharness.migration_lifecycle.quiescent'):
-            note=installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
-        cfg=read(f.new/'helene.json');selected=Path(cfg['code'])
+            if copy_data:
+                import python_migrate
+                note=python_migrate.migrate(f.old,f.new,f.new,f.new/'profile',stop_service=True,
+                    prepared=True,portable=True,source_mode='preserve',launch=False)
+            else:
+                note=installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
+        cfg=read(f.new/'helene.json');selected=(f.new/Path(cfg['code'])).resolve()
         result=(selected/'module.py').read_text()
         self.assertIn('return 99',result)
         self.assertIn('local_extension = 11' if conflict else 'custom_extension = True',result)
         self.assertEqual(events,['incoming-panel','stop-old'])
-        self.assertEqual(Path(cfg['tree']),f.tree);self.assertEqual(note['copied_data'],[])
+        if copy_data:
+            self.assertNotEqual((f.new/Path(cfg['tree'])).resolve(),f.tree)
+            self.assertEqual(((f.new/Path(cfg['tree'])).resolve()/'memory/history.jsonl').read_bytes(),(f.tree/'memory/history.jsonl').read_bytes())
+            self.assertTrue(note['copied_data'])
+        else:
+            self.assertEqual((f.new/Path(cfg['tree'])).resolve(),f.tree);self.assertEqual(note['copied_data'],[])
         self.assertEqual(note['state'],'prepared');self.assertEqual(note['source_policy'],'preserve')
         self.assertEqual((f.old/'helene.json').read_bytes(),before)
         self.assertEqual((f.tree/'memory/history.jsonl').read_text(),'retained-private-history\n')
-        self.assertTrue(Path(note['archives'][0]['path']).is_file())
+        if not copy_data:self.assertTrue(Path(note['archives'][0]['path']).is_file())
 
     def test_native_before_221_combines_conflicts_then_new_panel_before_shutdown(self):self.exercise(True)
 
     def test_automatic_merge_still_requires_new_panel_for_migration(self):self.exercise(False)
+
+    def test_standalone_cli_copies_data_and_reviews_code_before_shutdown(self):self.exercise(False,copy_data=True)
 
     def test_failed_panel_does_not_stop_or_retire_native_program(self):
         f=self.setup_fixture(False)
