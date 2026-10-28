@@ -273,7 +273,7 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         if not launch:return note
         interpreter=new/((('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')
         log=new/'migration-start.log'
-        from localharness.desktop_process import JobChild
+        from localharness.desktop_supervisor import JobChild
         progress('starting_new')
         from localharness.python_platform import desktop_argv
         child=JobChild.spawn(desktop_argv(new,['--root',str(new),'--migration',note['id']]),
@@ -364,7 +364,7 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
     note['state']='prepared';app_migration.write_note(new,note)
     install_selected_extensions(new,note,extensions,progress)
     if not launch:return note
-    from localharness.desktop_process import JobChild
+    from localharness.desktop_supervisor import JobChild
     child=None;started=False
     try:
         progress('starting_new')
