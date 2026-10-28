@@ -89,6 +89,28 @@ class SourceAdmission(unittest.TestCase):
         self.assertEqual((new/'python-package-files.json').read_bytes(),passport)
         self.assertEqual(read(new/'source-admission-state.json')['state'],'ready')
 
+    def test_retry_with_recopied_view_and_previous_stock_recovers(self):
+        original=Path.replace
+        def replace(path,target):
+            if path.name=='next':raise OSError('interrupted promotion')
+            return original(path,target)
+        with mock.patch.object(Path,'replace',replace):
+            with self.assertRaises(OSError):admission.activate(self.program)
+        shutil.copytree(self.base,self.program/'tree')
+        self.assertTrue(admission.activate(self.program))
+        self.assertEqual((self.program/'tree/module.py').read_bytes(),self.real)
+        retained=list(self.root.glob('.helene-source-admission-*/retained-view-*'))
+        self.assertEqual(len(retained),1)
+        self.assertEqual((retained[0]/'module.py').read_bytes(),(self.base/'module.py').read_bytes())
+        self.assertFalse(admission.activate(self.program))
+
+    def test_duplicate_recovery_never_overwrites_authored_tree(self):
+        bucket=self.program.parent/('.helene-source-admission-'+hashlib.sha256(str(self.program.resolve()).encode()).hexdigest()[:20])
+        shutil.copytree(self.base,bucket/'previous')
+        (self.program/'tree/module.py').write_text('authored=True\n')
+        with self.assertRaisesRegex(ValueError,'authored'):admission.activate(self.program)
+        self.assertEqual((self.program/'tree/module.py').read_text(),'authored=True\n')
+
     def test_crash_between_directory_renames_recovers_exact_stock(self):
         original=Path.replace
         def replace(path,target):

@@ -163,8 +163,15 @@ def activate(program, *, lease_held=False):
             write(state_path, {'format': FORMAT, 'identity': identity, 'state': 'prepared'})
             if tree.exists():
                 if previous.exists():
-                    raise ValueError('Both admission view and recovery tree exist; refusing ambiguous replacement')
-                tree.replace(previous)
+                    # A retry can recopy the shipped admission view after the
+                    # previous attempt moved it aside. Both inventories were
+                    # checked above against the exact declared baseline; keep
+                    # the duplicate rather than mistaking it for authored code.
+                    if current != baseline or prior != baseline:
+                        raise ValueError('Admission recovery does not match the declared shipped view')
+                    tree.replace(bucket / ('retained-view-' + uuid.uuid4().hex))
+                else:
+                    tree.replace(previous)
             staged.replace(tree)
         if _inventory(tree) != target:
             raise ValueError('Incoming source promotion is incomplete')
