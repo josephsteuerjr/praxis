@@ -1,0 +1,99 @@
+{
+  "version": "2.2.12",
+  "implementation_commit": "b4a7ca77f60a7d263f65e695f971dba5ecd7d0a8",
+  "source_commit": "6b53c87fe5402c3bdaca5f0ec86046cdf4a4b357",
+  "windows_source_regression": {
+    "passed": true,
+    "tests": 47,
+    "failures": 0,
+    "errors": 0,
+    "causal_before_failed": true,
+    "platform": "Windows",
+    "other_os_tests": "not run per owner instruction",
+    "live_model": "not exercised; actual journal-shaped premature final simulated"
+  },
+  "windows_admission_tests": {
+    "passed": true,
+    "tests": 17,
+    "scope": "Interrupted activation, recopied shipped view, authored tree preservation"
+  },
+  "platform_sources": {
+    "windows": {
+      "commit": "ae879cb3d9d52919fea5404a49f9f23fb0b18918",
+      "tree": "23809bbb8821096f3e6b6db3904b05675aceede8",
+      "tag": "source/helene-2.2.12-windows",
+      "archive": "Helene-2.2.12.zip",
+      "sha256": "3157a449a495d5f09e37e0f528245472279038c09443f593c052f8d348e6df56",
+      "size": 140584006,
+      "source_file_count": 723
+    },
+    "macos": {
+      "commit": "8db6bf5534be1c19641b2151cd4bd0576f4723b6",
+      "tree": "ecd428d139af2e3fe14e9526586c82111ad14178",
+      "tag": "source/helene-2.2.12-macos",
+      "archive": "Helene-2.2.12-macos-arm64.zip",
+      "sha256": "127f9e5d3ae9d92fb68e977b0e56bbafd60997bee2f4387086335a539b6a2b11",
+      "size": 127873093,
+      "source_file_count": 1050
+    },
+    "debian": {
+      "commit": "5efaedebb58efed30705073e92c9209324768d0e",
+      "tree": "08661e93fd66d63305b48d018a62338a76e3d04a",
+      "tag": "source/helene-2.2.12-debian",
+      "archive": "Helene-2.2.12-linux-x86_64.zip",
+      "sha256": "4f1d427ed7b6b7330f39622c86b8d883a5153a86ce542bb20269147f641fcf57",
+      "size": 666593199,
+      "source_file_count": 728
+    },
+    "fedora": {
+      "commit": "090818dcc2882732174131dcf5f26f23a4764e80",
+      "tree": "487f5cd2cde64f1787fbac4abdef600bdf501260",
+      "tag": "source/helene-2.2.12-fedora",
+      "archive": "Helene-2.2.12-fedora-x86_64.zip",
+      "sha256": "9fad56f2951f7d5a0bc5fc2647627ab446dd48bf6a99162b09aa60b4668d9f0c",
+      "size": 681483848,
+      "source_file_count": 727
+    }
+  },
+  "construction": "Four archives rebuilt with updated Python and wizard source; native runtimes and compiled frontends reused from qualified inputs; ZIP CRC, source/passport identities checked",
+  "frontend_source_unchanged_except_version": true,
+  "other_os_runtime_tests": "Explicitly not run, as requested by owner",
+  "previous_release": "2.2.11 remains published; optional voice URLs retain its pinned assets",
+  "limits": [
+    "No live owner model merge completion claimed",
+    "No new native runtime acceptance on macOS/Linux",
+    "No owner installation changed"
+  ],
+  "privacy": {
+    "windows": {
+      "source_files": 1084,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1736,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1089,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "fedora": {
+      "source_files": 1088,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "b4a7ca77f60a7d263f65e695f971dba5ecd7d0a8": {
+      "files": 2246,
+      "matches": [],
+      "known_private_values": 6
+    },
+    "6b53c87fe5402c3bdaca5f0ec86046cdf4a4b357": {
+      "files": 2248,
+      "matches": [],
+      "known_private_values": 6
+    }
+  }
+}

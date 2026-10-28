@@ -1,0 +1,1111 @@
+{
+  "repo": "josephsteuerjr/praxis",
+  "tag": "v2.2.12",
+  "release_id": 426525280,
+  "source_commit": "6b53c87fe5402c3bdaca5f0ec86046cdf4a4b357",
+  "assets": {
+    "Helene-2.2.12.zip": {
+      "kind": "program",
+      "platform": "windows",
+      "size": 140584006,
+      "sha256": "3157a449a495d5f09e37e0f528245472279038c09443f593c052f8d348e6df56"
+    },
+    "Helene-2.2.12-macos-arm64.zip": {
+      "kind": "program",
+      "platform": "macos",
+      "size": 127873093,
+      "sha256": "127f9e5d3ae9d92fb68e977b0e56bbafd60997bee2f4387086335a539b6a2b11"
+    },
+    "Helene-2.2.12-linux-x86_64.zip": {
+      "kind": "program",
+      "platform": "debian",
+      "size": 666593199,
+      "sha256": "4f1d427ed7b6b7330f39622c86b8d883a5153a86ce542bb20269147f641fcf57"
+    },
+    "Helene-2.2.12-fedora-x86_64.zip": {
+      "kind": "program",
+      "platform": "fedora",
+      "size": 681483848,
+      "sha256": "9fad56f2951f7d5a0bc5fc2647627ab446dd48bf6a99162b09aa60b4668d9f0c"
+    },
+    "Helene-2.2.12-source.zip": {
+      "kind": "source",
+      "size": 15925662,
+      "sha256": "2981c7c3c08e50629581f98cc473355243ddc0df89e368705d8a965f45815ead"
+    },
+    "Helene-2.2.12-fedora-x86_64.zip.sha256": {
+      "kind": "checksum",
+      "size": 99,
+      "sha256": "a1de0279685574f3ae45bffa7ea4b476a9fb7df5fe95496ca4d7ad9ee72fa3d0"
+    },
+    "Helene-2.2.12-linux-x86_64.zip.sha256": {
+      "kind": "checksum",
+      "size": 98,
+      "sha256": "8325051551dbd55d8f5d16daaddac5ca7f2c86710e6f794ce49d17bdd8eb3b78"
+    },
+    "Helene-2.2.12-macos-arm64.zip.sha256": {
+      "kind": "checksum",
+      "size": 97,
+      "sha256": "aa5f34c828702b3d03b412a2f28ec0ead4e67872f8a21a5c4961f86b32254181"
+    },
+    "Helene-2.2.12-source.zip.sha256": {
+      "kind": "checksum",
+      "size": 92,
+      "sha256": "8c5aa8a65a4e6b60c8228145c81e2cadd86c513ea036e1ef864ecfeab370b65e"
+    },
+    "Helene-2.2.12.zip.sha256": {
+      "kind": "checksum",
+      "size": 85,
+      "sha256": "5f8ff4fe730a3f605de490234a5fbccec2da5e5f7ac66850be04bfcb68a109f3"
+    },
+    "release-evidence.json": {
+      "kind": "metadata",
+      "size": 3526,
+      "sha256": "eadf38137dc3ec10783f85d8c5bfbb47f57c3a3bd99fc449c42492ac3b426da6"
+    },
+    "voice-components.json": {
+      "kind": "metadata",
+      "size": 5654,
+      "sha256": "9180804c60ed575f8af374e6c46e20e75626f687683ac8832d1c69ed329a9931"
+    },
+    "SHA256SUMS": {
+      "kind": "checksum-index",
+      "size": 1155,
+      "sha256": "5a1e9274295bf8f74e71bcce580b91733f80ed6ab29d66db3007e5b889afc446"
+    }
+  },
+  "programs": [
+    {
+      "platform": "windows",
+      "name": "Helene-2.2.12.zip",
+      "size": 140584006,
+      "sha256": "3157a449a495d5f09e37e0f528245472279038c09443f593c052f8d348e6df56",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4.zip",
+      "base_sha256": "20cc02d69de0d9b094ecdeb59249e9b59544a570f8218480339d15847157a26a",
+      "base_size": 137037889,
+      "literal_sha256": "33189b668db08fdd7c2ae2f5f01870d787ca863ae9ec026e6655e3da0a017577",
+      "segments": [
+        [
+          "literal",
+          0,
+          59174
+        ],
+        [
+          "base",
+          58759,
+          39803
+        ],
+        [
+          "literal",
+          59174,
+          40230
+        ],
+        [
+          "base",
+          138533,
+          46514
+        ],
+        [
+          "literal",
+          99404,
+          7727
+        ],
+        [
+          "base",
+          192700,
+          97206
+        ],
+        [
+          "literal",
+          107131,
+          2020
+        ],
+        [
+          "base",
+          291949,
+          33048
+        ],
+        [
+          "literal",
+          109151,
+          3685
+        ],
+        [
+          "base",
+          328065,
+          38557
+        ],
+        [
+          "literal",
+          112836,
+          10935
+        ],
+        [
+          "base",
+          377694,
+          97293
+        ],
+        [
+          "literal",
+          123771,
+          10848
+        ],
+        [
+          "base",
+          480765,
+          54984
+        ],
+        [
+          "literal",
+          134619,
+          1848
+        ],
+        [
+          "base",
+          537282,
+          23292
+        ],
+        [
+          "literal",
+          136467,
+          871
+        ],
+        [
+          "base",
+          561443,
+          6756
+        ],
+        [
+          "literal",
+          137338,
+          5215
+        ],
+        [
+          "base",
+          573261,
+          4002
+        ],
+        [
+          "literal",
+          142553,
+          1156
+        ],
+        [
+          "base",
+          578036,
+          1200
+        ],
+        [
+          "literal",
+          143709,
+          10564
+        ],
+        [
+          "base",
+          589468,
+          930
+        ],
+        [
+          "literal",
+          154273,
+          8681
+        ],
+        [
+          "base",
+          597765,
+          18416
+        ],
+        [
+          "literal",
+          162954,
+          89626
+        ],
+        [
+          "base",
+          702830,
+          47517
+        ],
+        [
+          "literal",
+          252580,
+          8847
+        ],
+        [
+          "base",
+          758653,
+          32401
+        ],
+        [
+          "literal",
+          261427,
+          1311682
+        ],
+        [
+          "base",
+          2119117,
+          139327
+        ],
+        [
+          "literal",
+          1573109,
+          84902
+        ],
+        [
+          "base",
+          2341442,
+          194825
+        ],
+        [
+          "literal",
+          1658011,
+          18256
+        ],
+        [
+          "base",
+          2557343,
+          5400427
+        ],
+        [
+          "literal",
+          1676267,
+          191
+        ],
+        [
+          "base",
+          7957961,
+          1094799
+        ],
+        [
+          "literal",
+          1676458,
+          290
+        ],
+        [
+          "base",
+          9053063,
+          540061
+        ],
+        [
+          "literal",
+          1676748,
+          574672
+        ],
+        [
+          "base",
+          10164608,
+          117007936
+        ],
+        [
+          "literal",
+          2251420,
+          17467
+        ],
+        [
+          "base",
+          127189651,
+          140
+        ],
+        [
+          "literal",
+          2268887,
+          3475740
+        ],
+        [
+          "base",
+          130911925,
+          8171
+        ],
+        [
+          "literal",
+          5744627,
+          4165543
+        ],
+        [
+          "base",
+          135070882,
+          7216
+        ],
+        [
+          "literal",
+          9910170,
+          3661
+        ],
+        [
+          "base",
+          135081181,
+          12641
+        ],
+        [
+          "literal",
+          9913831,
+          21822
+        ],
+        [
+          "base",
+          135156007,
+          507
+        ],
+        [
+          "literal",
+          9935653,
+          5700384
+        ]
+      ],
+      "base_asset_id": 679505877
+    },
+    {
+      "platform": "macos",
+      "name": "Helene-2.2.12-macos-arm64.zip",
+      "size": 127873093,
+      "sha256": "127f9e5d3ae9d92fb68e977b0e56bbafd60997bee2f4387086335a539b6a2b11",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4-macos-arm64.zip",
+      "base_sha256": "40f2808bd932728288a1353f302eb045cc318d885212eafe55d829297d40df9f",
+      "base_size": 122707047,
+      "literal_sha256": "3092d80762d32afc5e7e80bc8d4e0cbce9bcd95d939388cb30f8cdf47670cb2d",
+      "segments": [
+        [
+          "base",
+          0,
+          204705
+        ],
+        [
+          "literal",
+          0,
+          1185
+        ],
+        [
+          "base",
+          207745,
+          3662
+        ],
+        [
+          "literal",
+          1185,
+          40951
+        ],
+        [
+          "base",
+          252283,
+          41047
+        ],
+        [
+          "literal",
+          42136,
+          40230
+        ],
+        [
+          "base",
+          333301,
+          47794
+        ],
+        [
+          "literal",
+          82366,
+          7727
+        ],
+        [
+          "base",
+          388748,
+          99563
+        ],
+        [
+          "literal",
+          90093,
+          2020
+        ],
+        [
+          "base",
+          490364,
+          34098
+        ],
+        [
+          "literal",
+          92113,
+          3685
+        ],
+        [
+          "base",
+          527530,
+          39990
+        ],
+        [
+          "literal",
+          95798,
+          10935
+        ],
+        [
+          "base",
+          578592,
+          103873
+        ],
+        [
+          "literal",
+          106733,
+          10217
+        ],
+        [
+          "base",
+          687691,
+          56850
+        ],
+        [
+          "literal",
+          116950,
+          1848
+        ],
+        [
+          "base",
+          746133,
+          30589
+        ],
+        [
+          "literal",
+          118798,
+          5215
+        ],
+        [
+          "base",
+          781784,
+          4101
+        ],
+        [
+          "literal",
+          124013,
+          1156
+        ],
+        [
+          "base",
+          786890,
+          1507
+        ],
+        [
+          "literal",
+          125169,
+          10550
+        ],
+        [
+          "base",
+          798706,
+          952
+        ],
+        [
+          "literal",
+          135719,
+          8681
+        ],
+        [
+          "base",
+          807025,
+          18839
+        ],
+        [
+          "literal",
+          144400,
+          89626
+        ],
+        [
+          "base",
+          912513,
+          49054
+        ],
+        [
+          "literal",
+          234026,
+          8847
+        ],
+        [
+          "base",
+          969873,
+          32915
+        ],
+        [
+          "literal",
+          242873,
+          1308755
+        ],
+        [
+          "base",
+          2329033,
+          5546631
+        ],
+        [
+          "literal",
+          1551628,
+          591151
+        ],
+        [
+          "base",
+          8450047,
+          100206468
+        ],
+        [
+          "literal",
+          2142779,
+          11410550
+        ],
+        [
+          "base",
+          120562639,
+          7216
+        ],
+        [
+          "literal",
+          13553329,
+          3661
+        ],
+        [
+          "base",
+          120572938,
+          12641
+        ],
+        [
+          "literal",
+          13556990,
+          21823
+        ],
+        [
+          "base",
+          120647764,
+          507
+        ],
+        [
+          "literal",
+          13578813,
+          7751278
+        ]
+      ],
+      "base_asset_id": 679506210
+    },
+    {
+      "platform": "debian",
+      "name": "Helene-2.2.12-linux-x86_64.zip",
+      "size": 666593199,
+      "sha256": "4f1d427ed7b6b7330f39622c86b8d883a5153a86ce542bb20269147f641fcf57",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4-linux-x86_64.zip",
+      "base_sha256": "a6c08cf7f8eadc56d6f3aae237adae3f74afb696776f6030a0eef56652947a80",
+      "base_size": 663190707,
+      "literal_sha256": "afb18d75876a86c8fb062d6e26249be3d16b1fd24968034ec6d60de2394da6dc",
+      "segments": [
+        [
+          "base",
+          0,
+          5449
+        ],
+        [
+          "literal",
+          0,
+          1185
+        ],
+        [
+          "base",
+          6129,
+          449116
+        ],
+        [
+          "literal",
+          1185,
+          41038
+        ],
+        [
+          "base",
+          496261,
+          41047
+        ],
+        [
+          "literal",
+          42223,
+          40230
+        ],
+        [
+          "base",
+          577338,
+          47794
+        ],
+        [
+          "literal",
+          82453,
+          7727
+        ],
+        [
+          "base",
+          632785,
+          99563
+        ],
+        [
+          "literal",
+          90180,
+          2020
+        ],
+        [
+          "base",
+          734401,
+          34098
+        ],
+        [
+          "literal",
+          92200,
+          3685
+        ],
+        [
+          "base",
+          771567,
+          42700
+        ],
+        [
+          "literal",
+          95885,
+          10935
+        ],
+        [
+          "base",
+          825317,
+          102606
+        ],
+        [
+          "literal",
+          106820,
+          10217
+        ],
+        [
+          "base",
+          933149,
+          60217
+        ],
+        [
+          "literal",
+          117037,
+          1848
+        ],
+        [
+          "base",
+          994958,
+          33477
+        ],
+        [
+          "literal",
+          118885,
+          5215
+        ],
+        [
+          "base",
+          1033497,
+          4101
+        ],
+        [
+          "literal",
+          124100,
+          1156
+        ],
+        [
+          "base",
+          1038600,
+          1232
+        ],
+        [
+          "literal",
+          125256,
+          10688
+        ],
+        [
+          "base",
+          1050284,
+          952
+        ],
+        [
+          "literal",
+          135944,
+          8681
+        ],
+        [
+          "base",
+          1058575,
+          18839
+        ],
+        [
+          "literal",
+          144625,
+          89626
+        ],
+        [
+          "base",
+          1164049,
+          49054
+        ],
+        [
+          "literal",
+          234251,
+          8847
+        ],
+        [
+          "base",
+          1221409,
+          34227
+        ],
+        [
+          "literal",
+          243098,
+          1308555
+        ],
+        [
+          "base",
+          2581286,
+          304032
+        ],
+        [
+          "literal",
+          1551653,
+          17677
+        ],
+        [
+          "base",
+          2902510,
+          5341118
+        ],
+        [
+          "literal",
+          1569330,
+          196
+        ],
+        [
+          "base",
+          8244031,
+          16738
+        ],
+        [
+          "literal",
+          1569526,
+          817699
+        ],
+        [
+          "base",
+          9084635,
+          643021964
+        ],
+        [
+          "literal",
+          2387225,
+          28225
+        ],
+        [
+          "base",
+          652137204,
+          165796
+        ],
+        [
+          "literal",
+          2415450,
+          7675142
+        ],
+        [
+          "base",
+          660320572,
+          7214
+        ],
+        [
+          "literal",
+          10090592,
+          3661
+        ],
+        [
+          "base",
+          660330869,
+          12632
+        ],
+        [
+          "literal",
+          10094253,
+          21825
+        ],
+        [
+          "base",
+          660405597,
+          507
+        ],
+        [
+          "literal",
+          10116078,
+          6582648
+        ]
+      ],
+      "base_asset_id": 679506788
+    },
+    {
+      "platform": "fedora",
+      "name": "Helene-2.2.12-fedora-x86_64.zip",
+      "size": 681483848,
+      "sha256": "9fad56f2951f7d5a0bc5fc2647627ab446dd48bf6a99162b09aa60b4668d9f0c",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.4/Helene-2.2.4-fedora-x86_64.zip",
+      "base_sha256": "8a5e679c5004c7b4d9b79c3e7897125561ab1000a53964f07d1249ae2f78732d",
+      "base_size": 678026063,
+      "literal_sha256": "4ca038bfd328979a7822e7bc80a8ad895974db940fc915c073bee1a3e9fc8b42",
+      "segments": [
+        [
+          "base",
+          0,
+          5791
+        ],
+        [
+          "literal",
+          0,
+          1185
+        ],
+        [
+          "base",
+          6461,
+          1391588
+        ],
+        [
+          "literal",
+          1185,
+          41031
+        ],
+        [
+          "base",
+          1439061,
+          40632
+        ],
+        [
+          "literal",
+          42216,
+          40230
+        ],
+        [
+          "base",
+          1519723,
+          47259
+        ],
+        [
+          "literal",
+          82446,
+          7727
+        ],
+        [
+          "base",
+          1574635,
+          98588
+        ],
+        [
+          "literal",
+          90173,
+          2020
+        ],
+        [
+          "base",
+          1675276,
+          33647
+        ],
+        [
+          "literal",
+          92193,
+          3685
+        ],
+        [
+          "base",
+          1711991,
+          41941
+        ],
+        [
+          "literal",
+          95878,
+          10935
+        ],
+        [
+          "base",
+          1764982,
+          101829
+        ],
+        [
+          "literal",
+          106813,
+          10217
+        ],
+        [
+          "base",
+          1871953,
+          56190
+        ],
+        [
+          "literal",
+          117030,
+          1848
+        ],
+        [
+          "base",
+          1929690,
+          32798
+        ],
+        [
+          "literal",
+          118878,
+          5215
+        ],
+        [
+          "base",
+          1967550,
+          4071
+        ],
+        [
+          "literal",
+          124093,
+          1156
+        ],
+        [
+          "base",
+          1972607,
+          1219
+        ],
+        [
+          "literal",
+          125249,
+          10688
+        ],
+        [
+          "base",
+          1984234,
+          942
+        ],
+        [
+          "literal",
+          135937,
+          8681
+        ],
+        [
+          "base",
+          1992515,
+          18549
+        ],
+        [
+          "literal",
+          144618,
+          89626
+        ],
+        [
+          "base",
+          2097699,
+          48346
+        ],
+        [
+          "literal",
+          234244,
+          8847
+        ],
+        [
+          "base",
+          2154351,
+          34003
+        ],
+        [
+          "literal",
+          243091,
+          1308555
+        ],
+        [
+          "base",
+          3514004,
+          5715715
+        ],
+        [
+          "literal",
+          1551646,
+          196
+        ],
+        [
+          "base",
+          9230123,
+          12970
+        ],
+        [
+          "literal",
+          1551842,
+          828506
+        ],
+        [
+          "base",
+          10077324,
+          656910697
+        ],
+        [
+          "literal",
+          2380348,
+          17733
+        ],
+        [
+          "base",
+          667007104,
+          162561
+        ],
+        [
+          "literal",
+          2398081,
+          7674509
+        ],
+        [
+          "base",
+          675132193,
+          7214
+        ],
+        [
+          "literal",
+          10072590,
+          3661
+        ],
+        [
+          "base",
+          675142490,
+          12632
+        ],
+        [
+          "literal",
+          10076251,
+          21823
+        ],
+        [
+          "base",
+          675217215,
+          507
+        ],
+        [
+          "literal",
+          10098074,
+          6606085
+        ]
+      ],
+      "base_asset_id": 679508161
+    }
+  ],
+  "literal_chunks": [
+    {
+      "name": "literals.part001",
+      "sha256": "0959499b9445fc755a8a99f1e34e872c7a075ba7e81a450b05da58b84f37c4df"
+    },
+    {
+      "name": "literals.part002",
+      "sha256": "90bf38a5428a85eece2a684a951936c7ba7ed10e0bcbcd9143a94aa58ec8b71d"
+    },
+    {
+      "name": "literals.part003",
+      "sha256": "7f1e1fbd0d0d2873a25710530c5dc3551f25108208b0c9aaee64af558d9b6078"
+    },
+    {
+      "name": "literals.part004",
+      "sha256": "a776fa31d8421479dd0bb694da8950aebf4908c267b2e66716e8e6f2ab569f50"
+    },
+    {
+      "name": "literals.part005",
+      "sha256": "cc89a9b8e9dbe0e9b23f480bc427fe1596b37ec9076f53b63866976c5089e4a3"
+    },
+    {
+      "name": "literals.part006",
+      "sha256": "574727ef02ac1e6eb7502b88235f96b8c2be08bcc249bb0b179b5356b86ed82d"
+    },
+    {
+      "name": "literals.part007",
+      "sha256": "0c33af6fb8af36e7cb089ebcf4386f9765fc5ad46e9c7f0c754c2fad6379153d"
+    },
+    {
+      "name": "literals.part008",
+      "sha256": "946d1fae8a9c5e0f61e011c8941b2e74d3cb2d9b68db0b85f529e13222d7865f"
+    }
+  ],
+  "literals_sha256": "08c0441441482f17b92303776c720ba23d40b0dff87b71c29014abebb3e1c05a"
+}
