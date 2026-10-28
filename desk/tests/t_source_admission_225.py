@@ -175,6 +175,20 @@ class SourceAdmission(unittest.TestCase):
         self.assertEqual((self.program/'code-upstream.zip').read_bytes(),changed)
         self.assertEqual((self.program/'tree/module.py').read_bytes(),(self.base/'module.py').read_bytes())
 
+    def test_recovery_stage_retains_verified_pristine_admission_identity(self):
+        from localharness.upstream_recovery import stage
+        admission.activate(self.program)
+        for name in ('app/python_app.py','app/helene_setup.py',
+                     'runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'):
+            path=self.program/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('# fixture')
+        files={p.relative_to(self.program).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
+               for p in self.program.rglob('*') if p.is_file() and 'tree' not in p.relative_to(self.program).parts
+               and p.name not in ('source-admission-state.json','python-package-files.json')}
+        write(self.program/'python-package-files.json',{'files':files})
+        new=stage(self.program,'d'*32)
+        self.assertFalse(admission.activate(new))
+        self.assertEqual((new/'tree/module.py').read_bytes(),self.real)
+
     def test_new_release_has_fresh_identity_without_reviving_stopped_attempt(self):
         sys.path.insert(0,str(Path(__file__).parent))
         import t_source_update_pipeline_220 as fixtures

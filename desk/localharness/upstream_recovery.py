@@ -64,6 +64,17 @@ def stage(root,operation):
     baseline(root,new/'tree')  # archive SHA and every member are verified
     if merge.inventory(new/'tree')!=upstream['files']:
         raise ValueError('Upstream-снимок не соответствует сохранённому коммиту')
+    declaration=read(new/'source-admission.json')
+    if declaration:
+        from .source_admission import FORMAT,_upstream
+        verified,_=_upstream(new,declaration)
+        if merge.inventory(new/'tree')!=verified['files']:
+            raise ValueError('Восстановленный код не соответствует эталону выпуска')
+        # This transaction just constructed and verified B itself. Carry that
+        # fact into the new helper; its tree is no longer a legacy custody view.
+        write(new/'source-admission-state.json',{'format':FORMAT,
+            'identity':merge.signature(declaration),'state':'ready',
+            'provenance':'verified upstream recovery staging'})
     required=('python-app.json','app/python_app.py','app/helene_setup.py',('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'))
     if not all((new/name).is_file() for name in required):
         raise ValueError('Неполная поставка для восстановления; нужен целый архив Hélène')
