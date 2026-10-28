@@ -3646,7 +3646,6 @@ def main() -> None:
                      name="config-watch", daemon=True).start()
     # Control must run independently: the main loop is inside the model/tool turn.
     import atexit
-    import control_watch
     import process_scope
     owner_stop.configure(tree)
     process_scope.configure_admission(lambda: not owner_stop.paused())
