@@ -14,6 +14,24 @@ from localharness.package_notice import write
 
 @unittest.skipIf(os.name=='nt','POSIX lifecycle runs on the owned Linux stand')
 class PosixSetup(unittest.TestCase):
+    def test_process_that_exited_after_snapshot_does_not_block_installation(self):
+        import psutil,time
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);old=root/'old';old.mkdir();entry=old/'worker.py'
+            entry.write_text('import time\ntime.sleep(90)\n')
+            code='import subprocess,sys,time;p=subprocess.Popen([sys.executable,'+repr(str(entry))+']);print(p.pid,flush=True);time.sleep(90)'
+            parent=subprocess.Popen([sys.executable,'-u','-c',code],stdout=subprocess.PIPE,text=True)
+            try:
+                child=psutil.Process(int(parent.stdout.readline()));snapshot=lifecycle._processes(old)
+                self.assertTrue(any(p.pid==child.pid for p,_ in snapshot));child.terminate()
+                end=time.monotonic()+5
+                while child.status()!=psutil.STATUS_ZOMBIE and time.monotonic()<end:time.sleep(.02)
+                self.assertEqual(child.status(),psutil.STATUS_ZOMBIE)
+                with patch.object(lifecycle,'service',return_value=None),patch.object(lifecycle,'_processes',side_effect=[snapshot,snapshot,[]]):lifecycle.stop(old)
+                self.assertIsNone(parent.poll())
+            finally:
+                parent.terminate();parent.wait(timeout=5);parent.stdout.close()
+
     def test_nonchild_zombie_is_quiescent_without_killing_its_parent(self):
         import psutil
         with tempfile.TemporaryDirectory() as tmp:
@@ -28,7 +46,7 @@ class PosixSetup(unittest.TestCase):
                 self.assertEqual(child.status(),psutil.STATUS_ZOMBIE)
                 self.assertTrue(lifecycle.quiescent(old))
             finally:
-                parent.terminate();parent.wait(timeout=5)
+                parent.terminate();parent.wait(timeout=5);parent.stdout.close()
 
     def test_desktop_items_are_owned_bindings_and_foreign_items_stay_untouched(self):
         for platform in ('linux','darwin'):

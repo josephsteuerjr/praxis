@@ -104,7 +104,10 @@ def stop(old):
     import psutil
     for process,info in _processes(old):
         try:
-            if process.create_time()!=info['create_time'] or process.cmdline()!=info['cmdline']:raise RuntimeError('Old process identity changed')
+            if _wait_closed(process,0):continue
+            if process.create_time()!=info['create_time'] or process.cmdline()!=info['cmdline']:
+                if _wait_closed(process,0):continue
+                raise RuntimeError('Old process identity changed')
             process.terminate()
             if not _wait_closed(process,8):
                 process.kill()
