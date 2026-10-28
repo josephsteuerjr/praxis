@@ -1,36 +1,36 @@
 {
-  "format": "helene-component-downloads.v1",
-  "app_version": "2.2.11",
-  "extensions": {
-    "xtts": [
-      "xtts_runtime",
-      "xtts_model"
-    ],
-    "whisper": [
-      "whisper"
-    ],
-    "toolchain": []
-  },
+  "app_version": "2.2.13",
   "artifacts": {
+    "whisper": {
+      "name": "Helene-components-whisper.zip",
+      "sha256": "ef435231303937fa4f49fbf865915fbc1a8d9625022a2fbab36d3b6924580c93",
+      "size": 111474754,
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.11/Helene-components-whisper.zip"
+    },
     "xtts_model": {
       "name": "Helene-components-xtts-model.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.11/Helene-components-xtts-model.zip",
       "sha256": "4d1165ceb9d10fe503324bc777b0bcdbe56b73970cc29ce319c0c966b393b8ce",
-      "size": 1740279196
+      "size": 1740279196,
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.11/Helene-components-xtts-model.zip"
     },
     "xtts_runtime": {
       "name": "Helene-components-xtts-runtime.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.11/Helene-components-xtts-runtime.zip",
       "sha256": "7eb174f3f7e825e9ed316be8b38da664f7bb154100d3ff25b65c95bb79b88b06",
-      "size": 445699527
-    },
-    "whisper": {
-      "name": "Helene-components-whisper.zip",
-      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.11/Helene-components-whisper.zip",
-      "sha256": "ef435231303937fa4f49fbf865915fbc1a8d9625022a2fbab36d3b6924580c93",
-      "size": 111474754
+      "size": 445699527,
+      "url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.11/Helene-components-xtts-runtime.zip"
     }
   },
+  "extensions": {
+    "toolchain": [],
+    "whisper": [
+      "whisper"
+    ],
+    "xtts": [
+      "xtts_runtime",
+      "xtts_model"
+    ]
+  },
+  "format": "helene-component-downloads.v1",
   "target": "windows-x86_64",
   "unavailable": {
     "toolchain": "Build tools are not required by the portable Python application."
