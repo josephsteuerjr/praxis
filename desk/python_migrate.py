@@ -12,7 +12,7 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import sys
@@ -51,6 +51,21 @@ def transaction(old, new, *, prepared=False):
     return note
 
 
+def _program_path_identity(path):
+    """Compare resolved Windows paths independently of the extended prefix.
+
+    Windows can return either spelling while parents are created concurrently.
+    Only the comparison changes; I/O keeps its original path, and resolution
+    still detects links that lead outside the selected installation.
+    """
+    resolved=Path(path).resolve()
+    if os.name!='nt':return resolved
+    raw=str(resolved)
+    if raw.upper().startswith('\\\\?\\UNC\\'):raw='\\\\'+raw[8:]
+    elif raw.startswith('\\\\?\\') and len(raw)>6 and raw[5:7]==':\\':raw=raw[4:]
+    return PureWindowsPath(raw)
+
+
 def copy_program(package, new, progress, extensions=None):
     """Restartable, byte-verified program copy; never touch data/config/Stop.
 
@@ -62,6 +77,7 @@ def copy_program(package, new, progress, extensions=None):
         with path.open('rb') as stream:
             while chunk:=stream.read(1024*1024):h.update(chunk)
         return h.hexdigest()
+    root_identity=_program_path_identity(new)
     extensions=set(extensions or ())
     from localharness.source_admission import copy_exclusions
     preserved=copy_exclusions(package,new)
@@ -87,7 +103,7 @@ def copy_program(package, new, progress, extensions=None):
         nonlocal done
         if item.is_symlink():raise ValueError('Package symlink is unsupported: '+str(item))
         relative=item.relative_to(package);target=new/relative
-        if not target.resolve().is_relative_to(new):raise ValueError('Program destination leaves target')
+        if not _program_path_identity(target).is_relative_to(root_identity):raise ValueError('Program destination leaves target: '+relative.as_posix())
         expected=hash_file(item)
         equal=target.is_file() and target.stat().st_size==item.stat().st_size and hash_file(target)==expected
         if not equal:
@@ -112,7 +128,7 @@ def copy_program(package, new, progress, extensions=None):
 
     # Resolve and validate every target before independent copy workers start.
     for item in files:
-        if item.is_symlink() or not (new/item.relative_to(package)).resolve().is_relative_to(new):
+        if item.is_symlink() or not _program_path_identity(new/item.relative_to(package)).is_relative_to(root_identity):
             raise ValueError('Invalid program copy path')
     with ThreadPoolExecutor(max_workers=max(1,WORKERS-1)) as pool:
         pending=[pool.submit(copy,p) for p in files if p.stat().st_size>=256*1024]
