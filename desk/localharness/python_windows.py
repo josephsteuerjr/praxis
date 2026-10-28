@@ -36,8 +36,6 @@ def shortcut_matches(binding,target,cwd,arguments):
 
 
 def shortcut(path,target,cwd,arguments=''):
-    if Path(target).name.lower()=='helene.exe' and not Path(target).exists() and (Path(cwd)/'runtime/pythonw.exe').is_file():
-        target,arguments=launch_binding(cwd,arguments)
     path.parent.mkdir(parents=True,exist_ok=True)
     env=dict(os.environ,HELENE_LINK=str(path),HELENE_TARGET=str(target),HELENE_WORKDIR=str(cwd),HELENE_ARGUMENTS=arguments)
     powershell("$ErrorActionPreference='Stop';$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:HELENE_LINK);$s.TargetPath=$env:HELENE_TARGET;$s.WorkingDirectory=$env:HELENE_WORKDIR;$s.Arguments=$env:HELENE_ARGUMENTS;$s.IconLocation=$env:HELENE_WORKDIR+'\\app\\resources\\python-app.ico,0';$s.Save()",env)
@@ -45,25 +43,18 @@ def shortcut(path,target,cwd,arguments=''):
         raise RuntimeError('Shortcut target, working directory or arguments did not match after saving')
 
 
-def launch_binding(root,arguments=''):
-    root=Path(root)
-    if (root/'helene.exe').is_file():return root/'helene.exe',arguments
-    return root/'runtime/pythonw.exe',subprocess.list2cmdline(['-s',str(root/'app/python_app.py'),'--root',str(root)])+(' '+arguments if arguments else '')
-
-
 def invoke(owner,command,args):
     if command in ('install_service','remove_service','broker_resume','service_state','admin_state'):
         raise RuntimeError('Брокер и привилегированная служба недоступны в Python-поставке Hélène.')
     if os.name!='nt':raise RuntimeError('Windows integration unavailable on this platform')
     startup=Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs/Startup/Helene.lnk'
-    executable,automatic=launch_binding(owner.root,AUTOMATIC_ARGUMENTS)
-    if command=='autostart_get':return shortcut_matches(shortcut_binding(startup),executable,owner.root,automatic)
+    if command=='autostart_get':return shortcut_matches(shortcut_binding(startup),owner.root/'helene.exe',owner.root,AUTOMATIC_ARGUMENTS)
     if command=='autostart_set':
         if type(args.get('on'))is not bool:raise ValueError('Autostart on must be a boolean')
         prior=shortcut_binding(startup)
-        if prior and (not same_path(prior['target'],executable) or
+        if prior and (not same_path(prior['target'],owner.root/'helene.exe') or
                       prior['cwd'] and not same_path(prior['cwd'],owner.root) or
-                      prior['arguments'] not in ('',automatic)):
+                      prior['arguments'] not in ('',AUTOMATIC_ARGUMENTS)):
             raise RuntimeError('Startup Helene.lnk belongs to another launch binding; it was not changed')
         if startup.exists() and prior is None:raise RuntimeError('Startup path is not a shortcut file')
         if args['on']:shortcut(startup,owner.root/'helene.exe',owner.root,AUTOMATIC_ARGUMENTS)
