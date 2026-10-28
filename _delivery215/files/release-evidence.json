@@ -1,0 +1,96 @@
+{
+  "version": "2.2.15",
+  "implementation_commit": "995bd745362644456ce4649958e58dd542e9b8ad",
+  "source_commit": "ee4f4e4209c6bffffabbacf911cd9e2742a724ae",
+  "selected_agent_flow": {
+    "tests": 3,
+    "passed": true,
+    "scope": [
+      "Real preflight selected-agent request, diff, exact fragment patch, stale candidate rejection, finish, independent review and ready-to-apply; no merger worker",
+      "Legacy tool capability rejection before worker admission",
+      "Explicit clean retry after capability failure retains settings and preserves previous choice receipt"
+    ]
+  },
+  "wizard_ui": {
+    "passed": true,
+    "scope": "Execute shipped JavaScript with fixture DOM: error offers clean choice, clicking retains data/old/target and does not start installation"
+  },
+  "platform_sources": {
+    "windows": {
+      "commit": "4e278ac8aed3c6fddc1086d0189a574202ee1196",
+      "tree": "c680a83edd389b30c0365cb79300d02dcf30fd0a",
+      "tag": "source/helene-2.2.15-windows",
+      "archive": "Helene-2.2.15.zip",
+      "sha256": "c87f4290d201921d0272a2f6ee3f3e79dba7ab5b5250fa28906a80949515476f",
+      "size": 140585399,
+      "source_file_count": 723
+    },
+    "macos": {
+      "commit": "cd9cfcdaff3fa7f90456b9c3e49a00fa4a92e624",
+      "tree": "e18d003ba06fc6138601f25f3d7124f3b5f56de4",
+      "tag": "source/helene-2.2.15-macos",
+      "archive": "Helene-2.2.15-macos-arm64.zip",
+      "sha256": "68b46460bd21f226891f46bb4e4fcd98a434eb045ebf280301585adb0b4262f6",
+      "size": 127874487,
+      "source_file_count": 1050
+    },
+    "debian": {
+      "commit": "5e4927d3f72f4933a54f03582b5d05a4fd4fe58f",
+      "tree": "42bf0212eb3febf30c9f7e08f230a0239a891199",
+      "tag": "source/helene-2.2.15-debian",
+      "archive": "Helene-2.2.15-linux-x86_64.zip",
+      "sha256": "1b454bb446bb3d35fd9ce4fa0df8e923e9f910bb354081b872a477dfdde64b09",
+      "size": 666594595,
+      "source_file_count": 728
+    },
+    "fedora": {
+      "commit": "a36e43058d760d631bdf25979d9603232144817d",
+      "tree": "63b8c9f5803e4625e87e0e105930319626d5a1e8",
+      "tag": "source/helene-2.2.15-fedora",
+      "archive": "Helene-2.2.15-fedora-x86_64.zip",
+      "sha256": "8bdd429e7efcdb9c3cd5d9ec70293daf14d765e2ad82c7beb9c313c21a166af3",
+      "size": 681485241,
+      "source_file_count": 727
+    }
+  },
+  "construction": "Four archives rebuilt with changed Python/wizard source; qualified native runtimes and compiled frontends reused; archive CRC and source/passport bindings checked",
+  "frontend_source_unchanged_except_version": true,
+  "limits": [
+    "No live owner agent/model turn or owner installation performed",
+    "No new native macOS/Linux runtime tests; deferred by owner",
+    "Legacy installed agents without diff/patch require the explicit clean-code choice; preserve is not silently redirected to a separate model",
+    "Prior Windows destination-copy and active-runner fixes retained unchanged"
+  ],
+  "privacy": {
+    "windows": {
+      "source_files": 1084,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1736,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1089,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "fedora": {
+      "source_files": 1088,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "995bd745362644456ce4649958e58dd542e9b8ad": {
+      "files": 2249,
+      "matches": [],
+      "known_private_values": 4
+    },
+    "ee4f4e4209c6bffffabbacf911cd9e2742a724ae": {
+      "files": 2254,
+      "matches": [],
+      "known_private_values": 4
+    }
+  }
+}
