@@ -5,7 +5,7 @@ absolute Windows roots to directories in the transferred copy. Data, selected
 code, dirty Git bytes and preferences pass through app_migration; this command
 neither starts an agent nor retires/deletes the source. Tokens stay private.
 """
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PureWindowsPath, PurePosixPath
 import argparse
 import copy
 import json
@@ -28,6 +28,13 @@ def relocate_config(value, aliases):
                 except ValueError:continue
                 return str(Path(after).resolve().joinpath(*relative.parts))
             if os.name!='nt':raise ValueError('Missing offline path map for configured Windows path: '+value)
+        elif PurePosixPath(value).is_absolute():
+            for before,after in sorted(aliases.items(),key=lambda r:len(r[0]),reverse=True):
+                prior=PurePosixPath(before)
+                if not prior.is_absolute():continue
+                try:relative=PurePosixPath(value).relative_to(prior)
+                except ValueError:continue
+                return str(Path(after).resolve().joinpath(*relative.parts))
         if os.name!='nt' and '\\' in value:return str(Path(*win.parts))
         return value
     result=copy.deepcopy(value)
@@ -38,23 +45,11 @@ def relocate_config(value, aliases):
     return result
 
 
-def validate_offline(old, new, data_home, aliases, *, resume=False):
-    """Read-only admission shared by the graphical preview and actual copy."""
+def prepare_offline(old, new, data_home, aliases, *, resume=False):
     from . import app_migration
+    from .desktop_supervisor import _tree_hold
+    from contextlib import ExitStack
     old,new,data_home=map(lambda p:Path(p).resolve(),(old,new,data_home))
-    if old == new or old.is_relative_to(new) or new.is_relative_to(old):
-        raise ValueError('Source and destination program directories must be separate')
-    if (data_home == old or data_home == new or data_home.is_relative_to(old)
-            or data_home.is_relative_to(new) or old.is_relative_to(data_home)
-            or new.is_relative_to(data_home)):
-        raise ValueError('Data home must be separate from both program directories')
-    if not old.is_dir() or not new.is_dir():
-        raise ValueError('Select an offline source and an already unpacked destination program')
-    if not isinstance(aliases,dict) or any(not isinstance(k,str) or not k or not isinstance(v,str) or not v for k,v in aliases.items()):
-        raise ValueError('Path map must contain old-root to copied-directory strings')
-    aliases={k:str(Path(v).resolve()) for k,v in aliases.items()}
-    if any(not Path(v).is_relative_to(old) for v in aliases.values()):
-        raise ValueError('Every path-map destination must be inside the offline source copy')
     from .python_platform import require_runtime
     require_runtime(new)
     note_path=new/'python-migration.json';reuse=None
@@ -72,31 +67,11 @@ def validate_offline(old, new, data_home, aliases, *, resume=False):
             if not path.is_relative_to(old) or not path.is_dir():
                 raise ValueError('Map all effective data/code roots into the complete offline source copy before import')
     template=new/'helene.json';saved=template.read_bytes() if template.exists() else None
-    if not reuse:
-        value=json.loads(saved) if saved is not None else {'setup_complete':False}
+    if saved and not reuse:
+        value=json.loads(saved)
         if value.get('setup_complete') is not False or (new/'data').exists() or (new/'agents').exists():
             raise ValueError('Import requires a fresh unpacked destination, not another agent home')
-    return old,new,data_home,aliases,reuse,found,saved
-
-
-def preview_offline(old, new, data_home, aliases, *, resume=False):
-    old,new,data_home,aliases,reuse,found,saved=validate_offline(old,new,data_home,aliases,resume=resume)
-    return {'source':str(old),'destination':str(new),'data_home':str(data_home),
-            'path_aliases':aliases,'resume':bool(reuse),
-            'agents':[{'config':r['relative'],'tree':r['tree'],'code':str(r['code'])} for r in found['agents']],
-            'state':'ready_to_resume' if reuse else 'ready',
-            'source_retained':True,'starts_agent':False}
-
-
-def prepare_offline(old, new, data_home, aliases, *, resume=False, progress=None):
-    from . import app_migration
-    from .desktop_supervisor import _tree_hold
-    from contextlib import ExitStack
-    from python_migrate import installation_lock
-    with installation_lock(new), ExitStack() as holds:
-        # Validate again under the destination lease, not merely at preview time.
-        old,new,data_home,aliases,reuse,found,saved=validate_offline(old,new,data_home,aliases,resume=resume)
-        template=new/'helene.json'
+    with ExitStack() as holds:
         trees={Path(row['tree']) for row in found['agents']}
         if reuse:
             for value in reuse['data_paths']:
@@ -105,10 +80,10 @@ def prepare_offline(old, new, data_home, aliases, *, resume=False, progress=None
                 if path.exists():trees.add(path)
         for tree in sorted(trees):holds.enter_context(_tree_hold(tree))
         if reuse:app_migration.retain_attempt_configs(new,reuse)
+        elif saved:template.unlink()
         try:
             return app_migration.prepare(old,new,data_home,old_service_stopped=True,
-                                         preserve_voice=False,path_aliases=aliases,reuse=reuse,progress=progress,
-                                         fresh_template=saved if not reuse else None)
+                                         preserve_voice=False,path_aliases=aliases,reuse=reuse)
         except BaseException:
             if saved is not None and not template.exists():template.write_bytes(saved)
             raise

@@ -7,7 +7,17 @@ import sys
 
 def startup_binding(root):
     root=Path(root).resolve()
-    name='helene-'+hashlib.sha256(str(root).encode()).hexdigest()[:12]+'.desktop'
+    identity=hashlib.sha256(str(root).encode()).hexdigest()[:12]
+    if sys.platform=='darwin':
+        import plistlib
+        from .python_platform import desktop_argv
+        label='app.helene.python.'+identity
+        value={'Label':label,'ProgramArguments':desktop_argv(root,['--root',str(root),'--launch-intent','automatic']),
+               'RunAtLoad':True,'KeepAlive':False,'LimitLoadToSessionType':'Aqua',
+               'ProcessType':'Interactive','WorkingDirectory':str(root),
+               'StandardOutPath':str(root/'autostart.log'),'StandardErrorPath':str(root/'autostart.log')}
+        return Path.home()/'Library/LaunchAgents'/(label+'.plist'),plistlib.dumps(value).decode('utf-8')
+    name='helene-'+identity+'.desktop'
     base=Path(os.environ.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))
     # Desktop Exec values are not shell text. Escape the desktop-entry grammar,
     # including percent field codes, rather than interpolating a shell command.
@@ -27,8 +37,8 @@ def invoke(owner,command,args):
         owner.event('notification',{'title':str(args.get('title','')),'body':str(args.get('body',''))})
         return None
     if command in ('autostart_get','autostart_set'):
-        if not sys.platform.startswith('linux'):
-            raise RuntimeError('macOS login integration awaits native qualification')
+        if not (sys.platform.startswith('linux') or sys.platform=='darwin'):
+            raise RuntimeError('Unsupported POSIX login integration')
         path,text=startup_binding(owner.root)
         if command=='autostart_get':return path.is_file() and path.read_text(encoding='utf-8')==text
         if type(args.get('on')) is not bool:raise ValueError('Autostart on must be boolean')
