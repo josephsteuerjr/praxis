@@ -114,7 +114,7 @@ def main(argv=None):
         app.window.events.shown+=lambda:set_window_icon(app)
         app.window.events.maximized+=lambda:setattr(app,'window_maximized',True)
         app.window.events.restored+=lambda:setattr(app,'window_maximized',False)
-        webview.start(gui='qt' if sys.platform.startswith('linux') else None,private_mode=False,storage_path=str(root/'.migration-webview'),icon=str(root/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')))
+        webview.start(gui='qt' if sys.platform.startswith('linux') else None,private_mode=False,storage_path=str(root/'.migration-webview'),icon=(str(root/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')) if (root/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')).is_file() else None))
     finally:app.close()
     return 0
 
