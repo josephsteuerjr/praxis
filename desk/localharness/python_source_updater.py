@@ -299,9 +299,9 @@ def main():
     if not args.browser:
         # Old installed versions invoke this entry directly. They must reach
         # the same wizard too, rather than silently selecting a source merge.
-        from localharness.source_admission import activate
-        from localharness.migration_source import verify
-        activate(args.new);verify(args.new)
+        # The legacy parent allows only 15 seconds for the shown-window
+        # receipt. Source activation/verification belongs after the user's
+        # wizard action, while progress is visible, before any old writer stops.
         from helene_setup import main as installation_window
         return installation_window(['--root',str(args.new),'--old',str(args.old),
             '--target',str(args.old),'--admission',str(args.staging/'updater-admitted.json'),

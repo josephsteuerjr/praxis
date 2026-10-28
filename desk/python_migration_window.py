@@ -63,6 +63,11 @@ class MigrationWindow(Application):
                 from localharness import windows_installation as installation
                 cancelled=getattr(self,'review_cancelled',None)
                 if cancelled:cancelled.clear()
+                self.progress('checking_extensions')
+                from localharness.source_admission import activate
+                from localharness.migration_source import verify
+                activate(self.root);verify(self.root)
+                if cancelled and cancelled.is_set():raise RuntimeError('Обновление отменено; прежняя программа сохранена')
                 return installation.run(self.root,target,old=old,data=args.get('data') or (None if fresh else installation.default_data(old)),
                     fresh=fresh,remove_old=args.get('removeOld') is True,progress=self.progress,
                     source_mode=args.get('sourceMode'),cancelled=cancelled,force_extensions=getattr(self,'force_extensions',False))

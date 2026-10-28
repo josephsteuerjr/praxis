@@ -226,27 +226,36 @@ def in_place(package, old, *, data=None, progress,source_mode='preserve',cancell
         raise ValueError('Для прежней установки выбери отдельную папку программы. Данные можно оставить в прежней папке.')
     if package != staging / 'Helene' or staging.parent != old.parent or not staging.name.startswith('.helene-update-'):
         raise ValueError('Для обновления в той же папке используй кнопку «Обновить» в Hélène')
-    with installation_lock(old):
+    # The old window's startup recovery also acquires installation_lock(old).
+    # Keep that lease free while its runner loads the temporary update hand.
+    # A separate preparation lease serializes wizards sharing that old runner.
+    preparation = old.parent / ('.helene-preparation-' + old.name)
+    with installation_lock(preparation):
         migration_source.verify(package)
         from .python_updates import prepare_code
         prepare_code(old,package,WizardProgress(progress),source_mode,cancelled=cancelled,
                      require_review=source_mode=='preserve',resolution_owner='agent',forceExtensions=force_extensions)
-        progress('stopping_old')
-        before = migration_windows.service(old)
-        migration_windows.stop(old); migration_windows.quiescent(old)
-        committed = False
-        try:
-            receipt = Progress(staging.with_name(staging.name + '.progress.json'), staging.name.removeprefix('.helene-update-'), old)
-            archives = archive_sources(old, old, uuid.uuid4().hex, progress)
-            updater.prepare_install(old, package, progress=receipt, attached_data=data)
-            ready = threading.Event(); ready.set()
-            progress('starting_new')
-            updater.perform(SimpleNamespace(old=old, new=package, pid=0, staging=staging,
-                archive=[], cleanup=False, browser=False, observer_ready=ready))
-            committed = True
-            note = read(old / 'python-migration.json')
-            note.update(state='new_app_started', archives=archives)
-            return finish(old, note, remove_old=False, progress=progress)
-        except BaseException:
-            if not committed: migration_windows.restore_service(old, before)
-            raise
+        if cancelled and cancelled.is_set():
+            raise RuntimeError('Обновление отменено; прежняя программа сохранена')
+        with installation_lock(old):
+            from .code_transition import validate
+            validate(package)  # Rebind preparation to current code before stopping.
+            progress('stopping_old')
+            before = migration_windows.service(old)
+            migration_windows.stop(old); migration_windows.quiescent(old)
+            committed = False
+            try:
+                receipt = Progress(staging.with_name(staging.name + '.progress.json'), staging.name.removeprefix('.helene-update-'), old)
+                archives = archive_sources(old, old, uuid.uuid4().hex, progress)
+                updater.prepare_install(old, package, progress=receipt, attached_data=data)
+                ready = threading.Event(); ready.set()
+                progress('starting_new')
+                updater.perform(SimpleNamespace(old=old, new=package, pid=0, staging=staging,
+                    archive=[], cleanup=False, browser=False, observer_ready=ready))
+                committed = True
+                note = read(old / 'python-migration.json')
+                note.update(state='new_app_started', archives=archives)
+                return finish(old, note, remove_old=False, progress=progress)
+            except BaseException:
+                if not committed: migration_windows.restore_service(old, before)
+                raise
