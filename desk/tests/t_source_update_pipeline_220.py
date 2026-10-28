@@ -133,6 +133,27 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual((self.old / 'helene.json').read_bytes(), original_config)
         self.assertEqual(len(self.operation()['attempts']), 2)
 
+    def test_completion_feedback_keeps_unresolved_work_and_clears_only_after_finish(self):
+        operation = self.tick()
+        unit = self.forge._unit_dir(operation['task_id'], 'agents', operation['unit_id'])
+        request = read(unit / 'request.json')
+        adapter = source_update_worker.SourceMergeAdapter(request['source_update'])
+        self.assertIn('module.py', adapter.completion_feedback(request))
+        merge.resolve(self.directory, 'module.py', BOTH)
+        self.assertTrue(adapter.completion_feedback(request))
+        merge.finish(self.directory)
+        self.assertEqual(adapter.completion_feedback(request), '')
+        write(self.directory / 'cancel.json', {'cancelled': True})
+        with self.assertRaises(ValueError): adapter.completion_feedback(request)
+
+    def test_recovered_tool_error_with_verified_candidate_still_gets_independent_review(self):
+        self.tick()
+        self.merge_result(forged={'tool_errors': 2})
+        self.assertEqual(self.tick()['state'], 'reviewing')
+        self.assertNotEqual(self.operation()['state'], 'ready_to_apply')
+        self.review_result('clear')
+        self.assertEqual(self.tick()['state'], 'ready_to_apply')
+
     def test_no_ordinary_agent_turn_and_no_manual_bypass(self):
         callback = mock.Mock(side_effect=AssertionError('must not wake ordinary Jarvis'))
         pipeline.notify_due(self.tree, callback)

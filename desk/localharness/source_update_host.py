@@ -164,7 +164,7 @@ def review(old, new, plans, progress=None, cancelled=None):
         cancel = new.parent / ('review-cancel-' + token + '.json')
         log = new.parent / ('source-review-' + token + '.log')
         if progress:
-            progress.phase('waiting_review', message='Проверяю изменения кода координатором из новой поставки')
+            progress.phase('code', message='Подготавливаю совмещение кода')
         command = [str(interpreter_for(new)), '-s', str(new / 'app/localharness/source_update_host.py'),
                    '--old', str(old), '--new', str(new), '--directory', str(directory), '--cancel', str(cancel)]
         with log.open('ab') as output:
@@ -173,7 +173,15 @@ def review(old, new, plans, progress=None, cancelled=None):
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             started = time.monotonic()
             cancel_deadline = None
+            last_stage = None
             while process.poll() is None:
+                operation = read(directory / 'pipeline.json')
+                stage = {'queued': 'code', 'merging': 'waiting_agent',
+                         'waiting_agent': 'waiting_agent', 'reviewing': 'waiting_review',
+                         'ready_to_apply': 'code_ready'}.get(operation.get('state'))
+                if progress and stage and stage != last_stage:
+                    progress.phase(stage)
+                    last_stage = stage
                 if (cancelled is not None and cancelled.is_set()) or time.monotonic() - started > source_update.budget_seconds(read(directory / 'pipeline.json')) + 60:
                     if not cancel.exists():
                         write(cancel, {'reason': 'Update preparation cancelled or timed out'})

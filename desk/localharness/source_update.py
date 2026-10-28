@@ -438,8 +438,10 @@ def _merge_tick(operation, directory, forge):
         # Failure is never candidate acceptance. Preserve the worker's actual
         # cause instead of presenting a network/auth error as stale source.
         raise ValueError('Source merger failed: ' + str(result['error'])[:1200])
+    # Recoverable read/finish errors remain in the trace. Successful finish and
+    # exact current candidate proof, not a zero-error conversation, gate review.
     if (state != 'done' or result.get('status') != 'done' or result.get('complete') is not True
-            or result.get('tool_errors') or result.get('plan_id') != operation['id']
+            or result.get('plan_id') != operation['id']
             or result.get('input_sha256') != operation['input_sha256']
             or result.get('candidate_verified') is not True or result.get('candidate_sha256') != candidate
             or plan.get('state') != 'ready' or plan.get('result') != merge.inventory(directory / 'result')

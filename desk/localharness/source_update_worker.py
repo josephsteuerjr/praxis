@@ -80,7 +80,11 @@ class SourceMergeAdapter:
                 'automatically merged files. Repair declared nonconflict source with a '
                 'specific reason and the current candidate SHA from status. Preserve '
                 'authored changes; selecting an entire incoming file needs justification. '
-                'Call finish; independent reviewers, not you, approve M. '
+                'Read supports character offset pagination (8000 characters per side); '
+                'continue reading relevant sections and consumers before resolving. '
+                'A failed tool call is feedback to correct and continue, not a reason to stop. '
+                'Do not finish with a report of incomplete work: resolve remaining conflicts '
+                'and call finish successfully. Independent reviewers, not you, approve M. '
                 f'Input SHA256={self.input_sha256}. Request: {request.get("brief", "")}')
 
     def dispatch(self, request, name, args):
@@ -144,11 +148,26 @@ class SourceMergeAdapter:
         return json.dumps({'input_sha256': self.input_sha256, 'conflicts': plan['conflicts'],
                            'result': merge.inventory(self.root / 'result')}, ensure_ascii=False)
 
+    def completion_feedback(self, request):
+        plan, _ = self._check(request)
+        if plan.get('state') == 'ready' and merge.inventory(self.root / 'result') == plan.get('result'):
+            return ''
+        unresolved = [name for name in plan['conflicts'] if name not in plan['resolved']]
+        return ('The source merge is still incomplete. Continue using merge_source within '
+                'the remaining turn budget; a textual report cannot finish this task. '
+                'Unresolved files: ' + json.dumps(unresolved) + '. '
+                'Read the relevant source (use offset for long files), resolve each conflict '
+                'preserving both intents, then call finish and correct any validation errors. '
+                'Do not select incoming wholesale just to pass validation. '
+                'expected_input_sha256=' + self.input_sha256)
+
     def result_stamp(self):
         plan, _ = self._check(self.request)
         actual = merge.inventory(self.root / 'result')
         if plan.get('state') != 'ready' or actual != plan.get('result'):
-            raise ValueError('Merger did not finish a validated candidate')
+            unresolved = [name for name in plan['conflicts'] if name not in plan['resolved']]
+            raise ValueError('Source merge remains incomplete; unresolved files: '
+                             + ', '.join(unresolved) + '; successful finish is required')
         return {'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
                 'candidate_sha256': merge.signature(actual), 'candidate_verified': True,
                 'framework_requested': self.framework, 'review_scope': 'isolated-conflict-candidate'}

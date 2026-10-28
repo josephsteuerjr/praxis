@@ -126,6 +126,29 @@ class WorkerDurability(unittest.TestCase):
             "generation": info["generation"], "checkpoint_sha256": info["checkpoint_sha256"]})
         return info
 
+    def test_premature_final_continues_same_worker_to_validated_completion(self):
+        adapter = Adapter()
+        adapter.completion_feedback = mock.Mock(side_effect=['Unresolved: module.py; continue', ''])
+        self.responses = [self.response(text='not complete'), self.response('inspect', 1), self.response(text='finished')]
+        self.assertEqual(self.run_worker(adapter), 0)
+        result = json.loads((self.request_path.parent / 'result.json').read_text())
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['iters_used'], 3)
+        self.assertEqual(len(result['trace']), 1)
+        self.assertIn('Unresolved: module.py', json.dumps(self.calls[1]['messages']))
+
+    def test_premature_final_never_resets_turn_budget(self):
+        adapter = Adapter()
+        adapter.completion_feedback = lambda request: 'Still unresolved'
+        self.request['max_iters'] = 2
+        self.runtime.atomic_json(self.request_path, self.request)
+        self.responses = [self.response(text='incomplete'), self.response(text='incomplete'), self.response(text='budget exhausted')]
+        self.assertEqual(self.run_worker(adapter), 0)
+        result = json.loads((self.request_path.parent / 'result.json').read_text())
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['iters_used'], 2)
+        self.assertEqual(len(self.calls), 3)
+
     def test_older_llm_without_assistant_helper_runs_and_checkpoints(self):
         del self.worker.llm.assistant_message
         self.responses = [self.response('inspect', 0), self.response(text='legacy complete')]

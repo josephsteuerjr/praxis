@@ -419,6 +419,17 @@ def _loop(journal, request_path, request, adapter):
             "usage": getattr(response, "usage", {}), "assistant": _assistant(response)}, ensure_ascii=False))
         journal.event("model_result", output_ref=response_ref, summary=summarizing, model=response.model)
         if summarizing or response.stop_reason != "tool_use":
+            # A textual answer is not completion of an adapter-owned transaction.
+            # Keep the same journal and budget; never replay tools or reset turns.
+            continuation = getattr(adapter, "completion_feedback", None)
+            if not summarizing and callable(continuation):
+                feedback = continuation(request)
+                if feedback:
+                    state["messages"].append(_assistant(response))
+                    state["messages"].append({"role": "user", "content": feedback})
+                    journal.event("completion_deferred", reason=feedback)
+                    journal.save("model_ready", "ready", reply="", stopped_himself=False)
+                    continue
             state["reply"] = response.text.strip()
             if not summarizing:
                 state["stopped_himself"] = (response.stop_reason == "end_turn" if adapter is not None else True)
