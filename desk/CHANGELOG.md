@@ -1,3 +1,7 @@
+# 2.2.11
+
+Unified setup, incoming-panel migration, direct data attachment, source recovery and deterministic cold desktop startup. See [release notes](docs/RELEASE-2.2.11.md).
+
 # 2.2.9
 
 Explicit preserved or pristine source update in the window and agent tool. The selected agent resolves preserved changes; independent review still accepts the candidate. Pristine mode selects exact verified release source while retaining prior code and all profile paths. See [release notes](docs/RELEASE-2.2.9.md).
