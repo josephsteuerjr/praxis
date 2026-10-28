@@ -58,22 +58,40 @@ def _inventory(root, *, allow_bytecode=True):
 
 
 def _upstream(program, declaration):
-    upstream = read(program / 'code-upstream.json')
-    archive = program / 'code-upstream.zip'
+    protected = declaration.get('pristine')
+    manifest = program / ('source-admission-upstream.json' if protected else 'code-upstream.json')
+    archive = program / ('source-admission-upstream.zip' if protected else 'code-upstream.zip')
+    if protected and hashlib.sha256(manifest.read_bytes()).hexdigest() != protected['manifest_sha256']:
+        raise ValueError('Protected incoming source manifest changed')
+    upstream = read(manifest)
     if (upstream.get('sha256') != declaration['upstream_sha256']
             or hashlib.sha256(archive.read_bytes()).hexdigest() != declaration['upstream_sha256']
             or read(program / 'python-app.json').get('version') != declaration['target_version']):
         raise ValueError('Incoming source admission identity changed')
+    _verify_archive(archive, upstream['files'])
+    if protected:
+        # Older installed updaters seal their custody view during prepare().
+        # Accept only that exact declared view, never an arbitrary replacement.
+        current = read(program / 'code-upstream.json')
+        current_archive = program / 'code-upstream.zip'
+        current_sha = hashlib.sha256(current_archive.read_bytes()).hexdigest()
+        if current_sha != declaration['upstream_sha256']:
+            if current.get('files') != declaration['view_files'] or current.get('sha256') != current_sha:
+                raise ValueError('Legacy source reseal differs from declared custody view')
+            _verify_archive(current_archive, declaration['view_files'])
+    return upstream, archive
+
+
+def _verify_archive(archive, files):
     with zipfile.ZipFile(archive) as source:
         names = source.namelist()
-        if len(names) != len(set(names)) or set(names) != set(upstream['files']):
+        if len(names) != len(set(names)) or set(names) != set(files):
             raise ValueError('Incoming pristine source inventory differs')
         for name in names:
             if not merge.allowed(name):
                 raise ValueError('Private or invalid incoming source path')
-            if hashlib.sha256(source.read(name)).hexdigest() != upstream['files'][name]['sha256']:
+            if hashlib.sha256(source.read(name)).hexdigest() != files[name]['sha256']:
                 raise ValueError('Incoming pristine source changed: ' + name)
-    return upstream
 
 
 def activate(program, *, lease_held=False):
@@ -96,7 +114,7 @@ def activate(program, *, lease_held=False):
             return False
         if state and state.get('identity') != identity:
             raise ValueError('Source admission journal belongs to another incoming release')
-        upstream = _upstream(program, declaration)
+        upstream, archive = _upstream(program, declaration)
         baseline, target = declaration['view_files'], upstream['files']
         for name in baseline:
             if not merge.allowed(name):raise ValueError('Invalid admission view path')
@@ -121,13 +139,20 @@ def activate(program, *, lease_held=False):
             raise ValueError('Incoming source was replaced without an admission journal')
         if not state:
             write(state_path, {'format': FORMAT, 'identity': identity, 'state': 'preparing'})
+        if declaration.get('pristine'):
+            # Both immutable inputs and the still-unmodified custody tree have
+            # been checked before restoring legacy updater's derived files.
+            restored = program / '.code-upstream.restore-part'
+            shutil.copyfile(archive, restored)
+            restored.replace(program / 'code-upstream.zip')
+            write(program / 'code-upstream.json', upstream)
         if current != target:
             if staged.exists():
                 # Retain an interrupted extraction, including any later edit.
                 if staged.resolve().parent != bucket:raise ValueError('Invalid source admission staging')
                 staged.replace(bucket / ('retained-' + uuid.uuid4().hex))
             staged.mkdir()
-            with zipfile.ZipFile(program / 'code-upstream.zip') as source:
+            with zipfile.ZipFile(archive) as source:
                 for name, entry in target.items():
                     path = staged / name; path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(source.read(name))
@@ -171,7 +196,7 @@ def current_proofs(verified, program):
     if not verified:return verified
     program = Path(program).resolve()
     changed = {'python-package-files.json', 'edition-inventory.json', 'selected-source.json',
-               'source-admission-state.json'}
+               'source-admission-state.json', 'code-upstream.json', 'code-upstream.zip'}
     result = {}
     for name, proof in verified.items():
         path = Path(name).resolve()

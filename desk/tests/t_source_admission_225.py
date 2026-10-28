@@ -148,6 +148,33 @@ class SourceAdmission(unittest.TestCase):
         self.assertNotEqual(plan['files']['incoming'],self.declaration['view_files'])
         self.assertEqual(plan['files']['incoming'],read(self.program/'code-upstream.json')['files'])
 
+    def test_legacy_prepare_reseal_cannot_replace_protected_pristine_source(self):
+        pristine=(self.program/'code-upstream.zip').read_bytes()
+        manifest=(self.program/'code-upstream.json').read_bytes()
+        (self.program/'source-admission-upstream.zip').write_bytes(pristine)
+        (self.program/'source-admission-upstream.json').write_bytes(manifest)
+        self.declaration['pristine']={'manifest_sha256':hashlib.sha256(manifest).hexdigest()}
+        write(self.program/'source-admission.json',self.declaration)
+        code_transition.seal(self.program)  # real behavior of installed 2.2.4
+        self.assertNotEqual((self.program/'code-upstream.zip').read_bytes(),pristine)
+        self.assertTrue(admission.activate(self.program))
+        self.assertEqual((self.program/'code-upstream.zip').read_bytes(),pristine)
+        self.assertEqual((self.program/'tree/module.py').read_bytes(),self.real)
+
+    def test_protected_pristine_does_not_authorize_unknown_resealed_contents(self):
+        manifest=(self.program/'code-upstream.json').read_bytes()
+        shutil.copy2(self.program/'code-upstream.zip',self.program/'source-admission-upstream.zip')
+        (self.program/'source-admission-upstream.json').write_bytes(manifest)
+        self.declaration['pristine']={'manifest_sha256':hashlib.sha256(manifest).hexdigest()}
+        write(self.program/'source-admission.json',self.declaration)
+        (self.program/'tree/module.py').write_text('unknown_change=True\n')
+        code_transition.seal(self.program)
+        changed=(self.program/'code-upstream.zip').read_bytes()
+        shutil.copy2(self.base/'module.py',self.program/'tree/module.py')
+        with self.assertRaisesRegex(ValueError,'reseal differs'):admission.activate(self.program)
+        self.assertEqual((self.program/'code-upstream.zip').read_bytes(),changed)
+        self.assertEqual((self.program/'tree/module.py').read_bytes(),(self.base/'module.py').read_bytes())
+
     def test_new_release_has_fresh_identity_without_reviving_stopped_attempt(self):
         sys.path.insert(0,str(Path(__file__).parent))
         import t_source_update_pipeline_220 as fixtures
