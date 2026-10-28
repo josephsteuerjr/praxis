@@ -14,6 +14,26 @@ from localharness.package_notice import write
 
 @unittest.skipIf(os.name=='nt','POSIX lifecycle runs on the owned Linux stand')
 class PosixSetup(unittest.TestCase):
+    def test_installer_cwd_cannot_claim_foreign_inline_or_relative_python(self):
+        from contextlib import chdir
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);old=root/'old';other=root/'other';children=[]
+            for folder in (old,other):
+                folder.mkdir();(folder/'worker.py').write_text('import time\ntime.sleep(90)\n')
+            try:
+                children.append(subprocess.Popen([sys.executable,str(old/'worker.py')]))
+                children.append(subprocess.Popen([sys.executable,'worker.py'],cwd=old))
+                children.append(subprocess.Popen([sys.executable,'worker.py'],cwd=other))
+                children.append(subprocess.Popen([sys.executable,'-c','import time;time.sleep(90)'],cwd=old))
+                with chdir(old),patch.object(lifecycle,'service',return_value=None):lifecycle.stop(old)
+                for child in children[:2]:self.assertIsNotNone(child.poll())
+                for child in children[2:]:self.assertIsNone(child.poll())
+                self.assertTrue(lifecycle.quiescent(old))
+            finally:
+                for child in children:
+                    if child.poll() is None:child.terminate()
+                    child.wait(timeout=5)
+
     def test_exec_within_selected_program_is_rechecked_before_shutdown(self):
         import time
         with tempfile.TemporaryDirectory() as tmp:

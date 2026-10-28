@@ -13,11 +13,29 @@ import time
 from .package_notice import write
 
 
-def _inside(value, root):
+def _inside(value, root, *, cwd=None):
     try:
-        path=Path(value).resolve()
+        path=Path(value)
+        if not path.is_absolute():
+            if cwd is None:return False
+            path=Path(cwd)/path
+        path=path.resolve()
         return path==root or path.is_relative_to(root)
     except (OSError,ValueError,TypeError):return False
+
+
+def _script_inside(info,root,process):
+    args=info['cmdline'] or [];inline=False
+    for arg in args[1:]:
+        if inline:inline=False;continue
+        if arg in ('-c','--eval','-e','-m'):inline=True;continue
+        if arg.startswith('-'):continue
+        path=Path(arg)
+        if path.is_absolute():
+            if path.resolve()!=root and _inside(arg,root):return True
+        elif path.suffix.lower() in {'.py','.pyw','.js','.mjs','.cjs','.sh','.bash'}:
+            if _inside(arg,root,cwd=process.cwd()):return True
+    return False
 
 
 def _processes(old):
@@ -30,7 +48,7 @@ def _processes(old):
             if process.pid in ancestors or info['status'] in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD):continue
             executable=Path(info['exe'] or '').name.lower()
             script_owner=(executable.startswith(('python','node')) or executable in {'sh','bash'})
-            if _inside(info['exe'],old) or script_owner and any(_inside(arg,old) and Path(arg).resolve()!=old for arg in (info['cmdline'] or [])[1:] if not arg.startswith('-')):
+            if _inside(info['exe'],old) or script_owner and _script_inside(info,old,process):
                 result.append((process,info))
         except (psutil.NoSuchProcess,psutil.AccessDenied):continue
     return result
