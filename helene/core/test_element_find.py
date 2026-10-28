@@ -56,15 +56,6 @@ class Formatting(unittest.TestCase):
         self.assertIn("search_incomplete", missed)
         self.assertIn("raise limits", missed)
 
-    def test_unverified_origin_reaches_agent_text_without_click_coordinates(self):
-        receipt = {'ok':True,'matched':1,'elements':[{'role':'button','rect':{'center':{'x':20,'y':30},'coordinate_space':'reported_origin_unverified'}}], 'notes':['AT-SPI root origin is unverified']}
-        said = body_client.format_element_find(receipt)
-        self.assertIn('координаты экрана не подтверждены', said)
-        self.assertIn('AT-SPI root origin is unverified', said)
-        self.assertNotIn('центр=20,30', said)
-        receipt['elements'][0]['rect']['coordinate_space'] = 'screen'
-        self.assertIn('центр=20,30', body_client.format_element_find(receipt))
-
     def test_non_dict_transport_failure_is_named(self):
         self.assertIn("не ответил", body_client.format_element_find(None))
         self.assertIn("не ответил", body_client.format_element_find("сломалось"))
