@@ -1,0 +1,18 @@
+# Runtime utilities already used by Praxis.
+git
+libcairo2
+chromium
+
+# Headless Office editing/conversion without Base, Math, report-builder or GUI extras.
+libreoffice-writer-nogui
+libreoffice-calc-nogui
+libreoffice-impress-nogui
+
+# Cyrillic/Unicode coverage and metric-compatible substitutes for common MS fonts.
+# These are freely redistributable and require no msttcorefonts EULA prompt.
+fonts-dejavu-core
+fonts-liberation
+fonts-noto-core
+fonts-noto-color-emoji
+fonts-crosextra-carlito
+fonts-crosextra-caladea
