@@ -1,0 +1,121 @@
+{
+  "version": "2.2.13",
+  "implementation_commit": "bffc7ea2dc9ecbbe398ba4a4af26d52f44c1df18",
+  "source_commit": "c781555fd72852cfc176f5c4ff1277118a089a52",
+  "windows_active_native_migration": {
+    "passed": true,
+    "platform": "Windows",
+    "fixture": "synthetic native-layout 0.8.0 config, active stock runner, no provider credentials",
+    "owner_installation_modified": false,
+    "migration_state": "completed",
+    "startup_proof": {
+      "id": "main",
+      "tree": "ISOLATED_FIXTURE\\native\\old-native\\data",
+      "channel_pid": 11140,
+      "runner_pid": 20456,
+      "code": "ISOLATED_FIXTURE\\native\\Helene\\code\\b74ce948d86047abb05e6efce625b728\\clean-0",
+      "agents": [
+        {
+          "id": "main",
+          "tree": "ISOLATED_FIXTURE\\native\\old-native\\data",
+          "channel_pid": 11140,
+          "runner_pid": 20456,
+          "code": "ISOLATED_FIXTURE\\native\\Helene\\code\\b74ce948d86047abb05e6efce625b728\\clean-0"
+        }
+      ]
+    },
+    "heartbeat_advanced_without_restart": true,
+    "data_and_old_source_retained": true,
+    "native_window_pid": 19720,
+    "native_window_visible": true,
+    "archive_sha256": "4f564a77180005e1ebb41113b0597aa7d6e9ae1eee9b555f574f74bf318bc2ff",
+    "process_exit": 0,
+    "fixture_children_exited": true
+  },
+  "regression": {
+    "tests": 1,
+    "passed": true,
+    "scope": "Actual runner speech-install AST call and function-scope imports; reproduced UnboundLocalError before fix"
+  },
+  "platform_sources": {
+    "windows": {
+      "commit": "8e6d3cd7d39c98777898524f80abcd97940a167d",
+      "tree": "f2a97018764501144449adf01273d323a8ce3bd9",
+      "tag": "source/helene-2.2.13-windows",
+      "archive": "Helene-2.2.13.zip",
+      "sha256": "4f564a77180005e1ebb41113b0597aa7d6e9ae1eee9b555f574f74bf318bc2ff",
+      "size": 140584082,
+      "source_file_count": 723
+    },
+    "macos": {
+      "commit": "8f0e3bb7360b557aae10a38329e5bd7e8f31185a",
+      "tree": "f70b5f33c77eef94956244367638288c4b83a75f",
+      "tag": "source/helene-2.2.13-macos",
+      "archive": "Helene-2.2.13-macos-arm64.zip",
+      "sha256": "a9462806fb159a5c8c264a2dcd995c39b42581713e68eb05974507375c02503b",
+      "size": 127873139,
+      "source_file_count": 1050
+    },
+    "debian": {
+      "commit": "11148e983bbcafc8818fa2beb5f74c4a9367b918",
+      "tree": "95dff9d3f62e1958ae943715161c79f60b471950",
+      "tag": "source/helene-2.2.13-debian",
+      "archive": "Helene-2.2.13-linux-x86_64.zip",
+      "sha256": "f85b84f048874da1919ec69e44850d938ace175a87318860712a24bc6bb12b48",
+      "size": 666593238,
+      "source_file_count": 728
+    },
+    "fedora": {
+      "commit": "3513b2f3ec0e7586930bb8b1587717faf472352e",
+      "tree": "a8d6a3ae5a1740e4d34124769f4cd2279b1e4a3a",
+      "tag": "source/helene-2.2.13-fedora",
+      "archive": "Helene-2.2.13-fedora-x86_64.zip",
+      "sha256": "4e7f791771686a7fcf15a2e776bbd5fddef7c6352072f88b05e591ef71a18dde",
+      "size": 681483913,
+      "source_file_count": 727
+    }
+  },
+  "construction": "Four archives rebuilt with corrected Python and wizard source; qualified native runtimes and compiled frontends reused; archive CRC and source/passport identities checked",
+  "frontend_source_unchanged_except_version": true,
+  "other_os_runtime_tests": "Deferred as explicitly requested by owner",
+  "previous_release": "2.2.12 remains published; optional voice URLs retain pinned 2.2.11 assets",
+  "limits": [
+    "Windows fixture uses synthetic native-layout 0.8.0 configuration, not the actual historical 0.8.0 executable",
+    "No external provider/model request tested",
+    "No acceptance on affected user computer claimed",
+    "No new native runtime tests on macOS/Linux",
+    "No owner installation changed"
+  ],
+  "privacy": {
+    "windows": {
+      "source_files": 1084,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1736,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1089,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "fedora": {
+      "source_files": 1088,
+      "known_private_values": 6,
+      "matches": []
+    },
+    "bffc7ea2dc9ecbbe398ba4a4af26d52f44c1df18": {
+      "files": 2247,
+      "matches": [],
+      "known_private_values": 6
+    },
+    "c781555fd72852cfc176f5c4ff1277118a089a52": {
+      "files": 2250,
+      "matches": [],
+      "known_private_values": 6
+    }
+  }
+}
