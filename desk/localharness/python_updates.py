@@ -180,8 +180,8 @@ def update_check(owner,url):
     latest=value.get('version') or value.get('tag_name','')
     current=version(owner.root)
     assets=value.get('assets',[])
-    from .python_platform import asset_name, target
-    name=asset_name(latest.lstrip('vV'),target(owner.root))
+    from .python_platform import asset_name, target, distribution
+    name=asset_name(latest.lstrip('vV'),target(owner.root),distribution(owner.root))
     candidates=[a for a in assets if a.get('name')==name]
     asset=candidates[0] if len(candidates)==1 else {}
     address=value.get('url') if value.get('version') else asset.get('browser_download_url',value.get('html_url',''))
@@ -236,12 +236,12 @@ def _download(url, target, expected='', progress=None):
 def update_download(owner,url,sha256=None,extensions=None):
     parsed=urllib.parse.urlsplit(url)
     name=Path(urllib.parse.unquote(parsed.path)).name
-    from .python_platform import asset_name, target
+    from .python_platform import asset_name, target, distribution
     selected=target(owner.root)
-    suffix='' if selected=='windows-x86_64' else '-'+selected
-    ending=suffix+'.zip'
+    flavor=distribution(owner.root)
+    ending=asset_name('',selected,flavor).removeprefix('Helene-')
     release=name[len('Helene-'):-len(ending)] if name.startswith('Helene-') and name.endswith(ending) else ''
-    if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',release) or name != asset_name(release,selected):
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',release) or name != asset_name(release,selected,flavor):
         raise ValueError('Expected an update archive for this application target')
     folder=owner.root.resolve().parent
     from .update_progress import Progress
@@ -401,7 +401,7 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
     from .python_platform import require_runtime
-    require_runtime(new_root)
+    require_runtime(new_root,old if (old/'python-app.json').is_file() else None)
     from .update_process import interpreter_for
     interpreter=interpreter_for(new_root)
     if not interpreter.is_file():raise ValueError('Python application runtime is missing')
@@ -464,7 +464,7 @@ def _open_installation_wizard(owner,new_root,destination,progress,sourceMode=Non
     from .migration_source import verify
     from .update_process import interpreter_for,background_flags
     from .python_platform import require_runtime
-    require_runtime(new_root);verify(new_root)
+    require_runtime(new_root,owner.root);verify(new_root)
     entry=new_root/'app/helene_setup.py'
     if not entry.is_file():raise ValueError('Incoming application has no installation wizard')
     command=[str(interpreter_for(new_root)),'-s',str(entry),'--root',str(new_root),
