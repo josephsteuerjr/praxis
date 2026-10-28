@@ -143,27 +143,59 @@ def cleanup_installation(old,new):
     for row in (before or {}).get('services',[]):
         if row['running']:raise RuntimeError('Old service restarted; retirement refused')
         if row['kind']=='systemd':_run([*row['command'],'disable',row['unit']],elevated=row['elevated'])
+        else:_run(['launchctl','disable',row['target']],elevated=row['elevated'])
     removed=[]
     for folder in (Path.home()/'Desktop',Path.home()/'.local/share/applications',Path.home()/'.config/autostart'):
         for path in folder.glob('*.desktop'):
             if path.is_symlink():continue
-            text=path.read_text(errors='replace')
-            commands=[line.partition('=')[2] for line in text.splitlines() if line.startswith(('Exec=','TryExec='))]
-            if any(_inside(arg,Path(old).resolve()) for command in commands for arg in shlex.split(command)):
+            if desktop_binding(path,old):
                 path.unlink();removed.append(str(path))
+        for path in folder.glob('*.app'):
+            if path.is_symlink():
+                if _inside(path.resolve(),Path(old).resolve()):path.unlink();removed.append(str(path))
+            elif desktop_binding(path,old):
+                for relative in ('Contents/MacOS/Helene','Contents/Info.plist'):(path/relative).unlink()
+                for relative in ('Contents/MacOS','Contents',''):
+                    try:(path/relative).rmdir()
+                    except OSError:pass
+                removed.append(str(path))
     return {'shortcuts_removed':removed,'services_disabled':bool(before),'legacy_uninstaller_used':False}
+
+
+def desktop_binding(path,root):
+    """Recognize an executable binding, never an unrelated app's data argument."""
+    path,root=Path(path),Path(root).resolve()
+    try:
+        if path.suffix=='.app':
+            if path.is_symlink():return False
+            value=plistlib.loads((path/'Contents/Info.plist').read_bytes())
+            if value.get('CFBundleIdentifier')!='ai.helene.desktop-shortcut':return False
+            script=(path/'Contents/MacOS/Helene').read_text()
+            commands=[line[5:] for line in script.splitlines() if line.startswith('exec ')]
+        else:
+            commands=[line.partition('=')[2] for line in path.read_text().splitlines() if line.startswith(('Exec=','TryExec='))]
+        for command in commands:
+            args=shlex.split(command)
+            if not args:continue
+            if _inside(args[0],root):return True
+            if Path(args[0]).name.startswith(('python','node')) or Path(args[0]).name in ('sh','bash'):
+                if any(_inside(arg,root) and Path(arg).resolve()!=root for arg in args[1:] if not arg.startswith('-')):return True
+    except (OSError,ValueError,plistlib.InvalidFileException):pass
+    return False
 
 
 def install_shortcuts(new,folder=None,*,desktop_only=False):
     new=Path(new).resolve();desktop=Path(folder) if folder else Path.home()/'Desktop';desktop.mkdir(parents=True,exist_ok=True)
     if sys.platform=='darwin':
         target=desktop/'Helene.app';contents=target/'Contents';binary=contents/'MacOS/Helene'
+        if target.exists() and not desktop_binding(target,new):raise ValueError('Desktop Hélène item belongs to another installation; retained')
         binary.parent.mkdir(parents=True,exist_ok=True)
         binary.write_text('#!/bin/sh\nexec '+shlex.join([str(new/'runtime/bin/python3'),'-s',str(new/'app/python_app.py'),'--root',str(new)])+'\n')
         binary.chmod(0o755)
         (contents/'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable':'Helene','CFBundleName':'Hélène','CFBundleIdentifier':'ai.helene.desktop-shortcut','CFBundlePackageType':'APPL'}))
     else:
         target=desktop/'Helene.desktop'
+        if target.exists() and not desktop_binding(target,new):raise ValueError('Desktop Hélène item belongs to another installation; retained')
         def quoted(value):return '"'+str(value).replace('\\','\\\\').replace('"','\\"').replace('`','\\`').replace('$','\\$').replace('%','%%')+'"'
         target.write_text('[Desktop Entry]\nType=Application\nName=Hélène\nExec='+ ' '.join(quoted(v) for v in (new/'runtime/bin/python3','-s',new/'app/python_app.py','--root',new))+'\nTerminal=false\n')
         target.chmod(0o755)
@@ -177,15 +209,16 @@ def remove_program(old,new,note):
     protected=[Path(p).resolve() for p in note.get('data_paths',[])+note.get('old_data_paths',[])]+[Path(row['old']).resolve() for row in note.get('source_paths',[]) if row.get('old')]
     protected += [old/name for name in ('data','profile','agents','backups','archives','memory','models','tree','code','code-backup')]
     names=set()
-    for directory in ('app','runtime','resources','bin'):
+    for directory in ('app','runtime','resources','bin','Helene.app','Migrate Helene.app'):
         folder=old/directory
         if folder.is_dir() and not folder.is_symlink():names.update(p.relative_to(old).as_posix() for p in folder.rglob('*') if p.is_file())
-    names.update(n for n in ('python-app.json','python-package-files.json','Start Helene.command','Migrate Helene.command','Start Helene.sh','helene') if (old/n).is_file())
+    names.update(n for n in ('python-app.json','python-package-files.json','Start Helene.command','Migrate Helene.command','Start Helene.sh','helene','helene-body','helene-bridge') if (old/n).is_file())
     files={}
     for name in sorted(names):
         path=old/name;resolved=path.resolve()
         if not resolved.is_relative_to(old) or path.is_symlink() or any(p.is_symlink() for p in path.parents if p.is_relative_to(old)):raise ValueError('Linked program path')
         if any(resolved==p or resolved.is_relative_to(p) for p in protected):continue
+        if any(part.lower() in ('models','model','memory','.secrets') for part in path.relative_to(old).parts):continue
         files[name]=hashlib.sha256(path.read_bytes()).hexdigest()
     write(new/'old-program-retirement.json',{'old':str(old),'new':str(new),'files':files,'protected':[str(p) for p in protected]})
     for name,digest in files.items():

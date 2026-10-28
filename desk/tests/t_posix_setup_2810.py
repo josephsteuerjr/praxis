@@ -14,6 +14,22 @@ from localharness.package_notice import write
 
 @unittest.skipIf(os.name=='nt','POSIX lifecycle runs on the owned Linux stand')
 class PosixSetup(unittest.TestCase):
+    def test_desktop_items_are_owned_bindings_and_foreign_items_stay_untouched(self):
+        for platform in ('linux','darwin'):
+            with self.subTest(platform=platform), tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);desktop=root/'Desktop';desktop.mkdir();old=root/'old';new=root/'new'
+                with patch.object(sys,'platform',platform),patch.dict(os.environ,{'HOME':str(root)}),patch.object(lifecycle,'service',return_value=None):
+                    paths=lifecycle.install_shortcuts(old,desktop)
+                    self.assertTrue(lifecycle.desktop_binding(Path(paths[0]),old))
+                    lifecycle.cleanup_installation(old,new)
+                    self.assertFalse(Path(paths[0]).exists())
+                    paths=lifecycle.install_shortcuts(new,desktop)
+                    target=Path(paths[0]);self.assertTrue(lifecycle.desktop_binding(target,new))
+                    protected=target/'Contents/MacOS/Helene' if platform=='darwin' else target
+                    protected.write_text('foreign desktop item')
+                    with self.assertRaises(ValueError):lifecycle.install_shortcuts(old,desktop)
+                    self.assertEqual(protected.read_text(),'foreign desktop item')
+
     def test_old_writer_stops_without_affecting_a_neighbour(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);old=root/'old';other=root/'old-other'
