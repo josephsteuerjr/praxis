@@ -1,0 +1,106 @@
+{
+  "version": "2.2.17",
+  "implementation_commit": "8b2819ef13eea47865758043f94a5b1244f12f9d",
+  "source_commit": "42d7bf532e665602b5a3cc26a0824b5a5b0904d8",
+  "native_windows_legacy_admission": {
+    "passed": true,
+    "version": "2.2.17",
+    "archive_sha256": "66862ccf9a84228f8255e0fc044961c0becae502a3918f456a69b5b1445f39b1",
+    "original_consumer": "public 2.1.1 await_admission, default 15 seconds",
+    "elapsed_seconds": 3.8627712999877986,
+    "source_not_activated_before_window": true,
+    "native_window_visually_observed": true,
+    "fixture_closed": true,
+    "scope": "Real bundled Windows Python/pywebview shown-window admission accepted by original 2.1.1 consumer in 3.86s. Additional UI interaction started a disposable installation; stopped and cleaned. No owner installation/model/provider acceptance claimed."
+  },
+  "targeted_regressions": {
+    "passed": true,
+    "tests": 5,
+    "scope": [
+      "Original 2.1.1 admission consumer sees shown receipt before activation/verification",
+      "Verification follows wizard confirmation and precedes install",
+      "Cancellation during verification prevents install",
+      "Actual old installation lock remains available during runner preparation and held for replacement",
+      "Source freshness failure blocks old shutdown"
+    ]
+  },
+  "platform_sources": {
+    "windows": {
+      "commit": "b022da330f1a94796f7d307d40955740d13dfe8e",
+      "tree": "c64d8d948ba043c63cf88099c82ab778bb67cbbe",
+      "tag": "source/helene-2.2.17-windows",
+      "archive": "Helene-2.2.17.zip",
+      "sha256": "66862ccf9a84228f8255e0fc044961c0becae502a3918f456a69b5b1445f39b1",
+      "size": 140591054,
+      "source_file_count": 724
+    },
+    "macos": {
+      "commit": "3ee30e9c9122d6a835ec6aa4319ce18d0310b5b1",
+      "tree": "8120baf0000058d8a10f2aa84d89c2807ff956d6",
+      "tag": "source/helene-2.2.17-macos",
+      "archive": "Helene-2.2.17-macos-arm64.zip",
+      "sha256": "49a8912a44efdba2c3a4e409de9b672b605c7665093147bf2a6e4e474c593e38",
+      "size": 127880161,
+      "source_file_count": 1051
+    },
+    "debian": {
+      "commit": "f03cdfc29c075598640c964b2f92a17a9b94ecb3",
+      "tree": "c547b143a7051b99ce30e989d4b7602bc6c8758b",
+      "tag": "source/helene-2.2.17-debian",
+      "archive": "Helene-2.2.17-linux-x86_64.zip",
+      "sha256": "52c39f87fcef68630559b55735d0620adfa9591acf0b865f2948f511b8b67a33",
+      "size": 666600340,
+      "source_file_count": 729
+    },
+    "fedora": {
+      "commit": "cc901aec9b559dd5d47b161d2d6ca7bbf1146f9a",
+      "tree": "8c52934ddc5e10b03518120ef2bee12cb58dd761",
+      "tag": "source/helene-2.2.17-fedora",
+      "archive": "Helene-2.2.17-fedora-x86_64.zip",
+      "sha256": "e96b14f15886a193cbda68dfb1214826eedea8456589eccc2d37ca102b31e902",
+      "size": 681490919,
+      "source_file_count": 728
+    }
+  },
+  "construction": "Four platform archives constructed with corrected Python source; qualified native runtimes and compiled frontends reused. Archive CRC/source/passport checks retained in packaging receipts.",
+  "compiled_frontend_source_unchanged_except_version": true,
+  "prior_qualification": "2.2.16 same-agent diff/patch bridge and locked-cache regression evidence retained in earlier release; not rerun for unchanged implementation",
+  "limits": [
+    "Window admission is not full installation acceptance on the owner profile",
+    "No live owner agent/provider turn or owner profile mutation performed",
+    "Isolated native fixture received additional UI interaction after admission; disposable installation stopped and cleaned",
+    "No new native macOS/Linux tests; deferred by owner"
+  ],
+  "privacy": {
+    "windows": {
+      "source_files": 1085,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1737,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1090,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "fedora": {
+      "source_files": 1089,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "8b2819ef13eea47865758043f94a5b1244f12f9d": {
+      "files": 2253,
+      "matches": [],
+      "known_private_values": 4
+    },
+    "42d7bf532e665602b5a3cc26a0824b5a5b0904d8": {
+      "files": 2260,
+      "matches": [],
+      "known_private_values": 4
+    }
+  }
+}
