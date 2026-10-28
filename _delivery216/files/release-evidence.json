@@ -1,0 +1,121 @@
+{
+  "version": "2.2.16",
+  "implementation_commit": "94ba9eeb625d4e78d6b682b132a787fd9eceb727",
+  "source_commit": "d1af6c497fe643be9f71de2bf391c432943f7ef3",
+  "overlay_regression": {
+    "tests": 6,
+    "passed": true,
+    "scope": "Locked/changing WebView cache excluded from program and source inventories; actual program mutation still rejected; durable overlay journal checks"
+  },
+  "legacy_hand_bridge": {
+    "tests": 4,
+    "passed": true,
+    "scope": "Same agent hand registration, diff/patch/finish, exact old module restoration on success/failure, Stop and protected-app rejection"
+  },
+  "controller_protocol": {
+    "tests": 1,
+    "passed": true,
+    "scope": "Loopback HTTP with window token, stale control skipped, actual legacy result-envelope shape, restart acknowledgement"
+  },
+  "full_preparation": {
+    "passed": true,
+    "scope": "Real prepare_code and legacy hand registration, selected-agent patch/finish, incoming independent review, binding validation, old hand restoration. Fake provider/controller process transport; no owner app mutation."
+  },
+  "packaged_windows_cli": {
+    "passed": true,
+    "archive_sha256": "70120da480d9ed88873f885d427a09b6aff4e054570d6e9721c5bd05261031d9",
+    "version": "2.2.16",
+    "actual_packaged_cli": [
+      "status",
+      "diff",
+      "patch",
+      "finish"
+    ],
+    "wrong_release_rejected": true,
+    "runtime": "Qualified unchanged Windows runtime linked from retained 2.2.14 delivery",
+    "scope": "Real subprocesses, verified extracted app/upstream, isolated Git candidate. No model/provider request, native window or owner profile mutation."
+  },
+  "wizard_ui": {
+    "passed": true,
+    "scope": "Clean choice retains selected data/old/target and does not start installation"
+  },
+  "platform_sources": {
+    "windows": {
+      "commit": "8f20824839cb962fecbd07242580e38ec4239fec",
+      "tree": "846c2b6d182ed48d8dde56fc4ac4e46019f766d7",
+      "tag": "source/helene-2.2.16-windows",
+      "archive": "Helene-2.2.16.zip",
+      "sha256": "70120da480d9ed88873f885d427a09b6aff4e054570d6e9721c5bd05261031d9",
+      "size": 140590658,
+      "source_file_count": 724
+    },
+    "macos": {
+      "commit": "e6c3ede90471175aa057f5504338828b8928a5e9",
+      "tree": "25b76b3ba0bbc046a6dd54d94fc605b02c0595ff",
+      "tag": "source/helene-2.2.16-macos",
+      "archive": "Helene-2.2.16-macos-arm64.zip",
+      "sha256": "2c3b27375363bc349158737397879e80d8f7a374c6ebd987b5c3a1a43177ee8c",
+      "size": 127879709,
+      "source_file_count": 1051
+    },
+    "debian": {
+      "commit": "3e5441bc6d79dce47fcad95dce232e7ff2a17601",
+      "tree": "e882ef98b55bd5f20036c13ed852f2cea8f240cf",
+      "tag": "source/helene-2.2.16-debian",
+      "archive": "Helene-2.2.16-linux-x86_64.zip",
+      "sha256": "6ec822944a804d7b9a869eb932e174260589fdbd4f638e9968c90ab49797a7a5",
+      "size": 666599896,
+      "source_file_count": 729
+    },
+    "fedora": {
+      "commit": "33449e5f7e222ca8583641b37aa8110060fb050c",
+      "tree": "89f47e48ac5285090d919df9c4808c4b1f28b161",
+      "tag": "source/helene-2.2.16-fedora",
+      "archive": "Helene-2.2.16-fedora-x86_64.zip",
+      "sha256": "a8551e60a673a6b42b42d526a96c859b05ebaee0d5b07c58d2c7121f69e6395d",
+      "size": 681490463,
+      "source_file_count": 728
+    }
+  },
+  "construction": "Four archives rebuilt with corrected Python/wizard source. Qualified native runtimes and compiled frontends reused. Archive CRC and exact source/passport bindings checked.",
+  "frontend_source_unchanged_except_version": true,
+  "limits": [
+    "No live owner agent/provider turn or owner installation performed",
+    "Controller process/model transport is simulated in integration tests; packaged CLI executes real verified distribution in real subprocesses",
+    "No native-window/real-device acceptance added; previous unchanged runtime qualification retained",
+    "No new native macOS/Linux tests; deferred by owner",
+    "Native predecessors without Python runner control still receive explicit clean-code fallback with existing data"
+  ],
+  "privacy": {
+    "windows": {
+      "source_files": 1085,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "macos": {
+      "source_files": 1737,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "debian": {
+      "source_files": 1090,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "fedora": {
+      "source_files": 1089,
+      "known_private_values": 4,
+      "matches": []
+    },
+    "94ba9eeb625d4e78d6b682b132a787fd9eceb727": {
+      "files": 2252,
+      "matches": [],
+      "known_private_values": 4
+    },
+    "d1af6c497fe643be9f71de2bf391c432943f7ef3": {
+      "files": 2258,
+      "matches": [],
+      "known_private_values": 4
+    }
+  }
+}

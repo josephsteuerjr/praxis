@@ -1,0 +1,753 @@
+{
+  "repo": "josephsteuerjr/praxis",
+  "tag": "v2.2.16",
+  "release_id": 426799889,
+  "source_commit": "d1af6c497fe643be9f71de2bf391c432943f7ef3",
+  "assets": {
+    "Helene-2.2.16.zip": {
+      "kind": "program",
+      "platform": "windows",
+      "size": 140590658,
+      "sha256": "70120da480d9ed88873f885d427a09b6aff4e054570d6e9721c5bd05261031d9"
+    },
+    "Helene-2.2.16-macos-arm64.zip": {
+      "kind": "program",
+      "platform": "macos",
+      "size": 127879709,
+      "sha256": "2c3b27375363bc349158737397879e80d8f7a374c6ebd987b5c3a1a43177ee8c"
+    },
+    "Helene-2.2.16-linux-x86_64.zip": {
+      "kind": "program",
+      "platform": "debian",
+      "size": 666599896,
+      "sha256": "6ec822944a804d7b9a869eb932e174260589fdbd4f638e9968c90ab49797a7a5"
+    },
+    "Helene-2.2.16-fedora-x86_64.zip": {
+      "kind": "program",
+      "platform": "fedora",
+      "size": 681490463,
+      "sha256": "a8551e60a673a6b42b42d526a96c859b05ebaee0d5b07c58d2c7121f69e6395d"
+    },
+    "Helene-2.2.16-source.zip": {
+      "kind": "source",
+      "size": 15942417,
+      "sha256": "b23da91aa450540ad9f01073f8c06c240f583caea13ee0c07dfa83b713c6fb2b"
+    },
+    "Helene-2.2.16-fedora-x86_64.zip.sha256": {
+      "kind": "checksum",
+      "size": 99,
+      "sha256": "9068d18d7b5ba1180f6dda48cf750bdb5f53df0f7f9050c1427e30cd59ac484c"
+    },
+    "Helene-2.2.16-linux-x86_64.zip.sha256": {
+      "kind": "checksum",
+      "size": 98,
+      "sha256": "2c818d3b8457b9a2f25701032952b1802d98b70493c8f413e0c702649931c8df"
+    },
+    "Helene-2.2.16-macos-arm64.zip.sha256": {
+      "kind": "checksum",
+      "size": 97,
+      "sha256": "6068af2bf17a291ac1040806bea3f8cd647ec11c0417287937c1d983976fb21b"
+    },
+    "Helene-2.2.16-source.zip.sha256": {
+      "kind": "checksum",
+      "size": 92,
+      "sha256": "620e653375354bf7bc437ad9335d7a08dfcb9c2d0d78e42a235fec53f97ac72f"
+    },
+    "Helene-2.2.16.zip.sha256": {
+      "kind": "checksum",
+      "size": 85,
+      "sha256": "0fd2881646bf39d3b674000620217e98600a9654816876d094c48ecbe0739420"
+    },
+    "release-evidence.json": {
+      "kind": "metadata",
+      "size": 4868,
+      "sha256": "3b01007f0ea403a86167063e893bec35343b614e12d1ef42fc85ca81e947d257"
+    },
+    "voice-components.json": {
+      "kind": "metadata",
+      "size": 5654,
+      "sha256": "aa72fae11254772f66b30f2ee25693aa985dc1d242c105e0f645c486e74c3f38"
+    },
+    "SHA256SUMS": {
+      "kind": "checksum-index",
+      "size": 1155,
+      "sha256": "eb4703472ac9dfe80ee7f34001126746372461c09fcf1e6d46d6035b3bd8e198"
+    }
+  },
+  "programs": [
+    {
+      "platform": "windows",
+      "name": "Helene-2.2.16.zip",
+      "size": 140590658,
+      "sha256": "70120da480d9ed88873f885d427a09b6aff4e054570d6e9721c5bd05261031d9",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.15/Helene-2.2.15.zip",
+      "base_sha256": "c87f4290d201921d0272a2f6ee3f3e79dba7ab5b5250fa28906a80949515476f",
+      "base_size": 140585399,
+      "literal_sha256": "9d7d57a0076f7ee81b19bfa7318b7105d7fc221a16580c42d6c1356a759f329c",
+      "segments": [
+        [
+          "literal",
+          0,
+          18798
+        ],
+        [
+          "base",
+          18735,
+          579154
+        ],
+        [
+          "literal",
+          18798,
+          9007
+        ],
+        [
+          "base",
+          606587,
+          1648051
+        ],
+        [
+          "literal",
+          27805,
+          85158
+        ],
+        [
+          "base",
+          2339777,
+          194825
+        ],
+        [
+          "literal",
+          112963,
+          17661
+        ],
+        [
+          "base",
+          2552263,
+          5401022
+        ],
+        [
+          "literal",
+          130624,
+          192
+        ],
+        [
+          "base",
+          7953477,
+          1635150
+        ],
+        [
+          "literal",
+          130816,
+          574762
+        ],
+        [
+          "base",
+          10163306,
+          117007936
+        ],
+        [
+          "literal",
+          705578,
+          17242
+        ],
+        [
+          "base",
+          127188423,
+          3484947
+        ],
+        [
+          "literal",
+          722820,
+          5023
+        ],
+        [
+          "base",
+          130678380,
+          575712
+        ],
+        [
+          "literal",
+          727843,
+          18169
+        ],
+        [
+          "base",
+          131272260,
+          3587035
+        ],
+        [
+          "literal",
+          746012,
+          2703
+        ],
+        [
+          "base",
+          134861820,
+          11065
+        ],
+        [
+          "literal",
+          748715,
+          11142
+        ],
+        [
+          "base",
+          134883806,
+          8243
+        ],
+        [
+          "literal",
+          759857,
+          4617
+        ],
+        [
+          "base",
+          134896660,
+          2038
+        ],
+        [
+          "literal",
+          764474,
+          4212
+        ],
+        [
+          "base",
+          134898698,
+          592078
+        ],
+        [
+          "literal",
+          768686,
+          18181
+        ],
+        [
+          "base",
+          135508956,
+          3566054
+        ],
+        [
+          "literal",
+          786867,
+          1510481
+        ]
+      ],
+      "base_asset_id": 685086048
+    },
+    {
+      "platform": "macos",
+      "name": "Helene-2.2.16-macos-arm64.zip",
+      "size": 127879709,
+      "sha256": "2c3b27375363bc349158737397879e80d8f7a374c6ebd987b5c3a1a43177ee8c",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.15/Helene-2.2.15-macos-arm64.zip",
+      "base_sha256": "68b46460bd21f226891f46bb4e4fcd98a434eb045ebf280301585adb0b4262f6",
+      "base_size": 127874487,
+      "literal_sha256": "87b80073ce12bd8da3227abbff52d5938139aea9f58e3e77bcd8db9700fef10c",
+      "segments": [
+        [
+          "base",
+          0,
+          209552
+        ],
+        [
+          "literal",
+          0,
+          509
+        ],
+        [
+          "base",
+          210061,
+          594417
+        ],
+        [
+          "literal",
+          509,
+          9007
+        ],
+        [
+          "base",
+          813176,
+          7054902
+        ],
+        [
+          "literal",
+          9516,
+          591221
+        ],
+        [
+          "base",
+          8459240,
+          100206468
+        ],
+        [
+          "literal",
+          600737,
+          17331
+        ],
+        [
+          "base",
+          108682981,
+          5332281
+        ],
+        [
+          "literal",
+          618068,
+          5023
+        ],
+        [
+          "base",
+          114020272,
+          575712
+        ],
+        [
+          "literal",
+          623091,
+          34356
+        ],
+        [
+          "base",
+          114630340,
+          5428437
+        ],
+        [
+          "literal",
+          657447,
+          17538
+        ],
+        [
+          "base",
+          120076260,
+          20993
+        ],
+        [
+          "literal",
+          674985,
+          2703
+        ],
+        [
+          "base",
+          120099778,
+          11065
+        ],
+        [
+          "literal",
+          677688,
+          11141
+        ],
+        [
+          "base",
+          120121762,
+          8196
+        ],
+        [
+          "literal",
+          688829,
+          4617
+        ],
+        [
+          "base",
+          120134569,
+          2038
+        ],
+        [
+          "literal",
+          693446,
+          4212
+        ],
+        [
+          "base",
+          120136607,
+          235410
+        ],
+        [
+          "literal",
+          697658,
+          85158
+        ],
+        [
+          "base",
+          120457156,
+          250556
+        ],
+        [
+          "literal",
+          782816,
+          34368
+        ],
+        [
+          "base",
+          120742080,
+          5428449
+        ],
+        [
+          "literal",
+          817184,
+          1704049
+        ]
+      ],
+      "base_asset_id": 685086413
+    },
+    {
+      "platform": "debian",
+      "name": "Helene-2.2.16-linux-x86_64.zip",
+      "size": 666599896,
+      "sha256": "6ec822944a804d7b9a869eb932e174260589fdbd4f638e9968c90ab49797a7a5",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.15/Helene-2.2.15-linux-x86_64.zip",
+      "base_sha256": "1b454bb446bb3d35fd9ce4fa0df8e923e9f910bb354081b872a477dfdde64b09",
+      "base_size": 666594595,
+      "literal_sha256": "0a68c502f0245ff6d0a5ed7b7073593b1209c1934dc9341d521f036716c1681b",
+      "segments": [
+        [
+          "base",
+          0,
+          455750
+        ],
+        [
+          "literal",
+          0,
+          596
+        ],
+        [
+          "base",
+          456346,
+          601978
+        ],
+        [
+          "literal",
+          596,
+          9007
+        ],
+        [
+          "base",
+          1067022,
+          1813415
+        ],
+        [
+          "literal",
+          9603,
+          17734
+        ],
+        [
+          "base",
+          2898113,
+          5341118
+        ],
+        [
+          "literal",
+          27337,
+          196
+        ],
+        [
+          "base",
+          8239427,
+          16738
+        ],
+        [
+          "literal",
+          27533,
+          817789
+        ],
+        [
+          "base",
+          9073882,
+          643021964
+        ],
+        [
+          "literal",
+          845322,
+          28225
+        ],
+        [
+          "base",
+          652124071,
+          165796
+        ],
+        [
+          "literal",
+          873547,
+          17476
+        ],
+        [
+          "base",
+          652307284,
+          3475144
+        ],
+        [
+          "literal",
+          891023,
+          5023
+        ],
+        [
+          "base",
+          655787438,
+          575712
+        ],
+        [
+          "literal",
+          896046,
+          18181
+        ],
+        [
+          "base",
+          656381330,
+          3566052
+        ],
+        [
+          "literal",
+          914227,
+          17682
+        ],
+        [
+          "base",
+          659965007,
+          20986
+        ],
+        [
+          "literal",
+          931909,
+          2703
+        ],
+        [
+          "base",
+          659988514,
+          11065
+        ],
+        [
+          "literal",
+          934612,
+          11144
+        ],
+        [
+          "base",
+          660010501,
+          8196
+        ],
+        [
+          "literal",
+          945756,
+          4617
+        ],
+        [
+          "base",
+          660023308,
+          2038
+        ],
+        [
+          "literal",
+          950373,
+          4212
+        ],
+        [
+          "base",
+          660025346,
+          235610
+        ],
+        [
+          "literal",
+          954585,
+          85158
+        ],
+        [
+          "base",
+          660346095,
+          250556
+        ],
+        [
+          "literal",
+          1039743,
+          18193
+        ],
+        [
+          "base",
+          660614843,
+          3566064
+        ],
+        [
+          "literal",
+          1057936,
+          2413778
+        ]
+      ],
+      "base_asset_id": 685087448
+    },
+    {
+      "platform": "fedora",
+      "name": "Helene-2.2.16-fedora-x86_64.zip",
+      "size": 681490463,
+      "sha256": "a8551e60a673a6b42b42d526a96c859b05ebaee0d5b07c58d2c7121f69e6395d",
+      "base_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.2.15/Helene-2.2.15-fedora-x86_64.zip",
+      "base_sha256": "8bdd429e7efcdb9c3cd5d9ec70293daf14d765e2ad82c7beb9c313c21a166af3",
+      "base_size": 681485241,
+      "literal_sha256": "6cd51e285bcec39c7bca82f6ead962d9c65c83f4074312245b8df6ea0d3a3807",
+      "segments": [
+        [
+          "base",
+          0,
+          1398564
+        ],
+        [
+          "literal",
+          0,
+          589
+        ],
+        [
+          "base",
+          1399153,
+          593307
+        ],
+        [
+          "literal",
+          589,
+          9007
+        ],
+        [
+          "base",
+          2001158,
+          7223876
+        ],
+        [
+          "literal",
+          9596,
+          196
+        ],
+        [
+          "base",
+          9225230,
+          12970
+        ],
+        [
+          "literal",
+          9792,
+          828576
+        ],
+        [
+          "base",
+          10066713,
+          656910697
+        ],
+        [
+          "literal",
+          838368,
+          17733
+        ],
+        [
+          "base",
+          666995143,
+          162561
+        ],
+        [
+          "literal",
+          856101,
+          17425
+        ],
+        [
+          "base",
+          667175076,
+          3474894
+        ],
+        [
+          "literal",
+          873526,
+          5023
+        ],
+        [
+          "base",
+          670654980,
+          575712
+        ],
+        [
+          "literal",
+          878549,
+          18168
+        ],
+        [
+          "base",
+          671248860,
+          3565778
+        ],
+        [
+          "literal",
+          896717,
+          17629
+        ],
+        [
+          "base",
+          674832218,
+          20986
+        ],
+        [
+          "literal",
+          914346,
+          2703
+        ],
+        [
+          "base",
+          674855725,
+          11065
+        ],
+        [
+          "literal",
+          917049,
+          11144
+        ],
+        [
+          "base",
+          674877710,
+          8196
+        ],
+        [
+          "literal",
+          928193,
+          4617
+        ],
+        [
+          "base",
+          674890517,
+          2038
+        ],
+        [
+          "literal",
+          932810,
+          4212
+        ],
+        [
+          "base",
+          674892555,
+          235610
+        ],
+        [
+          "literal",
+          937022,
+          85158
+        ],
+        [
+          "base",
+          675213304,
+          250556
+        ],
+        [
+          "literal",
+          1022180,
+          18180
+        ],
+        [
+          "base",
+          675482040,
+          3565790
+        ],
+        [
+          "literal",
+          1040360,
+          2437503
+        ]
+      ],
+      "base_asset_id": 685088965
+    }
+  ],
+  "literal_chunks": [
+    {
+      "name": "literals.part001",
+      "sha256": "0b6c58f80f2d9ee6d2662c032b923f250e6608185efce2ea784558bec71fb2d7"
+    }
+  ],
+  "literals_sha256": "0b6c58f80f2d9ee6d2662c032b923f250e6608185efce2ea784558bec71fb2d7"
+}
