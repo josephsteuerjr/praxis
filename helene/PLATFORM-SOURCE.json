@@ -1,52 +1,42 @@
 {
-  "version": "2.2.9",
-  "implementation_commit": "f043cb73cebaea40778d8f445762247d00fd8f27",
+  "version": "2.2.17",
+  "implementation_commit": "8b2819ef13eea47865758043f94a5b1244f12f9d",
   "platforms": {
     "windows": {
-      "commit": "119ceec841d3f6afd0d413ca66852f21babb5561",
-      "tree": "4dd1441d4614bfe7362a6f1863626dd5f5c2eb06",
-      "branch": "source/helene-2.2.9-windows",
-      "ref_kind": "tag",
-      "archive": "Helene-2.2.9.zip",
-      "sha256": "13307250a7701207df6ec57cc74c0625025cb1e3860497d897eb6544a8324967",
-      "size": 136795619,
-      "source_file_count": 703,
-      "admission_view_file_count": 352
+      "commit": "b022da330f1a94796f7d307d40955740d13dfe8e",
+      "tree": "c64d8d948ba043c63cf88099c82ab778bb67cbbe",
+      "tag": "source/helene-2.2.17-windows",
+      "archive": "Helene-2.2.17.zip",
+      "sha256": "66862ccf9a84228f8255e0fc044961c0becae502a3918f456a69b5b1445f39b1",
+      "size": 140591054,
+      "source_file_count": 724
     },
     "macos": {
-      "commit": "68e16a8d023123fb0c0409a9d131e3da11600337",
-      "tree": "aeaa1ae41b92ec318b968c6dfb54b8a5f15cf9bc",
-      "branch": "source/helene-2.2.9-macos",
-      "ref_kind": "tag",
-      "archive": "Helene-2.2.9-macos-arm64.zip",
-      "sha256": "b42c6c964d83d6d87981dbe3ea6a20a09a2a5b5fee7b068fbdf3713eb350ddf2",
-      "size": 122230706,
-      "source_file_count": 1028,
-      "admission_view_file_count": 677
+      "commit": "3ee30e9c9122d6a835ec6aa4319ce18d0310b5b1",
+      "tree": "8120baf0000058d8a10f2aa84d89c2807ff956d6",
+      "tag": "source/helene-2.2.17-macos",
+      "archive": "Helene-2.2.17-macos-arm64.zip",
+      "sha256": "49a8912a44efdba2c3a4e409de9b672b605c7665093147bf2a6e4e474c593e38",
+      "size": 127880161,
+      "source_file_count": 1051
     },
     "debian": {
-      "commit": "e6a6b11ecff7a9d7fac440aea28d0177f352fdf5",
-      "tree": "d7f820e6dc68a52118717efcd8f0bce45ee23c41",
-      "branch": "source/helene-2.2.9-debian",
-      "ref_kind": "tag",
-      "archive": "Helene-2.2.9-linux-x86_64.zip",
-      "sha256": "9455e688225a75ed2bf2614b8757d0117eeef4e173f22eb0cdb3448e722d464a",
-      "size": 662827648,
-      "source_file_count": 705,
-      "admission_view_file_count": 352
+      "commit": "f03cdfc29c075598640c964b2f92a17a9b94ecb3",
+      "tree": "c547b143a7051b99ce30e989d4b7602bc6c8758b",
+      "tag": "source/helene-2.2.17-debian",
+      "archive": "Helene-2.2.17-linux-x86_64.zip",
+      "sha256": "52c39f87fcef68630559b55735d0620adfa9591acf0b865f2948f511b8b67a33",
+      "size": 666600340,
+      "source_file_count": 729
     },
     "fedora": {
-      "commit": "1f614f3cf406b377c06f78b8d7cf54821629bf00",
-      "tree": "cbc83d761413ef644a21587328905c49a1567d09",
-      "branch": "source/helene-2.2.9-fedora",
-      "ref_kind": "tag",
-      "archive": "Helene-2.2.9-fedora-x86_64.zip",
-      "sha256": "abdbc0515236ab7a021af932ac87f558139b439df97119d360a6909c3fec51a9",
-      "size": 677719203,
-      "source_file_count": 704,
-      "admission_view_file_count": 352
+      "commit": "cc901aec9b559dd5d47b161d2d6ca7bbf1146f9a",
+      "tree": "8c52934ddc5e10b03518120ef2bee12cb58dd761",
+      "tag": "source/helene-2.2.17-fedora",
+      "archive": "Helene-2.2.17-fedora-x86_64.zip",
+      "sha256": "e96b14f15886a193cbda68dfb1214826eedea8456589eccc2d37ca102b31e902",
+      "size": 681490919,
+      "source_file_count": 728
     }
-  },
-  "real_B_separate_from_admission_view": true,
-  "native_runtime_rebuilt": false
+  }
 }
