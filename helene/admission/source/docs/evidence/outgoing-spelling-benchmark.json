@@ -1,0 +1,198 @@
+{
+  "iterations": 40,
+  "synthetic_samples": {
+    "clean_ru": "Привет! Сегодня проверили отправку сообщения. Всё работает правильно.",
+    "clean_en": "Hello! We checked message delivery today. Everything works correctly.",
+    "technical": "Привет @dev_user! pytest tests/test_api.py; `reply_to=42`; outbox dedup Telegram Praxis. Check https://example.org/foo_bar and getUserName.",
+    "typos": "Превет! Сообщениие доставлено. Helo, mesage delivered."
+  },
+  "measurements": [
+    {
+      "engine": "hunspell",
+      "sample": "clean_ru",
+      "p50_ms": 275.9,
+      "p95_ms": 316.31,
+      "flags": [],
+      "returncode": 0
+    },
+    {
+      "engine": "hunspell",
+      "sample": "clean_en",
+      "p50_ms": 281.18,
+      "p95_ms": 322.2,
+      "flags": [],
+      "returncode": 0
+    },
+    {
+      "engine": "hunspell",
+      "sample": "technical",
+      "p50_ms": 284.81,
+      "p95_ms": 325.43,
+      "flags": [
+        "dev",
+        "pytest",
+        "api",
+        "py",
+        "dedup",
+        "getUserName"
+      ],
+      "returncode": 0
+    },
+    {
+      "engine": "hunspell",
+      "sample": "typos",
+      "p50_ms": 297.07,
+      "p95_ms": 327.4,
+      "flags": [
+        "Превет",
+        "Сообщениие",
+        "Helo",
+        "mesage"
+      ],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_ru",
+      "sample": "clean_ru",
+      "p50_ms": 10.2,
+      "p95_ms": 16.39,
+      "flags": [],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_ru",
+      "sample": "clean_en",
+      "p50_ms": 10.42,
+      "p95_ms": 14.34,
+      "flags": [
+        "Hello",
+        "We",
+        "checked",
+        "message",
+        "delivery",
+        "today",
+        "Everything",
+        "works",
+        "correctly"
+      ],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_ru",
+      "sample": "technical",
+      "p50_ms": 10.34,
+      "p95_ms": 15.51,
+      "flags": [
+        "dev",
+        "user",
+        "pytest",
+        "tests",
+        "test",
+        "api",
+        "py",
+        "reply",
+        "to",
+        "outbox",
+        "dedup",
+        "Telegram",
+        "Praxis",
+        "Check",
+        "and",
+        "getUserName"
+      ],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_ru",
+      "sample": "typos",
+      "p50_ms": 10.58,
+      "p95_ms": 15.54,
+      "flags": [
+        "Превет",
+        "Сообщениие",
+        "Helo",
+        "mesage",
+        "delivered"
+      ],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_en",
+      "sample": "clean_ru",
+      "p50_ms": 8.75,
+      "p95_ms": 14.37,
+      "flags": [],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_en",
+      "sample": "clean_en",
+      "p50_ms": 8.67,
+      "p95_ms": 13.52,
+      "flags": [],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_en",
+      "sample": "technical",
+      "p50_ms": 7.92,
+      "p95_ms": 11.47,
+      "flags": [
+        "dev",
+        "pytest",
+        "api",
+        "py",
+        "dedup",
+        "Praxis",
+        "getUserName"
+      ],
+      "returncode": 0
+    },
+    {
+      "engine": "aspell_en",
+      "sample": "typos",
+      "p50_ms": 8.42,
+      "p95_ms": 10.1,
+      "flags": [
+        "Helo",
+        "mesage"
+      ],
+      "returncode": 0
+    }
+  ],
+  "limited_mode_measurements": [
+    {
+      "sample": "clean_ru",
+      "p50_ms": 11.3,
+      "p95_ms": 15.4,
+      "findings": [],
+      "note": ""
+    },
+    {
+      "sample": "clean_en",
+      "p50_ms": 9.99,
+      "p95_ms": 12.64,
+      "findings": [],
+      "note": ""
+    },
+    {
+      "sample": "technical",
+      "p50_ms": 8.86,
+      "p95_ms": 13.03,
+      "findings": [
+        "pytest",
+        "dedup"
+      ],
+      "note": ""
+    },
+    {
+      "sample": "typos",
+      "p50_ms": 22.49,
+      "p95_ms": 29.2,
+      "findings": [
+        "mesage"
+      ],
+      "note": ""
+    }
+  ]
+}
