@@ -34,12 +34,12 @@ class PosixSetup(unittest.TestCase):
     def test_retirement_deletes_program_and_keeps_data_source_git_and_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);old=root/'old';new=root/'new';new.mkdir()
-            for name in ('app/python_app.py','runtime/bin/python3','data/memory/history.jsonl','tree/agent.py','tree/.git/HEAD','helene.json'):
+            for name in ('app/python_app.py','runtime/bin/python3','app/old-profile/memory.jsonl','data/memory/history.jsonl','tree/agent.py','tree/.git/HEAD','helene.json'):
                 path=old/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(name)
-            note={'startup_proof':True,'data_paths':[str(old/'data')],'source_paths':[{'old':str(old/'tree')} ]}
+            note={'startup_proof':True,'data_paths':[str(old/'data')],'old_data_paths':[str(old/'app/old-profile')],'source_paths':[{'old':str(old/'tree')} ]}
             result=lifecycle.remove_program(old,new,note)
             self.assertTrue(result['ok']);self.assertFalse((old/'app/python_app.py').exists())
-            for name in ('data/memory/history.jsonl','tree/agent.py','tree/.git/HEAD','helene.json'):self.assertEqual((old/name).read_text(),name)
+            for name in ('app/old-profile/memory.jsonl','data/memory/history.jsonl','tree/agent.py','tree/.git/HEAD','helene.json'):self.assertEqual((old/name).read_text(),name)
             self.assertTrue((new/'old-program-retirement.json').is_file())
 
 

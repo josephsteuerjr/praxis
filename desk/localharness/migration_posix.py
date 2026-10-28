@@ -174,7 +174,7 @@ def remove_program(old,new,note):
     """Delete only verified program files, keeping attached data and old source."""
     old,new=Path(old).resolve(),Path(new).resolve()
     if old==new or new.is_relative_to(old) or not note.get('startup_proof'):raise ValueError('Unsafe retirement')
-    protected=[Path(p).resolve() for p in note.get('data_paths',[])]+[Path(row['old']).resolve() for row in note.get('source_paths',[]) if row.get('old')]
+    protected=[Path(p).resolve() for p in note.get('data_paths',[])+note.get('old_data_paths',[])]+[Path(row['old']).resolve() for row in note.get('source_paths',[]) if row.get('old')]
     protected += [old/name for name in ('data','profile','agents','backups','archives','memory','models','tree','code','code-backup')]
     names=set()
     for directory in ('app','runtime','resources','bin'):
