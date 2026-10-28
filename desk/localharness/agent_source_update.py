@@ -6,6 +6,22 @@ from .package_notice import read,write
 
 class AgentResolutionPending(RuntimeError):pass
 
+class AgentResolutionUnavailable(RuntimeError):pass
+
+
+def require_patch_tool(program):
+    """Inspect the running app's tool contract without importing its code."""
+    import ast
+    path=Path(program)/'app/localharness/source_update.py'
+    try:
+        module=ast.parse(path.read_text(encoding='utf-8-sig'))
+        tool=next(ast.literal_eval(n.value) for n in module.body
+                  if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='TOOL' for t in n.targets))
+        actions=tool['input_schema']['properties']['action']['enum']
+        if {'diff','patch','finish'}<=set(actions):return
+    except (OSError,ValueError,SyntaxError,StopIteration,KeyError,TypeError):pass
+    raise AgentResolutionUnavailable('SELECTED_AGENT_UPDATE_UNAVAILABLE: Прежний агент не умеет точечно исправлять конфликт обновления. Можно установить чистый код, сохранив текущую папку данных. Прежние исходники останутся в архиве.')
+
 def marker(directory):return Path(directory)/'agent-resolution.json'
 
 def _carry(tree,directory):
@@ -88,7 +104,7 @@ def command(tree,action,**args):
                     metadata[side]={'withheld':'private or possible credential'};continue
                 texts[side]=text;metadata[side]={'exists':True,'total_chars':len(text)}
             if action=='diff':
-                text=''.join(''.join(difflib.unified_diff(texts.get('base','').splitlines(True),texts.get(side,'').splitlines(True),fromfile='base/'+name,tofile=side+'/'+name)) for side in ('local','incoming'))
+                text=''.join(''.join(difflib.unified_diff(texts.get('base','').splitlines(True),texts.get(side,'').splitlines(True),fromfile='base/'+name,tofile=side+'/'+name)) for side in ('local','incoming','result'))
             else:text=texts.get(args.get('side') or 'result','')
             offset=max(0,int(args.get('offset',0)));end=min(len(text),offset+8000)
             return {'sides':metadata,'text':text[offset:end],'offset':offset,'next_offset':end if end<len(text) else None,'total_chars':len(text)}

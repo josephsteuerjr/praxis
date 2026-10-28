@@ -28,6 +28,13 @@ def select(old,new,mode,*,by,require_review=False,resolution_owner='agent'):
     if require_review:value['require_review']=True
     if resolution_owner=='incoming':value['resolution_owner']='incoming'
     previous=read(choice_path(new))
+    if (previous and previous.get('mode')=='preserve' and mode=='clean'
+            and read(Path(new)/'source-resolution-unavailable.json')==identity(old,new)):
+        # No source writer is admitted before the capability check. Only an
+        # explicit second owner choice may take the clean-code path.
+        import uuid
+        write(choice_path(new).with_name('source-choice-preserve-'+uuid.uuid4().hex+'.json'),previous)
+        previous=None
     if previous and previous!=value:
         if {k:previous.get(k) for k in identity(old,new)}!=identity(old,new):raise ValueError('Update source choice belongs to another delivery')
         if previous['mode']!=mode:raise ValueError('Source policy is already selected for this operation; start a new update')

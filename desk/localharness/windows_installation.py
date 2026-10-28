@@ -21,7 +21,7 @@ from .essential_backup import configs, load, tree_path
 from .package_notice import read, write
 
 ARCHIVE_BEFORE = (2, 2, 1)
-POLICY = ('Сохраним прежний код в архиве. Мастер обновления совместит его с новым и разберёт нестыковки. '
+POLICY = ('Сохраним прежний код в архиве. Мастер обновления автоматически совместит изменения. Оставшиеся пересечения разберёт ваш агент. '
           'Затем независимые ревьюеры проверят результат. '
           'Можно также установить чистый код, сохранив данные агента.')
 
@@ -230,7 +230,7 @@ def in_place(package, old, *, data=None, progress,source_mode='preserve',cancell
         migration_source.verify(package)
         from .python_updates import prepare_code
         prepare_code(old,package,WizardProgress(progress),source_mode,cancelled=cancelled,
-                     require_review=source_mode=='preserve',resolution_owner='incoming',forceExtensions=force_extensions)
+                     require_review=source_mode=='preserve',resolution_owner='agent',forceExtensions=force_extensions)
         progress('stopping_old')
         before = migration_windows.service(old)
         migration_windows.stop(old); migration_windows.quiescent(old)

@@ -250,7 +250,7 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         from localharness.windows_installation import WizardProgress
         from localharness.python_updates import prepare_code
         prepare_code(old,new,WizardProgress(progress),source_mode,cancelled=review_cancelled,
-                     require_review=True,resolution_owner='incoming',forceExtensions=force_extensions)
+                     require_review=True,resolution_owner='agent',forceExtensions=force_extensions)
     from localharness.update_extensions import check
     progress('checking_extensions')
     check(old,new,force=force_extensions)

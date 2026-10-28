@@ -410,8 +410,14 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
     check(old, new_root, force=forceExtensions)
     from .code_transition import preflight
     progress.phase('code')
-    source_plan = ({'state':'ready','plans':[]} if sourceMode=='clean'
-                   else preflight(old, new_root, notify=False))
+    from .agent_source_update import AgentResolutionUnavailable
+    try:
+        source_plan = ({'state':'ready','plans':[]} if sourceMode=='clean'
+                       else preflight(old, new_root, notify=False))
+    except AgentResolutionUnavailable:
+        from .package_notice import write
+        write(new_root/'source-resolution-unavailable.json',update_source.identity(old,new_root))
+        raise
     review_binding = None
     if source_plan['state'] != 'ready':
         from .source_update_host import review

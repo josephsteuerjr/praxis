@@ -113,8 +113,10 @@ def preflight(old, new, *, notify=True):
                 agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
                 from . import update_source
                 choice=update_source.selected(old,new)
-                if choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming':
-                    from .agent_source_update import request as agent_request
+                if (choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming'
+                        and plan['state']!='ready'):
+                    from .agent_source_update import request as agent_request, require_patch_tool
+                    require_patch_tool(old)
                     agent_request(agent['tree'],old,source,directory,read(new/'python-app.json').get('version',''))
                 elif notify:
                     source_update.ensure(agent['tree'], old, source, directory,
