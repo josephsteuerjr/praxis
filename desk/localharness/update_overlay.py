@@ -37,10 +37,24 @@ def journal(recovery, rows):
 
 def _destination(target, relative):
     destination = target / relative
-    if (not destination.resolve().is_relative_to(target) or destination.is_symlink()
+    from python_migrate import _program_path_identity
+    if (not _program_path_identity(destination).is_relative_to(_program_path_identity(target)) or destination.is_symlink()
             or (hasattr(destination, 'is_junction') and destination.is_junction())):
         raise ValueError('Update destination leaves working folder or is linked')
     return destination
+
+
+def _program_files(source):
+    """The running setup window's browser profile is never program payload."""
+    for directory,dirs,names in os.walk(source,followlinks=False):
+        here=Path(directory)
+        dirs[:]=sorted(d for d in dirs if d not in {'.migration-webview','.webview','__pycache__'})
+        for name in [*dirs,*sorted(names)]:
+            item=here/name
+            if item.name.startswith('.python-') or item.suffix=='.pyc':continue
+            if item.is_symlink() or (hasattr(item,'is_junction') and item.is_junction()):
+                raise ValueError('Update contains a link: '+str(item))
+            if item.is_file():yield item
 
 
 def prepare(source, target, recovery, verified=None, progress=None):
@@ -48,10 +62,7 @@ def prepare(source, target, recovery, verified=None, progress=None):
     recovery.mkdir()
     rows = []
     inventory = {}
-    for item in sorted(source.rglob('*')):
-        if item.is_symlink() or (hasattr(item, 'is_junction') and item.is_junction()):
-            raise ValueError('Update contains a link: ' + str(item))
-        if item.is_dir():continue
+    for item in _program_files(source):
         relative = item.relative_to(source)
         if '__pycache__' in relative.parts or item.suffix == '.pyc':continue
         destination = _destination(target, relative)
@@ -89,8 +100,7 @@ def validate(source, target, recovery, progress=None):
     value = json.loads((recovery / 'prepared-overlay.json').read_text(encoding='utf-8'))
     if value['source'] != str(source) or value['target'] != str(target):
         raise ValueError('Prepared update identity differs')
-    actual = {p.relative_to(source).as_posix() for p in source.rglob('*') if p.is_file()
-              and '__pycache__' not in p.relative_to(source).parts and p.suffix != '.pyc'}
+    actual = {p.relative_to(source).as_posix() for p in _program_files(source)}
     if actual != set(value['inventory']):raise ValueError('Prepared update file inventory changed')
     for name, record in value['inventory'].items():
         item = source / name

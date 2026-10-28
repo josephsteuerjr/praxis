@@ -15,7 +15,7 @@ def require_patch_tool(program):
     path=Path(program)/'app/localharness/source_update.py'
     try:
         module=ast.parse(path.read_text(encoding='utf-8-sig'))
-        tool=next(ast.literal_eval(n.value) for n in module.body
+        tool=next(ast.literal_eval(n.value) for n in reversed(module.body)
                   if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='TOOL' for t in n.targets))
         actions=tool['input_schema']['properties']['action']['enum']
         if {'diff','patch','finish'}<=set(actions):return

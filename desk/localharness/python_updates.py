@@ -394,6 +394,25 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
 
 
 def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
+    """The incoming hand is temporarily attached to the existing agent."""
+    from .legacy_update_tool import provide
+    from .agent_source_update import AgentResolutionUnavailable
+    from . import update_source
+    from .package_notice import write
+    try:
+        try:
+            return _prepare_code(old,new_root,progress,sourceMode,forceExtensions,cancelled,require_review,resolution_owner)
+        except AgentResolutionUnavailable:
+            if sourceMode=='clean':raise
+            progress.phase('agent_tools')
+            with provide(old,new_root):
+                return _prepare_code(old,new_root,progress,sourceMode,forceExtensions,cancelled,require_review,resolution_owner)
+    except AgentResolutionUnavailable:
+        write(Path(new_root)/'source-resolution-unavailable.json',update_source.identity(old,new_root))
+        raise
+
+
+def _prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
     """Shared native-migration/update merge and incoming-panel preparation."""
     old,new_root=Path(old).resolve(),Path(new_root).resolve()
     from . import update_source
@@ -446,6 +465,19 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
                     break
                 except AgentResolutionPending:
                     if cancelled.is_set():raise RuntimeError('Owner cancelled update review')
+        except BaseException:
+            from . import source_update
+            from .package_notice import read,write
+            for row in source_plan['plans']:
+                directory=Path(row['directory']);operation=read(directory/'pipeline.json')
+                if operation.get('resolution_owner')!='agent':continue
+                source_update._cancel_marker(directory,'Selected-agent update preparation ended before acceptance')
+                operation.update(state='cancelled',cancel_requested=True)
+                source_update._persist(directory,operation)
+                request=read(source_update.path(operation['tree']))
+                if request.get('id')==directory.name:
+                    request['state']='cancelled';write(source_update.path(operation['tree']),request)
+            raise
         finally:
             with _update_guard:
                 if _waiting_updates.get(target) is cancelled:
