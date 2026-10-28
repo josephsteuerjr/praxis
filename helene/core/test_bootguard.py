@@ -1,0 +1,181 @@
+"""
+Тесты boot-супервизора (краш-безопасное само-изменение). Герметичны; git есть в окружении.
+
+Покрыто: политики решений (preflight/after), сам preflight (импорт ядра ловит битый код),
+откат на здоровый коммит и внятная запись в дневник.
+
+Запуск:  python praxis_test.py test_bootguard -v
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import types
+import unittest
+from pathlib import Path
+
+import bootguard as bg
+
+
+def _git(tmp: Path, *args: str):
+    return subprocess.run(["git", "-C", str(tmp), *args], capture_output=True, text=True)
+
+
+class TestDecidePreflight(unittest.TestCase):
+    def test_ok_launches(self):
+        self.assertEqual(bg.decide_preflight(True, "abc", "good"), ("launch", None))
+
+    def test_bad_rolls_back_when_good_exists(self):
+        self.assertEqual(bg.decide_preflight(False, "bad", "good"), ("rollback", "good"))
+
+    def test_bad_stuck_without_good(self):
+        self.assertEqual(bg.decide_preflight(False, "bad", None), ("stuck", None))
+        self.assertEqual(bg.decide_preflight(False, "x", "x"), ("stuck", None))
+
+
+class TestDecideAfter(unittest.TestCase):
+    def test_clean_exit_stops(self):
+        d = bg.decide_after(0, 5, "s", "g", 0, 60, 3)
+        self.assertEqual(d["action"], "stop")
+
+    def test_survived_grace_marks_good(self):
+        d = bg.decide_after(1, 120, "s1", "g", 2, 60, 3)
+        self.assertEqual(d["action"], "relaunch")
+        self.assertEqual(d["mark_good"], "s1")
+        self.assertEqual(d["early_fails"], 0)
+
+    def test_intentional_restart_not_a_crash(self):
+        d = bg.decide_after(bg.RESTART_CODE, 3, "s1", "g", 0, 60, 3)
+        self.assertEqual(d["action"], "relaunch")
+        self.assertNotIn("mark_good", d)
+        self.assertEqual(d["early_fails"], 0)
+
+    def test_early_crash_counts_then_rolls_back(self):
+        # ниже порога — копим, не откатываем
+        d1 = bg.decide_after(1, 2, "bad", "good", 0, 60, 3)
+        self.assertEqual(d1["action"], "relaunch")
+        self.assertEqual(d1["early_fails"], 1)
+        # достигли лимита и есть здоровый коммит — откат
+        d3 = bg.decide_after(1, 2, "bad", "good", 2, 60, 3)
+        self.assertEqual(d3["action"], "rollback")
+        self.assertEqual(d3["to"], "good")
+        self.assertEqual(d3["bad"], "bad")
+
+    def test_no_rollback_without_good_ref(self):
+        d = bg.decide_after(1, 2, "bad", None, 5, 60, 3)
+        self.assertEqual(d["action"], "relaunch")
+
+
+class TestPreflight(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="praxis_pf_"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_good_module_passes(self):
+        (self.tmp / "good_mod.py").write_text("VALUE = 1\n", encoding="utf-8")
+        ok, err = bg.preflight(cwd=self.tmp, modules=["good_mod"])
+        self.assertTrue(ok, err)
+
+    def test_broken_module_fails(self):
+        (self.tmp / "broken_mod.py").write_text("def (:\n", encoding="utf-8")  # синтаксис битый
+        ok, err = bg.preflight(cwd=self.tmp, modules=["broken_mod"])
+        self.assertFalse(ok)
+        self.assertTrue(err, "ошибка должна быть непустой")
+
+
+class TestRollbackJournal(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="praxis_bg_"))
+        (self.tmp / "memory" / "journal").mkdir(parents=True, exist_ok=True)
+        _git(self.tmp, "init", "-q")
+        _git(self.tmp, "config", "user.email", "t@t")
+        _git(self.tmp, "config", "user.name", "t")
+        (self.tmp / "code.py").write_text("V = 1\n", encoding="utf-8")
+        _git(self.tmp, "add", "-A")
+        _git(self.tmp, "commit", "-q", "-m", "v1")
+        self.good = _git(self.tmp, "rev-parse", "--short", "HEAD").stdout.strip()
+        (self.tmp / "code.py").write_text("V = 2  # bad\n", encoding="utf-8")
+        _git(self.tmp, "add", "-A")
+        _git(self.tmp, "commit", "-q", "-m", "v2")
+        self._orig = (bg.BASE, bg.STATE, bg.JOURNAL_DIR)
+        bg.BASE = self.tmp
+        bg.STATE = self.tmp / "memory" / ".boot.json"
+        bg.JOURNAL_DIR = self.tmp / "memory" / "journal"
+
+    def tearDown(self):
+        bg.BASE, bg.STATE, bg.JOURNAL_DIR = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_rollback_reverts_working_tree(self):
+        self.assertIn("bad", (self.tmp / "code.py").read_text(encoding="utf-8"))
+        self.assertTrue(bg.rollback(self.good))
+        self.assertNotIn("bad", (self.tmp / "code.py").read_text(encoding="utf-8"), "откат не вернул код")
+
+    def test_journal_writes_readable_line(self):
+        bg.journal("откатила правку abc123: preflight упал. git show abc123")
+        jtext = "".join(p.read_text(encoding="utf-8") for p in bg.JOURNAL_DIR.glob("*.md"))
+        self.assertIn("[boot]", jtext)
+        self.assertIn("git show abc123", jtext)
+
+
+class TestLostRunnerStatusIsNotACleanExit(unittest.TestCase):
+    """Потерянный статус раннера читался как rc=0 — «остановиться навсегда».
+
+    subprocess.Popen при ECHILD молча подставляет ноль; для decide_after ноль —
+    команда стоп, PID 1 выходит, контейнер умирает решением, которого никто не
+    принимал. Мина, названная адверсаркой 28.08: пути к ней сегодня нет, но любой
+    будущий SIGCHLD-хендлер или чужой waitpid(-1) её взводит."""
+
+    def test_a_reaped_elsewhere_child_means_restart_not_stop(self):
+        proc = types.SimpleNamespace(returncode=None, pid=2 ** 22 + 12345)
+        self.assertEqual(bg._runner_status_or_restart(proc),
+                         bg.RESTART_CODE,
+                         "потерянный статус снова читается как чистый выход")
+
+    def test_an_honest_code_is_passed_through(self):
+        proc = types.SimpleNamespace(returncode=7, pid=1)
+        self.assertEqual(bg._runner_status_or_restart(proc), 7)
+        proc = types.SimpleNamespace(returncode=0, pid=1)
+        self.assertEqual(bg._runner_status_or_restart(proc), 0,
+                         "честный ноль обязан остаться нулём")
+
+    @unittest.skipUnless(hasattr(os, "WNOHANG"), "нужен POSIX waitpid")
+    def test_the_full_wait_survives_a_stolen_runner(self):
+        proc = subprocess.Popen([sys.executable, "-c", "raise SystemExit(3)"])
+        os.waitpid(proc.pid, 0)  # «кто-то другой» снял ребёнка и унёс статус
+        self.assertEqual(bg._wait_runner_reaping(proc),
+                         bg.RESTART_CODE,
+                         "украденный статус превратился в «остановиться навсегда»")
+
+
+class TestReapOrphans(unittest.TestCase):
+    """Супервизор — PID 1 в контейнере: без wait() дети умершего раннера копятся
+    зомби до упора в cgroup pids.max, и тогда у неё отваливаются все руки с fork."""
+
+    @unittest.skipUnless(hasattr(os, "fork") and hasattr(os, "WNOHANG"), "только POSIX")
+    def test_collects_dead_child(self):
+        pid = os.fork()
+        if pid == 0:  # ребёнок: умереть сразу и не трогать состояние теста
+            os._exit(0)
+        for _ in range(50):
+            if bg._reap_orphans() >= 1:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("зомби не сжат за 5 секунд")
+        # Второй заход не должен ни падать, ни находить того же покойника дважды.
+        self.assertEqual(bg._reap_orphans(), 0)
+
+    def test_quiet_without_children(self):
+        self.assertIsInstance(bg._reap_orphans(), int)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)
