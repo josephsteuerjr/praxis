@@ -14,23 +14,29 @@ from localharness.package_notice import write
 
 @unittest.skipIf(os.name=='nt','POSIX lifecycle runs on the owned Linux stand')
 class PosixSetup(unittest.TestCase):
-    def test_process_that_exited_after_snapshot_does_not_block_installation(self):
-        import psutil,time
+    def test_exec_within_selected_program_is_rechecked_before_shutdown(self):
+        import time
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);old=root/'old';old.mkdir();entry=old/'worker.py'
-            entry.write_text('import time\ntime.sleep(90)\n')
-            code='import subprocess,sys,time;p=subprocess.Popen([sys.executable,'+repr(str(entry))+']);print(p.pid,flush=True);time.sleep(90)'
-            parent=subprocess.Popen([sys.executable,'-u','-c',code],stdout=subprocess.PIPE,text=True)
+            root=Path(tmp);old=root/'old';old.mkdir();before=old/'before.py';after=old/'after.py'
+            ready=root/'ready';go=root/'go';executed=root/'executed'
+            after.write_text('from pathlib import Path\nimport time\nPath('+repr(str(executed))+').touch()\ntime.sleep(90)\n')
+            before.write_text('from pathlib import Path\nimport os,sys,time\nPath('+repr(str(ready))+').touch()\nwhile not Path('+repr(str(go))+').exists():time.sleep(.01)\nos.execv(sys.executable,[sys.executable,'+repr(str(after))+'])\n')
+            child=subprocess.Popen([sys.executable,str(before)])
             try:
-                child=psutil.Process(int(parent.stdout.readline()));snapshot=lifecycle._processes(old)
-                self.assertTrue(any(p.pid==child.pid for p,_ in snapshot));child.terminate()
                 end=time.monotonic()+5
-                while child.status()!=psutil.STATUS_ZOMBIE and time.monotonic()<end:time.sleep(.02)
-                self.assertEqual(child.status(),psutil.STATUS_ZOMBIE)
-                with patch.object(lifecycle,'service',return_value=None),patch.object(lifecycle,'_processes',side_effect=[snapshot,snapshot,[]]):lifecycle.stop(old)
-                self.assertIsNone(parent.poll())
+                while not ready.exists() and time.monotonic()<end:time.sleep(.02)
+                self.assertTrue(ready.exists());snapshot=lifecycle._processes(old);original=lifecycle._processes;calls=[]
+                self.assertTrue(any(p.pid==child.pid for p,_ in snapshot));go.touch()
+                while not executed.exists() and time.monotonic()<end:time.sleep(.02)
+                self.assertTrue(executed.exists())
+                def discover(path):
+                    calls.append(path)
+                    return snapshot if len(calls)<=2 else original(path)
+                with patch.object(lifecycle,'service',return_value=None),patch.object(lifecycle,'_processes',side_effect=discover):lifecycle.stop(old)
+                self.assertIsNotNone(child.poll());self.assertTrue(lifecycle.quiescent(old))
             finally:
-                parent.terminate();parent.wait(timeout=5);parent.stdout.close()
+                if child.poll() is None:child.terminate()
+                child.wait(timeout=5)
 
     def test_nonchild_zombie_is_quiescent_without_killing_its_parent(self):
         import psutil

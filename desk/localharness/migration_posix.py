@@ -107,7 +107,12 @@ def stop(old):
             if _wait_closed(process,0):continue
             if process.create_time()!=info['create_time'] or process.cmdline()!=info['cmdline']:
                 if _wait_closed(process,0):continue
-                raise RuntimeError('Old process identity changed')
+                # Qt/guardians can exec between discovery and shutdown. Rebind
+                # to the same birth identity and current selected-root scope.
+                current=next(((p,row) for p,row in _processes(old)
+                              if p.pid==process.pid and row['create_time']==info['create_time']),None)
+                if current is None:continue
+                process,info=current
             process.terminate()
             if not _wait_closed(process,8):
                 process.kill()
