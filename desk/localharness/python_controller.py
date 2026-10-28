@@ -7,6 +7,7 @@ from queue import Queue
 import secrets
 import threading
 import time
+import typing  # Complete before GUI imports and owner-thread dataclasses can race.
 
 from . import agents, config_cli
 from .essential_backup import load
@@ -91,6 +92,11 @@ class Controller:
                         if child.handle is not None and child not in self.helpers:
                             self.helpers.append(child)
                     self.error = str(exc)
+                    try:
+                        import traceback
+                        with (self.root/'engine-startup-error.log').open('a',encoding='utf-8') as log:
+                            traceback.print_exception(exc,file=log)
+                    except OSError:pass
                     self.event('engine-error', {'error':self.error})
             if self.origin:
                 os.environ['HELENE_ORIGINS'] = self.origin
