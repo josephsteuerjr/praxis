@@ -296,7 +296,7 @@ def main():
     sys.path.insert(0,str(args.new.resolve()/'app'))
     if args.cleanup:return perform(args)
     validate_staging(args)
-    if os.name=='nt':
+    if not args.browser:
         # Old installed versions invoke this entry directly. They must reach
         # the same wizard too, rather than silently selecting a source merge.
         from localharness.source_admission import activate

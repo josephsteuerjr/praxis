@@ -98,6 +98,7 @@ class MigrationWindow(Application):
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,required=True);p.add_argument('--old',default='');p.add_argument('--target',default='');p.add_argument('--admission',type=Path);p.add_argument('--source-mode',choices=('preserve','clean'),default='preserve');p.add_argument('--force-extensions',action='store_true');args=p.parse_args(argv)
+    if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
     import webview
     root=args.root.resolve();app=MigrationWindow(root,args.old,args.target,args.source_mode,args.force_extensions);app.serve()
     try:

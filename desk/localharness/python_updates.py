@@ -375,7 +375,7 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
     from . import source_admission
     if source_admission.activate(new_root):
         verified = source_admission.current_proofs(verified, new_root)
-    if (new_root/'app/helene_setup.py').is_file():
+    if (new_root/'app/helene_setup.py').is_file() and not getattr(owner,'browser_mode',False):
         return _open_installation_wizard(owner,new_root,destination,progress,sourceMode,forceExtensions)
     review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions)
     # No old window closes on preparation failure. The helper independently
