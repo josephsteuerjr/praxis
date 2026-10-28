@@ -1,3 +1,27 @@
+# 2.2.16
+
+Exclude locked setup browser caches and provide the new update hand to the existing Python agent. See [release notes](docs/RELEASE-2.2.16.md).
+
+# 2.2.15
+
+Route conflicts to the selected agent, add result diffs and explicit clean-code fallback for legacy agent tools. See [release notes](docs/RELEASE-2.2.15.md).
+
+# 2.2.14
+
+Fix equivalent Windows destination paths being rejected while copying into a new installation folder. See [release notes](docs/RELEASE-2.2.14.md).
+
+# 2.2.13
+
+Fix active runner startup and migration heartbeat confirmation; clarify update-wizard wording. See [release notes](docs/RELEASE-2.2.13.md).
+
+# 2.2.12
+
+Resume premature merge-agent completion, recover interrupted clean-code preparation, and show accurate setup stages. See [release notes](docs/RELEASE-2.2.12.md).
+
+# 2.2.11
+
+Unified setup, incoming-panel migration, direct data attachment, source recovery and deterministic cold desktop startup. See [release notes](docs/RELEASE-2.2.11.md).
+
 # 2.2.9
 
 Explicit preserved or pristine source update in the window and agent tool. The selected agent resolves preserved changes; independent review still accepts the candidate. Pristine mode selects exact verified release source while retaining prior code and all profile paths. See [release notes](docs/RELEASE-2.2.9.md).
