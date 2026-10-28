@@ -1,7 +1,6 @@
-"""Windows setup: pristine program, attached data, explicit legacy retirement.
+"""Setup: pristine program, attached data, explicit legacy retirement.
 
-The same wizard is used by first launch and an extracted Update. Old executable
-code is material for the agent to inspect later, never an automatic merge input.
+The same wizard is used by first launch and an extracted Update. Old code is archived, combined with incoming code and reviewed by the new panel.
 """
 from __future__ import annotations
 
@@ -17,7 +16,7 @@ import time
 import uuid
 import zipfile
 
-from . import app_migration, migration_source, migration_windows
+from . import app_migration, migration_source, migration_lifecycle as migration_windows
 from .essential_backup import configs, load, tree_path
 from .package_notice import read, write
 
@@ -57,7 +56,7 @@ def blank_config(program, data):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
     return {'mode': 'local', 'tree': str(data), 'code': str(program / 'tree'),
-            'port': port, 'python': str(program / 'runtime/python.exe'),
+            'port': port, 'python': str(program / (('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')),
             'app': str(program / 'app/deskapp.py'),
             'runner': str(program / 'app/localharness/runner.py'),
             'setup_complete': False, 'installed': {'service': False},
@@ -129,7 +128,7 @@ def prepare_attached(old, new, data, operation, *, previous_sources=None,source_
         if value.get('mode') != 'remote' and not migration_windows.owner_lease_available(selected_data / '.desktop-owner.lock'):
             raise RuntimeError('Папку данных ещё использует другой процесс Hélène')
         value.update(tree=str(selected_data), code=str(row['code']),
-                     python=str(new / 'runtime/python.exe'), app=str(new / 'app/deskapp.py'),
+                     python=str(new / (('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')), app=str(new / 'app/deskapp.py'),
                      runner=str(new / 'app/localharness/runner.py'))
         value['installed'] = dict(value.get('installed') or {}, service=False)
         backup = value.get('backup')

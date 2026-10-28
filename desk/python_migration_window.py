@@ -77,7 +77,8 @@ class MigrationWindow(Application):
         if now-self.last_progress>=.1 or value.get('stage')in ('completed','starting_new','stopping_old'):
             self.event('migration-progress',value);self.last_progress=now
     def open_app(self):
-        subprocess.Popen([str(self.root/'runtime/pythonw.exe'),'-s',str(self.root/'app/python_app.py'),'--root',str(self.root)],cwd=self.root,creationflags=0x08000000)
+        from localharness.update_process import interpreter_for,background_flags
+        subprocess.Popen([str(interpreter_for(self.root)),'-s',str(self.root/'app/python_app.py'),'--root',str(self.root)],cwd=self.root,creationflags=background_flags())
         self.event('exit',{})
     def _handler(self):
         base=super()._handler();app=self
@@ -97,7 +98,6 @@ class MigrationWindow(Application):
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--root',type=Path,required=True);p.add_argument('--old',default='');p.add_argument('--target',default='');p.add_argument('--admission',type=Path);p.add_argument('--source-mode',choices=('preserve','clean'),default='preserve');p.add_argument('--force-extensions',action='store_true');args=p.parse_args(argv)
-    if sys.platform!='win32':raise RuntimeError('This entry is for Windows')
     import webview
     root=args.root.resolve();app=MigrationWindow(root,args.old,args.target,args.source_mode,args.force_extensions);app.serve()
     try:
@@ -113,7 +113,7 @@ def main(argv=None):
         app.window.events.shown+=lambda:set_window_icon(app)
         app.window.events.maximized+=lambda:setattr(app,'window_maximized',True)
         app.window.events.restored+=lambda:setattr(app,'window_maximized',False)
-        webview.start(private_mode=False,storage_path=str(root/'.migration-webview'),icon=str(root/'app/resources/python-app.ico'))
+        webview.start(gui='qt' if sys.platform.startswith('linux') else None,private_mode=False,storage_path=str(root/'.migration-webview'),icon=str(root/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')))
     finally:app.close()
     return 0
 

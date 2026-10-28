@@ -409,7 +409,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
   // Python обновляет рабочую папку собственным helper, без setup.
   const pythonUpdate = electron?.shell === 'python';
-  const windowsInstaller = pythonUpdate && platformOf(electron) === 'windows';
+  const installationWizard = pythonUpdate;
   let sourceMode: 'preserve' | 'clean' = 'preserve';
   const sourceChoices = el('div', 'field');
   const sourceLabel = el('label', '', 'Локальные изменения кода');
@@ -417,12 +417,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   for (const [value, label] of [['preserve', 'Сохранить правки · конфликты поручить агенту'], ['clean', 'Установить чистый код выпуска']]) {
     const option = el('option', '', label); option.value = value; sourceSelect.append(option);
   }
-  const sourceHint = el('p', 'field-hint', windowsInstaller
+  const sourceHint = el('p', 'field-hint', installationWizard
     ? 'Откроется мастер: перенос и совмещение кода с ревью нового Python, включая версии до 2.2.1. Чистый код с текущими данными можно выбрать отдельно.'
     : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.');
   sourceSelect.onchange = () => {
     sourceMode = sourceSelect.value === 'clean' ? 'clean' : 'preserve';
-    if (windowsInstaller) return;
+    if (installationWizard) return;
     sourceHint.textContent = sourceMode === 'clean'
       ? 'Локальные изменения кода будут заменены чистым кодом выпуска. Прежний код останется для отката. Память, переписка и настройки сохранятся.'
       : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.';
@@ -566,7 +566,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     });
     modal.footer.append(button('Отмена', 'quiet', () => modal.dialog.close()), apply);
   });
-  restoreUpstream.hidden = !windowsInstaller;
+  restoreUpstream.hidden = !installationWizard;
   about.append(manualUpdate);
   forceToggle.hidden = true;
   aboutRow.append(

@@ -1,4 +1,5 @@
 """Python desktop updates: download beside Helene, apply into its working folder."""
+import sys
 import hashlib
 import ipaddress
 import json
@@ -374,7 +375,7 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
     from . import source_admission
     if source_admission.activate(new_root):
         verified = source_admission.current_proofs(verified, new_root)
-    if os.name=='nt':
+    if (new_root/'app/helene_setup.py').is_file():
         return _open_installation_wizard(owner,new_root,destination,progress,sourceMode,forceExtensions)
     review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions)
     # No old window closes on preparation failure. The helper independently
@@ -469,9 +470,15 @@ def _open_installation_wizard(owner,new_root,destination,progress,sourceMode=Non
     command=[str(interpreter_for(new_root)),'-s',str(entry),'--root',str(new_root),
              '--old',str(owner.root.resolve()),'--target',str(owner.root.resolve()),'--source-mode',sourceMode or 'preserve']
     if forceExtensions:command.append('--force-extensions')
+    if sys.platform=='darwin':
+        from .python_platform import desktop_argv
+        arguments=['--root',str(new_root),'--migration-wizard','--setup-old',str(owner.root.resolve()),
+                   '--setup-target',str(owner.root.resolve()),'--setup-source-mode',sourceMode or 'preserve']
+        if forceExtensions:arguments.append('--setup-force-extensions')
+        command=desktop_argv(new_root,arguments)
     with (destination/'installation-wizard.log').open('ab') as output:
         child=subprocess.Popen(command,cwd=new_root,stdin=subprocess.DEVNULL,
-            stdout=output,stderr=subprocess.STDOUT,creationflags=background_flags())
+            stdout=output,stderr=subprocess.STDOUT,creationflags=background_flags(),start_new_session=os.name!='nt')
     # A live control descriptor proves the window opened. It grants no file
     # switch; closing/cancelling the wizard leaves the current owner running.
     deadline=time.monotonic()+15

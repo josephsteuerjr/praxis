@@ -404,7 +404,7 @@ def perform(args):
         return 0
     if legacy_prepare:
         from localharness.app_migration import discover
-        from localharness.migration_windows import owner_lease_available
+        from localharness.migration_lifecycle import owner_lease_available
         # PID exit does not prove that a separately hosted profile owner left.
         # Refuse before preparation without launching a duplicate previous app.
         for agent in discover(old)['agents']:
@@ -455,7 +455,7 @@ def perform(args):
         if child is not None and child.handle is not None:
             try:
                 if child.poll() is None:
-                    from localharness.migration_windows import close_python
+                    from localharness.migration_lifecycle import close_python
                     close_python(old)
             except Exception as exc:
                 graceful_error = exc

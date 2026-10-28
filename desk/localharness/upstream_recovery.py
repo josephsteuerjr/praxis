@@ -64,7 +64,7 @@ def stage(root,operation):
     baseline(root,new/'tree')  # archive SHA and every member are verified
     if merge.inventory(new/'tree')!=upstream['files']:
         raise ValueError('Upstream-снимок не соответствует сохранённому коммиту')
-    required=('python-app.json','app/python_app.py','app/helene_setup.py','runtime/python.exe')
+    required=('python-app.json','app/python_app.py','app/helene_setup.py',('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'))
     if not all((new/name).is_file() for name in required):
         raise ValueError('Неполная поставка для восстановления; нужен целый архив Hélène')
     return new
@@ -72,7 +72,7 @@ def stage(root,operation):
 
 def restore(root,*,operation=''):
     from python_migrate import installation_lock
-    from . import migration_windows as windows,python_source_updater as updater,update_source
+    from . import migration_lifecycle as windows,python_source_updater as updater,update_source
     from .update_progress import Progress
     root=Path(root).resolve();operation=operation_id(operation)
     status=receipt(root,operation)
@@ -113,7 +113,7 @@ def launch(root):
     with (root/'upstream-recovery.log').open('ab') as log:
         child=subprocess.Popen([str(interpreter_for(root)),'-s',str(entry),'--root',str(root),
             '--restore-upstream','--confirmed','--operation',operation],cwd=root,stdin=subprocess.DEVNULL,
-            stdout=log,stderr=subprocess.STDOUT,creationflags=background_flags())
+            stdout=log,stderr=subprocess.STDOUT,creationflags=background_flags(),start_new_session=os.name!='nt')
     status=receipt(root,operation);deadline=time.monotonic()+15
     while time.monotonic()<deadline:
         value=read(status)

@@ -16,6 +16,7 @@ import sys
 import threading
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -30,8 +31,9 @@ def recover_before_imports(argv):
     from localharness.python_source_updater import recover_startup
     root=known.root.resolve()
     if not recover_startup(root,known.migration):return False
-    executable=root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
-    os.execv(str(executable),[str(executable),str(root/'app/python_app.py'),*argv])
+    from localharness.python_platform import desktop_argv
+    command=desktop_argv(root,argv)
+    os.execv(command[0],command)
     return True
 
 
@@ -61,6 +63,13 @@ from localharness.python_controller import Controller
 from localharness.python_platform import desktop_identity
 
 
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        TCPServer.server_bind(self)
+        self.server_name='localhost'
+        self.server_port=self.server_address[1]
+
+
 class Application:
     def __init__(self, root: Path, ui: Path, host=None, program: Path | None = None):
         self.root, self.ui, self.host = root, ui.resolve(), host
@@ -85,7 +94,7 @@ class Application:
                         self._channel(host.ready.result(timeout=60)["script"]) if host else {})
         if host:
             self.host.on_event = self.event
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self.server = _LoopbackHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
         self.control_file = self.root / f'.python-window-{os.getpid()}.json'
@@ -618,6 +627,10 @@ def _main(argv=None):
     parser.add_argument('--migration-wizard', action='store_true', help='open the offline profile migration wizard before starting any agent')
     parser.add_argument("--browser", action="store_true", help="open the same Python-owned UI in the system browser")
     parser.add_argument("--launch-intent", choices=("manual", "automatic"), default="manual")
+    parser.add_argument('--setup-old',default='')
+    parser.add_argument('--setup-target',default='')
+    parser.add_argument('--setup-source-mode',choices=('preserve','clean'),default='preserve')
+    parser.add_argument('--setup-force-extensions',action='store_true')
     args = parser.parse_args(arguments)
     if args.panic:
         from localharness import owner_stop
@@ -627,6 +640,7 @@ def _main(argv=None):
             ctypes.windll.user32.MessageBoxW(None, 'Emergency Stop requested. Automatic starts remain paused.', 'Hélène', 0)
         return 0
     os.environ['PYTHONNOUSERSITE']='1'
+    if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
     from localharness import owner_stop
@@ -634,14 +648,18 @@ def _main(argv=None):
         return 0
     if program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
-    if sys.platform=='win32' and not args.migration:
+    if not args.migration and not args.browser:
         from localharness import portable_start
         incomplete=root/'python-migration.json'
         needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started')
         if args.migration_wizard or needs_migration or not (root/'helene.json').exists():
             from helene_setup import main as migration_window
-            return migration_window(['--root',str(root)])
-        portable_start.initialize(root)
+            setup_args=['--root',str(root),'--source-mode',args.setup_source_mode]
+            if args.setup_old:setup_args+=['--old',args.setup_old]
+            if args.setup_target:setup_args+=['--target',args.setup_target]
+            if args.setup_force_extensions:setup_args+=['--force-extensions']
+            return migration_window(setup_args)
+        if sys.platform=='win32':portable_start.initialize(root)
     ui = program / "app" / "static"
     if not (ui / "index.html").is_file():
         raise FileNotFoundError(f"Нет сборки окна: {ui}")
@@ -713,7 +731,9 @@ def _main(argv=None):
                 arguments.append(argument)
         arguments.extend(['--launch-intent', 'manual'])
         if app.migration_wizard:arguments.append('--migration-wizard')
-        os.execv(sys.executable, [sys.executable, str(Path(__file__).resolve()), *arguments])
+        from localharness.python_platform import desktop_argv
+        command=desktop_argv(root,arguments)
+        os.execv(command[0],command)
     return 0
 
 

@@ -5,6 +5,7 @@ migration lifecycle are used. Only provider/critic execution and Windows stop
 are replaced with bounded fixtures; no live user agent or model is called.
 """
 import json
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -27,7 +28,7 @@ class NativeBridge(unittest.TestCase):
         (f.old/'python-app.json').unlink();write(f.old/'build.json',{'version':'1.7.0'})
         put(f.old,'helene.exe','native fixture')
         write(f.new/'python-app.json',{'version':'2.2.10','delivery':'portable'})
-        for name in ('app/python_app.py','app/deskapp.py','runtime/python.exe'):put(f.new,name,'fixture')
+        for name in ('app/python_app.py','app/deskapp.py',('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')):put(f.new,name,'fixture')
         code_transition.seal(f.new)
         put(f.tree,'memory/history.jsonl','retained-private-history\n')
         return f
@@ -64,9 +65,9 @@ class NativeBridge(unittest.TestCase):
         before=(f.old/'helene.json').read_bytes()
         with patch.object(code_transition,'preflight',side_effect=preflight), \
              patch('localharness.source_update_host.review',side_effect=incoming_review), \
-             patch('localharness.migration_windows.service',return_value=None), \
-             patch('localharness.migration_windows.stop',side_effect=lambda _:events.append('stop-old')), \
-             patch('localharness.migration_windows.quiescent'):
+             patch('localharness.migration_lifecycle.service',return_value=None), \
+             patch('localharness.migration_lifecycle.stop',side_effect=lambda _:events.append('stop-old')), \
+             patch('localharness.migration_lifecycle.quiescent'):
             note=installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
         cfg=read(f.new/'helene.json');selected=Path(cfg['code'])
         result=(selected/'module.py').read_text()
@@ -86,7 +87,7 @@ class NativeBridge(unittest.TestCase):
     def test_failed_panel_does_not_stop_or_retire_native_program(self):
         f=self.setup_fixture(False)
         with patch('localharness.source_update_host.review',side_effect=RuntimeError('panel has findings')), \
-             patch('localharness.migration_windows.stop') as stop,patch('localharness.migration_windows.remove_program') as remove:
+             patch('localharness.migration_lifecycle.stop') as stop,patch('localharness.migration_lifecycle.remove_program') as remove:
             with self.assertRaisesRegex(RuntimeError,'panel has findings'):
                 installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
             stop.assert_not_called();remove.assert_not_called()

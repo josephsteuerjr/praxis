@@ -1,15 +1,25 @@
 # Hélène
 
-A desktop home for agents that remember, act and develop their own tools.
+**Download, extract, open.** Python and the ready runtime are bundled; you do not
+need Git, a compiler or a separate Python installation to start.
 
-Each agent has its own character, memory, settings and working files. Talk in
-the desktop window, connect Telegram, or use a paired phone and web interface
-while the host is online. Choose your model provider or a supported subscription
-relay. Local voice is optional.
+[**Download Hélène for your platform**](https://github.com/josephsteuerjr/praxis/releases/latest)
 
-**Downloads are temporarily withdrawn while the installation and update path is
-being repaired.** Existing conversations and agent data are not being removed.
-Availability will be announced on the [releases page](https://github.com/josephsteuerjr/praxis/releases).
+| Platform | Archive | Open after extracting |
+| --- | --- | --- |
+| Windows x64 | `Helene-…zip` | `helene.exe` |
+| macOS on Apple silicon | `Helene-…-macos-arm64.zip` | `Helene.app` |
+| Debian/Ubuntu x86_64 | `Helene-…-linux-x86_64.zip` | `Start Helene.sh` |
+| Fedora x86_64 | `Helene-…-fedora-x86_64.zip` | `Start Helene.sh` |
+
+The first window helps you create an agent or connect your existing data. Choose
+a permanent program folder, then configure your model provider. Local voice is
+optional. Files named `SHA256SUMS` and `release-evidence` are verification
+material; download the application archive for your system.
+
+Hélène is a desktop home for agents with their own character, lasting memory,
+settings and working files. Talk in the desktop window, connect Telegram, or use
+a paired phone and web interface while the host is online. Powered by Praxis.
 
 ## Your agent, your files
 
@@ -25,23 +35,20 @@ the result returned to the model.
 
 ## Install, connect, update
 
-Windows setup is being consolidated into one wizard, reached from the first
-launch of `helene.exe` and from **Update**. It offers a new agent or an existing
-data folder, a choice of program location and optional removal of the previous
-program. Old code is retained as material for future self-modification.
+First launch and **Update** open the same setup wizard. Create a new agent,
+connect an existing data folder, or migrate an old installation. Choose the
+program location and whether to remove the previous program after the new one
+has confirmed startup.
 
-Data and executable code are handled separately. A clean-code update keeps
-memory, conversations and settings. Preserved-code updates combine authored
-changes with incoming source; the verified incoming Python application owns
-the independent review and the final installation transaction.
+Keep your code changes by combining them with the incoming release and letting
+the new Python runtime's independent panel review the result. This also applies
+to older native installations. Alternatively, choose clean upstream code and
+keep the current data folder connected. Previous source and Git are archived.
+Memory, conversations, settings and keys stay with the selected data folders.
 
-The previous application must stop before the switch. Service operations use
-Windows' own administrator prompt. Old program files and shortcuts are removed
-only after the new application confirms startup; data directories are retained.
-The new installation creates one desktop shortcut.
-
-The source also contains application packaging for macOS, Debian and Fedora.
-Platform-specific setup and qualification are documented under [desk](desk/).
+**Restore upstream code**, beside Update, is the emergency route back to the
+installed release's clean source while keeping current data. The reusable
+`app/helene_setup.py` entry opens setup and also supports recovery.
 
 ## Models, Telegram and voice
 

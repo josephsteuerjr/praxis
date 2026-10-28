@@ -34,13 +34,36 @@ def target(program):
     return selected
 
 
-def asset_name(version, selected):
+def distribution(program):
+    program=Path(program)
+    value=json.loads((program/'python-app.json').read_text(encoding='utf-8'))
+    if target(program)!='linux-x86_64':return None
+    flavor=value.get('distribution') or ('fedora' if (program/'FEDORA-BUILD.json').is_file() else 'debian')
+    if flavor not in ('debian','fedora'):raise ValueError('Unknown Linux application distribution')
+    return flavor
+
+
+def asset_name(version, selected, flavor=None):
     if selected not in TARGETS:
         raise ValueError('Unknown Python application target')
-    suffix = '' if selected == 'windows-x86_64' else '-'+selected
+    if flavor not in (None,'debian','fedora'):raise ValueError('Unknown Linux application distribution')
+    suffix = '' if selected == 'windows-x86_64' else '-fedora-x86_64' if selected=='linux-x86_64' and flavor=='fedora' else '-'+selected
     return 'Helene-'+version+suffix+'.zip'
 
 
-def require_runtime(program):
+def require_runtime(program, current=None):
     if target(program) != runtime_target():
         raise ValueError('Incoming application is for another OS/architecture')
+    if current is not None and target(program)=='linux-x86_64' and distribution(program)!=distribution(current):
+        raise ValueError('Incoming application is for another Linux distribution')
+
+
+def desktop_argv(program, arguments=()):
+    """GUI re-entry keeps Cocoa bundle identity; helpers keep raw Python."""
+    program=Path(program).resolve()
+    arguments=list(map(str,arguments))
+    bundle=program/'Helene.app/Contents/MacOS/Helene'
+    if sys.platform=='darwin' and '--browser' not in arguments and bundle.is_file():
+        return [str(bundle),*arguments]
+    python=program/('runtime/python.exe' if sys.platform=='win32' else 'runtime/bin/python3')
+    return [str(python),str(program/'app/python_app.py'),*arguments]

@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 import uuid
-from localharness import app_migration, migration_windows
+from localharness import app_migration, migration_lifecycle as migration_windows
 
 
 def transaction(old, new, *, prepared=False):
@@ -35,7 +35,7 @@ def transaction(old, new, *, prepared=False):
             raise ValueError('This folder belongs to another migration; retained without changes')
         return note
     if prepared:
-        if (new/'helene.json').exists() or not all((new/p).is_file() for p in ('python-app.json','app/python_app.py','runtime/python.exe')):
+        if (new/'helene.json').exists() or not all((new/p).is_file() for p in ('python-app.json','app/python_app.py',(('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3'))):
             raise ValueError('Use the unpacked, unconfigured portable application for migration')
     elif new.exists():
         from localharness import owner_stop
@@ -142,7 +142,7 @@ def finish_retirement(old, package, new, note, progress):
     migration_windows.quiescent(old)
     progress('retiring_old')
     program_markers=('helene.exe','Helene.exe','helene-setup.exe','uninstall.exe',
-                     'python-app.json','app/python_app.py','app/deskapp.py','deskapp.py','runtime/python.exe')
+                     'python-app.json','app/python_app.py','app/deskapp.py','deskapp.py',(('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3'))
     if (note.get('startup_proof') and note.get('source_policy')=='clean'
             and not any((old/name).exists() for name in program_markers)):
         integrations=migration_windows.retire(old,new)
@@ -230,15 +230,15 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         selected_data=Path(attached_data).resolve()
         if not selected_data.is_dir():raise ValueError('Выбери существующую папку данных агента')
         if selected_data==new or new.is_relative_to(selected_data):raise ValueError('Папка данных не должна содержать новую программу')
-        if source_mode=='preserve':
-            from localharness.python_updates import prepare_code
-            prepare_code(old,new,WizardProgress(progress),source_mode,cancelled=review_cancelled,
-                         require_review=True,resolution_owner='incoming',forceExtensions=force_extensions)
+    if source_mode=='preserve':
+        from localharness.python_updates import prepare_code
+        prepare_code(old,new,WizardProgress(progress),source_mode,cancelled=review_cancelled,
+                     require_review=True,resolution_owner='incoming',forceExtensions=force_extensions)
     from localharness.update_extensions import check
     progress('checking_extensions')
     check(old,new,force=force_extensions)
     progress('stopping_old')
-    before=migration_windows.service(old) if os.name=='nt' else None
+    before=migration_windows.service(old)
     if before and not stop_service:
         raise RuntimeError('Explicit service handoff is required; prepared package retained')
     child=None
@@ -260,12 +260,17 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         else:
             note=app_migration.prepare(old,new,data,old_service_stopped=bool(stopped['service']) or stop_service,progress=progress,reuse=reuse,
                                        independent=prepared or portable,copy_external=prepared or portable,source_policy=source_mode)
+        if source_mode=='preserve' and attached_data is None:
+            from localharness.code_transition import prepare,validate
+            from localharness.windows_installation import WizardProgress
+            prepare(old,new,note,progress=WizardProgress(progress));validate(new)
+            note['state']='prepared';app_migration.write_note(new,note)
         if source_mode=='clean' and attached_data is None:
             from localharness.migration_source import prepare as prepare_clean_code
             note=prepare_clean_code(old,new,note)
         install_selected_extensions(new,note,extensions,progress)
         if not launch:return note
-        interpreter=new/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')
+        interpreter=new/((('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')
         log=new/'migration-start.log'
         from localharness.desktop_process import JobChild
         progress('starting_new')
@@ -347,7 +352,7 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
             sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
         tree=data if data_exact else data/note['id'];tree.mkdir(parents=True,exist_ok=True)
         value={'mode':'local','tree':str(tree),'code':str(new/'tree'),'port':port,
-               'python':str(new/'runtime/python.exe'),'app':str(new/'app/deskapp.py'),
+               'python':str(new/(('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')),'app':str(new/'app/deskapp.py'),
                'runner':str(new/'app/localharness/runner.py'),'setup_complete':False,
                'model':{'framework':'openai','base_url':'','model':'','key':''},
                'relay':{'enabled':False},'voice':{'enabled':False},'installed':{'service':False}}
@@ -361,7 +366,7 @@ def fresh(package:Path,new:Path,data:Path,*,extensions=None,launch=True,progress
     child=None;started=False
     try:
         progress('starting_new')
-        child=JobChild.spawn([str(new/'runtime/python.exe'),'-s',str(new/'app/python_app.py'),'--root',str(new),'--migration',note['id']],
+        child=JobChild.spawn([str(new/(('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3') if os.name=='nt' else 'runtime/bin/python3')),'-s',str(new/'app/python_app.py'),'--root',str(new),'--migration',note['id']],
                              cwd=new,env=dict(os.environ),log=new/'migration-start.log',stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:
