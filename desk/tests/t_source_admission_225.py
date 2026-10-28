@@ -106,6 +106,26 @@ class SourceAdmission(unittest.TestCase):
                 str(self.program/'runtime/python.exe'):{'keep':True}}
         self.assertEqual(admission.current_proofs(proofs,self.program),{str(self.program/'runtime/python.exe'):{'keep':True}})
 
+    def test_materialized_passport_hashes_match_files_needed_by_recovery(self):
+        manifest=read(self.program/'python-package-files.json')
+        for name in ('edition-inventory.json','selected-source.json'):
+            write(self.program/name,{'files':self.declaration['view_files']})
+            manifest['files'][name]=hashlib.sha256((self.program/name).read_bytes()).hexdigest()
+        write(self.program/'python-package-files.json',manifest)
+        admission.activate(self.program)
+        manifest=read(self.program/'python-package-files.json')
+        for name in ('edition-inventory.json','selected-source.json'):
+            self.assertEqual(manifest['files'][name],hashlib.sha256((self.program/name).read_bytes()).hexdigest())
+
+    def test_migration_preparation_keeps_verified_upstream_archive_immutable(self):
+        admission.activate(self.program)
+        archive=(self.program/'code-upstream.zip').read_bytes()
+        manifest=(self.program/'code-upstream.json').read_bytes()
+        os.utime(self.program/'tree/module.py',(1577836800,1577836800))
+        code_transition.prepare(self.root/'old',self.program,{'source_paths':[]})
+        self.assertEqual((self.program/'code-upstream.zip').read_bytes(),archive)
+        self.assertEqual((self.program/'code-upstream.json').read_bytes(),manifest)
+
     def test_actual_fresh_entry_materializes_before_controller_start(self):
         desk=Path(__file__).resolve().parents[1]
         shutil.copytree(desk/'localharness',self.program/'app/localharness',ignore=shutil.ignore_patterns('__pycache__'))

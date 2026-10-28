@@ -25,6 +25,19 @@ def seal(program):
         'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()})
 
 
+def _keep_upstream(program):
+    """A verified delivery's B remains immutable across authored-code merges."""
+    program=Path(program)
+    declaration=read(program/'source-admission.json')
+    if not declaration:
+        seal(program)
+        return
+    from .source_admission import _upstream
+    upstream,_=_upstream(program,declaration)
+    if merge.inventory(program/'tree')!=upstream['files']:
+        raise ValueError('Incoming pristine source changed before migration')
+
+
 def baseline(program, destination, sources=()):
     program, destination = Path(program), Path(destination)
     archive = program / 'code-upstream.zip'
@@ -163,7 +176,7 @@ def prepare(old, new, note, *, progress=None):
     if not (new / 'tree').is_dir():
         return
     if not note['source_paths']:
-        seal(new)
+        _keep_upstream(new)
         return
     from . import update_source
     choice=update_source.require(old,new,progress)
@@ -210,6 +223,6 @@ def prepare(old, new, note, *, progress=None):
         if prior in selected:
             value['code'] = str(selected[prior])
         write(config, value)
-    seal(new)
+    _keep_upstream(new)
     write(new / 'code-transition.json', {'format': 'helene-code-transition.v2', 'merges': receipts})
     note['code_transition'] = str(old / 'code-transition.json')

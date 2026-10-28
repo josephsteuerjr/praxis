@@ -176,12 +176,16 @@ def activate(program, *, lease_held=False):
             files = {n: h for n, h in manifest['files'].items() if not n.startswith('tree/')}
             files.update({'tree/' + n: row['sha256'] for n, row in target.items()})
             manifest.update(files=files, source_admission={'identity': identity, 'materialized': True})
-            write(program / 'python-package-files.json', manifest)
         for name in ('edition-inventory.json', 'selected-source.json'):
             passport = read(program / name)
             if passport:
                 passport.update(files=target, current_tree_scope='materialized pristine incoming source')
                 write(program / name, passport)
+        if manifest:
+            for name in ('edition-inventory.json','selected-source.json','code-upstream.json','code-upstream.zip'):
+                if name in manifest['files']:
+                    manifest['files'][name]=hashlib.sha256((program/name).read_bytes()).hexdigest()
+            write(program / 'python-package-files.json', manifest)
         write(state_path, {'format': FORMAT, 'identity': identity, 'state': 'ready'})
         # Previous is a byte-verified shipped view, never authored L. Keep any
         # uncertain/locked recovery rather than deleting a changed source tree.
