@@ -193,3 +193,11 @@ def remove_program(old,new,note):
         if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('Old program changed')
         path.unlink()
     return {'ok':True,'removed_files':len(files),'purge':False,'data_retained':True}
+
+
+def registered_uninstall(old):
+    return None
+
+
+def retire(old,new):
+    return cleanup_installation(old,new)

@@ -231,6 +231,7 @@ def migrate(old: Path, package: Path, new: Path, data: Path, *, stop_service=Fal
         if not selected_data.is_dir():raise ValueError('Выбери существующую папку данных агента')
         if selected_data==new or new.is_relative_to(selected_data):raise ValueError('Папка данных не должна содержать новую программу')
     if source_mode=='preserve':
+        from localharness.windows_installation import WizardProgress
         from localharness.python_updates import prepare_code
         prepare_code(old,new,WizardProgress(progress),source_mode,cancelled=review_cancelled,
                      require_review=True,resolution_owner='incoming',forceExtensions=force_extensions)
