@@ -693,7 +693,7 @@ def _main(argv=None):
     # A fresh/interrupted migrator has not yet selected a complete profile.
     # Require its ordinary recovery entry first; running the app still requires
     # the unchanged exact data-pointer/identity checks.
-    if (root/'helene.json').is_file():
+    if (root/'helene.json').is_file() and not args.session_job:
         from localharness.portable_profile import bind_program
         bind_program(root)
     if pending.is_file() and not args.migration:

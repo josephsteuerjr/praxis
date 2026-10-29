@@ -98,5 +98,19 @@ class StartupTests(unittest.TestCase):
         value['admission']['birth']+=1;jobs._save(self.data,value)
         with self.assertRaises(ValueError):migration.observer_program(self.root,package,value['id'])
 
+    def test_incoming_observer_never_rebinds_or_rewrites_legacy_configuration(self):
+        import python_app
+        from localharness import portable_profile,session_host
+        package=self.base/'incoming';(package/'app/static').mkdir(parents=True)
+        (package/'app/static/index.html').write_text('<html></html>')
+        before=(self.root/'helene.json').read_bytes()
+        with patch.object(migration,'observer_program',return_value=package),\
+             patch.object(portable_profile,'bind_program') as bind,\
+             patch.object(python_app,'Application',return_value=SimpleNamespace(event=Mock(),origin='http://127.0.0.1:1')),\
+             patch.object(session_host,'attach',side_effect=RuntimeError('fixture stops before attach')):
+            with self.assertRaisesRegex(RuntimeError,'fixture stops'):
+                python_app._main(['--root',str(self.root),'--program',str(package),'--session-job','c'*32])
+        bind.assert_not_called();self.assertEqual((self.root/'helene.json').read_bytes(),before)
+
 
 if __name__=='__main__':unittest.main()
