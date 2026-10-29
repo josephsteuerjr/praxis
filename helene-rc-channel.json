@@ -1,0 +1,18 @@
+{
+  "tag_name": "v2.3.0-rc.3",
+  "assets": [
+    {
+      "name": "Helene-2.3.0-rc.3-macos-arm64.zip",
+      "browser_download_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.3.0-rc.3/Helene-2.3.0-rc.3-macos-arm64.zip",
+      "digest": "sha256:f0bfcab250933869482927df289d9a27e568902768143fd9ae3fc9f421e2f159",
+      "size": 174336214
+    },
+    {
+      "name": "Helene-2.3.0-rc.3.zip",
+      "browser_download_url": "https://github.com/josephsteuerjr/praxis/releases/download/v2.3.0-rc.3/Helene-2.3.0-rc.3.zip",
+      "digest": "sha256:c831d0a244a29a102f8bbc8a459cd6aef4e2274bb514fb2ab2e5538076af50e8",
+      "size": 171937633
+    }
+  ],
+  "body": "Manual RC channel; not stable latest."
+}
