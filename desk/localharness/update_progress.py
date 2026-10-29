@@ -14,6 +14,7 @@ from contextlib import contextmanager, nullcontext
 _publication_lock = threading.RLock() if os.name == 'nt' else nullcontext()
 
 LABELS = {
+    'starting_agent':'Запускаю агента · окно доступно, готовность ещё проверяется',
     'choosing_source': 'Как обновить код?',
     'waiting_agent': 'Агент разрешает пересечения кода',
     'verifying':'Выполняю полную применимую проверку кандидата',

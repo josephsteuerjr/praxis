@@ -93,6 +93,33 @@ session.Host(Path(sys.argv[2]),controller_factory=FixtureController).run()
         second.shutdown();self.process.wait(timeout=8)
         self.assertEqual(self.process.returncode,0)
 
+    def test_explicit_rc3_recovery_exits_exact_failed_host_without_replaying_work(self):
+        from localharness import migration_job,desktop_update_request as jobs
+        self.start()
+        value={'id':'c'*32,'kind':'migration','program':str(self.root),'tree':str(self.tree),
+            'state':'attention','phase':'preparing','error':'TimeoutError: Runner ownership heartbeat unconfirmed',
+            'legacy_handoff':{'old':str(self.root)},
+            'admission':{k:self.descriptor[k] for k in ('pid','birth','generation')}}
+        jobs._save(self.tree,value)
+        self.assertEqual(migration_job.failed_session(self.root)['id'],value['id'])
+        self.assertTrue(migration_job.release_failed_session(self.root,value['id'])['released'])
+        self.process.wait(timeout=8)
+        self.assertEqual(jobs.status(self.tree)['state'],'cancelled')
+        self.assertFalse((self.tree/'effects.json').exists())
+
+    def test_rc3_recovery_never_stops_running_work_or_mismatched_birth(self):
+        from localharness import migration_job,desktop_update_request as jobs
+        self.start()
+        value={'id':'d'*32,'kind':'migration','program':str(self.root),'tree':str(self.tree),
+            'state':'running','phase':'preparing','error':'TimeoutError: Runner ownership heartbeat unconfirmed',
+            'legacy_handoff':{'old':str(self.root)},
+            'admission':{k:self.descriptor[k] for k in ('pid','birth','generation')}}
+        jobs._save(self.tree,value)
+        self.assertIsNone(migration_job.failed_session(self.root))
+        value['state']='attention';value['admission']['birth']+=1;jobs._save(self.tree,value)
+        with self.assertRaises(ValueError):migration_job.release_failed_session(self.root,value['id'])
+        self.assertIsNone(self.process.poll())
+
     def test_wrong_token_generation_or_origin_never_mutates(self):
         self.start()
         for key,value in [('token','wrong'),('generation','old')]:

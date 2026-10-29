@@ -132,6 +132,80 @@ def execute(host,owner,value):
         return _execute(host,owner,value)
 
 
+def observer_program(root, package, identity):
+    """An incoming view may attach only to its exact admitted migration host."""
+    from .session_host import control_path, process_state
+    root,package=Path(root).resolve(),Path(package).resolve()
+    descriptor=read(control_path(root));job=jobs.status(descriptor.get('tree',root))
+    if (descriptor.get('program')!=str(root) or process_state(descriptor)!='alive'
+            or job.get('id')!=identity or job.get('kind')!='migration'
+            or job.get('program')!=str(root) or job.get('migration',{}).get('package')!=str(package)
+            or any(job.get('admission',{}).get(k)!=descriptor.get(k) for k in ('pid','birth','generation'))):
+        raise ValueError('Migration observer does not match the admitted session')
+    return package
+
+
+def open_observer(host, owner, value, package, work):
+    """Render with incoming B while the selected program/source remain intact."""
+    from .desktop_supervisor import JobChild
+    from .python_platform import desktop_argv
+    from .session_host import process_state
+    previous=read(work/'observer.json')
+    if previous and process_state(previous)=='alive':return previous
+    command=desktop_argv(package,['--root',str(owner.root),'--program',str(package),'--session-job',value['id']])
+    child=JobChild.spawn(command,cwd=package,env=dict(os.environ),log=work/'observer.log',stopped=owner.update_cancelled)
+    try:
+        deadline=time.monotonic()+120
+        while time.monotonic()<deadline:
+            if owner.update_cancelled():raise InterruptedError('Migration observer startup cancelled')
+            # Registration is not enough: require the renderer's python_ready.
+            view=read(owner.root/f'.python-window-{child.pid}.json')
+            if (view.get('pid')==child.pid and view.get('root')==str(owner.root.resolve())
+                    and view.get('ui_ready') is True):
+                import psutil
+                result={'pid':child.pid,'birth':psutil.Process(child.pid).create_time()}
+                write(work/'observer.json',result);child.release();return result
+            if child.poll() is not None:raise RuntimeError('Migration window exited before it became ready; inspect observer.log')
+            time.sleep(.1)
+        raise TimeoutError('Migration window startup unconfirmed; inspect observer.log')
+    except BaseException:
+        if child.handle is not None:child.stop()
+        raise
+
+
+def failed_session(root):
+    """Identify RC3's exact failed bootstrap, never an arbitrary live owner."""
+    from .session_host import control_path,process_state
+    root=Path(root).resolve()
+    descriptor=read(control_path(root));job=jobs.status(descriptor.get('tree',root))
+    if (descriptor.get('program')==str(root) and process_state(descriptor)=='alive'
+            and job.get('program')==str(root) and job.get('kind')=='migration'
+            and job.get('state')=='attention' and job.get('phase')=='preparing'
+            and job.get('error')=='TimeoutError: Runner ownership heartbeat unconfirmed'
+            and job.get('legacy_handoff') and not job.get('helper')
+            and all(job.get('admission',{}).get(k)==descriptor.get(k) for k in ('pid','birth','generation'))):
+        return {'id':job['id'],'error':job['error']}
+    return None
+
+
+def release_failed_session(root, identity):
+    """Explicit recovery cancels that failed job, then proves its leases gone."""
+    from .session_host import control_path,process_state,_rpc
+    from .migration_windows import owner_lease_available
+    root=Path(root).resolve();failed=failed_session(root)
+    if not failed or failed['id']!=identity:raise ValueError('No matching failed legacy handoff to release')
+    descriptor=read(control_path(root))
+    _rpc(descriptor,'exit',timeout=45)
+    deadline=time.monotonic()+45
+    while time.monotonic()<deadline:
+        if process_state(descriptor) in ('absent','changed'):
+            if not owner_lease_available(Path(descriptor['tree'])/'.desktop-owner.lock'):
+                raise RuntimeError('Previous data lease is still held; recovery not confirmed')
+            return {'released':True,'id':identity}
+        time.sleep(.1)
+    raise TimeoutError('Previous session exit unconfirmed; no replacement started')
+
+
 def _execute(host,owner,value):
     """One admitted work item in the session host, not a window-owned thread."""
     from . import windows_installation as installation, python_updates, update_composition
@@ -148,6 +222,8 @@ def _execute(host,owner,value):
     owner.update_cancelled=lambda:owner.stop.is_set() or owner_stop.stopped() or jobs.cancelled(data,value['id'])
     owner.migration_data=data
     jobs.bind_incoming(value,package if old is not None and old==target else target)
+    previous_service=None
+    legacy_stopped=False
     try:
         if old is not None:
             from . import migration_lifecycle
@@ -158,13 +234,21 @@ def _execute(host,owner,value):
             # No old UI, old tool module or model session owns this continuation.
             previous_service=migration_lifecycle.service(old)
             stopped_old=migration_lifecycle.stop(old)
+            legacy_stopped=True
             migration_lifecycle.quiescent(old)
             jobs.checkpoint(owner,value,legacy_handoff={'old':str(old),'service':previous_service,
                 'stop':stopped_old,'runtime':runtime_binding,'at':time.time()})
             owner.root=old
             owner.runtime_program=package
             owner.start()
-            owner.readiness(timeout=30,require_runner=True)
+            jobs.checkpoint(owner,value,phase='starting_agent')
+            progress.phase('starting_agent')
+            open_observer(host,owner,value,package,work)
+            # Cold legacy runners import the preserved agent, start its body,
+            # project its brain and connect transports before the first reader
+            # heartbeat. The view is already usable; Stop remains responsive.
+            owner.readiness(timeout=180,require_runner=True,cancelled=owner.update_cancelled)
+            jobs.checkpoint(owner,value,phase='preparing')
         if old is not None and old==target:
             if not (old/'python-app.json').is_file():raise ValueError('A native legacy installation must migrate into the already unpacked program folder')
             if package!=package.parent/'Helene' or package.parent.parent!=old.parent or not package.parent.name.startswith('.helene-update-'):
@@ -199,9 +283,26 @@ def _execute(host,owner,value):
         jobs.checkpoint(owner,value,state='handed_off',phase='handoff',helper=admitted)
         host.stop.set()  # this bootstrap owns no agent; successor attaches after its exit
     except BaseException as exc:
-        jobs.checkpoint(owner,value,state='cancelled' if jobs.cancelled(data,value['id']) else 'attention',
-            error=f'{type(exc).__name__}: {exc}')
-        owner.event('migration-attention',{'id':value['id'],'error':str(exc)})
+        try:
+            jobs.checkpoint(owner,value,state='cancelled' if jobs.cancelled(data,value['id']) else 'attention',
+                error=f'{type(exc).__name__}: {exc}')
+            owner.event('migration-attention',{'id':value['id'],'error':str(exc)})
+        finally:
+            # Even a receipt write failure cannot strand a bootstrap owner.
+            if legacy_stopped:
+                released=False
+                try:
+                    owner.close()
+                    from . import migration_lifecycle
+                    restored=migration_lifecycle.restore_service(old,previous_service)
+                    released=True
+                    jobs.checkpoint(owner,value,legacy_recovery={'released':True,'service_restored':restored})
+                except BaseException as cleanup:
+                    owner.event('migration-attention',{'id':value['id'],'error':str(cleanup)})
+                    if not released:
+                        jobs.checkpoint(owner,value,legacy_recovery={'released':False,'error':str(cleanup)})
+                finally:
+                    if released:host.stop.set()
 
 
 def complete(args):

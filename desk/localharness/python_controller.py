@@ -183,7 +183,7 @@ class Controller:
                   'run','--config',str(agent.config),'--data',str(agent.tree)]
             self.publishers[identity]=self.background(argv,agent.tree/'remote-computer.log')
 
-    def readiness(self, timeout=30, require_runner=False, agent=None):
+    def readiness(self, timeout=30, require_runner=False, agent=None, cancelled=None):
         """Identify anonymously before sending a tree key; measure owned runner."""
         import urllib.request
         import urllib.error
@@ -204,6 +204,8 @@ class Controller:
         end=time.monotonic()+timeout
         last='channel is starting'
         while True:
+            if self.stop.is_set() or (cancelled is not None and cancelled()):
+                raise InterruptedError('Startup cancelled before readiness confirmation')
             try:
                 state=self.status().get('agents',{}).get(target.id,{})
                 who=json.load(http.open(base+'/api/who',timeout=2))

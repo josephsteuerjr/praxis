@@ -1,3 +1,7 @@
+# 2.3.0-rc.4
+
+Keep an incoming Python window available during legacy handoff. Confirm the cold runner's exact PID, source and heartbeat with cancellable startup waiting. Failed bootstrap releases its own workers and profile lease before allowing the legacy launcher to reopen. The migration window can explicitly stop RC3's identified failed heartbeat handoff without replaying or applying its saved work. Update review and apply gates remain in force.
+
 # 2.2.9
 
 Explicit preserved or pristine source update in the window and agent tool. The selected agent resolves preserved changes; independent review still accepts the candidate. Pristine mode selects exact verified release source while retaining prior code and all profile paths. See [release notes](docs/RELEASE-2.2.9.md).

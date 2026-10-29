@@ -46,9 +46,16 @@ class MigrationWindow(Application):
             return read(receipt(self.root,args.get('operation','')))
         if command=='migration_inspect':
             from localharness import windows_installation as installation
+            from localharness.migration_job import failed_session
             old=Path(args.get('old','')).resolve()
             if not (old/'helene.json').is_file():raise ValueError('В этой папке нет настроек прежней Hélène')
-            return {'data':installation.default_data(old),'version':installation.version(old)}
+            return {'data':installation.default_data(old),'version':installation.version(old),'failed_session':failed_session(old)}
+        if command=='migration_release_failed_session':
+            from localharness.migration_job import release_failed_session
+            if args.get('confirmed') is not True:raise ValueError('Confirm stopping the failed migration session')
+            if not self.running.acquire(blocking=False):raise RuntimeError('Migration admission is already in progress')
+            try:return release_failed_session(Path(args['old']),str(args['id']))
+            finally:self.running.release()
         if command=='migration_pick_path':
             import webview
             chosen=self.window.create_file_dialog(webview.FOLDER_DIALOG)

@@ -81,6 +81,7 @@ class Application:
         self.migration_id = ''
         self.confirm_lock = threading.Lock()
         self.confirmed_ui = False
+        self.ui_ready = False
         self.browser_mode = False
         self.tray = None
         self.start_in_tray = False
@@ -105,7 +106,7 @@ class Application:
     def publish_control(self):
         """Expose the existing authenticated exit surface only after UI readiness."""
         value = {'schema': 1, 'pid': os.getpid(), 'root': str(self.root.resolve()),
-                 'origin': self.origin, 'token': self.token}
+                 'origin': self.origin, 'token': self.token, 'ui_ready': self.ui_ready}
         temporary = self.control_file.with_suffix('.tmp')
         temporary.write_text(json.dumps(value), encoding='utf-8')
         os.replace(temporary, self.control_file)
@@ -234,6 +235,9 @@ class Application:
         return self.host.invoke(command, args)
 
     def confirm_ui(self):
+        if getattr(self,'session_job',''):
+            self.ui_ready=True
+            self.publish_control()
         if not self.migration_id:return {'confirmed':False}
         with self.confirm_lock:
             if not self.confirmed_ui:
@@ -630,6 +634,7 @@ def _main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--program", type=Path)
+    parser.add_argument('--session-job',default='',help=argparse.SUPPRESS)
     parser.add_argument("--agent", default="")
     parser.add_argument("--panic", action="store_true", help="latch owner Stop without starting the application")
     parser.add_argument("--notify", action="store_true", help="show the emergency-stop result")
@@ -656,9 +661,12 @@ def _main(argv=None):
     from localharness import owner_stop
     if args.launch_intent == "automatic" and owner_stop.stopped():
         return 0
-    if program != root:
+    if args.session_job:
+        from localharness.migration_job import observer_program
+        observer_program(root,program,args.session_job)
+    elif program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
-    if not args.migration and not args.browser:
+    if not args.migration and not args.browser and not args.session_job:
         from localharness import portable_start
         incomplete=root/'python-migration.json'
         needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started')
@@ -693,13 +701,14 @@ def _main(argv=None):
         if migrated.get('state')=='prepared':args.migration=migrated['id']
     app = Application(root, ui, None, program)
     app.migration_id=args.migration
+    app.session_job=args.session_job
     app.browser_mode=args.browser
     from localharness.session_host import attach
     host = attach(root, app.event, app.origin, args.agent, browser_mode=args.browser)
     try:
-        host.start()
+        if not args.session_job:host.start()
         from localharness import owner_stop
-        if not owner_stop.stopped():
+        if not owner_stop.stopped() and not args.session_job:
             host.readiness(timeout=30)
         app.channel = host.channel()
         app.host = host
