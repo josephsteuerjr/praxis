@@ -301,15 +301,18 @@ def main():
     parser.add_argument('--source-mode',choices=('preserve','clean'))
     parser.add_argument('--job',type=Path)
     parser.add_argument('--job-id',default='')
+    parser.add_argument('--admission-name',default='updater-admitted.json')
     args=parser.parse_args()
     sys.path.insert(0,str(args.new.resolve()/'app'))
     if args.cleanup:return perform(args)
     validate_staging(args)
+    if Path(args.admission_name).name != args.admission_name:
+        raise ValueError('Updater admission name leaves staging')
     mechanical = prepared_install_path(args.new).is_file()
     if not mechanical:
         from localharness.migration_job import legacy_update
         legacy_update(args.old,args.new,source_mode=args.source_mode or 'preserve',
-                      admission=args.staging/'updater-admitted.json')
+                      admission=args.staging/args.admission_name)
         return 0  # the confirmed persistent owner continues; browser/native alike
     if args.source_mode:
         from localharness.update_source import selected
@@ -403,7 +406,9 @@ def perform(args):
         observer_ready = getattr(args, 'observer_ready', None)
         if observer_ready is not None and not observer_ready.wait(15):
             raise TimeoutError('Update progress window did not become ready; previous application remains open')
-        admitted=staging/'updater-admitted.json'
+        admission_name=getattr(args,'admission_name','updater-admitted.json')
+        if Path(admission_name).name!=admission_name:raise ValueError('Updater admission name leaves staging')
+        admitted=staging/admission_name
         part=admitted.with_suffix('.tmp')
         import psutil
         part.write_text(json.dumps({'pid':os.getpid(),'birth':psutil.Process().create_time(),'target':str(old),

@@ -276,11 +276,13 @@ def update_install(owner,path,forceExtensions=False,sourceMode=None):
         raise
 
 
-def await_admission(child, staging, target, timeout=15):
+def await_admission(child, staging, target, timeout=15, *, receipt_name=None):
     """A created process is not admitted. Keep the old owner until its helper
     proves the target lease, before waiting for that owner's exit.
     """
-    receipt=Path(staging)/'updater-admitted.json';deadline=time.monotonic()+timeout
+    name = receipt_name or 'updater-admitted.json'
+    if Path(name).name != name:raise ValueError('Updater admission name leaves staging')
+    receipt=Path(staging)/name;deadline=time.monotonic()+timeout
     try:
         while True:
             if receipt.is_file():
@@ -580,8 +582,10 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
     # Copy the helper outside the live installation before replacing its files.
     helper = destination / 'python_source_updater.py'
     shutil.copy2(new_root/'app/localharness/python_source_updater.py',helper)
+    admission_name='updater-admitted-'+uuid.uuid4().hex+'.json'
     argv=[str(interpreter),str(helper),'--old',str(owner.root),'--new',str(new_root),
-          '--pid',str(os.getpid()),'--staging',str(destination)]
+          '--pid',str(os.getpid()),'--staging',str(destination),
+          '--admission-name',admission_name]
     job = getattr(owner, 'update_job', None)
     if job:
         from .desktop_update_request import path as job_path, checkpoint
@@ -595,7 +599,7 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
             stdout=output,stderr=subprocess.STDOUT,
             creationflags=background_flags(),
             start_new_session=os.name!='nt')
-    admitted = await_admission(child,destination,owner.root)
+    admitted = await_admission(child,destination,owner.root,receipt_name=admission_name)
     if job:
         checkpoint(owner, job, phase='handoff', helper=admitted)
     predicate = getattr(owner, 'update_cancelled', None)
