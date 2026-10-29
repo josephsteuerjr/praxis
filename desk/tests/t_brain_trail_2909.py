@@ -11,6 +11,7 @@ glm-5.3 — а агент модели своей в кадре не видел 
 from __future__ import annotations
 
 import datetime as dt
+import contextlib
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ import tempfile
 import time
 import types
 import unittest
+from unittest import mock
 from pathlib import Path
 
 DESK = Path(__file__).resolve().parents[1]
@@ -109,9 +111,78 @@ class Trail(unittest.TestCase):
 
 class Wiring(unittest.TestCase):
     def test_runner_puts_the_line_into_every_turn_and_projects_with_the_trail(self):
+        import runner
+        import llm as selected_llm
+
+        class StopBeforeProcesses(BaseException):
+            pass
+
+        # Use the selected real composed model consumer, not an invented AST
+        # body. The runner now binds code_dir through a callback to project_brain.
+        code_dir = Path(selected_llm.__file__).resolve().parent
+        with tempfile.TemporaryDirectory(prefix="brain-wiring-") as directory:
+            home = Path(directory)
+            tree = home / "data"
+            config_path = home / "helene.json"
+            llm(tree, "previous")
+            bt.reconcile(tree)
+            cfg = {"tree": str(tree), "code": str(code_dir),
+                   "model": {"model": "startup-model", "framework": "openai",
+                             "base_url": "http://127.0.0.1:5011"}}
+            config_path.write_text(json.dumps(cfg), encoding="utf-8")
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {
+                    "HELENE_TREE": str(tree), "PRAXIS_DESK_TREE": str(tree)}))
+                stack.enter_context(mock.patch.object(sys, "argv", [
+                    "runner", "--config", str(config_path)]))
+                # Stop the real startup immediately after projection, before
+                # body, model, transport, or background-process admission.
+                for name in ("arm_soft_exit", "watch_parent", "arm_git", "claim_tree", "ensure_layout"):
+                    stack.enter_context(mock.patch.object(runner.boot, name, return_value=None))
+                stack.enter_context(mock.patch.object(runner, "_settle_mode", return_value={}))
+                stack.enter_context(mock.patch.object(runner.vision_policy, "preflight"))
+                stack.enter_context(mock.patch.object(runner.vision_policy, "migrate"))
+                stack.enter_context(mock.patch.object(runner.body, "launch", side_effect=StopBeforeProcesses))
+                for name in ("_tree", "_install_root", "_agent", "_bot", "_mode",
+                             "_speaker", "_title", "_agent_name", "_deliver_unspoken"):
+                    stack.enter_context(mock.patch.object(runner, name, getattr(runner, name)))
+                with self.assertRaises(StopBeforeProcesses):
+                    runner.main()
+                self.assertEqual(bt.snapshot(tree)["model"], "startup-model")
+                self.assertEqual(bt.last(tree)["by"], bt.BY_OWNER)
+                self.assertEqual(bt.last(tree)["from"]["model"], "previous")
+                receipt = tree / "memory/.state/brain_projection.json"
+                self.assertTrue(json.loads(receipt.read_text("utf-8"))["fingerprint"])
+                startup_receipt = receipt.read_bytes()
+
+                ticks = 0
+
+                def tick(_seconds):
+                    nonlocal ticks
+                    ticks += 1
+                    if ticks > 1:
+                        raise StopBeforeProcesses
+                    cfg["model"]["model"] = "watch-model"
+                    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+                    # Deterministic changed-config authority on coarse filesystems.
+                    later = time.time() + 2
+                    os.utime(config_path, (later, later))
+
+                with mock.patch.object(runner.time, "sleep", side_effect=tick):
+                    with self.assertRaises(StopBeforeProcesses):
+                        runner._config_watch_forever(config_path, tree, code_dir)
+                self.assertEqual(bt.snapshot(tree)["model"], "watch-model")
+                self.assertEqual(bt.last(tree)["by"], bt.BY_OWNER)
+                self.assertEqual(bt.last(tree)["from"]["model"], "startup-model")
+                self.assertNotEqual(receipt.read_bytes(), startup_receipt)
+                for chat in ("window", "123456"):
+                    line = runner._orient(chat)
+                    self.assertIn("Твой мозг сейчас: watch-model", line)
+                    self.assertIn(bt.BY_OWNER, line)
+                    self.assertIn("было startup-model", line)
+        # The real switch hand's receipt is behavior-tested above in Trail;
+        # retain the separate startup installation obligation here.
         src = (DESK / "localharness" / "runner.py").read_text("utf-8")
-        self.assertIn("brain_trail.orient_line(_tree)", src)
-        self.assertEqual(src.count("brain_trail.project(tree, config_path, cfg, boot.project_brain)"), 2)
         self.assertIn("brain_trail.install_switch_hook(agent, tree)", src)
 
 

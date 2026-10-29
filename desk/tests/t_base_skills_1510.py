@@ -6,6 +6,8 @@ Run: python tests/t_base_skills_1510.py (from desk/).
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -89,11 +91,26 @@ class IncidentStarterSkills(unittest.TestCase):
             self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
             self.assertEqual(boot.refresh_kit(tree, {}), [])
             self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
-            candidate = next((tree / "memory/.state/kit-proposals").glob("*.json"))
-            import json
-            self.assertEqual(json.loads(candidate.read_text(encoding="utf-8"))["candidate"],
-                             (STOCK / "INDEX.md").read_text(encoding="utf-8"))
+            folder = tree / "memory/.state/kit-proposals"
+            records = [json.loads(path.read_text(encoding="utf-8"))
+                       for path in folder.glob("*.json")]
+            # Day-zero persona and other kit proposals share this store. Its
+            # directory iteration order is not the INDEX proposal identity.
+            indexes = [row for row in records if row.get("schema") == 1
+                       and row.get("target") == "soul/skills/INDEX.md"
+                       and row.get("source") == "kit"]
+            self.assertEqual(len(indexes), 1)
+            candidate = indexes[0]
+            stock = (STOCK / "INDEX.md").read_bytes()
+            self.assertEqual(candidate["candidate"], stock.decode("utf-8"))
+            self.assertEqual(candidate["source_sha256"], hashlib.sha256(stock).hexdigest())
+            self.assertEqual(candidate["previous"], history[-1])
+            self.assertEqual(candidate["current_sha256"],
+                             hashlib.sha256(history[-1].encode("utf-8")).hexdigest())
+            retained = {path.name: path.read_bytes() for path in folder.glob("*.json")}
             self.assertEqual(boot.refresh_kit(tree, {}), [])
+            self.assertEqual({path.name: path.read_bytes() for path in folder.glob("*.json")}, retained)
+            self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
 
 
 if __name__ == "__main__":

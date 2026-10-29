@@ -1,7 +1,7 @@
-"""Old 15s admission consumer against the new helper; no child/native processes."""
+"""Legacy durable admission and its mechanical 15s consumer; no child processes."""
 from __future__ import annotations
 
-from contextlib import ExitStack, nullcontext
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -14,8 +14,9 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from localharness import python_source_updater as updater, python_updates as updates
 from localharness import update_progress, update_window, update_overlay, app_migration
-from localharness import migration_windows, desktop_supervisor
-import python_migrate
+from localharness import migration_lifecycle, desktop_supervisor, code_transition
+from localharness import desktop_update_request as jobs, owner_stop
+from localharness import update_source
 
 # Frozen original main: the OLD admission timeout is reproduced by its actual
 # await_admission consumer, not a test's inferred time threshold. This is the
@@ -61,8 +62,19 @@ class LegacyAdmission(unittest.TestCase):
         put(self.old, 'python-app.json', b'{"version":"2.1.1","delivery":"portable"}')
         put(self.new, 'python-app.json', b'{"version":"2.2.0","delivery":"portable"}')
         put(self.new, 'app/python_app.py', b'# synthetic entry\n')
+        put(self.new, 'tree/main.py', b'# sealed synthetic incoming source\n')
+        code_transition.seal(self.new)
+        self.tree = self.root / 'profile'
+        put(self.tree, 'memory/identity.md', b'synthetic retained identity\n')
         put(self.old, 'helene.json', json.dumps({'mode': 'remote', 'tree': str(self.root / 'profile'),
              'setup_complete': False}).encode('utf-8'))
+        update_source.select(self.old, self.new, 'preserve', by='updater')
+        # Redirect both real Stop readers to disjoint synthetic latches, rather
+        # than consulting or modifying the owner's installed profile.
+        for name in ('seed_file', 'client_file'):
+            redirect = patch.object(owner_stop, name, return_value=self.root / (name + '.stop'))
+            redirect.start()
+            self.addCleanup(redirect.stop)
         self.args = SimpleNamespace(old=self.old, new=self.new, pid=42, staging=self.staging,
                                     archive=[], cleanup=False, browser=False)
         self.clock = 0.0
@@ -79,7 +91,7 @@ class LegacyAdmission(unittest.TestCase):
              patch.object(updates.time, 'sleep'):
             return updates.await_admission(self.child, self.staging, self.old, timeout=15)
 
-    def wait_old(self, pid):
+    def wait_old(self, pid, stopped=lambda: False):
         self.assertEqual(pid, 42)
         self.admitted = self.await_old()
         self.assertLess(self.clock, 15)
@@ -96,21 +108,95 @@ class LegacyAdmission(unittest.TestCase):
         ready.set()
         return transaction()
 
-    def run_main(self, *, observer=None, **patches):
-        argv = ['python_source_updater.py', '--old', str(self.old), '--new', str(self.new),
-                '--staging', str(self.staging), '--pid', '42']
+    def run_mechanical(self, *, observer=None, **patches):
+        # Unprepared main now admits an agent-owned migration job. These
+        # historical timing/journal cases still exercise the real mechanical
+        # consumer perform(), not a mock of the retired main preparation branch.
+        import threading
+        prepared = updater.prepared_install_path(self.new)
+        receipt = (json.loads(prepared.read_text(encoding='utf-8'))['progress'] if prepared.is_file()
+                   else str(self.staging.with_name(self.staging.name + '.progress.json')))
+        if not prepared.is_file():
+            update_progress.Progress(Path(receipt), 'legacy', self.old).phase('handoff', preparation_completed=False)
+        args = SimpleNamespace(**vars(self.args), observer_ready=threading.Event(), progress_path=receipt)
         with ExitStack() as stack:
-            stack.enter_context(patch.object(sys, 'argv', argv))
-            stack.enter_context(patch.object(python_migrate, 'installation_lock', return_value=nullcontext()))
-            stack.enter_context(patch.object(update_window, 'run', side_effect=observer or self.observer))
             stack.enter_context(patch.object(updater, 'wait_owner', side_effect=self.wait_old))
             for name, value in patches.items():
                 stack.enter_context(patch.object(updater, name, side_effect=value))
-            return updater.main()
+            # Already-prepared work still uses the actual CLI main and real
+            # installation lease; only its unprepared predecessor is direct.
+            transaction = self.run_entry if prepared.is_file() else lambda: updater.perform(args)
+            return (observer or self.observer)(transaction, receipt, args.observer_ready)
 
     def assert_old_unchanged(self):
         self.assertEqual(self.original_bytes, {p.relative_to(self.old): p.read_bytes()
                          for p in self.old.rglob('*') if p.is_file()})
+
+    def run_entry(self):
+        argv = ['python_source_updater.py', '--old', str(self.old), '--new', str(self.new),
+                '--staging', str(self.staging), '--pid', '42']
+        with patch.object(sys, 'argv', argv):
+            return updater.main()
+
+    def test_current_main_admits_real_durable_job_without_wizard_or_preparation(self):
+        import psutil
+        spawned = SimpleNamespace(pid=os.getpid(), handle=object(), poll=Mock(return_value=None),
+                                  release=Mock(), stop=Mock())
+        def spawn(command, **kwargs):
+            self.assertEqual(Path(command[3]), self.new / 'app/localharness/session_host.py')
+            self.assertEqual(Path(kwargs['cwd']), self.new)
+            self.assertEqual(command[command.index('--control-tree') + 1], str(self.tree))
+            value = jobs.status(self.tree)
+            self.assertEqual(value['state'], 'admitting')
+            self.assertEqual(value['confirmed_by'], 'legacy-update-invocation')
+            self.assertEqual(value['migration']['data'], str(self.tree))
+            self.assertEqual(value['migration']['source_mode'], 'preserve')
+            value.update(state='running', admission={'pid':os.getpid(),
+                         'birth':psutil.Process().create_time(), 'generation':'synthetic-host'})
+            jobs._save(self.tree, value)
+            return spawned
+        before = (self.tree / 'memory/identity.md').read_bytes()
+        with patch.object(desktop_supervisor.JobChild, 'spawn', side_effect=spawn) as start, \
+             patch.object(update_window, 'run') as window, \
+             patch.object(updater, 'prepare_install') as prepare, \
+             patch.object(updater, 'wait_owner') as wait, \
+             patch.object(updater.subprocess, 'Popen') as reopen:
+            self.assertEqual(self.run_entry(), 0)
+            # An exact repeated invocation rejoins the real persisted admission,
+            # rather than emitting another work item or spawning a second host.
+            self.assertEqual(self.run_entry(), 0)
+            start.assert_called_once()
+            window.assert_not_called(); prepare.assert_not_called()
+            wait.assert_not_called(); reopen.assert_not_called()
+        spawned.release.assert_called_once(); spawned.stop.assert_not_called()
+        value = jobs.status(self.tree)
+        admission = json.loads((self.staging / 'updater-admitted.json').read_text(encoding='utf-8'))
+        self.assertEqual(admission['job_id'], value['id'])
+        self.assertEqual(admission['durable_owner'], value['admission'])
+        self.assertEqual(admission['job_path'], str(jobs.path(self.tree)))
+        self.assertTrue(admission['process_exit_allowed'])
+        self.assertFalse(admission['preparation_completed'])
+        legacy = json.loads((self.new / ('.python-migrator-' + str(os.getpid()) + '.json')).read_text(encoding='utf-8'))
+        self.assertFalse(legacy['wizard_opened'])
+        self.assertEqual(legacy['admission_kind'], 'durable-agent-job')
+        self.assertFalse(updater.prepared_install_path(self.new).exists())
+        self.assertEqual(before, (self.tree / 'memory/identity.md').read_bytes())
+        self.assert_old_unchanged()
+
+    def test_current_main_missing_data_and_owner_stop_refuse_before_host_spawn(self):
+        missing = self.root / 'missing-profile'
+        put(self.old, 'helene.json', json.dumps({'mode':'remote', 'tree':str(missing)}).encode())
+        with patch.object(desktop_supervisor.JobChild, 'spawn') as spawn:
+            with self.assertRaisesRegex(ValueError, 'existing data folder'):
+                self.run_entry()
+            put(self.old, 'helene.json', self.original_bytes[Path('helene.json')])
+            put(self.root, 'seed_file.stop', b'synthetic owner Stop')
+            with self.assertRaisesRegex(RuntimeError, 'Owner Stop forbids migration admission'):
+                self.run_entry()
+            spawn.assert_not_called()
+        self.assertEqual(jobs.status(self.tree), {'state':'none'})
+        self.assertFalse((self.staging / 'updater-admitted.json').exists())
+        self.assert_old_unchanged()
 
     def test_prior_order_exceeds_actual_old_15s_admission_and_is_terminated(self):
         def slow_prepare(*args, **kwargs):
@@ -158,7 +244,7 @@ class LegacyAdmission(unittest.TestCase):
         with patch.object(update_overlay, 'copy_verified', side_effect=copy), \
              patch.object(desktop_supervisor.JobChild, 'spawn', side_effect=spawn), \
              patch.object(updater.subprocess, 'Popen') as cleanup:
-            self.assertEqual(self.run_main(prepare_install=prepare), 0)
+            self.assertEqual(self.run_mechanical(prepare_install=prepare), 0)
             cleanup.assert_called_once()  # command captured, never executed
         self.assertGreater(self.clock, 15)
         self.assertIn('a', observed)
@@ -178,7 +264,7 @@ class LegacyAdmission(unittest.TestCase):
         with patch.object(updater, 'prepare_install') as prepare, \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(TimeoutError, 'progress window did not become ready'):
-                self.run_main(observer=observer)
+                self.run_mechanical(observer=observer)
             prepare.assert_not_called()
             launch.assert_not_called()
         self.assertFalse((self.staging / 'updater-admitted.json').exists())
@@ -200,12 +286,12 @@ class LegacyAdmission(unittest.TestCase):
         self.assert_old_unchanged()
 
     def test_old_exit_timeout_never_prepares_or_reopens_over_live_owner(self):
-        def still_alive(pid):
+        def still_alive(pid, stopped=lambda: False):
             raise TimeoutError('old owner still alive')
         with patch.object(updater, 'prepare_install') as prepare, \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(TimeoutError, 'old owner still alive'):
-                self.run_main(wait_owner=still_alive)
+                self.run_mechanical(wait_owner=still_alive)
             prepare.assert_not_called()
             launch.assert_not_called()
         self.assertFalse(self.owner_exited)
@@ -217,7 +303,7 @@ class LegacyAdmission(unittest.TestCase):
         with patch.object(updater, 'prepare_install') as prepare, \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(RuntimeError, 'startup recovery'):
-                self.run_main()
+                self.run_mechanical()
             prepare.assert_not_called()
             launch.assert_not_called()
         self.assertFalse(self.owner_exited)
@@ -228,11 +314,11 @@ class LegacyAdmission(unittest.TestCase):
         tree = self.root / 'profile'
         local = {'tree': str(tree), 'value': {'mode': 'local'}}
         with patch.object(app_migration, 'discover', return_value={'agents': [local]}), \
-             patch.object(migration_windows, 'owner_lease_available', return_value=False) as lease, \
+             patch.object(migration_lifecycle, 'owner_lease_available', return_value=False) as lease, \
              patch.object(updater, 'prepare_install') as prepare, \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(RuntimeError, 'still holds its data lease'):
-                self.run_main()
+                self.run_mechanical()
             lease.assert_called_once_with(tree / '.desktop-owner.lock')
             prepare.assert_not_called()
             launch.assert_not_called()
@@ -243,7 +329,7 @@ class LegacyAdmission(unittest.TestCase):
         with patch.object(update_overlay, 'journal', side_effect=OSError('preimage journal failure')), \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(OSError, 'preimage journal failure'):
-                self.run_main()
+                self.run_mechanical()
             launch.assert_called_once()
         self.assertTrue(self.owner_exited)
         self.assertFalse(updater.active_update(self.old).exists())
@@ -261,7 +347,7 @@ class LegacyAdmission(unittest.TestCase):
         with patch.object(update_overlay, 'copy_verified', side_effect=copy), \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(update_overlay.RestorationIncomplete, 'restoration is incomplete'):
-                self.run_main()
+                self.run_mechanical()
             launch.assert_not_called()
         self.assertEqual((self.old / 'a').read_bytes(), b'new-a')
         self.assertTrue(updater.active_update(self.old).is_file())
@@ -286,7 +372,7 @@ class LegacyAdmission(unittest.TestCase):
                 with patch.object(updater, 'prepare_install') as prepare, \
                      patch.object(updater.subprocess, 'Popen') as launch:
                     with self.assertRaisesRegex(ValueError, 'Prepared update (target|recovery) differs'):
-                        self.run_main(observer=observer)
+                        self.run_mechanical(observer=observer)
                     prepare.assert_not_called()
                     launch.assert_not_called()
                 self.assertFalse((self.staging / 'updater-admitted.json').exists())
@@ -310,11 +396,11 @@ class LegacyAdmission(unittest.TestCase):
             self.assertTrue(updater.prepared_install_path(self.new).is_file())
             ready.set()
             return transaction()
-        def install(*args):
+        def install(*args, **kwargs):
             self.assertTrue(self.owner_exited)
             self.assertTrue(self.admitted['preparation_completed'])
             self.assertEqual(calls, [])
-            real_install(*args)
+            real_install(*args, **kwargs)
             self.assertEqual(calls, ['validate'])
             self.assertEqual((self.old / 'a').read_bytes(), b'new-a')
             raise OSError('stop after prepared validation and overlay')
@@ -322,7 +408,7 @@ class LegacyAdmission(unittest.TestCase):
              patch.object(updater, 'prepare_install') as prepare, \
              patch.object(updater.subprocess, 'Popen') as launch:
             with self.assertRaisesRegex(OSError, 'stop after prepared validation and overlay'):
-                self.run_main(observer=observer, install=install)
+                self.run_mechanical(observer=observer, install=install)
             prepare.assert_not_called()
             launch.assert_not_called()  # active journal prevents a mixed reopen
         self.assertGreater(self.clock, 15)

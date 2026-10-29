@@ -52,9 +52,10 @@ TOOL = {'name': 'source_update', 'description':
         'expected_composition_sha256':{'type':'string'}}, 'required': ['action']}}
 
 
-def requires_gate(plan):
+def requires_gate(plan, directory=None):
     """Modified-preserve is semantic reconciliation, even without Git markers."""
-    return bool(plan.get('conflicts') or plan.get('repairs')
+    compound = read(Path(directory) / 'composition.json') if directory is not None else {}
+    return bool(plan.get('conflicts') or plan.get('repairs') or plan.get('shared_app_required') or compound.get('repairs')
                 or plan.get('files', {}).get('local') != plan.get('files', {}).get('base'))
 
 
@@ -328,6 +329,10 @@ def validate_ready(directory):
     if not operation:
         raise ValueError('Source update has no canonical independent review')
     plan = _fresh(operation, directory)
+    from . import update_composition
+    shared = update_composition.for_plan(directory, operation)
+    if not shared['consistent']:
+        raise ValueError('Final shared application differs across selected code roots; reconcile peer app candidates before apply')
     if _owner_blocked(operation['tree']) or job_blocked(operation):
         raise ValueError('Owner Stop/Pause forbids source-update apply; old application retained')
     if (operation.get('state') != 'ready_to_apply' or operation.get('cancel_requested')

@@ -22,6 +22,9 @@ os.environ["PRAXIS_TEST"] = "1"
 
 import _sandbox
 
+# Load the required real SDK before legacy test modules offer import stubs.
+import anthropic  # noqa: F401
+
 TEST_BASE = _sandbox.activate_if_testing()
 if not TEST_BASE:  # pragma: no cover - a broken isolation boundary must be loud
     raise RuntimeError("Praxis test sandbox did not activate")

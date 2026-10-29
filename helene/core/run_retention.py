@@ -691,8 +691,12 @@ def inventory(base: Path, *, min_age: dt.timedelta, now: dt.datetime | None = No
                         if ref["size"] > MAX_ARCHIVE_OBJECT_SIZE:
                             continue
                         try:
-                            payload = read_evidence_bytes(run_dir / ref["path"],
-                                                          max_bytes=ref["size"])
+                            # A pinned unlinked FD is valid reading evidence, but
+                            # cannot certify bytes reclaimable at the current name.
+                            with safe_evidence_stream(run_dir / ref["path"]) as stream:
+                                payload = stream.read(ref["size"] + 1)
+                                if os.fstat(stream.fileno()).st_nlink != 1:
+                                    continue
                         except ContractError:
                             continue
                         if (len(payload) == ref["size"]

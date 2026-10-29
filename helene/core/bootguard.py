@@ -126,7 +126,9 @@ def journal(msg: str) -> None:
 def preflight(cwd: Path = BASE, modules: list[str] | None = None) -> tuple[bool, str]:
     """Импортировать ядро в отдельном процессе. -> (ок, первая строка ошибки)."""
     mods = modules if modules is not None else CORE_MODULES
-    code = "import " + ", ".join(mods)
+    # Embedded Python ._pth ignores cwd/PYTHONPATH. Import the explicitly
+    # selected code directory, not an ambient or already-installed module.
+    code = "import sys; sys.path.insert(0, " + repr(str(Path(cwd).resolve())) + "); import " + ", ".join(mods)
     try:
         # PYTHONUTF8: ребёнок с трубой пишет в кодировке локали (cp1251 на Windows), а
         # читаем мы его как UTF-8 — русский текст ошибки импорта приезжал бы кашей.

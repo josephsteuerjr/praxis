@@ -18,6 +18,9 @@ import capabilities
 import llm
 
 
+# Bind the transport dependency actually used by this installed SDK version.
+ANTHROPIC_HTTP = getattr(anthropic._base_client, "httpx2", None) or anthropic._base_client.httpx
+
 class EndpointPolicy(unittest.TestCase):
     def setUp(self):
         self.cfg = llm._normalize({'frameworks': {
@@ -34,6 +37,8 @@ class EndpointPolicy(unittest.TestCase):
         self.seen = []
 
     def capture(self, request):
+        # The installed Anthropic SDK may use httpx2; return its native response.
+        wire = ANTHROPIC_HTTP if isinstance(request, ANTHROPIC_HTTP.Request) else httpx
         self.seen.append(json.loads(request.content))
         if request.url.path.endswith('/responses'):
             result = {'id': 'resp_offline', 'object': 'response',
@@ -42,7 +47,7 @@ class EndpointPolicy(unittest.TestCase):
                             'content':[{'type':'output_text','text':'ok','annotations':[]}]}],
                 'usage': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2}}
             events = 'event: response.completed\ndata: '+json.dumps({'type':'response.completed','response':result})+'\n\n'
-            return httpx.Response(200, headers={'content-type':'text/event-stream'}, content=events.encode())
+            return wire.Response(200, headers={'content-type':'text/event-stream'}, content=events.encode())
         if request.url.path.endswith('/messages'):
             message={'id':'msg_offline','type':'message','role':'assistant','model':'glm-5.3',
                      'stop_reason':None,'stop_sequence':None,'content':[],
@@ -53,18 +58,19 @@ class EndpointPolicy(unittest.TestCase):
                     ('message_delta',{'type':'message_delta','delta':{'stop_reason':'end_turn','stop_sequence':None},'usage':{'output_tokens':1}}),
                     ('message_stop',{'type':'message_stop'})]
             data=''.join('event: '+name+'\ndata: '+json.dumps(value)+'\n\n' for name,value in events)
-            return httpx.Response(200,headers={'content-type':'text/event-stream'},content=data.encode())
+            return wire.Response(200,headers={'content-type':'text/event-stream'},content=data.encode())
         # Real SDK streaming parser, not an object stub.
         payload = {'id':'chat_offline','object':'chat.completion.chunk','created':1,
                    'model':'synthetic-model','choices':[{'index':0,'delta':{'content':'ok'},'finish_reason':None}]}
         done = dict(payload, choices=[{'index':0,'delta':{},'finish_reason':'stop'}])
         data = 'data: '+json.dumps(payload)+'\n\ndata: '+json.dumps(done)+'\n\ndata: [DONE]\n\n'
-        return httpx.Response(200, headers={'content-type':'text/event-stream'}, content=data.encode())
+        return wire.Response(200, headers={'content-type':'text/event-stream'}, content=data.encode())
 
     def call(self, account, effort, thinking=None):
         spec = self.cfg['frameworks'][account]
-        transport = httpx.MockTransport(self.capture)
-        with httpx.Client(transport=transport, trust_env=False) as http:
+        wire = ANTHROPIC_HTTP if spec['protocol'] == 'anthropic' else httpx
+        transport = wire.MockTransport(self.capture)
+        with wire.Client(transport=transport, trust_env=False) as http:
             factory = anthropic.Anthropic if spec['protocol'] == 'anthropic' else openai.OpenAI
             with factory(api_key='synthetic-test-only', base_url=spec['base_url'], http_client=http) as client, \
                     mock.patch.object(llm, '_client_for', return_value=client):

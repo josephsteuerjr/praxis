@@ -658,9 +658,6 @@ def _main(argv=None):
         return 0
     if program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
-    if (root/'helene.json').is_file():
-        from localharness.portable_profile import bind_program
-        bind_program(root)
     if not args.migration and not args.browser:
         from localharness import portable_start
         incomplete=root/'python-migration.json'
@@ -685,6 +682,12 @@ def _main(argv=None):
         if not run(root):return 0
     elif interrupted:
         raise RuntimeError('Interrupted profile copy: resume migration before starting the application')
+    # A fresh/interrupted migrator has not yet selected a complete profile.
+    # Require its ordinary recovery entry first; running the app still requires
+    # the unchanged exact data-pointer/identity checks.
+    if (root/'helene.json').is_file():
+        from localharness.portable_profile import bind_program
+        bind_program(root)
     if pending.is_file() and not args.migration:
         migrated=json.loads(pending.read_text(encoding='utf-8'))
         if migrated.get('state')=='prepared':args.migration=migrated['id']

@@ -96,9 +96,18 @@ migration_wizard.execute(request,lambda _:None)
                     retry=wizard.saved_request(new);self.assertTrue(retry['resume'])
                 # Invoke normal startup (no explicit wizard flag). Stop at the UI
                 # boundary so this source test neither needs Qt nor starts an agent.
-                with patch.object(python_app.sys,'platform','linux'),patch.object(wizard,'run',return_value=False) as entry,patch.object(python_app,'Application') as app:
+                import helene_setup
+                with patch.object(python_app.sys,'platform','linux'), \
+                        patch.object(wizard,'run',return_value=False) as entry, \
+                        patch.object(helene_setup,'main',return_value=0) as short_entry, \
+                        patch.object(python_app,'Application') as app:
                     self.assertEqual(python_app._main(['--root',str(new)]),0)
-                    entry.assert_called_once_with(new.resolve());app.assert_not_called()
+                    if boundary=='snapshot':
+                        entry.assert_called_once_with(new.resolve());short_entry.assert_not_called()
+                    else:
+                        short_entry.assert_called_once_with(['--root',str(new.resolve()),'--source-mode','preserve'])
+                        entry.assert_not_called()
+                    app.assert_not_called()
                 result=wizard.execute(retry,lambda _:None)
                 self.assertEqual(result['state'],'prepared')
                 selected=json.loads((new/'helene.json').read_text())
@@ -138,13 +147,15 @@ migration_wizard.execute(request,lambda _:None)
         import python_app
         with tempfile.TemporaryDirectory() as d:
             root=Path(d);(root/'app/static').mkdir(parents=True);(root/'app/static/index.html').write_text('<html></html>')
-            (root/'helene.json').write_text('{"setup_complete":true}')
+            data=root/'selected data';(data/'memory').mkdir(parents=True)
+            (root/'helene.json').write_text(json.dumps({'setup_complete':True,'tree':str(data)}))
             (root/'python-migration.json').write_text('{"state":"prepared","id":"fixture-operation"}')
             observed=[]
             class FakeApplication:
                 def __init__(self,*args):self.origin='fixture';self.event=lambda *_:None;observed.append(self)
             class ReachedController(Exception):pass
-            with patch.object(python_app,'Application',FakeApplication),patch.object(python_app,'Controller',side_effect=ReachedController):
+            from localharness import session_host
+            with patch.object(python_app,'Application',FakeApplication),patch.object(session_host,'attach',side_effect=ReachedController):
                 with self.assertRaises(ReachedController):python_app._main(['--root',str(root),'--browser'])
             self.assertEqual(observed[0].migration_id,'fixture-operation')
 

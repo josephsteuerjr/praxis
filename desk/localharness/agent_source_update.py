@@ -95,11 +95,15 @@ def _command(tree,action,**args):
             next_action='Read the exact review_evidence/error. Do not revive a cancelled plan or bypass review. Repair the cause and use update_request for a fresh authorized preserve update; explicit Stop remains binding.'
         from . import update_composition
         composition = update_composition.signature(directory, operation) if (directory/'composition.json').is_file() else None
+        shared = update_composition.for_plan(directory, operation)
+        if not shared['consistent']:
+            next_action='Reconcile the differing shared_application app paths with each selected peer, using app repair and finish, then a new full verify and independent review for every changed composition. Old receipts cannot approve peer app bytes.'
         return {**operation,'version':request['version'],'conflicts':plan['conflicts'],'resolved':plan['resolved'],
                 'candidate_state':plan['state'],'next_action':next_action,'acceptance_owner':'selected-agent',
                 'evidence_handling':'Frozen snapshots and incoming files are read-only evidence. Never import or execute them in place: Python may write __pycache__. Use AST or copy files to a separate temporary directory and run python -B there.',
                 'candidate_sha256':merge.candidate_signature(directory), 'composition_sha256':composition,
-                'compound_paths':['app/'+name for name in read(directory/'composition.json').get('base_app',{})]}
+                'compound_paths':['app/'+name for name in read(directory/'composition.json').get('base_app',{})],
+                'shared_application': shared}
     pipeline._fresh(operation,directory)
     if owner_stop.stopped() or operation.get('cancel_requested'):raise ValueError('Owner Stop cancelled source resolution')
     if operation.get('state')=='needs_attention' and operation.get('review_id'):
@@ -108,12 +112,18 @@ def _command(tree,action,**args):
         terminal={'done','error','cancelled'}
         if record.get('execution') not in terminal or any(c.get('execution') not in terminal for c in record.get('critics',[])):
             raise ValueError('Existing reviewer producer is live or unknown; observe its exact result before editing or replaying')
+    if operation.get('state') == 'ready_to_apply' and action in ('resolve','patch'):
+        from . import update_composition
+        if not update_composition.for_plan(directory, operation)['consistent']:
+            _invalidate(directory, operation)
     if operation.get('state') not in ('waiting_agent','queued','needs_attention'):raise ValueError('Agent candidate is frozen for verification or independent review')
     if action in ('verify','review','apply'):
         from . import update_composition, source_update_battery
         composition = update_composition.signature(directory, operation)
         if args.get('expected_composition_sha256') != composition:
             raise ValueError('Use the exact current expected_composition_sha256 from status')
+        if not update_composition.for_plan(directory, operation)['consistent']:
+            raise ValueError('Final shared application differs; reconcile peer app candidates before verify/review/apply')
         if plan.get('state') != 'ready' or merge.inventory(directory/'result') != plan.get('result'):
             raise ValueError('Finish the complete current candidate first')
         operation['candidate_sha256'] = merge.candidate_signature(directory)

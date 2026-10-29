@@ -1,4 +1,5 @@
 """Startup must not probe WSL; automatic Windows launches stay reachable in tray."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -96,7 +97,10 @@ class AutomaticWindow(unittest.TestCase):
             with self.subTest(platform=platform, intent=intent), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); (root/'app/static').mkdir(parents=True)
                 (root/'app/static/index.html').write_text('<html>fixture</html>')
-                (root/'helene.json').write_text('{"setup_complete":true}')
+                # Use a valid independent portable profile; the current startup
+                # consumer binds it before attaching the Python session owner.
+                (root/'data').mkdir()
+                (root/'helene.json').write_text(json.dumps({'setup_complete':True,'tree':'data'}))
                 class Host:
                     def __init__(self, *args): pass
                     def start(self): pass
@@ -108,7 +112,30 @@ class AutomaticWindow(unittest.TestCase):
                 def create(*args):
                     app = application(*args); app.relaunch = relaunch; return app
                 launch = ['--root', str(root)] + ([f'--launch-intent={intent}'] if inline else ['--launch-intent', intent])
-                with patch.dict(sys.modules, webview=webview), patch.object(python_app.sys, 'platform', platform), patch.object(python_app, 'Controller', Host):
+                if os.name == 'nt' and platform == 'win32' and not inline:
+                    # Exercise the actual shortcut producer's fallback binding,
+                    # including Windows quoting, through the startup consumer.
+                    import ctypes
+                    from ctypes import wintypes
+                    from localharness.python_windows import launch_binding
+                    target, command = launch_binding(root, '--launch-intent ' + intent)
+                    self.assertEqual(target, root/'runtime/pythonw.exe')
+                    parse = ctypes.windll.shell32.CommandLineToArgvW
+                    parse.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+                    parse.restype = ctypes.POINTER(wintypes.LPWSTR)
+                    count = ctypes.c_int()
+                    words = parse(command, ctypes.byref(count))
+                    self.assertTrue(words)
+                    try:
+                        parsed = [words[i] for i in range(count.value)]
+                    finally:
+                        free = ctypes.windll.kernel32.LocalFree
+                        free.argtypes = [ctypes.c_void_p]
+                        free.restype = ctypes.c_void_p
+                        free(words)
+                    self.assertEqual(parsed[:2], ['-s', str(root/'app/python_app.py')])
+                    launch = parsed[2:]
+                with patch.dict(sys.modules, webview=webview), patch.object(python_app.sys, 'platform', platform), patch('localharness.session_host.attach', return_value=Host()):
                     with patch('localharness.owner_stop.stopped', return_value=False), patch('localharness.portable_start.initialize'), patch.object(python_app, 'Application', side_effect=create), patch.object(python_app.os, 'execv') as execute:
                         self.assertEqual(python_app._main(launch), 0)
                 if relaunch:
@@ -118,6 +145,12 @@ class AutomaticWindow(unittest.TestCase):
                     self.assertIn(str(root), execute.call_args.args[1])
                 else: execute.assert_not_called()
                 self.assertEqual(webview.create_window.call_args.kwargs.get('hidden', False), hidden)
+
+    def test_automatic_stop_returns_without_attaching_or_clearing_stop(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('localharness.owner_stop.stopped', return_value=True), patch('localharness.session_host.attach') as attach, patch('localharness.owner_stop.latch_client') as latch:
+            self.assertEqual(python_app._main(['--root', tmp, '--launch-intent', 'automatic']), 0)
+            attach.assert_not_called()
+            latch.assert_not_called()
 
     def test_tray_failure_shows_hidden_window_and_success_does_not(self):
         system = ModuleType('System'); system.Action = lambda fn: fn

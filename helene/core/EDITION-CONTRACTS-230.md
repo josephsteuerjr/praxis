@@ -164,3 +164,41 @@ assertion that a live agent must retain its original words. The added actual
 `desk/tests/t_base_skills_1510` case seeds that public resource into a temporary
 profile, checks stock bytes/index and both phrases, then proves a later authored
 replacement survives seeding/refresh. No private source persona is copied.
+
+
+## RC1 full-core fixture and observer repairs
+
+These are narrow repairs to recorded RC1 failures, not a full-platform verdict.
+
+| Recorded family | Current contract / retained check |
+|---|---|
+| `_fold_run` AST receipt cases (6) | The button worker is retired. Six executable cases use real explicit prepare/apply: stale-source refusal, newly read explicit second attempt (never automatic retry), exact done/source receipt, writer failure then explicit retry, nothing-to-fold, and the actual retired `_fold_tick` leaving a historical claimed file untouched without helper/writes. No auto-generator or busy-worker API is restored. |
+| Root-group KEAT cases | Tests must explicitly bind `PRAXIS_ABSTRACTDL_ROOT_CHAT_ID`; capture policy and staged pairs cannot invent that identity. Existing capture, readiness, edit/delete/revocation, late-traffic selection and final-readiness rollback assertions remain. No KEAT implementation or epoch ordering changed. |
+| Windows simulations on POSIX | Test-local `os` facades select the Windows product branch without changing global `os.name` under pathlib/audit readers. Sharing retries, permanent denial, exact process stop and unresolved-status negatives remain. |
+| Real GLM SDK max | Required Anthropic SDK is imported before legacy test stubs. The fixture uses that installed SDK's own HTTP dependency (`httpx` or `httpx2`) with its real MockTransport/SSE parser, never a fake client. Canonical max and configured fallback/account-route assertions remain. |
+| Prompt builder arity | Existing eight arguments plus optional default-false deployment-notice argument still return exactly three strings. No new request signature is invented. |
+| Ghost fold cases | Ghost actor actually contains invalid surrounding whitespace; trailing text whitespace alone is now valid exact evidence. The ghost remains hot/unprovable and is never selected; proved sources drain once. |
+| Node notification fake | Synthetic normalize result includes the now-required work reference, so the real notice emitter is exercised rather than swallowed by the production diagnostic boundary. |
+| Private soul read fixture | A temporary existing authored soul is fenced: actual read/list succeeds while overwrite refuses. No owner's mutable private soul is a distribution/test input. |
+| Tool schema budget | Native worker description is shortened without dropping roles, durable results, descendant/detached Stop, delegation or exact-SHA disposition. All fields and the strict 30,000-character budget remain unchanged. |
+| Deployment examples | Composition restores exactly `.env.example` and `docker-compose.deploy.yml` from frozen hash-bound verification inputs, like required test source. Actual `.env` and arbitrary dotfiles are not support inputs and remain excluded; installable M inventory is unchanged. |
+
+Forge liveness reuses the admission observer's bounded current-unit discovery.
+Settled history is not replayed/read/written every observation tick. Old unfinished
+children and newly published units in existing tasks are discovered independently
+of recent-task windows. An already observed exact process remains tracked after
+result publication until its exit is observed; missing birth stays dated unknown,
+not assumed dead. These observations never authorize Stop or custody transfer.
+
+The retention reader still permits an unlinked regular pinned FD during atomic
+manifest replacement. Reclaimable result inventory additionally requires that its
+single hashed/sized descriptor remains linked once; reading old pinned bytes does
+not certify that the current result pathname is reclaimable. No deletion added.
+
+
+The private battery test copy may rebuild `dist/` only for its exact trusted
+`npm-build` roots (`desk/app`, `desk/mobile`, `desk/miniapp`). The report retains
+complete before/after output inventories and changed paths. Authored source,
+package/lock, live core, new undeclared files and undeclared output roots remain
+integrity errors. These generated test outputs are not applied to M or interpreted
+as READY. The final exact composition/runtime binding is still checked separately.

@@ -34,6 +34,8 @@ def composition(operation, directory, harness=None):
     """One authority for code + app/resources + runtime/manifests (owned by A)."""
     from . import update_composition
     value = update_composition.describe(Path(directory), operation)
+    if not update_composition.for_plan(directory, operation)['consistent']:
+        raise ValueError('Final shared application differs; reconcile before the full battery')
     if not value.get('sha256') or not all(value.get(k, {}).get('files') for k in ('core', 'app', 'runtime')):
         raise ValueError('Full update composition is unavailable')
     return value
@@ -90,7 +92,7 @@ def _verification_files(value, manifest, base_app=None):
         if bundle.python_framework(Path(value['core']['root'])/name)=='pytest':
             core[name]={**row,'framework':'pytest'}
     for name, row in manifest['files'].items():
-        if name.startswith('live/') and ((Path(name).name.startswith('test') and name.endswith('.py')) or Path(name).name == 'Cargo.lock'):
+        if name.startswith('live/') and ((Path(name).name.startswith('test') and name.endswith('.py')) or Path(name).name == 'Cargo.lock' or name[5:] in {'.env.example', 'docker-compose.deploy.yml'}):
             core.setdefault(name[5:], row)
     for prefix in ('live/', 'praxis/', 'helene/core/'):
         files = {n: r for n, r in files.items() if not n.startswith(prefix)}
@@ -278,7 +280,10 @@ def _copy_composition(value, repository, manifest, base_app=None):
     core = repository / 'live'
     required_tests = {n[len('live/'):]: row for n, row in manifest['files'].items()
                       if n.startswith('live/') and ((Path(n).name.startswith('test') and n.endswith('.py'))
-                                                    or Path(n).name == 'Cargo.lock')}
+                                                    or Path(n).name == 'Cargo.lock' or n[5:] in {'.env.example', 'docker-compose.deploy.yml'})}
+    # The two public deployment examples support unchanged source-contract tests;
+    # they are frozen/hash-bound verification inputs, never a live .env/profile
+    # or an addition to the installable candidate inventory.
     # Replace runtime source, not overlay an absent candidate file with old code.
     shutil.rmtree(core)
     bundle.copy_files(value['core']['root'], value['core']['files'], core)
@@ -522,6 +527,28 @@ def _sources(cache, receipt):
     return {'battery': {'root': str(evidence), 'files': {n: n for n in receipt['files']}}}
 
 
+def _test_copy_changes(repository, before, lanes):
+    """Separate observed build output from mutation of the private test inputs.
+
+    This NEVER changes/blesses installed M; _binding rechecks its exact bytes.
+    Only trusted declared frontend build roots can generate their dist subtree.
+    """
+    prefixes = sorted({lane['root'] + '/dist/' for lane in lanes
+        if lane.get('kind') == 'npm-build' and lane.get('root') in
+        {'desk/app', 'desk/mobile', 'desk/miniapp'} and
+        lane.get('id') == lane['root'] + '/build'})
+    after = bundle.inventory(repository)
+    changed = sorted(name for name in set(before) | set(after)
+                     if before.get(name) != after.get(name))
+    authored = [name for name in changed if not any(name.startswith(p) for p in prefixes)]
+    outputs = [{'root': prefix.rstrip('/'),
+                'before': {n: r for n, r in before.items() if n.startswith(prefix)},
+                'after': {n: r for n, r in after.items() if n.startswith(prefix)},
+                'changed_paths': [n for n in changed if n.startswith(prefix)]}
+               for prefix in prefixes]
+    return authored, outputs
+
+
 def prepare(operation, directory, harness, stopped):
     """Full attempts, frozen for review. Caller must persist mutated operation."""
     directory = Path(directory)
@@ -589,8 +616,7 @@ def prepare(operation, directory, harness, stopped):
                 rows.append({'id': lane['id'], 'status': 'unavailable', 'reason': type(exc).__name__ + ': ' + str(exc)})
         # This includes supplied test sources and direct-import edition paths,
         # not merely files which happened to be included in packaged M.
-        candidate_changes = [n for n, row in actual_files.items()
-                             if not (repository / n).is_file() or bundle.digest(repository / n) != row['sha256']]
+        candidate_changes, build_outputs = _test_copy_changes(repository, actual_files, lanes)
     except CustodyUnconfirmed:
         safe_to_remove = False
         write(cache / 'custody-unconfirmed.json', {'work': str(work), 'complete': False})
@@ -604,6 +630,7 @@ def prepare(operation, directory, harness, stopped):
         raise ValueError('Full composition or executor changed during battery')
     report = {'binding': binding, 'complete': True, 'scope': 'full version-bound applicable composition; no lane reuse',
               'lanes': lanes, 'results': rows, 'test_copy_modified_paths': candidate_changes,
+              'test_copy_build_outputs': build_outputs,
               'interpretation': 'Complete means attempted, not pass. Independent review and installed acceptance are separate.'}
     try:
         if candidate_changes:

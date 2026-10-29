@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -34,7 +35,7 @@ class AtomicReplaceRetry(unittest.TestCase):
                 raise PermissionError(5, "Отказано в доступе")
             return real(src, dst)
 
-        with mock.patch.object(run_manager.os, "name", "nt"), \
+        with mock.patch.object(run_manager, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"})), \
                 mock.patch.object(run_manager.os, "replace", side_effect=flaky), \
                 mock.patch.object(run_manager.time, "sleep") as slept:
             run_manager._atomic_json(self.path, {"status": "running"})
@@ -44,7 +45,7 @@ class AtomicReplaceRetry(unittest.TestCase):
         self.assertEqual([p for p in self.path.parent.iterdir()], [self.path], "временный файл убран")
 
     def test_a_persistent_denial_still_surfaces(self):
-        with mock.patch.object(run_manager.os, "name", "nt"), \
+        with mock.patch.object(run_manager, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"})), \
                 mock.patch.object(run_manager.os, "replace",
                                   side_effect=PermissionError(5, "Отказано в доступе")), \
                 mock.patch.object(run_manager.time, "sleep"):
@@ -54,7 +55,7 @@ class AtomicReplaceRetry(unittest.TestCase):
 
     def test_posix_does_not_retry_permission_errors(self):
         # На POSIX PermissionError — это права, а не гонка: повтор только скрыл бы причину.
-        with mock.patch.object(run_manager.os, "name", "posix"), \
+        with mock.patch.object(run_manager, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"})), \
                 mock.patch.object(run_manager.os, "replace",
                                   side_effect=PermissionError(13, "Permission denied")) as rep, \
                 mock.patch.object(run_manager.time, "sleep") as slept:

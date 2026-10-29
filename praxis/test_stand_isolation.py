@@ -134,14 +134,22 @@ class LiveTreeWriteIsRefusedTests(unittest.TestCase):
         self.assertFalse(self.db.exists())
 
     def test_reading_the_living_tree_stays_allowed(self):
-        # Забор — только на запись: стенд обязан читать её `soul/`, иначе прогон
-        # перестанет видеть тот текст, с которым она живёт.
-        readme = _REPO / "memory" / "README.md"
-        if readme.exists():
-            self.assertTrue(readme.read_text(encoding="utf-8", errors="ignore") is not None)
-        soul = _REPO / "soul"
-        self.assertTrue(soul.exists())
-        list(soul.iterdir())
+        # A user's mutable soul is not a distribution input. Test the exact
+        # read/write fence on an existing synthetic soul, never an owner profile.
+        from unittest import mock
+        with tempfile.TemporaryDirectory(prefix="stand-read-contract-") as folder:
+            soul = Path(folder) / "soul"
+            soul.mkdir()
+            note = soul / "SOUL.md"
+            note.write_text("Synthetic authored identity", encoding="utf-8")
+            prefixes = (*_sandbox._GUARDED_PREFIXES, _sandbox._norm(soul))
+            with mock.patch.object(_sandbox, "_GUARDED_PREFIXES", prefixes):
+                self.assertTrue(_sandbox._refuses(note))
+                self.assertEqual(note.read_text(encoding="utf-8"), "Synthetic authored identity")
+                self.assertEqual([p.name for p in soul.iterdir()], ["SOUL.md"])
+                with self.assertRaises(_sandbox.LiveTreeWriteRefused):
+                    note.write_text("must not replace identity", encoding="utf-8")
+                self.assertEqual(note.read_text(encoding="utf-8"), "Synthetic authored identity")
 
     def test_a_disposable_tree_with_the_same_folder_names_is_untouched(self):
         """Граница, на которой забор уже один раз оступился.

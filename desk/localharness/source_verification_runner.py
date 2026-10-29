@@ -12,6 +12,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+import stat
 import runpy
 import sys
 import traceback
@@ -76,10 +77,37 @@ def _write_fence(root, report):
     """
     root = Path(root).resolve()
     report = Path(report).resolve()
-    def allowed(path):
+    # CPython audit_events: each *at operation carries its own dir_fd slot.
+    # Resolve the live descriptor, not a cached name or the process cwd. Darwin
+    # has no /proc; F_GETPATH=50 is its public fcntl(2) ABI (sys/fcntl.h).
+    if sys.platform == 'darwin':
+        import fcntl
+    def directory(fd):
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISDIR(opened.st_mode):
+                raise OSError('descriptor is not a directory')
+            if sys.platform.startswith('linux'):
+                name = os.readlink('/proc/self/fd/' + str(fd))
+            elif sys.platform == 'darwin':
+                name = os.fsdecode(fcntl.fcntl(fd, getattr(fcntl, 'F_GETPATH', 50), b'\0' * 1024).split(b'\0', 1)[0])
+            else:
+                raise OSError('descriptor paths unsupported on this executor')
+            base = Path(name)
+            if not base.is_absolute() or not os.path.samestat(opened, base.stat()):
+                raise OSError('descriptor path identity unavailable')
+            return base
+        except OSError as exc:
+            raise PermissionError('Verification directory descriptor unresolved: ' + str(fd)) from exc
+    def resolved(path, dir_fd=None):
+        p = Path(os.fsdecode(path))
+        if not p.is_absolute() and dir_fd not in (None, -1):
+            p = directory(dir_fd) / p
+        return p.resolve()
+    def allowed(path, dir_fd=None):
         if isinstance(path, int) or path is None:
             return
-        p = Path(os.fsdecode(path)).resolve()
+        p = resolved(path, dir_fd)
         if p not in {Path(os.devnull).resolve(), report} and not p.is_relative_to(root):
             raise PermissionError('Verification write outside isolated work: ' + str(p))
     def audit(event, args):
@@ -87,10 +115,21 @@ def _write_fence(root, report):
             mode, flags = args[1], args[2]
             if (isinstance(mode, str) and any(c in mode for c in 'wax+')) or (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC)):
                 allowed(args[0])
-        elif event in {'os.remove', 'os.rmdir', 'os.mkdir', 'os.chmod', 'os.chown', 'os.utime', 'os.truncate'}:
+        elif event in {'os.remove', 'os.rmdir'}:
+            allowed(args[0], args[1])
+        elif event in {'os.mkdir', 'os.chmod'}:
+            allowed(args[0], args[2])
+        elif event in {'os.chown', 'os.utime'}:
+            allowed(args[0], args[3])
+        elif event == 'os.truncate':
             allowed(args[0])
-        elif event in {'os.rename', 'os.link', 'os.symlink'}:
-            allowed(args[0]); allowed(args[1])
+        elif event in {'os.rename', 'os.link'}:
+            allowed(args[0], args[2]); allowed(args[1], args[3])
+        elif event == 'os.symlink':
+            # The source is link contents, relative to the destination's parent,
+            # not a second mutation path or cwd-relative filesystem operand.
+            allowed(args[1], args[2])
+            allowed(resolved(args[1], args[2]).parent / os.fsdecode(args[0]))
     sys.addaudithook(audit)
 
 

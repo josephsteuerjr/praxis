@@ -191,9 +191,57 @@ def repair(directory, name, content=None, *, delete=False, expected='', reason='
     write(directory / 'composition.json', state)
 
 
+def shared(new, plans=None):
+    """Compare complete app candidates, including unchanged entries/deletions.
+
+    This is reconciliation evidence, never test/review approval. A plan without
+    a compound snapshot still selects the incoming app, not a peer's repairs.
+    """
+    new = Path(new).resolve()
+    if plans is None:
+        plans = read(new / 'code-transition-plan.json').get('plans', [])
+    if not any(read(Path(row['directory']) / 'composition.json') for row in plans):
+        return {'consistent': True, 'changed': False, 'candidates': [], 'different_paths': []}
+    base = app_inventory(new / 'app')
+    candidates = []
+    for row in plans:
+        directory = Path(row['directory']).resolve()
+        state = read(directory / 'composition.json')
+        if state:
+            if Path(state['program']).resolve() != new:
+                raise ValueError('Shared application candidate belongs to another incoming program')
+            app = describe(directory)['app']
+        else:
+            app = {'root': str(new / 'app'), 'files': base}
+        candidates.append({'directory': str(directory), 'app': app})
+    names = set().union(*(set(row['app']['files']) for row in candidates))
+    different = sorted(name for name in names if any(
+        row['app']['files'].get(name) != candidates[0]['app']['files'].get(name) for row in candidates[1:]))
+    return {'consistent': not different, 'changed': any(row['app']['files'] != base for row in candidates),
+            'candidates': candidates, 'different_paths': different}
+
+
+def require_shared(new, plans=None):
+    value = shared(new, plans)
+    if not value['consistent']:
+        raise ValueError('Final shared application differs across selected code roots; reconcile each candidate with '
+                         'source_update repair, finish, full verify and independent review before apply: '
+                         + ', '.join(value['different_paths']))
+    return value
+
+
+def for_plan(directory, operation=None):
+    operation = _operation(directory, operation)
+    binding = operation.get('coordinator') or {}
+    if binding.get('kind') != 'incoming-update-runtime.v1':
+        return {'consistent': True, 'changed': False, 'candidates': [], 'different_paths': []}
+    return shared(binding['program'])
+
+
 def overlay(new, plans):
     """Publish source overrides for existing transactional preimage machinery."""
     new = Path(new).resolve()
+    require_shared(new, plans)
     mapping = {}
     identities = []
     for row in plans:
@@ -227,6 +275,7 @@ def selected_files(new):
     if value.get('format') != FORMAT:
         raise ValueError('Unknown compound overlay format')
     transition = read(new / 'code-transition-plan.json')
+    require_shared(new, transition.get('plans', []))
     expected_identities = [{'directory': str(Path(row['directory']).resolve()),
         'sha256': signature(row['directory'])} for row in transition.get('plans', [])
         if read(Path(row['directory']) / 'composition.json')]

@@ -242,7 +242,15 @@ def review(old, new, plans, progress=None, cancelled=None):
     """Blocking preparation step, before overlay; output stays in a local log."""
     from localharness.update_process import interpreter_for
     old, new = Path(old).resolve(), Path(new).resolve()
-    verified_runtime(new)
+    binding = verified_runtime(new)
+    # Every selected core sees its own editable app snapshot before the first
+    # agent can finish. This grants no verification/review/apply authority.
+    from localharness import update_composition
+    for row in plans:
+        directory = Path(row['directory']).resolve()
+        plan = merge.validate_inputs(directory)
+        update_composition.prepare(directory, {'coordinator': binding,
+            'input_sha256': merge.input_signature(plan)})
     for row in plans:
         if row['state'] == 'ready':
             continue

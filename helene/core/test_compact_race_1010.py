@@ -384,84 +384,77 @@ def _runner_source() -> str | None:
     return None
 
 
-@unittest.skipUnless(_runner_source(), "исходник desk/localharness/runner.py не найден")
-class FoldRunReceiptsAndBusy(unittest.TestCase):
-    """Расписки кнопки: занятость снимается на каждом исходе; после переноса
-    автоповтора в compact_if_due state_changed в расписке означает ДВА конфликта."""
+class FoldRunReceiptsAndBusy(RaceBase):
+    """Retired button outcomes ported to explicit authoring receipts.
 
-    def setUp(self):
-        src = _runner_source()
-        tree = ast.parse(src)
-        fn = next(n for n in tree.body
-                  if isinstance(n, ast.FunctionDef) and n.name == "_fold_run")
-        module = ast.Module(body=[fn], type_ignores=[])
-        ast.fix_missing_locations(module)
-        self.ns = {
-            "dt": dt, "json": json, "os": os, "contextlib": contextlib,
-            "Path": Path, "log": logging.getLogger("fold-test"), "STREAM": "stream",
-        }
-        exec(compile(module, "<runner _fold_run>", "exec"), self.ns)
-        self.tmp = Path(tempfile.mkdtemp(prefix="fold_run_1010_"))
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.ns["_FOLD_BUSY"] = [False]
-        self.ns["_FOLD_ACTIVE"] = [None]
-        claimed = self.tmp / "memory" / ".control" / "fold.processing.json"
-        claimed.parent.mkdir(parents=True, exist_ok=True)
-        claimed.write_text("{}", encoding="utf-8")
-        self.claimed = claimed
-
-    def _run(self, out: dict | Exception):
-        if isinstance(out, Exception):
-            def fold_now(room):
-                raise out
-        else:
-            def fold_now(room):
-                return dict(out)
-        self.ns["_life"] = _Life(fold_now)
-        self.ns["_FOLD_BUSY"] = [True]
-        self.ns["_fold_run"](self.tmp, {"room": "room", "id": "r1", "by": "owner",
-                                        "at": "t"}, self.claimed)
-        receipt = json.loads((self.tmp / "memory" / ".state" / "fold-receipt.json")
-                             .read_text(encoding="utf-8"))
-        return receipt, self.ns["_FOLD_BUSY"][0]
-
+    No _fold_run worker, claimed-request consumer or automatic second pass exists.
+    The historical method addresses remain; EDITION-CONTRACTS gives the oracle map.
+    """
     def test_state_changed_receipt_and_busy_cleared(self):
-        receipt, busy = self._run({"ok": False, "reason": "state_changed"})
-        self.assertEqual(receipt["state"], "retry")
-        self.assertFalse(busy, "занятость обязана сниматься")
+        self.seed(); prepared = self.prepare()
+        self._edit(2, "changed after author read", ts=10_000_000.0)
+        text = "stale authored text"
+        self.assert_conflict(ml.apply_authored_fold(ROOM, prepared["selection"], text), text)
+        self.assertFalse(self.coverage_counts())
 
     def test_done_receipt_mentions_second_pass(self):
-        receipt, busy = self._run({"ok": True, "folded": 158, "retried": True})
-        self.assertEqual(receipt["state"], "done")
-        self.assertEqual(receipt["folded"], 158)
-        self.assertIn("второго захода", receipt["note"])
-        self.assertFalse(busy)
+        self.seed(); old = self.prepare()
+        self._edit(2, "requires a fresh author read", ts=10_000_000.0)
+        text = "first authored attempt"
+        self.assert_conflict(ml.apply_authored_fold(ROOM, old["selection"], text), text)
+        fresh = self.prepare()
+        self.assertNotEqual(fresh["selection"], old["selection"])
+        out = ml.apply_authored_fold(ROOM, fresh["selection"], "second explicit authored attempt")
+        self.assertTrue(out["ok"], out)
+        self.assertFalse(out.get("retried"), "no hidden second generator pass")
+        self.assertEqual(out["source_ids"], self.selected_ids(fresh))
+        self.assertEqual(ml.compact_text(out["compact_id"], ROOM), "second explicit authored attempt")
 
     def test_plain_done_receipt(self):
-        receipt, busy = self._run({"ok": True, "folded": 12})
-        self.assertEqual(receipt["state"], "done")
-        self.assertNotIn("второго захода", receipt["note"])
-        self.assertFalse(busy)
+        self.seed(); prepared = self.prepare()
+        out = ml.apply_authored_fold(ROOM, prepared["selection"], "my exact authored recap")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["folded"], len(prepared["sources"]))
+        self.assert_coverage(self.selected_ids(prepared))
+        self.assertEqual(ml.compact_text(out["compact_id"], ROOM), "my exact authored recap")
 
     def test_exception_receipt_and_busy_cleared(self):
-        receipt, busy = self._run(RuntimeError("модель ушла"))
-        self.assertEqual(receipt["state"], "failed")
-        self.assertFalse(busy)
+        self.seed(); prepared = self.prepare(); before = self.hot_ids()
+        with mock.patch.object(ml, "_write_compact", side_effect=OSError("injected writer refusal")):
+            with self.assertRaisesRegex(OSError, "injected writer refusal"):
+                ml.apply_authored_fold(ROOM, prepared["selection"], "retained author text")
+        self.assertEqual(self.hot_ids(), before)
+        self.assertFalse(self.coverage_counts())
+        out = ml.apply_authored_fold(ROOM, prepared["selection"], "explicit retry after repair")
+        self.assertTrue(out["ok"], out)
 
     def test_nothing_to_fold_receipt(self):
-        receipt, busy = self._run({"ok": True, "folded": 0,
-                                   "plan": {"reason": "within_window"}})
-        self.assertEqual(receipt["state"], "nothing")
-        self.assertFalse(busy)
+        prepared = ml.prepare_authored_fold(ROOM)
+        self.assertTrue(prepared["ok"], prepared)
+        self.assertEqual(prepared["reason"], "nothing_to_fold")
+        self.assertFalse(prepared.get("sources"))
+        self.assertFalse(self.coverage_counts())
 
     def test_claimed_request_file_removed_on_every_outcome(self):
-        self._run({"ok": True, "folded": 1})
-        self.assertFalse(self.claimed.exists())
-
-
-class _Life:
-    def __init__(self, fold_now):
-        self.fold_now = fold_now
+        # Old requests are audit data, not authorization for an automatic fold.
+        from test_source_root import source_root
+        source = (source_root(__file__) / "desk/localharness/runner.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        self.assertFalse(any(isinstance(n, ast.FunctionDef) and n.name == "_fold_run" for n in tree.body))
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_fold_tick")
+        module = ast.Module(body=[fn], type_ignores=[]); ast.fix_missing_locations(module)
+        namespace = {"Path": Path}
+        exec(compile(module, "<actual retired fold tick>", "exec"), namespace)
+        request = ml.BASE / "memory/.control/fold.processing.json"
+        request.parent.mkdir(parents=True, exist_ok=True)
+        request.write_bytes(b'{"id":"old-request"}')
+        self.seed(); before = self.hot_ids()
+        with mock.patch.object(ml, "_model_compact", side_effect=AssertionError("no helper")) as helper:
+            namespace["_fold_tick"](ml.BASE)
+        helper.assert_not_called()
+        self.assertEqual(request.read_bytes(), b'{"id":"old-request"}')
+        self.assertEqual(self.hot_ids(), before)
+        self.assertFalse(self.coverage_counts())
 
 
 if __name__ == "__main__":  # pragma: no cover

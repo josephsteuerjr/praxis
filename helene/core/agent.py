@@ -8007,10 +8007,7 @@ FORGE_TOOLS = [
      }, ["task_id", "action"])} ,
     {"name": "coding_agent",
      "description": (
-        "Fresh-context workers of one Praxis: spawn scout/worker/reviewer, poll/list "
-         "durable results, stop agent descendants; task stop includes detached jobs. "
-         "Workers may delegate. disposition binds "
-         "an exact result SHA without rewriting it."),
+        'Fresh-context Praxis scout/worker/reviewer: spawn, poll/list durable results, stop descendants. Task Stop covers detached jobs. May delegate. disposition binds exact result SHA; never rewrites it.'),
      "input_schema": _obj({
          "task_id": {"type": "string"},
          "action": {"type": "string", "enum": ["spawn", "poll", "stop", "pause", "resume", "tick", "list", "disposition"]},

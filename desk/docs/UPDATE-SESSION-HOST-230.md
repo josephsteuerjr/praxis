@@ -90,6 +90,18 @@ reason and current whole-composition identity. Changed app resources install
 through the same complete preimage overlay, not by mutating the running verifier.
 A core-unchanged app repair creates a new review operation identity.
 
+All selected code roots share one installed app. Their **complete** app inventories
+must agree before verify/review/apply and again at cutover, including unchanged
+files, modes and deletions. A changed-path union is not authority: a peer that
+tested unchanged incoming app bytes has not tested another agent's repaired app.
+`source_update status.shared_application` exposes peer candidates and differing
+paths. Reconcile each through its existing app repair/finish/full-verify/review
+chain; repairs retain previous evidence but invalidate its battery and review.
+A previously ready peer can reopen only to repair the reported disagreement.
+Pristine code peers affected by shared app repairs enter the same strict gate;
+no peer's review is copied to another. Consistent independently verified common
+apps remain supported, and incoming B stays frozen throughout.
+
 `harness/` contains final M app/resources, including factory soul/skill resources
 (not a live private persona); `distribution/` freezes both original source and
 program manifests. Unchanged published image/font/icon binaries can be represented

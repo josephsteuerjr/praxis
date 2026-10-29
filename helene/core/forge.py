@@ -4237,7 +4237,7 @@ def _queued_identities() -> list[Path]:
         state = _QUEUE_OBSERVER
         if state.get("root") != root:
             state.clear()
-            state.update(root=root, stamp=None, tasks={}, scans=deque(), unread=deque(), queued=set())
+            state.update(root=root, stamp=None, tasks={}, scans=deque(), unread=deque(), queued=set(), current={})
         stamp = _directory_identity(TASKS_DIR)
         if stamp != state["stamp"]:
             # Capture BEFORE enumeration: a producer racing this pass causes
@@ -4271,8 +4271,12 @@ def _queued_identities() -> list[Path]:
             if not isinstance(request, dict):
                 if directory.is_dir():
                     state["unread"].append(directory)
-            elif request.get("status") == "queued" and not (directory / "result.json").exists():
-                state["queued"].add(directory)
+            elif not (directory / "result.json").exists():
+                # Reuse bounded admission discovery for current liveness; never
+                # scan/read the complete settled history a second time per tick.
+                state["current"][directory] = request
+                if request.get("status") == "queued":
+                    state["queued"].add(directory)
         return sorted(state["queued"])
 
 
@@ -4289,14 +4293,20 @@ def _queued_dependency_reason(request: dict, by_id: dict) -> str:
 def observe_liveness() -> None:
     """Publish dated process facts; no admission/control or model invocation."""
     import forge_liveness
-    forge_liveness.refresh(TASKS_DIR, _atomic_json)
+    with _QUEUE_OBSERVER_LOCK:
+        current = dict(_QUEUE_OBSERVER.get("current", {}))
+    retired = forge_liveness.refresh(TASKS_DIR, _atomic_json, current)
+    with _QUEUE_OBSERVER_LOCK:
+        for directory in retired:
+            _QUEUE_OBSERVER.get("current", {}).pop(directory, None)
 
 
 def tick_queued(task_id: str = "") -> list[dict]:
     """Drain current admitted identities; never recreate/retry a lost execution."""
+    discovered = _queued_identities()
     observe_liveness()
     directories = (sorted((_task_dir(task_id) / "agents").glob("agent-*"))
-                   if task_id else _queued_identities())
+                   if task_id else discovered)
     by_task: dict[str, list[Path]] = {}
     for directory in directories:
         by_task.setdefault(directory.parent.parent.name, []).append(directory)

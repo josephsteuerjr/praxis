@@ -34,7 +34,7 @@ class OrdinaryRootGroupCanary(unittest.TestCase):
         self.policy.write_text(json.dumps(dict(
             schema='keat.capture-policy.v1', namespace='abstractdl-offline',
             root=root, enrollments=[self.row])), encoding='utf-8')
-        self.env = dict(PRAXIS_KEAT_CAPTURE='on',
+        self.env = dict(PRAXIS_ABSTRACTDL_ROOT_CHAT_ID=ROOT, PRAXIS_KEAT_CAPTURE='on',
                         PRAXIS_KEAT_CAPTURE_POLICY=str(self.policy),
                         PRAXIS_KEAT_ROOT=root, PRAXIS_KEAT='serve',
                         PRAXIS_KEAT_PAIRS='[["group","-1001240718803"]]')

@@ -35,16 +35,22 @@ the result returned to the model.
 
 ## Install, connect, update
 
-First launch and **Update** open the same setup wizard. Create a new agent,
-connect an existing data folder, or migrate an old installation. Choose the
-program location and whether to remove the previous program after the new one
-has confirmed startup.
+Normal **Update** starts a durable, in-place job owned by the Python host,
+not the setup window. Closing an observing window does not cancel that job;
+Pause, Continue and Stop remain explicit controls. Reopening the interface
+attaches to the same operation. The selected data folders stay connected.
 
-Keep your code changes by combining them with the incoming release and letting
-the new Python runtime's independent panel review the result. This also applies
-to older native installations. Alternatively, choose clean upstream code and
-keep the current data folder connected. Previous source and Git are archived.
-Memory, conversations, settings and keys stay with the selected data folders.
+The short setup/migration entry is separate: create a new agent, connect an
+existing data folder, or migrate an old installation. It hands the work to the
+host; the mechanical switch confirms the new program's startup or rolls back.
+See [Update and migration ownership](desk/docs/UPDATE-SESSION-HOST-230.md).
+
+Keep your code changes by combining them with the incoming release, running
+full verification, and obtaining independent review of the exact resulting
+composition. This also applies to older native installations. Alternatively,
+choose clean upstream code and keep the current data folder connected.
+Previous source and Git are archived. Memory, conversations, settings and keys
+stay with the selected data folders.
 
 **Restore upstream code**, beside Update, is the emergency route back to the
 installed release's clean source while keeping current data. The reusable

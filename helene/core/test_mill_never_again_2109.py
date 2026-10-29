@@ -46,7 +46,7 @@ class TheSameBlockIsNeverFoldedTwice(Base):
             "kind": "conversation_message",
             "stream": ml._safe(ROOM),
             "chat_id": ROOM,
-            "actor": "Николай",
+            "actor": " Николай ",
             "direction": "in",
             "text": "Николай: хвост с пробелом" + NBSP + " ",
             "source": "telegram",

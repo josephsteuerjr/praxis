@@ -799,8 +799,11 @@ class ArityAndShapesOfNeighboursAreUntouched(FrameBase):
         persona, dynamic, evidence = agent._build_prompt_parts(ctx=self.owner_dm())
         for value in (persona, dynamic, evidence):
             self.assertIsInstance(value, str)
-        self.assertEqual(
-            len(inspect.signature(agent._build_prompt_parts).parameters), 8)
+        signature = inspect.signature(agent._build_prompt_parts)
+        self.assertEqual(len(signature.parameters), 9)
+        notice = signature.parameters["include_deployment_notice"]
+        self.assertEqual(notice.kind, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        self.assertIs(notice.default, False)
 
     def test_the_direct_unpackings_in_the_neighbours_are_still_three_wide(self):
         here = Path(__file__).resolve().parent

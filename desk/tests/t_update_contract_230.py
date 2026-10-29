@@ -56,6 +56,118 @@ class CompositionTests(unittest.TestCase):
             'source':str(local.resolve()),'owner_update_requested':True})
         composition.prepare(self.directory,self.operation)
 
+    def peer(self, *, pristine=False):
+        tree=self.root/'peer-data';tree.mkdir()
+        local=self.root/'peer-code';shutil.copytree(self.root/'A' if pristine else self.local,local)
+        directory=tree/'memory/.source-updates'/('b'*64)
+        plan=merge.create(self.root/'A',local,self.program/'tree',directory)
+        operation={**self.operation,'id':directory.name,'directory':str(directory),'tree':str(tree),
+            'source':str(local.resolve()),'input_sha256':merge.input_signature(plan)}
+        write(directory/'pipeline.json',operation);write(pipeline.path(tree),operation)
+        write(hand.marker(directory),{'format':'helene-agent-resolution.v1',
+            'input_sha256':operation['input_sha256'],'source':operation['source'],'owner_update_requested':True})
+        composition.prepare(directory,operation)
+        rows=[{'source':str(self.local.resolve()),'directory':str(self.directory)},
+              {'source':str(local.resolve()),'directory':str(directory)}]
+        write(self.program/'code-transition-plan.json',{'plans':rows})
+        return tree,directory,rows
+
+    def test_two_authored_plans_cannot_overlay_one_repair_onto_unchanged_peer(self):
+        _,peer,rows=self.peer()
+        composition.repair(self.directory,'app/localharness/feature.py','answer=42\n',
+            expected=composition.signature(self.directory),reason='Agent A fixes shared consumer')
+        # Both local core results are real Git merges, but B still names the old
+        # application. A union of changed paths used to silently install A's app.
+        before=composition.signature(peer)
+        with self.assertRaisesRegex(ValueError,'shared application'):
+            composition.overlay(self.program,rows)
+        self.assertEqual(composition.signature(peer),before)
+        self.assertFalse((self.program.parent/'compound-overlay.json').exists())
+        state=hand.command(self.tree,'status')['shared_application']
+        self.assertFalse(state['consistent']);self.assertEqual(state['different_paths'],['localharness/feature.py'])
+        for tree,directory in ((self.tree,self.directory),(self.root/'peer-data',peer)):
+            with self.assertRaisesRegex(ValueError,'shared application'):
+                hand.command(tree,'verify',expected_composition_sha256=composition.signature(directory))
+
+    def test_shared_app_deletion_is_not_approved_by_an_unchanged_peer(self):
+        _,peer,rows=self.peer()
+        composition.repair(self.directory,'app/resources/example.txt',delete=True,
+            expected=composition.signature(self.directory),reason='Remove actual broken resource')
+        with self.assertRaisesRegex(ValueError,'shared application'):
+            composition.overlay(self.program,rows)
+        self.assertTrue((peer/'compound/app/resources/example.txt').is_file())
+
+    def test_common_final_app_multiagent_overlay_and_late_divergence(self):
+        tree,peer,rows=self.peer()
+        previous=composition.signature(peer)
+        operation=read(peer/'pipeline.json')
+        operation.update(review_id='historical-review',subject_sha256='historical-subject',
+            review_clear=True,battery={'key':'historical-battery'},composition_sha256=previous)
+        write(peer/'pipeline.json',operation)
+        for directory,owner in ((self.directory,self.tree),(peer,tree)):
+            hand.command(owner,'patch',path='app/localharness/feature.py',before='answer=1',after='answer=42',
+                expected_composition_sha256=composition.signature(directory),reason='Agreed final shared application')
+        operation=read(peer/'pipeline.json')
+        self.assertNotEqual(composition.signature(peer),previous)
+        self.assertNotIn('battery',operation);self.assertNotIn('review_id',operation)
+        self.assertNotIn('review_clear',operation)
+        self.assertEqual(operation['evidence_history'][-1]['battery']['key'],'historical-battery')
+        # Reconciliation is not new approval: without the exact new full battery
+        # and independent review, neither authored core can authorize apply.
+        with self.assertRaisesRegex(ValueError,'review.*clear'):
+            hand.command(tree,'apply',expected_composition_sha256=composition.signature(peer))
+        composition.overlay(self.program,rows)
+        files=composition.selected_files(self.program)
+        self.assertEqual(Path(files['app/localharness/feature.py']['source']).read_text(),'answer=42\n')
+        composition.repair(peer,'app/resources/example.txt',delete=True,
+            expected=composition.signature(peer),reason='Later different candidate')
+        with self.assertRaisesRegex(ValueError,'shared application|exact current'):
+            composition.selected_files(self.program)
+
+    def test_apply_checks_shared_app_before_any_local_review_receipt(self):
+        _,peer,rows=self.peer()
+        composition.repair(self.directory,'app/localharness/feature.py','answer=42\n',
+            expected=composition.signature(self.directory),reason='Shared repair after peer tests')
+        operation=read(peer/'pipeline.json')
+        operation.update(state='ready_to_apply',candidate_sha256=merge.candidate_signature(peer))
+        write(peer/'pipeline.json',operation)
+        with self.assertRaisesRegex(ValueError,'shared application'):
+            pipeline.validate_ready(peer)
+
+    def test_pristine_peer_cannot_silently_inherit_other_agents_app(self):
+        _,peer,rows=self.peer(pristine=True)
+        self.assertFalse(pipeline.requires_gate(merge.validate_inputs(peer)))
+        composition.repair(self.directory,'app/localharness/feature.py','answer=42\n',
+            expected=composition.signature(self.directory),reason='Shared changed app')
+        with self.assertRaisesRegex(ValueError,'shared application'):
+            composition.overlay(self.program,rows)
+
+    def test_ready_peer_can_reconcile_without_reusing_any_old_authority(self):
+        tree,peer,rows=self.peer()
+        operation=read(peer/'pipeline.json');operation.update(state='ready_to_apply',review_clear=True,
+            review_id='old-reviewed-composition',battery={'key':'old-full-battery'})
+        write(peer/'pipeline.json',operation)
+        composition.repair(self.directory,'app/localharness/feature.py','answer=42\n',
+            expected=composition.signature(self.directory),reason='Other agent fixes shared consumer')
+        hand.command(tree,'patch',path='app/localharness/feature.py',before='answer=1',after='answer=42',
+            expected_composition_sha256=composition.signature(peer),reason='Reconcile agreed final app')
+        operation=read(peer/'pipeline.json')
+        self.assertEqual(operation['state'],'waiting_agent')
+        self.assertNotIn('battery',operation);self.assertNotIn('review_id',operation)
+        self.assertEqual(operation['evidence_history'][-1]['review_id'],'old-reviewed-composition')
+        self.assertTrue(composition.require_shared(self.program)['consistent'])
+
+    def test_pristine_shared_app_repair_enters_the_same_strict_gate(self):
+        tree,peer,rows=self.peer(pristine=True)
+        self.assertFalse(pipeline.requires_gate(merge.validate_inputs(peer),peer))
+        hand.command(tree,'patch',path='app/localharness/feature.py',before='answer=1',after='answer=42',
+            expected_composition_sha256=composition.signature(peer),reason='Explicit common app repair')
+        self.assertTrue(pipeline.requires_gate(merge.validate_inputs(peer),peer))
+        target=self.root/'pristine-target';shutil.copytree(self.root/'peer-code',target)
+        with self.assertRaisesRegex(ValueError,'shared application'):
+            merge.apply(peer,target)
+        self.assertEqual(merge.inventory(target),merge.inventory(self.root/'peer-code'))
+
     def test_modified_preserve_without_text_conflict_is_strict(self):
         self.assertEqual(self.plan['conflicts'],[])
         self.assertTrue(pipeline.requires_gate(self.plan))

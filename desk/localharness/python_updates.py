@@ -605,11 +605,14 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
         if getattr(owner, 'session_host', False):
             from .session_host import retire_observers
             retire_observers(owner.root)
+        # The calling Controller owns the supervisor's data leases. Release
+        # them through its normal checked teardown before an external migration
+        # census (which excludes this PID) can require those leases to be free.
+        owner.close()
         if getattr(owner,'bootstrap',False):
             from . import migration_lifecycle
             migration_lifecycle.stop(owner.root)
             migration_lifecycle.quiescent(owner.root)
-        owner.close()
         os._exit(0)
     timer=threading.Timer(2,exit_old);timer.daemon=True;timer.start()
     return {'dir':str(owner.root),'updater_pid':child.pid,'log':str(log),

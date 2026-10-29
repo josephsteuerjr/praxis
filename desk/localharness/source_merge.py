@@ -115,10 +115,14 @@ def git(repo, *args, data=None, check=True, exe='git'):
                GIT_AUTHOR_NAME='Helene source update', GIT_AUTHOR_EMAIL='update@helene.local',
                GIT_COMMITTER_NAME='Helene source update', GIT_COMMITTER_EMAIL='update@helene.local',
                GIT_TERMINAL_PROMPT='0')
-    command = [exe, '-c', 'core.autocrlf=false', '-c', 'core.hooksPath=' + os.devnull,
+    # Git-for-Windows validates an absolute --git-dir before command config is
+    # applied. A relative private repository plus local longpaths handles both
+    # that early setup and later loose objects without changing user settings.
+    repo = Path(repo).resolve()
+    command = [exe, '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.hooksPath=' + os.devnull,
                '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.quotepath=false',
-               '--git-dir=' + str(repo), *args]
-    done = subprocess.run(command, input=data, capture_output=True, env=env, timeout=120,
+               '--git-dir=' + repo.name, *args]
+    done = subprocess.run(command, input=data, capture_output=True, env=env, cwd=repo.parent, timeout=120,
                           creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if check and done.returncode:
         raise RuntimeError('Source merge Git failed: ' + done.stderr.decode('utf-8', 'replace')[-1600:])
@@ -290,7 +294,7 @@ def apply(directory, target):
     directory, target = Path(directory), Path(target).resolve()
     value = validate_inputs(directory)
     from .source_update import validate_ready, requires_gate
-    if requires_gate(value):
+    if requires_gate(value, directory):
         validate_ready(directory)
     if value.get('state') != 'ready' or inventory(directory / 'result') != value['result']:
         raise ValueError('Source merge is not ready or its result changed')

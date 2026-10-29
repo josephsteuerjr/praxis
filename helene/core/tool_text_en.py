@@ -1052,7 +1052,7 @@ POINTER_SHA: dict[str, str] = {
     "call": "b7de026f",
     "code_map": "401e7444",
     "code_outline": "5bb7fcae",
-    "coding_agent": "e29f7e5d",
+    "coding_agent": "0be97877",
     "coding_checkpoint": "0686ab40",
     "coding_edit": "822bbda1",
     "coding_inspect": "db49eee0",

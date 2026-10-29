@@ -86,6 +86,8 @@ def preflight(old, new, *, notify=True):
     root = Path(found['agents'][0]['tree']).resolve() / 'memory/.source-updates'
     root.mkdir(parents=True, exist_ok=True)
     plans = []
+    from . import update_composition
+    shared_repair = update_composition.shared(new)['changed']
     if not sources:
         return {'state': 'ready', 'plans': []}
     with tempfile.TemporaryDirectory(prefix='baseline-', dir=root) as temporary:
@@ -113,7 +115,10 @@ def preflight(old, new, *, notify=True):
                 raise ValueError('Local code changed during preparation; retry the update')
             state = plan['state']
             detail = {}
-            if source_update.requires_gate(plan):
+            if shared_repair and not plan.get('shared_app_required'):
+                plan['shared_app_required'] = True
+                write(directory / 'plan.json', plan)
+            if source_update.requires_gate(plan, directory):
                 from . import update_source
                 choice=update_source.selected(old,new)
                 if (choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming'):
@@ -137,6 +142,18 @@ def preflight(old, new, *, notify=True):
     write(new / 'code-transition-plan.json', {'format': 'helene-code-plan.v1', 'old': str(old),
           'require_review':bool((source_choice or {}).get('require_review')),'choice':source_choice,
           'sources': sources, 'incoming': incoming, 'plans': plans})
+    shared = update_composition.shared(new, plans)
+    if not shared['consistent']:
+        for row in plans:
+            row.update(state='needs_attention', error='Final shared application differs; reconcile peer app candidates: '
+                       + ', '.join(shared['different_paths']))
+            operation = read(Path(row['directory']) / 'pipeline.json')
+            if operation.get('resolution_owner') == 'agent' and operation.get('state') == 'ready_to_apply':
+                request_path = source_update.path(operation['tree'])
+                request = read(request_path)
+                if request.get('id') == operation['id'] and request.get('state') == 'ready':
+                    request.update(state='pending', tries=0, retry_at=0)
+                    write(request_path, request)
     pending = [row for row in plans if row['state'] != 'ready']
     blocked = [row for row in pending if row['state'] in {'needs_attention', 'cancelled'}]
     message = ('Панель обновления требует внимания; старая версия сохранена. ' +
@@ -167,13 +184,14 @@ def validate(new):
         raise ValueError('Selected code paths changed before applying the update; retry')
     if merge.inventory(Path(new) / 'tree') != record['incoming']:
         raise ValueError('Incoming upstream code changed before applying the update; retry')
+    from . import update_composition
+    update_composition.require_shared(new, record.get('plans', []))
     for row in record.get('plans', []):
         plan = merge.validate_inputs(row['directory'])
         if merge.inventory(row['source']) != plan['files']['local']:
             raise ValueError('Local code changed before applying the update; retry')
-        if source_update.requires_gate(plan):
+        if source_update.requires_gate(plan, row['directory']):
             source_update.validate_ready(row['directory'])
-    from . import update_composition
     if (Path(new).parent / 'compound-overlay.json').exists():
         update_composition.selected_files(new)
 

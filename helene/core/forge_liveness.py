@@ -63,31 +63,44 @@ def observe(directory: Path, request: dict, write) -> dict:
     return row
 
 
-def refresh(tasks_root: Path, write, interval: float = 2.5) -> None:
-    """One owner tick, independent of model availability/recent-task windows.
+def refresh(tasks_root: Path, write, current: dict, interval: float = 2.5) -> set:
+    """Observe only unfinished identities from bounded admission discovery.
 
-    Terminal exit observations are retained; only current/unconfirmed units are
-    probed again. No result/request status is rewritten by this observer.
+    Discovery includes old unfinished units after restart, not a recent-task
+    window. A completed historical result is never a reason to probe/rewrite it.
+    Already observed live processes remain tracked across result publication until
+    an exact exit is seen. Missing birth stays unknown, never synthetic death.
     """
     root = Path(tasks_root)
     key, now = str(root.resolve()), time.monotonic()
     if now - _last.get(key, -float('inf')) < interval:
-        return
+        return set()
     _last[key] = now
-    for path in root.glob('*/agents/*/request.json'):
+    retired = set()
+    for directory in current:
         try:
-            request = json.loads(path.read_bytes())
+            request = json.loads((directory / 'request.json').read_bytes())
             if not isinstance(request, dict):
                 continue
-            prior_path = path.parent / 'liveness.json'
-            if (path.parent / 'result.json').is_file() and prior_path.is_file():
-                prior = json.loads(prior_path.read_bytes())
-                if (prior.get('state') in {'exited', 'not_started'}
-                        and prior.get('supervisor_pid') == request.get('supervisor_pid')
-                        and prior.get('process_identity') == request.get('process_identity')):
-                    continue
-            observe(path.parent, request, write)
+            terminal = (directory / 'result.json').is_file()
+            prior_path = directory / 'liveness.json'
+            prior = json.loads(prior_path.read_bytes()) if prior_path.is_file() else {}
+            if (terminal and prior.get('state') in {'exited', 'not_started'}
+                    and prior.get('supervisor_pid') == request.get('supervisor_pid')
+                    and prior.get('process_identity') == request.get('process_identity')):
+                retired.add(directory)
+                continue
+            row = observe(directory, request, write)
+            identity = request.get('process_identity')
+            if terminal and (row['state'] in {'exited', 'not_started'} or
+                    not isinstance(identity, dict) or identity.get('adapter') != 'psutil-v1'):
+                # Legacy missing identity can never become provable by polling.
+                # Preserve the dated unknown, not recurring history writes.
+                retired.add(directory)
+        except FileNotFoundError:
+            if not directory.is_dir():
+                retired.add(directory)
         except (OSError, ValueError, TypeError):
-            # Leave the last observation intact. The reader reports damaged
-            # request/observation records instead of presenting an empty tree.
+            # Keep the last observation; unreadable is not absence or exit.
             continue
+    return retired
