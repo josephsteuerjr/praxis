@@ -305,7 +305,7 @@ class Migration(unittest.TestCase):
         self.assertEqual(target.read_bytes(), b"new-dummy")
         boot.project_brain(self.tree, {"model": {"model": "primary", "key": "dummy-key"}})
         # Test the *replacement* descriptor, not icacls' earlier return code.
-        ps = ('$a=Get-Acl -LiteralPath $env:VISION_ACL_PROBE; '
+        ps = ('$ErrorActionPreference="Stop"; $a=Get-Acl -LiteralPath $env:VISION_ACL_PROBE; '
               '$aces=@($a.Access); '
               '@{protected=$a.AreAccessRulesProtected; '
               'inherited=@($aces|Where-Object {$_.IsInherited}).Count; '
@@ -313,9 +313,13 @@ class Migration(unittest.TestCase):
         for path in (target, self.target):
             with self.subTest(path=path.name):
                 result = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                                        env={**os.environ, "VISION_ACL_PROBE": str(path)},
+                                        env={**os.environ, "VISION_ACL_PROBE": str(path),
+                                             # Windows PowerShell 5 must load its own
+                                             # built-ins even when tests start in pwsh 7.
+                                             "PSModulePath": str(Path(os.environ["SystemRoot"]) /
+                                                 "System32/WindowsPowerShell/v1.0/Modules")},
                                         capture_output=True, text=True, timeout=20)
-                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.returncode, 0, result.stderr)
                 facts = json.loads(result.stdout)
                 self.assertTrue(facts["protected"])
                 self.assertEqual(facts["inherited"], 0)
@@ -332,6 +336,121 @@ class Migration(unittest.TestCase):
         vp.notice(self.tree, desk, dt.datetime.now(dt.timezone.utc))
         self.assertEqual(len((self.tree / "memory/groups/window.jsonl").read_text("utf8").splitlines()), 1)
         self.assertTrue(json.loads(vp._notice(self.tree).read_text("utf8"))["done"])
+
+    def test_older_pending_notice_does_not_deadlock_replayed_migration(self):
+        self.profile()
+        vp.migrate(self.tree)
+        old = vp._notice(self.tree).read_bytes()
+        old_id = json.loads(old)["id"]
+        # Reproduce a second transaction landing before its startup notice.
+        self.profile()
+        with mock.patch.object(vp, "_finish", side_effect=vp.MigrationError("power loss")):
+            with self.assertRaises(vp.MigrationError):
+                vp.migrate(self.tree)
+        profile = self.target.read_bytes()
+        new_id = json.loads(vp._marker(self.tree).read_text("utf8"))["id"]
+        self.assertNotEqual(old_id, new_id)
+        self.assertFalse(vp.migrate(self.tree))
+        self.assertEqual(self.target.read_bytes(), profile)
+        self.assertFalse(vp._marker(self.tree).exists())
+        queued = vp._notice(self.tree).with_name("vision-policy-notice-" + old_id + ".json")
+        self.assertEqual(queued.read_bytes(), old)
+        desk = Desk(self.tree)
+        now = dt.datetime.now(dt.timezone.utc)
+        vp.notice(self.tree, desk, now)
+        vp.notice(self.tree, desk, now)
+        self.assertEqual(desk.activity, ["vision-policy-" + old_id, "life:vision-policy-" + old_id,
+                                         "vision-policy-" + new_id, "life:vision-policy-" + new_id])
+        self.assertTrue(json.loads(queued.read_text("utf8"))["done"])
+        self.assertTrue(json.loads(vp._notice(self.tree).read_text("utf8"))["done"])
+
+    def test_queue_collision_preserves_both_receipts_and_restart_deduplicates_archive(self):
+        self.profile()
+        vp.migrate(self.tree)
+        pending = vp._notice(self.tree).read_bytes()
+        old_id = json.loads(pending)["id"]
+        queued = vp._notice(self.tree).with_name("vision-policy-notice-" + old_id + ".json")
+        queued.write_bytes(pending)
+        self.profile()
+        self.assertTrue(vp.migrate(self.tree))
+        self.assertEqual(queued.read_bytes(), pending, "an existing queued receipt must never be replaced")
+        copies = list(queued.parent.glob("vision-policy-notice-" + old_id + "*.json"))
+        self.assertEqual(len(copies), 2)
+        desk = Desk(self.tree)
+        now = dt.datetime.now(dt.timezone.utc)
+        with mock.patch.object(desk, "life", side_effect=OSError("crash after archive")):
+            with self.assertRaises(OSError):
+                vp.notice(self.tree, desk, now)
+        vp.notice(self.tree, desk, now)
+        activity = list(desk.activity)
+        vp.notice(self.tree, desk, now)
+        self.assertEqual(desk.activity, activity)
+        rows = [json.loads(line) for line in (self.tree / "memory/groups/window.jsonl").read_text("utf8").splitlines()]
+        self.assertEqual(sum(row["source_id"] == "vision-policy-" + old_id for row in rows), 1)
+        self.assertEqual(desk.activity.count("life:vision-policy-" + old_id), 1)
+        self.assertTrue(all(json.loads(path.read_text("utf8"))["done"] for path in copies))
+
+    def test_queue_alone_is_delivered_and_corrupt_receipt_is_not_silently_discarded(self):
+        self.profile()
+        vp.migrate(self.tree)
+        pending = json.loads(vp._notice(self.tree).read_text("utf8"))
+        queued = vp._notice(self.tree).with_name("vision-policy-notice-" + pending["id"] + ".json")
+        vp._notice(self.tree).rename(queued)
+        desk = Desk(self.tree)
+        vp.notice(self.tree, desk, dt.datetime.now(dt.timezone.utc))
+        self.assertEqual(desk.activity, ["vision-policy-" + pending["id"], "life:vision-policy-" + pending["id"]])
+        queued.write_text(json.dumps({**pending, "done": "false"}), encoding="utf8")
+        before = queued.read_bytes()
+        with self.assertRaises(vp.MigrationError):
+            vp.notice(self.tree, desk, dt.datetime.now(dt.timezone.utc))
+        self.assertEqual(queued.read_bytes(), before)
+
+    def test_invalid_old_notice_cannot_be_turned_into_a_path(self):
+        self.profile()
+        vp.migrate(self.tree)
+        event = self.events()[0]
+        bad = {"id": "../invalid", "text": "keep this", "done": False}
+        vp._notice(self.tree).write_text(json.dumps(bad), encoding="utf8")
+        original = vp._notice(self.tree).read_bytes()
+        with self.assertRaises(vp.MigrationError):
+            vp._finish(self.tree, {**event, "id": "b" * 32})
+        self.assertEqual(vp._notice(self.tree).read_bytes(), original)
+
+    def test_crash_after_queue_rename_recovers_without_losing_either_notice(self):
+        self.profile()
+        vp.migrate(self.tree)
+        old = vp._notice(self.tree).read_bytes()
+        self.profile()
+        write = vp._write
+        def crash_before_new_notice(path, data, **kwargs):
+            if path == vp._notice(self.tree):
+                raise OSError("power loss after queue rename")
+            return write(path, data, **kwargs)
+        with mock.patch.object(vp, "_write", side_effect=crash_before_new_notice):
+            with self.assertRaises(vp.MigrationError):
+                vp.migrate(self.tree)
+        self.assertFalse(vp._notice(self.tree).exists())
+        self.assertTrue(vp._marker(self.tree).exists())
+        queued = list(vp._notice(self.tree).parent.glob("vision-policy-notice-*.json"))
+        self.assertEqual([path.read_bytes() for path in queued], [old])
+        self.assertFalse(vp.migrate(self.tree))
+        desk = Desk(self.tree)
+        vp.notice(self.tree, desk, dt.datetime.now(dt.timezone.utc))
+        self.assertEqual(len(desk.activity), 4)
+        self.assertTrue(json.loads(queued[0].read_text("utf8"))["done"])
+
+    def test_conflicting_text_for_one_receipt_id_refuses_before_delivery(self):
+        self.profile()
+        vp.migrate(self.tree)
+        pending = json.loads(vp._notice(self.tree).read_text("utf8"))
+        queued = vp._notice(self.tree).with_name("vision-policy-notice-" + pending["id"] + ".json")
+        queued.write_bytes(vp._document({**pending, "text": "conflicting text"}))
+        before = {path: path.read_bytes() for path in (queued, vp._notice(self.tree))}
+        desk = Desk(self.tree)
+        with self.assertRaises(vp.MigrationError):
+            vp.notice(self.tree, desk, dt.datetime.now(dt.timezone.utc))
+        self.assertEqual(desk.activity, [])
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_runner_wires_lock_projection_migration_notice_before_owner_turn(self):
         runner = Path(__file__).resolve().parents[1] / "localharness/runner.py"

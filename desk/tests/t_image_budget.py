@@ -87,7 +87,11 @@ class Budget(unittest.TestCase):
         out = llm._sighted_messages("anthropic", msgs)
         self.assertEqual(len(self.images(out)), 1)
         self.assertEqual(Path(self.images(out)[0]["path"]).name, "small.png")
-        self.assertEqual(len(self.markers(out)), 1)
+        omissions=[b for message in out for b in message.get('content',[]) if isinstance(b,dict)
+                   and b.get('type')=='text' and 'image omitted before model call: size;' in str(b.get('text'))]
+        self.assertEqual(len(omissions),1)
+        self.assertIn('a bounded derivative could not be prepared',omissions[0]['text'])
+        self.assertEqual(big.stat().st_size,llm.IMAGE_REQUEST_MAX_BYTES+1)
 
     def test_three_ride_untrimmed_on_anthropic(self):
         msgs = self.messages_with([[(255, 0, 0), (0, 255, 0), (0, 0, 255)]])

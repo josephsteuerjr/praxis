@@ -162,9 +162,15 @@ class WhatTreeGets(Ground):
         """Переменные читает `live/media_audio.py`; опечатка здесь = тишина там."""
         self.install_model("turbo")
         env = voice.env_for(self.tree, {"voice": {"enabled": True}})
-        media = HERE.parent.parent.parent / "live" / "media_audio.py"
+        repository = HERE.parents[1]
+        media = repository / "live" / "media_audio.py"
         if not media.is_file():
-            self.skipTest("дерева агента нет рядом — сверять не с чем")
+            # An unfrozen checkout has the same explicit core + edition overlay;
+            # never inspect an unrelated sibling live/owner installation.
+            media = next((repository / name for name in
+                          ("helene/core/media_audio.py", "praxis/media_audio.py")
+                          if (repository / name).is_file()), media)
+        self.assertTrue(media.is_file(), "declared composed media_audio.py is missing")
         text = media.read_text(encoding="utf-8")
         for name in env:
             self.assertIn(name, text, f"{name} дерево не читает — переменная в пустоту")
@@ -179,15 +185,13 @@ class Speaking(Ground):
         voice.speech_library = lambda: {"present": True, "why": ""}
         self.addCleanup(lambda: setattr(voice, "speech_library", real))
 
-    def install_voice(self, name: str = "irina") -> Path:
-        """Сделать вид, что голос скачан: ОБА файла, как их кладёт `fetch_voice`."""
-        spec = voice.VOICES[name]
+    def install_voice(self) -> Path:
+        """Model availability uses all four XTTS payload files, not old ONNX."""
         home = voice.voices_dir(self.tree)
         home.mkdir(parents=True, exist_ok=True)
-        model = home / f"{spec['voice']}.onnx"
-        model.write_bytes(b"0" * 2_000_000)
-        (home / f"{spec['voice']}.onnx.json").write_text("{}", encoding="utf-8")
-        return model
+        for name in ('config.json','model.pth','vocab.json','speakers_xtts.pth'):
+            (home/name).write_bytes(b'fixture:availability-only')
+        return home
 
     def test_выключенная_речь_не_готова_и_сказано_почему(self):
         self.install_voice()
@@ -198,16 +202,14 @@ class Speaking(Ground):
     def test_включена_но_голоса_нет(self):
         said = voice.speech_state(self.tree, {"voice": {"speak": True}})
         self.assertFalse(said["ready"])
-        self.assertIn("не скачан", said["why"])
-        self.assertEqual(voice.speech_env_for(self.tree, {"voice": {"speak": True}}), {})
+        self.assertIn("не установлена", said["why"])
+        self.assertEqual(voice.speech_env_for(self.tree, {"voice": {"speak": True}})['PRAXIS_TTS_BACKEND'], 'disabled')
 
     def test_голос_из_одного_файла_не_считается_скачанным(self):
-        """⚠ Голос — это ДВА файла. Один без другого piper не поднимет, и
-        «скачано наполовину» обязано отличаться от «скачано»."""
-        spec = voice.VOICES["irina"]
+        """A partial XTTS download is unavailable, even when weights exist."""
         home = voice.voices_dir(self.tree)
         home.mkdir(parents=True, exist_ok=True)
-        (home / f"{spec['voice']}.onnx").write_bytes(b"0" * 2_000_000)
+        (home / 'model.pth').write_bytes(b'weights only')
         said = voice.speech_state(self.tree, {"voice": {"speak": True}})
         self.assertFalse(said["ready"], "описания голоса нет — говорить нечем")
 
@@ -221,22 +223,18 @@ class Speaking(Ground):
     def test_переменные_речи(self):
         model = self.install_voice()
         env = voice.speech_env_for(self.tree, {"voice": {"speak": True}})
-        self.assertEqual(env["PRAXIS_TTS_BACKEND"], "piper")
-        self.assertEqual(env["PRAXIS_PIPER_MODEL"], str(model))
+        self.assertEqual(env["PRAXIS_TTS_BACKEND"], "xtts")
+        self.assertEqual(env["HELENE_XTTS_HOME"], str(self.tree/'memory/.state/xtts'))
+        self.assertNotIn('PRAXIS_PIPER_MODEL',env)
         self.assertEqual(env["PRAXIS_TTS_OUTPUT_DIR"], str(self.tree / "media" / "tts"),
                          "синтезированное складывается В ДЕРЕВО: это слова агента, "
                          "и переезд дерева обязан увозить их с собой")
 
-    def test_имена_переменных_речи_те_же_что_у_дерева(self):
-        """Их читает `live/media_audio.py`; опечатка здесь = молчание там."""
+    def test_выбранный_голос_и_язык_передаются_раннеру(self):
         self.install_voice()
-        env = voice.speech_env_for(self.tree, {"voice": {"speak": True}})
-        media = HERE.parent.parent.parent / "live" / "media_audio.py"
-        if not media.is_file():
-            self.skipTest("дерева агента нет рядом — сверять не с чем")
-        text = media.read_text(encoding="utf-8")
-        for name in env:
-            self.assertIn(name, text, f"{name} дерево не читает — переменная в пустоту")
+        env = voice.speech_env_for(self.tree, {'voice':{'speak':True,'tts_speaker':'selected','tts_language':'en'}})
+        self.assertEqual(env['HELENE_XTTS_SPEAKER'],'selected')
+        self.assertEqual(env['HELENE_XTTS_LANGUAGE'],'en')
 
     def test_речь_едет_тем_же_ответом_что_и_слух(self):
         """Окно рисует обе половины одной карточкой: два ответа разъехались бы."""
@@ -246,22 +244,21 @@ class Speaking(Ground):
         self.assertTrue(said["speech"]["ready"])
 
     def test_нет_библиотеки_нет_речи(self):
-        voice.speech_library = lambda: {"present": False, "why": "в рантайме нет piper-tts"}
+        voice.speech_library = lambda: {"present": False, "why": "XTTS runtime не установлен"}
         self.install_voice()
         said = voice.speech_state(self.tree, {"voice": {"speak": True}})
         self.assertFalse(said["ready"])
-        self.assertIn("piper-tts", said["why"])
+        self.assertIn("XTTS runtime", said["why"])
 
     def test_чужой_голос_не_качается(self):
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ValueError):
             voice.fetch_voice(self.tree, "морган-фримен")
 
     def test_каталог_отмечает_скачанный_голос(self):
-        self.install_voice("irina")
+        self.install_voice()
         said = voice.speech_state(self.tree, {"voice": {"speak": True}})
         marks = {one["id"]: one["installed"] for one in said["catalog"]}
-        self.assertTrue(marks["irina"])
-        self.assertFalse(marks["dmitri"])
+        self.assertEqual(marks,{'xtts':True})
 
 
 class Choosing(Ground):

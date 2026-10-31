@@ -443,7 +443,9 @@ def xtts_child(base: Path, cfg: dict, tree: Path, env: dict,
                       HELENE_SUPERVISOR="serverboot", HELENE_TREE=str(tree))
     return Child("xtts", "XTTS", [str(python), "-u", str(worker), "--home",
                  str(tree / "memory/.state/xtts"), "--model", str(model), "--tree", str(tree), "--device",
-                 str(voice.get("tts_device") or "cpu")], worker_env, tree, tree / "xtts.log",
+                 str(voice.get("tts_device") or "cpu"), '--speaker', str(voice.get('tts_speaker') or 'Ana Florence'),
+                 '--language', str(voice.get('tts_language') or 'ru'), '--reference', str(voice.get('tts_reference') or '')],
+                 worker_env, tree, tree / "xtts.log",
                  user=user, group=group)
 
 

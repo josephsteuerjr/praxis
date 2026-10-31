@@ -28,6 +28,21 @@ def put(path: Path, value: dict) -> bytes:
 
 
 class WorkerTree(unittest.TestCase):
+    def test_duration_uses_exact_process_birth_and_running_requires_fresh_owner_observation(self):
+        import datetime as dt
+        from deskd import forge_reader
+        with tempfile.TemporaryDirectory() as tmp:
+            base=Path(tmp);task=base/'memory/.forge/tasks/code-time';folder=task/'agents/agent-clock'
+            identity={'adapter':'psutil-v1','pid':123,'birth':1700000000.0}
+            put(task/'task.json',{'status':'active'})
+            put(folder/'request.json',{'id':'agent-clock','task_id':'code-time','status':'running','supervisor_pid':123,'process_identity':identity})
+            live={'schema':1,'unit_id':'agent-clock','task_id':'code-time','supervisor_pid':123,'process_identity':identity,
+                'state':'alive','observed_at':dt.datetime.now(dt.timezone.utc).isoformat()}
+            put(folder/'liveness.json',live)
+            row=forge_reader.task_detail(base,'code-time')['agents'][0]
+            self.assertEqual(row['started'],identity['birth']);self.assertEqual(row['status'],'running')
+            live['observed_at']=(dt.datetime.now(dt.timezone.utc)-dt.timedelta(seconds=60)).isoformat();put(folder/'liveness.json',live)
+            self.assertEqual(forge_reader.task_detail(base,'code-time')['agents'][0]['status'],'unknown')
     def test_nested_result_identity_dispositions_and_unknown_custody(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

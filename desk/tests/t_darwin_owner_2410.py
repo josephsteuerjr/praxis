@@ -17,6 +17,10 @@ from localharness import desktop_supervisor as supervisor
 
 
 class Protocol(unittest.TestCase):
+    def setUp(self):
+        temporary=tempfile.TemporaryDirectory(prefix='darwin-protocol-')
+        self.addCleanup(temporary.cleanup)
+        self.root=Path(temporary.name)
     def simulated_spawn(self, interrupt):
         stopped = threading.Event()
         frames = []
@@ -73,7 +77,7 @@ class Protocol(unittest.TestCase):
         from localharness.python_controller import Controller
         events,bad,good=self.children()
         ctrl=Controller.__new__(Controller)
-        ctrl.lock=threading.RLock();ctrl.stop=threading.Event()
+        ctrl.lock=threading.RLock();ctrl.stop=threading.Event();ctrl.root=self.root;ctrl.exiting=False
         ctrl.helpers=[bad,good];ctrl.thread=None;ctrl.error=None;ctrl.publishers={}
         with self.assertRaisesRegex(RuntimeError, 'unconfirmed'):
             ctrl.close()
@@ -85,7 +89,7 @@ class Protocol(unittest.TestCase):
         from localharness.python_controller import Controller
         events,bad,good=self.children()
         ctrl=Controller.__new__(Controller)
-        ctrl.lock=threading.RLock();ctrl.stop=threading.Event();ctrl.root=Path('.')
+        ctrl.lock=threading.RLock();ctrl.stop=threading.Event();ctrl.root=self.root;ctrl.exiting=False
         ctrl.helpers=[];ctrl.thread=None;ctrl.error=None;ctrl.publishers={}
         fault=supervisor.CustodyFault('admission cleanup unconfirmed');fault.children=(bad,)
         with mock.patch.object(supervisor.JobChild,'spawn',side_effect=fault) as spawn:
@@ -115,8 +119,8 @@ class Protocol(unittest.TestCase):
         process.wait.assert_called_once_with(5)
 
     def test_log_enospc_does_not_interrupt_cleanup_reporting(self):
-        log=mock.Mock();log.open.side_effect=OSError(28,'No space left on device')
-        with mock.patch.object(darwin._posix,'_emit') as send:
+        log=self.root/'cleanup.log'
+        with mock.patch.object(Path,'open',side_effect=OSError(28,'No space left on device')),mock.patch.object(darwin._posix,'_emit') as send:
             darwin.report(log,{'state':'empty','code':0})
         self.assertEqual(send.call_args.args[0]['state'],'empty')
         self.assertIn('log_error',send.call_args.args[0])

@@ -108,7 +108,7 @@ export function start(opts: WindowOptions): void {
   const statePill = q<HTMLElement>("#state");
   const stateText = q<HTMLElement>("#state-text");
   const refreshReviewActivity = reviewActivity(q<HTMLElement>("#review-activity"),
-    () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key);
+    () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key + "\n" + cfg.agent);
   const stateAction = q<HTMLButtonElement>("#state-action");
   const pulseBox = q<HTMLElement>("#pulse");
   const alarmBox = q<HTMLElement>("#alarm");
@@ -562,7 +562,17 @@ export function start(opts: WindowOptions): void {
   });
   function togglePanel(which: "rail" | "panel") {
     if(which==='rail' && matchMedia('(max-width:760px)').matches){
-      const open=app.classList.toggle('narrow-navigation');railBtn.setAttribute('aria-pressed',String(open));return;
+      const open=app.classList.toggle('narrow-navigation');
+      if(open){app.classList.remove('narrow-activity');panelBtn.setAttribute('aria-pressed','false');}
+      railBtn.setAttribute('aria-pressed',String(open));return;
+    }
+    if(which==='panel' && matchMedia('(max-width:760px)').matches){
+      const open=app.classList.toggle('narrow-activity');
+      app.classList.remove('narrow-navigation');
+      railBtn.setAttribute('aria-pressed','false');
+      panelBtn.setAttribute('aria-pressed',String(open));
+      if(open){panelBox.tabIndex=-1;panelBox.focus({preventScroll:true});}
+      return;
     }
     setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
     // Focus without scrolling the history or changing the draft/selection.
@@ -570,6 +580,16 @@ export function start(opts: WindowOptions): void {
   }
   railBtn.addEventListener("click", () => togglePanel("rail"));
   document.getElementById('rail')?.addEventListener('click',e=>{if((e.target as Element).closest('button'))app.classList.remove('narrow-navigation');});
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape' && app.classList.contains('narrow-activity')){
+      app.classList.remove('narrow-activity');panelBtn.setAttribute('aria-pressed','false');panelBtn.focus();event.preventDefault();
+    }
+  });
+  document.addEventListener('click',event=>{
+    if(app.classList.contains('narrow-activity') && !(event.target as Element).closest('#panel,#toggle-panel')){
+      app.classList.remove('narrow-activity');panelBtn.setAttribute('aria-pressed','false');
+    }
+  });
   panelBtn.addEventListener("click", () => togglePanel("panel"));
   addEventListener("frame-live-action", (event) => {
     const button = document.querySelector("[data-live-runs]");

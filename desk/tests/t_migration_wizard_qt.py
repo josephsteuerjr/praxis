@@ -10,6 +10,8 @@ from localharness import migration_wizard as wizard
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import t_migration_wizard as engine_tests
 
+HELENE_TEST_NATIVE_INPUTS = ('DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR')
+
 
 @unittest.skipUnless(importlib.util.find_spec('PySide6'),'Native packaged PySide6 required')
 class NativeWizard(unittest.TestCase):

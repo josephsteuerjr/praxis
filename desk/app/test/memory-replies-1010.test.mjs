@@ -7,10 +7,10 @@ const { foldWords, deliveryWords } = await load('memory-fold.ts');
 const state = { room: '-1', hot: 921, keep: 250, offer_at: 400, hard_at: 500, offer_mode: true, backstop_hours: 26, offer: {hard: true}, pending: null, receipt: null };
 const idle = foldWords(state);
 assert.match(idle.counter, /921/);
-assert.match(idle.explanation, /26 ч/);
-assert.match(idle.explanation, /Решение принимает агент/);
+assert.doesNotMatch(idle.explanation, /26 ч|начинается автоматически/);
+assert.match(idle.explanation, /Компакт пишет только текущий агент своими словами/);
 assert.doesNotMatch(idle.explanation, /сворачивает сама|она |её словами/);
-assert.ok(idle.canFold);
+assert.equal(idle.canFold,false,'the owner button cannot create an agent-authored compact');
 const running = foldWords({...state, pending: {id: 'x'}});
 assert.equal(running.counter, idle.counter);
 assert.equal(running.canFold, false);
@@ -25,7 +25,7 @@ assert.match(foldWords({...state, hot: null}).counter, /неизвестно/);
 for (const [hot, noun] of [[1,'сообщение'],[2,'сообщения'],[5,'сообщений'],[11,'сообщений'],[21,'сообщение'],[22,'сообщения']]) {
   assert.ok(foldWords({...state,hot}).counter.endsWith(`${hot} ${noun}`));
 }
-assert.match(foldWords({...state, offer_mode: false}).explanation, /начинается автоматически/);
+assert.doesNotMatch(foldWords({...state, offer_mode: false}).explanation, /начинается автоматически/);
 assert.match(deliveryWords({...state, delivery:{state:'waiting',retry_at:150,retries:2,at:100}},100000), /50 с/);
 assert.match(deliveryWords({...state, delivery:{state:'waiting',retry_at:99,retries:2,at:90}},100000), /повторяется автоматически/);
 assert.match(deliveryWords({...state, delivery:{state:'accepted',retry_at:0,retries:2,at:100}},100000), /принял/);

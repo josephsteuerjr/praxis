@@ -93,7 +93,10 @@ assert.match(chrome, /if \(was !== S\.platform\) void show\(S\.view, \{ quiet: t
   "смена затвора по ответу app_info не перерисовывает открытый раздел");
 assert.match(frame, /const platform = platformOf\(host\) \|\| S\.platform;/, "настройки не берут слово клиента, когда оболочка молчит");
 assert.match(agent, /agentsCard\(mac, platform === "linux"\)/, "карточке агентов не передают систему хоста");
-assert.match(read(src, "agentscard.ts"), /Helene\.app\/Contents\/MacOS\/helene --agent/, "подсказка про --agent на Mac зовёт helene.exe");
+// The portable Python application no longer asks users to launch individual
+// agents through either historical native entry point.
+assert.doesNotMatch(read(src, "agentscard.ts"), /(?:helene\.exe|Helene\.app\/Contents\/MacOS\/helene) --agent/,
+  "карточка Python-агента предлагает устаревший нативный запуск");
 assert.ok(!/Windows не дал/.test(read(desk, "ui-kit", "text.ts")), "text.ts винит Windows в PermissionError и на macOS");
 // Подписи клавиш — по клиенту, и обработчик слушает metaKey.
 assert.match(chrome, /kbdLabel\("Ctrl\+" \+ key, clientMac\)/, "подпись клавиши в полке снова захардкожена как Ctrl+");

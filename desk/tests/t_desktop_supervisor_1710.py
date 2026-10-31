@@ -201,7 +201,7 @@ class Policy(unittest.TestCase):
         import deskpkg
         with tempfile.TemporaryDirectory() as tmp:
             stage = Path(tmp) / "app"
-            manifest = deskpkg.build(stage, deskpkg.WINDOWS, allow_partial=True, log=lambda _: None)
+            manifest = deskpkg.build(stage, deskpkg.WINDOWS, version='0.0.0-fixture', allow_partial=True, log=lambda _: None)
             for name in ("desktop_supervisor.py", "desktop_process.py", "agents.py", "owner_stop.py"):
                 source = DESK / "localharness" / name
                 target = stage / "localharness" / name
@@ -230,8 +230,7 @@ class Policy(unittest.TestCase):
             remote = base / "agents/remote"
             remote.mkdir(parents=True)
             (remote / "helene.json").write_text(json.dumps({"mode": "remote", "port": 8096}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "remote mode"):
-                _plans(base / "helene.json", session_host=True)
+            self.assertEqual(set(_plans(base / "helene.json", session_host=True)),{'main','neighbor'})
             (remote / "helene.json").write_text(json.dumps({"mode": "remote", "port": 8096,
                                                               "enabled": False}), encoding="utf-8")
             plans = _plans(base / "helene.json", session_host=True)
@@ -279,8 +278,7 @@ class Policy(unittest.TestCase):
                                          desktop_roster=True)), {"main", "peer"})
             data["mode"] = "remote"
             config.write_text(json.dumps(data), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "remote mode"):
-                _plans(base / "helene.json", session_host=False, desktop_roster=True)
+            self.assertEqual(set(_plans(base / "helene.json", session_host=False,desktop_roster=True)),{'main'})
             data["enabled"] = False
             config.write_text(json.dumps(data), encoding="utf-8")
             self.assertEqual(set(_plans(base / "helene.json", session_host=False,
@@ -492,13 +490,16 @@ class WindowsForeground(unittest.TestCase):
         self.assert_dead(base_ids)
         self.assertEqual((self.tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
 
-    def test_desktop_roster_remote_refuses_before_child_launch(self):
-        self.add_neighbor(mode="remote")
-        self.start_roster()
-        self.owner.wait(timeout=8)
-        self.assertNotEqual(self.owner.returncode, 0)
-        self.assertFalse((self.tree / "channel.pid").exists())
-        self.assertFalse((self.tree / ".python-desktop-status").exists())
+    def test_desktop_roster_remote_neighbor_has_no_local_brain_and_base_stays_alive(self):
+        neighbor_tree,_=self.add_neighbor(mode="remote")
+        nonce=self.start_roster()
+        base_ids=self.identities()[:3]
+        status=self.desktop_status(nonce)
+        self.assertEqual(set(status['agents']),{'main'})
+        self.assertFalse((neighbor_tree/'channel.pid').exists())
+        self.assertFalse((neighbor_tree/'runner.pid').exists())
+        self.assertTrue(all(self.psutil.pid_exists(pid) for pid in base_ids))
+        self.assertIsNone(self.owner.poll())
 
     def test_source_built_shell_host_python_owner_status_stop_and_refusals(self):
         binary = DESK / "shell/target/debug/helene-host.exe"
@@ -1135,7 +1136,7 @@ class WindowsForeground(unittest.TestCase):
         self.owner.send_signal(signal.CTRL_BREAK_EVENT)
         self.owner.wait(timeout=8)
 
-    def test_session_host_neighbor_crash_then_remote_switch_refuses_owner(self):
+    def test_session_host_neighbor_crash_then_remote_switch_retires_only_neighbor(self):
         cfg = self.base / "helene.json"
         data = json.loads(cfg.read_text(encoding="utf-8"))
         data["installed"] = {"service": True}
@@ -1156,11 +1157,10 @@ class WindowsForeground(unittest.TestCase):
         new["mode"] = "remote"
         peer_cfg.write_text(json.dumps(new), encoding="utf-8")
         next_runner = int((neighbor_tree / "runner.pid").read_text())
-        self.wait_for(lambda: self.owner.poll() is not None)
-        self.assertNotEqual(self.owner.returncode, 0)
-        self.assert_dead([next_runner, *base_ids])
+        self.wait_for(lambda: not self.psutil.pid_exists(next_runner))
+        self.assertTrue(all(self.psutil.pid_exists(pid) for pid in base_ids))
+        self.assertIsNone(self.owner.poll())
         self.assertEqual((neighbor_tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
-        self.assertEqual((self.tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
 
     def test_stop_after_job_assignment_prevents_first_child_instruction(self):
         marker = self.tree / "should-not-run"

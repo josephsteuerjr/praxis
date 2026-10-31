@@ -12,7 +12,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 if os.name == 'nt':
     import msvcrt
@@ -170,6 +170,8 @@ class Spec:
     env: dict[str, str]
     log: Path
     port: int
+    speech_selection: dict | None = field(default=None,compare=False)
+    unavailable: str = ''
 
 
 def _config(path: Path) -> dict:
@@ -217,7 +219,7 @@ def runner_required(cfg, agent_id):
 
 
 def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
-               install_base: Path, environ=None) -> Spec | None:
+               install_base: Path, environ=None, allow_missing=False) -> Spec | None:
     """The same private relay contract for desktop and incoming update custody."""
     ambient = os.environ if environ is None else environ
     relay = cfg.get("relay") or {}
@@ -229,8 +231,9 @@ def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
         return None
     from localharness.standalone_relay import executable as relay_executable
     exe = relay_executable(install_base, cfg)
-    if not exe.is_file():
-        raise ValueError("Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле")
+    unavailable = '' if exe.is_file() else 'Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле'
+    if unavailable and not allow_missing:
+        raise ValueError(unavailable)
     port = relay.get("port") or 5011
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("invalid relay port")
@@ -252,7 +255,7 @@ def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
     argv = ((str(exe), "--minimized", "--start-api", "--config", str(config.resolve()))
             if os.name == 'nt' and exe.name.lower() == 'helene-relay.exe'
             else (str(exe), 'serve', '--headless'))
-    return Spec("relay", argv, home, env, home / "logs/relay-console.log", port)
+    return Spec("relay", argv, home, env, home / "logs/relay-console.log", port, unavailable=unavailable)
 
 
 def _specs(config: Path, *, session_host: bool = False,
@@ -292,6 +295,8 @@ def _specs(config: Path, *, session_host: bool = False,
     token = _token(tree)
     common = dict(ambient, HELENE_TREE=str(tree), PYTHONUTF8="1", PYTHONUNBUFFERED="1",
                   HELENE_TOKEN=token, HELENE_CONFIG=str(config), HELENE_BROKER_DISABLED='1')
+    session_keys=('HELENE_MIGRATION_SESSION_TREE','HELENE_MIGRATION_SESSION_JOB')
+    for key in session_keys:common.pop(key,None)
     common.pop('HELENE_WINDOW_ROOT', None)
     if window_root is not None:common['HELENE_WINDOW_ROOT']=str(window_root.resolve())
     common.pop("PRAXIS_DESK_TOKEN", None)
@@ -299,6 +304,9 @@ def _specs(config: Path, *, session_host: bool = False,
     phone = cfg.get("phone") or {}
     lan = isinstance(phone, dict) and phone.get("enabled") is True and phone.get("mode") != "automatic"
     channel_env = dict(common, HELENE_HOST="0.0.0.0" if lan else "127.0.0.1")
+    if runtime_program is not None and any(ambient.get(key) for key in session_keys):
+        if not all(ambient.get(key) for key in session_keys):raise ValueError('Incomplete migration session binding')
+        channel_env.update({key:ambient[key] for key in session_keys})
     specs = {f"{agent_id}:channel": Spec("channel", (str(python), "-u", str(app), str(port)),
                                   app.parent, channel_env, tree / "deskapp.log", port)}
     if runner:
@@ -309,9 +317,16 @@ def _specs(config: Path, *, session_host: bool = False,
                                                 "--config", str(config)), runner.parent,
                                     dict(common, HELENE_HOST="127.0.0.1"), tree / "runner.log", port)
     install_base = base if agent_id == BASE_ID else base.parent.parent
-    selected_relay = relay_spec(config, cfg, tree, python, install_base=install_base, environ=ambient)
+    selected_relay = relay_spec(config, cfg, tree, python, install_base=install_base, environ=ambient,
+                                allow_missing=True)
     if selected_relay is not None:
         specs[f"{agent_id}:relay"] = selected_relay
+        if selected_relay.unavailable and (cfg.get('relay') or {}).get('enabled') is True:
+            # Keep the channel/settings usable without spawning a model against
+            # a missing text transport. Image-only relay does not block text.
+            runner_key = f'{agent_id}:runner'
+            if runner_key in specs:
+                specs[runner_key] = replace(specs[runner_key], unavailable=selected_relay.unavailable)
     # XTTS is a sibling owned by this same process tree, not an agent-spawned
     # model thread or a second daemon outside Stop/owner-death custody.
     voice_cfg = cfg.get("voice") or {}
@@ -329,7 +344,10 @@ def _specs(config: Path, *, session_host: bool = False,
                 str(voice_cfg.get("tts_device") or "cpu")), tree,
                 {**{key:ambient[key] for key in ('PATH', 'SYSTEMROOT', 'HOME', 'USERPROFILE',
                     'LOCALAPPDATA', 'PROGRAMDATA') if key in ambient},
-                 "PYTHONUTF8":"1", "PYTHONUNBUFFERED":"1"}, tree / "xtts.log", 0)
+                 "PYTHONUTF8":"1", "PYTHONUNBUFFERED":"1"}, tree / "xtts.log", 0,
+                speech_selection={'speaker':str(voice_cfg.get('tts_speaker') or 'Ana Florence'),
+                    'language':str(voice_cfg.get('tts_language') or 'ru'),
+                    'reference':str(voice_cfg.get('tts_reference') or '')})
     return tree, specs
 
 
@@ -456,6 +474,7 @@ def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
     data = {"schema": 1, "nonce": nonce, "seq": seq, "ack": ack,
             "agents": {agent: {"raised": f"{agent}:channel" in active,
                                "roles": sorted(spec.role for key, spec in specs.items() if key in active),
+                               "problems": {spec.role:spec.unavailable for spec in specs.values() if spec.unavailable},
                                "pids": {spec.role:active[key].pid for key,spec in specs.items() if key in active}}
                        for agent, (_, specs) in installed.items()}}
     temporary = path.with_name(f"{path.name}.{nonce}.{os.getpid()}.{seq}.tmp")
@@ -483,7 +502,7 @@ def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
 
 def run(config: Path, *, stop=None, session_host: bool = False,
         desktop_roster: bool = False, status_nonce: str | None = None,
-        commands: Queue | None = None, runtime_program=None) -> int:
+        commands: Queue | None = None, runtime_program=None, environ=None) -> int:
     """Run one owner generation; errors never fall back to another spawner."""
     if os.name != 'nt' and not (sys.platform.startswith('linux') or sys.platform == 'darwin'):
         raise RuntimeError('Desktop child custody has no qualified adapter for this OS')
@@ -495,7 +514,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
         raise ValueError("desktop owner requires a distinct 32-hex generation")
     # GUI libraries mutate process-wide environment during initialization. They
     # are not configuration edits and must not retire a healthy agent generation.
-    ambient = dict(os.environ)
+    ambient = dict(os.environ if environ is None else environ)
     desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient,runtime_program=runtime_program)
     tree, specs = desired[BASE_ID]
     wake = stop if stop is not None else Event()
@@ -604,8 +623,20 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                         installed[agent_id] = agent_tree, agent_specs
                         policy.children.update({key: ChildState(spec.role)
                                                 for key, spec in agent_specs.items()})
+                # Voice selection is a small private input to the existing
+                # worker, not a reason to reload its model/kill healthy siblings.
+                for agent_id in installed.keys() & desired.keys():
+                    if installed[agent_id]==desired[agent_id]:installed[agent_id]=desired[agent_id]
                 specs = {key: spec for _, agent_specs in installed.values()
                          for key, spec in agent_specs.items()}
+                for spec in specs.values():
+                    if spec.role=='xtts' and spec.speech_selection is not None:
+                        if __package__:from . import speech_protocol
+                        else:import speech_protocol
+                        home=Path(spec.argv[spec.argv.index('--home')+1])
+                        selection=home/'selection.json'
+                        if speech_protocol.read(selection)!=spec.speech_selection:
+                            speech_protocol.write(selection,spec.speech_selection)
                 for key, spec in specs.items():
                     if spec.role != "relay":
                         continue
@@ -644,6 +675,9 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     if key in active:
                         raise RuntimeError(f"duplicate live child {key}")
                     spec = specs[key]
+                    if spec.unavailable:
+                        policy.children[key].halted = True
+                        continue  # config/component refresh admits a fresh role
                     if stopped(): break
                     # A rival channel on this port means its runner owns the
                     # tree. A relay port belongs to a separate local service.

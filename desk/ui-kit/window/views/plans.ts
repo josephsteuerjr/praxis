@@ -2,6 +2,7 @@
 import { bindFail, esc, failHTML, md } from "../lib";
 import { forgePanel, readForge } from "./forge-panel";
 import "./forge-panel.css";
+import { agendaWhen } from "../agenda-time";
 
 const AGENDA_KIND: Record<string, string> = { wake: "будильник", window: "окно", message: "доставка", note: "записка", email: "письмо" };
 interface Agenda {
@@ -11,7 +12,7 @@ interface Agenda {
 const STATUS: Record<string, string> = { active: "в работе", running: "выполняется", pending: "ожидает", scheduled: "запланировано", completed: "завершено", done: "завершено", paused: "на паузе", cancelled: "отменено", failed: "ошибка", error: "ошибка", blocked: "нужна помощь", waiting: "ожидает" };
 function agendaRow(t: Agenda["active"][number]): string {
   return `<div class="row"><span class="badge">${esc(AGENDA_KIND[t.kind || ""] || t.kind || "?")}</span>
-    ${t.when ? ` <b class="mono">${esc(t.when)}</b>` : ""}${t.recur ? ` <span class="muted mono">повтор: ${esc(t.recur)}</span>` : ""}
+    ${t.when ? ` <b class="mono">${esc(agendaWhen(t.when))}</b>` : ""}${t.recur ? ` <span class="muted mono">повтор: ${esc(t.recur)}</span>` : ""}
     ${t.target ? ` <span class="muted">→ ${esc(String(t.target))}</span>` : ""}<span class="muted"> · ${esc(STATUS[t.status || ""] || t.status || "")}</span>
     <div class="muted" style="margin-top:4px">${esc((t.goal || "").slice(0, 220))}</div></div>`;
 }

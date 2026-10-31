@@ -80,7 +80,8 @@ class WorkPC(unittest.TestCase):
             self.assertTrue(event['author'].startswith('deploy:'))
             self.assertEqual(life.hot_bounds('window')[2],600)
             self.assertFalse((tree/'memory/.context-policy-change.json').exists())
-            self.assertFalse(update_inspection.read(tree/'memory/.state/context-policy-notice.json')['done'])
+            self.assertFalse((tree/'memory/.state/context-policy-notice.json').exists())
+            self.assertFalse(event['notify_owner'])
 
     def test_user_stop_and_protected_machine_stop_are_both_observed(self):
         with tempfile.TemporaryDirectory() as tmp:

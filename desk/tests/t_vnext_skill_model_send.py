@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -263,26 +264,35 @@ with patch.object(boot, 'seed_git', return_value=False), \
             self.assertTrue(row["proposal"])
 
     def test_actual_model_call_owner_and_other_with_missing_index(self):
-        head = git("rev-parse", "HEAD")
-        changed = set(git("diff", "--name-only", "HEAD", "--", "praxis", "helene/core").splitlines())
-        untracked = git("ls-files", "--others", "--exclude-standard", "--", "praxis", "helene/core")
-        changed.update(untracked.splitlines())
-        approved = {"helene/core/agent.py", "helene/core/frame_shadow.py",
-                    "helene/core/skill_navigation.py"}
-        self.assertLessEqual(changed, approved, "unexpected source edit during test")
         with tempfile.TemporaryDirectory(prefix="vnext-consumer-") as tmp:
             root = Path(tmp)
+            # The verification bundle is an exact source snapshot, without a
+            # publisher's mutable .git directory. Exercise the real stager on
+            # a disposable Git snapshot of those admitted source bytes.
+            source=root/'source';source.mkdir()
+            for relative in vnext_candidate.SOURCE_ROOTS:
+                for name,original in vnext_candidate.core_src.files(ROOT/relative).items():
+                    destination=source/relative/name;destination.parent.mkdir(parents=True,exist_ok=True)
+                    shutil.copyfile(original,destination)
+            git('init','-q',root=source);git('config','core.autocrlf','false',root=source)
+            # This snapshot pins admitted raw bytes, including CRLF HTML. The
+            # source's own attributes must not normalize the fixture's Git blob.
+            (source/'.git/info/attributes').write_text('* -text -filter\n',encoding='utf8')
+            git('add','--all',root=source)
+            git('-c','user.name=Verification fixture','-c','user.email=fixture@invalid.local',
+                '-c','commit.gpgsign=false','-c','gc.auto=0','commit','-qm','Admitted source snapshot',root=source)
+            head=git('rev-parse','HEAD',root=source)
             candidate = root / "edition"
-            manifest = vnext_candidate.stage(candidate, root=ROOT, expected_head=head,
-                                             allowed_dirty=tuple(sorted(changed)))
+            manifest = vnext_candidate.stage(candidate, root=source, expected_head=head)
             for rel in ("agent.py", "frame_shadow.py", "capabilities.py", "skill_navigation.py"):
                 entry = manifest["files"][rel]
                 self.assertEqual(entry["sha256"], hashlib.sha256((candidate / rel).read_bytes()).hexdigest())
-            self.assertEqual(manifest["files"]["agent.py"]["source"], "helene/core/agent.py")
-            self.assertEqual(manifest["files"]["capabilities.py"]["source"], "praxis/capabilities.py")
-            self.assertEqual(manifest["files"]["skill_navigation.py"]["source"],
-                             "helene/core/skill_navigation.py")
+            origins={name:layer+'/'+name for layer in vnext_candidate.SOURCE_ROOTS
+                     for name in vnext_candidate.core_src.files(source/layer)}
+            for name,entry in manifest['files'].items():
+                self.assertEqual(entry['source'],origins[name],name)
             env = {**os.environ, "PYTHONPATH": str(candidate), "PRAXIS_BASE": str(root / "data"),
+                   "PRAXIS_TEST_BASE": str(root / "data"),
                    "PRAXIS_FRAME_V6": "serve", "PRAXIS_FRAME_V6_STREAMS": "dm-177",
                    "PRAXIS_OWNER_ID": "177", "PRAXIS_FRAME_INDEX_BODY": "on", "PYTHONUTF8": "1"}
             run = subprocess.run([sys.executable, "-c", SEND_FIXTURE], cwd=candidate, env=env,

@@ -9,6 +9,10 @@ const factory=new Function('api','box','say','sayVoice','setTimeout','clearTimeo
   const picker={el:{childElementCount:1}},speechPicker={el:{childElementCount:1}};
   const model='draft-model',enabled=true,speakVoice='draft-voice',speak=true;
   const status={},speechStatus={},speechBtn={};
+  const cudaOption={},deviceNote={},speakerSelect={dataset:{},append(){},replaceChildren(){}},speakerCount={};
+  const voice={},previewBtn={},previewNote={},previewing=false;
+  const Option=function(text,value){this.text=text;this.value=value};
+  const speechStatusText=()=> 'worker status';
   const humanError=e=>({text:String(e)});
   const drawPicker=()=>{throw Error('picker rebuilt')},drawVoices=drawPicker;
   ${stripTypeScriptTypes(fragment)}
@@ -20,7 +24,7 @@ function harness(){
   return {...h,calls,timers,paint,speechPaint,box};
 }
 const state=(modelBusy,speechBusy)=>({model:'saved-model',enabled:false,download:modelBusy?{state:'running',updated_utc:new Date().toISOString()}:null,
-  speech:{voice:'saved-voice',enabled:false,download:speechBusy?{state:'running',at:new Date().toISOString()}:null}});
+  speech:{voice:'saved-voice',enabled:false,library:{present:true},download:speechBusy?{state:'running',at:new Date().toISOString()}:null}});
 for(const pair of [[true,false],[false,true],[true,true]]){
   const h=harness(),p=h.refresh();h.calls[0](state(...pair));await p;
   assert.equal(h.timers.size,1,'one timer for either or both downloads');

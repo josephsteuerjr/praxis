@@ -9,6 +9,7 @@ import json
 import os
 import threading
 import time
+import uuid
 
 OWNER_STOP_EXIT = 5
 LOCK = threading.RLock()
@@ -57,6 +58,12 @@ def stopped():
 def client_file():
     """Writable user latch; use the same Known Folder as the native client."""
     if os.name != 'nt': return seed_file()
+    selected=os.environ.get('HELENE_USER_DATA')
+    if selected:
+        if __package__:from .first_start import Places,normalized
+        else:from first_start import Places,normalized
+        expected=Places.current().data
+        if normalized(selected)==normalized(expected):return expected/'owner-stop.json'
     buf = ctypes.create_unicode_buffer(32768)
     fn = ctypes.WinDLL('shell32').SHGetFolderPathW
     fn.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p]
@@ -86,28 +93,73 @@ def pause_file():
     return _tree / 'memory' / '.control' / 'autonomy-paused.json' if _tree else None
 
 
+def pause_generation(tree):
+    """Exact durable control transition; absence is the legacy protocol only."""
+    path = Path(tree) / 'memory/.control/autonomy-generation.json'
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise RuntimeError('Autonomy generation is unreadable') from exc
+    identity = value.get('id') if isinstance(value, dict) else None
+    if (not isinstance(value, dict) or value.get('format') != 'helene-autonomy-generation.v1'
+            or not isinstance(identity, str) or len(identity) != 32
+            or any(c not in '0123456789abcdef' for c in identity)
+            or type(value.get('paused')) is not bool):
+        raise RuntimeError('Autonomy generation identity is unconfirmed')
+    return value
+
+
+def change_pause(tree, paused, *, reason='owner interrupt', via='owner'):
+    """Publish a new private control epoch BEFORE mutating its legacy marker.
+
+    The token is not a timestamp or a security boundary. Atomic private-state
+    writes preserve rapid transitions for trial observers without new processes.
+    """
+    if type(paused) is not bool:
+        raise ValueError('Autonomy pause must be a boolean')
+    if __package__:
+        from .package_notice import write
+    else:
+        from package_notice import write
+    tree = Path(tree)
+    with LOCK:
+        value = {'format':'helene-autonomy-generation.v1','id':uuid.uuid4().hex,
+                 'paused':paused,'at':time.time(),'via':str(via)[:40],'reason':str(reason)[:200]}
+        write(tree/'memory/.control/autonomy-generation.json', value)
+        path = tree/'memory/.control/autonomy-paused.json'
+        if paused:
+            write(path, {'at':value['at'],'via':value['via'],'reason':value['reason']})
+        else:
+            path.unlink(missing_ok=True)
+        return value
+
+
 def paused():
-    return stopped() or present(pause_file())
+    if stopped() or present(pause_file()):
+        return True
+    if _tree is None:
+        return False
+    try:
+        generation = pause_generation(_tree)
+    except RuntimeError:
+        return True
+    return generation is not None and generation['paused']
 
 
 def pause(reason='owner interrupt'):
-    with LOCK:
-        path = pause_file()
-        if path is None:
-            raise RuntimeError('owner pause has no configured data root')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix('.tmp')
-        temp.write_text(json.dumps({'at': time.time(), 'reason': reason}), encoding='utf-8')
-        os.replace(temp, path)
+    if _tree is None:
+        raise RuntimeError('owner pause has no configured data root')
+    return change_pause(_tree, True, reason=reason)
 
 
 def resume():
     with LOCK:
         if stopped():
             raise RuntimeError('Use explicit native Resume to clear the seed stop first')
-        path = pause_file()
-        if path:
-            path.unlink(missing_ok=True)
+        if _tree is not None:
+            return change_pause(_tree, False, reason='explicit owner resume')
 
 
 def require_admission():

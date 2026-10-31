@@ -380,7 +380,7 @@ def _now() -> str:
 
 
 class _Child:
-    def __init__(self, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path):
+    def __init__(self, name: str, argv: list[str], env: dict, cwd: Path, log_path: Path, *, stopped=None):
         self.name = name
         self.argv = argv
         self.env = env
@@ -390,11 +390,26 @@ class _Child:
         self.falls: list[float] = []
         self.retry_at = 0.0
         self.started_at = 0.0
+        self.stopped = stopped or (lambda: False)
+        self.custody = None
+        self.custody_fault = None
+        self.exit_code = None
+
+    def poll(self):
+        if self.proc is None:return self.exit_code
+        if self.custody is not None and self.custody.handle is None:return self.exit_code
+        result=self.proc.poll()
+        if result is not None:self.exit_code=result
+        return result
 
     def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        return self.proc is not None and self.poll() is None
 
     def spawn(self, job) -> bool:
+        if self.stopped():return False
+        if self.custody_fault is not None:raise RuntimeError('Earlier body custody remains unconfirmed') from self.custody_fault
+        if self.proc is not None:raise RuntimeError('Previous body child custody was not retired')
+        custody_fault=()
         try:
             self.log_path.parent.mkdir(parents=True, exist_ok=True)
             # Лог не растёт без границы: больше 5 МБ — прежний в .1.
@@ -403,37 +418,61 @@ class _Child:
                     os.replace(self.log_path, self.log_path.with_suffix(".log.1"))
             except OSError:
                 pass
-            out = open(self.log_path, "ab")
-            self.proc = subprocess.Popen(
-                self.argv, env=self.env, cwd=str(self.cwd), stdin=subprocess.DEVNULL,
-                stdout=out, stderr=subprocess.STDOUT, **spawn_kwargs())
-            out.close()
-            _adopt(job, self.proc)
+            if os.name=='nt':
+                # The same Python custody adapter as the desktop supervisor:
+                # suspended creation, Job assignment, Stop recheck, then resume.
+                # Never launch first and try to adopt an already running child.
+                if __package__:from .desktop_process import JobChild,CustodyFault
+                else:from desktop_process import JobChild,CustodyFault
+                custody_fault=CustodyFault
+                self.custody=JobChild.spawn(self.argv,cwd=self.cwd,env=self.env,
+                                           log=self.log_path,stopped=self.stopped)
+                self.proc=self.custody
+            else:
+                with open(self.log_path, "ab") as out:
+                    self.proc = subprocess.Popen(
+                        self.argv, env=self.env, cwd=str(self.cwd), stdin=subprocess.DEVNULL,
+                        stdout=out, stderr=subprocess.STDOUT, **spawn_kwargs())
+            self.exit_code=None
             self.started_at = time.monotonic()
             log.info("тело: %s поднят, pid %d", self.name, self.proc.pid)
             return True
         except Exception as exc:
+            if isinstance(exc,custody_fault):
+                self.custody_fault=exc
+                raise  # uncertain children forbid watchdog retries and false Stop
             self.proc = None
             log.warning("тело: %s не поднялся: %s", self.name, exc)
             return False
 
     def kill(self) -> None:
-        proc, self.proc = self.proc, None
+        if self.custody_fault is not None:
+            raise RuntimeError('Body child custody remains unconfirmed') from self.custody_fault
+        if self.custody is not None:
+            # Failure retains the same handles for another measured Stop.
+            self.custody.stop()
+            self.proc=None;self.custody=None
+            return
+        proc = self.proc
         if proc is None:
             return
         if os.name != "nt":
             kill_group(proc)
+            self.proc=None
             return
         if proc.poll() is not None:
+            self.proc=None
             return
         try:
             proc.terminate()
             proc.wait(timeout=5)
-        except Exception:
+        except Exception as error:
             try:
                 proc.kill()
-            except Exception:
-                pass
+                proc.wait(timeout=5)
+            except Exception as exc:
+                raise RuntimeError('Body process termination unconfirmed') from exc
+        self.proc=None
 
 
 def spawn_kwargs(posix: bool | None = None) -> dict:
@@ -650,7 +689,7 @@ class Body:
         self.children = [
             _Child("мост", [str(bridge_exe), "--listen", f"127.0.0.1:{self.port}",
                             "--state-dir", str(bridge_dir)],
-                   bridge_env, self.home, self.home / "bridge.log"),
+                   bridge_env, self.home, self.home / "bridge.log",stopped=self.stopping.is_set),
         ]
         # Под службой тело поднимает ОКНО, а не движок: у процесса вне
         # графической сессии нет ни рабочего стола, ни разрешений TCC, и
@@ -662,8 +701,8 @@ class Body:
         else:
             self.children.append(
                 _Child("тело", [str(body_exe), "connect", "--config", str(body_json)],
-                       body_env, self.home, self.home / "body.log"))
-        self.job = _make_job()
+                       body_env, self.home, self.home / "body.log",stopped=self.stopping.is_set))
+        self.job = None  # Windows children each retain their own checked Job.
         _TOKENS.update({"url": f"http://127.0.0.1:{self.port}",
                         "controller": self.controller_token, "device": self.device})
         STATE.update({"port": self.port, "device": self.device,
@@ -673,8 +712,12 @@ class Body:
                                  f"окно Helene — движок поднят службой, и рабочего стола у него нет"
                                  if self.service else
                                  f"мост 127.0.0.1:{self.port}, тело подключается")})
-        for child in self.children:
-            child.spawn(self.job)
+        try:
+            for child in self.children:
+                child.spawn(self.job)
+        except BaseException:
+            self.stop()
+            raise
         STATE["bridge_pid"] = self.children[0].proc.pid if self.children[0].proc else 0
         # Под службой второго ребёнка нет вовсе — не «его pid ноль», а «его
         # здесь не поднимают». Обращение по индексу роняло бы сторож.
@@ -746,25 +789,28 @@ class Body:
                 if pruned.get("frames") or pruned.get("responses"):
                     log.info("тело: спул моста подчищен — кадров %s, ответов %s",
                              pruned.get("frames"), pruned.get("responses"))
-            for child in self.children:
-                if child.alive():
-                    continue
-                if child.proc is not None:
-                    code = child.proc.poll()
-                    child.proc = None
-                    child.falls = [t for t in child.falls if now - t < 600] + [now]
-                    pause = min(60.0, 2.0 ** min(len(child.falls), 6))
-                    child.retry_at = now + pause
-                    log.warning("тело: %s завершился (код %s) — поднимаю снова через %.0f с; "
-                                "лог %s", child.name, code, pause, child.log_path)
-                    STATE["connected"] = None
-                    STATE["reason"] = f"{child.name} упал (код {code}), перезапуск"
-                    continue
-                if now >= child.retry_at:
-                    child.spawn(self.job)
-            STATE["bridge_pid"] = self.children[0].proc.pid if self.children[0].alive() else 0
-            STATE["body_pid"] = (self.children[1].proc.pid
-                                 if len(self.children) > 1 and self.children[1].alive() else 0)
+            with self.lock:
+                for child in self.children:
+                    if self.stopping.is_set():return
+                    if child.alive():
+                        continue
+                    if child.proc is not None:
+                        code = child.poll()
+                        child.proc = None
+                        child.falls = [t for t in child.falls if now - t < 600] + [now]
+                        pause = min(60.0, 2.0 ** min(len(child.falls), 6))
+                        child.retry_at = now + pause
+                        log.warning("тело: %s завершился (код %s) — поднимаю снова через %.0f с; "
+                                    "лог %s", child.name, code, pause, child.log_path)
+                        STATE["connected"] = None
+                        STATE["reason"] = f"{child.name} упал (код {code}), перезапуск"
+                        continue
+                    if self.stopping.is_set():return
+                    if now >= child.retry_at:
+                        child.spawn(self.job)
+                STATE["bridge_pid"] = self.children[0].proc.pid if self.children[0].alive() else 0
+                STATE["body_pid"] = (self.children[1].proc.pid
+                                     if len(self.children) > 1 and self.children[1].alive() else 0)
             # Пробы: первые полминуты — часто (тело подключается секунды), потом
             # раз в 15 с. Проба и есть правда о «подключено».
             young = any(now - c.started_at < 30 for c in self.children if c.alive())
@@ -847,18 +893,19 @@ class Body:
     # ---- остановка ------------------------------------------------------- #
 
     def stop(self) -> None:
-        if self.stopping.is_set():
-            return
         self.stopping.set()
         if self.service:
             self.drop_device_token()
-        for child in self.children:
-            child.kill()
-        if self.job:
-            try:
-                _kernel32().TerminateJobObject(self.job, 0)
-            except Exception:
-                pass
+        failures=[]
+        with self.lock:
+            for child in self.children:
+                try:child.kill()
+                except (OSError,RuntimeError) as exc:failures.append(str(exc))
+        if self.thread and self.thread is not threading.current_thread():
+            self.thread.join(6)
+            if self.thread.is_alive():failures.append('Body watchdog shutdown unconfirmed')
+        if failures:
+            raise RuntimeError('Body child stop unconfirmed: '+'; '.join(failures))
         STATE.update({"connected": None, "bridge_pid": 0, "body_pid": 0,
                       "reason": "остановлено вместе с движком"})
         try:

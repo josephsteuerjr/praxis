@@ -126,7 +126,8 @@ def cache_name(row):
 
 
 def cache_dir(program):
-    path = Path(program) / 'downloads'
+    from .program_state import directory
+    path = directory(program,'component-downloads')
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -163,10 +164,20 @@ def fetch(program, manifest, extensions, progress=None):
 
 def preserve_cache(previous, current):
     """Copy retained archives between program folders without overwriting bytes."""
-    source, target = Path(previous) / 'downloads', Path(current) / 'downloads'
-    if not source.is_dir() or source.resolve() == target.resolve():
+    from .program_state import directory
+    sources=[directory(previous,'component-downloads',create=False),Path(previous)/'downloads']
+    sources=[source for source in sources if source.is_dir()]
+    if not sources:
         return
-    target.mkdir(parents=True, exist_ok=True)
+    target=cache_dir(current)
+    for source in sources:
+        if source.is_symlink() or getattr(source.lstat(),'st_file_attributes',0)&0x400:
+            raise ValueError('Linked component cache root')
+        if source.resolve()==target.resolve():continue
+        _preserve_cache_files(source,target)
+
+
+def _preserve_cache_files(source,target):
     for item in source.iterdir():
         if item.is_symlink() or not item.is_file() or item.suffix not in {'.zip', '.json', '.sha256'}:
             continue

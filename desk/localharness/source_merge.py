@@ -18,7 +18,7 @@ import time
 
 from .package_notice import read, write
 
-EXCLUDED = {'.git', '__pycache__', '.venv', 'venv', 'node_modules', 'memory',
+EXCLUDED = {'.helene', '.git', '__pycache__', '.venv', 'venv', 'node_modules', 'memory',
             'soul', 'dossiers', 'graph', 'state', 'workspace', 'models', 'data',
             'profile', 'backups', 'archives', 'recovery', 'cache', '.cache', '.secrets', 'local_auth',
             '.pytest_cache', 'logs', '.source-updates', '.migration-webview', '.webview'}
@@ -42,15 +42,22 @@ def allowed(name):
             and not path.name.lower().endswith(('.pyc', '.log', '.lock', '.session', '.session-journal')))
 
 
-def inventory(root):
+def inventory(root,*,application=False):
+    from .validation_read import checkpoint,digest
+    checkpoint()
+    if application:
+        from .update_composition import app_inventory
+        return app_inventory(root)
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(root)
     result = {}
     for directory, dirs, names in os.walk(root, followlinks=False):
+        checkpoint()
         here = Path(directory)
         dirs[:] = sorted(d for d in dirs if allowed((here / d).relative_to(root).as_posix()))
         for name in [*dirs, *sorted(names)]:
+            checkpoint()
             path = here / name
             rel = path.relative_to(root).as_posix()
             if not allowed(rel):
@@ -58,7 +65,8 @@ def inventory(root):
             if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
                 raise ValueError('Linked source path: ' + rel)
             if path.is_file():
-                result[rel] = {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                with path.open('rb') as stream:measured=digest(stream)
+                result[rel] = {'sha256': measured,
                                'mode': '100755' if os.name != 'nt' and path.stat().st_mode & 0o111 else '100644'}
     return result
 
@@ -69,8 +77,10 @@ def signature(files):
 
 def input_signature(value):
     """Bind the immutable sides, source identity and permitted resolution surface."""
-    return signature({key: value[key] for key in
-                      ('local_path', 'commits', 'files', 'conflicts', 'automatic')})
+    fields={key: value[key] for key in ('local_path','commits','files','conflicts','automatic')}
+    if value.get('application'):fields['application']=True
+    if value.get('app_source'):fields['app_source']=value['app_source']
+    return signature(fields)
 
 
 def validate_inputs(directory, expected=''):
@@ -79,13 +89,14 @@ def validate_inputs(directory, expected=''):
     if expected and input_signature(value) != expected:
         raise ValueError('Source merge input identity changed')
     for side in ('base', 'local', 'incoming'):
-        if inventory(directory / side) != value['files'][side]:
+        if inventory(directory / side,application=value.get('application',False)) != value['files'][side]:
             raise ValueError('Frozen source merge side changed: ' + side)
     return value
 
 
 def candidate_signature(directory):
-    return signature(inventory(Path(directory) / 'result'))
+    value=read(Path(directory)/'plan.json')
+    return signature(inventory(Path(directory) / 'result',application=value.get('application',False)))
 
 
 def reopen(directory):
@@ -122,8 +133,31 @@ def git(repo, *args, data=None, check=True, exe='git'):
     command = [exe, '-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.hooksPath=' + os.devnull,
                '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'core.quotepath=false',
                '--git-dir=' + repo.name, *args]
-    done = subprocess.run(command, input=data, capture_output=True, env=env, cwd=repo.parent, timeout=120,
-                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    from .validation_read import current,checkpoint
+    if current() is not None and args==('rev-parse','HEAD') and data is None:
+        checkpoint()
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=repo.parent,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)) as process:
+            started=time.monotonic()
+            try:
+                while True:
+                    checkpoint()
+                    remaining=120-(time.monotonic()-started)
+                    if remaining<=0:raise subprocess.TimeoutExpired(command,120)
+                    try:output,error=process.communicate(timeout=min(.2,remaining))
+                    except subprocess.TimeoutExpired:continue
+                    checkpoint()
+                    done=subprocess.CompletedProcess(command,process.returncode,output,error)
+                    break
+            except BaseException as failure:
+                if process.poll() is None:process.kill()
+                output,error=process.communicate()
+                if isinstance(failure,subprocess.TimeoutExpired):
+                    failure.output=output;failure.stderr=error
+                raise
+    else:
+        done = subprocess.run(command, input=data, capture_output=True, env=env, cwd=repo.parent, timeout=120,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     if check and done.returncode:
         raise RuntimeError('Source merge Git failed: ' + done.stderr.decode('utf-8', 'replace')[-1600:])
     return done
@@ -148,7 +182,7 @@ def snapshot(repo, root, files, parents=(), *, exe='git', label='source snapshot
     return git(repo, *args, data=(label + '\n').encode(), exe=exe).stdout.decode().strip()
 
 
-def extract(repo, revision, destination, *, exe='git'):
+def extract(repo, revision, destination, *, exe='git',application=False):
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     entries = []
@@ -159,7 +193,7 @@ def extract(repo, revision, destination, *, exe='git'):
         mode, kind, oid = meta.decode().split()
         name = raw.decode('utf-8')
         relative(name)
-        if mode not in ('100644', '100755') or kind != 'blob' or not allowed(name):
+        if mode not in ('100644', '100755') or kind != 'blob' or (not application and not allowed(name)):
             raise ValueError('Unsupported merged source entry: ' + name)
         entries.append((mode, oid, name))
     raw = git(repo, 'cat-file', '--batch', data=(''.join(oid + '\n' for _, oid, _ in entries)).encode(), exe=exe).stdout
@@ -178,12 +212,12 @@ def extract(repo, revision, destination, *, exe='git'):
         position = end + 2 + length
 
 
-def create(base, local, incoming, directory, *, exe='git'):
+def create(base, local, incoming, directory, *, exe='git',application=False):
     directory = Path(directory)
     directory.mkdir(parents=True)
     repo = directory / 'repository.git'
     git(repo, 'init', '--bare', '--quiet', exe=exe)
-    inventories = {key: inventory(path) for key, path in
+    inventories = {key: inventory(path,application=application) for key, path in
                    (('base', base), ('local', local), ('incoming', incoming))}
     commits = {}
     for key, path in (('base', base), ('local', local), ('incoming', incoming)):
@@ -206,23 +240,27 @@ def create(base, local, incoming, directory, *, exe='git'):
         if not conflicts:
             raise RuntimeError('Git reported a structural conflict without resolvable paths')
     for key, commit in commits.items():
-        extract(repo, commit, directory / key, exe=exe)
-        if inventory(directory / key) != inventories[key]:
+        extract(repo, commit, directory / key, exe=exe,application=application)
+        if inventory(directory / key,application=application) != inventories[key]:
             raise ValueError('Source changed while taking the ' + key + ' snapshot')
-    extract(repo, lines[0], directory / 'result', exe=exe)
+    extract(repo, lines[0], directory / 'result', exe=exe,application=application)
     value = {'format': 'helene-source-merge.v1', 'state': 'conflicts' if conflicts else 'prepared',
              'local_path': str(Path(local).resolve()), 'commits': commits, 'files': inventories,
-             'conflicts': conflicts, 'resolved': {}, 'automatic': inventory(directory / 'result')}
+             'conflicts': conflicts, 'resolved': {}, 'automatic': inventory(directory / 'result',application=application)}
+    if application:value['application']=True
     write(directory / 'plan.json', value)
     if not conflicts:
-        finish(directory, exe=exe)
+        try:finish(directory, exe=exe)
+        except SyntaxError as error:
+            if not application:raise
+            value.update(state='conflicts',compile_error=str(error));write(directory/'plan.json',value)
     return read(directory / 'plan.json')
 
 
 def finish(directory, *, exe='git'):
     directory = Path(directory)
     value = validate_inputs(directory)
-    actual = inventory(directory / 'result')
+    actual = inventory(directory / 'result',application=value.get('application',False))
     if set(value['conflicts']) != set(value['resolved']):
         raise ValueError('Resolve every source conflict before finishing')
     for name in set(value['automatic']) | set(actual):
@@ -241,6 +279,7 @@ def finish(directory, *, exe='git'):
                       (value['commits']['local'], value['commits']['incoming']), exe=exe, label='merge upstream into local source')
     git(repo, 'update-ref', 'refs/heads/merged', commit, exe=exe)
     value.update(state='ready', result=actual, merged_commit=commit)
+    value.pop('compile_error',None)
     revisions = value.setdefault('revisions', [])
     identity = signature(actual)
     if not revisions or revisions[-1]['candidate_sha256'] != identity:
@@ -254,10 +293,10 @@ def resolve(directory, name, content=None, *, delete=False, side='', reason='', 
     value = validate_inputs(directory)
     relative(name)
     declared = set().union(*(set(side) for side in value['files'].values()))
-    if value.get('state') != 'conflicts' or not allowed(name) or name not in declared:
+    if value.get('state') != 'conflicts' or (not value.get('application') and not allowed(name)) or name not in declared:
         raise ValueError('Path is not a declared candidate source input')
     repair = name not in value['conflicts']
-    before = inventory(directory / 'result')
+    before = inventory(directory / 'result',application=value.get('application',False))
     if expected_candidate and signature(before) != expected_candidate:
         raise ValueError('Candidate changed before resolution; read its current state')
     if repair and (not str(reason).strip() or not expected_candidate):
@@ -280,13 +319,46 @@ def resolve(directory, name, content=None, *, delete=False, side='', reason='', 
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding='utf-8', newline='')
     if repair:
-        after = inventory(directory / 'result').get(name)
+        after = inventory(directory / 'result',application=value.get('application',False)).get(name)
         value.setdefault('repairs', []).append({'path': name, 'reason': str(reason).strip(),
             'before': before.get(name), 'after': after, 'at': time.time(),
             'candidate_before_sha256': signature(before)})
     else:
         value['resolved'][name] = side or ('deleted' if delete else 'written')
     write(directory / 'plan.json', value)
+    return value
+
+
+def apply_upstream(directory,target):
+    """Publish the reviewed diff into independent incoming upstream code.
+    No intermediate full copy of the former authored tree is needed.
+    """
+    directory,target=Path(directory),Path(target).resolve()
+    value=validate_inputs(directory)
+    from .source_update import validate_ready,requires_gate
+    if requires_gate(value,directory):validate_ready(directory)
+    if value.get('state')!='ready' or inventory(directory/'result')!=value['result']:
+        raise ValueError('Reviewed result changed')
+    if target==Path(value['local_path']).resolve():raise ValueError('Cannot replace the running tree')
+    if inventory(value['local_path'])!=value['files']['local']:raise ValueError('Authored code changed after review')
+    before=inventory(target) if target.exists() else {}
+    if target.exists() and before!=value['files']['incoming']:
+        raise ValueError('New upstream changed before publishing the reviewed diff')
+    target.mkdir(parents=True,exist_ok=True)
+    for name in sorted(set(before)-set(value['result']),reverse=True):
+        path=target/name;path.unlink();parent=path.parent
+        while parent!=target:
+            try:parent.rmdir()
+            except OSError:break
+            parent=parent.parent
+    for name,row in value['result'].items():
+        if before.get(name)==row:continue
+        path=target/name;path.parent.mkdir(parents=True,exist_ok=True)
+        if not path.resolve().is_relative_to(target):raise ValueError('Merged path leaves upstream')
+        fd,temporary=tempfile.mkstemp(prefix='.upstream-diff-',dir=path.parent);os.close(fd)
+        try:shutil.copy2(directory/'result'/name,temporary);os.replace(temporary,path)
+        finally:Path(temporary).unlink(missing_ok=True)
+    if inventory(target)!=value['result']:raise RuntimeError('Published upstream differs from reviewed result')
     return value
 
 

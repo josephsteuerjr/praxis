@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 DESK = Path(__file__).resolve().parents[1]
@@ -98,152 +99,48 @@ class Channel(unittest.TestCase):
         path.write_text(json.dumps({'pid':123,'at':time.time()-60}))
         self.assertIsNone(control.fold_state(self.tree,'-12')['delivery'])
 
-    def test_просьба_ложится_и_видна_своему_месту(self):
-        said = control.fold_request(self.tree, "window")
-        self.assertTrue(said["ok"])
-        self.assertTrue((self.tree / "memory" / ".control" / control.FOLD_REQUEST).is_file())
-        self.assertEqual(control.fold_state(self.tree, "window")["pending"]["room"], "window")
-        self.assertIsNone(control.fold_state(self.tree, "chat-2")["pending"], "чужое место не свёртывается")
+    def test_owner_request_is_refused_without_queue_or_execution(self):
+        said=control.fold_request(self.tree,"window")
+        self.assertFalse(said["ok"])
+        self.assertFalse((self.tree/"memory/.control"/control.FOLD_REQUEST).exists())
+        self.assertIsNone(control.fold_state(self.tree,"window")["pending"])
+        self.assertIsNone(control.fold_state(self.tree,"chat-2")["pending"])
+
 
     def test_странное_имя_не_принимается(self):
         self.assertFalse(control.fold_request(self.tree, "../../etc")["ok"])
         self.assertFalse((self.tree / "memory" / ".control" / control.FOLD_REQUEST).exists())
 
 
-class FakeLife:
-    def __init__(self, result=None, error=None, hold=None):
-        self.calls: list[str] = []
-        self.result = result if result is not None else {"ok": True, "folded": 62, "hot": 212}
-        self.error = error
-        self.hold = hold
-
-    def fold_now(self, place):
-        self.calls.append(str(place))
-        if self.hold is not None:
-            self.hold.wait(5)
-        if self.error:
-            raise self.error
-        return self.result
 
 
-class Runner(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.tree = Path(self.tmp.name)
-        saved = runner._life
-        self.addCleanup(lambda: setattr(runner, "_life", saved))
-        runner._FOLD_BUSY[0] = False
-        self.addCleanup(lambda: runner._FOLD_BUSY.__setitem__(0, False))
 
-    def receipt(self) -> dict:
-        path = self.tree / "memory" / ".state" / control.FOLD_RECEIPT
-        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 
-    def settle(self, want: str, seconds: float = 5.0) -> dict:
-        end = time.time() + seconds
-        while time.time() < end:
-            got = self.receipt()
-            if got.get("state") == want and not runner._FOLD_BUSY[0]:
-                return got
-            time.sleep(0.05)
-        self.fail(f"расписка не дошла до «{want}»: {self.receipt()}")
-
-    def test_раннер_сворачивает_её_функцией_и_отвечает(self):
-        life = FakeLife()
-        runner._life = life
-        control.fold_request(self.tree, "window")
-        runner._fold_tick(self.tree)
-        got = self.settle("done")
-        self.assertEqual(life.calls, ["window"])
-        self.assertEqual(got["folded"], 62)
-        self.assertIn("свёрнуто", got["note"])
-        ctl = self.tree / "memory" / ".control"
-        self.assertFalse((ctl / control.FOLD_REQUEST).exists())
-        self.assertFalse((ctl / control.FOLD_PROCESSING).exists(), "взятая просьба убрана")
-
-    def test_нечего_сворачивать_сказано_словами(self):
-        runner._life = FakeLife(result={"ok": True, "folded": 0, "plan": {"reason": "within_window"}})
-        control.fold_request(self.tree, "window")
-        runner._fold_tick(self.tree)
-        got = self.settle("nothing")
-        self.assertIn("нечего", got["note"])
-
-    def test_окно_сдвинулось_просит_ещё_раз(self):
-        runner._life = FakeLife(result={"ok": False, "reason": "state_changed", "folded": 0})
-        control.fold_request(self.tree, "window")
-        runner._fold_tick(self.tree)
-        self.assertIn("ещё раз", self.settle("retry")["note"])
-
-    def test_сбой_свёртки_словами(self):
-        runner._life = FakeLife(error=RuntimeError("модель не ответила"))
-        control.fold_request(self.tree, "window")
-        runner._fold_tick(self.tree)
-        self.assertIn("модель не ответила", self.settle("failed")["note"])
-
-    def test_вторая_просьба_ждёт_первую(self):
-        hold = threading.Event()
-        life = FakeLife(hold=hold)
-        runner._life = life
-        control.fold_request(self.tree, "window")
-        reader = threading.Thread(target=runner._fold_tick, args=(self.tree,))
-        reader.start()
-        end = time.time() + 2
-        while not life.calls and time.time() < end:
-            time.sleep(0.01)
-        control.fold_request(self.tree, "chat-2")
-        runner._fold_tick(self.tree)          # занято — не берёт
-        self.assertTrue((self.tree / "memory" / ".control" / control.FOLD_REQUEST).is_file())
-        self.assertEqual(control.fold_state(self.tree, "window")["receipt"]["state"], "running")
-        hold.set()
-        reader.join(3)
-        self.assertFalse(reader.is_alive())
-        self.settle("done")
-        runner._fold_tick(self.tree)          # теперь берёт вторую
-        end = time.time() + 5
-        while time.time() < end and life.calls != ["window", "chat-2"]:
-            time.sleep(0.05)
-        self.assertEqual(life.calls, ["window", "chat-2"])
-        self.settle("done")
-
-    def test_без_памяти_дерева_ничего_не_берёт(self):
-        runner._life = None
-        control.fold_request(self.tree, "window")
-        runner._fold_tick(self.tree)
-        self.assertTrue((self.tree / "memory" / ".control" / control.FOLD_REQUEST).is_file())
 
 
 class AuthoredButton(unittest.TestCase):
-    def test_control_reaches_exact_window_or_topic_without_helper_or_inbox_file(self):
-        from unittest import mock
-        for room in ('window-deadbeef', '-123__topic__19'):
-            with self.subTest(room=room), tempfile.TemporaryDirectory() as directory:
-                root=Path(directory); claimed=root/'fold.processing.json'; claimed.write_text('{}')
-                with mock.patch.object(runner, '_life', type('Life',(),{'fold_now':staticmethod(lambda place:{'author_required':True})})), mock.patch.object(runner,'handle_desk') as window, mock.patch.object(runner,'handle_owner_note') as topic:
-                    runner._fold_run(root, {'room':room,'id':'request'}, claimed)
-                    call=(window if room.startswith('window') else topic).call_args
-                    self.assertIsNotNone(call)
-                    self.assertIn(room, str(call))
-                    self.assertIn('prepare', str(call))
-                    self.assertFalse(list((root/'memory/.control/desk_inbox').glob('*')))
+    def test_owner_control_cannot_start_an_author_turn_or_create_a_request(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for room in ('window-deadbeef','-123__topic__19'):
+                response=control.fold_request(root,room)
+                self.assertFalse(response['ok'])
+                self.assertIn('текущий агент',response['note'])
+            self.assertEqual(list(root.rglob('*')),[])
 
-class AuthoredCompletion(unittest.TestCase):
-    def test_returned_author_turn_never_remains_requested_and_done_is_preserved(self):
-        from unittest import mock
-        for completed in (False, True):
-            with self.subTest(completed=completed), tempfile.TemporaryDirectory() as directory:
-                root=Path(directory); claimed=root/'fold.processing.json'; claimed.write_text('{}')
-                receipt=root/'memory/.state/fold-receipt.json'
-                def author(*args, **kwargs):
-                    if completed:
-                        row=json.loads(receipt.read_text(encoding='utf-8'))
-                        row.update(state='done', compact_id='confirmed')
-                        receipt.write_text(json.dumps(row),encoding='utf-8')
-                with mock.patch.object(runner,'_life',type('Life',(),{'fold_now':staticmethod(lambda place:{'author_required':True})})), mock.patch.object(runner,'handle_desk',side_effect=author):
-                    runner._fold_run(root,{'room':'window-deadbeef','id':'request'},claimed)
-                row=json.loads(receipt.read_text(encoding='utf-8'))
-                self.assertEqual(row['state'],'done' if completed else 'nothing')
-                self.assertFalse(claimed.exists())
+    def test_retired_tick_preserves_old_requests_and_never_calls_model_or_fold(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);claim=root/'memory/.control'/control.FOLD_PROCESSING
+            claim.parent.mkdir(parents=True);claim.write_text('{"id":"old","room":"window"}')
+            before=claim.read_bytes();life=mock.Mock();agent=mock.Mock()
+            with mock.patch.object(runner,'_life',life),mock.patch.object(runner,'_agent',agent),mock.patch.object(runner,'_turn_in_window') as turn:
+                for _ in range(3):runner._fold_tick(root)
+            self.assertEqual(claim.read_bytes(),before)
+            self.assertFalse((root/'memory/.state'/control.FOLD_RECEIPT).exists())
+            life.fold_now.assert_not_called();turn.assert_not_called();self.assertFalse(agent.mock_calls)
+
+
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

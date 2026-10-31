@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Hélène</title>
+<style>
+:root{color-scheme:light;--bg:#f8eee0;--paper:#fffaf2;--ink:#30291f;--muted:#8b7d69;--line:#e1d4c0;--accent:#df955c;--error:#9c492e;font:14px/1.5 "Segoe UI Variable","Segoe UI",sans-serif;color:var(--ink);background:var(--bg)}*{box-sizing:border-box}body{margin:0}button,input,select{font:inherit;color:inherit}button{cursor:pointer}.bar{position:sticky;top:0;z-index:1;background:var(--bg);height:42px;display:flex;align-items:center;padding:0 12px 0 20px;color:var(--muted);font-size:12px}.bar .brand{flex:1;letter-spacing:.04em}.bar button{width:30px;height:28px;border:0;background:none;color:var(--muted);border-radius:8px}.bar button:hover{background:var(--line)}main{max-width:470px;margin:0 auto;padding:28px 32px 30px}.mark{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:var(--accent);font-size:28px;margin-bottom:24px;color:#352518}.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:8px}h1{font-size:29px;font-weight:400;line-height:1.2;margin:0 0 11px;letter-spacing:-.025em}p{margin:0 0 22px;color:var(--muted);font-size:13px}.stage{margin-top:32px;font-size:13px}progress{appearance:none;-webkit-appearance:none;width:100%;height:4px;border:0;background:var(--line);border-radius:4px;overflow:hidden;margin:13px 0 0}progress::-webkit-progress-bar{background:var(--line)}progress::-webkit-progress-value{background:var(--accent)}progress:indeterminate{background:linear-gradient(90deg,var(--line),var(--accent),var(--line));background-size:200% 100%;animation:pulse 1.8s ease-in-out infinite}label{display:block;font-size:12px;margin:12px 0 5px}input,select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);outline:none;min-width:0}input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px #df955c20}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.primary{border:0;border-radius:11px;background:var(--accent);width:100%;padding:12px 15px;margin-top:21px;font-weight:500}.primary:disabled{cursor:wait;opacity:.6}details{margin-top:13px;color:var(--muted);font-size:12px}summary{cursor:pointer;width:fit-content}#error{color:var(--error);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:18px}#form .mark{margin-bottom:18px}#form p{margin-bottom:15px}.note{font-size:11px;margin-top:13px;margin-bottom:0}footer{color:var(--muted);font-size:11px;margin-top:22px}body:has(#form:not([hidden])) main{padding-top:12px}[hidden]{display:none!important}@keyframes pulse{50%{background-position:100% 0}}@media(prefers-reduced-motion:reduce){progress:indeterminate{animation:none}}@media(max-width:380px){main{padding:20px}.row{grid-template-columns:1fr;gap:0}}@media(prefers-color-scheme:dark){:root{--bg:#211c17;--paper:#2b241d;--ink:#eddfcc;--muted:#b3a18a;--line:#4e4133;--error:#edab8b}}
+</style></head><body>
+<header class="bar"><span class="brand pywebview-drag-region">Hélène</span><button id="minimize" aria-label="Свернуть">−</button><button id="close" aria-label="Закрыть">×</button></header>
+<main><section id="preparing"><div class="mark" aria-hidden="true">é</div><h1>Подготовка Hélène</h1><p>Подключаем данные и проверяем запуск.</p><div id="stage" class="stage" role="status" aria-live="polite">Подготовка</div><progress id="progress" aria-label="Подготовка Hélène"></progress></section>
+<form id="form" hidden autocomplete="off"><div class="mark" aria-hidden="true">é</div><h1>Новый агент</h1>
+<div class="row"><div><label for="name">Имя агента</label><input id="name" name="agent-name" required maxlength="100" placeholder="Например, Вера"></div><div><label for="owner">Твоё имя</label><input id="owner" name="owner-name" maxlength="100" placeholder="Как к тебе обращаться"></div></div>
+<div class="row"><div><label for="provider">Подключение</label><select id="provider"><option value="openai">OpenAI / другой API</option><option value="anthropic">Anthropic</option></select></div><div><label for="model">Модель</label><input id="model" required placeholder="Название модели" spellcheck="false"></div></div>
+<label for="key">Ключ доступа</label><input id="key" type="password" required autocomplete="off" placeholder="API key" spellcheck="false">
+<details><summary>Другой адрес API</summary><label for="base">Адрес сервера</label><input id="base" type="url" placeholder="https://api.openai.com/v1" spellcheck="false"></details>
+<button id="create" class="primary" type="submit">Создать агента</button><p class="note">Настройки можно изменить позже.</p></form>
+<div id="error" hidden role="alert"></div></main>
+<script>
+const $=id=>document.getElementById(id),invoke=(command,args={})=>window.__HELENE__.invoke(command,args);
+let opening=false;
+function error(value){$('error').textContent=String(value);$('error').hidden=false;$('progress').hidden=true;}
+async function open(){if(opening)return;opening=true;$('form').hidden=true;$('preparing').hidden=false;$('stage').textContent='Открываем агента';try{await invoke('first_open')}catch(e){opening=false;error(e)}}
+function show(value){
+  if(value.stage==='error'){error(value.error);$('stage').textContent=value.label;return false;}
+  if(value.stage==='create'){$('preparing').hidden=true;$('form').hidden=false;$('name').focus();return false;}
+  if(value.stage==='ready'){open();return false;}
+  $('stage').textContent=value.label||'Подготовка';return true;
+}
+async function poll(){try{if(show(await invoke('first_status')))setTimeout(poll,500)}catch(e){error(e)}}
+$('minimize').onclick=()=>invoke('python_window',{action:'minimize'});
+$('close').onclick=()=>invoke('python_window',{action:'exit'});
+$('provider').onchange=()=>{$('base').placeholder=$('provider').value==='anthropic'?'https://api.anthropic.com':'https://api.openai.com/v1'};
+$('form').onsubmit=async event=>{event.preventDefault();$('create').disabled=true;$('error').hidden=true;try{await invoke('first_create',{name:$('name').value,owner:$('owner').value,provider:$('provider').value,model:$('model').value,key:$('key').value,base_url:$('base').value});$('key').value='';await open()}catch(e){error(e);$('create').disabled=false}};
+invoke('first_start').then(value=>{if(show(value))setTimeout(poll,500)}).catch(error);
+</script></body></html>

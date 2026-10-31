@@ -430,21 +430,32 @@ def speech_library() -> dict:
             "downloadable":not bool(unavailable),'cuda_supported':cuda}
 
 
-def worker_live(home: Path, ready: dict):
+def worker_live(home: Path, ready: dict, *, require_ready=True):
     """A retained ready file is metadata, not proof that its old PID still owns IPC."""
-    if not ready.get('ready') or type(ready.get('pid')) is not int or ready['pid']<=0:return False
+    if (require_ready and ready.get('ready') is not True) or type(ready.get('pid')) is not int or ready['pid']<=0:return False
     try:
         import psutil
     except ImportError:return None
     try:
-        args=psutil.Process(ready['pid']).cmdline()
+        process=psutil.Process(ready['pid']);args=process.cmdline()
+        if os.name=='nt':
+            # Retained process metadata can still be readable during Windows
+            # termination. A signalled OS handle is authoritative, even then.
+            try:
+                process.wait(timeout=0)
+                return False
+            except psutil.TimeoutExpired:pass
         selected=next((args[i+1] for i,arg in enumerate(args[:-1]) if arg=='--home'),None)
         if selected is None:selected=next((arg.split('=',1)[1] for arg in args if arg.startswith('--home=')),None)
         worker = any(Path(arg).name == 'speech_worker.py' for arg in args)
         if worker:
             generation = next((args[i+1] for i,arg in enumerate(args[:-1]) if arg == '--generation'), None)
+            identity=ready.get('process_identity') or {}
+            if (not isinstance(identity,dict) or identity.get('adapter')!='psutil-v1' or identity.get('pid')!=ready['pid']
+                    or type(identity.get('birth')) not in (float,int)):return None
+            if process.create_time()!=identity['birth']:return False
             return (ready.get('schema') == 2 and generation == ready.get('generation')
-                    and isinstance(generation, str) and len(generation) == 32
+                    and isinstance(generation, str) and len(generation) == 32 and all(c in '0123456789abcdef' for c in generation)
                     and selected is not None and Path(selected).resolve() == home.resolve())
         # Legacy metadata may be shown, but the application request client never
         # admits the old unbound protocol (no generation in its ready record).
@@ -461,7 +472,19 @@ def speech_state(tree: Path, cfg: dict) -> dict:
     enabled = bool(block(cfg).get("speak"))
     catalog = _read(model / 'voices.json')
     worker = _read(tree / 'memory/.state/xtts/ready.json')
-    live=worker_live(tree/'memory/.state/xtts',worker)
+    live=worker_live(tree/'memory/.state/xtts',worker,require_ready=False)
+    if __package__:from . import speech_protocol
+    else:import speech_protocol
+    status=worker or _read(tree/'memory/.state/xtts/state.json')
+    configured=block(cfg)
+    chosen=speech_protocol.selection({'speaker':configured.get('tts_speaker'),'language':configured.get('tts_language'),
+        'reference':configured.get('tts_reference')},tree)
+    selected_ready=(live is True and worker.get('ready') is True and worker.get('selection_key')==speech_protocol.selection_key(chosen)
+                    and worker.get('reference_stamp')==speech_protocol.reference_stamp(chosen))
+    phase='off' if not enabled else status.get('phase','not_started')
+    if enabled and speech_protocol.blocked(tree):phase='paused'
+    elif live is True and not selected_ready and phase not in ('loading','warming_voice','error'):phase='warming_voice'
+    elif phase in ('ready','busy','loading','warming_voice') and live is not True:phase='unknown' if live is None else 'not_started'
     speakers = (worker.get('speakers') if live else None) or catalog.get('speakers') or []
     languages = (worker.get('languages') if live else None) or catalog.get('languages') or []
     why = "голос агента выключен" if not enabled else lib["why"] if not lib["present"] else "XTTS модель не установлена" if not ready_model else ""
@@ -470,9 +493,12 @@ def speech_state(tree: Path, cfg: dict) -> dict:
             "download":_read(tree / "memory/.state" / SPEECH_PROGRESS) or None,
             "speaker":str(block(cfg).get("tts_speaker") or "Ana Florence"),
             "language":str(block(cfg).get("tts_language") or "ru"),
-            "speakers":speakers,"languages":languages,"worker_ready":live,
-            "generation":worker.get('generation') if live else None,
-            "voice_note_ready":live is True and worker.get('ogg_opus') is True,
+            "speakers":speakers,"languages":languages,"worker_ready":selected_ready if live is True else live,
+            "worker_phase":phase,'worker_error':str(status.get('error') or ''),
+            'model_identity':status.get('model_identity'),'voice_identity':status.get('voice_identity'),
+            'device_actual':status.get('device'),
+            "generation":worker.get('generation') if live is True else None,
+            "voice_note_ready":selected_ready and worker.get('ogg_opus') is True,
             "device":str(block(cfg).get('tts_device') or 'cpu')}
 
 
@@ -703,6 +729,7 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
 
 
 def fetch_voice(tree: Path, voice_id: str, *, quiet: bool = False) -> dict:
+    if voice_id!='xtts':raise ValueError('Only the XTTS component can be installed')
     tree = Path(tree)
     progress = tree / 'memory/.state' / SPEECH_PROGRESS
     _write(progress, {'state':'running','voice':'xtts','at':_utc(),'note':'Устанавливаю runtime и модель из локального комплекта'})

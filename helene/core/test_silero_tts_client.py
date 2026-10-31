@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 import json
 import os
 import signal
@@ -161,7 +162,8 @@ class SileroTTSClientTests(unittest.TestCase):
             model_path=self.model,
             model_sha256="a" * 64,
             output_dir=self.output_dir,
-            request_timeout_seconds=0.35,
+            # Functional protocol/recovery cases use the actual product budget;
+            # deadline regressions below choose their own short limits.
             idle_timeout_seconds=10.0,
             terminate_grace_seconds=0.1,
             rss_poll_interval_seconds=0.01,
@@ -246,6 +248,8 @@ class SileroTTSClientTests(unittest.TestCase):
         self.assertEqual(client.status()["requests"], 2)
 
     def test_timeout_kills_and_reaps_before_reporting_failure(self) -> None:
+        normal_timeout = self.config.request_timeout_seconds
+        self.config = replace(self.config, request_timeout_seconds=0.35)
         client = self.make_client()
         before = time.monotonic()
         with self.assertRaises(silero_tts_client.SileroTTSTimeoutError):
@@ -260,6 +264,7 @@ class SileroTTSClientTests(unittest.TestCase):
         self.assertEqual(status["last_error"], "timeout")
         self.assert_no_partials()
 
+        client.config = replace(client.config, request_timeout_seconds=normal_timeout)
         restarted = client.synthesize("после таймаута")
         self.assertTrue(restarted.is_file())
         self.assertEqual(client.status()["starts"], 2)
@@ -318,8 +323,13 @@ class SileroTTSClientTests(unittest.TestCase):
         self.assertEqual(status["failures"], 0)
 
     def test_request_limit_recycles_after_success_and_restarts_lazily(self) -> None:
-        config = silero_tts_client.SileroTTSConfig(
-            **{**self.config.__dict__, "recycle_after_requests": 2}
+        config = replace(
+            self.config,
+            recycle_after_requests=2,
+            # This case proves recycling, not the fixture's short deadline.
+            # Keep the production cold-start budget under concurrent test IO.
+            request_timeout_seconds=silero_tts_client.SileroTTSConfig.
+                __dataclass_fields__["request_timeout_seconds"].default,
         )
         client = silero_tts_client.SileroTTSClient(config)
         self.clients.append(client)
@@ -336,6 +346,66 @@ class SileroTTSClientTests(unittest.TestCase):
         self.assertIsNotNone(client.pid)
         self.assertEqual(client.status()["starts"], 2)
 
+    def test_recycle_policy_tolerates_cold_start_beyond_short_fixture_deadline(self) -> None:
+        self.config = replace(self.config, request_timeout_seconds=2.0)
+        delay = self.config.request_timeout_seconds + 0.25
+        self.worker.write_text(_FAKE_WORKER.replace(
+            "root = Path(args.output_root).resolve()\n",
+            "root = Path(args.output_root).resolve()\n"
+            "(root / 'startup.pid').write_text(str(os.getpid()), encoding='ascii')\n"
+            f"time.sleep({delay!r})\n",
+        ), encoding="utf-8")
+        processes: list[tuple[subprocess.Popen[bytes], int | None]] = []
+        def capture_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            proc = subprocess.Popen(*args, **kwargs)  # type: ignore[arg-type]
+            processes.append((proc, silero_tts_client._linux_process_start_ticks(proc.pid)))
+            return proc
+        client = self.make_client(popen_factory=capture_popen)
+        with self.assertRaises(silero_tts_client.SileroTTSTimeoutError):
+            client.synthesize("короткий лимит")
+        self.assertEqual(len(processes), 1)
+        timed_out_proc, birth = processes[0]
+        timed_out_pid = timed_out_proc.pid
+        if sys.platform == "linux":self.assertIsNotNone(birth, "owned child birth was not captured")
+        self.assertIsNotNone(timed_out_proc.returncode, "owned cold child was not reaped by the client")
+        self.assertTrue(all(stream is None or stream.closed for stream in
+            (timed_out_proc.stdin, timed_out_proc.stdout, timed_out_proc.stderr)))
+        # Interpreter entry is optional: the deadline may expire before the
+        # child executes this fixture's first line. Popen owns the actual child.
+        startup_pid = self.output_dir / "startup.pid"
+        if startup_pid.exists():
+            self.assertEqual(int(startup_pid.read_text(encoding="ascii")), timed_out_pid)
+        self.assertIsNone(client.pid)
+        self.assertIsNone(_pid_state(timed_out_pid), "timed-out cold worker was not reaped")
+        self.assertEqual(client.status()["failures"], 1)
+        self.assertEqual(client.status()["recycles"], 1)
+        self.assertEqual(client.status()["last_error"], "timeout")
+        self.assert_no_partials()
+
+        client.config = replace(
+            client.config, recycle_after_requests=2,
+            request_timeout_seconds=silero_tts_client.SileroTTSConfig.
+                __dataclass_fields__["request_timeout_seconds"].default,
+        )
+        before = time.monotonic()
+        self.assertTrue(client.synthesize("раз").is_file())
+        self.assertGreaterEqual(time.monotonic() - before, delay)
+        pid = client.pid
+        self.assertIsNotNone(pid)
+        self.assertNotEqual(pid, timed_out_pid)
+        self.assertEqual(client.status()["starts"], 2)
+        self.assertTrue(client.synthesize("два").is_file())
+        self.assertIsNone(client.pid)
+        self.assertIsNone(_pid_state(pid), "successful recycled worker was not reaped")
+        self.assertEqual(client.status()["recycles"], 2)
+        self.assertEqual(client.status()["starts"], 2, "recycle must not eagerly start a worker")
+        self.assertTrue(client.synthesize("три").is_file())
+        self.assertIsNotNone(client.pid)
+        self.assertNotEqual(client.pid, pid)
+        self.assertEqual(client.status()["starts"], 3)
+        self.assertEqual(client.status()["failures"], 1)
+        self.assert_no_partials()
+
     @unittest.skipUnless(os.name == "posix", "process-group lifecycle is POSIX-only")
     def test_timeout_kills_spawned_descendant_not_leaves_it_running(self) -> None:
         """Prove group signalling, not reaping of a non-child descendant.
@@ -347,6 +417,11 @@ class SileroTTSClientTests(unittest.TestCase):
         """
 
         client = self.make_client()
+        self.assertTrue(client.synthesize("прогрев перед проверкой группы").is_file())
+        worker_pid, starts = client.pid, client.status()["starts"]
+        self.assertIsNotNone(worker_pid)
+        client.config = replace(client.config, request_timeout_seconds=2.0)
+        self.assertEqual(client.pid, worker_pid)
         with self.assertRaises(silero_tts_client.SileroTTSTimeoutError):
             client.synthesize("orphan")
 
@@ -364,6 +439,7 @@ class SileroTTSClientTests(unittest.TestCase):
             "a descendant remained executable after whole-group termination",
         )
         self.assertIsNone(client.pid)
+        self.assertEqual(client.status()["starts"], starts, "group stop used a different worker")
 
     def test_configuration_and_input_fail_before_process_start(self) -> None:
         with self.assertRaises(silero_tts_client.SileroTTSConfigurationError):
@@ -424,6 +500,7 @@ class SileroTTSClientTests(unittest.TestCase):
         self.assertEqual(list(self.output_dir.iterdir()), [])
 
     def test_lock_wait_is_part_of_end_to_end_deadline(self) -> None:
+        self.config = replace(self.config, request_timeout_seconds=0.35)
         client = self.make_client()
         client._lock.acquire()
         errors: list[BaseException] = []
@@ -455,6 +532,7 @@ class SileroTTSClientTests(unittest.TestCase):
             errors.append(exc)
 
     def test_popen_returned_after_deadline_is_killed_and_reaped(self) -> None:
+        self.config = replace(self.config, request_timeout_seconds=0.1)
         returned = threading.Event()
         process_holder: list[subprocess.Popen[bytes]] = []
 
@@ -483,6 +561,9 @@ class SileroTTSClientTests(unittest.TestCase):
             self.assertIsNone(_pid_state(proc.pid), "late child leader was not reaped")
 
     def test_late_started_child_blocks_fallback_until_cleanup_finishes(self) -> None:
+        # The client deadline must precede the fixture's handle-release guard;
+        # equal two-second deadlines race under the parallel product battery.
+        self.config = replace(self.config, request_timeout_seconds=0.1)
         created = threading.Event()
         release_handle = threading.Event()
         process_holder: list[subprocess.Popen[bytes]] = []
@@ -491,20 +572,21 @@ class SileroTTSClientTests(unittest.TestCase):
             proc = subprocess.Popen(*args, **kwargs)  # type: ignore[arg-type]
             process_holder.append(proc)
             created.set()
-            if not release_handle.wait(2):
+            if not release_handle.wait(10):
                 raise AssertionError("test did not release the late Popen handle")
             return proc
 
         client = self.make_client(popen_factory=withheld_popen)
-        with self.assertRaises(silero_tts_client.SileroTTSTimeoutError):
-            client.synthesize("неопределённый запуск")
-
-        self.assertTrue(created.is_set())
-        self.assertFalse(
-            client.fallback_ready(),
-            "fallback became eligible while an unpublished child could still be alive",
-        )
-        release_handle.set()
+        try:
+            with self.assertRaises(silero_tts_client.SileroTTSTimeoutError):
+                client.synthesize("неопределённый запуск")
+            self.assertTrue(created.wait(5), "the controlled child was not created")
+            self.assertFalse(
+                client.fallback_ready(),
+                "fallback became eligible while an unpublished child could still be alive",
+            )
+        finally:
+            release_handle.set()
         deadline = time.monotonic() + 2
         while not client.fallback_ready() and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -611,7 +693,9 @@ class PackageImporter:
                 # the soft RSS rail.  Full-suite instrumentation can lift a fresh
                 # interpreter above the small fixture's 256 MiB ceiling.
                 "max_rss_bytes": 2 * 1024 * 1024 * 1024,
-                "request_timeout_seconds": 2.0,
+                # Protocol/recycle test, not a two-second startup benchmark.
+                # Dedicated timeout tests retain their short failure budgets.
+                "request_timeout_seconds": 10.0,
             }
         )
         client = silero_tts_client.SileroTTSClient(config)

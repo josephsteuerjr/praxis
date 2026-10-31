@@ -56,6 +56,11 @@ else:
     if scenario=='rmtree':
         tree=root/'tree';(tree/'nested').mkdir(parents=True)
         (tree/'nested'/'leaf').write_text('x')
+    if scenario in {'unlink-entry','unlink-outside-entry','rename-entry'}:
+        # Native package extraction can create absolute links before this
+        # Python floor observes them. Deleting an entry never follows its leaf.
+        (root/'outward').symlink_to(outside/'victim')
+        (outside/'inward').symlink_to(root/'victim')
     if scenario=='moved':
         moving=root/'moving';moving.mkdir();(moving/'victim').write_text('keep')
         movingfd=os.open(moving,os.O_RDONLY)
@@ -101,6 +106,23 @@ else:
         shutil.rmtree(tree)
         assert not tree.exists()
         assert any(event=='os.remove' and args[0]=='leaf' and args[1]>=0 for event,args in events)
+    elif scenario=='unlink-entry':
+        denied(lambda:(root/'outward').write_text('outside mutation'))
+        denied(lambda:os.chmod('outward',0o600,dir_fd=insidefd))
+        os.unlink('outward',dir_fd=insidefd)
+        assert not (root/'outward').is_symlink()
+        assert (outside/'victim').read_text()=='outside'
+    elif scenario=='unlink-outside-entry':
+        denied(lambda:os.unlink('inward',dir_fd=outsidefd))
+        assert (outside/'inward').is_symlink()
+        assert (root/'victim').read_text()=='inside'
+    elif scenario=='rename-entry':
+        denied(lambda:os.rename('inward','stolen',src_dir_fd=outsidefd,dst_dir_fd=insidefd))
+        denied(lambda:os.replace(root/'victim',outside/'inward'))
+        os.rename('outward','moved',src_dir_fd=insidefd,dst_dir_fd=insidefd)
+        assert (root/'moved').is_symlink() and (outside/'inward').is_symlink()
+        assert (root/'victim').read_text()=='inside'
+        assert (outside/'victim').read_text()=='outside'
     elif scenario=='invalid':
         dead=os.dup(insidefd);os.close(dead)
         denied(lambda:os.unlink('victim',dir_fd=dead))
@@ -189,6 +211,15 @@ class AuditDirectoryDescriptors(unittest.TestCase):
 
     def test_actual_shutil_rmtree_uses_descriptor_not_cwd(self):
         self.check('rmtree')
+
+    def test_unlink_private_symlink_leaves_its_external_target_unchanged(self):
+        self.check('unlink-entry')
+
+    def test_unlink_external_entry_cannot_borrow_its_internal_target_authority(self):
+        self.check('unlink-outside-entry')
+
+    def test_rename_and_replace_validate_both_entries_without_following_their_leaves(self):
+        self.check('rename-entry')
 
     def test_closed_and_nondirectory_descriptors_refuse(self):
         self.check('invalid')

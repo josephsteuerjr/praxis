@@ -143,7 +143,10 @@ new file mode 100644
         proc_id = re.search(r"(proc-[0-9a-f]+)", out).group(1)
         self.assertIn("Стартовал", out)
         polled = ""
-        for _ in range(60):
+        # Poll the actual receipt with a bounded startup budget. Three seconds
+        # is not a contract for an instrumented child under all-core QA load.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
             polled = forge.process(task_id, "poll", process_id=proc_id)
             if "FORGE_PROCESS_OK" in polled and '"status": "done"' in polled:
                 break
@@ -156,10 +159,13 @@ new file mode 100644
         out = forge.process(
             task_id, "start",
             command=f'"{sys.executable}" -c "import time; print(\'BEGIN\', flush=True); time.sleep(20)"',
-            name="timeout-probe", timeout=1)
+            # This proves timeout classification and captured output. Leave
+            # room for the instrumented child to start under all-core QA load.
+            name="timeout-probe", timeout=5)
         proc_id = re.search(r"(proc-[0-9a-f]+)", out).group(1)
         polled = ""
-        for _ in range(80):
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
             polled = forge.process(task_id, "poll", process_id=proc_id)
             if '"status": "timed_out"' in polled:
                 break

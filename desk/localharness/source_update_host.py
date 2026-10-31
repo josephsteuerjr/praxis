@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from contextlib import nullcontext
 
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -39,7 +40,9 @@ def verified_runtime(new):
         if hashlib.sha256(path.read_bytes()).hexdigest() != row['sha256']:
             raise ValueError('Incoming runtime source changed: ' + name)
     required = {'localharness/source_update_host.py', 'localharness/source_update.py',
-                'localharness/source_update_worker.py', 'localharness/source_update_battery.py', 'localharness/self_review.py',
+                'localharness/source_update_worker.py', 'localharness/source_update_battery.py',
+                'localharness/source_update_parallel.py', 'localharness/self_review.py',
+                'localharness/source_update_hand.py',
                 'localharness/self_review_worker.py', 'localharness/source_update_transport.py',
                 'localharness/agent_source_update.py', 'localharness/update_source.py',
                 'localharness/desktop_supervisor.py', 'localharness/python_relay.py'}
@@ -173,7 +176,7 @@ def coordinate(old, new, directory, cancel_file):
     if (Path(forge.__file__).resolve() != new / 'tree/forge.py'
             or forge.SOURCE_UPDATE_API != 1 or forge.SELF_REVIEW_API != 1):
         raise ValueError('Coordinator did not load the verified incoming Forge')
-    review_config = {'max_parallel': 4, 'max_iters': 60, **agent['value'].get('self_review', {})}
+    review_config = {'max_parallel': 4, 'max_iters': 0, **agent['value'].get('self_review', {})}
     service = self_review.Service(tree, agent['code'], old, forge,
                                   review_config, coordinator=binding)
     # A distinct plan lease does not contend with the parent's install lease.
@@ -198,13 +201,18 @@ def coordinate(old, new, directory, cancel_file):
             stopped = lambda: Path(cancel_file).exists() or owner_stop.stopped() or job_state().get('cancel_requested') is True
             paused = lambda: owner_stop.paused() or job_state().get('state')=='paused'
             service.battery_cancelled = lambda:stopped() or paused()
-            with review_transport(agent, old, directory, llm._config(), stopped) as transport:
+            from localharness.source_update_hand import serve
+            hand=(serve(directory,tree,new,binding)
+                  if operation.get('continuation')==source_update.AUTOMATIC else nullcontext())
+            with hand, review_transport(agent, old, directory, llm._config(), stopped) as transport:
                 while True:
                     if stopped():
                         raise RuntimeError('Owner cancelled or stopped update review')
                     if paused():
-                        operation['paused'] = True
-                        source_update._persist(directory, operation)
+                        with source_update._LOCK:
+                            operation=read(directory/'pipeline.json')
+                            operation['paused'] = True
+                            source_update._persist(directory, operation)
                         time.sleep(.25)
                         continue
                     if transport is not None:
@@ -217,7 +225,8 @@ def coordinate(old, new, directory, cancel_file):
                         source_update.validate_ready(directory)
                         return
                     if operation['state']=='waiting_agent':
-                        raise AgentResolutionPending('Кандидат ожидает разрешений или исправлений от выбранного агента')
+                        if operation.get('continuation')!=source_update.AUTOMATIC:
+                            raise AgentResolutionPending('Кандидат ожидает разрешений или исправлений от выбранного агента')
                     if operation['state'] not in source_update.ACTIVE:
                         raise RuntimeError(operation.get('error') or operation.get('reason') or 'Update review failed')
                     time.sleep(.25)

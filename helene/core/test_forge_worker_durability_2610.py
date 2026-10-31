@@ -10,6 +10,7 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -137,6 +138,34 @@ class WorkerDurability(unittest.TestCase):
         self.assertEqual(len(result['trace']), 1)
         self.assertIn('Unresolved: module.py', json.dumps(self.calls[1]['messages']))
 
+    def test_actual_dispatch_has_its_own_receipt_before_handler_execution(self):
+        test=self
+        class ObservedAdapter(Adapter):
+            def dispatch(self,request,name,args):
+                latest=list(test.runtime._events(test.request_path.parent))[-1]
+                test.assertEqual(latest['kind'],'tool_dispatch')
+                test.assertEqual(latest['receipt']['status'],'entered')
+                test.assertTrue(latest['receipt']['handler'].endswith('ObservedAdapter.dispatch'))
+                return super().dispatch(request,name,args)
+        self.responses=[self.response('inspect',1),self.response()]
+        self.assertEqual(self.run_worker(ObservedAdapter()),0)
+        events=[row['kind'] for row in self.runtime._events(self.request_path.parent) if row.get('call_id')=='call-1']
+        self.assertEqual(events,['tool_start','tool_dispatch','tool_result'])
+
+    def test_dispatch_journal_failure_cannot_be_relabelled_as_a_completed_tool(self):
+        adapter=Adapter();adapter.dispatch=mock.Mock(return_value='effect must not execute')
+        original=self.runtime.Journal.event
+        def append(journal,kind,**fields):
+            if kind=='tool_dispatch':raise OSError('synthetic append failure')
+            return original(journal,kind,**fields)
+        self.responses=[self.response('inspect',1),self.response()]
+        with mock.patch.object(self.runtime.Journal,'event',append):
+            self.assertNotEqual(self.run_worker(adapter),0)
+        adapter.dispatch.assert_not_called()
+        result=json.loads((self.request_path.parent/'result.json').read_text())
+        self.assertEqual(result['status'],'error');self.assertFalse(result.get('complete'))
+        self.assertEqual(json.loads((self.request_path.parent/'checkpoint.json').read_text())['next_boundary'],'tool_in_flight')
+
     def test_premature_final_never_resets_turn_budget(self):
         adapter = Adapter()
         adapter.completion_feedback = lambda request: 'Still unresolved'
@@ -148,6 +177,35 @@ class WorkerDurability(unittest.TestCase):
         self.assertFalse(result['complete'])
         self.assertEqual(result['iters_used'], 2)
         self.assertEqual(len(self.calls), 3)
+
+    def test_default_and_zero_run_beyond_legacy_ceiling_with_real_journal(self):
+        for name,limit in [('omitted',None),('zero',0)]:
+            with self.subTest(limit=limit):
+                path,request=self.make_request('unbounded-'+name)
+                if limit is None:request.pop('max_iters')
+                else:request['max_iters']=limit
+                self.runtime.atomic_json(path,request)
+                self.responses=[self.response('inspect',i) for i in range(45)]+[self.response()]
+                self.assertEqual(self.run_worker(Adapter(),path,request),0)
+                result=json.loads((path.parent/'result.json').read_text('utf-8'))
+                checkpoint=json.loads((path.parent/'checkpoint.json').read_text('utf-8'))
+                self.assertTrue(result['complete']);self.assertEqual(result['iters_used'],46)
+                self.assertEqual(checkpoint['max_iters'],0)
+                self.assertEqual(len(result['trace']),45)
+
+    def test_unbounded_worker_still_obeys_owner_stop_after_legacy_ceiling(self):
+        self.request['max_iters']=0
+        self.runtime.atomic_json(self.request_path,self.request)
+        adapter=Adapter();count=[0]
+        def dispatch(*args):
+            count[0]+=1
+            if count[0]==41:self.allowed=False
+            return 'completed fixture effect'
+        adapter.dispatch=dispatch
+        self.responses=[self.response('inspect',i) for i in range(45)]+[self.response()]
+        self.assertEqual(self.run_worker(adapter),2)
+        result=json.loads((self.request_path.parent/'result.json').read_text('utf-8'))
+        self.assertEqual(result['status'],'stopped');self.assertEqual(count[0],41)
 
     def test_older_llm_without_assistant_helper_runs_and_checkpoints(self):
         del self.worker.llm.assistant_message
@@ -190,7 +248,8 @@ class WorkerDurability(unittest.TestCase):
             cp = json.loads((self.request_path.parent / "checkpoint.json").read_text("utf-8"))
             self.assertEqual(cp["next_boundary"], "tool_in_flight")
             events = list(self.runtime._events(self.request_path.parent))
-            self.assertEqual(events[-1]["kind"], "tool_start")
+            self.assertEqual(events[-2]["kind"], "tool_start")
+            self.assertEqual(events[-1]["kind"], "tool_dispatch")
             self.assertEqual(json.loads(self.runtime.read_payload_full(
                 self.request_path.parent, events[-1]["input_ref"])), args)
             return "effect completed"
@@ -463,7 +522,8 @@ class WorkerDurability(unittest.TestCase):
         second.close()
 
     def test_actual_snapshot_reviewer_keyword_is_compatible(self):
-        app = ROOT / "desk" / "localharness"
+        source_root = os.environ.get('HELENE_TEST_SOURCE_ROOT')
+        app = (Path(source_root) if source_root else ROOT) / "desk" / "localharness"
         if not (app / "self_review.py").is_file():
             app = CORE.parent / "app" / "localharness"
         if not (app / "self_review.py").is_file():

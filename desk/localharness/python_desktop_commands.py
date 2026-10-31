@@ -57,6 +57,13 @@ def probe_model(base_url, key="", framework="openai"):
 
 
 def invoke(owner, command, args):
+    if command=='restore_upstream':
+        if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
+        from . import upstream_recovery
+        if upstream_recovery.modern(owner.root):
+            from .desktop_update_request import admit_restore
+            return admit_restore(owner,confirmed=True)
+        return upstream_recovery.launch(owner.root)
     agent=owner.current()
     cfg=load(agent.config)
     if command=='window_retire_ack': return {'ok':True}
@@ -72,7 +79,8 @@ def invoke(owner, command, args):
         state=owner.status().get('agents',{}).get(agent.id,{})
         return {'agent_id':agent.id,'supported':True,'stopped':owner_stop.stopped(),
                 'runner_alive':'runner' in state.get('roles',[]),'pid':state.get('pids',{}).get('runner'),
-                'enabled':agent.enabled,'service':False,'note':owner.error or ''}
+                'enabled':agent.enabled,'service':False,
+                'note':owner.error or '; '.join(dict.fromkeys(state.get('problems',{}).values()))}
     if command=='owner_control':
         from . import owner_stop
         if args.get('action')=='panic':

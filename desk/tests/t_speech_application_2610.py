@@ -79,6 +79,7 @@ class SpeechApplication(unittest.TestCase):
             if time.monotonic() > end:
                 self.fail('synthetic worker did not become ready: ' + repr(errors))
             time.sleep(.01)
+        return thread
 
     def test_client_waits_for_generation_and_returns_real_wav(self):
         self.serve()
@@ -171,14 +172,22 @@ class SpeechApplication(unittest.TestCase):
             self.assertFalse(list((self.home / 'output').iterdir()))
 
     def test_replacement_generation_never_adopts_old_result(self):
+        release=threading.Event()
         def synth(req, partial, cancelled):
             wav(partial)
             ready = ipc.read(self.home / 'ready.json'); ready['generation'] = 'd' * 32
             ipc.write(self.home / 'ready.json', ready)
-        self.serve(synth)
-        with self.assertRaises(InterruptedError):
-            speech_client.synthesize('test', self.root, self.root / 'client',
-                configuration=lambda: CFG, format='wav', timeout=2)
+            release.wait(2)
+        worker=self.serve(synth)
+        try:
+            with self.assertRaises(InterruptedError):
+                speech_client.synthesize('test', self.root, self.root / 'client',
+                    configuration=lambda: CFG, format='wav', timeout=2)
+        finally:release.set()
+        # Cancellation fences delivery immediately. No-orphan is asserted
+        # after this actual old producer has completed its finally cleanup.
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
         self.assertFalse(list((self.home / 'output').iterdir()))
 
     def test_voice_note_refuses_missing_codec_before_inbox(self):
@@ -308,6 +317,13 @@ class SpeechApplication(unittest.TestCase):
         self.assertEqual(Path(spec.argv[2]), DESK / 'localharness/speech_worker.py')
         self.assertIn('--tree', spec.argv)
         self.assertFalse((self.root / 'missing-authored').exists())
+        cfg=ipc.read(config);cfg['voice'].update(tts_speaker='B',tts_language='en');ipc.write(config,cfg)
+        _,changed=owner._specs(config)
+        self.assertEqual(spec,changed['main:xtts'],'voice selection must not restart the loaded model')
+        self.assertNotEqual(spec.speech_selection,changed['main:xtts'].speech_selection)
+        cfg['voice']['tts_device']='cuda';ipc.write(config,cfg)
+        _,device_changed=owner._specs(config)
+        self.assertNotEqual(spec,device_changed['main:xtts'],'a different physical device needs a new worker')
         coordinator = owner.Coordinator({key: item.role for key, item in specs.items()})
         actions = coordinator.tick({'seq': 1, 'now_ms': 0, 'children': {key: {'state': 'absent'} for key in specs}})
         self.assertIn({'id': 'main:xtts', 'action': 'spawn'}, actions)
@@ -363,7 +379,7 @@ class SpeechApplication(unittest.TestCase):
             sentences.append(text)
             yield Chunk()
         engine = types.SimpleNamespace(speaker_manager=types.SimpleNamespace(
-            speakers={'A': {'conditioning': 'c', 'speaker': 's'}}), inference_stream=stream)
+            speakers={'A': {'gpt_cond_latent': 'c', 'speaker_embedding': 's'}}), inference_stream=stream)
         path = self.root / 'canonical.wav'
         text = 'one two three ' * 40
         canonical.synthesize_wav(engine, {'text': text, 'speaker': 'A', 'language': 'en'}, path)

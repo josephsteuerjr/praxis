@@ -58,26 +58,32 @@ class LinuxCustody(unittest.TestCase):
             clean()
         with self.hold(self.root) as clean:clean()
     def test_leader_exit_retires_detached_grandchild(self):
-        code="import os,subprocess,sys,time;subprocess.Popen([sys.executable,'-c',\"import os,time;open('grand','w').write(str(os.getpid()));time.sleep(60)\"],start_new_session=True);time.sleep(.2)"
+        descendant="import os,time;from pathlib import Path;p=Path('grand');p.with_suffix('.tmp').write_text(str(os.getpid()));p.with_suffix('.tmp').replace(p);time.sleep(60)"
+        # Exit only after the descendant actually publishes its PID. A fixed
+        # sleep can let the guardian correctly kill it before its first byte
+        # under load, leaving the test unable to observe that same cleanup.
+        code="import os,subprocess,sys,time;subprocess.Popen([sys.executable,'-c',"+repr(descendant)+"],start_new_session=True)\nwhile not os.path.isfile('grand'):time.sleep(.01)\n"
         with self.hold(self.root) as clean:
-            child=self.spawn(code);pid=int(wait_file(self.root/'grand'))
-            end=time.monotonic()+10
-            while child.poll() is None:
-                self.assertLess(time.monotonic(),end);time.sleep(.02)
-            self.assertTrue(dead(pid));clean()
+            child=self.spawn(code)
+            try:
+                pid=int(wait_file(self.root/'grand'));end=time.monotonic()+10
+                while child.poll() is None:
+                    self.assertLess(time.monotonic(),end);time.sleep(.02)
+                self.assertTrue(dead(pid));clean()
+            finally:child.stop()
     def test_stop_retires_live_descendant(self):
-        child=self.spawn("import os,time;open('pid','w').write(str(os.getpid()));time.sleep(60)")
+        child=self.spawn("import os,time;from pathlib import Path;p=Path('pid');p.with_suffix('.pending').write_text(str(os.getpid()));p.with_suffix('.pending').replace(p);time.sleep(60)")
         pid=int(wait_file(self.root/'pid'));child.stop()
         self.assertTrue(dead(pid));self.assertIsNone(child.handle)
     def test_closed_admission_pipe_still_waits_for_real_cleanup(self):
-        child=self.spawn("import os,time;open('pid','w').write(str(os.getpid()));time.sleep(30)")
+        child=self.spawn("import os,time;from pathlib import Path;p=Path('pid');p.with_suffix('.pending').write_text(str(os.getpid()));p.with_suffix('.pending').replace(p);time.sleep(30)")
         pid=int(wait_file(self.root/'pid'))
         child.process.stdin.close()  # the failed-admission transport state
         child.stop()
         self.assertTrue(dead(pid));self.assertIsNone(child.handle)
 
     def test_released_app_can_handoff_detached_updater(self):
-        code="import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',\"import time;time.sleep(.8);open('handoff','w').write('ok')\"],start_new_session=True);time.sleep(.2)"
+        code="import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',\"import time;from pathlib import Path;time.sleep(.8);p=Path('handoff');p.with_suffix('.pending').write_text('ok');p.with_suffix('.pending').replace(p)\"],start_new_session=True);time.sleep(.2)"
         child=self.spawn(code)
         guardian=child.process
         child.release()
@@ -88,7 +94,7 @@ class LinuxCustody(unittest.TestCase):
         # guardian's escalation interval even after GUI PID/its fd disappear.
         script=self.root/'owner.py'
         desk=Path(__file__).resolve().parents[1]
-        script.write_text('import sys,os,time\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(desk))+')\nfrom localharness.posix_process import PosixChild,tree_hold\nr=Path('+repr(str(self.root))+')\nwith tree_hold(r):\n c=PosixChild.spawn([sys.executable,"-c",'+repr("import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',\"import os,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);open('orphan','w').write(str(os.getpid()));time.sleep(60)\"],start_new_session=True);time.sleep(60)")+'],cwd=r,env=dict(os.environ,HELENE_TREE=str(r)),log=r/"owner-log",stopped=lambda:False)\n (r/"owner-ready").write_text(str(c.pid))\n time.sleep(60)\n')
+        script.write_text('import sys,os,time\nfrom pathlib import Path\nsys.path.insert(0,'+repr(str(desk))+')\nfrom localharness.posix_process import PosixChild,tree_hold\nr=Path('+repr(str(self.root))+')\nwith tree_hold(r):\n c=PosixChild.spawn([sys.executable,"-c",'+repr("import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',\"import os,signal,time;from pathlib import Path;signal.signal(signal.SIGTERM,signal.SIG_IGN);p=Path('orphan');p.with_suffix('.pending').write_text(str(os.getpid()));p.with_suffix('.pending').replace(p);time.sleep(60)\"],start_new_session=True);time.sleep(60)")+'],cwd=r,env=dict(os.environ,HELENE_TREE=str(r)),log=r/"owner-log",stopped=lambda:False)\n ready=r/"owner-ready";ready.with_suffix(".pending").write_text(str(c.pid));ready.with_suffix(".pending").replace(ready)\n time.sleep(60)\n')
         owner=subprocess.Popen([sys.executable,str(script)],cwd=self.root)
         try:
             wait_file(self.root/'owner-ready');pid=int(wait_file(self.root/'orphan'))

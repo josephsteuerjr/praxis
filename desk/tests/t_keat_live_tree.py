@@ -23,6 +23,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+HELENE_TEST_ISOLATION = 'quiescent'
+
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 

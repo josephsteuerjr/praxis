@@ -14,6 +14,14 @@ from contextlib import contextmanager, nullcontext
 _publication_lock = threading.RLock() if os.name == 'nt' else nullcontext()
 
 LABELS = {
+    'probation':'Проверяем пять минут работы нового дерева',
+    'checking_programme':'Проверяю распакованную новую программу',
+    'preparing_relay':'Подготавливаю актуальное реле для сохранённых настроек',
+    'transferring_data':'Переношу данные в выбранную папку · проверяю каждый файл',
+    'stopping_old':'Завершаю прежнюю Hélène',
+    'uninstalling_old':'Удаляю прежнюю Hélène штатным деинсталлятором · данные сохраняются',
+    'removing_old':'Удаляю прежние программные файлы · данные сохраняются',
+    'connecting_data':'Подключаю существующие данные к чистому коду',
     'starting_agent':'Запускаю агента · окно доступно, готовность ещё проверяется',
     'choosing_source': 'Как обновить код?',
     'waiting_agent': 'Агент разрешает пересечения кода',
@@ -35,8 +43,14 @@ LABELS = {
 TERMINAL = {'completed', 'failed', 'needs_resolution', 'cancelled'}
 
 
-def pointer(target):
+def pointer(target,*,create=True):
     target = Path(target).resolve()
+    from .program_state import root
+    return root(target,create=create)/'progress.json'
+
+
+def legacy_pointer(target):
+    target=Path(target).resolve()
     identity = hashlib.sha256(os.path.normcase(str(target)).encode()).hexdigest()[:16]
     return target.parent / ('.helene-update-progress-' + identity + '.json')
 
@@ -54,15 +68,34 @@ def read_json(path):
         return json.load(stream)
 
 
-def status(target):
-    """Read a single target-bound operation, never scan an ever-growing folder."""
+def status(target,*,operation_id=None):
+    """Read the admitted operation, or the latest one for an unbound overview.
+
+    The latest-operation pointer may still name a previous attempt between
+    admission and the worker's first publication. It is not job ownership.
+    """
     target = Path(target).resolve()
-    index = pointer(target)
+    if operation_id is not None:
+        from .program_state import progress,progress_belongs
+        path=progress(target,operation_id,create=False)
+        if not path.exists():
+            path=target.parent/('.helene-update-'+operation_id+'.progress.json')
+        if not progress_belongs(target,path):
+            raise ValueError('Update progress receipt leaves installation state')
+        if not path.exists():return None
+        value=read_json(path)
+        if (not isinstance(value,dict) or value.get('target')!=str(target)
+                or value.get('id')!=operation_id):
+            raise ValueError('Update progress identity differs')
+        return value
+    index = pointer(target,create=False)
+    if not index.is_file():index=legacy_pointer(target)
     if not index.is_file():return None
     ref = read_json(index)
-    path = Path(ref['receipt']).resolve()
-    if path.parent != target.parent or not path.name.startswith('.helene-update-') or not path.name.endswith('.progress.json'):
-        raise ValueError('Update progress receipt leaves installation parent')
+    path = Path(ref['receipt'])
+    from .program_state import progress_belongs
+    if not progress_belongs(target,path):
+        raise ValueError('Update progress receipt leaves installation state')
     value = read_json(path)
     if value.get('target') != str(target) or value.get('id') != ref['id']:
         raise ValueError('Update progress identity differs')
@@ -97,7 +130,10 @@ def atomic_json(path, value):
 class Progress:
     """Only measured counters; durations refer to observed phases, not estimates."""
     def __init__(self, path, operation_id=None, target=None, event=None):
-        self.path = Path(path).resolve()
+        self.path = Path(path).absolute()
+        if target is not None:
+            from .program_state import progress_belongs
+            if not progress_belongs(target,self.path):raise ValueError('Invalid update receipt path')
         self.lock = threading.RLock()
         self.event = event
         self.last_write = 0.0
@@ -119,8 +155,9 @@ class Progress:
 
     def pin(self):
         target = Path(self.value['target']).resolve()
-        if self.path.parent != target.parent:
-            raise ValueError('Update progress must remain beside the installation')
+        from .program_state import progress_belongs
+        if not progress_belongs(target,self.path):
+            raise ValueError('Update progress must remain in installation state')
         atomic_json(pointer(target), {'receipt': str(self.path), 'id': self.value['id']})
 
     def save(self):
@@ -153,6 +190,12 @@ class Progress:
             if time.monotonic() - self.last_write >= .25:self.save()
 
     def __call__(self, row):
+        # Migration callbacks historically send phase names; transaction
+        # streams send measured dictionaries. Both use this same receipt.
+        if isinstance(row, str):
+            if not row.strip():raise ValueError('Progress stage must not be empty')
+            return self.phase(row)
+        if not isinstance(row, dict):raise TypeError('Progress requires a stage name or dictionary')
         with self.lock:
             name = row.get('stage', self.value['stage'])
             if name != self.value['stage']:

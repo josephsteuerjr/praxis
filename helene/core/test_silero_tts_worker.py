@@ -188,12 +188,47 @@ class SileroTTSWorkerTests(unittest.TestCase):
         self.assertTrue(all(path.stat().st_size > 44 for path in (first, second)))
         self.assertGreaterEqual(responses[-1]["peak_rss_bytes"], responses[-1]["rss_bytes"])
 
-    def test_real_worker_process_exits_cleanly_after_idle_without_loading_torch(self) -> None:
+    def _assert_real_idle_process(self, *, block_startup: bool = False) -> None:
         script = Path(worker_module.__file__).resolve()
+        ready = self.root / "actual-serve-entry.json"
+        exited = self.root / "actual-main-exit.json"
+        gate = self.root / "release-startup" if block_startup else None
+        # Observe the real CLI entry without changing main(), serve(), its
+        # selector or idle timeout. No protocol output/model request is added.
+        observer = r'''
+import json, os, runpy, sys, time
+from pathlib import Path
+script, ready, exited, gate = sys.argv[1:5]
+sys.argv = [script] + sys.argv[5:]
+def witness(path, **values):
+    temporary = Path(path + ".tmp")
+    temporary.write_text(json.dumps(dict(values, pid=os.getpid(),
+        monotonic=time.monotonic(), torch_loaded=any(
+            name == "torch" or name.startswith("torch.") for name in sys.modules))), encoding="utf-8")
+    temporary.replace(path)
+def observe(frame, event, arg):
+    if event == "call" and frame.f_code.co_filename == script and frame.f_code.co_name == "serve":
+        sys.setprofile(None)
+        witness(ready, idle_timeout=frame.f_locals["worker"].config.idle_timeout,
+            requests_served=frame.f_locals["worker"].requests_served)
+if gate:
+    while not Path(gate).exists():
+        time.sleep(.01)
+sys.setprofile(observe)
+try:
+    runpy.run_path(script, run_name="__main__")
+finally:
+    witness(exited)
+'''
         command = [
             sys.executable,
             "-I",
+            "-c",
+            observer,
             str(script),
+            str(ready),
+            str(exited),
+            str(gate) if gate else "",
             "--parent-pid",
             str(os.getpid()),
             "--model-path",
@@ -215,19 +250,62 @@ class SileroTTSWorkerTests(unittest.TestCase):
             close_fds=True,
         )
         try:
+            if gate:
+                # Negative control: a healthy CLI which has not entered serve
+                # cannot be judged by a three-second idle budget at Popen.
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    proc.wait(timeout=3.0)
+                self.assertIsNone(proc.poll())
+                self.assertFalse(ready.exists())
+                self.assertFalse(exited.exists())
+                gate.write_bytes(b"release this private startup barrier")
+            # Interpreter/import/configuration readiness has its own bounded
+            # ten-second allowance. The unchanged idle assertion starts only
+            # after the actual production serve entry is observed.
+            deadline = time.monotonic() + 10.0
+            while not ready.is_file():
+                if proc.poll() is not None:
+                    self.fail("Worker exited before actual serve entry")
+                if time.monotonic() >= deadline:
+                    self.fail("Worker did not enter serve within startup readiness bound")
+                time.sleep(.01)
+            entry = json.loads(ready.read_text(encoding="utf-8"))
+            self.assertEqual(entry["pid"], proc.pid)
+            self.assertEqual(entry["idle_timeout"], .1)
+            self.assertEqual(entry["requests_served"], 0)
+            self.assertFalse(entry["torch_loaded"])
+            assert proc.stdin is not None
+            self.assertFalse(proc.stdin.closed, "idle exit must not depend on pipe EOF")
             return_code = proc.wait(timeout=3.0)
             self.assertEqual(return_code, 0)
+            self.assertFalse(proc.stdin.closed, "stdin stayed open until the process exited")
+            final = json.loads(exited.read_text(encoding="utf-8"))
+            self.assertEqual(final["pid"], proc.pid)
+            self.assertFalse(final["torch_loaded"])
             assert proc.stdout is not None
             assert proc.stderr is not None
             self.assertEqual(proc.stdout.read(), b"")
             self.assertNotIn(b"torch", proc.stderr.read().lower())
+            self.assertEqual(list(self.output_root.iterdir()), [])
+            print("SILERO_IDLE_PROOF " + json.dumps({
+                "actual_main_and_serve": True, "controlled_startup_barrier": block_startup,
+                "serve_to_main_exit_seconds": final["monotonic"] - entry["monotonic"],
+                "idle_exit_wait_bound_seconds": 3.0, "stdin_open_at_process_exit": True,
+                "torch_loaded": False, "stdout_empty": True,
+            }), flush=True)
         finally:
             if proc.poll() is None:
                 proc.kill()
-                proc.wait()
+                proc.wait(timeout=5.0)
             for stream in (proc.stdin, proc.stdout, proc.stderr):
                 if stream is not None:
                     stream.close()
+
+    def test_real_worker_process_exits_cleanly_after_idle_without_loading_torch(self) -> None:
+        self._assert_real_idle_process()
+
+    def test_startup_delay_is_not_credited_to_the_real_worker_idle_exit(self) -> None:
+        self._assert_real_idle_process(block_startup=True)
 
     def test_max_request_count_marks_recycle_and_exits_with_open_stdin(self) -> None:
         first = self._reserve(".recycle-1.part.wav")

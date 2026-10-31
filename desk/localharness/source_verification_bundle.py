@@ -17,6 +17,7 @@ import shutil
 import stat
 import sys
 import site
+from functools import lru_cache
 
 FORMAT = 'helene-verification-bundle.v1'
 EXCLUDED = {'.git', '.ouroboros', '__pycache__', '.pytest_cache', '.venv', 'venv',
@@ -33,6 +34,8 @@ NATIVE = ('live/body', 'live/relay', 'live/hands')
 # app imports desk/remote/src/settings-server, which resolves its own qrcode.
 # These are the existing locked projects, not a general workspace installer.
 NPM_PROJECTS = ('desk/app', 'desk/mobile', 'desk/miniapp', 'desk/remote')
+SHARED_NATIVE_INPUTS=frozenset({'HELENE_BODY_DIR','HELENE_BODY_BIN','DISPLAY',
+                              'DBUS_SESSION_BUS_ADDRESS','XDG_RUNTIME_DIR'})
 
 
 def encoded(value):
@@ -40,11 +43,10 @@ def encoded(value):
 
 
 def digest(path):
-    h = hashlib.sha256()
+    from .validation_read import checkpoint,digest as measured
+    checkpoint()
     with Path(path).open('rb') as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b''):
-            h.update(block)
-    return h.hexdigest()
+        return measured(stream)
 
 
 def relative(name):
@@ -56,8 +58,52 @@ def python_framework(path):
     """Select pytest only for actual top-level test functions (including fixtures)."""
     path=Path(path)
     if path.suffix!='.py' or not path.name.startswith(('test','t_')):return 'unittest'
+    return _python_framework_content(path.read_bytes())
+
+
+def python_native_inputs(path):
+    path=Path(path)
+    return _native_input_content(path.read_bytes()) if path.suffix=='.py' else None
+
+
+@lru_cache(maxsize=2048)
+def _native_input_content(content):
+    """A test must expressly request the shared desktop capability it uses."""
+    try:module=ast.parse(content.decode('utf-8-sig'))
+    except (SyntaxError,UnicodeError):return None  # Its canonical import lane fails.
+    found=[]
+    for node in module.body:
+        targets=node.targets if isinstance(node,ast.Assign) else [node.target] if isinstance(node,ast.AnnAssign) else []
+        if any(isinstance(target,ast.Name) and target.id=='HELENE_TEST_NATIVE_INPUTS' for target in targets):
+            try:value=ast.literal_eval(node.value)
+            except (ValueError,TypeError):raise ValueError('Test native inputs must be a literal tuple')
+            if (not isinstance(value,tuple) or any(not isinstance(key,str) or key not in SHARED_NATIVE_INPUTS for key in value)
+                    or len(value)!=len(set(value))):
+                raise ValueError('Invalid test native input declaration')
+            if 'HELENE_BODY_BIN' in value and 'HELENE_BODY_DIR' not in value:
+                raise ValueError('Native body capability requires its declared directory')
+            found.append(sorted(value))
+    if len(found)>1:raise ValueError('Duplicate test native input declaration')
+    return found[0] if found else None
+
+
+def native_lane_inputs(files,names):
+    result=set()
+    for name in names:
+        value=files.get(name,{}).get('native_inputs',[])
+        if (not isinstance(value,list) or any(not isinstance(key,str) or key not in SHARED_NATIVE_INPUTS for key in value)
+                or value!=sorted(set(value))):
+            raise ValueError('Invalid frozen native input metadata: '+name)
+        result.update(value)
+    return sorted(result)
+
+
+@lru_cache(maxsize=2048)
+def _python_framework_content(content):
+    # Classification depends on exact bytes. Twelve private, hash-verified
+    # copies need not parse the same test AST twelve more times under the GIL.
     try:
-        module=ast.parse(path.read_text(encoding='utf-8-sig'))
+        module=ast.parse(content.decode('utf-8-sig'))
     except (SyntaxError,UnicodeError):
         # The canonical import lane reports the real error, never a helper skip.
         return 'unittest'
@@ -67,14 +113,18 @@ def python_framework(path):
 
 def inventory(root):
     """Exact regular files including lockfiles; unlike source_merge, no .lock filter."""
+    from .validation_read import checkpoint
+    checkpoint()
     root = Path(root).resolve()
     if not root.is_dir():
         raise ValueError('Verification directory unavailable: ' + str(root))
     rows = {}
     for directory, dirs, names in os.walk(root):
+        checkpoint()
         here = Path(directory)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDED)
         for name in [*dirs, *sorted(names)]:
+            checkpoint()
             p = here / name
             rel = p.relative_to(root).as_posix()
             relative(rel)
@@ -85,6 +135,8 @@ def inventory(root):
                 rows[rel] = {'sha256': digest(p), 'size': mode.st_size,
                              'mode': '100755' if mode.st_mode & 0o111 and os.name != 'nt' else '100644'}
                 if python_framework(p)=='pytest':rows[rel]['framework']='pytest'
+                native=python_native_inputs(p)
+                if native is not None:rows[rel]['native_inputs']=native
     return rows
 
 
@@ -164,6 +216,9 @@ def recipe(files, native=(), rebuild=(), scripts=None):
                                        (root + '/package.json', root + '/package-lock.json')},
                       'sources': sorted(n for n in names if n.startswith(root + '/')
                                         and '/dist/' not in n and '/test/' not in n)})
+    for lane in lanes:
+        native=native_lane_inputs(files,lane['sources'])
+        if native:lane['native_inputs']=native
     return lanes
 
 
@@ -276,7 +331,7 @@ def load(root, expected, version):
         raise ValueError('Verification bundle belongs to another version')
     if inventory(root / 'repository') != value.get('files') or inventory(root / 'runner') != value.get('runners'):
         raise ValueError('Verification bundle source/runner changed')
-    if recipe(value['files'], value.get('native_lanes', []), value.get('build_lanes', []), value.get('script_contracts', {})) != value.get('lanes'):
+    if recipe(value['files'], value.get('native_lanes', []), value.get('build_lanes', []), value.get('script_contracts',{})) != value.get('lanes'):
         raise ValueError('Verification bundle omits a full discovery lane')
     for platform, row in value.get('dependencies', {}).items():
         if platform not in {'win32', 'linux', 'darwin'} or inventory(root / 'dependencies' / platform) != row['files']:

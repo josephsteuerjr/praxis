@@ -281,6 +281,7 @@ class CompositionTests(unittest.TestCase):
     def test_compound_only_change_has_a_new_review_operation_identity(self):
         from localharness import source_update_battery
         service=Mock();service.request.return_value={'id':'review-fixture','subject_sha256':'f'*64}
+        service.battery_cancelled.return_value=False
         operation=dict(self.operation,candidate_sha256=merge.candidate_signature(self.directory))
         with patch.object(source_update_battery,'validate'),patch.object(source_update_battery,'prepare',return_value={}):
             pipeline._review_request(operation,self.directory,service)

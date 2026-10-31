@@ -20,14 +20,18 @@ class NoTrial(unittest.TestCase):
             agent=types.SimpleNamespace(TOOL_IMPL={},BASE_TOOLS=[],HAND_PURPOSE={},_call_tool_with_ceiling=funnel)
             with mock.patch.object(updates,'on_server',return_value=False):updates.install(agent,tree,{})
             self.assertIs(agent._call_tool_with_ceiling,funnel)
-            self.assertEqual(agent.BASE_TOOLS[0]['input_schema']['properties']['action']['enum'],['status'])
+            actions=agent.BASE_TOOLS[0]['input_schema']['properties']['action']['enum']
+            self.assertEqual(actions,['status','plan','confirm','decline','cancel','resume'])
+            self.assertNotIn('accept',actions);self.assertNotIn('reject',actions)
             ctl=tree/'memory/.control';ctl.mkdir(parents=True)
             (ctl/control.UPDATE_RECEIPT).write_text(json.dumps({'id':'old','desktop':True,'state':'trial','trial':{'key':'old-key'}}))
             hand=agent.TOOL_IMPL[updates.TOOL_NAME]
             for action in ('accept','reject'):
                 self.assertIn('приёмки приложения больше нет',hand(action=action,report='some deeds'))
             self.assertFalse((ctl/control.UPDATE_VERDICT).exists())
-            self.assertEqual(hand(action='status').count('отменено'),1)
+            self.assertEqual(json.loads(hand(action='status'))['state'],'none')
+            self.assertEqual(json.loads((ctl/control.UPDATE_RECEIPT).read_text())['state'],'trial',
+                             'obsolete acceptance evidence is not rewritten as a new update verdict')
     def test_open_legacy_trial_never_starts_a_detached_watcher(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);(root/'backups').mkdir();(root/'backups/update-trial.json').write_text('{"phase":"trial"}')

@@ -247,6 +247,27 @@ class TestPositiveOnlySemantics(unittest.TestCase):
 
 
 class TestPrivateFreeze(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "requires POSIX dirfd traversal")
+    def test_existing_ancestors_are_opened_without_mkdir_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "private" / "freeze"
+            original = os.mkdir
+            created = []
+
+            def mkdir_missing(component, *args, **kwargs):
+                self.assertIn(component, ("private", "freeze"))
+                created.append(component)
+                return original(component, *args, **kwargs)
+
+            with mock.patch.object(history_scan.os, "mkdir", side_effect=mkdir_missing):
+                actual, descriptor = history_scan._open_private_directory(target)
+                os.close(descriptor)
+            self.assertEqual(actual, target)
+            self.assertEqual(created, ["private", "freeze"])
+            with mock.patch.object(history_scan.os, "mkdir", side_effect=AssertionError("existing directory")):
+                _, descriptor = history_scan._open_private_directory(target)
+                os.close(descriptor)
+
     def _result(self):
         result = history_scan.HistoryScanResult(
             peer_id="-100secret", range=history_scan.ScanRange(1, 2),

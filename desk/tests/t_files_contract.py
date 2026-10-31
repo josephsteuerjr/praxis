@@ -44,8 +44,10 @@ class InitialFiles(unittest.TestCase):
                 self.assertEqual((tree / "memory/runs/2026-10/run-test/files/about.md").read_text(), "document")
             self.assertTrue(source.is_file())
             rows = [json.loads(row) for row in (tree / "memory/groups/window.jsonl").read_text().splitlines()]
-            self.assertEqual(rows[-1]["media_name"], "about.md")
-            self.assertEqual(rows[-1]["media_kind"], "file")
+            attachments = [row for row in rows if row.get('media_path')]
+            self.assertEqual(len(attachments), 1, 'archive also contains the text request')
+            self.assertEqual(attachments[0]["media_name"], "about.md")
+            self.assertEqual(attachments[0]["media_kind"], "file")
             self.assertIsNone(runner._INITIAL_FILES.get())
 
     def test_artifact_snapshots_external_bytes_and_rejects_secret_paths(self):

@@ -78,7 +78,7 @@ class ServerDelivery(unittest.TestCase):
         self.assertEqual(child.user, 10001)
         self.assertEqual(child.argv[:3], [str(python), "-u", str(worker)])
         self.assertEqual(child.argv[child.argv.index("--tree") + 1], str(self.tree))
-        self.assertEqual(child.argv[-2:], ["--device", "cpu"])
+        self.assertEqual(child.argv[child.argv.index("--device") + 1], "cpu")
         self.assertNotIn("HELENE_TOKEN", child.env)
         self.assertNotIn("RELAY_API_KEY", child.env)
         self.assertEqual(child.env["HELENE_SUPERVISOR"], "serverboot")

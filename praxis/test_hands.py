@@ -270,10 +270,16 @@ class TestWorkshopHands(WorkshopContract, unittest.TestCase):
             hands.rails_fp_expected = orig
 
     def test_receipts_are_written(self):
+        # Mutations in workshop use its Python CAS path; this obligation is
+        # specifically the compiled CLI's persisted operation receipt.
         workshop.fs_write("workspace/a.py", "print(1)\n")
+        result = hands.outline("workspace/a.py", base=self.tmp)
+        self.assertIsNotNone(result)
+        self.assertTrue(result['ok'])
+        self.assertEqual((self.tmp / 'workspace/a.py').read_text(encoding='utf8'), 'print(1)\n')
         rec = hands.receipts_path(self.tmp)
-        self.assertTrue(rec.exists(), "каждая операция обязана оставить расписку")
-        self.assertIn('"op":"write"', rec.read_text(encoding="utf-8"))
+        self.assertTrue(rec.exists(), "native operation must persist its receipt")
+        self.assertIn('"op":"outline"', rec.read_text(encoding="utf-8"))
 
     def test_timeout_flag_actually_reaches_the_binary(self):
         """Регресс: `timeout` съедался сигнатурой моста и не уезжал флагом — бинарь молча

@@ -29,6 +29,18 @@ class Host:
 
 
 class PythonApplicationTests(unittest.TestCase):
+    def test_normal_renderer_ready_is_published_for_the_actual_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app=python_app.Application(Path(temporary),Path(temporary))
+            try:
+                self.assertFalse(app.ui_ready)
+                app.invoke('python_ready',{})
+                receipt=json.loads(app.control_file.read_text(encoding='utf8'))
+                self.assertTrue(receipt['ui_ready'])
+                self.assertEqual(receipt['origin'],app.origin)
+                self.assertEqual(receipt['root'],str(Path(temporary).resolve()))
+            finally:app.server.server_close()
+
     @unittest.skipUnless(sys.platform == 'win32', 'Windows native error dialog')
     def test_startup_failure_is_logged_and_shown(self):
         from unittest.mock import patch
@@ -37,7 +49,7 @@ class PythonApplicationTests(unittest.TestCase):
             with patch.object(python_app, '_main', side_effect=RuntimeError('fixture startup failure')):
                 with patch.object(ctypes.windll.user32, 'MessageBoxW') as message:
                     self.assertEqual(python_app.main(['--root', temporary]), 1)
-            self.assertIn('fixture startup failure', (Path(temporary) / 'startup-error.log').read_text(encoding='utf-8'))
+            self.assertIn('fixture startup failure', python_app.startup_log(Path(temporary)).read_text(encoding='utf-8'))
             self.assertIn('fixture startup failure', message.call_args.args[1])
 
     def test_automatic_start_does_not_clear_stop_or_create_window(self):

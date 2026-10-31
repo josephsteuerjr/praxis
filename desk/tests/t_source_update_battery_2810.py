@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -131,6 +132,21 @@ class Battery(unittest.TestCase):
         self.assertNotIn('selected', self.manifest['reuse'])
         bundle.load(self.bundle, self.binding['sha256'], '2.3.0')
 
+    def test_focused_core_consumer_runs_hermetic_bootstrap_before_its_import(self):
+        self.put(self.core/'praxis_test.py', 'import os\nos.environ["FIXTURE_CORE_BOOTSTRAPPED"]="yes"\n')
+        source=self.core/'test_focus.py'
+        self.put(source, 'import os,unittest\nassert os.environ.get("FIXTURE_CORE_BOOTSTRAPPED")=="yes"\n'
+                         'class Focus(unittest.TestCase):\n def test_bootstrap(self):self.assertTrue(True)\n')
+        env=battery._environment(self.root/'home',self.core,self.app)
+        observation=self.root/'focused-observation.json'
+        command=[sys.executable,'-B','-s',str(self.bundle/'runner/source_verification_runner.py'),
+                 '--root',str(self.core),'--source',str(source),'--report',str(observation),'--sandbox',str(self.root)]
+        result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
+        observed=read(observation)
+        self.assertTrue(observed['complete']);self.assertTrue(observed['coverage_complete'])
+        self.assertEqual([row['status'] for row in observed['outcomes']],['passed'])
+
     def test_actual_full_python_node_and_missing_native_fail_honestly(self):
         cache, report = self.prepare()
         core = next(r for r in report['results'] if r['id'] == 'core')
@@ -159,6 +175,47 @@ class Battery(unittest.TestCase):
         next_cache, next_report, _ = self.green_fixture()
         self.assertNotEqual(cache, next_cache)
         self.assertEqual(next(r for r in next_report['results'] if r['id'] == 'core')['observation']['tests_run'], 3)
+
+    def test_cleanup_failure_preserves_complete_evidence_and_never_repeats_lanes(self):
+        actual_rmtree = shutil.rmtree
+        def denied(path, *args, **kwargs):
+            if Path(path).name.startswith('helene-update-tests-'):
+                self.assertTrue(list(self.directory.glob('test-battery/*/receipt.json')),
+                                'Completed evidence must be committed before cleanup')
+                raise PermissionError('fixture: locked Git object')
+            return actual_rmtree(path, *args, **kwargs)
+        with mock.patch.object(battery.shutil,'rmtree',side_effect=denied):
+            cache,report,_=self.green_fixture()
+        cleanup=read(cache/'cleanup.json')
+        work=Path(cleanup['work'])
+        self.addCleanup(lambda: actual_rmtree(work) if work.exists() else None)
+        self.assertEqual(cleanup['state'],'pending')
+        self.assertIn('locked Git object',cleanup['error'])
+        self.assertTrue(report['complete']);self.assertTrue(report['full_pass'])
+        with mock.patch.object(battery,'_execute',side_effect=AssertionError('duplicate execution')):
+            self.assertEqual(self.prepare()[0],cache)
+
+    def test_cleanup_failure_does_not_promote_red_lanes(self):
+        actual_rmtree=shutil.rmtree
+        def denied(path,*args,**kwargs):
+            if Path(path).name.startswith('helene-update-tests-'):raise PermissionError('fixture cleanup')
+            return actual_rmtree(path,*args,**kwargs)
+        with mock.patch.object(battery.shutil,'rmtree',side_effect=denied):
+            cache,report=self.prepare()
+        work=Path(read(cache/'cleanup.json')['work'])
+        self.addCleanup(lambda:actual_rmtree(work) if work.exists() else None)
+        self.assertFalse(report['full_pass'])
+        self.assertTrue((cache/'receipt.json').is_file())
+        with self.assertRaises(ValueError):battery.validate(self.operation,self.directory)
+
+    @unittest.skipUnless(os.name=='nt','Windows read-only Git objects')
+    def test_owned_readonly_git_file_cleanup_leaves_no_work_tree(self):
+        import stat
+        work=Path(tempfile.mkdtemp(prefix='helene-update-tests-'))
+        obj=work/'.git/objects/01/object';obj.parent.mkdir(parents=True);obj.write_bytes(b'fixture')
+        obj.chmod(stat.S_IREAD)
+        result=battery._cleanup_work(work,self.root/'cleanup-cache')
+        self.assertEqual(result['state'],'removed');self.assertFalse(work.exists())
 
     def test_app_and_runtime_changes_invalidate_receipt_not_only_core(self):
         cache, _, _ = self.green_fixture()

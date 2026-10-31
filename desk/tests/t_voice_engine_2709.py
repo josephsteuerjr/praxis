@@ -85,7 +85,7 @@ def fake_runtime(site: Path) -> None:
 
 
 VOICE_ONLY = {"faster-whisper", "av", "ctranslate2", "numpy", "pyyaml", "huggingface-hub",
-              "packaging", "piper-tts", "onnxruntime", "protobuf"}
+              "packaging"}
 
 
 class Split(unittest.TestCase):
@@ -99,13 +99,16 @@ class Split(unittest.TestCase):
     def test_голосу_ровно_его_пакеты_общее_остаётся(self):
         got = build_dist.split_voice(self.site, self.stage)
         self.assertEqual(set(got["dists"]), VOICE_ONLY)
-        for rel in ("faster_whisper/__init__.py", "numpy.libs/openblas.dll", "yaml/__init__.py",
-                    "google/protobuf/__init__.py", "onnxruntime/capi/onnx.dll"):
+        for rel in ("faster_whisper/__init__.py", "numpy.libs/openblas.dll", "yaml/__init__.py"):
             self.assertTrue((self.stage / rel).is_file(), rel)
             self.assertFalse((self.site / rel).exists(), rel)
         for rel in ("anthropic/__init__.py", "typing_extensions.py",
-                    "__pycache__/typing_extensions.cpython-314.pyc", "idna/__init__.py"):
+                    "__pycache__/typing_extensions.cpython-314.pyc", "idna/__init__.py",
+                    "piper/__init__.py", "google/protobuf/__init__.py", "onnxruntime/capi/onnx.dll"):
             self.assertTrue((self.site / rel).is_file(), f"рантайму: {rel}")
+        # Legacy authored-code dependencies belong to the base closure. The
+        # Whisper download must not silently include a second TTS backend.
+        self.assertFalse((self.stage/'piper').exists())
         self.assertTrue(any(p.name.startswith("numpy-") for p in self.stage.glob("*.dist-info")))
         self.assertFalse(any(p.name.startswith("numpy-") for p in self.site.glob("*.dist-info")))
 
@@ -123,7 +126,7 @@ class Split(unittest.TestCase):
     def test_вершины_без_pycache_и_dist_info(self):
         got = build_dist.split_voice(self.site, self.stage)
         self.assertIn("numpy.libs", got["tops"])
-        self.assertIn("google", got["tops"])
+        self.assertNotIn("google", got["tops"])
         self.assertNotIn("__pycache__", got["tops"])
         self.assertFalse(any(t.endswith(".dist-info") for t in got["tops"]))
 
@@ -137,7 +140,7 @@ class Split(unittest.TestCase):
         got=build_dist.bundle_voice(self.site,self.stage)
         self.assertEqual(set(got['dists']),VOICE_ONLY)
         for rel in ('faster_whisper/__init__.py','yaml/__init__.py','_yaml/__init__.py',
-                    'ctranslate2/ctranslate2.dll','numpy.libs/openblas.dll','onnxruntime/capi/onnx.dll'):
+                    'ctranslate2/ctranslate2.dll','numpy.libs/openblas.dll'):
             self.assertEqual((self.site/rel).read_bytes(),(self.stage/rel).read_bytes(),rel)
         self.assertFalse((self.site/build_dist.VOICE_PTH).exists())
         build_dist.bundle_voice(self.site,self.stage)

@@ -32,8 +32,8 @@ class BrainReceiptUpgrade(unittest.TestCase):
             (tree / "memory").mkdir(parents=True)
             cfg_path = Path(tmp) / "helene.json"
             with_fallback = {
-                "model": {"framework": "openai", "name": "gpt-x", "key": "sk-main", "base_url": "http://a",
-                          "fallback_framework": "anthropic", "fallback_name": "claude-x",
+                "model": {"framework": "openai", "model": "gpt-x", "key": "sk-main", "base_url": "http://a",
+                          "fallback_framework": "anthropic", "fallback_model": "claude-x",
                           "fallback_key": "zai-SECRET", "fallback_base_url": "http://b"},
             }
             cfg_path.write_text(json.dumps(with_fallback), encoding="utf-8")
@@ -50,7 +50,7 @@ class BrainReceiptUpgrade(unittest.TestCase):
             boot.project_brain(tree, json.loads(cfg_path.read_text(encoding="utf-8")))
             self.assertIn("projected", json.loads(receipt.read_text(encoding="utf-8")))
             # владелец убрал запасного
-            without = {"model": {"framework": "openai", "name": "gpt-x", "key": "sk-main", "base_url": "http://a"}}
+            without = {"model": {"framework": "openai", "model": "gpt-x", "key": "sk-main", "base_url": "http://a"}}
             cfg_path.write_text(json.dumps(without), encoding="utf-8")
             boot.project_brain(tree, without)
             self.assertNotIn("zai-SECRET", llm_path.read_text(encoding="utf-8"),
@@ -108,12 +108,22 @@ class RehearsalSeesTreeAndConfig(unittest.TestCase):
 class PassportPathsAreRelative(unittest.TestCase):
     def test_core_provenance_paths_do_not_name_the_build_machine(self):
         import build_dist
-        tree = next((p for p in (ROOT.parents[1] / "port-2409", ROOT.parents[1] / "live") if p.is_dir()), None)
-        if tree is None:
-            self.skipTest("дерева рядом нет")
-        note = build_dist.core_provenance(tree)
-        if not note:
-            self.skipTest("ядро и слой не прочитались")
+        tree = ROOT.parent / "live"
+        with tempfile.TemporaryDirectory(prefix="provenance-composed-source-") as temporary:
+            if not tree.is_dir():
+                # Development checkouts have not materialized repository/live;
+                # use the packager's actual core + edition composition in a
+                # private fixture instead of a neighbouring owner/audit tree.
+                from portable_sources import compose_core
+                tree = Path(temporary)
+                composed, _origins = compose_core(ROOT.parent)
+                for name, entry in composed.items():
+                    target = tree / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(entry.data)
+            self.assertTrue((tree / "agent.py").is_file(), "declared composed agent.py is missing")
+            note = build_dist.core_provenance(tree)
+        self.assertTrue(note, "declared core/layer provenance is unavailable")
         for part in ("core", "layer"):
             path = str(note[part].get("path") or "")
             self.assertNotIn("Users", path, path)

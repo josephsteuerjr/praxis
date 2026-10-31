@@ -224,21 +224,41 @@ class TestConfig(Base):
 
         Цена ошибки здесь не «красный прогон», а ключи мозга в истории git.
         """
-        if not (llm.REPO / ".git").exists():
-            self.skipTest("нет git-репозитория")
-        r = subprocess.run(["git", "-C", str(llm.REPO), "check-ignore", "-v",
-                            "memory/llm.json"],
-                           capture_output=True, text=True, timeout=20)
-        self.assertEqual(r.returncode, 0, "memory/llm.json обязан быть в .gitignore")
-        source = (r.stdout or "").split(":", 1)[0].strip()
-        self.assertTrue(source.endswith(".gitignore"),
-                        f"правило игнора пришло из {source!r}, а не из .gitignore репо — "
-                        "такая защита не переживёт клон")
-        tracked = subprocess.run(
-            ["git", "-C", str(llm.REPO), "ls-files", "--error-unmatch", "memory/llm.json"],
-            capture_output=True, text=True, timeout=20)
-        self.assertNotEqual(tracked.returncode, 0,
-                            "файл уже отслеживается git — .gitignore на него не действует")
+        with tempfile.TemporaryDirectory(prefix="exported-ignore-policy-") as temporary:
+            repository = llm.REPO
+            env = {k:v for k,v in os.environ.items() if not k.startswith("GIT_")}
+            env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+            if not (repository / ".git").exists():
+                # A source export has no index/history. Reconstruct only the
+                # exported path membership in private Git, with its REAL ignore
+                # rule. File bodies are never copied or read from lived memory.
+                ignore = repository / ".gitignore"
+                self.assertTrue(ignore.is_file(), "exported repository .gitignore is missing")
+                exported = [p.relative_to(repository).as_posix() for p in repository.rglob("*")
+                            if p.is_file() and ".git" not in p.relative_to(repository).parts]
+                repository = Path(temporary)
+                (repository / ".gitignore").write_bytes(ignore.read_bytes())
+                subprocess.run(["git", "init", "--quiet", str(repository)],
+                               env=env, check=True, capture_output=True, timeout=20)
+                blob = subprocess.run(["git", "-C", str(repository), "hash-object", "-w", "--stdin"],
+                    input=b"synthetic exported path membership only\n", env=env, check=True,
+                    capture_output=True, timeout=20).stdout.strip().decode("ascii")
+                index = b"".join((f"100644 {blob}\t{name}".encode("utf-8") + b"\0") for name in exported)
+                subprocess.run(["git", "-C", str(repository), "update-index", "-z", "--index-info"],
+                               input=index, env=env, check=True, capture_output=True, timeout=20)
+            r = subprocess.run(["git", "-C", str(repository), "check-ignore", "-v",
+                                "memory/llm.json"],
+                               env=env, capture_output=True, text=True, timeout=20)
+            self.assertEqual(r.returncode, 0, "memory/llm.json обязан быть в .gitignore")
+            source = (r.stdout or "").split(":", 1)[0].strip()
+            self.assertTrue(source.endswith(".gitignore"),
+                            f"правило игнора пришло из {source!r}, а не из .gitignore репо — "
+                            "такая защита не переживёт клон")
+            tracked = subprocess.run(
+                ["git", "-C", str(repository), "ls-files", "--error-unmatch", "memory/llm.json"],
+                env=env, capture_output=True, text=True, timeout=20)
+            self.assertNotEqual(tracked.returncode, 0,
+                                "файл уже отслеживается git — .gitignore на него не действует")
 
     def test_broken_json_keeps_last_good(self):
         self._write_cfg(voice={"model": "glm-good"})

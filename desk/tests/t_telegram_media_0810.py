@@ -44,7 +44,7 @@ class Media(unittest.TestCase):
         row['source_message_id']='23'
         archive=self.tree/'memory/groups/-77.jsonl'; archive.parent.mkdir(parents=True); archive.write_text(json.dumps(row),encoding='utf-8')
         spool=media.MediaSpool(self.tree/'memory/media')
-        ctx=types.SimpleNamespace(owner=False,is_dm=False,known=True)
+        ctx=types.SimpleNamespace(owner=False,is_dm=False,known=True,scope='group',chat_id='-77')
         with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:spool)):
             refs,notes=runner._telegram_media_refs('-77',ctx)
         self.assertEqual(len(refs),1)
@@ -77,7 +77,7 @@ class Media(unittest.TestCase):
         archive.write_text(json.dumps({'media_preview_path':'secret.png'}),encoding='utf-8')
         spool=Mock(max_turn_media=4)
         with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:spool)):
-            refs,_=runner._telegram_media_refs('-77',types.SimpleNamespace(owner=True))
+            refs,_=runner._telegram_media_refs('-77',types.SimpleNamespace(owner=True,is_dm=False,scope='group',chat_id='-77'))
         self.assertFalse(refs); spool.ingest_path.assert_not_called()
 
     def test_gif_original_plays_and_vision_gets_a_png_frame(self):
@@ -104,8 +104,8 @@ class Media(unittest.TestCase):
         self.assertEqual((self.tree/row['media_path']).read_bytes(),PNG)
         spool=media.MediaSpool(self.tree/'memory/media')
         with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:spool)):
-            refs,_=runner._telegram_media_refs('-77',types.SimpleNamespace(owner=True,is_dm=False))
-        self.assertEqual(len(refs),1);self.assertEqual(refs[0].scope,'owner')
+            refs,_=runner._telegram_media_refs('-77',types.SimpleNamespace(owner=True,is_dm=False,scope='group',chat_id='-77'))
+        self.assertEqual(len(refs),1);self.assertEqual(refs[0].scope,'group','an owner in a group still has a group audience')
         self.assertEqual(bot.wake_sender('-77'),('Другой автор','11'))
 
     def test_window_instruction_rejects_an_attachment_outside_its_inbox(self):
@@ -122,14 +122,21 @@ class Media(unittest.TestCase):
         archive=self.tree/'memory/groups/-77.jsonl';archive.parent.mkdir(parents=True)
         archive.write_text(json.dumps({'media_kind':'audio','media_path':'memory/telegram-media/voice.ogg','sender_name':'Автор','source_message_id':'9'}),encoding='utf-8')
         transcribe=Mock(return_value='проверь картинки и стикеры')
-        context=types.SimpleNamespace(owner=True,is_dm=True)
+        context=types.SimpleNamespace(owner=True,is_dm=False,scope='group',chat_id='-77')
         with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:Mock(max_turn_media=4)),_voice_state={'ready':False,'why':'расшифровка выключена'}),patch.dict(sys.modules,{'media_audio':types.SimpleNamespace(transcribe=transcribe)}):
             _,notes=runner._telegram_media_refs('-77',context)
-            self.assertIn('выключена',notes[0]);transcribe.assert_not_called()
+            self.assertFalse(notes);transcribe.assert_not_called()
         with patch.multiple(runner,_tree=self.tree,_agent=types.SimpleNamespace(_media_spool=lambda:Mock(max_turn_media=4)),_voice_state={'ready':True}),patch.dict(sys.modules,{'media_audio':types.SimpleNamespace(transcribe=transcribe)}):
             _,notes=runner._telegram_media_refs('-77',context)
-            self.assertIn('проверь картинки и стикеры',notes[0]);self.assertIn('Автор',notes[0]);transcribe.assert_called_once_with(audio.resolve())
-            runner._telegram_media_refs('-77',context);transcribe.assert_called_once()
+            self.assertFalse(notes);transcribe.assert_not_called()
+            # Context assembly consumes a verified receipt; it never starts
+            # historical recognition. Input admission owns inference.
+            import hashlib
+            runner.voice_admission._write(audio,{'status':'ready','sha256':hashlib.sha256(audio.read_bytes()).hexdigest(),
+                                                'transcript':'проверь картинки и стикеры'})
+            _,notes=runner._telegram_media_refs('-77',context)
+            self.assertIn('проверь картинки и стикеры',notes[0]);self.assertIn('Автор',notes[0])
+            transcribe.assert_not_called()
 
     def test_network_failure_preserves_file_identity_and_retry_cannot_replace_an_edit(self):
         bot=botapi.BotTransport(types.SimpleNamespace(),self.tree,None,{'agent':{'name':'Лира'},'telegram':{}})

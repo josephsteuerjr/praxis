@@ -76,9 +76,13 @@ def _commit_profile(tree, target, event):
             dst.write(json.dumps(event, ensure_ascii=False) + '\n'); dst.flush(); os.fsync(dst.fileno())
     update_inspection.write(target, event['after'])
     p, before = event['after'], event['before']
-    update_inspection.write(Path(tree) / 'memory/.state/context-policy-notice.json', {
-        'id': event['id'], 'done': False,
-        'text': f"Контекст владельца: до {p['hard_at']} свежих сообщений, {p['tape_chars']} знаков и примерно {p['token_cap']} токенов разговора. Пределы можно изменить в Настройках → Контекст владельца. Прежние значения: {before['hard_at']} сообщений, {before['tape_chars']} знаков, {before['token_cap']} токенов; архив и сводки сохранены."})
+    # An initial profile has no previously installed budget. Do not turn the
+    # internal fallback into a fictitious migration notice in the owner chat.
+    # Older admitted journals without this flag retain their recovery contract.
+    if event.get('notify_owner') is not False:
+        update_inspection.write(Path(tree) / 'memory/.state/context-policy-notice.json', {
+            'id': event['id'], 'done': False,
+            'text': f"Контекст владельца: до {p['hard_at']} свежих сообщений, {p['tape_chars']} знаков и примерно {p['token_cap']} токенов разговора. Пределы можно изменить в Настройках → Контекст владельца. Прежние значения: {before['hard_at']} сообщений, {before['tape_chars']} знаков, {before['token_cap']} токенов; архив и сводки сохранены."})
     target.with_name('.context-policy-change.json').unlink(missing_ok=True)
 
 
@@ -135,9 +139,14 @@ def configure(life, config: dict, *, tree: Path | None = None) -> dict:
                                   "token_cap": original_bounds(rooms.ROOM_DEFAULT)[3]}
             change_id = uuid.uuid4().hex
             source_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-            event = {"kind": "owner_context_policy_changed", "author": f"deploy:{source_sha}",
+            initialized = not valid_snapshot(previous)
+            notify = not initialized and any(previous[key] != profile[key]
+                for key in ('hard_at','tape_chars','token_cap'))
+            event = {"kind": "owner_context_policy_initialized" if initialized else "owner_context_policy_changed",
+                     "notify_owner": notify, "author": f"deploy:{source_sha}",
                      "at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "id": change_id,
-                     "before": before, "after": profile, "reason": "Owner requested fuller adjustable dialogue context for Hélène1.6.0"}
+                     "before": before, "after": profile,
+                     "reason": "Initial owner dialogue context configuration" if initialized else "Owner dialogue context settings changed"}
             update_inspection.write(transaction, event)
             _commit_profile(tree, target, event)
         # The model reads an explicit persisted profile, not a parse-time fallback.

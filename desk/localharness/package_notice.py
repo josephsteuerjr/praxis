@@ -35,12 +35,20 @@ def replace_with_retry(source, target):
 
 def write(path,value):
     path=Path(path); path.parent.mkdir(parents=True,exist_ok=True)
+    hidden=False
+    if os.name=='nt' and path.exists():
+        import ctypes
+        flags=ctypes.windll.kernel32.GetFileAttributesW(str(path))
+        hidden=flags!=-1 and bool(flags&2)
     fd, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as target:
             json.dump(value, target, ensure_ascii=False, indent=2); target.write('\n')
             target.flush(); os.fsync(target.fileno())
         replace_with_retry(name, path)
+        if hidden:
+            from .program_state import hidden as retain_hidden
+            retain_hidden(path)
     finally:
         Path(name).unlink(missing_ok=True)
 

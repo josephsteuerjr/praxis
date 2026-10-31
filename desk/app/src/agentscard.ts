@@ -54,7 +54,7 @@ type SoulKind = "canon" | "inherit" | "text";
  * Карточка живёт только в оболочке: в браузере и на телефоне переключать и
  * заводить нечего — они пришли к одному каналу по адресу.
  */
-export function agentsCard(mac = false, linux = false): { el: HTMLElement } {
+export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
   const box = el("div", "agents-card");
   const list = el("div", "agents-list");
   const add = el("div", "actions");
@@ -273,8 +273,8 @@ export function agentsCard(mac = false, linux = false): { el: HTMLElement } {
               void shell<{ attic?: string }>("agent_remove", { id: a.id })
                 .then((made) => {
                   const where = made && typeof made.attic === "string" && made.attic.trim()
-                    ? `папка уехала в ${made.attic}`
-                    : "папка уехала на чердак agents-attic рядом с папкой agents";
+                    ? `данные перемещены в ${made.attic}`
+                    : "данные перемещены в agents-attic";
                   toast(`Агент «${a.name}» удалён: ${where}.`);
                   void paint();
                 })
@@ -290,8 +290,8 @@ export function agentsCard(mac = false, linux = false): { el: HTMLElement } {
           );
           kill.append(
             el("p", "field-hint",
-              `Удаление из окна неотвратимо: дом агента уезжает на чердак — папка agents-attic рядом с папкой agents у корня установки, — и вернуть его оттуда можно только руками. ` +
-              `Если он сейчас поднят — сначала погаси его кнопкой выше.`),
+              `Данные будут перемещены в agents-attic. Восстановить их можно вручную. ` +
+              `Перед удалением останови агента.`),
             killField,
             killRow,
           );
@@ -313,13 +313,7 @@ export function agentsCard(mac = false, linux = false): { el: HTMLElement } {
     el: card(
       "Агенты",
       box,
-      "Одна установка — сколько угодно агентов: рантайм, код и обновление общие, дом и настройки у каждого свои. " +
-        // Значок и путь бинаря — этой системы: на Mac оболочка живёт в бандле, а
-        // значок — в строке меню.
-        (mac
-          ? "Переключает окно полка слева и значок в строке меню; открыть конкретного агента — Helene.app/Contents/MacOS/helene --agent <папка>."
-          : linux ? "Переключает окно полка слева и значок у часов; открыть конкретного агента — helene --agent <папка>."
-          : "Переключает окно полка слева и значок у часов; ярлык на конкретного агента — helene.exe --agent <папка>."),
+      "У каждого агента свои данные и настройки. Переключайся между ними в списке слева.",
     ),
   };
 }

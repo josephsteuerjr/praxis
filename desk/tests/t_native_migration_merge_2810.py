@@ -1,8 +1,6 @@
-"""The missing native -> Python -> merged/reviewed-code connection.
+"""New native migration refuses retired preserve mode before code/data effects.
 
-Actual merge, selected-agent CAS edits, independent Service records and the real
-migration lifecycle are used. Only provider/critic execution and Windows stop
-are replaced with bounded fixtures; no live user agent or model is called.
+Already-admitted legacy review is covered by the source-update pipeline tests.
 """
 import json
 import os
@@ -35,76 +33,31 @@ class NativeBridge(unittest.TestCase):
         return f
 
     def exercise(self,conflict,copy_data=False):
-        f=self.setup_fixture(conflict);events=[]
-        original=code_transition.preflight
-        def preflight(*args,**kwargs):
-            result=original(*args,**kwargs)
-            for row in result['plans']:
-                f.directory=Path(row['directory'])
-                self.assertFalse((f.directory/'agent-resolution.json').exists(),
-                                 'A native predecessor must not need the new selected-agent API')
-            return result
-        def incoming_review(old,new,plans,progress,cancelled):
-            self.assertEqual(old,f.old);self.assertEqual(new,f.new)
-            events.append('incoming-panel')
-            for row in plans:
-                if row['state']=='ready':continue
-                f.directory=Path(row['directory'])
-                binding={'kind':'incoming-test','program':str(new),'plan_id':f.directory.name}
-                pipeline.ensure(f.tree,old,f.code,f.directory,'2.2.10',coordinator=binding)
-                pipeline.tick(f.tree,f.forge,f.service,coordinator=binding)
-                if f.operation()['state']=='merging':
-                    merged=BASE.replace('return 1','return 99')+'\nlocal_extension = 11\n'
-                    f.merge_result(merged)
-                    pipeline.tick(f.tree,f.forge,f.service,coordinator=binding)
-                else:
-                    self.assertFalse(any('source_update_worker.py' in str(row[0]) for row in f.spawns))
-                self.assertEqual(f.operation()['state'],'reviewing')
-                f.review_result()
-                pipeline.tick(f.tree,f.forge,f.service,coordinator=binding)
-                self.assertEqual(pipeline.validate_ready(f.directory)['state'],'ready_to_apply')
+        f=self.setup_fixture(conflict)
         before=(f.old/'helene.json').read_bytes()
-        with patch.object(code_transition,'preflight',side_effect=preflight), \
-             patch('localharness.source_update_host.review',side_effect=incoming_review), \
-             patch('localharness.migration_lifecycle.service',return_value=None), \
-             patch('localharness.migration_lifecycle.stop',side_effect=lambda _:events.append('stop-old') or {'service':None}), \
-             patch('localharness.migration_lifecycle.quiescent'):
-            if copy_data:
-                import python_migrate
-                note=python_migrate.migrate(f.old,f.new,f.new,f.new/'profile',stop_service=True,
-                    prepared=True,portable=True,source_mode='preserve',launch=False)
-            else:
-                note=installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
-        cfg=read(f.new/'helene.json');selected=(f.new/Path(cfg['code'])).resolve()
-        result=(selected/'module.py').read_text()
-        self.assertIn('return 99',result)
-        self.assertIn('local_extension = 11' if conflict else 'custom_extension = True',result)
-        self.assertEqual(events,['incoming-panel','stop-old'])
-        if copy_data:
-            self.assertNotEqual((f.new/Path(cfg['tree'])).resolve(),f.tree)
-            self.assertEqual(((f.new/Path(cfg['tree'])).resolve()/'memory/history.jsonl').read_bytes(),(f.tree/'memory/history.jsonl').read_bytes())
-            self.assertTrue(note['copied_data'])
-        else:
-            self.assertEqual((f.new/Path(cfg['tree'])).resolve(),f.tree);self.assertEqual(note['copied_data'],[])
-        self.assertEqual(note['state'],'prepared');self.assertEqual(note['source_policy'],'preserve')
+        with patch.object(code_transition,'preflight') as preflight,patch('localharness.source_update_host.review') as review,\
+             patch('localharness.migration_lifecycle.stop') as stop,patch('localharness.migration_lifecycle.remove_program') as remove:
+            with self.assertRaisesRegex(ValueError,'clean code'):
+                if copy_data:
+                    import python_migrate
+                    python_migrate.migrate(f.old,f.new,f.new,f.new/'profile',stop_service=True,
+                        prepared=True,portable=True,source_mode='preserve',launch=False)
+                else:installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
+            preflight.assert_not_called();review.assert_not_called();stop.assert_not_called();remove.assert_not_called()
         self.assertEqual((f.old/'helene.json').read_bytes(),before)
         self.assertEqual((f.tree/'memory/history.jsonl').read_text(),'retained-private-history\n')
-        if not copy_data:self.assertTrue(Path(note['archives'][0]['path']).is_file())
-
-    def test_native_before_221_combines_conflicts_then_new_panel_before_shutdown(self):self.exercise(True)
-
-    def test_automatic_merge_still_requires_new_panel_for_migration(self):self.exercise(False)
-
-    def test_standalone_cli_copies_data_and_reviews_code_before_shutdown(self):self.exercise(False,copy_data=True)
-
-    def test_failed_panel_does_not_stop_or_retire_native_program(self):
-        f=self.setup_fixture(False)
-        with patch('localharness.source_update_host.review',side_effect=RuntimeError('panel has findings')), \
-             patch('localharness.migration_lifecycle.stop') as stop,patch('localharness.migration_lifecycle.remove_program') as remove:
-            with self.assertRaisesRegex(RuntimeError,'panel has findings'):
-                installation.run(f.new,f.new,old=f.old,data=f.tree,source_mode='preserve',launch=False)
-            stop.assert_not_called();remove.assert_not_called()
         self.assertTrue((f.old/'helene.exe').is_file())
+
+
+    def test_native_conflicts_cannot_reenable_preserve_mode(self):self.exercise(True)
+
+    def test_nonconflicting_edits_cannot_reenable_preserve_mode(self):self.exercise(False)
+
+    def test_standalone_cli_refuses_preserve_before_any_data_copy(self):self.exercise(False,copy_data=True)
+
+    def test_new_migration_cannot_admit_a_preserve_panel_or_stop_the_old_program(self):
+        self.exercise(False)
+
 
 
 if __name__=='__main__':unittest.main()

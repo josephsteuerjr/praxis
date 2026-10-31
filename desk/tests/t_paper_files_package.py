@@ -1,4 +1,4 @@
-"""The complete desktop source package carries the exact native-window CLI chain.
+"""The complete desktop package carries the actual Python-window file consumer.
 
 Before running, build the first-party app/mobile/miniapp dist as for a normal
 package. This test refuses a partial desk package; it never installs it.
@@ -10,11 +10,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import queue
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 
 DESK = Path(__file__).resolve().parents[1]
@@ -53,41 +51,25 @@ class DesktopPackageFileConsumer(unittest.TestCase):
                              "overwrite": False, "data": base64.b64encode(b"from package").decode()})
             self.assertTrue(saved["ok"])
             self.assertEqual((folder / "copy.bin").read_bytes(), b"from package")
-            if sys.platform == "win32":
-                binary = DESK / "shell/target/debug/helene-host.exe"
-                self.assertTrue(binary.is_file(), "build source helene-host before the package test")
-                (base / "runtime").mkdir()
-                os.link(sys.executable, base / "runtime/python.exe")
-                (base / "data").mkdir()
-                (base / "helene.json").write_text(json.dumps({
-                    "mode": "remote", "base": "http://127.0.0.1:9", "key": "not-live",
-                    "setup_complete": True, "python": "runtime/python.exe", "tree": "data", "port": 8094,
-                }), encoding="utf-8")
-                env["PYTHONHOME"] = sys.prefix
-                host = subprocess.Popen([str(binary), "--root", str(base)],
-                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE, env=env,
-                                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-                rows = queue.Queue()
-                threading.Thread(target=lambda: [rows.put(json.loads(line)) for line in host.stdout],
-                                 daemon=True).start()
-                try:
-                    self.assertEqual(rows.get(timeout=15).get("event"), "ready")
-                    host.stdin.write((json.dumps({"id": 1, "command": "local_files_read",
-                                                      "args": {"path": str(folder / "copy.bin")}}) + "\n").encode())
-                    host.stdin.flush()
-                    response = rows.get(timeout=20)
-                    self.assertEqual(response.get("id"), 1, response)
-                    self.assertEqual(base64.b64decode(response["result"]["data"]), b"from package")
-                finally:
-                    if host.poll() is None:
-                        host.stdin.write(b'{"id":999,"command":"host_shutdown"}\n')
-                        host.stdin.flush()
-                        try: host.wait(timeout=12)
-                        except subprocess.TimeoutExpired: host.kill(); host.wait(timeout=5)
-                    host.stdin.close()
-                    host.stdout.close()
-                    host.stderr.close()
+            (base/'data').mkdir()
+            (base/'helene.json').write_text(json.dumps({'mode':'local','tree':'data',
+                'code':'tree','setup_complete':False}),encoding='utf8')
+            # The current window delegates to Controller, not the retired Rust
+            # host. Isolated import proves this complete package carries its
+            # real dependency closure; no source PYTHONPATH or model is used.
+            code="""import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from localharness.python_controller import Controller
+owner=Controller(Path(sys.argv[2]),lambda *unused:None)
+try:result=owner.invoke('local_files_read',{'path':sys.argv[3]})
+finally:owner.close()
+print(json.dumps(result))
+"""
+            response=subprocess.run([sys.executable,'-I','-c',code,str(app),str(base),str(folder/'copy.bin')],
+                                    capture_output=True,text=True,timeout=20,env=env)
+            self.assertEqual(response.returncode,0,response.stderr)
+            self.assertEqual(base64.b64decode(json.loads(response.stdout)['data']),b'from package')
             print("package_files=%d digest=%s" % (len(manifest["files"]), manifest["digest"]))
 
 

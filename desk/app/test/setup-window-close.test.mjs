@@ -5,7 +5,7 @@ import { stripTypeScriptTypes } from 'node:module';
 // Use the installed Tauri SDK, including its automatic destroy after a close
 // event, so this regression cannot pass by mocking close() as a simple return.
 globalThis.window = {};
-const { Window: TauriWindow } = await import('../../setup/ui/node_modules/@tauri-apps/api/window.js');
+const { Window: TauriWindow } = await import('@tauri-apps/api/window');
 const permissions = JSON.parse(readFileSync(new URL('../../setup/capabilities/default.json', import.meta.url))).permissions;
 const source = readFileSync(new URL('../../setup/ui/src/window-close.ts', import.meta.url), 'utf8');
 const { setupWindowClose } = await import('data:text/javascript;base64,' + Buffer.from(stripTypeScriptTypes(source)).toString('base64'));

@@ -233,6 +233,10 @@ class TestP02PositiveOpenerKnowledge(_Repair2Env):
             again = await runner._catalog_for_routing("-300", object())
             self.assertIn(9100, again,
                           "positive-знание переживает рестарт без полного свипа")
+            # The incomplete catalogue starts a real background flight. Settle
+            # its durable failure record while the provider patch and temporary
+            # route store still belong to this test, before tearDown removes it.
+            await self._drain_flights()
 
     async def test_completeness_still_gates_negative_knowledge(self):
         """`confirmed_topics` (полнота) продолжает отвечать «не знаю» без полного

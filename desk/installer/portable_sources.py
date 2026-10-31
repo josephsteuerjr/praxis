@@ -229,7 +229,7 @@ def application(source):
             raise ValueError('Linked application input')
         dest = 'app/' + p.name
         selected[dest], origins[dest] = Entry(p.read_bytes()), 'desk/' + p.name
-    for name in ('python_app.py', 'python_migrate.py', 'deskapp.py', 'helene_setup.py'):
+    for name in ('python_app.py', 'python_migrate.py', 'deskapp.py', 'helene_setup.py', 'windows_start.py', 'first_start_window.py'):
         if 'app/' + name not in selected:
             raise ValueError('Missing portable application entry: ' + name)
     for frontend, destination in FRONTS.items():

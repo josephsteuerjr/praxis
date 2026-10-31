@@ -94,7 +94,8 @@ class Activity(unittest.TestCase):
             row = reader.task_detail(self.base, 'actual-process')['agents'][0]
             self.assertEqual(row['liveness']['state'], 'alive')
             self.assertNotIn('supervisor_pid', row['liveness'])
-            self.assertEqual(row['status'], 'unknown', 'process observation does not invent task progress')
+            self.assertEqual(row['status'], 'running', 'fresh observation confirms the assigned running process')
+            self.assertEqual(row['observation'], {}, 'liveness must not invent tool or model progress')
             child.terminate(); child.wait(10)
             observed = live.observe(directory, request, put)
             self.assertEqual(observed['state'], 'exited')

@@ -146,19 +146,33 @@ def snapshot(entries):
     return stream.getvalue()
 
 
-def copy_records(source, target, replacements, removed):
+def copy_records(source, target, replacements, removed,*,windows_visibility=False):
     """Copy local headers+compressed streams, preserving attrs and data descriptors."""
     copied = {}
     with zipfile.ZipFile(source) as reader, Path(source).open('rb') as raw, \
             zipfile.ZipFile(target, 'w', allowZip64=True) as writer:
         infos = sorted(reader.infolist(), key=lambda i: i.header_offset)
         remaining = dict(replacements)
+        def visible_entry(info):
+            if windows_visibility and info.filename.startswith(PREFIX):
+                name=info.filename[len(PREFIX):].rstrip('/')
+                if name and '/' not in name:
+                    info.external_attr=(info.external_attr&~2) if name.lower()=='helene.exe' else (info.external_attr|2)
+            return info
+        if windows_visibility:
+            final_names=(set(reader.namelist())-set(removed))|set(replacements)
+            folders={PREFIX+name[len(PREFIX):].split('/')[0]+'/' for name in final_names
+                     if name.startswith(PREFIX) and '/' in name[len(PREFIX):]}
+            for name in sorted(folders-set(reader.namelist())):
+                info=zipfile.ZipInfo(name,STAMP);info.create_system=3
+                info.external_attr=(0o40755<<16)|0x12
+                writer.writestr(info,b'')
         for index, item in enumerate(infos):
             if item.filename in removed:
                 continue
             if item.filename in remaining:
                 entry = remaining.pop(item.filename)
-                writer.writestr(info_for(item.filename, entry.mode), entry.data, compresslevel=6)
+                writer.writestr(visible_entry(info_for(item.filename, entry.mode)), entry.data, compresslevel=6)
                 continue
             end = infos[index + 1].header_offset if index + 1 < len(infos) else reader.start_dir
             left = end - item.header_offset
@@ -166,6 +180,7 @@ def copy_records(source, target, replacements, removed):
                 raise ValueError('Overlapping/truncated local ZIP records')
             raw.seek(item.header_offset)
             cloned = copy.copy(item)
+            visible_entry(cloned)
             cloned.header_offset = writer.fp.tell()
             h = hashlib.sha256()
             while left:
@@ -181,7 +196,7 @@ def copy_records(source, target, replacements, removed):
             writer.start_dir = writer.fp.tell()
             writer._didModify = True
         for name, entry in sorted(remaining.items()):
-            writer.writestr(info_for(name, entry.mode), entry.data, compresslevel=6)
+            writer.writestr(visible_entry(info_for(name, entry.mode)), entry.data, compresslevel=6)
     return copied
 
 

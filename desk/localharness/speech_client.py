@@ -15,9 +15,9 @@ import uuid
 from . import speech_protocol as ipc
 
 
-def _live(home, ready):
+def _live(home, ready, *, require_ready=True):
     from .voice import worker_live
-    return worker_live(home, ready) is True
+    return worker_live(home, ready,require_ready=require_ready) is True
 
 
 def _enabled(cfg):
@@ -68,18 +68,21 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
         generation = ready.get('generation')
         if ready.get('ready') is True and ipc.identity(generation) and _live(home, ready):
             break
+        if ready.get('phase')=='error' and _live(home,ready,require_ready=False):
+            raise RuntimeError(ready.get('error') or 'XTTS voice preparation failed; correct the voice settings')
         if time.monotonic() >= deadline:
             raise TimeoutError('XTTS worker is not ready; install/enable XTTS and wait for model loading')
         time.sleep(.05)
     if format == 'ogg_opus' and ready.get('ogg_opus') is not True:
         raise RuntimeError('XTTS runtime has no Ogg/Opus encoder (libsndfile OPUS capability); voice note unavailable')
-    if speaker not in (ready.get('speakers') or []):
+    reference = str(chosen.get('tts_reference') or '').strip()
+    if not reference and speaker not in (ready.get('speakers') or []):
         raise ValueError('Выбери голос из каталога установленной модели')
     if language not in (ready.get('languages') or []):
         raise ValueError('Язык отсутствует в установленной модели')
-    reference = str(chosen.get('tts_reference') or '').strip()
     if reference:
         path = Path(reference).expanduser()
+        if not path.is_absolute():path=tree/path
         if not path.is_file() or path.suffix.lower() != '.wav':
             raise ValueError('Свой образец должен быть существующим локальным WAV')
         reference = str(path.resolve())
@@ -99,7 +102,7 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
     try:
         audio.check(stopped)
         lease.touch()
-        ipc.write(request, {'request_id': identity, 'generation': generation,
+        ipc.enqueue(request, {'request_id': identity, 'generation': generation,
                   'deadline': time.time() + max(0, deadline - time.monotonic()),
                   'text': text, 'speaker': speaker, 'language': language,
                   'reference': reference, 'format': format})

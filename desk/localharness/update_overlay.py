@@ -48,7 +48,7 @@ def _program_files(source):
     """The running setup window's browser profile is never program payload."""
     for directory,dirs,names in os.walk(source,followlinks=False):
         here=Path(directory)
-        dirs[:]=sorted(d for d in dirs if d not in {'.migration-webview','.webview','__pycache__'})
+        dirs[:]=sorted(d for d in dirs if d not in {'.helene','.migration-webview','.webview','__pycache__'})
         for name in [*dirs,*sorted(names)]:
             item=here/name
             if item.name.startswith('.python-') or item.suffix=='.pyc':continue
@@ -57,10 +57,31 @@ def _program_files(source):
             if item.is_file():yield item
 
 
-def _source_map(source):
+def _source_map(source,target=None):
     """Compose declared M app repairs without editing running verifier B."""
     from .update_composition import selected_files
     result = {item.relative_to(source).as_posix(): item for item in _program_files(source)}
+    if target is not None:
+        from .package_notice import read
+        from .update_source import choice_path
+        choice=read(choice_path(source))
+        if choice.get('mode')=='clean':
+            if choice.get('old')!=str(target) or choice.get('new')!=str(source):
+                raise ValueError('Clean overlay target differs from consent')
+            from .app_migration import discover
+            from .source_merge import inventory
+            data=[Path(a['tree']).resolve() for a in discover(target)['agents'] if a['value'].get('mode')!='remote']
+            # These two distribution-owned code roots cannot retain importable
+            # modules deleted by the release. Memory and configured profiles
+            # remain outside the removal set even with legacy nested layouts.
+            for name in ('tree','app'):
+                root=target/name
+                if not root.is_dir():continue
+                for relative in inventory(root):
+                    item=root/relative
+                    key=item.relative_to(target).as_posix()
+                    if key not in result and not any(item.is_relative_to(home) for home in data):
+                        result[key]=None
     for name, row in selected_files(source).items():
         result[name] = None if row.get('delete') else Path(row['source'])
     return result
@@ -71,7 +92,7 @@ def prepare(source, target, recovery, verified=None, progress=None):
     recovery.mkdir()
     rows = []
     inventory = {}
-    for name, item in sorted(_source_map(source).items()):
+    for name, item in sorted(_source_map(source,target).items()):
         relative = Path(name)
         if '__pycache__' in relative.parts or relative.suffix == '.pyc':continue
         destination = _destination(target, relative)
@@ -106,18 +127,30 @@ def prepare(source, target, recovery, verified=None, progress=None):
     return prepared
 
 
+def _same_incoming(actual, expected):
+    if actual == expected:return True
+    if not actual or not expected or actual['sha256'] != expected['sha256']:return False
+    before,after=expected['stat'],actual['stat']
+    # NTFS security filters can attach an EA when an executable first starts.
+    # A changed counter still invalidates the cached digest: proof() must hash
+    # the file again. Accept only identical bytes and every other identity field;
+    # working program/preimage freshness remains strict below.
+    return (before.get('change_time') is not None and after.get('change_time') is not None
+            and before == {**after,'change_time':before['change_time']})
+
+
 def validate(source, target, recovery, progress=None):
     source, target, recovery = (Path(p).resolve() for p in (source, target, recovery))
     value = json.loads((recovery / 'prepared-overlay.json').read_text(encoding='utf-8'))
     if value['source'] != str(source) or value['target'] != str(target):
         raise ValueError('Prepared update identity differs')
-    actual = _source_map(source)
+    actual = _source_map(source,target)
     if set(actual) != set(value['inventory']):raise ValueError('Prepared update file inventory changed')
     for name, record in value['inventory'].items():
         item = actual[name]
         target_file = _destination(target, name)
         incoming = proof(item, record['incoming'], progress) if item is not None else None
-        if incoming != record['incoming']:raise ValueError('Prepared incoming file changed: ' + name)
+        if not _same_incoming(incoming,record['incoming']):raise ValueError('Prepared incoming file changed: ' + name)
         before = record['prior']
         if before is None:
             if target_file.exists():raise ValueError('New update path appeared after preparation: ' + name)
@@ -136,7 +169,7 @@ def apply(source, target, recovery, *, consume=False, progress=None, stopped=lam
     changed = []
     try:
         value = validate(source, target, recovery, progress)
-        sources = _source_map(source)
+        sources = _source_map(source,target)
         for row in value['rows']:
             if stopped():raise InterruptedError('Owner stopped the mechanical file switch')
             relative = Path(row['path'])

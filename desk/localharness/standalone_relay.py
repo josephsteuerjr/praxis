@@ -1,5 +1,6 @@
 """Optional independent MIT praxis-relay. The base application carries no compiler."""
 from pathlib import Path
+import copy
 import json,os,shutil,tempfile,tarfile,zipfile
 from .python_platform import runtime_target
 
@@ -60,7 +61,10 @@ def install(program,progress=None):
     program=Path(program);home=program/'relay-product';binary='praxis-relay-headless.exe' if os.name=='nt' else 'praxis-relay-headless';target=home/binary
     from .config_transaction import transaction
     with transaction(program/'relay-product-install'):
-        if target.is_file():return {'installed':True,'path':str(target),'restart_required':True}
+        if target.is_file():
+            from .program_state import hidden
+            hidden(home)
+            return {'installed':True,'path':str(target),'restart_required':True}
         with tempfile.TemporaryDirectory(prefix='.relay-install-',dir=program) as temporary:
             stage=Path(temporary);archive=stage/asset['name']
             result=_download(asset['url'],archive,asset['sha256'],progress)
@@ -68,8 +72,51 @@ def install(program,progress=None):
             payload=stage/'product';payload.mkdir();unpack(archive,payload,binary)
             (payload/'provenance.json').write_text(json.dumps({'product':'praxis-relay','version':PIN['version'],'license':'MIT','source_commit':PIN['source_commit'],'release':PROJECT,**asset},indent=2),encoding='utf-8')
             home.mkdir(exist_ok=True)
+            from .program_state import hidden
+            hidden(home)
             for path in payload.iterdir():os.replace(path,home/path.name)
     return {'installed':True,'path':str(target),'restart_required':True}
+
+def prepare_migration(previous,current,configurations,progress=None,cancelled=None):
+    """Prepare current transport before retirement, never import legacy code.
+
+    Configurations are snapshots; neither the old config nor data is written.
+    An explicit independent executable stays independent. An executable inside
+    the retired program becomes the current pinned standalone component.
+    """
+    previous,current=Path(previous).resolve(),Path(current).resolve()
+    result=[];needed=False
+    for original in configurations:
+        value=copy.deepcopy(original)
+        if value.get('mode','local')!='local':
+            result.append(value);continue
+        relay=value.get('relay') or {};images=value.get('images') or {}
+        if not isinstance(relay,dict) or not isinstance(images,dict):
+            raise ValueError('relay/images configuration is not an object')
+        enabled=relay.get('enabled') is True or images.get('enabled') is True
+        if relay.get('executable'):
+            selected=executable(previous,value)
+            relay=dict(relay)
+            if selected.is_relative_to(previous):
+                relay.pop('executable')
+            elif selected.is_file():
+                relay['executable']=str(selected)
+            elif enabled:
+                raise FileNotFoundError('Не найдено отдельное реле: '+str(selected)+'. Прежняя программа не удалена.')
+            value['relay']=relay
+        needed=needed or (enabled and not relay.get('executable'))
+        result.append(value)
+    if needed:
+        if cancelled and cancelled.is_set():raise InterruptedError('Owner stopped migration')
+        if not executable(current).is_file():
+            if progress:progress({'stage':'preparing_relay','label':'Подготовка подключения'})
+            def report(row):
+                if cancelled and cancelled.is_set():raise InterruptedError('Owner stopped migration')
+                if progress:progress(dict(row,stage='preparing_relay',label='Подготовка подключения'))
+            install(current,report)
+        if not executable(current).is_file():raise RuntimeError('Текущее реле не подготовлено; прежняя программа не удалена')
+    return result
+
 
 def preserve(previous,current):
     previous,current=Path(previous),Path(current)

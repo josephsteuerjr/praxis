@@ -114,7 +114,10 @@ function stand({available=true,reviews=[],saveError='',postError=''}={}) {
   const test=stand();test.node.isConnected=false;await tick();assert.equal(test.reads,0);
   const impl=test.impl;
   assert.match(impl.validateReviewPolicy({...policy,max_parallel:0}),/от 1 до 8/);
-  assert.match(impl.validateReviewPolicy({...policy,max_iters:NaN}),/от 1 до 200/);
+  assert.match(impl.validateReviewPolicy({...policy,max_iters:NaN}),/неотрицательное/);
+  assert.match(impl.validateReviewPolicy({...policy,max_iters:-1}),/неотрицательное/);
+  assert.equal(impl.validateReviewPolicy({...policy,max_iters:0}),'');
+  assert.equal(impl.validateReviewPolicy({...policy,max_iters:400}),'');
   assert.match(impl.validateReviewPolicy({...policy,models:['https://wrong']}),/URL/);
   assert.equal(impl.validateReviewPolicy(policy),'');
 }

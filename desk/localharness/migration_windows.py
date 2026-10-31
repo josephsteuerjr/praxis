@@ -44,13 +44,24 @@ def registered_uninstall(old):
             except FileNotFoundError:continue
     return None
 
-def uninstall_registered(old,argv):
-    """Called only after the new Python window and preserved profile are proven."""
+def uninstall_registered(old,argv,*,progress=None):
+    """Let the selected native uninstaller own shutdown and programme removal."""
     current=service()
     if current and not service_belongs_to(old,current):
         raise RuntimeError('The Helene service belongs to another installation; old package retained')
-    result=subprocess.run(argv,cwd=old,capture_output=True,timeout=180,creationflags=0x08000000)
-    if result.returncode:raise RuntimeError('The old uninstaller failed; the new application remains available')
+    import tempfile
+    # The launcher can spend minutes waiting for its elevated data-ACL worker.
+    # Keep emitting truthful phase/elapsed progress instead of freezing the UI.
+    with tempfile.TemporaryFile() as output:
+        child=subprocess.Popen(argv,cwd=old,stdout=output,stderr=subprocess.STDOUT,creationflags=0x08000000)
+        started=time.monotonic()
+        while child.poll() is None:
+            elapsed=time.monotonic()-started
+            if progress:progress({'stage':'uninstalling_old','seconds':elapsed,
+                'detail':'Штатный деинсталлятор завершает работу · данные сохраняются'})
+            if elapsed>=600:raise RuntimeError('Native uninstall is still running; data attachment postponed (pid '+str(child.pid)+')')
+            time.sleep(.5)
+        if child.returncode:raise RuntimeError('The old uninstaller failed; existing data has not been attached to a new owner')
     deadline=time.monotonic()+15
     while time.monotonic()<deadline:
         if registered_uninstall(old) is None and service(old) is None:
@@ -59,11 +70,105 @@ def uninstall_registered(old,argv):
     raise RuntimeError('Old installation removal has not yet been confirmed')
 
 
+def uninstaller_for(old):
+    """Exact registered command, or the native setup left in this installation."""
+    old=Path(old).resolve()
+    command=registered_uninstall(old)
+    if command:return command
+    for name,args in (('helene-setup.exe',['--uninstall','--quiet']),('uninstall.exe',['/S'])):
+        entry=old/name
+        if entry.is_file():
+            if entry.is_symlink() or entry.resolve().parent!=old:
+                raise ValueError('Uninstaller must belong to the selected installation')
+            return [str(entry),*args]
+    return None
+
+
+def uninstall_before_attach(old,command,data_paths,*,progress=None,cancelled=None):
+    """No preliminary stop, Python file walk, deletion or code backup."""
+    old=Path(old).resolve()
+    expected={'helene-setup.exe':('--uninstall','--quiet'),'uninstall.exe':('/s',)}
+    entry=Path(command[0]).resolve() if command else old
+    switches=[str(arg).lower() for arg in command[1:]]
+    if (entry.parent!=old or entry.name.lower() not in expected
+            or len(switches)!=len(expected[entry.name.lower()]) or set(switches)!=set(expected[entry.name.lower()])):
+        raise ValueError('Unsupported data-preserving uninstaller command')
+    # Native uninstallers retain data/agents/backups without --purge. Reject
+    # a nonstandard in-program data directory before they can remove it.
+    for raw in data_paths:
+        data=Path(raw).resolve()
+        if not data.is_dir():raise ValueError('Existing data folder is missing')
+        if data==old or (data.is_relative_to(old) and data.relative_to(old).parts[0].lower() not in ('data','agents','backups')):
+            raise ValueError('The old uninstaller cannot preserve this in-program data directory; move the data outside the programme first')
+    captured=owned_processes(old)
+    from .session_host import process_state
+    existing=[row for row in captured
+              if Path(row.get('ExecutablePath') or '').name.lower() in ('helene-setup.exe','uninstall.exe','icacls.exe')
+              and process_state({'pid':row['ProcessId'],'birth':row['Birth']}) not in ('absent','changed')]
+    # The native uninstaller may delete its shortcuts without notifying the
+    # shell. Unpin while those exact shortcut identities still exist.
+    unpinned=unpin_shortcuts(old) if os.name=='nt' else []
+    # An outer UAC launcher may already have returned. Joining its still-live
+    # generation must not start a second uninstaller over the same data ACLs.
+    receipt=({'ok':True,'method':'existing_native_uninstaller','purge':False,
+              'joined_existing':[{'pid':row['ProcessId'],'birth':row['Birth']} for row in existing]}
+             if existing else uninstall_registered(old,command,progress=progress))
+    # NSIS/UAC can return from its outer launcher and remove SCM/registry
+    # entries while an elevated helene-setup/icacls worker still owns the data.
+    # Observe new generations too, not only those present before invocation.
+    deadline=time.monotonic()+600
+    observed={(int(row['ProcessId']),row['Birth']):row for row in captured}
+    original_generations=set(observed)
+    stopping=set()
+    while True:
+        if cancelled and cancelled.is_set():raise InterruptedError('Owner stopped waiting for legacy uninstall')
+        try:
+            from .session_host import process_state
+            current=owned_processes(old)
+            observed.update({(int(row['ProcessId']),row['Birth']):row for row in current})
+            alive=[row for row in observed.values()
+                   if process_state({'pid':row['ProcessId'],'birth':row['Birth']}) not in ('absent','changed')]
+            uninstallers=[row for row in alive if (
+                Path(row.get('ExecutablePath') or '').name.lower() in ('helene-setup.exe','uninstall.exe','icacls.exe')
+                or ((int(row['ProcessId']),row['Birth']) not in original_generations
+                    and Path(row.get('ExecutablePath') or '').name.lower() in ('cmd.exe','powershell.exe','pwsh.exe','conhost.exe')))]
+            if progress and alive:
+                progress({'stage':'uninstalling_old','processes':[{'pid':row['ProcessId'],
+                    'name':Path(row.get('ExecutablePath') or '').name} for row in alive],
+                    'detail':'Ожидаю завершения штатного удаления и освобождения данных'})
+            if alive and not uninstallers:
+                # The native uninstaller has finished. Close only its remaining
+                # captured generations; never interrupt an ACL/uninstall worker.
+                for row in alive:
+                    identity=(int(row['ProcessId']),row['Birth'])
+                    if identity not in stopping:
+                        stop_generation(row);stopping.add(identity)
+                raise RuntimeError('Waiting for old application descendants to exit')
+            if alive:raise RuntimeError('Waiting for the native uninstaller and its data-permission workers')
+            quiescent(old)
+            if service(old):raise RuntimeError('The old uninstaller left its service registered')
+            if any((old/name).exists() for name in ('helene.exe','app/python_app.py','app/deskapp.py','runtime/python.exe','helene-svc.exe')):
+                raise RuntimeError('The old uninstaller left executable programme files')
+            if any(not Path(data).is_dir() for data in data_paths):
+                raise RuntimeError('The old uninstaller did not retain the selected data')
+            # Older native uninstallers remove only normal product/agent
+            # shortcut names and leave their emergency-stop variants behind.
+            # Remove remaining links by exact old target, never by display name.
+            shortcuts=remove_shortcuts(old)
+            return dict(receipt,method='native_uninstaller',old_processes_confirmed_dead=True,
+                        shortcuts_unpinned=unpinned,shortcuts_removed=shortcuts,
+                        empty_local=remove_empty_legacy_local())
+        except RuntimeError:
+            if time.monotonic()>=deadline:raise
+            time.sleep(.2)
+
+
 def request_python_exit(old, pid, *, observer_only=False):
     """Ask this installation's existing authenticated window, never close-to-tray."""
     import urllib.request
     from urllib.parse import urlsplit
-    path = old / f'.python-window-{pid}.json'
+    from .program_state import window_control
+    path = window_control(old,pid)
     if not path.is_file():
         raise RuntimeError('This running legacy window has no update exit surface; use its tray Exit, then retry')
     value = json.loads(path.read_text(encoding='utf-8'))
@@ -79,7 +184,7 @@ def request_python_exit(old, pid, *, observer_only=False):
         def redirect_request(self, *args, **kwargs): return None
     http = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     body = json.dumps({'command': 'python_window', 'args': {'action': 'exit', 'relaunch': False,
-                      'observer_only': bool(observer_only)}}).encode()
+                      'observer_only': bool(observer_only),'owner_exit':False}}).encode()
     request = urllib.request.Request(origin + '/__python__/invoke', data=body,
         headers={'Content-Type': 'application/json', 'X-Helene-Window': value['token']})
     with http.open(request, timeout=3) as response:
@@ -87,9 +192,12 @@ def request_python_exit(old, pid, *, observer_only=False):
 
 
 def service(old=None):
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();$s=Get-CimInstance Win32_Service -Filter \"Name='Helene'\"; if($s){$s|Select-Object Name,State,PathName|ConvertTo-Json -Compress}",dict(os.environ))
-    if not raw:return None
-    value=json.loads(raw)
+    """Use the native SCM query, without a WMI/PowerShell enumeration."""
+    import psutil
+    try:record=psutil.win_service_get('Helene').as_dict()
+    except psutil.NoSuchProcess:return None
+    value={'Name':record['name'],'State':'Stopped' if record['status']=='stopped' else 'Running',
+           'PathName':record['binpath'],'ProcessId':record.get('pid')}
     return value if old is None or service_belongs_to(old,value) else None
 
 
@@ -101,36 +209,33 @@ def service_belongs_to(old,value):
 
 
 def close_python(old, *, force=False):
+    """Ask an identified Python window to exit, then observe its native PID."""
     if os.name!='nt':return
-    env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()))
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @((Get-CimInstance Win32_Process)|Where-Object {$_.ExecutablePath -and ($_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\python.exe',[StringComparison]::OrdinalIgnoreCase) -or $_.ExecutablePath.Equals($env:HELENE_OLD_ROOT+'\\runtime\\pythonw.exe',[StringComparison]::OrdinalIgnoreCase))}|Select-Object ProcessId,CommandLine)|ConvertTo-Json -Compress",env)
-    rows=json.loads(raw or '[]')
-    if isinstance(rows,dict):rows=[rows]
-    owners=[row for row in rows if references_root(row.get('CommandLine',''),str(old/'app/python_app.py'))]
+    import psutil
+    old=Path(old).resolve()
+    interpreters={old/'runtime/python.exe',old/'runtime/pythonw.exe'}
+    owners=[row for row in process_snapshot() if row.get('ExecutablePath')
+            and Path(row['ExecutablePath']).resolve() in interpreters
+            and references_root(row.get('CommandLine',''),str(old/'app/python_app.py'))]
     for row in owners:
-        env['HELENE_WINDOW_PID']=str(row['ProcessId'])
-        # A disconnect may race successful exit. Observe the selected process
-        # independently, while an absent/invalid descriptor never authorizes kill.
-        request_error = None
+        request_error=None
+        try:request_python_exit(old,int(row['ProcessId']))
+        except (OSError,RuntimeError,ValueError) as exc:
+            request_error=exc
+            if force:continue
         try:
-            request_python_exit(old, int(row['ProcessId']))
-        except (OSError, RuntimeError, ValueError) as exc:
-            request_error = exc
-            if force:continue  # exact executable identity is rechecked by stop()
-        try:
-            env['HELENE_EXIT_WAIT']='3000' if force else '25000'
-            powershell("$ErrorActionPreference='Stop';$p=Get-Process -Id ([int]$env:HELENE_WINDOW_PID) -ErrorAction SilentlyContinue;if($p -and -not $p.WaitForExit([int]$env:HELENE_EXIT_WAIT)){throw 'Python window exit unconfirmed'}",env)
-        except Exception as exc:
+            process=psutil.Process(int(row['ProcessId']))
+            if process.create_time()!=row['Birth']:continue
+            process.wait(timeout=3 if force else 25)
+        except psutil.NoSuchProcess:pass
+        except (psutil.Error,OSError) as exc:
             if force:continue
             raise RuntimeError('Python window exit unconfirmed; installation retained') from (request_error or exc)
     if owners and not force:
         from .app_migration import discover
         for agent in discover(old)['agents']:
-            value=agent['value']
-            if value.get('mode')=='remote':continue
-            record=Path(agent['tree'])/'.desktop-owner.lock'
-            if not owner_lease_available(record):
-                raise RuntimeError('Previous Python owner still holds its data lease; previous installation retained')
+            if agent['value'].get('mode')!='remote' and not owner_lease_available(Path(agent['tree'])/'.desktop-owner.lock'):
+                raise RuntimeError('Previous Python owner still holds its data lease')
 
 
 def owner_lease_available(path):
@@ -185,36 +290,88 @@ def stop(old):
     return {'service':before}
 
 
-def stop_owned_processes(old):
-    """Force only identified old executables/entries, including pre-control apps."""
-    old=Path(old).resolve()
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();@(Get-CimInstance Win32_Process|Select-Object ProcessId,ExecutablePath,CommandLine)|ConvertTo-Json -Compress",dict(os.environ))
-    rows=json.loads(raw or '[]')
-    if isinstance(rows,dict):rows=[rows]
+def process_snapshot():
+    """Native process generations; never execute/inspect an old Python module."""
+    import psutil
+    rows=[]
+    if hasattr(psutil.process_iter,'cache_clear'):psutil.process_iter.cache_clear()
+    for process in psutil.process_iter(['pid','ppid','exe','cmdline','create_time','status'],ad_value=None):
+        try:
+            value=process.info
+            if value['status'] in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD):continue
+            rows.append({'ProcessId':value['pid'],'ParentProcessId':value['ppid'],
+                         'ExecutablePath':value['exe'],'CommandLine':subprocess.list2cmdline(value['cmdline'] or []),
+                         'Birth':value['create_time']})
+        except psutil.NoSuchProcess:continue
+    return rows
+
+
+def stop_generation(row):
+    """Recheck birth, image and entry before signalling exactly this generation."""
+    import psutil
+    try:
+        process=psutil.Process(int(row['ProcessId']))
+        if (process.create_time()!=row['Birth'] or process.exe()!=row.get('ExecutablePath')
+                or subprocess.list2cmdline(process.cmdline())!=(row.get('CommandLine') or '')):
+            return False
+        process.terminate();process.wait(timeout=10)
+        return True
+    except psutil.NoSuchProcess:return True
+    except (psutil.AccessDenied,psutil.TimeoutExpired) as exc:
+        raise RuntimeError('Windows did not confirm termination of old process '+str(row['ProcessId'])) from exc
+
+
+def owned_processes(old):
+    """Read-only scoped guardians and captured external descendants, in order."""
+    old=Path(old).resolve();rows=process_snapshot();owned_ids=set()
     scripts=[old/p for p in ('app/python_app.py','app/deskapp.py','deskapp.py','app/localharness/runner.py','localharness/runner.py')]
     for row in rows:
         if int(row['ProcessId']) in (os.getpid(),os.getppid()):continue
         executable=row.get('ExecutablePath');command=row.get('CommandLine') or ''
         if not executable:continue
         path=Path(executable).resolve()
-        owned=path.is_relative_to(old) or (path.name.lower() in ('python.exe','pythonw.exe') and
-            any(references_root(command,str(script)) for script in scripts))
-        if not owned:continue
-        env=dict(os.environ,HELENE_OLD_PID=str(row['ProcessId']),HELENE_OLD_EXE=executable,HELENE_OLD_COMMAND=command)
-        # Recheck process generation immediately before Stop-Process. An exited
-        # PID that Windows reused cannot authorize signalling its new owner.
-        powershell("$ErrorActionPreference='Stop';$p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$env:HELENE_OLD_PID);if($p -and $p.ExecutablePath -eq $env:HELENE_OLD_EXE -and $p.CommandLine -eq $env:HELENE_OLD_COMMAND){Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop}",env)
+        if path.is_relative_to(old) or (path.name.lower() in ('python.exe','pythonw.exe') and
+                any(references_root(command,str(script)) for script in scripts)):
+            owned_ids.add(int(row['ProcessId']))
+    while True:
+        generations={int(row['ProcessId']):row.get('Birth') for row in rows}
+        children=set()
+        for row in rows:
+            parent=int(row.get('ParentProcessId') or -1)
+            if parent not in owned_ids:continue
+            if row.get('Birth') is None or generations.get(parent) is None:
+                raise RuntimeError('Old child process generation is unknown; new owner not admitted')
+            # An orphan can retain a reused parent PID. Its earlier birth does
+            # not make it a child of this newly observed supervisor generation.
+            if float(row['Birth'])>=float(generations[parent]):children.add(int(row['ProcessId']))
+        added=children-owned_ids-{os.getpid(),os.getppid()}
+        if not added:break
+        owned_ids.update(added)
+    parents={int(row['ProcessId']):int(row.get('ParentProcessId') or -1) for row in rows}
+    def depth(row):
+        level=0;parent=parents.get(int(row['ProcessId']));seen=set()
+        while parent in owned_ids and parent not in seen:
+            seen.add(parent);level+=1;parent=parents.get(parent)
+        return level
+    result=[row for row in sorted(rows,key=depth) if int(row['ProcessId']) in owned_ids]
+    for row in result:
+        if not row.get('Birth'):raise RuntimeError('Old process generation is unknown; new owner not admitted')
+    return result
+
+
+def stop_owned_processes(old):
+    """Portable fallback only: stop guardians before their captured children."""
+    for row in owned_processes(old):
+        stop_generation(row)
 
 
 def quiescent(old):
-    """Find only command lines carrying the exact old installation; never kill by name."""
+    """Prove no selected-root references remain, using native process APIs."""
     if os.name!='nt':return True
-    env=dict(os.environ,HELENE_OLD_ROOT=str(old.resolve()),HELENE_MIGRATOR_PID=str(os.getpid()),HELENE_WIZARD_PID=str(os.getppid()))
-    raw=powershell("[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); @((Get-CimInstance Win32_Process)|Where-Object {$_.ProcessId -ne [int]$env:HELENE_MIGRATOR_PID -and $_.ProcessId -ne [int]$env:HELENE_WIZARD_PID -and $_.CommandLine}|Select-Object ProcessId,CommandLine)|ConvertTo-Json -Compress",env)
-    rows=json.loads(raw or '[]')
-    if isinstance(rows,dict):rows=[rows]
-    if any(references_root(row.get('CommandLine',''),str(old.resolve())) for row in rows):
-        raise RuntimeError('Close the old Hélène window before switching; old processes still reference its directory')
+    exempt={os.getpid(),os.getppid()}
+    if any(int(row['ProcessId']) not in exempt and references_root(row.get('CommandLine',''),str(Path(old).resolve()))
+           for row in process_snapshot()):
+        raise RuntimeError('Old processes still reference the selected installation; new owner not admitted')
     return True
 
 
@@ -326,7 +483,8 @@ def run_privileged(script,env):
     pass through this process. Explicit values survive another admin identity.
     """
     import base64
-    allowed={'HELENE_OLD_ROOT','HELENE_SYSTEM_ACTION','HELENE_RETIRE_MANIFEST','HELENE_RETIRE_SHA256','HELENE_LINK'}
+    allowed={'HELENE_OLD_ROOT','HELENE_SYSTEM_ACTION','HELENE_RETIRE_MANIFEST','HELENE_RETIRE_SHA256','HELENE_LINK',
+             'HELENE_FIRST_ROOTS','HELENE_FIRST_DATA','HELENE_FIRST_PYTHON','HELENE_FIRST_ARGUMENTS'}
     assignments='\n'.join('$env:'+name+"='"+str(value).replace("'","''")+"'"
                           for name,value in env.items() if name in allowed)
     encoded=base64.b64encode((assignments+'\n'+script).encode('utf-16le')).decode('ascii')
@@ -350,7 +508,8 @@ def system_action(old,action,files=None):
     env=dict(os.environ,HELENE_OLD_ROOT=str(Path(old).resolve()),HELENE_SYSTEM_ACTION=action)
     if action=='remove_files':
         from .package_notice import write
-        folder=Path(os.environ.get('LOCALAPPDATA') or Path.home()/'AppData/Local')/'Helene/retirement-requests'
+        import tempfile
+        folder=Path(tempfile.gettempdir())/'Helene-retirement-requests'
         request=folder/(uuid.uuid4().hex+'.json')
         write(request,{'old':str(Path(old).resolve()),'files':files or {}})
         env.update(HELENE_RETIRE_MANIFEST=str(request),HELENE_RETIRE_SHA256=hashlib.sha256(request.read_bytes()).hexdigest())
@@ -405,9 +564,13 @@ switch($env:HELENE_SYSTEM_ACTION){
 
 def link_belongs(binding,root):
     target=binding.get('target','');root=Path(root).resolve()
-    return bool(target and (Path(target).resolve().is_relative_to(root) or
-        (references_root(binding.get('arguments',''),str(root/'app/python_app.py')) and
-         references_root(binding.get('arguments',''),str(root)))))
+    if target and Path(target).resolve().is_relative_to(root):return True
+    arguments=binding.get('arguments','')
+    launchers=('helene.exe','helene-host.exe','helene-setup.exe','Start Helene.vbs',
+        'Helene setup and recovery.vbs','Migrate Helene.vbs','app/python_app.py','app/windows_start.py')
+    if any(references_root(arguments,str(root/name)) for name in launchers):return True
+    cwd=binding.get('cwd')
+    return bool(cwd and Path(cwd).resolve()==root and any(references_root(arguments,name) for name in launchers))
 
 
 def unpin_shortcut(path):
@@ -453,19 +616,55 @@ def shortcut_folders():
         Path(os.environ['APPDATA'])/'Microsoft/Internet Explorer/Quick Launch/User Pinned']
 
 
-def remove_shortcuts(old,folders=None):
-    removed=[]
-    for folder in folders or shortcut_folders():
+def owned_shortcuts(old,folders=None):
+    for folder in shortcut_folders() if folders is None else folders:
         for path in Path(folder).rglob('*.lnk') if Path(folder).is_dir() else []:
             binding=shortcut_binding(path)
             if not binding or not link_belongs(binding,old):continue
-            unpin_shortcut(path)  # failure keeps the identity and is reported
-            try:path.unlink()
-            except PermissionError:
-                env=dict(os.environ,HELENE_LINK=str(path))
-                run_privileged("$ErrorActionPreference='Stop';Remove-Item -LiteralPath $env:HELENE_LINK -Force",env)
-            removed.append(str(path))
+            yield path
+
+
+def unpin_shortcuts(old,folders=None):
+    unpinned=[]
+    for path in owned_shortcuts(old,folders):
+        unpin_shortcut(path)
+        unpinned.append(str(path))
+    return unpinned
+
+
+def remove_shortcuts(old,folders=None):
+    removed=[]
+    for path in owned_shortcuts(old,folders):
+        unpin_shortcut(path)  # failure keeps the identity and is reported
+        try:path.unlink()
+        except PermissionError:
+            env=dict(os.environ,HELENE_LINK=str(path))
+            run_privileged("$ErrorActionPreference='Stop';Remove-Item -LiteralPath $env:HELENE_LINK -Force",env)
+        removed.append(str(path))
     return removed
+
+
+def remove_empty_legacy_local():
+    """Remove only the legacy empty placeholder; never walk data or links."""
+    if os.name!='nt':return {'state':'not-windows'}
+    import errno
+    from deskd.local_files import _known_folder
+    base=_known_folder('F1B32785-6FBA-4FCF-9D55-7B8E7F157091')
+    if base is None:
+        raw=os.environ.get('LOCALAPPDATA')
+        if not raw:return {'state':'unavailable'}
+        base=Path(raw)
+    target=Path(base)/'Helene'
+    from .program_state import _plain
+    try:_plain(target)
+    except ValueError:return {'state':'linked-retained'}
+    try:target.rmdir()
+    except FileNotFoundError:return {'state':'absent'}
+    except OSError as exc:
+        if exc.errno in (errno.ENOTEMPTY,errno.EEXIST) or getattr(exc,'winerror',None)==145:
+            return {'state':'nonempty-retained'}
+        raise
+    return {'state':'empty-removed'}
 
 
 def cleanup_installation(old,new):
@@ -487,7 +686,8 @@ def cleanup_installation(old,new):
         except FileNotFoundError:pass
     # Avoid asking for admin just to enumerate empty HKLM/task registrations.
     if service(old) or has_system_registration(old):system_action(old,'cleanup')
-    return {'shortcuts_removed':remove_shortcuts(old),'legacy_uninstaller_used':False}
+    return {'shortcuts_removed':remove_shortcuts(old),'legacy_uninstaller_used':False,
+            'empty_local':remove_empty_legacy_local()}
 
 
 def has_system_registration(old):
@@ -497,32 +697,67 @@ def has_system_registration(old):
     return raw=='yes'
 
 
-def remove_program(old,new,note):
-    """Delete an explicit program inventory, with data/source roots protected.
+def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=None):
+    """Retire stopped program/code files while preserving data and model roots.
 
     Older packages lack a passport: only known program directories/entries are
     admitted. No recursive deletion of the installation or data is performed.
     """
-    import hashlib
+    import hashlib,stat,time
     old,new=Path(old).resolve(),Path(new).resolve()
-    if old==new or new.is_relative_to(old) or not note.get('startup_proof'):
+    if old==new or new.is_relative_to(old) or old.is_relative_to(new):
         raise ValueError('Unsafe old-program retirement')
-    if not any((old/p).exists() for p in ('helene.exe','Helene.exe','helene-setup.exe','app/python_app.py','python-app.json')):
+    def check():
+        if cancelled and cancelled.is_set():raise InterruptedError('Owner stopped old-program retirement')
+    check()
+    if before_start:
+        if note.get('source_policy')!='clean' or not note.get('old_quiescent'):
+            raise ValueError('Early retirement requires a quiescent clean migration')
+        quiescent(old)
+        if any(not owner_lease_available(Path(p)/'.desktop-owner.lock') for p in note['data_paths']):
+            raise RuntimeError('Old data ownership is still held; program retained')
+    elif not note.get('startup_proof'):raise ValueError('Unsafe old-program retirement')
+    if not any((old/p).exists() for p in ('helene.exe','Helene.exe','helene-setup.exe','helene-body.exe',
+            'helene-bridge.exe','helene-svc.exe','helene-host.exe','app/python_app.py','python-app.json','helene.json','runtime','app')):
         return {'ok':True,'previous_program_already_absent':True,'purge':False}
     protected=[Path(p).resolve() for p in note['data_paths']+note.get('old_data_paths',[])]
-    protected += [Path(row['old']).resolve() for row in note.get('source_paths',[]) if Path(row['old']).resolve()!=old]
-    protected += [old/name for name in ('data','profile','agents','backups','archives','memory','models','code','code-backup')]
+    protected += [old/name for name in ('data','profile','agents','backups','archives','memory','models')]
+    def retained(path):
+        return any(path==p or path.is_relative_to(p) for p in protected)
+    def linked(path):
+        info=path.lstat()
+        return stat.S_ISLNK(info.st_mode) or bool(getattr(info,'st_file_attributes',0)&0x400)
+    def signature(path):
+        info=path.lstat()
+        return {'size':info.st_size,'mtime_ns':info.st_mtime_ns,'inode':info.st_ino}
+    last=0.0
+    def publish(**counts):
+        nonlocal last
+        if progress and (counts.get('force') or time.monotonic()-last>=.25):
+            counts.pop('force',None);progress({'stage':'removing_old',**counts});last=time.monotonic()
     names=set()
     inventory=old/'python-package-files.json'
-    if inventory.is_file():names.update(json.loads(inventory.read_text(encoding='utf-8')).get('files',{}))
-    for name in ('app','runtime','resources','components','bin'):
-        folder=old/name
-        if folder.is_dir() and not folder.is_symlink():
-            names.update(p.relative_to(old).as_posix() for p in folder.rglob('*') if p.is_file())
-    names.update(name for name in ('helene.exe','Helene.exe','helene-setup.exe','helene-svc.exe','helene-service.exe',
-        'helene-host.exe','uninstall.exe','python-app.json','python-package-files.json','Start Helene.vbs','Migrate Helene.vbs') if (old/name).is_file())
+    declared=json.loads(inventory.read_text(encoding='utf-8')).get('files',{}) if inventory.is_file() else {}
+    if note.get('normal_python_update'):
+        declared={**note.get('old_runtime_code_inventory',{}),**declared}
+    names.update(declared)
+    program_roots={old/name for name in ('app','runtime','resources','components','bin','tree','code','code-backup','voice','voice-xtts','relay-product')}
+    program_roots.update(Path(row['old']).resolve() for row in note.get('source_paths',[])
+        if Path(row['old']).resolve()!=old and Path(row['old']).resolve().is_relative_to(old))
+    for folder in sorted(program_roots):
+        if folder.is_dir() and not linked(folder) and not retained(folder):
+            for directory,dirs,entries in os.walk(folder,followlinks=False):
+                check();here=Path(directory)
+                dirs[:]=[n for n in dirs if n.lower() not in ('models','model','memory','.secrets')
+                    and not retained(here/n) and not linked(here/n)]
+                names.update((here/n).relative_to(old).as_posix() for n in entries if not linked(here/n))
+                publish(inventoried_files=len(names),files=0)
+    names.update(name for name in ('helene.exe','Helene.exe','helene-body.exe','helene-bridge.exe','helene-setup.exe','helene-svc.exe','helene-service.exe',
+        'helene-host.exe','helene-relay.exe','helene-relay','uninstall.exe','python-app.json','python-package-files.json',
+        'Start Helene.vbs','Helene setup and recovery.vbs','Migrate Helene.vbs') if (old/name).is_file())
     files={};seen=set()
     for name in sorted(names):
+        check()
         relative=Path(name)
         if relative.is_absolute() or '..' in relative.parts:raise ValueError('Invalid old program inventory')
         path=old/relative;resolved=path.resolve()
@@ -530,22 +765,42 @@ def remove_program(old,new,note):
         if identity in seen:continue
         seen.add(identity)
         if not resolved.is_relative_to(old) or resolved==old:raise ValueError('Old program inventory leaves installation')
-        if any(resolved==p or resolved.is_relative_to(p) for p in protected):continue
-        if path.name in ('helene.json','helene.json.bak','owner-stop.json') or not path.is_file():continue
-        if any(part.lower() in ('models','model','memory','.secrets') for part in relative.parts):continue
+        if retained(resolved):continue
+        if path.name in ('helene.json','helene.json.bak','owner-stop.json','agent-default.json','window-preferences.json',
+                '.env','auth.json','credentials.json') or not path.is_file():continue
+        if any(part.lower() in ('memory','.secrets') for part in relative.parts):continue
+        if any(part.lower() in ('models','model') for part in relative.parts):
+            from .python_archive_update import declared_runtime_file
+            if not note.get('normal_python_update') or not declared_runtime_file(old,name,declared):continue
         if path.is_symlink() or any(p.is_symlink() or (hasattr(p,'is_junction') and p.is_junction()) for p in [path,*path.parents] if p.is_relative_to(old)):
             raise ValueError('Linked program path cannot be retired')
-        files[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+        files[name]=signature(path)
     # Save the exact deletion list before the first mutation.
     from .package_notice import write
-    write(new/'old-program-retirement.json',{'old':str(old),'new':str(new),'files':files,'protected':[str(p) for p in protected]})
-    remaining={}
-    for name,digest in files.items():
+    write(new/'old-program-retirement.json',{'old':str(old),'new':str(new),'files':files,'protected':[str(p) for p in protected],
+        'policy':'quiescent-clean-program-only;no-code-backup','inventory':'file-metadata'})
+    remaining={};removed=0;removed_bytes=0
+    publish(files=0,total_files=len(files),force=True)
+    for name,expected in files.items():
+        check()
         path=old/name
-        if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('Old program changed before retirement')
-        try:path.unlink()
-        except PermissionError:remaining[name]=digest
+        if (any(linked(p) for p in (path,*path.parents) if p.is_relative_to(old))
+                or signature(path)!=expected):raise RuntimeError('Old program changed before retirement')
+        try:path.unlink();removed+=1;removed_bytes+=expected['size']
+        except PermissionError:
+            info=path.lstat()
+            if not info.st_mode&stat.S_IWRITE and info.st_nlink==1:
+                path.chmod(info.st_mode|stat.S_IWRITE)
+                try:
+                    path.unlink();removed+=1;removed_bytes+=expected['size']
+                    publish(files=removed,total_files=len(files),bytes=removed_bytes);continue
+                except PermissionError:pass
+            # Elevated deletion still receives an exact digest-bound list;
+            # ordinary per-user retirement need not read gigabytes twice.
+            with path.open('rb') as stream:remaining[name]=hashlib.file_digest(stream,'sha256').hexdigest()
+        publish(files=removed,total_files=len(files),bytes=removed_bytes)
     if remaining:system_action(old,'remove_files',remaining)
     if any((old/name).exists() for name in files):raise RuntimeError('Some old program files remain')
+    publish(files=len(files),total_files=len(files),bytes=sum(v['size'] for v in files.values()),force=True)
     launchers=[name for name in ('helene.exe','Helene.exe','helene-setup.exe','app/python_app.py') if (old/name).is_file()]
     return {'ok':not launchers,'removed_files':len(files),'retained_program_entries':launchers,'purge':False,'data_retained':True}

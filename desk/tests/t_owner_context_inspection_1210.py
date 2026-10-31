@@ -28,6 +28,36 @@ class Context(unittest.TestCase):
     def life(self):
         return types.SimpleNamespace(HOT_TOKEN_CAP=40000, hot_bounds=lambda p: (150,250,300,40000), tape_chars_for=lambda p: 5500)
 
+    def test_initial_profile_is_persisted_without_fictitious_previous_values_in_chat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree=Path(tmp);life=self.life()
+            profile=owner_context.configure(life,{},tree=tree)
+            self.assertEqual(profile['hard_at'],600)
+            self.assertEqual(profile['tape_chars'],128000)
+            self.assertFalse((tree/'memory/.state/context-policy-notice.json').exists())
+            event=json.loads((tree/'memory/context-policy.events.jsonl').read_text().strip())
+            self.assertEqual(event['kind'],'owner_context_policy_initialized')
+            self.assertFalse(event['notify_owner'])
+            desk=types.SimpleNamespace(archive=mock.Mock(),life=mock.Mock())
+            owner_context.notice(tree,desk,None)
+            desk.archive.assert_not_called();desk.life.assert_not_called()
+            owner_context.configure(life,{},tree=tree)
+            self.assertEqual(len((tree/'memory/context-policy.events.jsonl').read_text().splitlines()),1)
+
+    def test_real_budget_change_notifies_once_but_owner_binding_change_does_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree=Path(tmp);life=self.life()
+            owner_context.configure(life,{},tree=tree)
+            owner_context.configure(life,{'telegram':{'owner_id':12}},tree=tree)
+            self.assertFalse((tree/'memory/.state/context-policy-notice.json').exists())
+            owner_context.configure(life,{'owner_context':{'messages':900}},tree=tree)
+            notice=update_inspection.read(tree/'memory/.state/context-policy-notice.json')
+            self.assertIn('900 свежих сообщений',notice['text'])
+            self.assertIn('Прежние значения: 600',notice['text'])
+            desk=types.SimpleNamespace(rows=lambda _:[],archive=mock.Mock(),life=mock.Mock())
+            owner_context.notice(tree,desk,None);owner_context.notice(tree,desk,None)
+            desk.archive.assert_called_once();desk.life.assert_called_once()
+
     def test_owner_window_and_dm_are_fuller_without_changing_other_chats(self):
         life = self.life()
         owner_context.configure(life, {"telegram": {"owner_id": 12}})

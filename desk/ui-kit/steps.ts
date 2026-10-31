@@ -1,6 +1,7 @@
 // Шаги одного прогона агента — одна разметка для окна (панель хода, урок на
 // экране «Система») и для телефона. Данные — `GET /api/run/{id}`.
 import { esc, fmtK, md } from "./text";
+import { copyText } from "./dom";
 
 /**
  * Старый ключ комнаты окна (до 10.09.2026) — копия `contract.rooms.legacy`.
@@ -287,8 +288,8 @@ function bindMore(): void {
     if (copy) {
       e.preventDefault();
       const text = copy.closest('.tool-trace-block')?.querySelector('.run-text-body')?.textContent;
-      if (text != null && navigator.clipboard?.writeText) {
-        navigator.clipboard.writeText(text).then(() => { copy.textContent = 'Скопировано'; },
+      if (text != null) {
+        copyText(text).then((ok) => { copy.textContent = ok ? 'Скопировано' : 'Не скопировалось'; },
           () => { copy.textContent = 'Не скопировалось'; });
       } else copy.textContent = 'Копирование недоступно';
       return;

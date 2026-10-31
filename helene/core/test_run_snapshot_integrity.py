@@ -2743,20 +2743,22 @@ class AHostileLiveSnapshotHerEyesCanRead(_GuestBed):
                 checked += 1
         self.assertGreater(checked, 10, "блоков не нашлось — сверка ничего не проверила")
 
-    @unittest.skipUnless(
-        (Path(agent.__file__).resolve().parent.parent / "report"
-         / "resume_drill_sample.md").exists(),
-        "образец приёмки лежит в дереве аудита")
     def test_the_drill_sample_she_will_read_is_a_real_snapshot(self):
-        """Материал ЕЁ приёмки обязан быть настоящим снимком, а не рисунком.
+        """Публичный обезличенный образец обязан быть снимком, а не рисунком.
+
+        Статический wire-fixture собран отдельно от production render/write;
+        это регрессия формата, не квитанция исторической приёмки владельцем.
 
         ⚠ Читать только с `newline=""`: в payload-блоке лежат СЫРЫЕ `\\r\\n`
         (демоция CRLF), и универсальный перевод строк питона превратил бы их в
         `"\\n"` — метр разошёлся бы с телом на ровном месте.  Тот же байт делает
         файл чувствительным к `core.autocrlf` при коммите.
         """
-        path = (Path(agent.__file__).resolve().parent.parent / "report"
-                / "resume_drill_sample.md")
+        path = Path(__file__).with_name("test_fixtures") / "resume-drill-v2-3110.md"
+        identity = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+        self.assertEqual(identity["format"], "praxis-public-wire-fixture.v1")
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), identity["sha256"])
+        self.assertEqual(path.stat().st_size, identity["bytes"])
         sample = path.read_text(encoding="utf-8", newline="")
         parsed = run_snapshot.parse(sample)
         self.assertIsNotNone(parsed, "образец приёмки не разбирается — он устарел")

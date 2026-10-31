@@ -11,20 +11,27 @@ from localharness.package_notice import read,write
 
 class UpdateModes(unittest.TestCase):
     def setUp(self):
-        self.f=fixtures.PipelineTests('runTest');self.f.setUp();self.addCleanup(self.f.doCleanups)
-        f=self.f;write(f.new/'python-app.json',{'version':'2.2.9'});code_transition.seal(f.new)
+        self.f=fixtures.PipelineTests('runTest')
+        # Construct this exact delivery before its first admission. Overwriting
+        # python-app.json after setUp would erase the real v2 baseline anchor.
+        self.f.incoming_version='2.2.9'
+        self.f.setUp();self.addCleanup(self.f.doCleanups)
 
     def agent(self):
-        f=self.f;policy.select(f.old,f.new,'preserve',by='window');f.preflight()
+        f=self.f
+        from localharness import source_update
+        (f.old/'app/localharness').mkdir(parents=True,exist_ok=True)
+        (f.old/'app/localharness/source_update.py').write_bytes(Path(source_update.__file__).read_bytes())
+        policy.select(f.old,f.new,'preserve',by='window');f.preflight()
         f.request=read(pipeline.path(f.tree));f.directory=Path(f.request['directory'])
         return f
 
     def test_no_implicit_pristine_fallback_and_choice_binds_delivery(self):
         f=self.f
-        with self.assertRaisesRegex(ValueError,'Choose whether'):policy.require(f.old,f.new)
+        self.assertEqual(policy.require(f.old,f.new)['mode'],'preserve')
         with self.assertRaises(ValueError):policy.select(f.old,f.new,'anything',by='window')
-        policy.select(f.old,f.new,'clean',by='window')
-        with self.assertRaisesRegex(ValueError,'already selected'):policy.select(f.old,f.new,'preserve',by='window')
+        policy.select(f.old,f.new,'preserve',by='window',require_review=True,resolution_owner='incoming')
+        with self.assertRaisesRegex(ValueError,'already selected'):policy.select(f.old,f.new,'clean',by='window')
         upstream=read(f.new/'code-upstream.json');upstream['sha256']='0'*64;write(f.new/'code-upstream.json',upstream)
         with self.assertRaisesRegex(ValueError,'stale'):policy.selected(f.old,f.new)
 
@@ -39,7 +46,7 @@ class UpdateModes(unittest.TestCase):
         self.assertNotEqual(merge.inventory(target),before);self.assertEqual(merge.inventory(f.code),before)
         self.assertEqual((f.old/'helene.json').read_bytes(),settings);self.assertEqual((f.tree/'memory/owner.json').read_bytes(),memory)
         (target/'module.py').write_text('changed=True\n')
-        with self.assertRaisesRegex(ValueError,'candidate was changed'):code_transition.validate(f.new)
+        with self.assertRaisesRegex(ValueError,'incoming source changed'):code_transition.validate(f.new)
 
     def test_selected_agent_finishes_then_independent_review_without_merger_worker(self):
         f=self.agent();self.assertEqual(f.operation()['state'],'waiting_agent');self.assertFalse(f.spawns)
@@ -50,10 +57,12 @@ class UpdateModes(unittest.TestCase):
         pipeline.command(f.tree,'resolve',path='module.py',content=fixtures.BOTH,expected_candidate_sha256=status['candidate_sha256'])
         pipeline.command(f.tree,'finish')
         with self.assertRaises(ValueError):pipeline.validate_ready(f.directory)
-        binding={'kind':'incoming-test','program':str(f.new),'plan_id':f.directory.name}
+        binding={**f.coordinator,'plan_id':f.directory.name}
         pipeline.ensure(f.tree,f.old,f.code,f.directory,'2.2.9',coordinator=binding)
-        pipeline.tick(f.tree,f.forge,f.service,coordinator=binding)
-        self.assertEqual(f.operation()['state'],'reviewing');self.assertFalse(f.operation().get('task_id'))
+        for _ in range(5):
+            pipeline.tick(f.tree,f.forge,f.service,coordinator=binding)
+            if f.operation()['state']=='reviewing':break
+        self.assertEqual(f.operation()['state'],'reviewing',{k:f.operation().get(k) for k in ('state','finish_error','verification_error','error','continuation')});self.assertFalse(f.operation().get('task_id'))
         f.review_result();pipeline.tick(f.tree,f.forge,f.service,coordinator=binding)
         self.assertEqual(pipeline.validate_ready(f.directory)['state'],'ready_to_apply')
         self.assertEqual((f.directory/'result/module.py').read_text(),fixtures.BOTH)
@@ -68,7 +77,10 @@ class UpdateModes(unittest.TestCase):
         import shutil
         f=self.agent();first=f.directory
         pipeline._cancel_marker(first,'Owner cancelled')
-        second=f.root/'second-operation/Helene';shutil.copytree(f.new,second)
+        second=f.root/'second-operation/Helene'
+        # A fresh extracted delivery carries no authority/private state from
+        # the cancelled operation whose programme files this fixture reuses.
+        shutil.copytree(f.new,second,ignore=shutil.ignore_patterns('.helene','.source-updates'))
         policy.select(f.old,second,'preserve',by='window')
         code_transition.preflight(f.old,second)
         self.assertNotEqual(read(pipeline.path(f.tree))['id'],first.name)
@@ -85,7 +97,7 @@ class UpdateModes(unittest.TestCase):
 
     def test_clean_proposal_waits_for_explicit_owner_consent(self):
         f=self.f
-        value=requests.request(f.tree,'plan',root=f.old,source_mode='clean',owner_spoke=True,owner_words='обнови приложение')
+        value=requests.request(f.tree,'plan',root=f.old,source_mode='clean')
         self.assertEqual(value['state'],'awaiting');self.assertEqual(value['source_mode'],'clean')
         with self.assertRaisesRegex(ValueError,'Direct owner'):requests.request(f.tree,'confirm',root=f.old)
         value=requests.request(f.tree,'confirm',root=f.old,identity=value['id'],by='window',source_mode='clean')
@@ -97,11 +109,16 @@ class UpdateModes(unittest.TestCase):
         value=requests.request(f.tree,'plan',root=f.old,source_mode='clean',owner_spoke=True,owner_words='обнови на чистый код без локальных правок')
         self.assertEqual(value['state'],'confirmed')
         agent=SimpleNamespace(tree=f.tree,enabled=True,conflict=False)
-        owner=SimpleNamespace(root=f.old,stop=threading.Event(),event=mock.Mock())
+        from contextlib import nullcontext
+        agent.id='base'
+        owner=SimpleNamespace(root=f.old,stop=threading.Event(),event=mock.Mock(),selection=lambda _:nullcontext())
         from localharness import agents,owner_stop,python_updates
-        with mock.patch.object(agents,'roster',return_value=[agent]),mock.patch.object(owner_stop,'stopped',return_value=False),mock.patch.object(python_updates,'update_check',return_value={'newer':True,'url':'fixture','sha256':'a'*64}),mock.patch.object(python_updates,'update_download',return_value={'path':'fixture.zip'}),mock.patch.object(python_updates,'update_install',return_value={'updater_pid':123}) as install:
+        import hashlib
+        archive=f.root/'fixture.zip';archive.write_bytes(b'synthetic update archive')
+        digest=hashlib.sha256(archive.read_bytes()).hexdigest()
+        with mock.patch.object(agents,'roster',return_value=[agent]),mock.patch.object(owner_stop,'stopped',return_value=False),mock.patch.object(python_updates,'release_endpoint',return_value='fixture'),mock.patch.object(python_updates,'update_check',return_value={'newer':True,'url':'fixture','sha256':digest}),mock.patch.object(python_updates,'update_download',return_value={'path':str(archive),'sha256':digest}),mock.patch.object(python_updates,'update_install',return_value={'updater_pid':123}) as install:
             requests.consume(owner);requests.consume(owner)
-        install.assert_called_once_with(owner,'fixture.zip',sourceMode='clean');self.assertEqual(requests.status(f.tree)['state'],'handed_off')
+        install.assert_called_once_with(owner,str(archive),forceExtensions=False,sourceMode='clean');self.assertEqual(requests.status(f.tree)['state'],'handed_off')
 
     def test_updater_choice_is_bound_to_this_operation(self):
         f=self.f;stage=f.root/('.helene-update-'+'a'*32);stage.mkdir();f.new.rename(stage/'Helene');f.new=stage/'Helene'

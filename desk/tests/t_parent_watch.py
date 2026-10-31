@@ -60,12 +60,16 @@ while True:
 
 
 def _alive(pid: int) -> bool:
+    # A container's PID 1 may not have reaped an exited orphan yet. A zombie
+    # owns no live process resources; the separate .soft assertion still proves
+    # that the child's finally block actually ran before exit.
+    import psutil
     try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
+        process=psutil.Process(pid)
+        return process.status() not in (psutil.STATUS_ZOMBIE,psutil.STATUS_DEAD)
+    except psutil.NoSuchProcess:
         return False
-    except PermissionError:
+    except psutil.AccessDenied:
         return True
 
 

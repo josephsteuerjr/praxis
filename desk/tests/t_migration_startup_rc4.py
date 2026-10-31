@@ -52,7 +52,7 @@ class StartupTests(unittest.TestCase):
     def failed_bootstrap(self,close_error=None):
         package=self.base/'.helene-update-fixture'/'Helene';package.mkdir(parents=True)
         value={'format':jobs.FORMAT if hasattr(jobs,'FORMAT') else 'helene-desktop-update-request.v2',
-            'id':'a'*32,'kind':'migration','program':str(self.root),'tree':str(self.data),
+            'id':'a'*32,'kind':'source-update','program':str(self.root),'tree':str(self.data),
             'state':'running','phase':'preparing','migration':{'old':str(self.root),'target':str(self.root),
             'package':str(package),'source_mode':'preserve','fresh':False,'remove_old':False}}
         jobs._save(self.data,value)
@@ -76,6 +76,31 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(saved['id'],'a'*32);self.assertEqual(saved['state'],'attention')
         self.assertTrue(saved['legacy_recovery']['released'])
         self.assertIn('heartbeat',saved['error'])
+
+    def test_explicit_clean_reaches_handoff_without_starting_previous_agent(self):
+        package=self.base/'.helene-update-clean'/'Helene';package.mkdir(parents=True)
+        write(self.root/'python-app.json',{'version':'old'})
+        value={'id':'d'*32,'kind':'source-update','program':str(self.root),'tree':str(self.data),
+            'state':'running','migration':{'old':str(self.root),'target':str(self.root),
+            'package':str(package),'source_mode':'clean','fresh':False,'remove_old':False}}
+        jobs._save(self.data,value)
+        owner=SimpleNamespace(root=self.root,stop=threading.Event(),event=Mock(),close=Mock(),
+            start=Mock(side_effect=AssertionError('clean must not start old code')),
+            readiness=Mock(side_effect=AssertionError('clean needs no old heartbeat')))
+        host=SimpleNamespace(stop=threading.Event())
+        from localharness import migration_lifecycle,source_update_host,python_updates
+        with patch.object(jobs,'bind_incoming'),patch.object(migration,'open_observer') as observer,\
+             patch.object(migration.owner_stop,'stopped',return_value=False),\
+             patch.object(source_update_host,'verified_runtime',return_value={}),\
+             patch.object(migration_lifecycle,'service',return_value=None),\
+             patch.object(migration_lifecycle,'stop',return_value={}) as stop,\
+             patch.object(migration_lifecycle,'quiescent'),\
+             patch.object(python_updates,'_prepare_handoff',return_value={'effect':'admitted'}) as handoff:
+            migration._execute(host,owner,value)
+        stop.assert_called_once_with(self.root)
+        handoff.assert_called_once_with(owner,package.parent,{},unittest.mock.ANY,False,'clean')
+        owner.start.assert_not_called();owner.readiness.assert_not_called();observer.assert_not_called()
+        self.assertEqual(jobs.status(self.data)['state'],'handed_off')
 
     def test_uncertain_cleanup_never_claims_release_or_forces_another_owner(self):
         owner,host,saved=self.failed_bootstrap(RuntimeError('child custody unconfirmed'))
@@ -107,7 +132,7 @@ class StartupTests(unittest.TestCase):
         with patch.object(migration,'observer_program',return_value=package),\
              patch.object(portable_profile,'bind_program') as bind,\
              patch.object(python_app,'Application',return_value=SimpleNamespace(event=Mock(),origin='http://127.0.0.1:1')),\
-             patch.object(session_host,'attach',side_effect=RuntimeError('fixture stops before attach')):
+             patch.object(session_host,'attach_migration',side_effect=RuntimeError('fixture stops before attach')):
             with self.assertRaisesRegex(RuntimeError,'fixture stops'):
                 python_app._main(['--root',str(self.root),'--program',str(package),'--session-job','c'*32])
         bind.assert_not_called();self.assertEqual((self.root/'helene.json').read_bytes(),before)

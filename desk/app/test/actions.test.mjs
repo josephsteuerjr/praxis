@@ -6,7 +6,8 @@ import { stripTypeScriptTypes } from "node:module";
 const kit = new URL("../../ui-kit/", import.meta.url);
 const moduleURL = (source) => "data:text/javascript;base64," + Buffer.from(stripTypeScriptTypes(source)).toString("base64");
 const text = moduleURL(readFileSync(new URL("text.ts", kit), "utf8"));
-const source = readFileSync(new URL("steps.ts", kit), "utf8").replace('"./text"', JSON.stringify(text));
+const dom = moduleURL(readFileSync(new URL("dom.ts", kit), "utf8").replace('"./text"', JSON.stringify(text)));
+const source = readFileSync(new URL("steps.ts", kit), "utf8").replace('"./text"', JSON.stringify(text)).replace('"./dom"', JSON.stringify(dom));
 const { stepsHTML, suppliedCommand, toolParameters, toolTraceHTML } = await import(moduleURL(source));
 const show = (iteration, status = "running") => stepsHTML({ manifest: { status }, iterations: [iteration] });
 

@@ -13,6 +13,8 @@ import tempfile
 import unittest
 from unittest import mock
 
+HELENE_TEST_ISOLATION = 'quiescent'  # Actual Windows desktop/process observations share the stand.
+
 DESK = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("cu_read_cli", DESK / "localharness" / "cu_read_cli.py")
 cu = importlib.util.module_from_spec(spec)

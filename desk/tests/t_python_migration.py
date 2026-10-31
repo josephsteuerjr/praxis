@@ -19,20 +19,28 @@ def git(path,*args):
 
 
 class MigrationTests(unittest.TestCase):
-    def test_portable_archive_migrates_profile_without_copying_program(self):
+    def setUp(self):
+        from localharness import source_update_host
+        for boundary in (patch.object(source_update_host,'verified_runtime',return_value={'kind':'fixture-runtime-boundary'}),
+            patch.object(python_migrate.migration_windows,'stop',return_value={}),
+            patch.object(python_migrate.migration_windows,'quiescent'),
+            patch.object(python_migrate.migration_windows,'cleanup_installation',return_value={})):
+            boundary.start();self.addCleanup(boundary.stop)
+
+    def clean_fixture(self,root):
+        import t_migration_clean_windows_2810 as fixtures
+        return fixtures.CleanMigration().fixture(root)
+
+    def test_clean_archive_attaches_same_data_without_copying_program_or_old_code(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';(old/'data/memory').mkdir(parents=True)
-            (old/'data/memory/history.txt').write_text('authored memory')
-            (old/'helene.json').write_text(json.dumps({'tree':'data','code':'data','runner':''}))
-            new=root/'portable'
-            for rel in ('python-app.json','app/python_app.py','runtime/python.exe'):
-                p=new/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('prepared program')
-            with patch.object(python_migrate,'copy_program',side_effect=AssertionError('Portable program must not be copied')),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(python_migrate.migration_windows,'service',return_value=None):
-                note=python_migrate.migrate(old,new,new,new/'profile',prepared=True,launch=False)
-            self.assertEqual(note['state'],'prepared')
-            self.assertEqual((new/'app/python_app.py').read_text(),'prepared program')
-            self.assertTrue(list((new/'profile').rglob('history.txt')))
-            self.assertEqual((old/'data/memory/history.txt').read_text(),'authored memory')
+            root=Path(temp);old,package=self.clean_fixture(root)
+            before=(old/'data/memory/history.jsonl').read_bytes()
+            with patch.object(python_migrate,'copy_program',side_effect=AssertionError('prepared program must not be copied')):
+                note=python_migrate.migrate(old,package,package,package/'profile',prepared=True,launch=False)
+            cfg=json.loads((package/'helene.json').read_text())
+            self.assertEqual(Path(cfg['tree']),old/'data');self.assertEqual(note['copied_data'],[])
+            self.assertFalse((package/'profile').exists());self.assertFalse((old/'code/agent.py').exists())
+            self.assertEqual((old/'data/memory/history.jsonl').read_bytes(),before)
 
     def test_migration_preserves_default_agent_preferences_and_legacy_voice_runtime(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -60,20 +68,15 @@ class MigrationTests(unittest.TestCase):
             python_migrate.fresh(package,new,root/'data',launch=False)
             self.assertEqual(json.loads(config.read_text())['model']['model'],'selected-model')
 
-    def test_incomplete_retirement_resumes_without_second_launch(self):
+    def test_launch_admits_one_durable_job_without_running_migration_inside_the_window(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';(old/'data').mkdir(parents=True)
-            (old/'helene.json').write_text(json.dumps({'tree':'data','code':'data','runner':''}))
-            package=root/'package';(package/'migration').mkdir(parents=True)
-            (package/'migration/legacy-package-files.json').write_text('{"files":{}}')
-            new=root/'new';note=app_migration.prepare(old,new,root/'saved')
-            note.update(state='retirement_incomplete',startup_proof={'stopped':True,'root':str(new)})
-            app_migration.write_note(new,note)
-            with patch('localharness.owner_stop.stopped',return_value=True),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(python_migrate.migration_windows,'retire',return_value={'service_removed':False}) as retire,patch('localharness.desktop_supervisor.JobChild.spawn') as spawn:
-                result=python_migrate.migrate(old,package,new,root/'saved')
-                self.assertEqual(result['state'],'completed')
-                self.assertEqual(python_migrate.migrate(old,package,new,root/'saved')['state'],'completed')
-                spawn.assert_not_called();retire.assert_called_once()
+            root=Path(temp);old,package=self.clean_fixture(root);target=root/'new'
+            with patch('localharness.migration_job.admit',return_value={'state':'admitted','job':{'id':'exact-job'}}) as admit, \
+                 patch('localharness.windows_installation.clean_attached') as work:
+                result=python_migrate.migrate(old,package,target,root/'unused-copy')
+            self.assertEqual(result['state'],'admitted');self.assertEqual(result['id'],'exact-job')
+            self.assertEqual(admit.call_args.kwargs['data'],old/'data');self.assertTrue(admit.call_args.kwargs['remove_old'])
+            admit.assert_called_once();work.assert_not_called()
 
     def test_immutable_model_reuses_storage_but_memory_has_independent_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -125,22 +128,15 @@ class MigrationTests(unittest.TestCase):
             self.assertTrue(events[-1]['reused'])
             self.assertEqual(events[-1]['bytes'],events[-1]['total_bytes'])
 
-    def test_failed_prepared_attempt_can_resnapshot_without_losing_prior_data(self):
+    def test_preparation_retry_uses_same_data_and_never_creates_previous_code_or_data_copies(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';(old/'data').mkdir(parents=True)
-            (old/'helene.json').write_text(json.dumps({'tree':'data','code':'data','runner':''}))
-            (old/'data/last').write_text('first')
-            package=root/'package';package.mkdir();new=root/'new'
-            with patch.object(python_migrate.migration_windows,'service',return_value=None),patch.object(python_migrate.migration_windows,'quiescent'):
-                first=python_migrate.migrate(old,package,new,root/'saved',launch=False)
-                (old/'data/last').write_text('latest')
-                second=python_migrate.migrate(old,package,new,root/'saved',launch=False)
-            self.assertNotEqual(first['id'],second['id'])
-            self.assertEqual(first['data_paths'],second['data_paths'])
-            retained=list((root/'saved'/second['id']).glob('previous-delta-*/last'))
-            self.assertEqual(len(retained),1);self.assertEqual(retained[0].read_text(),'first')
-            self.assertEqual((Path(second['data_paths'][0])/'last').read_text(),'latest')
-            self.assertTrue(list((new/'.migration-attempts').glob('*/helene.json')))
+            root=Path(temp);old,package=self.clean_fixture(root);data=old/'data';(data/'last').write_text('first')
+            first=python_migrate.migrate(old,package,package,root/'unused-copy',launch=False)
+            (data/'last').write_text('latest')
+            second=python_migrate.migrate(old,package,package,root/'unused-copy',launch=False)
+            self.assertEqual(first['id'],second['id']);self.assertEqual(first['data_paths'],second['data_paths'])
+            self.assertEqual((data/'last').read_text(),'latest');self.assertFalse((root/'unused-copy').exists())
+            self.assertFalse((package/'code-backup').exists());self.assertFalse((package/'archives').exists())
 
     def test_stopped_controller_admits_no_children_but_keeps_controls(self):
         from localharness.python_controller import Controller
@@ -173,20 +169,15 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(runner_required(dict(cfg,setup_complete=True),'neighbor'))
 
     @unittest.skipUnless(sys.platform=='win32','Windows Job transaction')
-    def test_retirement_failure_keeps_proven_new_owner(self):
-        from unittest.mock import MagicMock
+    def test_old_removal_failure_never_attaches_or_launches_new_owner(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';old.mkdir();package=root/'package';package.mkdir()
-            (old/'helene.json').write_text(json.dumps({'tree':'data','runner':''}))
-            new=root/'new'
-            def prepared(*args,**kwargs):
-                note={'id':'test','state':'new_app_started','old_root':str(old),'new_root':str(new)}
-                app_migration.write_note(new,note);return note
-            child=MagicMock();child.handle=123
-            with patch.object(python_migrate.migration_windows,'service',return_value=None),patch.object(python_migrate.migration_windows,'quiescent'),patch.object(app_migration,'prepare',side_effect=prepared),patch('localharness.desktop_process.JobChild.spawn',return_value=child),patch.object(python_migrate.migration_windows,'retire',side_effect=PermissionError('shortcut')):
-                with self.assertRaises(PermissionError):python_migrate.migrate(old,package,new,root/'data')
-            child.release.assert_called_once();child.stop.assert_not_called()
-            self.assertEqual(json.loads((new/'python-migration.json').read_text())['state'],'retirement_incomplete')
+            root=Path(temp);old,package=self.clean_fixture(root);new=root/'new'
+            with patch.object(python_migrate.migration_windows,'remove_program',side_effect=PermissionError('retirement blocked')), \
+                 patch('localharness.desktop_supervisor.JobChild.spawn') as spawn:
+                with self.assertRaisesRegex(PermissionError,'retirement blocked'):
+                    python_migrate.migrate(old,package,new,root/'unused-copy',launch=False)
+            spawn.assert_not_called();self.assertFalse((new/'helene.json').exists())
+            self.assertTrue((old/'data/memory/history.jsonl').is_file())
 
     def test_panic_shortcut_does_not_start_window_or_touch_real_latch(self):
         import python_app
@@ -233,17 +224,14 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(git(selected,'diff','--cached','--binary'),git(code,'diff','--cached','--binary'))
             self.assertEqual(git(selected,'diff','--binary'),git(code,'diff','--binary'))
 
-    def test_final_snapshot_follows_quiescence_not_discovery(self):
+    def test_attached_history_includes_final_old_owner_write_without_a_snapshot_copy(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';(old/'data').mkdir(parents=True);package=root/'package';package.mkdir()
-            (old/'helene.json').write_text(json.dumps({'tree':'data','code':'data','runner':''}))
-            event=old/'data/last';event.write_text('early')
-            def stop_writes(path):event.write_text('final');return True
-            with patch.object(python_migrate.migration_windows,'service',return_value=None), patch.object(python_migrate.migration_windows,'quiescent',side_effect=stop_writes):
-                note=python_migrate.migrate(old,package,root/'new',root/'saved',launch=False)
-            cfg=json.loads((root/'new/helene.json').read_text())
-            self.assertEqual((Path(cfg['tree'])/'last').read_text(),'final')
-            self.assertEqual(note['state'],'prepared')
+            root=Path(temp);old,package=self.clean_fixture(root);event=old/'data/last';event.write_text('early')
+            def stop_writes(path):event.write_text('final');return {}
+            with patch.object(python_migrate.migration_windows,'stop',side_effect=stop_writes):
+                note=python_migrate.migrate(old,package,package,root/'unused-copy',launch=False)
+            cfg=json.loads((package/'helene.json').read_text())
+            self.assertEqual((Path(cfg['tree'])/'last').read_text(),'final');self.assertEqual(note['copied_data'],[])
 
     def test_remote_connection_and_completed_receipt_are_not_window_only(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -269,18 +257,14 @@ class MigrationTests(unittest.TestCase):
             self.assertNotIn('connected',result['startup_proof'])
 
     @unittest.skipUnless(sys.platform=='win32','Windows Job transfer')
-    def test_failure_after_stop_restores_previous_service(self):
+    def test_failure_after_stop_never_revives_the_retired_old_supervisor(self):
         with tempfile.TemporaryDirectory() as temp:
-            root=Path(temp);old=root/'old';old.mkdir();package=root/'package';package.mkdir()
-            (old/'helene.json').write_text(json.dumps({'tree':'data','runner':''}))
-            before={'State':'Running'}
-            with patch.object(python_migrate.migration_windows,'service',return_value=before), patch.object(python_migrate.migration_windows,'stop',return_value={'service':before}), patch.object(python_migrate.migration_windows,'quiescent',side_effect=RuntimeError('old window')), patch.object(python_migrate.migration_windows,'restore_service',return_value=True) as restore:
+            root=Path(temp);old,package=self.clean_fixture(root);new=root/'new'
+            with patch.object(python_migrate.migration_windows,'quiescent',side_effect=RuntimeError('old window')), \
+                 patch.object(python_migrate.migration_windows,'restore_service') as restore:
                 with self.assertRaisesRegex(RuntimeError,'old window'):
-                    python_migrate.migrate(old,package,root/'new',root/'saved',stop_service=True)
-                restore.assert_called_once_with(old,before)
-            note=json.loads((root/'new/python-migration.json').read_text())
-            self.assertEqual(note['state'],'failed_before_retirement')
-            self.assertTrue(note['old_service_restored'])
+                    python_migrate.migrate(old,package,new,root/'unused-copy',launch=False)
+            restore.assert_not_called();self.assertFalse((new/'helene.json').exists())
 
     @unittest.skipUnless(sys.platform=='win32','Windows Job transfer')
     def test_installer_job_release_retains_process(self):

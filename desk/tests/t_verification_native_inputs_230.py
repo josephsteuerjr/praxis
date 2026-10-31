@@ -44,7 +44,10 @@ class NativeInputs(unittest.TestCase):
                           ' if k in os.environ},sort_keys=True))\n', encoding='utf8')
         cache = self.root / 'probe-cache'; cache.mkdir(exist_ok=True)
         lane = {'id': 'owned-env-probe', 'kind': 'script', 'root': 'desk',
-                'source': 'desk/tests/t_probe.py', 'argv': []}
+                'source': 'desk/tests/t_probe.py', 'argv': [],
+                'native_inputs':sorted(set(env)&bundle.SHARED_NATIVE_INPUTS)}
+        if native_inputs is None and lane['native_inputs']:
+            native_inputs=battery._native_inputs(self.executor)
         args = [lane, repository, None, {'python': sys.executable}, env, cache, lambda: False]
         if native_inputs is not None:
             args.append(native_inputs)
@@ -66,12 +69,38 @@ class NativeInputs(unittest.TestCase):
             observed = self.run_environment_probe(env)
         self.assertEqual(observed, {'HELENE_BODY_DIR': str(self.program)})
 
+    def test_declared_hands_binary_requires_exact_pin_and_reaches_child(self):
+        hands = self.program / 'owned-hands'
+        hands.write_bytes(b'fixture native binary; never executed')
+        executor = {'native_env': {'PRAXIS_HANDS': str(hands)},
+                    'native_files': {str(hands): bundle.digest(hands)}}
+        native = battery._native_inputs(executor)
+        self.assertEqual(self.run_environment_probe(self.environment(executor), native),
+                         {'PRAXIS_HANDS': str(hands)})
+        hands.write_bytes(b'changed')
+        with self.assertRaises(ValueError):
+            battery._native_inputs(executor)
+        with self.assertRaises(ValueError):
+            battery._native_inputs({'native_env': {'PRAXIS_HANDS': str(hands)}})
+
     def test_unknown_env_keys_and_bad_values_are_refused_not_ignored(self):
         for env in ({'OPENAI_API_KEY': 'secret'}, {'PRAXIS_HANDS': 'off'},
                     {'HELENE_HOST_BIN': 'invented'}, {'DISPLAY': ''}, {'DISPLAY': 42},
                     {'DISPLAY': 'bad\x00value'}, [], None):
             with self.subTest(env=env), self.assertRaises(ValueError):
                 self.environment({'native_env': env})
+
+    def test_explicit_legacy_host_consumer_is_pinned_without_ambient_custody(self):
+        binary=self.program/'owned-test-host'
+        binary.write_bytes(b'explicit isolated native consumer; never executed')
+        executor={'native_env':{'HELENE_HOST_BINARY':str(binary)},
+                  'native_files':{str(binary):bundle.digest(binary)}}
+        native=battery._native_inputs(executor)
+        with mock.patch.dict(os.environ,{'HELENE_HOST_BINARY':'UNRELATED production input'}):
+            self.assertEqual(self.run_environment_probe(self.environment(executor),native),executor['native_env'])
+        binary.write_bytes(b'replaced native consumer')
+        with self.assertRaises(ValueError):self.environment(executor)
+        with self.assertRaises(ValueError):self.environment({'native_env':executor['native_env']})
 
     def test_missing_wrong_or_unpinned_native_files_refuse_environment(self):
         cases = []

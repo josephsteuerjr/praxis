@@ -17,6 +17,56 @@ from localharness import source_update_host
 
 
 class MigrationJobTests(unittest.TestCase):
+    def test_old_progress_pointer_cannot_fail_a_new_admitted_observer(self):
+        from localharness import program_state,update_progress
+        target=self.base/'new';target.mkdir();control=self.base/'bootstrap'
+        previous=update_progress.Progress(program_state.progress(target,'a'*32),'a'*32,target)
+        previous.phase('failed',error='previous attempt')
+        pointer=update_progress.pointer(target);before=pointer.read_bytes()
+        admitted={'id':'b'*32,'kind':'migration','tree':str(control),'state':'running','admission':{},
+            'migration':{'package':str(self.root),'target':str(target),'data':str(self.data)}}
+        jobs._save(control,admitted)
+        row=migration_job.observation(self.root,admitted)
+        self.assertIsNone(row['progress']);self.assertEqual(row['state'],'running')
+        self.assertEqual(pointer.read_bytes(),before,'observing must not repin another operation')
+        current=update_progress.Progress(program_state.progress(target,admitted['id']),admitted['id'],target)
+        current.phase('connecting_data',files=8)
+        previous.pin()  # The overview pointer is not this admitted job's authority.
+        row=migration_job.observation(self.root,admitted)
+        self.assertEqual(row['progress']['id'],admitted['id'])
+        self.assertEqual(row['progress']['files'],8)
+        jobs._save(control,{**admitted,'id':'c'*32})
+        with self.assertRaisesRegex(ValueError,'identity'):
+            migration_job.observation(self.root,admitted)
+
+    def test_bound_progress_read_is_read_only_and_refuses_a_wrong_receipt(self):
+        from localharness import program_state,update_progress
+        target=self.base/'new';target.mkdir()
+        self.assertIsNone(update_progress.status(target,operation_id='a'*32))
+        self.assertEqual(list(target.iterdir()),[])
+        path=program_state.progress(target,'a'*32)
+        write(path,{'id':'b'*32,'target':str(target),'stage':'completed'})
+        original=path.read_bytes()
+        with self.assertRaisesRegex(ValueError,'identity'):
+            update_progress.status(target,operation_id='a'*32)
+        self.assertEqual(path.read_bytes(),original)
+
+    def test_passive_window_reads_only_its_admitted_job_and_preserves_exact_failure(self):
+        from localharness.update_progress import Progress
+        target=self.base/'new';target.mkdir();control=self.base/'bootstrap'
+        admitted={'id':'c'*32,'kind':'migration','tree':str(control),'state':'running','admission':{},
+            'migration':{'package':str(self.root),'target':str(target),'data':str(self.data)}}
+        jobs._save(control,admitted)
+        progress=Progress(target.parent/('.helene-update-'+admitted['id']+'.progress.json'),admitted['id'],target)
+        progress.phase('removing_old',files=5,total_files=10)
+        with patch.object(session_host,'process_state',return_value='alive'):
+            row=migration_job.observation(self.root,admitted)
+        self.assertTrue(row['live']);self.assertEqual(row['progress']['files'],5)
+        jobs._save(control,{**admitted,'state':'attention','error':'real failure','diagnostic':'migration-error.log'})
+        row=migration_job.observation(self.root,admitted)
+        self.assertEqual(row['error'],'real failure');self.assertEqual(row['diagnostic'],'migration-error.log')
+        jobs._save(control,{**admitted,'id':'d'*32})
+        with self.assertRaisesRegex(ValueError,'identity'):migration_job.observation(self.root,admitted)
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='helene-migration-job-test-');self.addCleanup(self.temp.cleanup)
         self.base=Path(self.temp.name);self.root=self.base/'program';self.root.mkdir();self.data=self.base/'data'
@@ -37,6 +87,35 @@ class MigrationJobTests(unittest.TestCase):
                 migration_job.admit(self.root,self.root,data=self.data,fresh=True)
         spawn.assert_not_called();self.assertEqual((self.data/'keep.txt').read_text(),'existing data')
         self.assertFalse(jobs.path(self.data).exists())
+
+    def test_separate_target_observer_uses_old_program_and_exact_host_admission(self):
+        from localharness import desktop_supervisor,owner_stop,update_process
+        self.data.mkdir();write(self.root/'helene.json',{'tree':str(self.data),'port':18742})
+        package=self.base/'RC4';package.mkdir();target=self.base/'new-installation';write(package/'source-inputs.json',{'files':{}})
+        child=Mock(pid=84173,handle=object())
+        descriptor={'program':str(package),'pid':child.pid,'birth':12,'generation':'fixture'}
+        def spawn(command,**kwargs):
+            self.assertEqual(command[command.index('--root')+1],str(package))
+            control=Path(command[command.index('--control-tree')+1]);descriptor['tree']=str(control)
+            self.assertFalse(control.is_relative_to(self.data))
+            value=jobs.status(control);value.update(state='running',admission={k:descriptor[k] for k in ('pid','birth','generation')})
+            jobs._save(control,value);write(control/'memory/.control/desktop-session.json',descriptor)
+            return child
+        with patch.object(owner_stop,'stopped',return_value=False),patch.object(update_process,'interpreter_for',return_value=Path(sys.executable)), \
+             patch.object(session_host,'process_state',return_value='alive'),patch.object(desktop_supervisor.JobChild,'spawn',side_effect=spawn):
+            admitted=migration_job.admit(package,target,old=self.root,data=self.data,source_mode='clean')
+            self.assertEqual(admitted['job']['program'],str(package))
+            control=Path(admitted['job']['tree'])
+            self.assertEqual(migration_job.observer_program(package,package,admitted['job']['id'],tree=control),package)
+            with patch.object(migration_job,'admit',side_effect=AssertionError('reopening must not repeat admission')):
+                reopened=migration_job.existing_observation(package,target,self.data)
+            self.assertEqual(reopened['id'],admitted['job']['id'])
+            self.assertEqual(Path(reopened['tree']),control)
+            self.assertFalse(jobs.path(self.data).exists(),'reopening must not write controls into the attached data')
+            for key in ('birth','generation'):
+                changed=dict(descriptor);changed[key]='different';write(control/'memory/.control/desktop-session.json',changed)
+                with self.assertRaisesRegex(ValueError,'does not match'):migration_job.observer_program(package,package,admitted['job']['id'],tree=control)
+        child.release.assert_called_once();child.stop.assert_not_called()
 
     def test_window_calls_only_durable_admit_not_the_migration_worker(self):
         from python_migration_window import MigrationWindow
@@ -148,7 +227,7 @@ session_host.Host(Path(sys.argv[2]),controller_factory=FixtureController,control
         tool={'input_schema':{'properties':{'action':{'enum':['diff','patch','finish']}}}}
         path.write_text('TOOL='+repr(tool))
         with self.assertRaises(AgentResolutionUnavailable):require_patch_tool(self.root)
-        path.write_text('TOOL='+repr(source_update.TOOL));require_patch_tool(self.root)
+        path.write_text('CONTINUATION_PROTOCOL=2\nTOOL='+repr(source_update.TOOL));require_patch_tool(self.root)
         with patch.dict(os.environ,{'HELENE_SOURCE_UPDATE_RUNTIME':'temporary-update-runtime'}):
             self.assertNotIn('HELENE_SOURCE_UPDATE_RUNTIME',update_process.permanent_environment())
 
@@ -161,7 +240,7 @@ session_host.Host(Path(sys.argv[2]),controller_factory=FixtureController,control
              patch.object(migration_job,'legacy_update',return_value={'state':'admitted'}) as legacy, \
              patch.object(updater,'perform',side_effect=AssertionError('legacy UI must not own semantic work')):
             self.assertEqual(updater.main(),0)
-        legacy.assert_called_once_with(self.root,new,source_mode='preserve',admission=stage/'updater-admitted.json')
+        legacy.assert_called_once_with(self.root,new,source_mode='clean',admission=stage/'updater-admitted.json')
 
     def test_staged_setup_update_does_not_open_a_long_lived_migration_window(self):
         import helene_setup
@@ -169,7 +248,7 @@ session_host.Host(Path(sys.argv[2]),controller_factory=FixtureController,control
         with patch.object(migration_job,'legacy_update',return_value={'state':'admitted'}) as legacy, \
              patch('python_migration_window.main',side_effect=AssertionError('normal Update is not a migration wizard')):
             self.assertEqual(helene_setup.main(['--root',str(new),'--old',str(self.root),'--target',str(self.root)]),0)
-        legacy.assert_called_once_with(self.root,new,source_mode='preserve',admission=None,force_extensions=False)
+        legacy.assert_called_once_with(self.root,new,source_mode='clean',admission=None,force_extensions=False)
 
     def test_legacy_descriptor_is_honest_job_admission_not_a_shown_window(self):
         import psutil

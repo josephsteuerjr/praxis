@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -16,10 +17,18 @@ DESK=Path(__file__).resolve().parents[1];sys.path.insert(0,str(DESK))
 from localharness import python_updates as updates,python_source_updater as updater,app_migration
 import python_app
 import python_migrate
+from localharness.package_notice import write
+from localharness.program_state import recovery as recovery_path
 
 
 def put(root,name,data):
     p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(data);return p
+
+def posix_runtime_entry(root):
+    # This consumer fixture needs an executable forwarding entry, not a link
+    # into the executor's read-only installation or a copied full runtime.
+    entry=put(root,'runtime/bin/python3',('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' "$@"\n').encode())
+    entry.chmod(0o755)
 
 class NativeUpdate(unittest.TestCase):
     def test_duplicate_http_install_request_cannot_launch_two_helpers(self):
@@ -48,11 +57,11 @@ class NativeUpdate(unittest.TestCase):
 
     def test_startup_recovery_is_real_before_controller_import_and_execs_restored_program(self):
         with tempfile.TemporaryDirectory() as tmp:
-            base=Path(tmp);old=base/'application';incoming=base/'incoming';recovery=base/'recovery'
+            base=Path(tmp);old=base/'application';incoming=base/'incoming';recovery=recovery_path(old,'restore-fixture')
             put(old,'app/python_app.py',b'print("RESTORED_BEFORE_CONTROLLER")\n')
             put(incoming,'app/python_app.py',(DESK/'python_app.py').read_bytes())
             updater.apply_files(incoming,old,recovery)
-            updater.active_update(old).write_text(json.dumps({'target':str(old),'recovery':str(recovery)}))
+            write(updater.active_update(old),{'target':str(old),'recovery':str(recovery)})
             shutil.copytree(DESK/'localharness',old/'app/localharness',ignore=shutil.ignore_patterns('__pycache__'))
             shutil.copy2(DESK/'python_migrate.py',old/'app/python_migrate.py')
             (old/'app/localharness/python_controller.py').write_text('raise RuntimeError("MIXED_CONTROLLER_IMPORTED")')
@@ -60,7 +69,7 @@ class NativeUpdate(unittest.TestCase):
                 try:(old/'runtime').symlink_to(Path(sys.executable).parent,target_is_directory=True)
                 except OSError as exc:self.skipTest(str(exc))
             else:
-                (old/'runtime/bin').mkdir(parents=True);(old/'runtime/bin/python3').symlink_to(sys.executable)
+                posix_runtime_entry(old)
             got=subprocess.run([sys.executable,str(old/'app/python_app.py'),'--root',str(old)],capture_output=True,timeout=20)
             self.assertEqual(got.returncode,0,got.stderr.decode(errors='replace'))
             self.assertIn(b'RESTORED_BEFORE_CONTROLLER',got.stdout)
@@ -70,7 +79,7 @@ class NativeUpdate(unittest.TestCase):
     def test_update_new_generation_does_not_roll_back_its_own_prepared_overlay(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)/'app';root.mkdir()
-            updater.active_update(root).write_text(json.dumps({'target':str(root),'migration_id':'one','recovery':str(root.parent/'recovery')}))
+            write(updater.active_update(root),{'target':str(root),'migration_id':'one','recovery':str(root.parent/'recovery')})
             (root/'python-migration.json').write_text(json.dumps({'id':'one','state':'prepared','new_root':str(root)}))
             self.assertFalse(updater.recover_startup(root,'one'))
             self.assertTrue(updater.active_update(root).exists())
@@ -117,9 +126,9 @@ class NativeUpdate(unittest.TestCase):
 
     def test_proven_ready_generation_is_not_rolled_back_after_helper_crash(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);old=root/'old';new=root/'new';recovery=root/'recovery'
+            root=Path(tmp);old=root/'old';new=root/'new';recovery=recovery_path(old,'one')
             put(old,'value',b'old');put(new,'value',b'new');updater.apply_files(new,old,recovery)
-            updater.active_update(old).write_text(json.dumps({'target':str(old),'migration_id':'one','recovery':str(recovery)}))
+            write(updater.active_update(old),{'target':str(old),'migration_id':'one','recovery':str(recovery)})
             (old/'python-migration.json').write_text('{"id":"one","state":"new_app_started"}')
             self.assertTrue(updater.recover_startup(old));self.assertEqual((old/'value').read_bytes(),b'new')
 
@@ -171,7 +180,7 @@ class UpdateHandoff(unittest.TestCase):
                     try:(root/'runtime').symlink_to(Path(sys.executable).parent,target_is_directory=True)
                     except OSError as exc:self.skipTest(str(exc))
                 else:
-                    (root/'runtime/bin').mkdir(parents=True);(root/'runtime/bin/python3').symlink_to(sys.executable)
+                    posix_runtime_entry(root)
             args=SimpleNamespace(old=old,new=new,staging=staging,archive=[],pid=0,cleanup=False,browser=True)
             children=[];popen=subprocess.Popen
             def launch(*a,**k):
@@ -180,7 +189,7 @@ class UpdateHandoff(unittest.TestCase):
                 with python_migrate.installation_lock(old),patch.object(updater,'install',side_effect=ValueError('failed update')),patch.object(updater.subprocess,'Popen',side_effect=launch):
                     with self.assertRaisesRegex(ValueError,'failed update'):updater.perform(args)
                     self.assertEqual(len(children),1)
-                    log=old/'python-update-recovery.log';deadline=time.monotonic()+8
+                    log=old/'.helene/logs/python-update-recovery.log';deadline=time.monotonic()+8
                     while time.monotonic()<deadline and b'Waiting for update installation lease' not in log.read_bytes():
                         if children[0].poll() is not None:break
                         time.sleep(.02)

@@ -136,6 +136,8 @@ def assemble(stage, output, relay=None, relay_source=None, *, version, toolchain
     (app/'component-downloads.json').write_bytes(downloads)
     (output/'helene-build.json').write_text(json.dumps({'format':'helene-python-version.v1','product':'Hélène','version':version,
         'platform':'windows','version_source':'python-app.json'},indent=2),encoding='utf-8')
+    from localharness.authored_baseline import seal as seal_authored_baseline
+    seal_authored_baseline(output)
     files={p.relative_to(output).as_posix():app_components.digest(p) for p in output.rglob('*')
            if p.is_file() and p.relative_to(output).parts[0] not in ('data','agents','backups','tree','components')
            and p.relative_to(output).as_posix() not in ('helene.json','python-package-files.json','owner-stop.json','python-migration.json')}

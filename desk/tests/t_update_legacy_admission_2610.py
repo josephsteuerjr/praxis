@@ -49,8 +49,7 @@ def put(root, name, content=b'fixture'):
 class LegacyAdmission(unittest.TestCase):
     def setUp(self):
         # All synthetic effects are confined to this test-owned temporary tree.
-        folder = Path(__file__).resolve().parent
-        temporary = tempfile.TemporaryDirectory(prefix='legacy-admission-', dir=folder)
+        temporary = tempfile.TemporaryDirectory(prefix='legacy-admission-')
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.old = self.root / 'application'
@@ -68,7 +67,7 @@ class LegacyAdmission(unittest.TestCase):
         put(self.tree, 'memory/identity.md', b'synthetic retained identity\n')
         put(self.old, 'helene.json', json.dumps({'mode': 'remote', 'tree': str(self.root / 'profile'),
              'setup_complete': False}).encode('utf-8'))
-        update_source.select(self.old, self.new, 'preserve', by='updater')
+        update_source.select(self.old, self.new, 'clean', by='updater')
         # Redirect both real Stop readers to disjoint synthetic latches, rather
         # than consulting or modifying the owner's installed profile.
         for name in ('seed_file', 'client_file'):
@@ -82,7 +81,7 @@ class LegacyAdmission(unittest.TestCase):
         self.admitted = None
         self.child = SimpleNamespace(pid=os.getpid(), poll=Mock(return_value=None),
                                      terminate=Mock(), wait=Mock())
-        self.original_bytes = {p.relative_to(self.old): p.read_bytes() for p in self.old.rglob('*') if p.is_file()}
+        self.original_bytes = {p.relative_to(self.old): p.read_bytes() for p in self.old.rglob('*') if p.is_file() and '.helene' not in p.relative_to(self.old).parts}
 
     def await_old(self, expired=False):
         start = self.clock
@@ -130,7 +129,7 @@ class LegacyAdmission(unittest.TestCase):
 
     def assert_old_unchanged(self):
         self.assertEqual(self.original_bytes, {p.relative_to(self.old): p.read_bytes()
-                         for p in self.old.rglob('*') if p.is_file()})
+                         for p in self.old.rglob('*') if p.is_file() and '.helene' not in p.relative_to(self.old).parts})
 
     def run_entry(self):
         argv = ['python_source_updater.py', '--old', str(self.old), '--new', str(self.new),
@@ -150,7 +149,7 @@ class LegacyAdmission(unittest.TestCase):
             self.assertEqual(value['state'], 'admitting')
             self.assertEqual(value['confirmed_by'], 'legacy-update-invocation')
             self.assertEqual(value['migration']['data'], str(self.tree))
-            self.assertEqual(value['migration']['source_mode'], 'preserve')
+            self.assertEqual(value['migration']['source_mode'], 'clean')
             value.update(state='running', admission={'pid':os.getpid(),
                          'birth':psutil.Process().create_time(), 'generation':'synthetic-host'})
             jobs._save(self.tree, value)
@@ -278,7 +277,7 @@ class LegacyAdmission(unittest.TestCase):
                 args = SimpleNamespace(**vars(self.args))
                 if kind == 'staging':args.new = self.root / 'unbound'
                 else:args.archive = [self.root.parent / 'unbound.zip']
-                with self.assertRaisesRegex(ValueError, 'staging directory|archive must be beside'):
+                with self.assertRaisesRegex(ValueError, 'staging directory|download cache'):
                     updater.perform(args)
                 observer.assert_not_called()
                 prepare.assert_not_called()
@@ -299,6 +298,7 @@ class LegacyAdmission(unittest.TestCase):
 
     def test_unrecovered_marker_refuses_before_old_exit_and_is_never_blessed(self):
         pending = updater.active_update(self.old)
+        pending.parent.mkdir(parents=True,exist_ok=True)
         pending.write_text('{"prior":"unresolved"}', encoding='utf-8')
         with patch.object(updater, 'prepare_install') as prepare, \
              patch.object(updater.subprocess, 'Popen') as launch:

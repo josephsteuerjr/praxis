@@ -107,7 +107,7 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
             with local.reader.open(entry) as source,temporary.open('xb') as output:
                 while chunk:=source.read(1024*1024):
                     digest.update(chunk);output.write(chunk);report(len(chunk),entry.filename)
-            if os.name!='nt':temporary.chmod((entry.external_attr>>16)&0o777 or 0o644)
+            if os.name!='nt':temporary.chmod(((entry.external_attr>>16)&0o777 or 0o644)&~0o022)
             temporary.replace(target);report(0,entry.filename,True)
             from .update_io import stamp, count
             count(progress, 'extracted', entry.file_size)
@@ -120,14 +120,13 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
             init()
             for entry in entries:unpack(entry)
         else:
-            # A queue item per tiny Python module creates more overhead than
-            # decompression work. One reader streams small entries in archive
-            # order while other readers inflate the independent large members.
-            init()
-            with ThreadPoolExecutor(max_workers=max(1,workers-1),initializer=init) as pool:
-                pending=[pool.submit(unpack,e) for e in entries if e.file_size>=256*1024]
-                for entry in entries:
-                    if entry.file_size<256*1024:unpack(entry)
+            # Bounded batches avoid a future per file while allowing the tiny
+            # files' independent metadata and writes to overlap as well.
+            count=max(1,min(workers,len(entries)))
+            def unpack_batch(batch):
+                for entry in batch:unpack(entry)
+            with ThreadPoolExecutor(max_workers=count,initializer=init) as pool:
+                pending=[pool.submit(unpack_batch,entries[index::count]) for index in range(count)]
                 for future in pending:future.result()
     finally:
         for reader in readers:reader.close()

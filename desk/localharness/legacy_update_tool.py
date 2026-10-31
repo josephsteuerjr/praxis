@@ -39,7 +39,8 @@ def replace_owned(path,expected,data):
 
 def live_control(old):
     http=urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    for path in Path(old).glob('.python-window-*.json'):
+    from .program_state import window_controls
+    for path in window_controls(old):
         control=read(path)
         if Path(control.get('root') or '.').resolve()!=Path(old).resolve():continue
         url=urlsplit(control.get('origin',''))
@@ -96,13 +97,22 @@ def ensure_agent_window(old,new):
 
 def shim(new,interpreter,tool,bridge_id):
     """Appended to the old module; its other legacy functions stay available."""
-    return '\n# Incoming update hand, temporary; no model process.\n'+f'''
+    import inspect
+    from .source_update_hand import try_request
+    from .runtime_identity import capture
+    client=inspect.getsource(try_request).replace('def try_request(', 'def _incoming_rpc(',1)
+    identity=inspect.getsource(capture).replace('def capture(', 'def _capture_worker_identity(',1)
+    return '\n# Incoming update hand, temporary; no model process.\n'+client+'\n'+identity+'\n'+f'''
 TOOL = {tool!r}
+CONTINUATION_PROTOCOL = 2
+_incoming_program = {str(Path(new).resolve())!r}
 _incoming_python = {str(interpreter)!r}
 _incoming_hand = {str(Path(new)/'app/localharness/legacy_update_tool.py')!r}
 _incoming_bridge_id = {bridge_id!r}
 def command(tree, action='status', **args):
     import subprocess,os
+    handled,value=_incoming_rpc(tree,action,args,_incoming_program)
+    if handled:return value
     result=subprocess.run([_incoming_python,'-B','-s',_incoming_hand,'--tree',str(tree)],
         input=json.dumps(dict(args,action=action)).encode('utf-8'),capture_output=True,
         timeout=90,env=dict(os.environ,PYTHONUTF8='1',PYTHONIOENCODING='utf-8'),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -110,7 +120,7 @@ def command(tree, action='status', **args):
     return json.loads(result.stdout)
 def pending(tree):
     request=read(path(tree))
-    return request if request.get('resolution_owner')=='agent' and request.get('state') in ('pending','waiting_agent') else None
+    return request if request.get('resolution_owner')=='agent' and request.get('state') in ('pending','waiting_agent','verification_requested','review_requested','reviewing','ready_to_apply','needs_attention') else None
 def install(agent,tree):
     def hand(action='status',**args):
         try:return json.dumps(command(tree,action,**args),ensure_ascii=False)
@@ -118,20 +128,48 @@ def install(agent,tree):
     agent.TOOL_IMPL['source_update']=hand
     agent.BASE_TOOLS[:]=[t for t in agent.BASE_TOOLS if t.get('name')!='source_update']
     agent.BASE_TOOLS.append(TOOL)
-    write(path(tree).with_name('source-update-hand-ready.json'),{{'bridge':_incoming_bridge_id,'pid':__import__('os').getpid()}})
+    context={{}}
+    if globals().get('__file__') and getattr(agent,'__file__',None):
+        context=_capture_worker_identity(Path(__file__).resolve().parents[2],Path(agent.__file__).resolve().parent)
+    write(path(tree).with_name('source-update-hand-ready.json'),{{'bridge':_incoming_bridge_id,'pid':__import__('os').getpid(),'worker_context':context}})
 def notify_due(tree,turn):
     request=pending(tree)
-    if not request or int(request.get('tries',0))>=3 or time.time()<request.get('retry_at',0):return
+    if not request:return
     from . import owner_stop
     if owner_stop.stopped() or owner_stop.paused():return
-    request.update(tries=int(request.get('tries',0))+1,retry_at=time.time()+120);write(path(tree),request)
-    return turn('source-update-'+request['id'],speaker='Hélène',origin_text=
-        'Владелец начал обновление с сохранением правок. Новая сборка предоставила тебе source_update: '
-        'status, diff/read с пагинацией, patch(before/after, expected_candidate_sha256), finish, verify, review, apply. '
-        'Разреши оставшиеся конфликты точечными патчами в изолированной копии, сохраняя оба намерения. '
-        'Живой код не меняй. После finish запроси verify для полной применимой батареи, затем review; исправь findings и повтори verify перед новым review. После clear запроси apply с expected_composition_sha256 из status. '
-        'Приёмка передана тебе: сам исправляй замечания панели и повторяй finish; не проси владельца запускать ревью. '
-        'Stop и отмена обязательны.')
+    import hashlib
+    from pathlib import Path
+    identity=str(request.get('id') or '');directory=Path(request.get('directory') or '.').resolve()
+    programme=Path(request.get('program') or '.').resolve();base=Path(tree).resolve()
+    if len(identity)!=64 or directory not in (programme/'.source-updates'/identity,base/'memory/.source-updates'/identity):return
+    operation=read(directory/'pipeline.json');plan=read(directory/'plan.json')
+    if (operation.get('state') not in ('waiting_agent','needs_attention') or operation.get('cancel_requested')
+            or (directory/'cancel.json').exists() or operation.get('paused')):return
+    control=(operation.get('coordinator') or {{}}).get('job_control') or {{}}
+    parent=read(control['path']) if control.get('path') else {{}}
+    if control and (parent.get('id')!=control.get('id') or parent.get('state') in ('completed','cancelled','superseded','paused')):return
+    automatic=operation.get('continuation')=='automatic-v1'
+    if automatic and read(directory/'coordinator-hand.json').get('state')!='ready':return
+    event=hashlib.sha256(json.dumps(dict(state=operation.get('state'),candidate=operation.get('candidate_sha256'),
+        composition=operation.get('composition_sha256'),review=operation.get('review_id'),clear=operation.get('review_clear'),
+        error=operation.get('verification_error') or operation.get('finish_error') or operation.get('error'),
+        result=plan.get('result'),resolved=plan.get('resolved')),sort_keys=True).encode()).hexdigest()
+    notice_path=directory/'legacy-agent-notice.json';notice=read(notice_path);now=time.time()
+    if notice.get('event')==event and (notice.get('state')!='failed' or now<notice.get('retry_at',0)):return
+    value={{'event':event,'state':'reserved','at':now}};write(notice_path,value)
+    if read(path(tree)).get('id')!=identity or read(directory/'pipeline.json')!=operation:return
+    flow=('После finish обновлятор сам выполнит полные тесты, независимое ревью и разрешённое переключение. '
+          if automatic else 'После finish: verify, затем review после PASS и apply после clear. ')
+    try:
+        result=turn('source-update-'+identity+'-'+event[:16],speaker='Hélène',origin_text=
+            'Событие текущего обновления '+identity[:8]+'. Прочитай source_update status и фактические замечания/ошибку. '
+            'Разреши конфликты или исправь findings через read/diff/patch/resolve, затем finish. '+flow+
+            'Живой код, замороженные входы и квитанции не меняй. Stop/Pause обязательны; новых подтверждений владельца не требуется.')
+    except BaseException:
+        write(notice_path,dict(value,state='failed',retry_at=now+60));raise
+    write(notice_path,dict(value,state='failed' if result=='failed' else 'delivered',
+        **({{'retry_at':now+60}} if result=='failed' else {{}})))
+    return result
 '''
 
 

@@ -2803,6 +2803,11 @@ select.field-input {
   #app { --rail-track:0px;--panel-track:0px; }
   #app .chrome-left { width:auto;min-width:0; }
   #app.narrow-navigation #rail { position:fixed;left:0;top:var(--chrome-h);bottom:0;width:min(290px,90vw);background:var(--paper);z-index:40;box-shadow:6px 0 24px #0003; }
+  #app.narrow-activity.with-panel #panel {
+    position:fixed;right:0;top:var(--chrome-h);bottom:0;
+    width:min(380px,calc(100vw - 18px));background:var(--paper);z-index:40;
+    border-left:var(--lw) solid var(--line);box-shadow:-6px 0 24px #0002;
+  }
   /* ⚠ Форма селектора повторена дословно НАМЕРЕННО. `#app.with-panel` весит (1,1,0), а
      базовое `#app.with-panel:not(.panel-collapsed)` — (1,2,0): :not() несёт вес своего
      аргумента, а медиазапрос специфичности не добавляет. Короткая запись проиграла бы, и

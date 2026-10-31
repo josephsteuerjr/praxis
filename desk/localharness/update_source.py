@@ -8,7 +8,13 @@ MODES=('preserve','clean')
 
 class SourceChoiceCancelled(RuntimeError):pass
 
-def choice_path(new):return Path(new).parent/'source-choice.json'
+def choice_path(new):
+    new=Path(new).resolve();current=new/'.helene/source-choice.json'
+    legacy=new.parent/'source-choice.json'
+    previous=read(legacy) if not current.exists() else {}
+    if previous.get('format')=='helene-source-choice.v1' and previous.get('new')==str(new):
+        return legacy  # preserve the exact authority of an already admitted job
+    return current
 
 def identity(old,new):
     old,new=Path(old).resolve(),Path(new).resolve()
@@ -20,6 +26,8 @@ def identity(old,new):
 
 def select(old,new,mode,*,by,require_review=False,resolution_owner='agent',resolution_runtime=None):
     if mode not in MODES:raise ValueError('Choose preserve or clean source policy')
+    from .authored_baseline import mode as eligible
+    eligible(old,mode)
     if by not in ('window','owner-words','updater'):raise ValueError('Source choice requires an explicit owner action')
     if resolution_owner not in ('agent','incoming'):raise ValueError('Unknown source-resolution owner')
     from .app_migration import discover
@@ -43,7 +51,11 @@ def select(old,new,mode,*,by,require_review=False,resolution_owner='agent',resol
         if previous.get('resolution_owner','agent')!=resolution_owner:raise ValueError('Source-resolution owner is already bound; start a new update')
         if previous.get('resolution_runtime')!=value.get('resolution_runtime'):raise ValueError('Resolution runtime is already bound to this operation')
         return previous
-    write(choice_path(new),value);return value
+    target=choice_path(new)
+    if target.parent==Path(new).resolve()/'.helene':
+        from .program_state import root
+        root(new)
+    write(target,value);return value
 
 def selected(old,new):
     value=read(choice_path(new))
@@ -51,29 +63,25 @@ def selected(old,new):
     expected=identity(old,new)
     if value.get('format')!='helene-source-choice.v1' or any(value.get(k)!=v for k,v in expected.items()) or value.get('mode') not in MODES:
         raise ValueError('Update source choice is stale or changed')
+    from .authored_baseline import mode as eligible
+    eligible(old,value['mode'])
     return value
 
 def require(old,new,progress=None):
     value=selected(old,new)
-    if value:return value
-    if progress is None:
-        raise ValueError('Choose whether to preserve changes or install clean incoming source')
-    bound=identity(old,new)
-    progress.phase('choosing_source',source_choice=bound,
-        message='Сохранить локальные правки с помощью агента или установить чистый код выпуска. Память и настройки сохранятся.')
-    deadline=time.monotonic()+7200
-    while time.monotonic()<deadline:
-        if read(progress.path).get('source_choice_cancelled'):raise SourceChoiceCancelled('Owner cancelled update source choice')
-        value=selected(old,new)
-        if value:
-            progress.phase('code',source_mode=value['mode'],source_choice=None);return value
-        time.sleep(.1)
-    raise TimeoutError('Source update choice was not made; previous application retained')
+    from .authored_baseline import mode as eligible
+    if value:
+        eligible(old,value['mode'])
+        return value
+    # Normal Python updates retain authored source. Legacy native migration
+    # stays clean; explicit choices already bound above are never rewritten.
+    mode=eligible(old)
+    return select(old,new,mode,by='updater',require_review=mode=='preserve',
+                  resolution_owner='incoming' if mode=='preserve' else 'agent')
 
 def clean_prepare(old,new,note,choice):
-    """New code paths only. Old code, its Git and every profile remain intact."""
+    """Select the verified shipped tree directly; no source/Git duplicates."""
     from .essential_backup import configs,load
-    from .code_transition import baseline
     old,new=Path(old).resolve(),Path(new).resolve()
     if selected(old,new)!=choice or choice['mode']!='clean':raise ValueError('Clean source choice changed')
     from .app_migration import discover
@@ -82,40 +90,38 @@ def clean_prepare(old,new,note,choice):
     upstream=read(new/'code-upstream.json');actual=merge.inventory(new/'tree')
     if actual!=upstream['files']:raise ValueError('Clean update requires exact pristine incoming source')
     # Verify archive bytes and every source member independently before copying.
-    import tempfile
-    with tempfile.TemporaryDirectory(prefix='clean-proof-',dir=new.parent) as tmp:
-        if merge.inventory(baseline(new,Path(tmp)))!=actual:raise ValueError('Pristine source archive differs')
+    import hashlib,zipfile
+    archive=new/'code-upstream.zip'
+    with archive.open('rb') as stream:
+        if hashlib.file_digest(stream,'sha256').hexdigest()!=upstream['sha256']:
+            raise ValueError('Pristine source archive differs')
+    with zipfile.ZipFile(archive) as reader:
+        names=reader.namelist()
+        if len(names)!=len(set(names)) or set(names)!=set(actual):raise ValueError('Pristine source archive inventory differs')
+        for name in names:
+            if not merge.allowed(name):raise ValueError('Non-code member in pristine source archive')
+            with reader.open(name) as stream:
+                if hashlib.file_digest(stream,'sha256').hexdigest()!=actual[name]['sha256']:
+                    raise ValueError('Pristine source archive member differs: '+name)
     targets={};receipts=[]
     for row in note['source_paths']:
         original=Path(row['old']).resolve()
         if original not in targets:
-            target=new/'code'/note['id']/('clean-'+str(len(targets)))
-            if target.exists():raise ValueError('Clean candidate path already exists')
-            target.mkdir(parents=True)
-            for name,entry in actual.items():
-                path=target/name;path.parent.mkdir(parents=True,exist_ok=True)
-                path.write_bytes((new/'tree'/name).read_bytes())
-                if merge.os.name!='nt':path.chmod(0o755 if entry['mode']=='100755' else 0o644)
-            if merge.inventory(target)!=actual:raise ValueError('Clean source copy differs')
-            exe=merge.executable(new,old);repo=target/'.git'
-            merge.git(repo,'init','--quiet',exe=exe)
-            merge.git(repo,'config','core.worktree','..',exe=exe)
-            commit=merge.snapshot(repo,target,actual,exe=exe,label='Pristine Hélène '+str(choice['version'])+' source '+upstream['sha256'])
-            merge.git(repo,'update-ref','refs/heads/upstream',commit,exe=exe)
-            merge.git(repo,'symbolic-ref','HEAD','refs/heads/upstream',exe=exe)
+            target=new/'tree'
             targets[original]=target
             receipts.append({'source':str(original),'selected':str(target),'previous_files':merge.inventory(original),
-                             'incoming_files':actual,'upstream_sha256':upstream['sha256'],'clean_commit':commit})
+                             'incoming_files':actual,'upstream_sha256':upstream['sha256'],'layout':'shipped-tree'})
         row['selected']=str(targets[original])
     for config in configs(new):
         if not config.is_file():continue
         value=load(config);previous=Path(value.get('code','')).resolve()
         if previous in targets:
             value.update(code=str(targets[previous]))
-            value.setdefault('app',str(new/'app/deskapp.py'));value.setdefault('runner',str(new/'app/localharness/runner.py'))
+            # Clean recovery runs only incoming distribution entry points.
+            value.update(app=str(new/'app/deskapp.py'),runner=str(new/'app/localharness/runner.py'))
             value['installed']=dict(value.get('installed') or {},service=False)
             write(config,value)
-    note['source_policy']='clean';note['source_choice']=choice
+    note['source_policy']='clean';note['source_choice']=choice;note['source_layout']='shipped-tree'
     write(new/'code-transition-plan.json',{'format':'helene-clean-code-plan.v1','old':str(old),
         'incoming':actual,'choice':choice,'sources':receipts})
     write(new/'code-transition.json',{'format':'helene-code-transition.v3','source_policy':'clean','sources':receipts})
@@ -132,6 +138,12 @@ def validate_clean(new,record):
     for row in record['sources']:
         if merge.inventory(row['source'])!=row['previous_files']:raise ValueError('Local code changed after clean update choice')
         target=Path(row['selected']).resolve()
+        if row.get('layout')=='shipped-tree':
+            if target!=new/'tree' or merge.inventory(target)!=record['incoming']:
+                raise ValueError('Clean shipped source was changed')
+            continue
+        # Already admitted older operations retain their original candidate/Git
+        # contract. They are not silently converted into a new clean request.
         if not target.is_relative_to(new/'code') or merge.inventory(target)!=record['incoming']:
             raise ValueError('Clean candidate was changed')
         if merge.git(target/'.git','rev-parse','HEAD',exe=merge.executable(new,old)).stdout.decode().strip()!=row['clean_commit']:

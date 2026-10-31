@@ -82,6 +82,15 @@ class Activity(unittest.TestCase):
         self.assertEqual(tool["status"], "received")
         self.assertEqual(tool["call_id"], "a")
 
+    def test_execution_tail_without_start_keeps_real_harness_action(self):
+        receipt={'kind':'process','argv':['bash','-lc','echo OK'],'status':'returned','exit_code':0}
+        detail=self.read([{'kind':'tool_execution','call_id':'actual','tool':'shell','receipt':receipt}])
+        tool=detail['iterations'][0]['tools'][0]
+        self.assertEqual(tool['call_id'],'actual')
+        self.assertEqual(tool['operations'],[receipt])
+        self.assertIsNone(tool['args'])
+        self.assertEqual(tool['status'],'unknown')
+
     def test_failure_without_start_is_visible(self):
         d = self.read([{"kind": "tool_failed", "call_id": "a", "tool": "shell", "error": "Interrupted"}])
         self.assertEqual(d["iterations"][0]["tools"][0]["status"], "failed")

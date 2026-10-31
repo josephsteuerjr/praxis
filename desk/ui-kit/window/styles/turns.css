@@ -29,15 +29,15 @@
   padding: 0 4px 10px;
 }
 .turns-title {
-  font: 400 26px/1 var(--hand);
-  letter-spacing: 0.03em;
+  font: 500 12px/1.5 var(--sans);
+  letter-spacing: 0;
   color: var(--ink);
-  -webkit-text-stroke: 0.3px currentColor;
+  -webkit-text-stroke: 0;
 }
 .turns-room {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  font-size: 11px;
   color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -299,14 +299,16 @@ button.st-line:hover {
 }
 /* Руки — под своим шагом, с тонкой направляющей слева. */
 .st-hand {
-  margin: 12px 0;
-  padding: 10px;
-  border: var(--lw) solid var(--line-strong);
-  border-radius: 12px;
-  background: var(--surface);
+  margin: 3px 0;
+  padding: 2px 0 3px;
+  border: 0;
+  border-bottom: var(--lw) solid var(--line);
+  border-radius: 0;
+  background: transparent;
 }
 .st-hand .st-line { flex-wrap: wrap; gap: 6px 8px; }
-.st-hand .st-label { font-size: 14px; }
+.st-hand .st-label { font-size: 12px; font-weight: 500; }
+.st-harness { margin: 0 6px 3px 28px; color: var(--ink-3); font: 10.5px/1.45 var(--mono); overflow-wrap: anywhere; }
 .st-hand .st-what { flex-basis: 100%; padding-left: 23px; color: var(--ink-2); }
 .st-hand.open .st-what { display: none; }
 .st-toggle::after { content: '⌄'; margin-left: auto; color: var(--ink-3); }
@@ -400,6 +402,8 @@ button.st-line:hover {
   font: 400 20px/1.3 var(--hand);
   color: var(--ink-3);
 }
+
+.st-harness { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) {
   .turn[data-status="live"] .turn-dot,

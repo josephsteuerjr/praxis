@@ -16,7 +16,7 @@ import threading
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import wave
 
 DESK = Path(__file__).resolve().parents[1]
@@ -151,7 +151,7 @@ class SpeechAssemblyServer(unittest.TestCase):
         self.assertEqual(child.env['HELENE_TREE'], str(tree))
         launches, errors, threads = [], [], []
         canonical = worker.engine_module()
-        engine = types.SimpleNamespace(speaker_manager=types.SimpleNamespace(speakers={'A': {}}),
+        engine = types.SimpleNamespace(speaker_manager=types.SimpleNamespace(speakers={'A': {'gpt_cond_latent':'c','speaker_embedding':'s'}}),
                                        config=types.SimpleNamespace(languages=['en']))
 
         def synthetic_pcm(engine, request, path, stopped):
@@ -182,9 +182,11 @@ class SpeechAssemblyServer(unittest.TestCase):
             return (selected_tree / '.owner-stop/stop.json').exists() or (
                 selected_tree / 'memory/.control/autonomy-paused.json').exists()
 
-        def command(pid):
-            self.assertEqual(pid, os.getpid())
-            return types.SimpleNamespace(cmdline=lambda: launches[-1])
+        def command(pid=None):
+            import psutil
+            if pid is not None:self.assertEqual(pid, os.getpid())
+            return types.SimpleNamespace(cmdline=lambda: launches[-1],create_time=lambda:10.5,
+                wait=Mock(side_effect=psutil.TimeoutExpired(0)))
 
         def finish():
             put(home, 'stop', b'')

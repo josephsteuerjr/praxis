@@ -15,6 +15,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+if __package__ in (None,''):
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+
 
 def mtime_ns(path: Path) -> str | None:
     try:
@@ -69,7 +72,11 @@ def _commit(path, pretty, seen):
                                          delete=False) as output:
             staged = Path(output.name)
             output.write(pretty)
-        os.replace(staged, path)
+        if __package__:
+            from .config_transaction import replace_config
+        else:
+            from localharness.config_transaction import replace_config
+        replace_config(staged, path)
         staged = None
         fresh = mtime_ns(path)
         if fresh is None:

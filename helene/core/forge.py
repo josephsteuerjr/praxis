@@ -25,6 +25,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -78,19 +79,24 @@ def _id(prefix: str) -> str:
 
 def _atomic_json(path: Path, data: dict | list) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    # Windows read_text() temporarily holds a non-delete-sharing handle. A
-    # newly spawned worker can overlap its request read with PID publication.
-    # Retry only that transient sharing error; a persistent denial still raises.
-    for attempt in range(21):
-        try:
-            tmp.replace(path)
-            break
-        except PermissionError:
-            if os.name != "nt" or attempt == 20:
-                raise
-            time.sleep(.01)
+    # A process can publish its command result while another thread stops the
+    # same unit. Each write needs its own exclusively created staging file.
+    fd, name = tempfile.mkstemp(prefix=path.name + f".{os.getpid()}.", suffix=".tmp", dir=path.parent)
+    tmp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+        # Windows readers can briefly hold a non-delete-sharing handle.
+        for attempt in range(21):
+            try:
+                tmp.replace(path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 20:
+                    raise
+                time.sleep(.01)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _atomic_text(path: Path, text: str) -> None:

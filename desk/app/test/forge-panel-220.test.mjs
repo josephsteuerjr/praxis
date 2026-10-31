@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
-import {randomUUID} from 'node:crypto';
+import {webcrypto} from 'node:crypto';
 
 class Element {
   constructor(tag) { this.tag=tag;this.className='';this.children=[];this.listeners={};this.attrs={};this.style={};this._text='';this.isConnected=true;this.parentNode=null;this.disabled=false;this.hidden=false;this.open=false; }
@@ -23,7 +23,7 @@ const find=(root,text)=>walk(root).find(n=>n.tag==='button' && n.textContent===t
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const source=readFileSync(new URL('../../ui-kit/window/views/forge-panel.ts',import.meta.url),'utf8');
 const code=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
-const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg',code+';return {forgePanel};');
+const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg','ACTIONS = {}',code+';return {forgePanel};');
 const sha='d'.repeat(64);
 function task() {return {id:'code-fixture',goal:'Implement a parser → independent review → repair',status:'active',agents:[{id:'agent-fixture',role:'worker',model:'fixture-model',subtask:'Preserve authored edits while fixing parser.py',status:'unknown',request_status:'running',custody:'unknown',observation:{generation:'g-one',phase:'tool',tool:'coding_verify',observed_at:'2026-10-26T02:20:00Z'},result_ref:{kind:'result',sha256:sha}}]};}
 function stand(options={}) {
@@ -54,7 +54,7 @@ function stand(options={}) {
     }
     throw Error(path);
   };
-  const impl=factory(document,{randomUUID},Error,path=>path,(fn)=>{const id=++seq;timers.set(id,fn);return id;},id=>timers.delete(id),{});
+  const impl=factory(document,{getRandomValues:array=>webcrypto.getRandomValues(array)},Error,path=>path,(fn)=>{const id=++seq;timers.set(id,fn);return id;},id=>timers.delete(id),{});
   const panel=impl.forgePanel(root,read,10,{scope:()=>state.scope,...options});
   return {root,calls,state,panel,timers,content};
 }
@@ -169,6 +169,52 @@ async function open(test) {
   t.panel.start();await tick();await open(t);assert.match(t.root.textContent,/Нарушена последовательность истории/);assert.doesNotMatch(t.root.textContent,/SHOULD_NOT_PAINT/);t.panel.stop();
 }
 const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'utf8');
+{
+  const t=stand({compact:true});
+  t.state.eventPage={generation:'g-one',events:[{seq:1,kind:'tool_start',call_id:'same',iteration:1,tool:'run',input_ref:{sha256:sha}}],next_offset:100,has_more:true};
+  t.panel.start();await tick();const {unit}=await open(t);
+  const action=walk(unit).find(n=>n.className.includes('forge-action st'));
+  assert(action,'a real worker call is a folded action');assert.equal(action.open,false);
+  assert.match(action.textContent,/запрос записан/);
+  action.open=true;const args=find(action,'Аргументы');
+  t.state.eventPage={generation:'g-one',events:[
+    {seq:2,kind:'tool_dispatch',call_id:'same',iteration:1,tool:'run',receipt:{handler:'forge_worker._dispatch',status:'entered'}},
+    {seq:3,kind:'tool_result',call_id:'same',iteration:1,tool:'run',input_ref:{sha256:sha},output_ref:{sha256:sha}},
+    {seq:4,kind:'tool_start',call_id:'same',iteration:2,tool:'inspect'},
+    {seq:5,kind:'tool_result',call_id:'same',iteration:2,tool:'inspect',output_ref:{sha256:sha}},
+    {seq:6,kind:'tool_start',call_id:'same',iteration:2,tool:'inspect'},
+  ],next_offset:500,has_more:false};
+  await find(unit,'Следующие шаги').click();await tick();
+  const actions=walk(unit).filter(n=>n.className.includes('forge-action st'));
+  assert.equal(actions.length,3,'repeated provider IDs and iterations remain distinct calls');
+  assert.equal(actions[0],action);assert.equal(action.open,true,'receipts update the existing expanded action');
+  assert.equal(find(action,'Аргументы'),args,'arrival of a result preserves argument control focus');
+  assert.match(action.textContent,/результат получен/);assert.match(action.textContent,/Харнесс · forge_worker\._dispatch/);
+  assert(t.calls.some(c=>c.path.includes('after_seq=1')),'continuation uses the exact journal cursor');
+  t.panel.stop();
+}
+{
+  const t=stand({compact:true});
+  t.state.tasks[0].agents=Array.from({length:20},(_,i)=>({...task().agents[0],id:'participant-'+i,subtask:'Narrow participant '+i}));
+  t.panel.start();await tick();
+  const units=walk(t.root).filter(n=>n.className.includes('forge-unit') && n.tag==='details');
+  assert.equal(units.length,20,'compact roster never caps participant count');
+  assert(units.every(n=>!n.open),'participant details start collapsed');
+  units[19].open=true;await units[19].emit('toggle');await tick();
+  assert(t.calls.some(c=>c.path.includes('unit_id=participant-19')),'last participant can load actions');
+  await t.panel.refresh();await tick();
+  assert.equal(units[19].open,true,'refresh preserves expanded participant');
+  t.panel.stop();
+}
 assert.match(main,/if \(from === "plans" && id !== "plans"\) plans\.dispose\(\);/);
+{
+  const t=stand({compact:true});const unit=t.state.tasks[0].agents[0];
+  unit.status='done';unit.started=Date.parse('2026-01-01T00:00:00Z')/1000;unit.finished='2026-01-01T00:01:30Z';
+  t.panel.start();await tick();
+  assert.match(t.root.textContent,/ждёт решения агента/,'terminal result is distinct from its acceptance');
+  assert.equal(walk(t.root).find(n=>n.className==='forge-unit-time').textContent,'1 мин 30 с');
+  unit.current_disposition='integrated';await t.panel.refresh();await tick();assert.match(t.root.textContent,/принят/);
+  t.panel.stop();
+}
 assert.match(main,/if \(from === 'talk' && id !== 'talk'\) panel\.dispose\(\);/);
 console.log('Forge production panel: pagination, inert content, stable expansion, failure preservation, abort/late-response fences, controls/generation/unknown delivery, one poll lifetime PASS');

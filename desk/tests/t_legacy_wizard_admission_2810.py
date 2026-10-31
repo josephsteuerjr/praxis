@@ -1,5 +1,5 @@
 from pathlib import Path
-import ast,json,sys,tempfile,threading,time,unittest
+import ast,json,os,sys,tempfile,threading,time,unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -7,7 +7,7 @@ from localharness import python_source_updater as updater
 from python_migration_window import MigrationWindow
 
 class WizardAdmission(unittest.TestCase):
-    def test_original_211_consumer_gets_shown_receipt_before_source_work(self):
+    def test_original_211_consumer_gets_durable_job_receipt_before_source_work(self):
         fixture=Path(__file__).parent/'fixtures/update211/python_updates.py'
         parsed=ast.parse(fixture.read_text(encoding='utf-8'))
         function=next(n for n in parsed.body if isinstance(n,ast.FunctionDef) and n.name=='await_admission')
@@ -15,31 +15,33 @@ class WizardAdmission(unittest.TestCase):
         exec(compile(ast.Module(body=[function],type_ignores=[]),str(fixture),'exec'),namespace)
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);old=root/'old';old.mkdir();stage=root/'.helene-update-test';new=stage/'Helene';new.mkdir(parents=True)
-            def shown(args):
-                path=Path(args[args.index('--admission')+1]);path.write_text(json.dumps({'pid':987,'target':str(old),'wizard_opened':True,'preparation_completed':False}))
-                return 0
+            job={'id':'fixture','tree':str(root/'data'),'admission':{'kind':'fixture-durable-owner'}}
             argv=['updater','--old',str(old),'--new',str(new),'--pid','123','--staging',str(stage)]
-            with patch.object(sys,'argv',argv),patch('helene_setup.main',side_effect=shown),patch('localharness.source_admission.activate') as activate,patch('localharness.migration_source.verify') as verify:
+            with patch.object(sys,'argv',argv),patch('localharness.migration_job.admit',return_value={'job':job}) as admit,patch('localharness.source_admission.activate') as activate,patch('localharness.migration_source.verify') as verify:
                 self.assertEqual(updater.main(),0)
-                receipt=namespace['await_admission'](SimpleNamespace(pid=987,poll=lambda:None),stage,old)
-                self.assertTrue(receipt['wizard_opened']);activate.assert_not_called();verify.assert_not_called()
+                receipt=namespace['await_admission'](SimpleNamespace(pid=os.getpid(),poll=lambda:None),stage,old)
+                self.assertTrue(receipt['process_exit_allowed']);self.assertEqual(receipt['durable_owner'],job['admission'])
+                self.assertFalse(receipt.get('wizard_opened',False));activate.assert_not_called();verify.assert_not_called()
+                self.assertEqual(admit.call_args.kwargs['source_mode'],'clean')
     def click(self,cancel=False):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);old=root/'old';old.mkdir();(old/'helene.json').write_text('{}')
             app=object.__new__(MigrationWindow);app.root=root/'new';app.running=threading.Lock();app.review_cancelled=threading.Event()
             app.progress=lambda value:None;events=[]
-            def activate(path):
-                events.append('activate')
-                if cancel:app.review_cancelled.set()
-            with patch('localharness.source_admission.activate',side_effect=activate),patch('localharness.migration_source.verify',side_effect=lambda path:events.append('verify')),patch('localharness.windows_installation.run',side_effect=lambda *a,**kw:events.append('install') or {'state':'completed'}):
-                call=lambda:app.invoke('migration_install',{'old':str(old),'target':str(old),'data':str(root/'data'),'sourceMode':'preserve'})
+            def admit(*args,**kwargs):
+                events.append('admit');self.assertEqual(kwargs['source_mode'],'clean')
+                if cancel:raise InterruptedError('admission cancelled')
+                return {'job':{'id':'fixture'},'state':'admitted'}
+            with patch('localharness.migration_job.admit',side_effect=admit),patch('localharness.source_admission.activate') as activate,patch('localharness.migration_source.verify') as verify:
+                call=lambda:app.invoke('migration_install',{'old':str(old),'target':str(old),'data':str(root/'data'),'sourceMode':'clean'})
                 if cancel:
-                    with self.assertRaisesRegex(RuntimeError,'отменено'):call()
-                else:self.assertEqual(call()['state'],'completed')
-            self.assertEqual(events,['activate','verify']+([] if cancel else ['install']))
+                    with self.assertRaisesRegex(InterruptedError,'cancelled'):call()
+                else:self.assertEqual(call()['state'],'admitted');self.assertEqual(app.admitted_job,'fixture')
+                activate.assert_not_called();verify.assert_not_called()
+            self.assertEqual(events,['admit'])
             self.assertFalse(app.running.locked())
-    def test_verification_after_click_before_any_installation(self):self.click()
-    def test_cancel_during_verification_never_installs(self):self.click(True)
+    def test_click_admits_clean_job_without_running_source_work_in_the_window(self):self.click()
+    def test_failed_admission_releases_window_lease(self):self.click(True)
 
 class PreparationLease(unittest.TestCase):
     def check(self,stale):

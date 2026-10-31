@@ -310,7 +310,7 @@ function buildRows(rows: Msg[], peer: string): Row[] {
       : `${showName ? `<b>${esc(name)}</b>` : ""}${topic}<span>${fmtTime(m.timestamp)}${edited}</span>`;
     const visibleText = artifactCaption(m.text || "", m.media_path);
     const body = birth
-      ? `<details><summary>Первый запуск: ${esc(PRODUCT_NAME)} рассказала агенту, кто он, где его дом и кто владелец</summary>${md(m.text || "")}</details>`
+      ? `<details><summary>Первый запуск</summary>${md(m.text || "")}</details>`
       : md(visibleText);
     const base = `${m.timestamp || ""}|${m.outgoing ? "a" : system ? "s" : "o"}|${m.sender_id ?? ""}`;
     const n = seen.get(base) ?? 0;

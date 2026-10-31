@@ -44,7 +44,7 @@ def bundle(runtime, model, output):
     # Read the model's own speaker embeddings in its compatible, separate torch
     # runtime. The UI needs names only; it must not load torch on a Settings GET.
     catalogue=subprocess.check_output([str(interpreter),'-c',
-        'import torch,json,sys;from pathlib import Path;p=Path(sys.argv[1]);'
+        'import torch,json,sys,psutil;from pathlib import Path;p=Path(sys.argv[1]);'
         'v=torch.load(p/"speakers_xtts.pth",map_location="cpu",weights_only=True);'
         'print(json.dumps({"speakers":sorted(v),"languages":json.loads((p/"config.json").read_text())["languages"],"torch_version":str(torch.__version__),"cuda_build":torch.version.cuda}))',
         str(model)],timeout=90)

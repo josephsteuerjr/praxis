@@ -39,14 +39,14 @@ class Retirement(unittest.TestCase):
             root=Path(temp);old=root/'old';new=root/'new';old.mkdir();new.mkdir()
             events=[];command=[str(old/'helene-setup.exe'),'--uninstall','--quiet']
             note={'id':'proof','state':'new_app_started','startup_proof':{'stopped':True}}
-            with patch.object(migration,'registered_uninstall',return_value=command),patch.object(migration,'uninstall_registered',side_effect=lambda *a:events.append('uninstall') or {'ok':True}),patch.object(migration,'retire',side_effect=lambda *a:events.append('shortcuts') or {}):
+            with patch.object(python_migrate,'migration_windows',migration),patch.object(migration,'quiescent'),patch.object(migration,'registered_uninstall',return_value=command),patch.object(migration,'uninstall_registered',side_effect=lambda *a:events.append('uninstall') or {'ok':True}),patch.object(migration,'retire',side_effect=lambda *a:events.append('shortcuts') or {}):
                 result=python_migrate.finish_retirement(old,new,new,note,lambda v:None)
             self.assertEqual(events,['uninstall','shortcuts']);self.assertEqual(result['state'],'completed')
     def test_uninstaller_failure_keeps_new_receipt_pending(self):
         import python_migrate
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);note={'id':'proof','state':'new_app_started','startup_proof':{'stopped':True}}
-            with patch.object(migration,'registered_uninstall',return_value=['old.exe']),patch.object(migration,'uninstall_registered',side_effect=RuntimeError('not removed')),patch.object(migration,'retire') as retire:
+            with patch.object(python_migrate,'migration_windows',migration),patch.object(migration,'quiescent'),patch.object(migration,'registered_uninstall',return_value=['old.exe']),patch.object(migration,'uninstall_registered',side_effect=RuntimeError('not removed')),patch.object(migration,'retire') as retire:
                 with self.assertRaises(RuntimeError):python_migrate.finish_retirement(root,root,root,note,lambda v:None)
             retire.assert_not_called();self.assertEqual(note['state'],'new_app_started')
     def test_stale_active_word_is_not_a_live_owner_and_is_not_erased(self):

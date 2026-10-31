@@ -96,12 +96,12 @@ class TranscriptionYieldsTheProcessor(unittest.TestCase):
 
     def test_whisper_leaves_a_core_to_the_owner(self):
         ready = {"ready": True, "installed": {"path": "C:/models/turbo"}, "why": ""}
-        original = voice.state
-        voice.state = lambda tree, cfg: ready
-        self.addCleanup(lambda: setattr(voice, "state", original))
+        original = voice.stt_state
+        voice.stt_state = lambda tree, cfg: ready
+        self.addCleanup(lambda: setattr(voice, "stt_state", original))
         cores = os.cpu_count() or 4
         env = voice.env_for(Path("."), {"voice": {"threads": 64}})
-        self.assertEqual(int(env["PRAXIS_STT_CPU_THREADS"]), max(1, cores - 1))
+        self.assertEqual(int(env["PRAXIS_STT_CPU_THREADS"]), max(1, min(64, cores - 1)))
         env = voice.env_for(Path("."), {"voice": {"threads": 1}})
         self.assertEqual(env["PRAXIS_STT_CPU_THREADS"], "1")
 

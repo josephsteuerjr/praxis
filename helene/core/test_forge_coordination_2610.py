@@ -260,7 +260,7 @@ class Coordination(unittest.TestCase):
             if len(calls) == 1:
                 raise PermissionError("synthetic Windows open-reader sharing violation")
             return replace(path, destination)
-        win = types.SimpleNamespace(name="nt", getpid=forge.os.getpid)
+        win = types.SimpleNamespace(name="nt", getpid=forge.os.getpid, fdopen=forge.os.fdopen)
         with mock.patch.object(forge, "os", win), mock.patch.object(Path, "replace", reader_overlap), \
              mock.patch.object(forge.time, "sleep") as pause:
             forge._atomic_json(target, {"new": True})

@@ -20,9 +20,12 @@ _waiting_updates = {}
 
 def update_agent_request(owner):
     from .desktop_update_request import status
-    return status(owner.current().tree)
+    from .authored_baseline import capabilities
+    value=status(owner.current().tree)
+    return {**value,**capabilities(owner.root),
+            'proposal_current':value.get('program')==str(owner.root.resolve()) and value.get('from_version')==version(owner.root)}
 
-def update_agent_confirm(owner,id,sourceMode='preserve'):
+def update_agent_confirm(owner,id,sourceMode=None):
     from .desktop_update_request import request
     return request(owner.current().tree,'confirm',root=owner.root,identity=id,source_mode=sourceMode,by='window')
 
@@ -51,10 +54,34 @@ def update_cancel(owner):
 
 def update_progress(owner):
     from .update_progress import status
+    from .desktop_update_request import status as job_status
+    tree=owner.current().tree
+    job=job_status(tree)
+    if (job.get('operation')=='restore_upstream' and job.get('kind')=='install'
+            and job.get('source_mode')=='clean' and job.get('program')==str(owner.root.resolve())
+            and job.get('tree')==str(tree.resolve()) and job.get('from_version')==version(owner.root)):
+        # Admission precedes the worker's first Progress. The overview pointer
+        # can still name a previous terminal operation, even after rejoining.
+        # Read only this durable Restore identity without changing the pointer.
+        value=None if job['state'] in ('cancelled','attention','superseded') else status(owner.root,operation_id=job['id'])
+        if value:
+            return {**value,'job_state':job['state']}
+        stage=job['state'] if job['state'] in ('cancelled','attention','superseded','completed') else job.get('phase',job['state'])
+        labels={'confirmed':'Задание принято','running':'Подготавливаю восстановление',
+                'cancelled':'Восстановление отменено','attention':'Восстановление требует внимания',
+                'superseded':'Прежнее задание заменено','completed':'Восстановление завершено'}
+        return {'id':job['id'],'target':str(owner.root.resolve()),'stage':stage,
+                'job_state':job['state'],'label':labels.get(job['state'],'Восстановление · '+job['state']),
+                'error':job.get('error','')}
     value = status(owner.root)
+    if value:
+        from .source_update_activity import activity
+        try:
+            current = activity(owner.current().tree)
+            if current is not None:
+                value = {**value, 'source_update': current}
+        except (OSError,ValueError,KeyError,TypeError):pass
     if not value:
-        from .desktop_update_request import status as job_status
-        job = job_status(owner.current().tree)
         if job.get('state') != 'none':
             return {'id':job['id'],'stage':job.get('phase',job['state']),
                     'label':'Обновление · '+job['state'],'error':job.get('error','')}
@@ -224,17 +251,18 @@ def update_download(owner,url,sha256=None,extensions=None):
     release=name[len('Helene-'):-len(ending)] if name.startswith('Helene-') and name.endswith(ending) else ''
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?',release) or name != asset_name(release,selected,flavor):
         raise ValueError('Expected an update archive for this application target')
-    folder=owner.root.resolve().parent
+    from . import program_state
+    folder=program_state.directory(owner.root,'downloads')
     from .update_progress import Progress
     job = getattr(owner, 'update_job', None)
     operation=job['id'] if job else uuid.uuid4().hex
-    report=Progress(folder/('.helene-update-'+operation+'.progress.json'),operation,owner.root,event=owner.event)
+    report=Progress(program_state.progress(owner.root,operation),operation,owner.root,event=owner.event)
     report.phase('downloading')
     selected=installed_extensions(owner.root) if extensions is None else extensions
     if not isinstance(selected,list) or any(s not in EXTENSION_ASSETS for s in selected):raise ValueError('Unknown extension selection')
     result=_download(url,folder/name,sha256 or asset_sha(url),report)
     components=[]
-    cache=folder/'.helene-downloads'/name.removesuffix('.zip');cache.mkdir(parents=True,exist_ok=True)
+    cache=folder/'components'/name.removesuffix('.zip');cache.mkdir(parents=True,exist_ok=True)
     from . import component_downloads
     manifest=component_downloads.incoming(result['path'])
     if manifest is not None:
@@ -311,12 +339,13 @@ def await_admission(child, staging, target, timeout=15, *, receipt_name=None):
 
 def _update_install(owner,path,forceExtensions=False,sourceMode=None):
     archive=Path(path).resolve(strict=True)
-    folder=owner.root.resolve().parent
-    if archive.suffix.lower()!='.zip' or archive.parent!=folder:
-        raise ValueError('Choose the update ZIP beside the working Helene folder')
+    from . import program_state
+    folder=program_state.directory(owner.root,'downloads')
+    if archive.suffix.lower()!='.zip' or not archive.is_file():
+        raise ValueError('Choose a Hélène update ZIP')
     job = getattr(owner, 'update_job', None)
-    destination=Path(job['staging']) if job and job.get('staging') else folder/('.helene-update-'+(job['id'] if job else uuid.uuid4().hex))
-    if destination.parent != folder or not destination.name.startswith('.helene-update-'):
+    destination=Path(job['staging']) if job and job.get('staging') else program_state.staging(owner.root,job['id'] if job else uuid.uuid4().hex)
+    if not program_state.staging_belongs(owner.root,destination):
         raise ValueError('Durable update staging identity differs')
     resumed = bool(job and job.get('staging') and (destination/'extraction.json').is_file())
     destination.mkdir(exist_ok=resumed)
@@ -324,8 +353,8 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
         from .desktop_update_request import checkpoint
         checkpoint(owner, job, staging=str(destination), phase='preparing' if resumed else 'unpacking')
     from .update_progress import Progress
-    operation=destination.name.removeprefix('.helene-update-')
-    progress=Progress(folder/(destination.name+'.progress.json'),operation,owner.root,event=owner.event)
+    operation=destination.name.removeprefix('.helene-update-').removeprefix('Helene-update-')
+    progress=Progress(program_state.progress(owner.root,operation),operation,owner.root,event=owner.event)
     if resumed:
         from .package_notice import read
         state = read(destination / 'extraction.json')
@@ -338,7 +367,7 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
         value=json.loads(receipt.read_text(encoding='utf-8'))
         if value.get('progress'):
             previous=Path(value['progress']).resolve()
-            if previous.parent!=folder or not previous.name.startswith('.helene-update-') or not previous.name.endswith('.progress.json'):
+            if not program_state.progress_belongs(owner.root,previous):
                 raise ValueError('Download progress receipt differs')
             downloaded=Progress(previous,target=owner.root)
             if downloaded.value['stage'] not in ('completed','failed','needs_resolution'):
@@ -347,7 +376,7 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
                 progress.event=owner.event
                 progress.pin()
         rows=[value['archive'],*value['components']]
-        cache=folder/'.helene-downloads'/archive.name.removesuffix('.zip')
+        cache=folder/'components'/archive.name.removesuffix('.zip')
         from . import component_downloads
         manifest=component_downloads.incoming(archive)
         pinned={component_downloads.cache_name(a):a for a in component_downloads.select(manifest,value['extensions'])} if manifest else {}
@@ -355,8 +384,9 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
             candidate=Path(row['path']).resolve()
             if manifest:
                 record=pinned.get(candidate.name)
-                return candidate.parent==component_downloads.cache_dir(owner.root).resolve() and record is not None and row.get('sha256')==record['sha256'] and row.get('bytes')==record['size']
-            return candidate.parent==cache and candidate.name in COMPONENTS
+                return candidate.parent in (component_downloads.cache_dir(owner.root).resolve(),owner.root.resolve()/'downloads') and record is not None and row.get('sha256')==record['sha256'] and row.get('bytes')==record['size']
+            legacy=owner.root.resolve().parent/'.helene-downloads'/archive.name.removesuffix('.zip')
+            return candidate.parent in (cache,legacy) and candidate.name in COMPONENTS
         if Path(rows[0]['path']).resolve()!=archive or any(not valid_component(r) for r in rows[1:]):
             raise ValueError('Download receipt paths differ')
         for row in rows:
@@ -385,7 +415,7 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
 
 def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceMode=None):
     new_root=destination/'Helene'
-    _wait_pause(owner,progress)
+    _wait_pause(owner,progress,source_mode=sourceMode)
     from . import source_admission
     if source_admission.activate(new_root):
         verified = source_admission.current_proofs(verified, new_root)
@@ -399,7 +429,7 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
     predicate = getattr(owner, 'update_cancelled', None)
     cancellation = _Cancellation(predicate) if predicate else None
     review_binding,interpreter=prepare_code(owner.root,new_root,progress,sourceMode,forceExtensions,cancelled=cancellation)
-    _wait_pause(owner,progress)
+    _wait_pause(owner,progress,source_mode=sourceMode)
     # No old window closes on preparation failure. The helper independently
     # reacquires the lease and binds the snapshot identity before admission.
     # Full mutable-byte validation follows old-owner exit, before any replacement.
@@ -416,14 +446,22 @@ def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceM
     return _launch_handoff(owner, destination, new_root, interpreter, progress)
 
 
-def _wait_pause(owner,progress=None):
+def _wait_pause(owner,progress=None,*,source_mode=None):
     from . import owner_stop
     from .desktop_update_request import status as job_status
+    if source_mode=='clean':
+        from . import session_exit
+        cancelled=getattr(owner,'update_cancelled',None)
+        stop=getattr(owner,'stop',None)
+        if (getattr(owner,'exiting',False) or (stop is not None and stop.is_set())
+                or owner_stop.stopped() or session_exit.requested(owner.root)
+                or (cancelled and cancelled())):raise InterruptedError('Owner stopped clean update preparation')
+        return
     job=getattr(owner,'update_job',None)
     if not job:return
     marker=Path(job['tree'])/'memory/.control/autonomy-paused.json'
     announced=False
-    while marker.exists() or job_status(job['tree']).get('state')=='paused':
+    while (marker.exists() and job.get('source_mode')!='clean') or job_status(job['tree']).get('state')=='paused':
         cancelled=getattr(owner,'update_cancelled',None)
         if owner_stop.stopped() or (cancelled and cancelled()):raise InterruptedError('Owner stopped paused update')
         if progress and not announced:
@@ -453,6 +491,8 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
     from .agent_source_update import AgentResolutionUnavailable
     from . import update_source
     from .package_notice import write
+    from .authored_baseline import mode as eligible
+    sourceMode=eligible(old,sourceMode)
     try:
         try:
             return _prepare_code(old,new_root,progress,sourceMode,forceExtensions,cancelled,require_review,resolution_owner)
@@ -469,6 +509,8 @@ def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,can
 def _prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
     """Shared native-migration/update merge and incoming-panel preparation."""
     old,new_root=Path(old).resolve(),Path(new_root).resolve()
+    from .authored_baseline import mode as eligible
+    sourceMode=eligible(old,sourceMode)
     if forceExtensions:
         raise ValueError('Incompatible-extension override is obsolete')
     from . import update_source
@@ -476,7 +518,7 @@ def _prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,ca
     if resolution_runtime:
         from .source_update_host import verified_runtime
         verified_runtime(Path(resolution_runtime))
-    update_source.select(old,new_root,sourceMode or 'preserve',by='window',require_review=require_review,
+    update_source.select(old,new_root,sourceMode,by='window',require_review=require_review,
         resolution_owner=resolution_owner,resolution_runtime=resolution_runtime)
     if not (new_root/'python-app.json').is_file() or not (new_root/'app/python_app.py').is_file():
         raise ValueError('Update ZIP must contain Helene Python application')
@@ -565,8 +607,8 @@ def _discard_extraction(owner, destination):
     import shutil
     from .update_io import remove_created_file
     destination = Path(destination)
-    if (destination.resolve() != owner.root.resolve().parent / destination.name
-            or not destination.name.startswith('.helene-update-')):
+    from .program_state import staging_belongs
+    if not staging_belongs(owner.root,destination):
         raise ValueError('Unexpected update extraction directory')
     def readonly(function, path, failure):
         if function is not os.unlink or not isinstance(failure[1], PermissionError):
@@ -578,6 +620,9 @@ def _discard_extraction(owner, destination):
 def _launch_handoff(owner, destination, new_root, interpreter, progress):
     import shutil
     from .update_process import background_flags
+    from . import session_exit
+    if getattr(owner,'exiting',False) or session_exit.requested(owner.root):
+        raise InterruptedError('Owner exited before update handoff')
     folder = owner.root.resolve().parent
     # Copy the helper outside the live installation before replacing its files.
     helper = destination / 'python_source_updater.py'
@@ -591,9 +636,10 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
         from .desktop_update_request import path as job_path, checkpoint
         write_path = job_path(job['tree'])
         argv.extend(['--job',str(write_path),'--job-id',job['id']])
-    if getattr(owner,'browser_mode',False):argv.append('--browser')
+    browser_mode=job.get('browser_mode',False) if job else getattr(owner,'browser_mode',False)
+    if browser_mode:argv.append('--browser')
     # Verified input ZIPs remain a reusable cache, not disposable updater output.
-    log=folder/('helene-update-'+destination.name.removeprefix('.helene-update-')+'.log')
+    log=destination/'update.log'
     with log.open('ab') as output:
         child=subprocess.Popen(argv,cwd=destination,stdin=subprocess.DEVNULL,
             stdout=output,stderr=subprocess.STDOUT,
@@ -604,6 +650,7 @@ def _launch_handoff(owner, destination, new_root, interpreter, progress):
         checkpoint(owner, job, phase='handoff', helper=admitted)
     predicate = getattr(owner, 'update_cancelled', None)
     def exit_old():
+        if getattr(owner,'exiting',False) or session_exit.requested(owner.root):return
         if predicate and predicate():
             return
         if getattr(owner, 'session_host', False):

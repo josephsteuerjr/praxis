@@ -29,11 +29,13 @@ assert.strictEqual(f.loadRooms(),fresh,'old finalizer cannot clear new flight');
 newResolve({runs:[],chats:[{key:'-1',name:'new profile',count:3,mtime:3}]});await fresh;
 assert.equal(f.S.rooms[0].name,'new profile');assert.equal(f.refreshed,2);
 
-const timerStart=main.indexOf('  setInterval(() => {\n    const active = !!engineOperation');
+const timerStart=main.lastIndexOf('  setInterval(',main.indexOf('    const active = !!engineOperation'));
+assert.ok(timerStart>=0,'the production passive polling timer must be present');
 const timer=main.slice(main.indexOf('() => {',timerStart),main.indexOf('\n  }, 1500);',timerStart)+4);
 let polled=0,statePolled=0;
 const timerFactory=new Function('loadRooms','refreshState',`
  const document={hidden:false},engineOperation=null,channelAvailable=false,S={agentState:{runner:{busy:false}}};
+ const refreshReviewActivity=()=>Promise.resolve();
  const lastStateAttempt=0,lastRoomsAttempt=0;
  return ${stripTypeScriptTypes(timer)};
 `);
@@ -43,10 +45,10 @@ assert.equal(polled,1,'passive polling is independent of busy state and socket a
 const load=async name=>import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/'+name,import.meta.url),'utf8'))).toString('base64'));
 const {foldWords}=await load('memory-fold.ts');
 const state={room:'-1',hot:1360,keep:250,offer_at:400,hard_at:500,owner_context:false,offer:null,pending:{id:'old'},receipt:{state:'running',at:'2026-01-01T00:00:00Z'}};
-assert.equal(foldWords(state).state,'unconfirmed');assert.equal(foldWords(state).canFold,true);
+assert.equal(foldWords(state).state,'unconfirmed');assert.equal(foldWords(state).canFold,false);
 for(const status of ['queued','starting','running','interrupted','unconfirmed']) {
  const words=foldWords({...state,operation:{state:status,note:'actual operation'}});
- assert.equal(words.state,status);assert.equal(words.canFold,['interrupted','unconfirmed'].includes(status));
+ assert.equal(words.state,status);assert.equal(words.canFold,false,'only the current agent authors its compact');
  assert.match(words.counter,/1\s?360/);
 }
 assert.equal(foldWords({...state,paused:true}).canFold,false,'pause never implies a model call');

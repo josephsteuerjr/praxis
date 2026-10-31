@@ -102,19 +102,37 @@ def activity(tree):
     """Small read-only projection; stale coordinator records cannot light the badge."""
     root = _root(tree)
     running = queued = 0
+    from .source_update_activity import activity as update_activity
+    try:update=update_activity(tree)
+    except (OSError,ValueError,KeyError,TypeError):update=None
+    reviewers=[]
     now = time.time()
     for store in (root, root.with_name(".source-update-reviews")):
         for path in store.glob("review-*/request.json"):
             try:
                 stat = path.stat()
-                if not -5 <= now - stat.st_mtime < 30:
+                fresh=-5 <= now - stat.st_mtime < 30
+                row=_read(path)
+                selected=bool(update and row.get('id')==update.get('review_id'))
+                if not fresh and not selected:
                     continue
                 active, waiting = _activity_counts(str(path), stat.st_mtime_ns, stat.st_size)
-                running += active
-                queued += waiting
+                if fresh:
+                    running += active
+                    queued += waiting
+                if row.get('cancel_requested'):continue
+                if not selected and row.get('execution') not in {'queued','running'}:continue
+                for critic in row.get('critics',[]):
+                    reviewers.append({'id':str(row.get('id',''))+'/'+str(critic.get('unit_id','')),
+                        'name':critic.get('model_actual') or critic.get('model') or 'Ревьюер',
+                        'review_id':row.get('id'),'execution':critic.get('execution','unknown'),
+                        'live':fresh and critic.get('execution') in {'starting','running','finishing'},
+                        'observed_at':stat.st_mtime,'started_at':critic.get('started_at'),'finished_at':critic.get('finished_at'),
+                        'verdict':critic.get('verdict'),'summary':str(critic.get('summary') or critic.get('reason') or '')[:4000],
+                        'findings':critic.get('findings',[])[:50]})
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
-    return {"running": running, "queued": queued}
+    return {"running": running, "queued": queued,'reviewers':reviewers,'update':update}
 
 
 def status(tree, config=None, review_id=""):

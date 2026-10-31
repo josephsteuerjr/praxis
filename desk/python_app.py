@@ -20,6 +20,14 @@ from socketserver import TCPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+
+def startup_log(root):
+    try:
+        from localharness.program_state import directory
+        return directory(root,'logs')/'startup-error.log'
+    except (OSError,ValueError,ImportError):
+        return Path(root)/'startup-error.log'
+
 def recover_before_imports(argv):
     """The startup consumer repairs an interrupted overlay before body imports."""
     if '--panic' in argv:return False  # Stop never waits for update recovery
@@ -53,8 +61,17 @@ if __name__=='__main__':
     except Exception as exc:
         import traceback
         detail=traceback.format_exc()
+        root=Path(__file__).resolve().parents[1]
+        if '--root' in sys.argv:
+            position=sys.argv.index('--root')+1
+            if position<len(sys.argv):root=Path(sys.argv[position]).resolve()
+        try:
+            with startup_log(root).open('a',encoding='utf-8') as output:output.write(detail+'\n')
+        except OSError:pass
         print(detail,file=sys.stderr)
         if os.name=='nt':
+            from localharness.bootstrap_ready import signal
+            signal(failed=True)
             import ctypes
             ctypes.windll.user32.MessageBoxW(None,str(exc),'Hélène — startup failed',0x10)
         raise SystemExit(1)
@@ -90,6 +107,7 @@ class Application:
         # Closing a view detaches it. Only an explicit application Exit owns
         # the session lifetime; an update/relaunch retires this observer.
         self.exit_session = False
+        self.session_exit_intent = True
         self.token = secrets.token_urlsafe(32)
         self.events: list[dict] = []
         self.stopping = threading.Event()
@@ -101,7 +119,8 @@ class Application:
         self.server = _LoopbackHTTPServer(("127.0.0.1", 0), self._handler())
         self.server.daemon_threads = True
         self.origin = f"http://127.0.0.1:{self.server.server_port}"
-        self.control_file = self.root / f'.python-window-{os.getpid()}.json'
+        from localharness.program_state import window_control
+        self.control_file = window_control(self.root,os.getpid(),create=True)
 
     def publish_control(self):
         """Expose the existing authenticated exit surface only after UI readiness."""
@@ -150,11 +169,17 @@ class Application:
             from localharness import standalone_relay, component_downloads
             return [standalone_relay.status(self.program)]+component_downloads.status(self.program)
         if command == 'python_ready':
-            return self.confirm_ui()
+            result=self.confirm_ui()
+            from localharness.bootstrap_ready import signal
+            signal()
+            return result
         if command == 'restore_upstream':
             if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
-            from localharness.upstream_recovery import launch
-            return launch(self.root)
+            from localharness import upstream_recovery
+            if upstream_recovery.modern(self.root):
+                if self.host is None:raise RuntimeError('Для восстановления открой действующий сеанс Hélène или новый целый архив.')
+                return self.host.invoke(command,args)
+            return upstream_recovery.launch(self.root)
         if command == 'migration_wizard':
             if not sys.platform.startswith('linux'):
                 raise ValueError('This offline migration wizard is available in the Linux application')
@@ -181,8 +206,9 @@ class Application:
             if self.host is not None:
                 # Component replacement retires executable readers, unlike a
                 # window detach. Do not overwrite under a surviving session.
-                shutdown = getattr(self.host, 'shutdown', self.host.close)
-                shutdown()
+                shutdown = getattr(self.host, 'shutdown', None)
+                if callable(shutdown):shutdown(owner_exit=False)
+                else:self.host.close()
                 self.host = None
             return app_components.install(self.program, self.root, str(args.get("name", "")))
         if command == "components_start":
@@ -207,9 +233,10 @@ class Application:
             action = args.get("action")
             if action == "exit":
                 self.exiting = True
-                self.exit_session = not args.get('observer_only', False) and not self.relaunch
                 if args.get('relaunch') is False:
                     self.relaunch = False
+                self.exit_session = not args.get('observer_only', False) and not self.relaunch
+                self.session_exit_intent = args.get('owner_exit') is not False
                 if self.window is None:
                     self.stopping.set()
                 else:
@@ -235,9 +262,12 @@ class Application:
         return self.host.invoke(command, args)
 
     def confirm_ui(self):
-        if getattr(self,'session_job',''):
-            self.ui_ready=True
-            self.publish_control()
+        self.ui_ready=True
+        self.publish_control()
+        if sys.platform=='win32' and not getattr(self,'retirement_started',False):
+            from localharness.portable_retirement import start
+            start(self.root,self.host)
+            self.retirement_started=True
         if not self.migration_id:return {'confirmed':False}
         with self.confirm_lock:
             if not self.confirmed_ui:
@@ -472,20 +502,25 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
                 self.event("backup-error", {"error": str(exc)})
 
     def close(self):
-        try:
-            self.stopping.set()
-            if self.voice_keys:self.voice_keys.close()
-            self.backup_thread.join()
-            self.server.shutdown()
-            self.server.server_close()
-            self.thread.join()
-            if self.host:
-                if self.exit_session and callable(getattr(self.host, 'shutdown', None)):
-                    self.host.shutdown()
-                else:
-                    self.host.close()
-        finally:
-            self.control_file.unlink(missing_ok=True)
+        self.stopping.set()
+        failures=[]
+        def finish(action):
+            try:action()
+            except Exception as exc:failures.append(exc)
+        # UI/backup failures cannot leave the independent process owner running.
+        if self.host:
+            if self.exit_session and callable(getattr(self.host, 'shutdown', None)):
+                if getattr(self,'session_exit_intent',True):finish(self.host.shutdown)
+                else:finish(lambda:self.host.shutdown(owner_exit=False))
+            else:finish(self.host.close)
+        if self.voice_keys:finish(self.voice_keys.close)
+        if getattr(self,'backup_thread',None):finish(lambda:self.backup_thread.join(5))
+        if getattr(self,'thread',None):finish(self.server.shutdown)
+        finish(self.server.server_close)
+        if getattr(self,'thread',None):finish(lambda:self.thread.join(5))
+        finish(lambda:self.control_file.unlink(missing_ok=True))
+        if failures:
+            raise RuntimeError('Application shutdown incomplete: '+'; '.join(str(exc) for exc in failures)) from failures[0]
 
 
 def window_geometry(screen):
@@ -630,11 +665,14 @@ def migration_proof(host, root, timeout=60):
 
 
 def _main(argv=None):
+    from localharness import bootstrap_ready
+    bootstrap_ready.attach()  # do not leak the one-shot event into descendants
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--program", type=Path)
     parser.add_argument('--session-job',default='',help=argparse.SUPPRESS)
+    parser.add_argument('--session-tree',type=Path,help=argparse.SUPPRESS)
     parser.add_argument("--agent", default="")
     parser.add_argument("--panic", action="store_true", help="latch owner Stop without starting the application")
     parser.add_argument("--notify", action="store_true", help="show the emergency-stop result")
@@ -644,12 +682,13 @@ def _main(argv=None):
     parser.add_argument("--launch-intent", choices=("manual", "automatic"), default="manual")
     parser.add_argument('--setup-old',default='')
     parser.add_argument('--setup-target',default='')
-    parser.add_argument('--setup-source-mode',choices=('preserve','clean'),default='preserve')
+    parser.add_argument('--setup-source-mode',choices=('clean',),default='clean')
     parser.add_argument('--setup-force-extensions',action='store_true')
     args = parser.parse_args(arguments)
     if args.panic:
         from localharness import owner_stop
         owner_stop.latch_client('shortcut', 'owner emergency stop')
+        bootstrap_ready.signal()
         if args.notify and os.name == 'nt':
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, 'Emergency Stop requested. Automatic starts remain paused.', 'Hélène', 0)
@@ -658,19 +697,29 @@ def _main(argv=None):
     if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
+    if sys.platform=='win32':
+        from localharness.first_start import ready as first_start_ready,Places
+        if first_start_ready(root):os.environ['HELENE_USER_DATA']=str(Places.current().data)
+        from localharness.program_state import tidy_program
+        tidy_program(program)
     from localharness import owner_stop
     if args.launch_intent == "automatic" and owner_stop.stopped():
+        bootstrap_ready.signal()
         return 0
     if args.session_job:
         from localharness.migration_job import observer_program
-        observer_program(root,program,args.session_job)
+        observer_program(root,program,args.session_job,tree=args.session_tree)
+    elif args.session_tree is not None:
+        raise ValueError('A selected session tree requires an admitted migration job')
     elif program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
     if not args.migration and not args.browser and not args.session_job:
         from localharness import portable_start
+        from localharness.first_start import ready as first_start_ready
+        prepared=first_start_ready(root) if sys.platform=='win32' else False
         incomplete=root/'python-migration.json'
-        needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started')
-        if args.migration_wizard or needs_migration or not (root/'helene.json').exists():
+        needs_migration=incomplete.exists() and json.loads(incomplete.read_text(encoding='utf-8')).get('state') not in ('completed','new_app_started','retirement_incomplete')
+        if not prepared and (args.migration_wizard or needs_migration or not (root/'helene.json').exists()):
             from helene_setup import main as migration_window
             setup_args=['--root',str(root),'--source-mode',args.setup_source_mode]
             if args.setup_old:setup_args+=['--old',args.setup_old]
@@ -703,8 +752,10 @@ def _main(argv=None):
     app.migration_id=args.migration
     app.session_job=args.session_job
     app.browser_mode=args.browser
-    from localharness.session_host import attach
-    host = attach(root, app.event, app.origin, args.agent, browser_mode=args.browser)
+    from localharness.session_host import attach,attach_migration
+    host = (attach_migration(root,program,args.session_job,app.event,app.origin,args.agent,
+                            browser_mode=args.browser,tree=args.session_tree) if args.session_job else
+            attach(root, app.event, app.origin, args.agent, browser_mode=args.browser))
     try:
         if not args.session_job:host.start()
         from localharness import owner_stop
@@ -738,8 +789,9 @@ def _main(argv=None):
             # The shared renderer's python_ready is the sole confirmation
             # writer for native and browser windows alike.
             icon=program/('app/resources/python-app.png' if sys.platform.startswith('linux') else 'app/resources/python-app.ico')
+            from localharness.program_state import directory
             webview.start(gui='qt' if sys.platform.startswith('linux') else None,
-                          private_mode=False,storage_path=str(root/'.webview'),icon=str(icon) if icon.is_file() else None)
+                          private_mode=False,storage_path=str(directory(root,'webview')),icon=str(icon) if icon.is_file() else None)
     except KeyboardInterrupt:
         pass
     finally:
@@ -779,7 +831,7 @@ def main(argv=None):
             position = arguments.index("--root") + 1
             if position < len(arguments):
                 root = Path(arguments[position]).resolve()
-        log = root / "startup-error.log"
+        log = startup_log(root)
         detail = "".join(traceback.format_exception(exc))
         try:
             with log.open("a", encoding="utf-8") as output:
@@ -789,6 +841,8 @@ def main(argv=None):
             message = f"Hélène could not start.\n\n{exc}\n\nStartup log unavailable: {log_error}"
         print(detail, file=sys.stderr)
         if os.name == "nt":
+            from localharness.bootstrap_ready import signal
+            signal(failed=True)
             import ctypes
             ctypes.windll.user32.MessageBoxW(None, message, "Hélène — startup failed", 0x10)
         elif sys.platform == "darwin":

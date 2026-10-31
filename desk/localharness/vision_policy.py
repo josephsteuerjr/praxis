@@ -151,17 +151,35 @@ def _value(*, code_dir: Path | None = None, read_dotenv: bool = False) -> bool:
     raise MigrationError("PRAXIS_VISION_PREPASS не распознан — выбор зрения не меняю")
 
 
+def _valid_id(value) -> bool:
+    return (isinstance(value, str) and len(value) == 32
+            and all(char in "0123456789abcdef" for char in value))
+
+
+def _read_notice(path: Path) -> dict:
+    pending = _json(path)
+    if (not _valid_id(pending.get("id"))
+        or not isinstance(pending.get("text"), str) or not pending["text"]
+        or type(pending.get("done")) is not bool):
+        raise MigrationError("расписка зрения повреждена — не притворяюсь, что показал изменение")
+    return pending
+
+
 def _finish(tree: Path, event: dict) -> None:
+    if not _valid_id(event.get("id")):
+        raise MigrationError("идентификатор миграции зрения повреждён")
     notice = _notice(tree)
     if notice.exists():
-        existing = _json(notice)
+        existing = _read_notice(notice)
         if existing.get("id") != event["id"]:
-            if not existing.get("done"):
-                raise MigrationError("предыдущее уведомление о зрении не доставлено")
-            if not isinstance(existing.get("id"), str) or len(existing["id"]) != 32 or any(c not in "0123456789abcdef" for c in existing["id"]):
-                raise MigrationError("старое уведомление о зрении повреждено — не перезаписываю")
             archived = notice.with_name("vision-policy-notice-" + str(existing["id"]) + ".json")
-            os.replace(notice, archived)
+            # Startup has not reached notice() yet. Queue an undelivered receipt
+            # instead of preventing the very startup that could deliver it.
+            # The harness tree lock serializes this rename; preserve collisions.
+            while archived.exists():
+                archived = notice.with_name("vision-policy-notice-" + existing["id"]
+                                            + "-queued-" + uuid.uuid4().hex + ".json")
+            notice.rename(archived)
     if not notice.exists():
         enabled = event["after"]
         text = ("Зрение Hélène: теперь снимки сначала описывает отдельная зрячая модель, "
@@ -209,7 +227,7 @@ def migrate(tree: Path, *, code_dir: Path | None = None, read_dotenv: bool = Fal
         if (event.get("kind") != "vision_prepass_migration"
             or not isinstance(event.get("after_sha256"), str)
             or not isinstance(event.get("before_sha256"), str)
-            or not isinstance(event.get("id"), str)
+            or not _valid_id(event.get("id"))
             or type(event.get("after")) is not bool):
             raise MigrationError("незавершённая миграция зрения повреждена — ручная сверка")
         observed = hashlib.sha256(original).hexdigest()
@@ -253,19 +271,7 @@ def migrate(tree: Path, *, code_dir: Path | None = None, read_dotenv: bool = Fal
     return True
 
 
-def notice(tree: Path, desk, now) -> None:
-    """Visible once in the activity archive; duplicate writes share one source id."""
-    tree = Path(tree)
-    path = _notice(tree)
-    if not path.exists():
-        return
-    pending = _json(path)
-    if (not isinstance(pending.get("id"), str) or not pending["id"]
-        or not isinstance(pending.get("text"), str) or not pending["text"]
-        or type(pending.get("done")) is not bool):
-        raise MigrationError("расписка зрения повреждена — не притворяюсь, что показал изменение")
-    if pending.get("done"):
-        return
+def _deliver_notice(tree: Path, path: Path, pending: dict, desk, now) -> None:
     source_id = "vision-policy-" + str(pending["id"])
     # Read the complete stream: a crash after archive but before the marker may
     # be followed by more than 2000 messages before restart.
@@ -288,3 +294,34 @@ def notice(tree: Path, desk, now) -> None:
     pending["done"] = True
     pending["at"] = dt.datetime.now(dt.timezone.utc).isoformat()
     _write(path, _document(pending))
+
+
+def notice(tree: Path, desk, now) -> None:
+    """Deliver queued and current receipts before the first owner turn.
+
+    A crash between queueing an older receipt and completing a newer transaction
+    leaves both recoverable. Duplicate queue copies share one delivery identity.
+    """
+    tree = Path(tree)
+    current = _notice(tree)
+    paths = sorted(current.parent.glob("vision-policy-notice-*.json"))
+    if current.exists():
+        paths.append(current)
+    records = [(path, _read_notice(path)) for path in paths]
+    texts = {}
+    for _, pending in records:
+        previous = texts.setdefault(pending["id"], pending["text"])
+        if previous != pending["text"]:
+            raise MigrationError("один идентификатор уведомления зрения содержит разный текст")
+    delivered = {pending["id"] for _, pending in records if pending["done"]}
+    for path, pending in records:
+        if pending["done"]:
+            continue
+        if pending["id"] not in delivered:
+            _deliver_notice(tree, path, pending, desk, now)
+            delivered.add(pending["id"])
+        else:
+            # A previous copy has an actual completion receipt, including life().
+            pending["done"] = True
+            pending["at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            _write(path, _document(pending))

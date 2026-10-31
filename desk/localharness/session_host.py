@@ -64,6 +64,10 @@ def _origin(value):
 def allowed_origin(tree, origin):
     """Dynamic exact CORS admission, without restarting a channel on UI reopen."""
     value = read(Path(tree) / 'memory/.control/desktop-session.json')
+    return _registered_origin(value,tree,origin)
+
+
+def _registered_origin(value,tree,origin):
     return (value.get('format') == FORMAT and value.get('tree') == str(Path(tree).resolve())
             and value.get('state') in ('starting', 'running') and process_state(value) == 'alive'
             and origin in value.get('observer_origins', []))
@@ -78,6 +82,17 @@ def configured_origin(config, origin):
     primary = agents.find(root, agents.BASE_ID)
     if primary is None or config not in {row.config.resolve() for row in agents.roster(root)}:
         return False
+    selected=os.environ.get('HELENE_MIGRATION_SESSION_TREE')
+    identity=os.environ.get('HELENE_MIGRATION_SESSION_JOB')
+    if selected or identity:
+        if not selected or not identity:return False
+        from . import desktop_update_request as jobs
+        from .migration_job import observer_descriptor
+        try:
+            job=jobs.status(Path(selected));package=job.get('migration',{}).get('package')
+            descriptor=observer_descriptor(root,package,identity,tree=selected)
+        except (OSError,ValueError,TypeError):return False
+        return _registered_origin(descriptor,selected,origin)
     value = read(control_path(root))
     if value.get('program') != str(root):
         return False
@@ -111,9 +126,10 @@ def _rpc(descriptor, action, args=None, *, timeout=30):
 
 class SessionClient(Controller):
     """Compatibility-shaped client, never a second supervisor in the window."""
-    def __init__(self, root, descriptor, event, origin='', agent='', browser_mode=False):
+    def __init__(self, root, descriptor, event, origin='', agent='', browser_mode=False, *, session_job=''):
         super().__init__(Path(root), event, origin, agent)
         self.descriptor = descriptor
+        self.session_job = session_job
         self.browser_mode = browser_mode
         self.observer = secrets.token_hex(16)
         self._detached = threading.Event()
@@ -125,7 +141,9 @@ class SessionClient(Controller):
         self._events.start()
 
     def _request(self, action, args=None, timeout=30):
-        return _rpc(self.descriptor, action, {'agent': self.selected, **(args or {})}, timeout=timeout)
+        arguments={'agent':self.selected,**(args or {})}
+        if self.session_job:arguments['session_job']=self.session_job
+        return _rpc(self.descriptor, action, arguments, timeout=timeout)
 
     def _observe(self):
         while not self._detached.wait(.35):
@@ -157,7 +175,8 @@ class SessionClient(Controller):
         return self._request('refresh')
 
     def invoke(self, command, args):
-        result = self._request('invoke', {'command': command, 'arguments': args}, timeout=180)
+        result = self._request('invoke', {'command': command, 'arguments': args,
+                                         'observer': self.observer}, timeout=180)
         if command == 'switch_agent' and isinstance(result, dict):
             self.selected = result['id']
         return result
@@ -174,10 +193,38 @@ class SessionClient(Controller):
         if threading.current_thread() is not self._events:
             self._events.join(4)
 
-    def shutdown(self):
-        result = self._request('exit', timeout=45)
+    def shutdown(self,*,owner_exit=True):
+        try:
+            result = (self._request('exit',timeout=45) if owner_exit else
+                      self._request('exit',{'owner_exit':False},timeout=45))
+        except OSError:
+            # Another observer may already have completed Exit. Resolve only
+            # this exact PID birth; never replay Exit against a replacement or
+            # turn a lost reply into an unsupported cleanup-success claim.
+            deadline=time.monotonic()+5
+            while process_state(self.descriptor) not in ('absent','changed'):
+                if process_state(self.descriptor)=='unknown' or time.monotonic()>=deadline:raise
+                time.sleep(.05)
+            result={'session_exited':True,'already_exited':True}
+        deadline=time.monotonic()+15
+        while True:
+            state=process_state(self.descriptor)
+            if state in ('absent','changed'):break
+            if state=='unknown' or time.monotonic()>=deadline:
+                raise RuntimeError('Session shutdown is not confirmed; the exact owner is still live or unknown')
+            time.sleep(.05)
         self.close()
+        result['session_exited']=True
         return result
+
+    def retirement(self):return self._request('retirement_start')
+
+
+def attach_migration(root, package, identity, event, origin='', agent='', browser_mode=False, *, tree=None):
+    """Rejoin only the exact bootstrap. Never create a replacement owner."""
+    from .migration_job import observer_descriptor
+    descriptor=observer_descriptor(root,package,identity,tree=tree)
+    return SessionClient(root,descriptor,event,origin,agent,browser_mode,session_job=identity)
 
 
 def attach(root, event, origin='', agent='', browser_mode=False, *, timeout=30):
@@ -185,7 +232,10 @@ def attach(root, event, origin='', agent='', browser_mode=False, *, timeout=30):
     from .config_transaction import transaction
     from .desktop_supervisor import JobChild
     from .update_process import interpreter_for
+    from . import session_exit
     root = Path(root).resolve()
+    if os.environ.get('HELENE_RECOVERY_AUTOMATIC')=='1' and session_exit.requested(root):
+        raise InterruptedError('Owner exited the programme; automatic recovery cancelled')
     target = control_path(root)
     with transaction(target.with_name('desktop-session-launch')):
         descriptor = read(target)
@@ -236,6 +286,9 @@ class Host:
         self.migration_request = Path(migration_request) if migration_request else None
         self.stop = threading.Event()
         self.lock = threading.RLock()
+        self.exit_lock = threading.Lock()
+        self.exit_result = None
+        self.exit_owner = False
         self.observers = {}
         self.events = deque(maxlen=512)
         self.sequence = 0
@@ -271,14 +324,50 @@ class Host:
             self.events.append({'seq': self.sequence, 'name': name, 'data': data,
                                 'agent': self.owner.selected if hasattr(self, 'owner') else ''})
 
-    def request_exit(self):
+    def _latch_exit(self):
         self.stop.set()
+        # start() replaces its stop Event under this lock. Latch the current
+        # event atomically with the terminal flag, before cancellation/join.
+        with self.owner.lock:
+            self.owner.exiting=True
+            self.owner.stop.set()
+
+    def request_exit(self):
+        self._latch_exit()
+        from . import session_exit
+        session_exit.record(self.root,self.descriptor)
+
+    def exit(self, *, owner_exit=True):
+        # Never hold the event/publication lock while joining its producer.
+        with self.exit_lock:
+            self._latch_exit()
+            if self.exit_result is not None and (not owner_exit or self.exit_owner):return self.exit_result
+            failures=[]
+            if owner_exit:
+                from . import session_exit
+                try:session_exit.record(self.root,self.descriptor)
+                except Exception as exc:failures.append(str(exc))
+            pending=False;observations={}
+            if owner_exit:
+                pending=True
+                try:pending,observations=self.cancel_owned_jobs('Owner explicitly exited the application')
+                except Exception as exc:failures.append(str(exc))
+                self.exit_owner=not failures
+            # Durable cancellation is bookkeeping, never a prerequisite for stop.
+            if self.exit_result is None:
+                self.owner.close()
+                self.publish('stopped')
+            self.exit_result={'stop_requested':True,'stopped':not pending and not failures,
+                              'producers':observations}
+            if failures:self.exit_result['errors']=failures
+            return self.exit_result
 
     def cancel_owned_jobs(self,reason):
         """Exit/Stop intent survives process death; observer detach never calls this."""
         from . import desktop_update_request as jobs
         roots={self.root.resolve(),self.owner.root.resolve()}
-        trees={self.control_tree,*(row.tree.resolve() for row in agents.roster(self.owner.root))}
+        trees=({self.control_tree} if self.migration_request is not None else
+               {self.control_tree,*(row.tree.resolve() for row in agents.roster(self.owner.root))})
         observations={}
         pending=False
         for tree in trees:
@@ -290,17 +379,26 @@ class Host:
         return pending,observations
 
     def dispatch(self, action, args):
+        # Authenticated installation Exit must survive a deleted agent/stale job.
+        if action=='exit':return self.exit(owner_exit=args.get('owner_exit') is not False)
+        if self.stop.is_set() and action not in ('status','job_status','events','detach'):
+            raise RuntimeError('Programme Exit is already in progress')
+        if args.get('session_job'):
+            from . import desktop_update_request as jobs
+            job=jobs.status(self.control_tree)
+            if self.migration_request is None or job.get('kind') not in ('migration','source-update') or job.get('id')!=args['session_job']:
+                raise ValueError('Migration observer job identity changed; reattach before any action')
         if action in ('job_status','cancel_job','pause_job','resume_job'):
             from . import desktop_update_request as jobs
             job=jobs.status(self.control_tree)
             if action=='job_status':return job
             if action=='pause_job':
-                write(self.control_tree/'memory/.control/autonomy-paused.json',{'at':time.time(),'via':'session-control'})
+                owner_stop.change_pause(self.control_tree,True,via='session-control')
                 return jobs.checkpoint(self.owner,job,state='paused')
             if action=='resume_job':
                 if job.get('cancel_requested') or jobs.cancelled(self.control_tree,job.get('id','')):
                     raise ValueError('Cancelled work cannot be revived')
-                (self.control_tree/'memory/.control/autonomy-paused.json').unlink(missing_ok=True)
+                owner_stop.change_pause(self.control_tree,False,reason='explicit owner resume',via='session-control')
                 if self.migration_request and getattr(self,'migration_thread',None) and self.migration_thread.is_alive():
                     return jobs.checkpoint(self.owner,job,state='running')
                 result=jobs.request(self.control_tree,'resume',root=self.root,identity=job.get('id'))
@@ -311,6 +409,9 @@ class Host:
                     self.migration_thread.start()
                 return result
             return jobs.request(self.control_tree,'cancel',root=self.root,identity=job.get('id'),by='window')
+        if action=='retirement_start':
+            from .portable_retirement import start
+            return start(self.root,owner=self.owner)
         selected = args.get('agent') or self.owner._default()
         if agents.find(self.root, selected) is None:
             raise ValueError('Selected agent is unavailable')
@@ -324,7 +425,8 @@ class Host:
                     if process_state(args) != 'alive':
                         raise ValueError('Observer process birth is not current')
                     self.observers[identity] = {'origin': origin, 'agent': selected,
-                        'pid': args['pid'], 'birth': args['birth']}
+                        'pid': args['pid'], 'birth': args['birth'],
+                        'browser_mode': args.get('browser_mode') is True}
                     self.publish()
                 return {'generation': self.descriptor['generation'], 'pid': os.getpid()}
             if action == 'detach':
@@ -353,19 +455,25 @@ class Host:
             if action == 'refresh':
                 self.owner.refresh()
                 return {'refreshed': True}
-            if action == 'exit':
-                pending,observations=self.cancel_owned_jobs('Owner explicitly exited the application')
-                self.owner.close()
-                self.publish('stopped')
-                self.stop.set()
-                return {'stop_requested':True,'stopped':not pending,'producers':observations}
             if action == 'invoke':
                 command, arguments = args.get('command'), args.get('arguments')
                 if not isinstance(command, str) or not isinstance(arguments, dict):
                     raise ValueError('Expected a desktop command and object arguments')
-                if command == 'update_install':
-                    from .desktop_update_request import admit_install
-                    return admit_install(self.owner, **arguments)
+                durable_restore=False
+                if command=='restore_upstream':
+                    from .upstream_recovery import modern
+                    durable_restore=modern(self.root)
+                if command in ('update_install','update_start') or durable_restore:
+                    from .desktop_update_request import admit_install,admit_download,admit_restore
+                    observer = self.observers.get(args.get('observer'))
+                    if ((command=='restore_upstream' and not observer)
+                            or args.get('observer') and (not observer or observer['agent']!=selected)):
+                        raise ValueError('Update observer is no longer registered for this agent')
+                    presentation = bool(observer and observer.get('browser_mode'))
+                    arguments = {**arguments,'browser_mode':presentation}
+                    admission = (admit_restore if command=='restore_upstream' else
+                                 admit_install if command=='update_install' else admit_download)
+                    return admission(self.owner, **arguments)
                 return self.owner.invoke(command, arguments)
         raise ValueError('Unknown session operation')
 
@@ -408,10 +516,16 @@ class Host:
         from .phone_tunnel.platform_support import acquire_file_lock, release_file_lock
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lease = acquire_file_lock(self.path.with_name('desktop-session.lock'), timeout_sec=1)
+        server=None
         try:
             previous = read(self.path)
             if previous and process_state(previous) not in ('absent', 'changed'):
                 raise RuntimeError('Another live or unknown session owner already holds this profile')
+            from . import session_exit
+            if os.environ.get('HELENE_RECOVERY_AUTOMATIC')=='1':
+                if session_exit.requested(self.root):raise InterruptedError('Owner exited the programme')
+            else:
+                session_exit.clear_for_manual_start(self.root)
             if self.migration_request is None:
                 self.owner.start()
             self.publish('running')
@@ -421,7 +535,8 @@ class Host:
                 from . import migration_job, desktop_update_request as jobs
                 value=read(self.migration_request)
                 if (self.migration_request.resolve()!=jobs.path(self.control_tree).resolve()
-                        or value.get('kind')!='migration' or value.get('state')!='admitting'):
+                        or value.get('kind') not in ('migration','source-update') or value.get('state')!='admitting'
+                        or value.get('program')!=str(self.root) or value.get('tree')!=str(self.control_tree)):
                     raise ValueError('Migration bootstrap request differs')
                 jobs.checkpoint(self.owner,value,state='running',phase='preparing',
                     admission={key:self.descriptor[key] for key in ('pid','birth','generation')})
@@ -434,13 +549,28 @@ class Host:
                     self.owner.close()
                     self.publish('owner-stopped')
                     # Keep a control endpoint so explicit Resume can still act.
-            self.owner.close()
-            self.publish('stopped')
-            self.server.shutdown()
-            server.join(5)
         finally:
-            self.server.server_close()
-            release_file_lock(lease)
+            original=sys.exc_info()[1]
+            failures=[]
+            self._latch_exit()
+            try:
+                with self.exit_lock:
+                    self.owner.close()
+                    self.publish('stopped')
+            except Exception as exc:failures.append(exc)
+            try:
+                if server is not None and server.is_alive():
+                    self.server.shutdown()
+                    server.join(5)
+            except Exception as exc:failures.append(exc)
+            try:self.server.server_close()
+            except Exception as exc:failures.append(exc)
+            try:release_file_lock(lease)
+            except Exception as exc:failures.append(exc)
+            if failures:
+                detail='Session shutdown incomplete: '+'; '.join(str(exc) for exc in failures)
+                if original is not None:original.add_note(detail)
+                else:raise RuntimeError(detail) from failures[0]
 
 
 def main(argv=None):
@@ -465,12 +595,12 @@ def main(argv=None):
             if args.control in ('stop','exit'):
                 result=jobs.request(tree,'cancel',root=args.root,identity=job.get('id'),by='window')
             elif args.control=='pause':
-                write(tree/'memory/.control/autonomy-paused.json',{'at':time.time(),'via':'durable-session-control'})
+                owner_stop.change_pause(tree,True,via='durable-session-control')
                 result=jobs.checkpoint(None,job,state='paused')
             else:
                 if job.get('cancel_requested') or jobs.cancelled(tree,job.get('id','')):raise ValueError('Cancelled job cannot resume')
                 if process_state(job.get('helper') or {})!='alive':raise RuntimeError('No live mechanical producer; reopen migration/session to resume saved work')
-                (tree/'memory/.control/autonomy-paused.json').unlink(missing_ok=True)
+                owner_stop.change_pause(tree,False,reason='explicit owner resume',via='durable-session-control')
                 result=jobs.checkpoint(None,job,state='handed_off')
             print(json.dumps(result,ensure_ascii=False));return 0
         action={'status':'job_status','stop':'cancel_job','pause':'pause_job','resume':'resume_job','exit':'exit'}[args.control]

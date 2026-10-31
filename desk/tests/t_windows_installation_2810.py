@@ -18,18 +18,25 @@ import t_migration_clean_windows_2810 as clean_fixture
 
 
 class Installation(unittest.TestCase):
+    def setUp(self):
+        # These small packages exercise config/retirement, not the separate
+        # full incoming runtime/bundle gate covered by packaged qualification.
+        from localharness import source_update_host
+        adapter=patch.object(install,'migration_windows',windows);adapter.start();self.addCleanup(adapter.stop)
+        boundary=patch.object(source_update_host,'verified_runtime',return_value={'kind':'fixture-runtime-boundary'})
+        boundary.start();self.addCleanup(boundary.stop)
     def fixture(self,root):
         old,package=clean_fixture.CleanMigration().fixture(root)
         (old/'python-app.json').write_text('{"version":"2.1.1"}')
         return old,package
 
-    def test_attach_keeps_same_data_settings_pause_and_archives_old_code(self):
+    def test_attach_keeps_same_data_settings_pause_and_retires_old_code_without_archive(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);old,package=self.fixture(root)
             (old/'components/whisper').mkdir(parents=True)
             (old/'components/whisper/fixture.dll').write_bytes(b'optional runtime')
             original=(old/'helene.json').read_bytes()
-            with patch.object(windows,'stop') as stop,patch.object(windows,'quiescent'),patch.object(windows,'service',return_value=None):
+            with patch.object(windows,'stop',return_value={}) as stop,patch.object(windows,'quiescent'),patch.object(windows,'service',return_value=None):
                 note=install.run(package,package,old=old,data=old/'data',launch=False,source_mode='clean')
             stop.assert_called_once_with(old)
             cfg=json.loads((package/'helene.json').read_text(encoding='utf-8'))
@@ -41,13 +48,10 @@ class Installation(unittest.TestCase):
             self.assertEqual((Path(cfg['code'])/'agent.py').read_text(),'release_code = True\n')
             self.assertEqual((old/'helene.json').read_bytes(),original)
             self.assertEqual(note['copied_data'],[])
-            self.assertEqual((package/'components/whisper/fixture.dll').read_bytes(),b'optional runtime')
-            archive=Path(note['archives'][0]['path'])
-            with zipfile.ZipFile(archive) as saved:
-                self.assertEqual(saved.read('agent.py'),(old/'code/agent.py').read_bytes())
-                self.assertFalse(any('memory/' in n for n in saved.namelist()))
-            self.assertTrue(install.archived_version('2.1.1'))
-            self.assertFalse(install.archived_version('2.2.1'))
+            self.assertFalse((package/'components/whisper/fixture.dll').exists())
+            self.assertFalse((old/'components/whisper/fixture.dll').exists())
+            self.assertFalse((old/'code/agent.py').exists());self.assertFalse((package/'archives').exists())
+            self.assertEqual(note['copied_data'],[])
 
     def test_data_only_after_uninstall_and_new_agent_in_chosen_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,7 +104,7 @@ class Installation(unittest.TestCase):
                 result=windows.remove_program(old,new,note)
             self.assertTrue(result['ok']);self.assertFalse((old/'helene.exe').exists())
             self.assertFalse((old/'helene-svc.exe').exists())
-            self.assertTrue((old/'helene.json').is_file());self.assertTrue((old/'code/agent.py').is_file())
+            self.assertTrue((old/'helene.json').is_file());self.assertFalse((old/'code/agent.py').exists())
             self.assertTrue((old/'data/memory/history.jsonl').is_file())
             self.assertEqual((old/'components/xtts/model/weights.pth').read_bytes(),b'model-data')
 
@@ -109,7 +113,7 @@ class Installation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);old,package=self.fixture(root)
             window=SimpleNamespace(root=package,running=threading.Lock(),progress=lambda _:None)
-            with patch.object(install,'run',return_value={'state':'completed'}) as run:
+            with patch('localharness.migration_job.admit',return_value={'state':'admitted','job':{'id':'fixture'}}) as run:
                 MigrationWindow.invoke(window,'migration_install',{'old':str(old),'target':str(package),
                     'data':str(old/'data'),'removeOld':True,'mode':'connect'})
                 self.assertEqual(run.call_args.kwargs['data'],str(old/'data'))
@@ -144,10 +148,11 @@ class Installation(unittest.TestCase):
                 request=Path(env['HELENE_RETIRE_MANIFEST']);value=json.loads(request.read_text())
                 self.assertEqual(value['files'],files);self.assertEqual(Path(value['old']),old)
                 self.assertEqual(len(env['HELENE_RETIRE_SHA256']),64);seen.append(request)
-            with patch.object(windows,'admin',return_value=False),patch.object(windows,'powershell',side_effect=RuntimeError('access denied')),patch.object(windows,'run_privileged',side_effect=elevated):
+            windows_os=SimpleNamespace(**{**vars(os),'name':'nt','environ':{**os.environ,'SYSTEMROOT':str(root/'Windows')}})
+            with patch.object(windows,'os',windows_os),patch.object(windows,'admin',return_value=False),patch.object(windows,'powershell',side_effect=RuntimeError('access denied')),patch.object(windows,'run_privileged',side_effect=elevated):
                 windows.system_action(old,'remove_files',files)
             self.assertEqual(len(seen),1);self.assertFalse(seen[0].exists())
-            with patch.object(windows.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run:
+            with patch.object(windows,'os',windows_os),patch.object(windows.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run:
                 windows.run_privileged("$ErrorActionPreference='Stop'",{'HELENE_OLD_ROOT':str(old),'HELENE_PRIVATE_TOKEN':'fixture-secret-do-not-forward'})
                 script=base64.b64decode(run.call_args.kwargs['env']['HELENE_ADMIN_CODE']).decode('utf-16le')
                 self.assertNotIn('fixture-secret',script);self.assertNotIn('HELENE_PRIVATE_TOKEN',script)

@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import io
 import json
 import shutil
+import struct
 from pathlib import Path
 import sys
 import tempfile
@@ -42,8 +43,16 @@ class Fixture:
         put(self.source, 'helene/core/agent.py', 'VALUE = "new edition"\r\n')
         put(self.source, 'helene/core/new.py', 'NEW = True\n')
         put(self.source, 'helene/core/start.sh', '#!/bin/sh\necho new\n')
-        for n in ('python_app.py', 'python_migrate.py', 'deskapp.py', 'helene_setup.py'):
-            put(self.source, 'desk/' + n, 'ENTRY = True\n')
+        # Packaging consumes the complete current entry surface. Keep real
+        # entry/launcher source bytes here; these fixture ZIPs never execute it.
+        for n in ('python_app.py', 'python_migrate.py', 'deskapp.py', 'helene_setup.py',
+                  'windows_start.py', 'first_start_window.py'):
+            put(self.source, 'desk/' + n, (INSTALLER.parent / n).read_bytes())
+        for n in ('windows_archive_entry.py', 'windows_launcher.rs'):
+            put(self.source, 'desk/installer/' + n, (INSTALLER / n).read_bytes())
+        put(self.source, 'desk/shell/icons/icon.ico', (INSTALLER.parent / 'shell/icons/icon.ico').read_bytes())
+        put(self.source, 'desk/resources/first-start.html',
+            (INSTALLER.parent / 'resources/first-start.html').read_bytes())
         put(self.source, 'desk/deskpkg.py', 'def requirements(flavor):\n return ["aiohttp", "pywebview==6.2.1"]\n')
         put(self.source, 'desk/localharness/new.py', 'CHANGED = True\n')
         put(self.source, 'desk/deskd/reader.py', 'READER = True\n')
@@ -75,7 +84,24 @@ class Fixture:
         put(self.bundle, 'manifest.json', encoded({'format': 'helene-verification-bundle.v1', 'version': VERSION,
              'files': rows('repository/'), 'runners': rows('runner/'), 'lanes': ['fixture-only']}))
         self.donor = root / 'old.zip'
+        # Structural PE fixture only: the real consumer validates its x64 GUI
+        # header and exact source/icon/binary binding, without running native code.
+        bootstrap = bytearray(512)
+        bootstrap[:2] = b'MZ'
+        struct.pack_into('<I', bootstrap, 0x3c, 0x80)
+        bootstrap[0x80:0x84] = b'PE\0\0'
+        struct.pack_into('<HH', bootstrap, 0x84, 0x8664, 1)
+        struct.pack_into('<H', bootstrap, 0x94, 0xf0)
+        struct.pack_into('<H', bootstrap, 0x98, 0x20b)
+        struct.pack_into('<H', bootstrap, 0x80 + 92, 2)
+        bootstrap = bytes(bootstrap)
+        bootstrap_receipt = {'kind':'helene-python-bootstrap.v1',
+            'source_sha256':digest(self.source/'desk/installer/windows_launcher.rs'),
+            'icon_sha256':digest(self.source/'desk/shell/icons/icon.ico'),
+            'binary_sha256':sha(bootstrap)}
         entries = {
+            'helene.exe': Entry(bootstrap),
+            'helene-bootstrap.json': Entry(encoded(bootstrap_receipt)),
             'runtime/bin/python3': Entry(b'not-executed-python-runtime\0' * 1024, '100755'),
             'runtime/lib/library.bin': Entry(bytes(range(255)) * 1024),
             'Helene.app/Contents/MacOS/Helene': Entry(b'actual-preserved-wrapper', '100755'),
@@ -87,7 +113,7 @@ class Fixture:
             'app/mobile/index.html': Entry(b'old mobile'),
             'app/miniapp/index.html': Entry(b'old miniapp'),
             'app/component-downloads.json': Entry(encoded({'app_version':'2.2.17','artifacts': {'voice': {'sha256':'pinned','url':'https://example.invalid/immutable'}}})),
-            'python-app.json': Entry(encoded({'version':'2.2.17'})),
+            'python-app.json': Entry(encoded({'format':'helene-python-app.v1','version':'2.2.17'})),
             'helene-build.json': Entry(encoded({'version':'2.2.17'})),
             'tree/agent.py': Entry(b'LEGACY\n'),
             'helene.json': Entry(b'{"setup_complete":false}'),
@@ -112,9 +138,23 @@ class PortableRefreshTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
+    def test_windows_refresh_removes_donor_vbs_and_refreshes_the_single_entry_instructions(self):
+        from windows_archive_entry import OBSOLETE_ENTRIES,INSTRUCTION_FILES,instructions
+        f=Fixture(self.root)
+        with zipfile.ZipFile(f.donor,'a') as z:
+            for name in OBSOLETE_ENTRIES:z.writestr(PREFIX+name,b'old script')
+            for name in INSTRUCTION_FILES:z.writestr(PREFIX+name,b'old instructions')
+        f.kw['expected_sha256']=digest(f.donor)
+        plan,replacements,removed=f.plan('windows')
+        target=self.root/'single-entry.zip'
+        refresh.build(f.donor,target,plan,replacements,removed,expected_plan=plan['sha256'])
+        with zipfile.ZipFile(target) as z:
+            self.assertTrue(all(PREFIX+name not in z.namelist() for name in OBSOLETE_ENTRIES))
+            self.assertTrue(all(z.read(PREFIX+name)==instructions().encode('utf8') for name in INSTRUCTION_FILES))
+
     def test_four_platform_zip_consumers_preserve_compressed_native_records(self):
         f = Fixture(self.root)
-        preserved = {PREFIX + n for n in ('runtime/bin/python3', 'runtime/lib/library.bin',
+        preserved = {PREFIX + n for n in ('runtime/bin/python3', 'runtime/lib/library.bin', 'helene.exe',
                      'Helene.app/Contents/MacOS/Helene', 'Helene.app/Contents/_CodeSignature/CodeResources', 'helene')}
         old_records = record_hashes(f.donor, preserved)
         for platform in refresh.PLATFORMS:

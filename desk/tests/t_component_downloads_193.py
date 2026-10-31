@@ -62,7 +62,7 @@ class Components(unittest.TestCase):
         previous=self.root/'components/xtts/fixture';previous.parent.mkdir(parents=True);previous.write_text('previous')
         with patch('localharness.xtts_install.install',side_effect=OSError('model conflict')):
             with self.assertRaisesRegex(OSError,'model conflict'):cd.install(self.root,['xtts'],tree=self.root/'agent')
-        self.assertEqual(previous.read_text(),'previous');self.assertTrue(list((self.root/'downloads').glob('*.zip')))
+        self.assertEqual(previous.read_text(),'previous');self.assertTrue(list(cd.cache_dir(self.root).glob('*.zip')))
     def test_missing_xtts_tree_refuses_before_download_or_overlay(self):
         with self.assertRaisesRegex(ValueError,'Select'):cd.install(self.root,['xtts'])
         self.assertEqual(self.calls,[])

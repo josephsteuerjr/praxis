@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'desk'))
 from localharness import python_source_updater as updater,migration_windows
-from localharness.desktop_process import JobChild
 import python_app
 class Exit(unittest.TestCase):
     def test_actual_window_bridge_exit_and_descriptor_identity(self):
@@ -20,7 +19,9 @@ class Exit(unittest.TestCase):
     def test_legacy_without_control_requires_manual_exit_not_force(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(RuntimeError,'tray Exit'):migration_windows.request_python_exit(Path(tmp),123)
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job handle custody')
     def test_graceful_failure_cannot_skip_job_stop_or_race_rollback(self):
+        from localharness.desktop_process import JobChild
         for unconfirmed in (False,True):
             with self.subTest(unconfirmed=unconfirmed),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);old=root/'old';staging=root/'.helene-update-fixture';new=staging/'Helene';recovery=root/'recovery'

@@ -76,6 +76,7 @@ _POLL_SEC = 1.0
 _HEARTBEAT_SEC = 10.0
 
 _agent = None          # её дерево, загруженное в этот процесс
+_CODE_CONTEXT = {}
 _life = None           # memory_life — память дерева
 _refresh_care = None   # serialized background refresh, owned by main lifecycle
 _desk: transport.Desk | None = None      # комната окна по умолчанию (`window`)
@@ -141,7 +142,9 @@ def _load_tree(code_dir: Path, tree: Path, cfg: dict):
       5. ручки ПОВТОРНО — страховка на случай, когда `.env` читать всё же попросили.
     Разбор ловушки — в шапке `boot.py`.
     """
-    global _agent, _life
+    global _agent, _life, _CODE_CONTEXT
+    from localharness.runtime_identity import capture
+    _CODE_CONTEXT=capture(Path(__file__).resolve().parents[2],code_dir)
     # С деревом — чтобы КЕАТ личного потока получил абсолютные пути своей политики
     # (boot.keat_knobs); без владельца в Telegram его ручек нет вовсе.
     knobs = boot.env_knobs(cfg, tree=tree)
@@ -1934,6 +1937,7 @@ def _write_reader(inbox: Path) -> None:
     _write_json(inbox / ".reader.json", {
         "pid": os.getpid(), "at": time.time(), "started": _STARTED_UTC,
         "code": str(Path(_agent.__file__).resolve().parent) if _agent is not None else "",
+        "code_context": _CODE_CONTEXT,
         "autonomy": {"protocol": 1, "paused": owner_stop.paused(), "stopped": owner_stop.stopped()},
         "fold": _FOLD_ACTIVE[0],
         "busy": bool(_busy["busy"]), "run": str(_busy["run"] or ""),
