@@ -28,6 +28,8 @@ def subject():
     places=first.Places(home/'Helene')
     result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'real_complete_release_archive':True,
         'synthetic_profile_only':True,'semantic_model_review_accepted':False,'steps':{}}
+    recheck=os.environ.get('UPDATE_RECHECK')=='failed-start'
+    if recheck:result['previous_real_https_clean_and_support_run']=41296826304
     write('FULL-UPDATE.json',result)
     provider_calls=[]
     class Provider(http.server.BaseHTTPRequestHandler):
@@ -98,39 +100,48 @@ def subject():
     server.socket=context.wrap_socket(server.socket,server_side=True)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     url=f'https://localhost:{server.server_port}/{name}'
+    stop_watch=None
     try:
         launch();native.wait(lambda:info().get('version')=='2.3.0-rc.18');data_exact()
-        diag=root/'.helene/logs/archive-fixture.log';diag.parent.mkdir(parents=True,exist_ok=True)
-        diag.write_text('native archive fixture api_key="fixture-local-key"\n')
-        support=Path(native.invoke(root,'logs_bundle'))
-        with zipfile.ZipFile(support) as z:
-            assert z.testzip() is None
-            text=b'\n'.join(z.read(n) for n in z.namelist())
-            assert b'fixture-local-key' not in text and b'native archive fixture' in text
-        shutil.copy2(support,OUT/'redacted-support.zip');result['steps']['actual_support_export_masks_model_key']=True
-        try:native.invoke(root,'update_download',{'url':url,'sha256':'0'*64,'extensions':[]})
-        except urllib.error.HTTPError:result['steps']['wrong_hash_refused_old_window_retained']=bool(info())
-        else:raise AssertionError('Wrong archive SHA was accepted')
-        downloaded=native.invoke(root,'update_download',{'url':url,'sha256':os.environ['CANDIDATE_SHA256'],'extensions':[]},timeout=300)
-        assert downloaded['sha_ok'] and digest(downloaded['path'])==os.environ['CANDIDATE_SHA256']
-        result['steps']['full_https_download_exact']=True;write('FULL-UPDATE.json',result)
-        admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'clean'})
-        write('clean-admission.json',{k:v for k,v in admission.items() if k not in ('token','key')})
-        identity=admission.get('id') or admission.get('job',{}).get('id')
-        assert identity,admission
-        finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
-        result['steps']['real_full_archive_clean_update_and_native_restart']=True;screenshot('after-clean.png');write('FULL-UPDATE.json',result)
+        if recheck:
+            from localharness.program_state import directory
+            manual=directory(root,'downloads')/name;shutil.copy2(archive,manual)
+            assert digest(manual)==os.environ['CANDIDATE_SHA256']
+            downloaded={'path':str(manual)}
+        else:
+            diag=root/'.helene/logs/archive-fixture.log';diag.parent.mkdir(parents=True,exist_ok=True)
+            diag.write_text('native archive fixture api_key="fixture-local-key"\n')
+            support=Path(native.invoke(root,'logs_bundle'))
+            with zipfile.ZipFile(support) as z:
+                assert z.testzip() is None
+                text=b'\n'.join(z.read(n) for n in z.namelist())
+                assert b'fixture-local-key' not in text and b'native archive fixture' in text
+            shutil.copy2(support,OUT/'redacted-support.zip');result['steps']['actual_support_export_masks_model_key']=True
+            try:native.invoke(root,'update_download',{'url':url,'sha256':'0'*64,'extensions':[]})
+            except urllib.error.HTTPError:result['steps']['wrong_hash_refused_old_window_retained']=bool(info())
+            else:raise AssertionError('Wrong archive SHA was accepted')
+            downloaded=native.invoke(root,'update_download',{'url':url,'sha256':os.environ['CANDIDATE_SHA256'],'extensions':[]},timeout=300)
+            assert downloaded['sha_ok'] and digest(downloaded['path'])==os.environ['CANDIDATE_SHA256']
+            result['steps']['full_https_download_exact']=True;write('FULL-UPDATE.json',result)
+            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'clean'})
+            write('clean-admission.json',{k:v for k,v in admission.items() if k not in ('token','key')})
+            identity=admission.get('id') or admission.get('job',{}).get('id')
+            assert identity,admission
+            finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
+            result['steps']['real_full_archive_clean_update_and_native_restart']=True;screenshot('after-clean.png');write('FULL-UPDATE.json',result)
         # Force only the newly launched, exact-path migration child to fail.
         # All archive bytes and updater logic remain the real distribution.
         code=selected_code();(code/'archive-owner-change.py').write_bytes(b'OWNER_CHANGE=1\n')
         before_cfg=(root/'helene.json').read_bytes();before_file=(code/'archive-owner-change.py').read_bytes()
         stop_watch=threading.Event();killed=[]
+        existing_pid=native.control(root)['pid'];admission_started=time.time()
         def fail_new_start():
             while not stop_watch.is_set():
                 for p in psutil.process_iter(['pid','cmdline','create_time']):
                     try:
                         args=p.info.get('cmdline') or []
-                        if '--migration' in args and str(root/'app/python_app.py') in args and str(root) in args:
+                        if (p.pid!=existing_pid and p.info['create_time']>=admission_started-.05
+                                and '--migration' in args and str(root/'app/python_app.py') in args and str(root) in args):
                             born=p.info['create_time']
                             if psutil.Process(p.pid).create_time()==born:
                                 p.kill();killed.append({'pid':p.pid,'birth':born});return
@@ -156,6 +167,7 @@ def subject():
                 if p.stat().st_size<2*1024*1024:shutil.copy2(p,OUT/p.name)
         screenshot('failure.png');raise
     finally:
+        if stop_watch is not None:stop_watch.set()
         try:
             if native.control(root):native.invoke(root,'python_window',{'action':'exit','relaunch':False,'owner_exit':False})
         except Exception:pass
