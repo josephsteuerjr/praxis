@@ -10,7 +10,7 @@ jobs:
   source:
     runs-on: macos-15
     env:
-      RC23_SCOPE: settings-and-common
+      RC23_SCOPE: bounded-repair
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

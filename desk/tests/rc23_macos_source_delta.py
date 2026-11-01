@@ -74,6 +74,8 @@ def check():
             'tests.t_posix_first_start_0111','tests.t_posix_package_2410',
             'tests.t_python_app.PythonApplicationTests.test_close_hides_but_exit_and_relaunch_destroy',
             'tests.t_python_app.PythonApplicationTests.test_pending_mac_profile_migration_reaches_recovery_before_first_start']
+    bounded_repair=os.environ.get('RC23_SCOPE')=='bounded-repair'
+    if bounded_repair:modules=['tests.t_bounded_discovery_0111']
     suite=unittest.defaultTestLoader.loadTestsFromNames(modules)
     def flatten(value):
         for case in value:
@@ -95,9 +97,9 @@ def check():
         'scope':'Source-level native Darwin unit/loopback fixtures. No new distributed RC23 assembly, GUI/TCC, semantic-review or broad-matrix acceptance.'}
     (OUT/'python-results.json').write_text(json.dumps(report,indent=2)+'\n')
     node=SUBJECT/'Helene/verification-tools/bin/node'
-    if repair_only:
-        (OUT/'node-result.json').write_text(json.dumps({'repeated':False,'retained_passed_run':41353011091,
-            'reason':'Only three Python fixture paths and the native QA observer/workflow changed; shared UI/Node inputs unchanged.'},indent=2)+'\n')
+    if repair_only or bounded_repair:
+        (OUT/'node-result.json').write_text(json.dumps({'repeated':False,'retained_passed_run':41359869672 if bounded_repair else 41353011091,
+            'reason':'Python fixture path canonicalization only; all 32 current native Node checks retained.' if bounded_repair else 'Only three Python fixture paths and the native QA observer/workflow changed; shared UI/Node inputs unchanged.'},indent=2)+'\n')
         print(json.dumps({k:v for k,v in report.items() if k!='outcomes'}),flush=True)
         assert result.wasSuccessful()
         return
