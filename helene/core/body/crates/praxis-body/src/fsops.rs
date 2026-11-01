@@ -143,7 +143,8 @@ fn apply_patch(args: PatchArgs) -> Result<Value> {
     }
     let stage = std::env::temp_dir().join(format!("praxis-{}.patch", Uuid::new_v4()));
     fs::write(&stage, args.patch.as_bytes())?;
-    let mut check_command = std::process::Command::new("git.exe");
+    let git = if cfg!(windows) { "git.exe" } else { "git" };
+    let mut check_command = std::process::Command::new(git);
     check_command
         .args(["-C"])
         .arg(&args.root)
@@ -157,7 +158,7 @@ fn apply_patch(args: PatchArgs) -> Result<Value> {
             String::from_utf8_lossy(&check.stderr)
         );
     }
-    let mut apply_command = std::process::Command::new("git.exe");
+    let mut apply_command = std::process::Command::new(git);
     apply_command
         .args(["-C"])
         .arg(&args.root)
@@ -1752,6 +1753,21 @@ mod tests {
 
     fn text(value: &Value, key: &str) -> String {
         value[key].as_str().unwrap_or_default().to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unified_patch_runs_native_git_and_applies_only_after_a_successful_check() {
+        let dir = scratch("native-git-patch");
+        fs::write(dir.join("value.txt"), b"old\n").unwrap();
+        let result = dispatch("fs.apply_patch", json!({"root":dir,
+            "patch":"--- a/value.txt\n+++ b/value.txt\n@@ -1 +1 @@\n-old\n+new\n"})).unwrap();
+        assert_eq!(result["ok"], true, "{result}");
+        assert_eq!(fs::read(dir.join("value.txt")).unwrap(), b"new\n");
+        assert!(dispatch("fs.apply_patch", json!({"root":dir,
+            "patch":"--- a/value.txt\n+++ b/value.txt\n@@ -1 +1 @@\n-missing\n+wrong\n"})).is_err());
+        assert_eq!(fs::read(dir.join("value.txt")).unwrap(), b"new\n");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     /// Живой случай 13–14 июля: две операции били по `C:\Users\Egor` и `C:\Users\Егор`,
