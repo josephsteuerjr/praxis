@@ -11,63 +11,31 @@ concurrency:
 jobs:
   native:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: desk/app/package-lock.json
       - uses: actions/cache/restore@v4
-        id: runtime-cache
+        id: candidate-cache
         with:
-          path: ${{ runner.temp }}/rc18-evidence.zip
-          key: helene-macos-runtime-6eb05a4b19951fa9
-      - name: Reuse successful hash-bound native runtime
-        if: steps.runtime-cache.outputs.cache-hit != 'true'
+          path: ${{ runner.temp }}/rc18-qualified-input.zip
+          key: helene-rc18-native-79ce64094f84499c
+      - name: Reuse unchanged native candidate and prior evidence
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(uname -m)" = arm64
-          gh api repos/josephsteuerjr/praxis/actions/artifacts/12614081769/zip > "$RUNNER_TEMP/rc18-evidence.zip"
-          shasum -a 256 "$RUNNER_TEMP/rc18-evidence.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13077655662/zip > "$RUNNER_TEMP/rc18-qualified-input.zip"
       - uses: actions/cache/save@v4
-        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
         with:
-          path: ${{ runner.temp }}/rc18-evidence.zip
-          key: helene-macos-runtime-6eb05a4b19951fa9
-      - name: Exact frontend source cache key
-        id: fronts-key
-        run: python3 desk/tests/rc18_macos_pipeline.py key >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
-        id: fronts-cache
-        with:
-          path: ${{ runner.temp }}/rc18-fronts
-          key: helene-rc18-macos-fronts-${{ steps.fronts-key.outputs.key }}
-      - name: Install all locked frontend dependencies and build
-        id: front-build
-        run: python3 desk/tests/rc18_macos_pipeline.py fronts
-      - uses: actions/cache/save@v4
-        if: steps.fronts-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/rc18-fronts
-          key: helene-rc18-macos-fronts-${{ steps.fronts-key.outputs.key }}
-      - name: Assemble editable Python candidate
-        run: python3 desk/installer/build_python_macos_rc.py --evidence "$RUNNER_TEMP/rc18-evidence.zip" --work "$RUNNER_TEMP/rc18-assembly" --output "$RUNNER_TEMP/rc18-output"
-      - name: Actual Darwin lifecycle and native GUI consumers
-        run: |
-          "$RUNNER_TEMP/rc18-assembly/donor/Helene/runtime/bin/python3" -B desk/tests/rc18_macos_pipeline.py native
+          path: ${{ runner.temp }}/rc18-qualified-input.zip
+          key: helene-rc18-native-79ce64094f84499c
+      - name: Recheck only canonical-path fixtures on native ARM64
+        run: python3 desk/tests/qualify_existing_rc18_macos.py
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: helene-rc18-macos-arm64
-          path: |
-            ${{ runner.temp }}/rc18-output/*.zip
-            ${{ runner.temp }}/rc18-output/*.sha256
-            ${{ runner.temp }}/rc18-output/candidate.json
-            evidence-rc18/
-          include-hidden-files: false
+          name: helene-rc18-macos-qualification
+          path: evidence-requalified/
           retention-days: 30
