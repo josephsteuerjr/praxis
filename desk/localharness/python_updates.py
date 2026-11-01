@@ -123,12 +123,13 @@ def asset_sha(url):
 
 
 def download_http():
+    from .tls_context import default_context
     class SecureRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self,req,fp,code,msg,headers,newurl):
             if urllib.parse.urlsplit(newurl).scheme!='https':raise ValueError('Update redirect must remain HTTPS')
             secure_url(newurl)
             return super().redirect_request(req,fp,code,msg,headers,newurl)
-    return urllib.request.build_opener(SecureRedirect())
+    return urllib.request.build_opener(SecureRedirect(),urllib.request.HTTPSHandler(context=default_context()))
 
 
 def secure_url(value):

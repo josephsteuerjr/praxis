@@ -1,0 +1,51 @@
+name: Hélène RC18 complete macOS package and offline verification executor
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/build_macos_final.py, .github/workflows/rc18-macos-final.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  candidate:
+    runs-on: macos-15
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: fronts
+        run: python3 desk/tests/rc18_macos_pipeline.py key >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rc18-fronts
+          key: helene-rc18-macos-fronts-${{ steps.fronts.outputs.key }}
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rc18-verification-tools
+          key: helene-rc18-macos-verification-tools-${{ steps.fronts.outputs.key }}-v1
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rc18-evidence.zip
+          key: helene-macos-runtime-6eb05a4b19951fa9
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        id: candidate
+        with:
+          path: ${{ runner.temp }}/rc18-qualified-input.zip
+          key: helene-rc18-native-79ce64094f84499c
+          fail-on-cache-miss: true
+      - name: Build source-complete native candidate and exercise offline consumer
+        run: python3 desk/tests/build_macos_final.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-macos-complete
+          path: |
+            ${{ runner.temp }}/final-output/*.zip
+            ${{ runner.temp }}/final-output/*.sha256
+            ${{ runner.temp }}/final-output/candidate.json
+            evidence-final/
+            evidence-extended/
+            evidence-rc18/

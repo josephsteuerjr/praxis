@@ -34,7 +34,7 @@ def unpack(archive,destination):
             if i.is_dir():target.mkdir(parents=True,exist_ok=True);continue
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(z.read(i));target.chmod(mode&0o777 or 0o644)
 
-def build(evidence,work,out):
+def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=None):
     if runtime_target()!='macos-arm64':raise ValueError('Run on native macOS ARM64')
     evidence,work,out=map(lambda p:Path(p).resolve(),(evidence,work,out))
     if digest(evidence)!=EVIDENCE_SHA256:raise ValueError('Reusable CI input digest mismatch')
@@ -52,8 +52,8 @@ def build(evidence,work,out):
     program=out/'Helene'
     # assemble owns an initial archive. Final GUI metadata is sealed below;
     # keep only the final archive name and the source-bound final passport.
-    first=assemble(donor/'runtime',edition,None,None,program,version=VERSION,target='macos-arm64',
-        downloads=downloads,body=donor/'helene-body',bridge=donor/'helene-bridge')
+    first=assemble(runtime or donor/'runtime',edition,None,None,program,version=VERSION,target='macos-arm64',
+        downloads=downloads,body=donor/'helene-body',bridge=donor/'helene-bridge',verification=verification,verification_tools=verification_tools)
     first.rename(work/'assembly-before-cocoa.zip')
     bundle=program/'Helene.app'
     shutil.copytree(donor/'Helene.app',bundle)
@@ -96,4 +96,5 @@ def build(evidence,work,out):
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('evidence','work','output'):p.add_argument('--'+name,type=Path,required=True)
-    a=p.parse_args();build(a.evidence,a.work,a.output)
+    for name in ('verification','verification-tools','runtime'):p.add_argument('--'+name,type=Path)
+    a=p.parse_args();build(a.evidence,a.work,a.output,verification=a.verification,verification_tools=a.verification_tools,runtime=a.runtime)

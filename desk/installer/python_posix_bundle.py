@@ -44,7 +44,7 @@ def normalize_output_modes(output):
         if safe!=mode:path.chmod(safe)
 
 
-def assemble(runtime, edition, relay, relay_source, output, *, version, target, downloads=None, body=None, bridge=None, without_relay=False):
+def assemble(runtime, edition, relay, relay_source, output, *, version, target, downloads=None, body=None, bridge=None, without_relay=False, verification=None, verification_tools=None):
     runtime,edition,output=map(Path,(runtime,edition,output))
     relay=Path(relay) if relay else None
     relay_source=Path(relay_source) if relay_source else None
@@ -127,6 +127,32 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     shutil.copy2(DESK.parent/'NOTICE',output/'NOTICE')
     shutil.copy2(DESK/'installer/THIRD-PARTY.md',output/'THIRD-PARTY.md')
     shutil.copy2(DESK/'installer/PYTHON-START-HERE.md',output/'START-HERE.md')
+    # The incoming coordinator verifies actual application bytes before it may
+    # import itself for an authored update. This is the same app-relative ABI
+    # as Windows portable_refresh, including target-specific downloads.
+    app_files={p.relative_to(app).as_posix():app_components.digest(p) for p in app.rglob('*')
+               if p.is_file() and p.name!='desk.json'}
+    static={n[7:]:h for n,h in app_files.items() if n.startswith('static/')}
+    (output/'source-inputs.json').write_text(json.dumps({'version':version,'files':app_files},indent=2),encoding='utf-8')
+    (app/'desk.json').write_text(json.dumps({'version':version,'files':app_files,
+        'digest':hashlib.sha256('\n'.join(f'{n} {h}' for n,h in sorted(app_files.items())).encode()).hexdigest(),
+        'static':hashlib.sha256('\n'.join(f'{n} {h}' for n,h in sorted(static.items())).encode()).hexdigest()},indent=2),encoding='utf-8')
+    if verification:
+        from localharness import source_verification_bundle
+        verification=Path(verification).resolve()
+        bundle_sha=source_verification_bundle.digest(verification/'manifest.json')
+        source_verification_bundle.load(verification,bundle_sha,version)
+        shutil.copytree(verification,output/'verification',symlinks=False)
+        meta=json.loads((output/'python-app.json').read_text(encoding='utf-8'))
+        meta['verification_bundle_sha256']=bundle_sha
+        (output/'python-app.json').write_text(json.dumps(meta,indent=2),encoding='utf-8')
+        if verification_tools:
+            from localharness import source_verification_executor
+            shutil.copytree(verification_tools,output/'verification-tools',symlinks=False)
+            declared=source_verification_bundle.load(output/'verification',bundle_sha,version).get('bundled_executors',{}).get(sys.platform)
+            if source_verification_executor.describe(output/'verification-tools')!=declared:
+                raise ValueError('Native verification tools differ from bound bundle')
+    elif verification_tools:raise ValueError('Native verification tools require a bound source bundle')
     normalize_output_modes(output)
     from localharness.code_transition import seal as seal_code
     from localharness.authored_baseline import seal as seal_authored_baseline
@@ -154,4 +180,5 @@ if __name__=='__main__':
     p.add_argument('--without-relay',action='store_true',help='Compatibility flag: relay is always downloaded separately')
     p.add_argument('--version',required=True);p.add_argument('--target',required=True)
     p.add_argument('--downloads',type=Path);p.add_argument('--body',type=Path);p.add_argument('--bridge',type=Path)
-    a=p.parse_args();print(assemble(a.runtime,a.edition,a.relay,a.relay_source,a.output,version=a.version,target=a.target,downloads=a.downloads,body=a.body,bridge=a.bridge,without_relay=a.without_relay))
+    p.add_argument('--verification',type=Path,help='Exact version-bound full source verification bundle')
+    a=p.parse_args();print(assemble(a.runtime,a.edition,a.relay,a.relay_source,a.output,version=a.version,target=a.target,downloads=a.downloads,body=a.body,bridge=a.bridge,without_relay=a.without_relay,verification=a.verification))
