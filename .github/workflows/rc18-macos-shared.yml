@@ -1,0 +1,45 @@
+name: Hélène native Mac shared regression consumers
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_shared_regressions.py, desk/tests/macos_archive_delta.py, .github/workflows/rc18-macos-shared.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  shared:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      CANDIDATE_SHA256: 8730bdebc9e2f66f828a2fbd10a6ca412a70c3fe238a5d2a6feb4ae35030ee22
+      ARTIFACT_SHA256: ed4f983c1da982ffb384fbae5bde59ae34ff28d1c7b864d4b153234767cc3ea1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: base
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-8f133b5238fbea7a
+      - if: steps.base.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - name: Retain verified base as transport input
+        run: mv "$RUNNER_TEMP/qualified-release-artifact.zip" "$RUNNER_TEMP/baseline-release-artifact.zip"
+      - name: Download exact source-bound shared-fix archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13082226446/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-8730bdebc9e2f66f
+      - name: Native tiny installer errors, retry, Exit and two Cocoa observers
+        run: python3 desk/tests/macos_shared_regressions.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-shared-mac
+          path: evidence-shared-mac/
