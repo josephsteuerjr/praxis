@@ -58,7 +58,15 @@ def ui_subject(program=None,python=None):
         identity=json.loads((home/'Helene/memory/.control/profile-identity.json').read_text())
         assert identity['agent_name']=='Native UI fixture'
         result['steps']['created_agent_via_native_form']=True
-        time.sleep(6);row=control(program);pid=row['pid']
+        import Quartz
+        def ordinary_pid():
+            windows=Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly,Quartz.kCGNullWindowID)
+            for window in windows:
+                if window.get('kCGWindowOwnerName')=='Hélène' and window.get('kCGWindowLayer')==0:
+                    candidate=int(window['kCGWindowOwnerPID'])
+                    if any(x['AXValue']=='Настройки' or x['AXTitle']=='Настройки' for x in ax.walk(candidate)):
+                        return candidate
+        pid=wait(ordinary_pid)
         save('window-ax.json',[{k:v for k,v in x.items() if k!='element'} for x in ax.walk(pid)])
         ax.press(ax.find(pid,'Настройки'))
         result['steps']['opened_settings_via_native_control']=True

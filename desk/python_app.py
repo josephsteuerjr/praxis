@@ -700,7 +700,15 @@ def _main(argv=None):
     if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
-    if sys.platform=='darwin' and not (args.session_job or args.migration or args.browser):
+    from localharness import owner_stop
+    if args.launch_intent == "automatic" and owner_stop.stopped():
+        bootstrap_ready.signal()
+        return 0
+    if args.session_tree is not None and not args.session_job:
+        raise ValueError('A selected session tree requires an admitted migration job')
+    if (sys.platform=='darwin' and not (args.session_job or args.migration or args.browser or args.migration_wizard)
+            and (root/'python-app.json').is_file()
+            and __import__('localharness.python_platform',fromlist=['target']).target(root)=='macos-arm64'):
         from localharness import posix_first_start as first
         places=first.Places.current(root)
         if not first.ready(root,places) or not first.agent_exists(places.data):
@@ -714,15 +722,9 @@ def _main(argv=None):
         if first_start_ready(root):os.environ['HELENE_USER_DATA']=str(Places.current().data)
         from localharness.program_state import tidy_program
         tidy_program(program)
-    from localharness import owner_stop
-    if args.launch_intent == "automatic" and owner_stop.stopped():
-        bootstrap_ready.signal()
-        return 0
     if args.session_job:
         from localharness.migration_job import observer_program
         observer_program(root,program,args.session_job,tree=args.session_tree)
-    elif args.session_tree is not None:
-        raise ValueError('A selected session tree requires an admitted migration job')
     elif program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
     if not args.migration and not args.browser and not args.session_job:

@@ -34,6 +34,8 @@ def execute(command,log,*,cwd=REPO,env=None,timeout=300):
 
 def broad():
     program,python=prepare()
+    from rc18_macos_pipeline import fronts
+    fronts()
     # Test dependencies live in this one task's auxiliary directory. Never
     # install into the candidate, system Python or a publisher's runtime.
     deps=TEMP/'qa-deps'
@@ -58,17 +60,29 @@ def broad():
     write('collection.json',[{k:str(v) for k,v in row.items()} for row in lanes])
     def run(row):
         identity=row['id'];home=TEMP/'broad-homes'/identity;home.mkdir(parents=True)
+        # Several canonical suites create temp fixtures beside their source.
+        # Each lane therefore owns its complete clean source copy INSIDE the
+        # write fence. Sharing a read-only checkout was an invalid test setup.
+        source=home/'source'
+        shutil.copytree(REPO,source,ignore=shutil.ignore_patterns('.git','__pycache__','*.pyc','node_modules','evidence-*'))
+        localcore=source/'live';shutil.copytree(core,localcore)
+        localdesk=source/'desk'
         env=dict(os.environ,HOME=str(home),CFFIXED_USER_HOME=str(home),USERPROFILE=str(home),TMPDIR=str(home),TMP=str(home),TEMP=str(home),
             PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1',PRAXIS_TEST='1',HELENE_BODY_DIR=str(program),
-            PYTHONPATH=os.pathsep.join([str(deps),str(core),str(REPO/'desk'),str(REPO/'desk/localharness')]))
+            HELENE_TEST_SOURCE_ROOT=str(source),HELENE_TREE_SRC=str(localcore),PRAXIS_TEST_FORGE_PROCESS='1',
+            PYTHONPATH=os.pathsep.join([str(deps),str(localcore),str(localdesk),str(localdesk/'localharness')]))
         result=EVIDENCE/'reports'/(identity+'.json');result.parent.mkdir(exist_ok=True)
-        if row.get('script'):command=[python,'-B',row['script']]
+        if row.get('script'):command=[python,'-B',source/row['script'].relative_to(REPO)]
         else:
-            command=[python,'-B',runner,'--root',row['root'],'--report',result,'--sandbox',home,'--dependencies',deps]
-            if row.get('source'):command+=['--source',row['source'],'--framework',row['framework']]
+            root=localcore if row['root']==core else localdesk
+            command=[python,'-B',runner,'--root',root,'--report',result,'--sandbox',home,'--dependencies',deps]
+            if row.get('source'):
+                original=row['source'];relative=original.relative_to(core) if original.is_relative_to(core) else original.relative_to(REPO/'desk')
+                command+=['--source',root/relative,'--framework',row['framework']]
             if 'shard' in row:command+=['--shard-index',row['shard'],'--shard-count',row['count']]
-        code=execute(command,'logs/'+identity+'.log',cwd=row.get('root',REPO),env=env,timeout=600 if identity.startswith('core-') else 180)
+        code=execute(command,'logs/'+identity+'.log',cwd=localcore if identity.startswith(('core-','pytest-')) else localdesk,env=env,timeout=900 if identity.startswith('core-') else 240)
         report=json.loads(result.read_text()) if result.exists() else {}
+        shutil.rmtree(source)
         return identity,{'exit':code,'report':str(result.relative_to(EVIDENCE)) if result.exists() else None,
             'tests':report.get('tests_run',0),'collected':len(report.get('collected',[])),'complete':report.get('complete'),
             'failures':[x for x in report.get('outcomes',[]) if x['status'] not in ('passed','skipped','expected-failure')],

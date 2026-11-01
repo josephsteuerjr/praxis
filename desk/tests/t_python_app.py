@@ -56,7 +56,7 @@ class PythonApplicationTests(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as temporary:
             with patch('localharness.owner_stop.stopped', return_value=True):
-                with patch.object(python_app, 'Application') as application:
+                with patch.object(python_app, 'Application') as application, patch('first_start_window.main', side_effect=AssertionError('automatic Stop must precede every window')):
                     self.assertEqual(python_app.main(['--root', temporary, '--launch-intent', 'automatic']), 0)
             application.assert_not_called()
 
