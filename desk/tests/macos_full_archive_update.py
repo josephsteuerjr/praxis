@@ -91,8 +91,8 @@ def subject():
     places=first.Places(home/'Helene')
     result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'real_complete_release_archive':True,
         'synthetic_profile_only':True,'semantic_model_review_accepted':False,'steps':{}}
-    recheck=os.environ.get('UPDATE_RECHECK')=='failed-start'
-    if recheck:result['previous_real_https_clean_and_support_run']=41296826304
+    recheck=os.environ.get('UPDATE_RECHECK')=='remaining'
+    if recheck:result['previous_exact_archive_https_clean_support_and_legacy_run']=41301228972
     write('FULL-UPDATE.json',result)
     provider_calls=[]
     class Provider(http.server.BaseHTTPRequestHandler):
@@ -197,17 +197,28 @@ def subject():
             assert identity,admission
             finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
             result['steps']['real_full_archive_clean_update_and_native_restart']=cocoa_identity();screenshot('after-clean.png');write('FULL-UPDATE.json',result)
-            # Non-conflicting authored code must survive a real complete ZIP;
-            # no fake semantic verdict or full-source clearance is injected.
-            authored=selected_code()/'archive-preserved-owner.py';authored.write_bytes(b'OWNER_NONCONFLICT=23\n')
-            owner_stop.change_pause(places.data,False,reason='explicit synthetic preserve qualification',via='fixture')
-            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
-            identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
-            finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120)
-            assert (selected_code()/'archive-preserved-owner.py').read_bytes()==b'OWNER_NONCONFLICT=23\n'
-            data_exact();result['steps']['real_full_archive_nonconflicting_authored_preserve']=cocoa_identity()
-            owner_stop.change_pause(places.data,True,reason='synthetic preserve completed',via='fixture')
-            screenshot('after-preserve.png');write('FULL-UPDATE.json',result)
+        # Modified-preserve requires full semantic clearance even without Git
+        # conflicts. A fixture provider cannot grant it. Prove the real gate
+        # retains the old program and its own explicit cancellation settles.
+        from localharness import source_update,python_source_updater as mechanical
+        authored=selected_code()/'archive-preserved-owner.py';authored.write_bytes(b'OWNER_NONCONFLICT=23\n')
+        before_preserve=(root/'helene.json').read_bytes();window_pid=native.control(root)['pid']
+        owner_stop.change_pause(places.data,False,reason='explicit synthetic preserve qualification',via='fixture')
+        admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
+        identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
+        plans=native.wait(lambda:list((places.data/'memory/.source-updates').glob('*/plan.json')),120)
+        gated=[p for p in plans if source_update.requires_gate(read(p),p.parent)]
+        assert gated,'Authored source was not admitted to its mandatory gate'
+        assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
+        assert (root/'helene.json').read_bytes()==before_preserve and not mechanical.active_update(root).exists()
+        result['steps']['modified_preserve_requires_semantic_gate_old_program_retained']=True
+        cancelled=native.invoke(root,'update_cancel');assert cancelled.get('ok')
+        finish(identity,timeout=180,failed=True)
+        native.wait(lambda:jobs.status(places.data).get('state')=='cancelled',90)
+        assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
+        data_exact();owner_stop.change_pause(places.data,True,reason='synthetic preserve cancelled',via='fixture')
+        result['steps']['pending_preserve_explicit_cancel_retains_program_data_and_authored_code']=True
+        screenshot('after-preserve-cancel.png');write('FULL-UPDATE.json',result)
         # Force only the newly launched, exact-path migration child to fail.
         # All archive bytes and updater logic remain the real distribution.
         code=selected_code();(code/'archive-owner-change.py').write_bytes(b'OWNER_CHANGE=1\n')
