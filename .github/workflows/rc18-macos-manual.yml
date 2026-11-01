@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-26]
+        os: [macos-14]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
@@ -28,7 +28,7 @@ jobs:
         id: archive
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-baa533b05f4b63c6
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
       - if: steps.archive.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}

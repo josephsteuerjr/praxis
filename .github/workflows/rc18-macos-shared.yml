@@ -31,17 +31,17 @@ jobs:
       - if: steps.base.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085994464/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
       - name: Retain verified base as transport input
         run: mv "$RUNNER_TEMP/qualified-release-artifact.zip" "$RUNNER_TEMP/baseline-release-artifact.zip"
       - name: Exact final source-event candidate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085417762/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085994464/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
       - uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-baa533b05f4b63c6
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
       - name: Native tiny installer errors, retry, Exit and two Cocoa observers
         run: python3 desk/tests/macos_shared_regressions.py prepare
       - uses: actions/upload-artifact@v4

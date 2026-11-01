@@ -65,6 +65,7 @@ def legacy():
         assert str(root/'Helene.app/Contents/MacOS/Helene') in current.cmdline()
         result['steps']['real_previous_to_current_full_archive_native_update_data_exact']=True
         result['steps']['cocoa_identity_retained']=current.cmdline()
+        native.wait(lambda:native.control(root) and native.control(root).get('ui_ready'),90);time.sleep(2)
         subprocess.run(['screencapture','-x',str(OUT/'after-legacy-upgrade.png')],check=True)
         write('LEGACY-UPDATE.json',result)
     except BaseException as error:

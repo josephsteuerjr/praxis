@@ -12,13 +12,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [current]
+        scenario: [current, legacy]
     timeout-minutes: 35
     env:
       UPDATE_SCENARIO: ${{ matrix.scenario }}
       REQUIRE_WORK_EVENT: '1'
       REQUIRE_NATIVE_MONITOR: '1'
-      UPDATE_RECHECK: remaining
       CANDIDATE_SHA256: baa533b05f4b63c69be3547122ae38fd21ca87012d68fea20445bd4b19da40f5
       ARTIFACT_SHA256: a2c375d594aaf31e7cf0f57b598a70a16473ce26dc8acb492ae44afd606970ae
     steps:
@@ -29,7 +28,7 @@ jobs:
         id: archive
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-baa533b05f4b63c6
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
       - if: steps.archive.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,7 +37,7 @@ jobs:
         if: steps.archive.outputs.cache-hit != 'true'
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-baa533b05f4b63c6
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
       - uses: actions/cache/restore@v4
         if: matrix.scenario == 'legacy'
         with:
