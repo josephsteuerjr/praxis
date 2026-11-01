@@ -154,6 +154,7 @@ class CommandProcess:
 
     def stop_tree(self):
         with self._lock:
+            phase='poll'
             try:
                 if self.poll() is not None:return True, 'private command group already empty'
                 if self._job:
@@ -162,10 +163,14 @@ class CommandProcess:
                 else:
                     # waitid also confirms we still own the unreaped child. A
                     # foreign waiter/reaper makes this fail closed before signals.
+                    phase='unreaped-child identity'
                     self._leader_exited()
+                    phase='group census'
                     if self._live() is None:return False, 'private group census unavailable'
                     for sig in (signal.SIGTERM, signal.SIGKILL):
+                        phase='signal '+str(sig)
                         os.killpg(self.pid, sig)
+                        phase='wait after signal '+str(sig)
                         try:self.wait(1);break
                         except subprocess.TimeoutExpired:
                             if self._live() is None:return False, 'private group census unavailable'
@@ -173,4 +178,4 @@ class CommandProcess:
                 self._stopped = True
                 return True, 'private command group exited'
             except (OSError, subprocess.TimeoutExpired) as exc:
-                return False, f'{type(exc).__name__}: {exc}; private group exit unconfirmed'
+                return False, f'{type(exc).__name__}: {exc}; phase={phase}; private group exit unconfirmed'
