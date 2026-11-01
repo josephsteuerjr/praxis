@@ -19,17 +19,39 @@ def run(command,log,*,cwd=REPO,env=None,timeout=600):
 def fronts():
     assert os.uname().machine=='arm64'
     names=('app','mobile','miniapp','remote','setup/ui');jobs=os.cpu_count() or 3
-    def install(name):return name,run(['npm','ci','--prefix',REPO/'desk'/name],'npm-ci-'+name.replace('/','-')+'.log')
-    with ThreadPoolExecutor(max_workers=jobs) as pool:installed=dict(pool.map(install,names))
-    save('frontend-install.json',installed);assert not any(installed.values()),installed
     sys.path.insert(0,str(REPO/'desk/installer'))
     from portable_sources import frontend_inputs,frontend_outputs
     before=frontend_inputs(REPO)
+    cache=TEMP/'rc18-fronts'
+    if (cache/'receipt.json').is_file():
+        receipt=json.loads((cache/'receipt.json').read_text())
+        assert receipt['inputs']==before,'Cached frontend source differs'
+        for name in names:shutil.copytree(cache/name,REPO/'desk'/name/'dist')
+        assert frontend_outputs(REPO)==receipt['outputs'],'Cached frontend bytes differ'
+        save('frontend-build.json',dict(receipt,reused_exact=True));return
+    def install(name):return name,run(['npm','ci','--prefix',REPO/'desk'/name],'npm-ci-'+name.replace('/','-')+'.log')
+    with ThreadPoolExecutor(max_workers=jobs) as pool:installed=dict(pool.map(install,names))
+    save('frontend-install.json',installed);assert not any(installed.values()),installed
     def build(name):return name,run(['npm','run','build','--prefix',REPO/'desk'/name],'build-'+name.replace('/','-')+'.log')
     with ThreadPoolExecutor(max_workers=jobs) as pool:built=dict(pool.map(build,names))
-    save('frontend-build.json',{'cpu_count':jobs,'commands':built,'inputs':before,'outputs':frontend_outputs(REPO)})
+    save('frontend-commands.json',built)
     assert not any(built.values()),built
     assert before==frontend_inputs(REPO),'Frontend inputs changed during build'
+    receipt={'cpu_count':jobs,'commands':built,'inputs':before,'outputs':frontend_outputs(REPO)}
+    save('frontend-build.json',receipt)
+    cache.mkdir()
+    for name in names:shutil.copytree(REPO/'desk'/name/'dist',cache/name)
+    (cache/'receipt.json').write_text(json.dumps(receipt),encoding='utf-8')
+
+def key():
+    sys.path.insert(0,str(REPO/'desk/installer'))
+    from portable_sources import frontend_inputs
+    # Include the fifth setup frontend's complete tracked compiler input too.
+    rows=frontend_inputs(REPO)
+    for p in (REPO/'desk/setup/ui').rglob('*'):
+        if p.is_file() and not any(x in ('node_modules','dist') for x in p.relative_to(REPO).parts):
+            rows[p.relative_to(REPO).as_posix()]=hashlib.sha256(p.read_bytes()).hexdigest()
+    print('key='+hashlib.sha256(json.dumps(rows,sort_keys=True).encode()).hexdigest())
 
 def wait(fn,seconds=90):
     end=time.monotonic()+seconds
@@ -178,4 +200,4 @@ def native():
         for log in logs:log.close()
 
 if __name__=='__main__':
-    {'fronts':fronts,'native':native}[sys.argv[1]]()
+    {'fronts':fronts,'native':native,'key':key}[sys.argv[1]]()

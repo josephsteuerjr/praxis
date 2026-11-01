@@ -57,8 +57,9 @@ def build(evidence,work,out):
     first.rename(work/'assembly-before-cocoa.zip')
     bundle=program/'Helene.app'
     shutil.copytree(donor/'Helene.app',bundle)
-    if not (donor/'licenses').is_dir():raise ValueError('Reusable native input is missing third-party license texts')
-    shutil.copytree(donor/'licenses',program/'licenses')
+    license_input=Path(__file__).with_name('rc18-native-license-texts.zip')
+    if not license_input.is_file():raise ValueError('Native dependency license input is missing')
+    unpack(license_input,program)
     info=bundle/'Contents/Info.plist';value=plistlib.loads(info.read_bytes())
     value.update(CFBundleShortVersionString='2.3.0',CFBundleVersion='23018')
     info.write_bytes(plistlib.dumps(value))
