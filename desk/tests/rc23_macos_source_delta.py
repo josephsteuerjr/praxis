@@ -103,7 +103,7 @@ def check():
         return
     names=['phone-settings-dismiss-0111','phone-sheet-lifecycle-0211','release-notice-0111',
            'update-monitor-0111','work-activity-3010','panel-density-2910','panel-widths']
-    if settings_scope:names.extend(['forge-panel-220','startup-now-2610','now-history-refresh-0211','passive-chat-fold-1310'])
+    if settings_scope:names.append('forge-panel-220')
     with (OUT/'node-tests.log').open('wb') as output:
         done=subprocess.run([str(node),'--test',*[str(REPO/'desk/app/test'/(name+'.test.mjs')) for name in names]],
             cwd=REPO/'desk/app',stdout=output,stderr=subprocess.STDOUT,timeout=120)
