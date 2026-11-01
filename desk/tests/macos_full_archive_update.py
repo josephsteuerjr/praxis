@@ -96,7 +96,7 @@ def subject():
     if recheck:result['previous_exact_archive_https_clean_support_pristine_preserve_run']=41308479060
     if cold_only:result['previous_preserve_cancellation_and_failed_start_rollback_run']=41302093575
     write('FULL-UPDATE.json',result)
-    provider_calls=[];provider_users=[];status_tool={'issued':False,'observed':False}
+    provider_calls=[];provider_users=[];provider_meta=[];status_tool={'issued':False,'observed':False}
     class Provider(http.server.BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def do_POST(self):
@@ -109,6 +109,10 @@ def subject():
                 request=read(source_ops.path(places.data))
                 expected='Событие текущего обновления '+str(request.get('id',''))[:8]
                 offered=[row.get('function',{}).get('name') for row in body.get('tools',[])]
+                provider_meta.append({'offered_tool_names':offered,'source_request_id':request.get('id'),
+                    'new_event_in_last_user':bool(request.get('id') and users and expected in users[-1]),
+                    'tool_reply_ids':[row.get('tool_call_id') for row in body.get('messages',[]) if row.get('role')=='tool']})
+                write('PROVIDER-METADATA.json',provider_meta)
                 if (request.get('id') and users and expected in users[-1]
                         and 'source_update' in offered and not status_tool['issued']):
                     tool_name='source_update';status_tool.update(issued=True,started=time.monotonic(),request_id=request['id'])
@@ -364,7 +368,19 @@ def subject():
         write('FULL-UPDATE.json',result)
     except BaseException as error:
         result['error']=type(error).__name__+': '+str(error);result['job']=job_public();result['provider_calls']=provider_calls
+        write('READONLY-STATUS-TOOL.json',status_tool)
         write('FULL-UPDATE.json',result)
+        from localharness import source_update as source_ops
+        source_request=read(source_ops.path(places.data))
+        if source_request.get('directory'):
+            from localharness.source_update_hand import public_context
+            directory=Path(source_request['directory']);operation=read(directory/'pipeline.json')
+            write('SOURCE-TRANSPORT-STATE.json',{'id':source_request.get('id'),'state':source_request.get('state'),
+                'operation':{k:operation.get(k) for k in ('state','error','paused','cancel_requested') if k in operation},
+                'public_hand':public_context(directory)})
+        runner_log=places.data/'runner.log'
+        if runner_log.is_file():
+            (OUT/'runner-tail.log').write_text(runner_log.read_text(errors='replace')[-40000:].replace('fixture-local-key','[fixture-key]'))
         for folder in (root/'.helene/logs',places.data/'memory/.control'):
             for p in folder.glob('*.log'):
                 if p.stat().st_size<2*1024*1024:shutil.copy2(p,OUT/p.name)
