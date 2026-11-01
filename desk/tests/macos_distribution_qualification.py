@@ -22,10 +22,34 @@ def prepare():
         archive.write_bytes(z.read(matches[0]))
     assert digest(archive)==os.environ['CANDIDATE_SHA256'],'Native package differs'
     unpack(archive,TEMP/'matrix-package')
-    program=TEMP/'matrix-package/Helene';python=program/'runtime/bin/python3'
+    program=TEMP/'matrix-package/Helene'
+    # The subject moves its program folder. Keep the observer's interpreter
+    # outside it so late stdlib imports do not resolve through a vanished path.
+    driver=TEMP/'matrix-driver-runtime';shutil.copytree(program/'runtime',driver)
+    python=driver/'bin/python3'
     os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),'subject'])
 def subject():
     program=TEMP/'matrix-package/Helene';python=program/'runtime/bin/python3'
+    if os.environ.get('MATRIX_RECHECK')=='post-move':
+        # Original run41296230218 already passed ALL10 source modules, body8,
+        # native first-start/relay/exit/login/move AND isolated imports on each
+        # OS. Only its final tiny rollback observer lost its moving stdlib.
+        moved=program.parent/'Moved Hélène';program.rename(moved)
+        sys.path.insert(0,str(moved/'app'))
+        from localharness import python_source_updater as updater
+        old=TEMP/'rollback-old';new=TEMP/'rollback-new';recovery=TEMP/'rollback-recovery'
+        old.mkdir();new.mkdir();(old/'file.py').write_text('previous\n');(new/'file.py').write_text('incoming\n')
+        updater.apply_files(new,old,recovery);assert (old/'file.py').read_text()=='incoming\n'
+        (old/'file.py').write_text('later owner edit\n');updater.rollback(old,recovery)
+        assert (old/'file.py').read_text()=='previous\n'
+        assert (recovery/'later-self-edits/file.py').read_text()=='later owner edit\n'
+        assert command(['xattr','-w','com.apple.quarantine','0083;00000000;HeleneRCQualification;',moved/'Helene.app'],'quarantine-set.log')==0
+        assessed=command(['spctl','--assess','--type','execute','--verbose=4',moved/'Helene.app'],'quarantined-gatekeeper.log')
+        (OUT/'TAIL-QUALIFIED.json').write_text(json.dumps({'archive_sha256':os.environ['CANDIDATE_SHA256'],
+            'previous_native_and_imports_run':41296230218,'sw_vers':subprocess.check_output(['sw_vers'],text=True),
+            'actual_post_move_rollback':True,'later_edit_retained':True,'quarantine_assessment_exit':assessed,
+            'scope':'Only failed observer tail rechecked; join previous exact native/import evidence, not whole failed run as green'},indent=2))
+        return
     # Exercise actual imports with PATH restricted to OS tools. Host Python,
     # Homebrew, npm, user site and build-machine PYTHONPATH cannot fill gaps.
     env={k:v for k,v in os.environ.items() if k not in ('PYTHONPATH','PYTHONHOME','VIRTUAL_ENV','DYLD_LIBRARY_PATH','SSL_CERT_FILE','SSL_CERT_DIR')}
