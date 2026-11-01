@@ -2,6 +2,12 @@ name: Hélène RC18 extended macOS qualification
 on:
   push:
     branches: [codex/rc18-macos-0111]
+    paths:
+      - desk/tests/extended_macos.py
+      - desk/localharness/**
+      - desk/deskd/**
+      - praxis/**
+      - helene/core/**
 permissions:
   contents: read
   actions: read
