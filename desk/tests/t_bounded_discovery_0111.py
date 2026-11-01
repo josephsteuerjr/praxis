@@ -8,7 +8,7 @@ from localharness import first_start
 class BoundedDiscovery(unittest.TestCase):
     def test_unrelated_inaccessible_entry_is_never_inspected(self):
         with tempfile.TemporaryDirectory(prefix='bounded-discovery-') as temporary:
-            base=Path(temporary);current=base/'current';current.mkdir()
+            base=Path(temporary).resolve();current=base/'current';current.mkdir()
             unrelated=base/'Docker';unrelated.mkdir()
             legacy=base/'Helene-old';legacy.mkdir()
             real_linked=first_start.linked;seen=[]
