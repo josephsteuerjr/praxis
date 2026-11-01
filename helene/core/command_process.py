@@ -170,14 +170,18 @@ class CommandProcess:
                     for sig in (signal.SIGTERM, signal.SIGKILL):
                         phase='signal '+str(sig)
                         try:os.killpg(self.pid, sig)
-                        except (ProcessLookupError,PermissionError):
+                        except (ProcessLookupError,PermissionError) as refused:
                             # Darwin can refuse a signal after the last live
                             # group member exits. Only a fresh complete poll
                             # (unreaped-child identity AND empty census) may
                             # turn that race into success. A live/unknown group
                             # keeps the original refusal and never falls back
                             # to a bare PID or another process generation.
-                            if self.poll() is None:raise
+                            # Allow the same bounded exit observation used
+                            # after a delivered signal. Immediate Darwin exit
+                            # can still be between census samples here.
+                            try:self.wait(1)
+                            except subprocess.TimeoutExpired:raise refused
                             break
                         phase='wait after signal '+str(sig)
                         try:self.wait(1);break

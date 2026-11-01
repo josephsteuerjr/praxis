@@ -26,7 +26,7 @@ def build():
     fronts()
     command([sys.executable,'-m','pip','check'],'pip-check.log',timeout=120)
     # Other72 cases passed and3 exact Windows cases skipped on source0a388b1/run41295075384;
-    # only the unresolved native output-limit case is repeated here.
+    # Only native custody cases affected by the bounded exit observation repeat.
     command([sys.executable,'-B','-m','unittest','tests.t_source_update_battery_2810.Battery.test_output_limit_has_no_passing_coverage','test_command_process_2810.CommandCustody','-v'],
         'verification-contracts.log',cwd=REPO/'desk',timeout=600)
     # Contract tests above include native output-limit custody diagnostics.
