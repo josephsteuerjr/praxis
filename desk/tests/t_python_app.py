@@ -60,6 +60,16 @@ class PythonApplicationTests(unittest.TestCase):
                     self.assertEqual(python_app.main(['--root', temporary, '--launch-intent', 'automatic']), 0)
             application.assert_not_called()
 
+    def test_invalid_nonobserver_arguments_refuse_before_first_start_ui(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for extra in (['--program',str(root/'other')],['--session-tree',str(root/'profile')]):
+                with self.subTest(arguments=extra),patch('first_start_window.main',side_effect=AssertionError('Invalid admission must not open first-start UI')):
+                    with self.assertRaises(ValueError):python_app._main(['--root',str(root),*extra])
+                self.assertFalse((root/'helene.json').exists())
+                self.assertFalse((root/'.helene/first-start.json').exists())
+
     def test_close_hides_but_exit_and_relaunch_destroy(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as temporary:

@@ -706,6 +706,8 @@ def _main(argv=None):
         return 0
     if args.session_tree is not None and not args.session_job:
         raise ValueError('A selected session tree requires an admitted migration job')
+    if not args.session_job and program != root:
+        raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
     if (sys.platform=='darwin' and not (args.session_job or args.migration or args.browser or args.migration_wizard)
             and (root/'python-app.json').is_file()
             and __import__('localharness.python_platform',fromlist=['target']).target(root)=='macos-arm64'):
@@ -725,8 +727,6 @@ def _main(argv=None):
     if args.session_job:
         from localharness.migration_job import observer_program
         observer_program(root,program,args.session_job,tree=args.session_tree)
-    elif program != root:
-        raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
     if not args.migration and not args.browser and not args.session_job:
         from localharness import portable_start
         from localharness.first_start import ready as first_start_ready

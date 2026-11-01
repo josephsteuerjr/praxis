@@ -81,7 +81,7 @@ class Contracts(unittest.TestCase):
    (new/'helene.json').write_text('{"setup_complete":false}');(new/'python-app.json').write_text(json.dumps({'target':platform.runtime_target()}))
    prepare_offline(old,new,home,{r'C:\Data':str(old/'data'),r'C:\App':str(old)})
    dest=essential_backup.destination(new)
-            self.assertTrue(dest.is_relative_to(home.resolve()));self.assertFalse(dest.is_relative_to(old.resolve()))
+   self.assertTrue(dest.is_relative_to(home.resolve()));self.assertFalse(dest.is_relative_to(old.resolve()))
    result=essential_backup.snapshot(new,dest,'fixture')
    self.assertTrue(Path(result['path']).is_file());self.assertFalse((old/'backups').exists())
 
