@@ -51,7 +51,7 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     if target not in ('linux-x86_64','macos-arm64'):raise ValueError('Expected a POSIX target')
     if target!=python_platform.runtime_target():raise ValueError('Assembly must run on the selected native OS/architecture')
     if output.exists():raise FileExistsError(output)
-    if not re.fullmatch(r'\d+\.\d+\.\d+',version):raise ValueError('Expected numeric version')
+    if not re.fullmatch(r'\d+\.\d+\.\d+(?:-rc\.\d+)?',version):raise ValueError('Expected release or numbered RC version')
     if relay or relay_source:raise ValueError('praxis-relay downloads separately; do not embed it in the base application')
     for source in (runtime,edition,*((relay_source,) if relay_source else ())):
         if not source.is_dir() or output.resolve().is_relative_to(source.resolve()):raise ValueError('Invalid or overlapping package input')
@@ -66,7 +66,9 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     gui='from PySide6 import QtCore,QtGui,QtWidgets,QtWebEngineWidgets' if target.startswith('linux-') else 'import Cocoa,WebKit'
     subprocess.run([str(python),'-I','-c','import psutil,socks,yaml,webview,aiohttp,telethon,paramiko; '+gui],check=True)
     app=output/'app';app.mkdir()
-    for name in ('python_app.py','python_tray.py','python_migrate.py','deskapp.py'):shutil.copy2(DESK/name,app/name)
+    for entry in DESK.glob('*.py'):
+        if not entry.name.startswith(('test_','scratch_')) and entry.name not in ('deskpkg.py','layout.py'):
+            shutil.copy2(entry,app/entry.name)
     for name in ('localharness','deskd','resources'):shutil.copytree(DESK/name,app/name,ignore=ignore)
     # Same canonical release engine as Windows; edition/tree may be older or edited.
     shutil.copy2(DESK.parent/'helene/core/xtts_tts_worker.py',app/'localharness/xtts_tts_worker.py')

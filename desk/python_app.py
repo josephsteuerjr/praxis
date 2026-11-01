@@ -700,6 +700,15 @@ def _main(argv=None):
     if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
+    if sys.platform=='darwin' and not (args.session_job or args.migration or args.browser):
+        from localharness import posix_first_start as first
+        places=first.Places.current(root)
+        if not first.ready(root,places) or not first.agent_exists(places.data):
+            from first_start_window import main as first_window
+            return first_window(root,places=places,flow=first)
+        changed=first.handover(root,places=places)
+        first.ensure_config(root,places=places,refresh_profile=changed)
+        os.environ['HELENE_USER_DATA']=str(places.data)
     if sys.platform=='win32':
         from localharness.first_start import ready as first_start_ready,Places
         if first_start_ready(root):os.environ['HELENE_USER_DATA']=str(Places.current().data)

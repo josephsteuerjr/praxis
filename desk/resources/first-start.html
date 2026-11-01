@@ -11,7 +11,8 @@
 <div id="api-key"><label for="key">Ключ доступа</label><input id="key" type="password" required autocomplete="off" placeholder="API key" spellcheck="false"></div>
 <details id="api-address"><summary>Другой адрес API</summary><label for="base">Адрес сервера</label><input id="base" type="url" placeholder="https://api.openai.com/v1" spellcheck="false"></details>
 <p id="subscription-note" class="note" hidden>Установим praxis-relay (MIT), затем откроем вход в ChatGPT. Ключ API не нужен. До входа агент будет на паузе.</p>
-<button id="create" class="primary" type="submit">Создать агента</button><p class="note">Настройки можно изменить позже.</p></form>
+<button id="create" class="primary" type="submit">Создать агента</button><p class="note">Настройки можно изменить позже.</p>
+<details id="connect-data" hidden><summary>Подключить существующего агента</summary><label for="data-path">Папка данных агента</label><input id="data-path" placeholder="Путь к папке с memory и soul"><button id="connect" type="button" class="primary">Подключить папку</button></details></form>
 <div id="error" hidden role="alert"></div></main>
 <script>
 const $=id=>document.getElementById(id),invoke=(command,args={})=>window.__HELENE__.invoke(command,args);
@@ -31,6 +32,8 @@ $('minimize').onclick=()=>invoke('python_window',{action:'minimize'});
 $('close').onclick=()=>invoke('python_window',{action:'exit'});
 function providerChanged(){const subscription=$('provider').value==='chatgpt';$('api-key').hidden=subscription;$('api-address').hidden=subscription;$('subscription-note').hidden=!subscription;$('key').required=!subscription;$('key').disabled=subscription;$('base').disabled=subscription;$('base').placeholder=$('provider').value==='anthropic'?'https://api.anthropic.com':'https://api.openai.com/v1';$('create').textContent=subscription?'Установить реле и продолжить':'Создать агента';}
 $('provider').onchange=providerChanged;providerChanged();
+if(window.__HELENE__.platform!=='windows')$('connect-data').hidden=false;
+$('connect').onclick=async()=>{try{await invoke('first_connect',{path:$('data-path').value});await open()}catch(e){error(e)}};
 async function creationProgress(){if(!creating)return;try{const value=await invoke('first_status');if(creating&&value.stage!=='create'&&value.stage!=='ready'&&value.stage!=='error')show(value)}catch{}if(creating)setTimeout(creationProgress,500)}
 $('form').onsubmit=async event=>{event.preventDefault();$('create').disabled=true;$('error').hidden=true;const subscription=$('provider').value==='chatgpt';creating=true;
   if(subscription){$('form').hidden=true;$('preparing').hidden=false;$('progress').hidden=false;$('stage').textContent='Устанавливаем praxis-relay';setTimeout(creationProgress,500)}

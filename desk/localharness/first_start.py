@@ -441,7 +441,7 @@ def ensure_config(root,*,places=None,refresh_profile=False):
 
 def _bind(config,old,root,data):
     value=copy.deepcopy(config)
-    value.update(tree=str(data),code=str(root/'tree'),python=str(root/'runtime/python.exe'),
+    value.update(tree=str(data),code=str(root/'tree'),python=str(root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3')),
                  app=str(root/'app/deskapp.py'),runner=str(root/'app/localharness/runner.py'))
     value['installed']=dict(value.get('installed') or {},service=False)
     value['read_dotenv']=False

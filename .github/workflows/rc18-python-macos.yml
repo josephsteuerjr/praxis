@@ -1,0 +1,48 @@
+name: Hélène RC18 Python macOS ARM64
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rc18-python-macos
+  cancel-in-progress: false
+jobs:
+  native:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desk/app/package-lock.json
+      - name: Reuse successful hash-bound native runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(uname -m)" = arm64
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/12614081769/zip > "$RUNNER_TEMP/rc18-evidence.zip"
+          shasum -a 256 "$RUNNER_TEMP/rc18-evidence.zip"
+      - name: Install all locked frontend dependencies and build
+        run: python3 desk/tests/rc18_macos_pipeline.py fronts
+      - name: Assemble editable Python candidate
+        run: python3 desk/installer/build_python_macos_rc.py --evidence "$RUNNER_TEMP/rc18-evidence.zip" --work "$RUNNER_TEMP/rc18-assembly" --output "$RUNNER_TEMP/rc18-output"
+      - name: Actual Darwin lifecycle and native GUI consumers
+        run: |
+          "$RUNNER_TEMP/rc18-output/Helene/runtime/bin/python3" -B desk/tests/rc18_macos_pipeline.py native
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-macos-arm64
+          path: |
+            ${{ runner.temp }}/rc18-output/*.zip
+            ${{ runner.temp }}/rc18-output/*.sha256
+            ${{ runner.temp }}/rc18-output/candidate.json
+            evidence-rc18/
+          include-hidden-files: false
+          retention-days: 30
