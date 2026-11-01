@@ -469,7 +469,25 @@ def perform(args):
             # staging-runtime trampoline waits for our lease to be released,
             # then execs the unmodified old entry point (no new CLI required).
             staging_python=interpreter_for(new)
-            trampoline="import os,sys,subprocess;from pathlib import Path;sys.path.insert(0,sys.argv[1]);from python_migrate import installation_lock;from localharness import owner_stop,session_exit\nprint('Waiting for update installation lease',flush=True)\nwith installation_lock(Path(sys.argv[2]),timeout_sec=60):\n pass\nif owner_stop.stopped() or session_exit.requested(Path(sys.argv[2])) or session_exit.requested(Path(sys.argv[1]).parent):sys.exit(0)\nos.environ['HELENE_RECOVERY_AUTOMATIC']='1'\nos.chdir(sys.argv[2])\ncommand=[sys.argv[3],sys.argv[4],'--root',sys.argv[2],*sys.argv[5:]]\nif os.name=='nt':command=[subprocess.list2cmdline([part]) for part in command]\nos.execv(sys.argv[3],command)"
+            trampoline="""import os,sys,subprocess
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from python_migrate import installation_lock
+from localharness import owner_stop,session_exit
+print('Waiting for update installation lease',flush=True)
+with installation_lock(Path(sys.argv[2]),timeout_sec=60):
+ pass
+if owner_stop.stopped() or session_exit.requested(Path(sys.argv[2])) or session_exit.requested(Path(sys.argv[1]).parent):sys.exit(0)
+os.environ['HELENE_RECOVERY_AUTOMATIC']='1'
+os.chdir(sys.argv[2])
+if sys.platform=='darwin':
+ from localharness.python_platform import desktop_argv
+ command=desktop_argv(Path(sys.argv[2]),['--root',sys.argv[2],*sys.argv[5:]])
+else:command=[sys.argv[3],sys.argv[4],'--root',sys.argv[2],*sys.argv[5:]]
+entry=command[0]
+if os.name=='nt':command=[subprocess.list2cmdline([part]) for part in command]
+os.execv(entry,command)
+"""
             subprocess.Popen([str(staging_python),'-s','-c',trampoline,str(new/'app'),str(old),str(executable),str(old/'app/python_app.py'),*presentation],
                 cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
                 creationflags=background_flags(),start_new_session=os.name!='nt')
@@ -581,7 +599,12 @@ def perform(args):
         report('starting')
         from localharness.desktop_supervisor import JobChild
         from localharness.update_process import permanent_environment
-        child=JobChild.spawn([str(executable),str(old/'app/python_app.py'),'--root',str(old),'--migration',note['id'],*presentation],
+        arguments=['--root',str(old),'--migration',note['id'],*presentation]
+        if sys.platform=='darwin':
+            from localharness.python_platform import desktop_argv
+            command=desktop_argv(old,arguments)
+        else:command=[str(executable),str(old/'app/python_app.py'),*arguments]
+        child=JobChild.spawn(command,
                              cwd=old,env=permanent_environment(),log=log,stopped=lambda:False)
         deadline=time.monotonic()+120
         while time.monotonic()<deadline:

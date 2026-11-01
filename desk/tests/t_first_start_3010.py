@@ -30,7 +30,7 @@ class Backend:
 class FirstStart(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='helene-first-start-');self.addCleanup(self.tmp.cleanup)
-        self.base=Path(self.tmp.name);self.profile=self.base/'User — Юзер';self.profile.mkdir()
+        self.base=Path(self.tmp.name).resolve();self.profile=self.base/'User — Юзер';self.profile.mkdir()
         self.local=self.profile/'AppData/Local';self.roaming=self.profile/'AppData/Roaming'
         self.pf=self.base/'Program Files';self.downloads=self.profile/'Downloads'
         for path in (self.local,self.roaming,self.pf,self.downloads):path.mkdir(parents=True)

@@ -606,6 +606,11 @@ def finish_for_verification(operation,directory):
             or intent.get('candidate_sha256')!=merge.candidate_signature(directory)):
         raise ValueError('Finished candidate changed; submit finish for the current bytes')
     try:
+        # finish_app/merge.finish may execute the incoming Git synchronously.
+        # Revalidate actual runtime bytes BEFORE either execution boundary,
+        # even if a caller accidentally carries an editing ContextVar.
+        from . import update_composition
+        update_composition.admit_runtime(directory,operation)
         from .app_source_update import finish as finish_app
         finish_app(directory)
         if plan.get('state')!='ready':
@@ -632,6 +637,10 @@ def _verification_dependencies(operation,directory,stopped):
     import sys
     root,digest,manifest=source_update_battery._bundle(operation)
     executor=dict(operation.get('verification_executor') or {})
+    if not any(executor.get(key) for key in ('node','npm','npm_config_cache')) and manifest.get('bundled_executors',{}).get(sys.platform):
+        from .source_verification_executor import provision
+        executor.update(provision(root.parent,manifest,directory,stopped))
+        operation['verification_executor']=executor
     if executor.get('python_dependencies') or not manifest.get('dependencies',{}).get(sys.platform):return
     target=Path(directory)/'verification-dependencies'/digest
     receipt=target.with_name(target.name+'.receipt.json')

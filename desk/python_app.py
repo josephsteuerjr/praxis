@@ -515,6 +515,7 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
 
     def close(self):
         self.stopping.set()
+        if getattr(self,'cocoa_js_bridge',None):self.cocoa_js_bridge.close()
         failures=[]
         def finish(action):
             try:action()
@@ -712,22 +713,36 @@ def _main(argv=None):
     if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
     root = args.root.resolve()
     program = (args.program or root).resolve()
+    from localharness import owner_stop
+    if args.launch_intent == "automatic" and owner_stop.stopped():
+        bootstrap_ready.signal()
+        return 0
+    if args.session_tree is not None and not args.session_job:
+        raise ValueError('A selected session tree requires an admitted migration job')
+    if not args.session_job and program != root:
+        raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
+    pending_entry=root/'python-migration.json'
+    recovery_entry=(pending_entry.is_file() and json.loads(pending_entry.read_text(encoding='utf-8')).get('state')
+                    not in ('completed','new_app_started','retirement_incomplete'))
+    if (sys.platform=='darwin' and not (args.session_job or args.migration or args.browser or args.migration_wizard or recovery_entry)
+            and (root/'python-app.json').is_file()
+            and __import__('localharness.python_platform',fromlist=['target']).target(root)=='macos-arm64'):
+        from localharness import posix_first_start as first
+        places=first.Places.current(root)
+        if not first.ready(root,places) or not first.agent_exists(places.data):
+            from first_start_window import main as first_window
+            return first_window(root,places=places,flow=first)
+        changed=first.handover(root,places=places)
+        first.ensure_config(root,places=places,refresh_profile=changed)
+        os.environ['HELENE_USER_DATA']=str(places.data)
     if sys.platform=='win32':
         from localharness.first_start import ready as first_start_ready,Places
         if first_start_ready(root):os.environ['HELENE_USER_DATA']=str(Places.current().data)
         from localharness.program_state import tidy_program
         tidy_program(program)
-    from localharness import owner_stop
-    if args.launch_intent == "automatic" and owner_stop.stopped():
-        bootstrap_ready.signal()
-        return 0
     if args.session_job:
         from localharness.migration_job import observer_program
         observer_program(root,program,args.session_job,tree=args.session_tree)
-    elif args.session_tree is not None:
-        raise ValueError('A selected session tree requires an admitted migration job')
-    elif program != root:
-        raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
     if not args.migration and not args.browser and not args.session_job:
         from localharness import portable_start
         from localharness.first_start import ready as first_start_ready
@@ -799,6 +814,9 @@ def _main(argv=None):
             app.window = webview.create_window("Hélène", app.origin, **window_geometry(webview.screens[0]),
                                                frameless=True, easy_drag=False, text_select=True,
                                                background_color="#1d1914", hidden=app.start_in_tray)
+            if sys.platform=='darwin':
+                from localharness.cocoa_js_bridge import install
+                install(app)
             bind_window_state(app)
             bind_native_reload(app)
             # The shared renderer's python_ready is the sole confirmation

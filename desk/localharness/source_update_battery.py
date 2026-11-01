@@ -397,6 +397,8 @@ def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_input
                 for arg in lane.get('argv', [])]
         commands.append([tools['python'], '-B', '-s', str(repository / lane['source']), *argv])
     elif kind == 'node':
+        env=dict(env,HELENE_TEST_PYTHON=tools['python'],
+                 PATH=str(Path(tools['node']).parent)+os.pathsep+env.get('PATH',''))
         commands.append([tools['node'], '--test', '--test-concurrency=1', '--test-reporter=tap', *[str(repository / n) for n in lane['sources']]])
         root = repository / 'desk/app'
     elif kind in {'cargo', 'cargo-build'}:

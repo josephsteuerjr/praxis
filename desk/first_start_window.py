@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import threading
 import tempfile
+import sys
 from urllib.parse import urlsplit
 
 from python_app import Application,window_geometry,set_window_icon
@@ -13,8 +14,9 @@ from localharness import first_start
 
 
 class FirstStartWindow(Application):
-    def __init__(self,root,places):
+    def __init__(self,root,places,flow=first_start):
         super().__init__(root,root/'app/resources',None,root)
+        self.flow=flow
         self.places=places;self.worker=None;self.opening=False
         self.value={'stage':'starting','label':'Подготовка'}
         self.value_lock=threading.Lock()
@@ -27,8 +29,8 @@ class FirstStartWindow(Application):
 
     def prepare(self):
         try:
-            result=first_start.prepare(self.root,places=self.places,progress=self.publish)
-            config=first_start.ensure_config(self.root,places=self.places)
+            result=self.flow.prepare(self.root,places=self.places,progress=self.publish)
+            config=self.flow.ensure_config(self.root,places=self.places)
             if result['agent']:
                 from localharness.standalone_relay import ensure_configured
                 ensure_configured(self.root,config,self.publish)
@@ -46,14 +48,24 @@ class FirstStartWindow(Application):
                 self.worker=threading.Thread(target=self.prepare,name='helene-first-start',daemon=False);self.worker.start()
             return self.status()
         if command=='first_status':return self.status()
+        if command=='first_connect' and self.flow is not first_start:
+            self.places=self.flow.connect(self.root,str(args.get('path') or ''),places=self.places,progress=self.publish)
+            from localharness.standalone_relay import ensure_configured
+            ensure_configured(self.root,self.flow.ensure_config(self.root,places=self.places),self.publish)
+            self.publish({'stage':'ready','label':'Открываем агента'})
+            return {'connected':True}
         if command=='first_create':
-            result=first_start.create_agent(self.root,args,places=self.places,progress=self.publish)
+            result=self.flow.create_agent(self.root,args,places=self.places,progress=self.publish)
             self.publish({'stage':'ready','label':'Открываем агента'});return result
         if command=='first_open':
             if self.opening:return {'opening':True}
-            if not first_start.ready(self.root,self.places) or not first_start.agent_exists(self.places.data):
+            if not self.flow.ready(self.root,self.places) or not self.flow.agent_exists(self.places.data):
                 raise ValueError('Сначала заверши создание агента')
             self.opening=True
+            if sys.platform!='win32':
+                self.exiting=True;self.exit_session=False
+                if self.window is not None:self.window.destroy()
+                return {'opening':True}
             try:
                 # A fresh launcher owns normal window readiness. No migration
                 # job, observation receipt or previous supervisor participates.
@@ -87,15 +99,18 @@ class FirstStartWindow(Application):
         self.backup_thread=threading.Thread(target=lambda:None);self.backup_thread.start()
 
 
-def main(root,*,places=None):
+def main(root,*,places=None,flow=first_start):
     import webview
-    root=Path(root).resolve();app=FirstStartWindow(root,places or first_start.Places.current());app.serve()
+    root=Path(root).resolve();app=FirstStartWindow(root,places or flow.Places.current(),flow);app.serve()
     try:
         webview.settings['DRAG_REGION_SELECTOR']='.brand'
         webview.settings['DRAG_REGION_DIRECT_TARGET_ONLY']=True
         geometry=window_geometry(webview.screens[0]);geometry.update(width=min(500,geometry['width']),height=min(650,geometry['height']))
         app.window=webview.create_window('Hélène',app.origin,**geometry,min_size=(360,420),
             frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
+        if sys.platform=='darwin':
+            from localharness.cocoa_js_bridge import install
+            install(app)
         from localharness.bootstrap_ready import signal
         def loaded():
             app.ui_ready=True;app.publish_control();signal()
@@ -109,4 +124,8 @@ def main(root,*,places=None):
         app.close()
         try:app.control_file.parent.rmdir()
         except OSError:pass
+    if app.opening and sys.platform!='win32':
+        from localharness.python_platform import desktop_argv
+        command=desktop_argv(root,['--root',str(root)])
+        os.execv(command[0],command)
     return 0

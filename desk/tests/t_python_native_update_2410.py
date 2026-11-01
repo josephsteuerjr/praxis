@@ -138,7 +138,7 @@ class NativeUpdate(unittest.TestCase):
 
     def test_browser_ui_confirmation_uses_real_migration_identity_and_keeps_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);tree=root/'data';code=root/'code';tree.mkdir();code.mkdir()
+            root=Path(tmp).resolve();tree=root/'data';code=root/'code';tree.mkdir();code.mkdir()
             (root/'helene.json').write_text(json.dumps({'tree':str(tree),'code':str(code)}))
             note={'id':'one','new_root':str(root),'data_paths':[str(tree)],'source_paths':[{'selected':str(code)}],'state':'prepared'}
             app_migration.write_note(root,note)

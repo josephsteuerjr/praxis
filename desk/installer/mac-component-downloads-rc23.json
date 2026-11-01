@@ -1,0 +1,17 @@
+{
+  "format": "helene-component-downloads.v1",
+  "app_version": "2.3.0-rc.23",
+  "target": "macos-arm64",
+  "extensions": {"whisper": ["whisper"], "xtts": []},
+  "artifacts": {
+    "whisper": {
+      "name": "Helene-components-whisper-macos-arm64.zip",
+      "sha256": "7865add11cefe976f09fdb75c3654b4aa7bca06e5f5902979d3cef4499993755",
+      "size": 65002441,
+      "offline_only": true
+    }
+  },
+  "unavailable": {
+    "xtts": "Для этого Mac-кандидата пока нет доступного проверенного ARM64-пакета XTTS. Удалённый архив предыдущего релиза не загружается; уже установленные компоненты сохраняются."
+  }
+}

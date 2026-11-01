@@ -13,12 +13,14 @@ type Request=<T>(path:string,body?:unknown,signal?:AbortSignal)=>Promise<T>;
 type State={runner?:{alive?:boolean;busy?:boolean;run?:string}};
 
 /** The desktop roster, review/tests and action renderer at a phone's width. */
-export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,describe?:(run:Run)=>string) {
+export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,describe?:(run:Run)=>string,options:{history?:boolean}={}) {
+  const history=options.history!==false;
   root.className='phone-actions';
   const work=el('section'),forge=el('section','turns-forge'),head=el('div','turns-head');
   const title=el('span','turns-title','Ходы'),count=el('span','turns-n');head.append(title,count);
   const list=el('div','turns'),message=el('p','muted');list.setAttribute('role','list');message.setAttribute('role','status');
-  root.append(work,forge,head,list,message);
+  root.append(work,forge);
+  if(history)root.append(head,list,message);
   const renderWork=workActivity(work);
   const teams=forgePanel(forge,async<T>(path:string,signal:AbortSignal,body?:unknown)=>{
     if(body!==undefined)throw Error('Управление Forge с этого экрана недоступно');
@@ -71,8 +73,8 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     const capturedScope=scope();
     controller=new AbortController();
     const results=await Promise.allSettled([
-      request<Run[]>('/api/runs?limit=40',undefined,controller.signal),
-      request<State>('/api/state',undefined,controller.signal),
+      history?request<Run[]>('/api/runs?limit=40',undefined,controller.signal):Promise.resolve([] as Run[]),
+      history?request<State>('/api/state',undefined,controller.signal):Promise.resolve({} as State),
       request<WorkActivity>('/api/phone/activity',undefined,controller.signal),
     ]);
     if(!active||captured!==epoch||capturedScope!==scope()){if(captured===epoch)busy=false;return}
@@ -80,7 +82,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     if(state.status==='fulfilled')liveRun=state.value.runner?.alive&&state.value.runner?.busy?state.value.runner.run||'':'';
     if(work.status==='fulfilled'){activity=work.value;renderWork(activity)}
     else renderWork({...activity,update:activity.update?{...activity.update,live:false,tests:activity.update.tests?{...activity.update.tests,live:false}:undefined}:undefined,reviewers:activity.reviewers?.map(row=>({...row,live:false}))});
-    if(runs.status==='fulfilled')paint(runs.value);else message.textContent='Не удалось обновить ходы. Уже прочитанные записи сохранены.';
+    if(history){if(runs.status==='fulfilled')paint(runs.value);else message.textContent='Не удалось обновить ходы. Уже прочитанные записи сохранены.';}
     busy=false;if(active)timer=setTimeout(()=>void refresh(),2500);
   }
   return {

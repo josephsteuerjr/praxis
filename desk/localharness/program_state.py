@@ -10,7 +10,8 @@ def _identity(value):
 
 
 def _plain(path):
-    path=Path(os.path.abspath(path))
+    from .posix_paths import system_absolute
+    path=system_absolute(path)
     for item in (path,*path.parents):
         if item.is_symlink() or (hasattr(item,'is_junction') and item.is_junction()):
             raise ValueError('Linked programme-state path')

@@ -63,7 +63,7 @@ export const electron: ElectronBridge | undefined = (window as unknown as { __HE
  * Окно — в оболочке программы, а не веб-версия за каналом. Имя историческое: с 28.09
  * оболочка — Electron (`electron`), прежние выпуски — Tauri; для окна разницы нет.
  */
-export const inTauri = "__TAURI_INTERNALS__" in window || !!electron;
+export const inTauri = !!electron;
 
 export function channelURL(path: string): string {
   const full = (cfg.base || "") + path;

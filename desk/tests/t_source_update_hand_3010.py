@@ -10,6 +10,42 @@ from localharness.package_notice import read,write
 
 
 class HandTransport(unittest.TestCase):
+    def test_automatic_finish_rejects_changed_runtime_before_synchronous_git(self):
+        from localharness import app_source_update
+        with self.serve() as descriptor:
+            (self.f.new/'runtime/fixture.lock').write_text('runtime changed after hand admission')
+            self.assertTrue(self.call(descriptor)['ok'])
+            with patch.object(source_merge,'git',side_effect=AssertionError('Unvalidated Git executed')) as git, \
+                    patch.object(app_source_update,'finish',side_effect=AssertionError('Unvalidated app finish entered')) as app_finish:
+                with self.assertRaises(urllib.error.HTTPError) as caught:self.call(descriptor,'finish')
+                self.assertEqual(caught.exception.code,409)
+                git.assert_not_called();app_finish.assert_not_called()
+            self.assertIn('runtime changed',self.f.operation()['finish_error'])
+
+    def test_legacy_finish_rejects_changed_runtime_before_synchronous_git(self):
+        from localharness import app_source_update
+        with self.serve() as descriptor:
+            operation=self.f.operation();operation['continuation']='legacy';write(self.f.directory/'pipeline.json',operation)
+            (self.f.new/'runtime/fixture.lock').write_text('runtime changed after hand admission')
+            with patch.object(source_merge,'git',side_effect=AssertionError('Unvalidated Git executed')) as git, \
+                    patch.object(app_source_update,'finish',side_effect=AssertionError('Unvalidated app finish entered')) as app_finish:
+                with self.assertRaises(urllib.error.HTTPError) as caught:self.call(descriptor,'finish')
+                self.assertEqual(caught.exception.code,409)
+                git.assert_not_called();app_finish.assert_not_called()
+
+    def test_execution_requests_recheck_runtime_outside_the_editing_scope(self):
+        from localharness import source_update_battery
+        with self.serve() as descriptor:
+            composition=self.call(descriptor)['result']['composition_sha256']
+            (self.f.new/'runtime/fixture.lock').write_text('runtime changed after hand admission')
+            for action in ('verify','review','apply'):
+                with self.subTest(action=action),patch.object(source_update_battery,'prepare') as battery, \
+                        patch.object(pipeline,'validate_ready') as apply:
+                    with self.assertRaises(urllib.error.HTTPError) as caught:
+                        self.call(descriptor,action,{'expected_composition_sha256':composition})
+                    self.assertEqual(caught.exception.code,409)
+                    battery.assert_not_called();apply.assert_not_called()
+
     def test_existing_coordinator_lives_through_idle_agent_finish_and_exact_review_gate(self):
         """Real host loop/RPC lifetime; battery/provider stay explicit fixture boundaries."""
         import contextlib,types

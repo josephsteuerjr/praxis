@@ -547,7 +547,7 @@ a {
 }
 
 .sheet[hidden] {
-  display: none;
+  display: none !important;
 }
 
 .sheet.show {

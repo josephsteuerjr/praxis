@@ -1,0 +1,51 @@
+name: Hélène native Mac shared regression consumers
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [.github/workflows/rc18-macos-shared.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  shared:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    env:
+      CANDIDATE_SHA256: 29414244dbac27a6ef5beac33a4b754db3db919523c30a6b02c0051f0b972758
+      ARTIFACT_SHA256: e4ff88a30bbb533232be04bae9aa2a84081c0003fdde7b15714ffce61f2ee459
+      SKIP_DELTA_TRANSPORT: '0'
+      RECHECK_MOVED_LOGIN: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: base
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-8f133b5238fbea7a
+      - if: steps.base.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - name: Retain verified base as transport input
+        run: mv "$RUNNER_TEMP/qualified-release-artifact.zip" "$RUNNER_TEMP/baseline-release-artifact.zip"
+      - name: Exact final source-event candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085417762/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-29414244dbac27a6
+      - name: Native tiny installer errors, retry, Exit and two Cocoa observers
+        run: python3 desk/tests/macos_shared_regressions.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-shared-${{ matrix.os }}
+          path: evidence-shared-mac/

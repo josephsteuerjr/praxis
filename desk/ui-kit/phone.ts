@@ -635,10 +635,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     if(!nowRoot?.isConnected) {
       nowView?.stop();nowRoot=el('section');
       const usage=el('section','now-usage');usage.innerHTML=usageShell(true);
-      screen.replaceChildren(nowRoot,usage);mountUsage(usage,api);
+      screen.replaceChildren(usage,nowRoot);mountUsage(usage,api);
       nowView=phoneActions(nowRoot,settingsRequest,()=>base+'\n'+key,
-        run=>words.get(run.id)?.out||noteLabel(words.get(run.id)?.note||''));
-      void loadWords(runs.slice(0,12));
+        undefined,{history:false});
     }
     if(!sheetKind&&!document.hidden)nowView!.start();
   }
@@ -1108,17 +1107,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   let actionsRoot:HTMLElement|undefined;
   let actionsView:ReturnType<typeof phoneActions>|undefined;
   let dialogFocus:HTMLElement|null=null;
+  let sheetEpoch=0,sheetCloseTimer:ReturnType<typeof setTimeout>|undefined;
   async function settingsRequest<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T> {
     const response=await call(path,body===undefined?{signal,cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal,cache:'no-store'});
     return response.json();
   }
   function openDialog(kind:'settings'|'actions',title:string) {
+    const opening=++sheetEpoch;clearTimeout(sheetCloseTimer);
     dialogFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
     nowView?.stop();actionsView?.stop();sheetKind=kind;sheet.classList.add('phone-dialog');
     sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',title);
     sheetHead.replaceChildren(el('span','',title));
     const close=el('button','phone-dialog-close','×') as HTMLButtonElement;close.type='button';close.setAttribute('aria-label','Закрыть '+title.toLowerCase());close.addEventListener('click',closeSheet);sheetHead.append(close);
-    veil.hidden=false;sheet.hidden=false;requestAnimationFrame(()=>{veil.classList.add('show');sheet.classList.add('show');close.focus()});opts.onSheet?.(true);
+    veil.hidden=false;sheet.hidden=false;requestAnimationFrame(()=>{if(opening!==sheetEpoch||sheetKind!==kind)return;veil.classList.add('show');sheet.classList.add('show');close.focus()});opts.onSheet?.(true);
   }
   function openSettings() {
     openDialog('settings','Настройки');
@@ -1127,16 +1128,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
   function openActions() {
     openDialog('actions','Действия');
+    void loadWords(runs.slice(0,12));
     if(!actionsRoot){actionsRoot=el('div');actionsView=phoneActions(actionsRoot,settingsRequest,()=>base+'\n'+key,run=>words.get(run.id)?.out||noteLabel(words.get(run.id)?.note||''))}
     sheetBody.replaceChildren(actionsRoot);actionsView!.start();
   }
   q('#btn-actions',root).addEventListener('click',openActions);
   function openSheet() {
-    actionsView?.stop();sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');
+    const opening=++sheetEpoch;clearTimeout(sheetCloseTimer);
+    nowView?.stop();actionsView?.stop();sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');
     sheetKind = "more";
     veil.hidden = false;
     sheet.hidden = false;
     requestAnimationFrame(() => {
+      if(opening!==sheetEpoch||sheetKind!=='more')return;
       veil.classList.add("show");
       sheet.classList.add("show");
     });
@@ -1145,15 +1149,17 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
   function closeSheet() {
     if (!sheetKind) return;
+    const closing=++sheetEpoch;clearTimeout(sheetCloseTimer);
     actionsView?.stop();
     sheetKind = "";
     if(dialogFocus?.isConnected)dialogFocus.focus({preventScroll:true});dialogFocus=null;
     veil.classList.remove("show");
     sheet.classList.remove("show");
-    setTimeout(() => {
-      if (!sheetKind) {
+    sheetCloseTimer=setTimeout(() => {
+      if (closing===sheetEpoch&&!sheetKind) {
         veil.hidden = true;
         sheet.hidden = true;
+        sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');sheet.removeAttribute('aria-label');
         sheetBody.replaceChildren();
       }
     }, 220);

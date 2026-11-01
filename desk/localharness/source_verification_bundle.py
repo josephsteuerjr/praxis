@@ -336,6 +336,10 @@ def load(root, expected, version):
     for platform, row in value.get('dependencies', {}).items():
         if platform not in {'win32', 'linux', 'darwin'} or inventory(root / 'dependencies' / platform) != row['files']:
             raise ValueError('Verification dependency wheel material changed')
+    for platform,row in value.get('bundled_executors',{}).items():
+        if platform not in value.get('executor_locks',{}):raise ValueError('Bundled tools have no native lock')
+        from .source_verification_executor import declaration
+        declaration(row)
     return value
 
 

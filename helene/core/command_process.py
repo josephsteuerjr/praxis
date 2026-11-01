@@ -154,6 +154,7 @@ class CommandProcess:
 
     def stop_tree(self):
         with self._lock:
+            phase='poll'
             try:
                 if self.poll() is not None:return True, 'private command group already empty'
                 if self._job:
@@ -162,10 +163,27 @@ class CommandProcess:
                 else:
                     # waitid also confirms we still own the unreaped child. A
                     # foreign waiter/reaper makes this fail closed before signals.
+                    phase='unreaped-child identity'
                     self._leader_exited()
+                    phase='group census'
                     if self._live() is None:return False, 'private group census unavailable'
                     for sig in (signal.SIGTERM, signal.SIGKILL):
-                        os.killpg(self.pid, sig)
+                        phase='signal '+str(sig)
+                        try:os.killpg(self.pid, sig)
+                        except (ProcessLookupError,PermissionError) as refused:
+                            # Darwin can refuse a signal after the last live
+                            # group member exits. Only a fresh complete poll
+                            # (unreaped-child identity AND empty census) may
+                            # turn that race into success. A live/unknown group
+                            # keeps the original refusal and never falls back
+                            # to a bare PID or another process generation.
+                            # Allow the same bounded exit observation used
+                            # after a delivered signal. Immediate Darwin exit
+                            # can still be between census samples here.
+                            try:self.wait(1)
+                            except subprocess.TimeoutExpired:raise refused
+                            break
+                        phase='wait after signal '+str(sig)
                         try:self.wait(1);break
                         except subprocess.TimeoutExpired:
                             if self._live() is None:return False, 'private group census unavailable'
@@ -173,4 +191,4 @@ class CommandProcess:
                 self._stopped = True
                 return True, 'private command group exited'
             except (OSError, subprocess.TimeoutExpired) as exc:
-                return False, f'{type(exc).__name__}; private group exit unconfirmed'
+                return False, f'{type(exc).__name__}: {exc}; phase={phase}; private group exit unconfirmed'

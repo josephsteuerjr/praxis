@@ -305,7 +305,10 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
     entries=('python-app.json','python-package-files.json','Start Helene.command','Migrate Helene.command','Start Helene.sh',
              'helene','helene-body','helene-bridge','helene.exe','Helene.exe','helene-setup.exe','helene-body.exe',
              'helene-bridge.exe','helene-svc.exe','helene-host.exe')
-    names.update(name for name in entries if (old/name).is_file())
+    # APFS commonly treats Helene.exe and helene.exe as the same entry. Admit
+    # only the spelling actually present, so one unlink cannot be queued twice.
+    actual_entries={p.name for p in old.iterdir()}
+    names.update(name for name in entries if name in actual_entries and (old/name).is_file())
     files={}
     for name in sorted(names):
         check();path=old/name
