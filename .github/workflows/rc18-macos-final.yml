@@ -22,6 +22,11 @@ jobs:
           key: helene-rc18-macos-fronts-${{ steps.fronts.outputs.key }}
       - uses: actions/cache/restore@v4
         with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-43115b145684a985
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v4
+        with:
           path: ${{ runner.temp }}/rc18-verification-tools
           key: helene-rc18-macos-verification-tools-${{ steps.fronts.outputs.key }}-v1
           fail-on-cache-miss: true

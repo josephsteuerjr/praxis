@@ -1,0 +1,31 @@
+name: Hélène RC18 native body source qualification
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_native_body_source.py, .github/workflows/rc18-macos-native-source.yml]
+permissions:
+  contents: read
+jobs:
+  native-source:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Pinned minimal native compiler
+        run: rustup toolchain install 1.94.0 --profile minimal
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/rc18-body-target
+          key: helene-rc18-mac-native-1.94-${{ hashFiles('praxis/body/**','helene/core/body/**') }}
+      - name: Locked actual protocol, body and bridge source tests
+        run: python3 desk/tests/macos_native_body_source.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-macos-native-source
+          path: evidence-native-source/

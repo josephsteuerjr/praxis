@@ -34,7 +34,7 @@ def unpack(archive,destination):
             if i.is_dir():target.mkdir(parents=True,exist_ok=True);continue
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(z.read(i));target.chmod(mode&0o777 or 0o644)
 
-def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=None):
+def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=None,runtime_scripts=None):
     if runtime_target()!='macos-arm64':raise ValueError('Run on native macOS ARM64')
     evidence,work,out=map(lambda p:Path(p).resolve(),(evidence,work,out))
     if digest(evidence)!=EVIDENCE_SHA256:raise ValueError('Reusable CI input digest mismatch')
@@ -61,6 +61,7 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
     if not license_input.is_file():raise ValueError('Native dependency license input is missing')
     unpack(license_input,program)
     shutil.copy2(Path(__file__).with_name('PYTHON-MACOS-START-HERE.md'),program/'START-HERE.md')
+    if runtime_scripts:shutil.copy2(runtime_scripts,program/'runtime-script-portability.json')
     info=bundle/'Contents/Info.plist';value=plistlib.loads(info.read_bytes())
     value.update(CFBundleShortVersionString='2.3.0',CFBundleVersion='23018')
     info.write_bytes(plistlib.dumps(value))
@@ -96,5 +97,5 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('evidence','work','output'):p.add_argument('--'+name,type=Path,required=True)
-    for name in ('verification','verification-tools','runtime'):p.add_argument('--'+name,type=Path)
-    a=p.parse_args();build(a.evidence,a.work,a.output,verification=a.verification,verification_tools=a.verification_tools,runtime=a.runtime)
+    for name in ('verification','verification-tools','runtime','runtime-scripts'):p.add_argument('--'+name,type=Path)
+    a=p.parse_args();build(a.evidence,a.work,a.output,verification=a.verification,verification_tools=a.verification_tools,runtime=a.runtime,runtime_scripts=a.runtime_scripts)
