@@ -33,7 +33,23 @@ def prepare():
     if os.environ.get('EXPECTED_MANUAL_SHA256'):
         assert receipt['sha256']==os.environ['EXPECTED_MANUAL_SHA256']
     write('MANUAL-ARCHIVE.json',receipt)
-    unpack(manual,TEMP/'shared-install');program=TEMP/'shared-install/Helene-2.3.0-rc.18-macos-arm64'
+    if os.environ.get('NATIVE_DITTO_EXTRACT')=='1':
+        # The real OS extractor must preserve the shipped executable bits;
+        # custom Python unpack() would repair modes and hide delivery defects.
+        subprocess.run(['/usr/bin/ditto','-x','-k',str(manual),str(TEMP/'shared-install')],check=True)
+        measured=0
+        with zipfile.ZipFile(manual) as z:
+            for row in z.infolist():
+                target=TEMP/'shared-install'/row.filename
+                if row.is_dir():continue
+                assert target.is_file() and not target.is_symlink(),row.filename
+                assert target.read_bytes()==z.read(row),row.filename
+                assert target.stat().st_mode&0o777==(row.external_attr>>16)&0o777,row.filename
+                measured+=1
+        write('NATIVE-EXTRACTION.json',{'extractor':'/usr/bin/ditto -x -k','archive_sha256':receipt['sha256'],
+            'actual_extracted_file_bytes_and_modes_exact':measured,'mode_repair_performed':False})
+    else:unpack(manual,TEMP/'shared-install')
+    program=TEMP/'shared-install/Helene-2.3.0-rc.18-macos-arm64'
     shutil.copytree(program/'runtime',TEMP/'shared-driver-runtime')
     python=TEMP/'shared-driver-runtime/bin/python3'
     os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),'subject'])

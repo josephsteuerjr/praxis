@@ -1,0 +1,43 @@
+name: Hélène exact versioned manual archive with native OS extraction
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [.github/workflows/rc18-macos-manual.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  manual:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CANDIDATE_SHA256: b992662dc6146ec1431113a62209218e083e7b1f8ff804ab8f5797eab1d1496b
+      ARTIFACT_SHA256: b505c1c2972d95991e207d351ce19c032222b36322698d70468b8d83740e2892
+      EXPECTED_MANUAL_SHA256: 6ab2e08cdf106371abb0d45df0c0c93ae53b2875b16f835aca48dfade1807c6e
+      SKIP_DELTA_TRANSPORT: '1'
+      RECHECK_MOVED_LOGIN: '1'
+      NATIVE_DITTO_EXTRACT: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: archive
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-b992662dc6146ec1
+      - if: steps.archive.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13083525999/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - name: Native extraction, exact modes, Cocoa lifecycle and moved-root login
+        run: python3 desk/tests/macos_shared_regressions.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-manual-${{ matrix.os }}
+          path: evidence-shared-mac/
