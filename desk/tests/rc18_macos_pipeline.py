@@ -18,7 +18,8 @@ def run(command,log,*,cwd=REPO,env=None,timeout=600):
 
 def fronts():
     assert os.uname().machine=='arm64'
-    names=('app','mobile','miniapp','remote','setup/ui');jobs=os.cpu_count() or 3
+    outputs={'app':'app/dist','mobile':'mobile/dist','miniapp':'miniapp/dist','remote':'remote/dist','setup/ui':'setup/dist'}
+    names=tuple(outputs);jobs=os.cpu_count() or 3
     sys.path.insert(0,str(REPO/'desk/installer'))
     from portable_sources import frontend_inputs,frontend_outputs
     before=frontend_inputs(REPO)
@@ -26,7 +27,7 @@ def fronts():
     if (cache/'receipt.json').is_file():
         receipt=json.loads((cache/'receipt.json').read_text())
         assert receipt['inputs']==before,'Cached frontend source differs'
-        for name in names:shutil.copytree(cache/name,REPO/'desk'/name/'dist')
+        for name in names:shutil.copytree(cache/name,REPO/'desk'/outputs[name])
         assert frontend_outputs(REPO)==receipt['outputs'],'Cached frontend bytes differ'
         save('frontend-build.json',dict(receipt,reused_exact=True));return
     def install(name):return name,run(['npm','ci','--prefix',REPO/'desk'/name],'npm-ci-'+name.replace('/','-')+'.log')
@@ -40,7 +41,7 @@ def fronts():
     receipt={'cpu_count':jobs,'commands':built,'inputs':before,'outputs':frontend_outputs(REPO)}
     save('frontend-build.json',receipt)
     cache.mkdir()
-    for name in names:shutil.copytree(REPO/'desk'/name/'dist',cache/name)
+    for name in names:shutil.copytree(REPO/'desk'/outputs[name],cache/name)
     (cache/'receipt.json').write_text(json.dumps(receipt),encoding='utf-8')
 
 def key():
