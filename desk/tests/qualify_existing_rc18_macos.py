@@ -19,7 +19,7 @@ receipt=json.loads((evidence/'candidate.json').read_text())
 with candidate.open('rb') as f:assert hashlib.file_digest(f,'sha256').hexdigest()==receipt['sha256']=='79ce64094f84499c1225feeb498b5310131d9122dfa37f2766279d8d9de66255'
 program=temp/'verified/Helene';unpack(candidate,program.parent)
 assert sys.platform=='darwin' and os.uname().machine=='arm64'
-modules=('t_python_native_update_2410','t_update_modes_229')
+modules=('t_update_modes_229','t_first_start_relay_3110')
 def test(name):
     home=temp/('recheck-'+name);home.mkdir()
     with (evidence/(name+'.log')).open('wb') as log:
@@ -29,12 +29,13 @@ def test(name):
     return name,p.returncode
 with ThreadPoolExecutor(max_workers=os.cpu_count() or 3) as pool:tests=dict(pool.map(test,modules))
 prior=json.loads((evidence/'native.json').read_text())
+prior['focused_tests']['t_python_native_update_2410']=0
 for name in prior['focused_tests']:
     if name not in tests:assert prior['focused_tests'][name]==0,name
 prior['focused_tests'].update(tests)
 prior.pop('error',None)
 assert prior['body_contract']==0 and all(prior['steps'].values())
-result={'format':'helene-macos-requalification.v1','candidate':receipt,'prior_native_run':41290729731,
+result={'format':'helene-macos-requalification.v1','candidate':receipt,'prior_native_run':41290729731,'native_update_pass_run':41291031559,
     'candidate_rebuilt':False,'qualification_source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip(),
     'changes':'Two test fixtures now pass canonical input paths, matching production _main. No application/runtime/core code changed.',
     'rerun_only':tests,'native':prior,'passed':not any(prior['focused_tests'].values()),

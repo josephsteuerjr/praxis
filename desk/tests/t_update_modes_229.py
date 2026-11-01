@@ -123,7 +123,7 @@ class UpdateModes(unittest.TestCase):
     def test_updater_choice_is_bound_to_this_operation(self):
         f=self.f;stage=f.root.resolve()/('.helene-update-'+'a'*32);stage.mkdir();f.new.rename(stage/'Helene');f.new=stage/'Helene'
         from localharness.update_progress import Progress
-        report=Progress(f.root/(stage.name+'.progress.json'),'a'*32,f.old)
+        report=Progress(f.root.resolve()/(stage.name+'.progress.json'),'a'*32,f.old)
         report.phase('choosing_source',source_choice=policy.identity(f.old,f.new))
         update_window.choose_source(report.path,'clean')
         self.assertEqual(policy.require(f.old,f.new,report)['mode'],'clean')
