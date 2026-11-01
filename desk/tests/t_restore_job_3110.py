@@ -86,7 +86,7 @@ class RestoreJob(unittest.TestCase):
                 self.assertEqual(row['id'],identity);self.assertEqual(row['stage'],state)
                 self.assertEqual(row['job_state'],state);self.assertEqual(row['error'],'this restore needs observation')
 
-    def test_ordinary_progress_keeps_existing_receipt_and_activity_behavior(self):
+    def test_new_download_never_reuses_previous_progress_or_source_activity(self):
         from localharness.update_progress import Progress
         previous=Progress(program_state.progress(self.root,'f'*32),'f'*32,self.root)
         previous.phase('completed',files=27)
@@ -94,8 +94,57 @@ class RestoreJob(unittest.TestCase):
                               'tree':str(self.tree),'from_version':updates.version(self.root)})
         with patch('localharness.source_update_activity.activity',return_value={'id':'ordinary-source'}):
             row=updates.update_progress(self.owner)
-        self.assertEqual((row['id'],row['stage'],row['files']),('f'*32,'completed',27))
-        self.assertEqual(row['source_update'],{'id':'ordinary-source'})
+        self.assertEqual((row['id'],row['stage'],row['job_state']),('a'*32,'confirmed','confirmed'))
+        self.assertNotIn('files',row);self.assertNotIn('source_update',row)
+
+    def test_failed_download_exposes_its_attention_instead_of_cancelled_overview(self):
+        from localharness.update_progress import Progress
+        previous=Progress(program_state.progress(self.root,'f'*32),'f'*32,self.root)
+        previous.phase('cancelled')
+        jobs._save(self.tree,{'id':'a'*32,'state':'attention','phase':'attention','kind':'download',
+            'program':str(self.root),'tree':str(self.tree),'from_version':updates.version(self.root),
+            'error':'New portable window failed'})
+        row=updates.update_progress(self.owner)
+        self.assertEqual((row['id'],row['stage']),('a'*32,'attention'))
+        self.assertEqual(row['error'],'New portable window failed')
+
+    def test_incoming_window_rejoins_its_parent_attention_and_rejects_foreign_binding(self):
+        from localharness.update_progress import Progress
+        identity='a'*32;former=str(self.root.parent/'former')
+        record={'id':identity,'state':'attention','phase':'attention','kind':'install','program':former,
+            'tree':str(self.tree),'from_version':'former-version','error':'exact trial failure'}
+        jobs._save(self.tree,record)
+        Progress(program_state.progress(self.root,'f'*32),'f'*32,self.root).phase('failed',error='old overview')
+        reference={'id':identity,'program':former,'path':str(jobs.path(self.tree).resolve()),'incoming':str(self.root.resolve())}
+        write(jobs.incoming_reference(self.root,create=True),reference)
+        row=updates.update_progress(self.owner)
+        self.assertEqual((row['id'],row['stage'],row['error']),(identity,'attention','exact trial failure'))
+        reference['incoming']=str(self.root.parent/'foreign');write(jobs.incoming_reference(self.root,create=True),reference)
+        self.assertNotEqual(updates.update_progress(self.owner)['id'],identity)
+
+    def test_incoming_native_progress_is_projected_under_its_durable_parent(self):
+        from localharness.update_progress import Progress
+        identity='a'*32;native='f'*32;former=str(self.root.parent/'former')
+        jobs._save(self.tree,{'id':identity,'state':'handed_off','kind':'install','program':former,
+            'tree':str(self.tree),'from_version':'former-version'})
+        write(jobs.incoming_reference(self.root,create=True),{'id':identity,'program':former,
+            'path':str(jobs.path(self.tree).resolve()),'incoming':str(self.root.resolve())})
+        Progress(program_state.progress(self.root,native),native,self.root).phase('probation',seconds=25)
+        with patch('localharness.source_update_activity.activity',return_value=None):row=updates.update_progress(self.owner)
+        self.assertEqual((row['id'],row['receipt_id'],row['stage']),(identity,native,'probation'))
+
+    def test_download_attaches_only_its_own_source_activity(self):
+        from localharness.update_progress import Progress
+        identity='a'*32
+        jobs._save(self.tree,{'id':identity,'state':'running','kind':'download',
+            'program':str(self.root),'tree':str(self.tree),'from_version':updates.version(self.root)})
+        Progress(program_state.progress(self.root,identity),identity,self.root).phase('waiting_agent')
+        for parent in (identity,'f'*32,None):
+            activity={'id':'source-plan','parent_job_id':parent}
+            with self.subTest(parent=parent),patch('localharness.source_update_activity.activity',return_value=activity):
+                row=updates.update_progress(self.owner)
+                self.assertEqual(row['id'],identity)
+                self.assertEqual(row.get('source_update'),activity if parent==identity else None)
 
     def test_confirmation_owner_stop_and_selected_agent_are_admission_guards(self):
         with self.assertRaises(ValueError):jobs.admit_restore(self.owner)

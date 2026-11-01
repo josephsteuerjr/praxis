@@ -868,6 +868,8 @@ html.electron #chrome a {
   white-space: nowrap;
 }
 .review-activity[hidden] { display: none; }
+.review-activity[role="button"] { cursor: pointer; }
+.review-activity[role="button"]:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 3px; }
 
 .state-pill {
   display: flex;

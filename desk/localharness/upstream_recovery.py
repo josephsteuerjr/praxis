@@ -88,7 +88,11 @@ def _populate(root,new,passport,upstream,v2,*,check=None,progress=None):
                            program_files_done=done,program_files_total=len(entries))
             last_report=now
     report_files(0,force=True)
-    for done,(name,relative,digest) in enumerate(entries,1):
+    completed=0
+    report_lock=threading.Lock()
+    def prepare_file(entry):
+        nonlocal completed
+        name,relative,digest=entry
         if check:check()
         source=plain(root/relative)
         if source.is_symlink() or not source.resolve().is_relative_to(root) or not source.is_file():
@@ -102,7 +106,11 @@ def _populate(root,new,passport,upstream,v2,*,check=None,progress=None):
             try:os.link(source,target)
             except OSError:shutil.copy2(source,target)
         else:shutil.copy2(source,target)
-        report_files(done)
+        with report_lock:
+            completed+=1
+            report_files(completed)
+    from .validation_read import parallel
+    parallel(prepare_file,entries,workers=os.cpu_count() or 1)
     report_files(len(entries),force=True)
     # These may have been sealed after an older program passport was written.
     carriers=('code-upstream.json','code-upstream.zip')+(

@@ -57,21 +57,37 @@ def update_progress(owner):
     from .desktop_update_request import status as job_status
     tree=owner.current().tree
     job=job_status(tree)
-    if (job.get('operation')=='restore_upstream' and job.get('kind')=='install'
-            and job.get('source_mode')=='clean' and job.get('program')==str(owner.root.resolve())
-            and job.get('tree')==str(tree.resolve()) and job.get('from_version')==version(owner.root)):
-        # Admission precedes the worker's first Progress. The overview pointer
-        # can still name a previous terminal operation, even after rejoining.
-        # Read only this durable Restore identity without changing the pointer.
-        value=None if job['state'] in ('cancelled','attention','superseded') else status(owner.root,operation_id=job['id'])
+    incoming=False
+    if job.get('id') and job.get('tree')==str(tree.resolve()):
+        from .desktop_update_request import incoming_reference,path as job_path
+        from .package_notice import read
+        reference=read(incoming_reference(owner.root))
+        incoming=(reference.get('id')==job['id'] and reference.get('path')==str(job_path(tree).resolve())
+            and reference.get('program')==job.get('program') and reference.get('incoming')==str(owner.root.resolve()))
+    current=(job.get('program')==str(owner.root.resolve()) and job.get('from_version')==version(owner.root))
+    if job.get('id') and job.get('tree')==str(tree.resolve()) and (current or incoming):
+        # Admission owns the identity for downloads too. An old cancelled
+        # overview must never hide a new failure or prevent closing that job.
+        value=(None if job['state'] in ('cancelled','attention','superseded','completed') else
+            status(owner.root) if incoming else status(owner.root,operation_id=job['id']))
         if value:
+            if incoming:value={**value,'receipt_id':value['id'],'id':job['id']}
+            if job.get('operation')!='restore_upstream':
+                from .source_update_activity import activity
+                try:
+                    current=activity(tree)
+                    if current is not None and current.get('parent_job_id')==job['id']:
+                        value={**value,'source_update':current}
+                except (OSError,ValueError,KeyError,TypeError):pass
             return {**value,'job_state':job['state']}
         stage=job['state'] if job['state'] in ('cancelled','attention','superseded','completed') else job.get('phase',job['state'])
-        labels={'confirmed':'Задание принято','running':'Подготавливаю восстановление',
-                'cancelled':'Восстановление отменено','attention':'Восстановление требует внимания',
-                'superseded':'Прежнее задание заменено','completed':'Восстановление завершено'}
+        restoring=job.get('operation')=='restore_upstream'
+        noun='Восстановление' if restoring else 'Обновление'
+        labels={'confirmed':'Задание принято','running':'Подготавливаю восстановление' if restoring else 'Подготавливаю обновление',
+                'cancelled':noun+' отменено','attention':noun+' требует внимания',
+                'superseded':'Прежнее задание заменено','completed':noun+' завершено'}
         return {'id':job['id'],'target':str(owner.root.resolve()),'stage':stage,
-                'job_state':job['state'],'label':labels.get(job['state'],'Восстановление · '+job['state']),
+                'job_state':job['state'],'label':labels.get(job['state'],noun+' · '+job['state']),
                 'error':job.get('error','')}
     value = status(owner.root)
     if value:

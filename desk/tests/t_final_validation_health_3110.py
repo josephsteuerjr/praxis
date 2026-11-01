@@ -561,8 +561,10 @@ class ReadSamplingPriority(unittest.TestCase):
         now=time.monotonic();self.window=switch.HealthWindow(since=now-300,previous=now,identity='generation')
 
     def nested_reads(self,check,entered,inside,attempts,crossed,condition,workers,handles,cancelled):
+        started=threading.Barrier(2)
         def measured(_number):
             workers.append(threading.current_thread())
+            started.wait(timeout=3)
             def observed_check():
                 began_during_health=inside.is_set()
                 if began_during_health:
@@ -588,8 +590,8 @@ class ReadSamplingPriority(unittest.TestCase):
             return self.nested_reads(reads.current(),entered,inside,attempts,crossed,condition,workers,handles,cancelled)
         def health(_program):
             self.assertIs(threading.current_thread(),caller);health_calls.append(True)
-            if len(health_calls)==1:
-                self.assertTrue(entered.wait(3));inside.set()
+            if len(workers)==2 and entered.is_set() and not attempts:
+                inside.set()
                 try:
                     with condition:
                         self.assertTrue(condition.wait_for(lambda:len(attempts)==2,timeout=3))
@@ -612,7 +614,11 @@ class ReadSamplingPriority(unittest.TestCase):
         def validator():
             return self.nested_reads(reads.current(),entered,inside,attempts,crossed,condition,workers,handles,cancelled)
         def health(_program):
-            self.assertTrue(entered.wait(3));inside.set()
+            # The validation scope can correctly park a worker before its
+            # function starts. Never wait for that worker while health owns
+            # the read barrier; sample again after both actual readers start.
+            if len(workers)<2 or not entered.is_set():return 'generation'
+            inside.set()
             try:
                 with condition:self.assertTrue(condition.wait_for(lambda:len(attempts)==2,timeout=3))
                 stop.set()

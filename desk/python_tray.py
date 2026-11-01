@@ -7,7 +7,7 @@ def _popup(native,restore,exit_app):
     from System.Drawing import Color,Font,Point,Size,Region
     from System.Drawing.Drawing2D import GraphicsPath
     from System.Windows.Forms import (Form,Button,FormBorderStyle,FormStartPosition,
-        FlatStyle,Padding,Keys,AutoScaleMode)
+        FlatStyle,Padding,Keys,AutoScaleMode,CloseReason)
     from System.Drawing import ContentAlignment
     scale=max(1.0,float(native.DeviceDpi)/96.0)
     px=lambda value:round(value*scale)
@@ -52,7 +52,11 @@ def _popup(native,restore,exit_app):
     menu.KeyDown+=escape
     menu.Deactivate+=lambda sender,event:menu.Hide()
     def close_popup(sender,event):
-        event.Cancel=True;menu.Hide()
+        # Hide a dismissed menu, but never veto whole-application shutdown.
+        # WinForms closes this hidden form during Application.Exit before
+        # the main form's later tray-disposal callback can run.
+        if event.CloseReason==CloseReason.UserClosing:
+            event.Cancel=True;menu.Hide()
     menu.FormClosing+=close_popup
     return menu
 

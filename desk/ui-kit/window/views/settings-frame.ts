@@ -39,6 +39,8 @@ import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
 import { selfReviewCard } from "./self-review-card";
 import { workActivity, observeActivity, type WorkActivity, type UpdateActivity } from '../work-activity';
 import '../styles/work-activity.css';
+import { SERVER_TRANSFER_NOTICE } from '../feature-availability';
+import { updateOperationControls } from '../update-operation-controls';
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -184,6 +186,15 @@ export const GROUP = {
   app: "app",
   look: "look",
 } as const;
+
+export function focusUpdates(container: HTMLElement): void {
+  container.querySelector<HTMLButtonElement>('[role="tab"][data-group="app"]')?.click();
+  // The section navigation owns the custom scroller and sticky-tab offset.
+  const about=Array.from(container.querySelectorAll<HTMLAnchorElement>('nav a'))
+    .find(link=>link.textContent?.trim()==='О программе');
+  if (about)about.click();
+  else container.querySelector<HTMLElement>('[data-updates]')?.scrollIntoView({block:'start'});
+}
 
 /** Пометить карточку группой. Непомеченная не теряется — см. `mountSettings`. */
 export function inGroup(el: HTMLElement, group: string): HTMLElement {
@@ -386,6 +397,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // --- о программе
   draft.update = draft.update || {};
   const about = el("div");
+  about.dataset.updates='';
   const aboutRow = el("div", "actions");
   const ver = el("span", "mono", "версия …");
   let aboutInfo: { version: string; exe_dir: string; log: string } | null = null;
@@ -493,10 +505,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       }
       updOut.textContent = [row.label || row.stage, row.error || ''].filter(Boolean).join(' · ');
       progressUpdate=row.source_update;renderSettingsWork();
-      const waiting = ['waiting_review','waiting_agent'].includes(row.stage);
-      cancelUpdate.hidden = !waiting;
-      const active = !['completed', 'failed', 'needs_resolution', 'cancelled'].includes(row.stage);
+      const controls=updateOperationControls(row.stage);
+      cancelUpdate.hidden = !controls.cancellable;
+      cancelUpdate.textContent = controls.cancelLabel;
+      const active = controls.active;
       dlBtn.disabled = active;
+      restoreUpstream.disabled = active;
       if (active) setTimeout(restoreUpdateProgress, 600);
     } catch (error) {
       if (updOut.isConnected && scope===activityScope() && scope===settingsScope
@@ -661,7 +675,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
         } else {
-          updOut.textContent = `Это последняя версия (${r.current}).`;
+          updOut.textContent = r.latest === r.current
+            ? `Это последняя версия (${r.current}).`
+            : `Установлена ${r.current}. В источнике обновлений — ${r.latest}.`;
           updUrl = "";
           updSha = "";
           dlBtn.hidden = true;
@@ -1247,8 +1263,8 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   const exportRow = el("div", "actions");
   exportRow.append(exportBtn, exportOut);
   const steps = el("ol", "field-hint");
-  steps.append(el("li", "", "Для переноса на сервер открой «Онбординг» → «Телефон, Telegram и сервер». Приложение проверит сервер, сохранит архив и подключит окно."),
-    el("li", "", "Кнопка ниже собирает отдельный архив памяти, навыков, настроек и входов. Она сама не переносит и не останавливает агента."),
+  const unavailable = el('p','receipt',SERVER_TRANSFER_NOTICE);unavailable.setAttribute('role','status');box.append(unavailable);
+  steps.append(el("li", "", "Кнопка ниже собирает отдельный архив памяти, навыков, настроек и входов. Она сама не переносит и не останавливает агента."),
     el("li", "", "Ручные настройки ниже нужны, если адрес и ключ уже работающего сервера у тебя есть."));
   box.append(button("Настроить подключения","primary",()=>dispatchEvent(new CustomEvent("frame-go",{detail:"learn"}))));
   const details = el("details");
@@ -1267,7 +1283,7 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   const baseField = field("Адрес канала на сервере", String(draft.base || ""), (v) => (draft.base = v), {
     mono: true,
     placeholder: "https://helene.example.com",
-    hint: "HTTPS-адрес уже работающего агента. Для нового сервера используй пошаговый перенос в знакомстве с приложением.",
+    hint: "HTTPS-адрес уже работающего агента. Автоматический перенос на новый сервер пока недоступен.",
   });
   const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
     type: "password",
@@ -1381,7 +1397,7 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
   function sync() {
     if(!remote)hint.textContent=draft.phone?.mode==='stable'
       ? 'Постоянный адрес использует уже настроенный прокси или туннель к этому компьютеру. Он должен запускаться самостоятельно. Hélène проверяет адрес перед выдачей QR; временный Cloudflare-туннель в этом режиме выключен.'
-      : 'Hélène сама открывает защищённый HTTPS-доступ. Сервер и настройка роутера не нужны. Адрес может измениться после перезапуска; для входа снова открой кнопку в Telegram или новый QR.';
+      : 'Hélène сама открывает защищённый HTTPS-доступ. Сервер и настройка роутера не нужны. После следующего обновления открой на телефоне новую ссылку из Telegram или отсканируй свежий QR-код. Временный адрес может измениться и при перезапуске.';
     const saved = remote || (savedEnabled && ['automatic','stable'].includes(savedMode) && savedMode===draft.phone?.mode);
     const on = remote || !!draft.phone?.enabled;
     receipt.textContent = !on ? "Подключение выключено. Нажми «Сохранить», чтобы применить." : !saved

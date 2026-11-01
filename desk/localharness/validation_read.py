@@ -54,8 +54,15 @@ def digest(stream, check=None):
 
 def parallel(function, items, *, workers):
     """Cancel queued reads and join active readers on every outcome."""
+    callback = current()
+    def scoped(item):
+        # Thread-local validation admission never leaks or disappears when a
+        # previously serial file pass is moved to the existing worker pool.
+        with scope(callback):
+            checkpoint(callback)
+            return function(item)
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        return list(pool.map(function, items))
+        return list(pool.map(scoped, items))
     finally:
         pool.shutdown(wait=True, cancel_futures=True)

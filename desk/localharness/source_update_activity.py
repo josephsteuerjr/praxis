@@ -13,12 +13,24 @@ def activity(tree):
     tree=Path(tree).resolve();request=read(pipeline.path(tree))
     if not request:return None
     if Path(request.get('tree') or '.').resolve()!=tree:return None
+    from .update_supersession import blocked
+    if blocked(request,protocol='source',current_tree=tree):return None
     directory=pipeline.locate(request);operation=read(directory/'pipeline.json')
     if operation.get('id')!=request['id'] or operation.get('input_sha256')!=request.get('input_sha256'):return None
     installed=pipeline.applied_status(tree) if request.get('installed_receipt') else None
     if not installed and Path(operation.get('tree') or '.').resolve()!=tree:return None
     state=operation.get('state','unknown')
-    if state in ('cancelled','superseded') and not installed:return None
+    if state=='superseded' and not installed:return None
+    if state=='cancelled' and not installed:
+        # Keep the cancelled result for its own programme, but do not pin an
+        # old programme's terminal badge above the replacement's live status.
+        from .runtime_identity import current
+        running=current(tree);program=running.get('program')
+        if (running.get('available') is True and isinstance(program,str) and program.strip()
+                and Path(program).is_absolute() and Path(program).resolve()!=Path(request['program']).resolve()):
+            return None
+        return {'id':request['id'],'state':state,'version':request.get('version',''),'live':False,'role':'none',
+                'next':'Автопродолжение отменено. Предыдущая версия сохранена; проверки и ревью не выполняются.'}
     producer=read(directory/'coordinator-process.json')
     live=not installed and bool(producer) and process_state(producer)=='alive'
     result={'id':request['id'],'state':state,'version':request.get('version',''),
@@ -28,6 +40,18 @@ def activity(tree):
         'next':('Исправить замечания и завершить кандидат' if state in ('waiting_agent','needs_attention')
             else 'Проверки, независимое ревью и переход выполняет обновлятор'),
         'composition':operation.get('composition_sha256','')}
+    # Candidate progress is a passive projection, never a source-tool call or
+    # evidence that a worker/reviewer is executing. Keep the current failure
+    # visible even when the selected agent has returned from its turn.
+    pending=[];completed=total=0
+    for prefix,target in (('',directory/'plan.json'),('app/',directory/'app-merge/plan.json')):
+        plan=read(target)
+        conflicts=plan.get('conflicts',[]);resolved=plan.get('resolved',{})
+        if not isinstance(conflicts,list) or not isinstance(resolved,dict):continue
+        names=[name for name in conflicts if isinstance(name,str)]
+        total+=len(names);completed+=sum(name in resolved for name in names)
+        pending.extend(prefix+name for name in names if name not in resolved)
+    result['editing']={'completed':completed,'total':total,'pending':pending}
     if installed:result.update(state='completed',role='none',live=False,next='Обновление установлено, запуск подтверждён',error='')
     control=(operation.get('coordinator') or {}).get('job_control') or {}
     if not installed and control.get('tree') and control.get('path'):
@@ -35,6 +59,7 @@ def activity(tree):
         if Path(control['path']).resolve()==job_path(control['tree']).resolve():
             parent=read(control['path'])
             if parent.get('id')==control.get('id') and parent.get('program')==request.get('program'):
+                result['parent_job_id']=parent['id']
                 result['parent_state']=parent.get('state')
                 if parent.get('state') in ('completed','paused','cancelled','superseded'):
                     result.update(state=parent['state'],role='none',live=False,

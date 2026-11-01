@@ -446,12 +446,13 @@ def _bind(config,old,root,data):
     value['installed']=dict(value.get('installed') or {},service=False)
     value['read_dotenv']=False
     phone=value.get('phone') or {}
-    if phone.get('mode')=='stable' or (phone.get('external') and type(phone.get('local_port')) is int):
+    if phone.get('mode')=='stable' or (phone.get('mode')!='automatic' and phone.get('external') and type(phone.get('local_port')) is int):
         port=phone.get('local_port') or value.get('port')
         if type(port) is not int or not 1<=port<=65535:raise ValueError('Для постоянного адреса телефона нужен сохранённый локальный порт канала')
         value['port']=port;value['phone']=dict(phone,local_port=port)
     else:
         with socket.socket() as sock:sock.bind(('127.0.0.1',0));value['port']=sock.getsockname()[1]
+        if phone.get('mode')=='automatic':value['phone']=dict(phone,local_port=value['port'])
     for block,key in ((value.get('backup'),'dir'),(value.get('voice'),'tts_reference')):
         if isinstance(block,dict) and block.get(key):
             path=Path(block[key]).expanduser();path=path if path.is_absolute() else old/path

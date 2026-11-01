@@ -4,6 +4,7 @@ import { humanError } from "./lib";
 import { phoneCard, type Config, type Loaded } from "./views/settings-frame";
 import { collectConnection } from "./server-connection";
 import { pickPaperFiles } from "./paper-files";
+import { SERVER_TRANSFER_AVAILABLE, SERVER_TRANSFER_NOTICE } from './feature-availability';
 
 let qrRenderer: (value:string)=>Promise<string> = async()=>{throw new Error("Не удалось подготовить QR. Обнови приложение.");};
 let transferBusy=false;
@@ -196,6 +197,11 @@ async function stopForTransfer(out:HTMLElement) {
   throw new Error("Остановка ещё не подтвердилась. Перенос не начат — дождись остановки и повтори.");
 }
 function drawNewServer(host:HTMLElement) {
+  if (!SERVER_TRANSFER_AVAILABLE) {
+    const unavailable=el('p','receipt',SERVER_TRANSFER_NOTICE);unavailable.setAttribute('role','status');
+    host.replaceChildren(el('h4','','Перенос на сервер'),unavailable);
+    return;
+  }
   const data:Record<string,unknown>={login:"root",port:22,install_docker:true};
   let ready=false,busy=false;
   const out=el("p","receipt");const trust=el("div");trust.hidden=true;

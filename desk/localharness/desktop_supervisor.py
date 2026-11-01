@@ -402,7 +402,9 @@ def _port_busy(port: int) -> bool:
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
         return False
-    except OSError:
+    except OSError as error:
+        if os.name=='nt' and getattr(error,'winerror',None)==10013:
+            raise RuntimeError(f'Windows запретила внутренний порт {port}. Перезапусти движок для проверки и выбора доступного порта.') from error
         return True
 
 

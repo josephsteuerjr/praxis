@@ -44,6 +44,8 @@ import * as anatomy from "../../ui-kit/window/views/anatomy";
 import { mountVoiceComposer, mountVoiceAttachment } from "./voice-composer";
 import * as learn from "../../ui-kit/window/views/learn";
 import * as settings from "../../ui-kit/window/views/settings-frame";
+import { releaseNotice, type ReleaseSummary } from './release-notice';
+import './styles/release-notice.css';
 
 /** Чем издание отличается от голого окна. */
 export interface WindowOptions {
@@ -110,7 +112,12 @@ export function start(opts: WindowOptions): void {
   const headTitle = q<HTMLElement>("#head-title");
   const statePill = q<HTMLElement>("#state");
   const stateText = q<HTMLElement>("#state-text");
-  const refreshReviewActivity = reviewActivity(q<HTMLElement>("#review-activity"),
+  const workBadge=q<HTMLElement>("#review-activity");
+  workBadge.setAttribute('role','button');workBadge.tabIndex=0;
+  const openWork=()=>dispatchEvent(new CustomEvent('frame-live-runs'));
+  workBadge.addEventListener('click',openWork);
+  workBadge.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openWork();}});
+  const refreshReviewActivity = reviewActivity(workBadge,
     () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key + "\n" + cfg.agent);
   const stateAction = q<HTMLButtonElement>("#state-action");
   const pulseBox = q<HTMLElement>("#pulse");
@@ -598,8 +605,10 @@ export function start(opts: WindowOptions): void {
     const button = document.querySelector("[data-live-runs]");
     if (button) button.textContent = `Агент: ${(event as CustomEvent<string>).detail} — раскрыть действия`;
   });
-  addEventListener("frame-live-runs", () => {
+  addEventListener("frame-live-runs", async () => {
+    if(S.view!=='talk')await show('talk');
     setCollapsed("panel", false, true);
+    if(matchMedia('(max-width:760px)').matches){app.classList.add('narrow-activity');panelBtn.setAttribute('aria-pressed','true');}
     void panel.revealLiveRun();
   });
 
@@ -1159,7 +1168,9 @@ export function start(opts: WindowOptions): void {
       return;
     }
     statePill.dataset.level = s.level;
-    stateText.textContent = s.level === "live" && s.activity ? "На связи" : s.phrase;
+    stateText.textContent = s.level === "live" && s.activity
+      ? s.activity.phase==='model' ? 'Думает' : s.activity.phase==='tool' ? 'Выполняет действие' : 'Работает'
+      : s.phrase;
     statePill.title = s.phrase;
     if (s.action) {
       stateAction.hidden = false;
@@ -1619,6 +1630,17 @@ export function start(opts: WindowOptions): void {
   // грузит, потому что подключаться пока не к чему.
   window.dispatchEvent(new Event('helene:ui-ready'));
   if (opts.firstRun?.(view)) return;
+  if (LOCAL_AGENT && electron?.shell === 'python') {
+    const notice=document.createElement('section');q<HTMLElement>('#head').after(notice);
+    releaseNotice(notice, async()=>{
+      const loaded=await shell<settings.Loaded>('config_load');
+      const url=String(loaded.config.update?.url || '').trim() || settings.UPDATE_URL_DEFAULT;
+      return shell<ReleaseSummary>('update_check',{url});
+    },()=>{
+      try{localStorage.setItem('settings.group',settings.GROUP.app);}catch{}
+      void show('settings').then(()=>settings.focusUpdates(pageFor('settings')));
+    });
+  }
   if (LOCAL_AGENT && cfg.needs_local_setup) {
     // The local engine intentionally waits for a configured provider/model.
     // Native settings remain available without a running agent or API channel.

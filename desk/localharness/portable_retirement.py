@@ -229,7 +229,8 @@ def commit(program,value,window,*,places=None,backend=None):
     for row in value['targets']:
         if row['root'] not in value['removed'] and missing(row['root']):value['removed'].append(row['root'])
     roots=[plain(row['root']) for row in value['targets'] if row['root'] not in value['removed']]
-    value.update(state='commit-started',healthy_seconds=TRIAL_SECONDS)
+    admission=window.seal_retirement(time.monotonic())
+    value.update(state='commit-started',healthy_seconds=TRIAL_SECONDS,working_trial=admission)
     _write(path(program),value,private=True)
     try:
         backend.stop(roots,())  # Canonical data never grants killing affinity.

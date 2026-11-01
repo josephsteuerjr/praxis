@@ -54,11 +54,16 @@ def payload(program,*,runtime=True):
         from .first_start import plain
         for here,dirs,files in os.walk(program/'runtime',followlinks=False):
             checkpoint(check)
-            for name in [*dirs,*files]:checkpoint(check);plain(Path(here)/name)
+            # Reject linked directories before descending. Declared ordinary
+            # files receive the same complete plain-path check in measured(),
+            # on all CPU workers, immediately before opening their bytes.
+            for name in dirs:checkpoint(check);plain(Path(here)/name)
             for name in files:
                 checkpoint(check)
                 path=Path(here)/name
                 if path.suffix=='.pyc' and path.parent.name=='__pycache__':
+                    # Ignored bytecode must not hide a linked import path.
+                    plain(path)
                     import importlib.util
                     try:
                         if Path(importlib.util.source_from_cache(str(path))).is_file():continue
@@ -333,13 +338,29 @@ class HealthWindow:
     since:float|None=None
     previous:float|None=None
     identity:str|None=None
+    retirement_identity:str|None=None
     def observe(self,identity,now):
         if identity is None:
-            self.since=None;self.previous=None;self.identity=None;return False
+            self.since=None;self.previous=None;self.identity=None;self.retirement_identity=None;return False
         if (self.previous is None or now<self.previous or now-self.previous>15 or identity!=self.identity):
             self.since=now
+            self.retirement_identity=None
         self.previous=now;self.identity=identity
         return now-self.since>=TRIAL_SECONDS
+
+    def seal_retirement(self,now):
+        """A completed working trial admits cleanup of this exact generation.
+
+        Cleanup can take longer than the observation cadence. Its own slow OS
+        effects do not earn trial time or erase an already measured interval.
+        Fresh health, the same generation and Stop remain mandatory throughout.
+        No stored journal restores this in-process admission after a restart.
+        """
+        if (self.identity is None or self.since is None or self.previous is None
+                or not 0<=now-self.previous<=15 or self.previous-self.since<TRIAL_SECONDS):
+            raise _TrialIncomplete('Five fresh continuous healthy minutes are required before cleanup')
+        self.retirement_identity=self.identity
+        return {'identity':self.identity,'observed_seconds':self.previous-self.since}
 
 
 class TrialPaused(RuntimeError):
@@ -401,10 +422,16 @@ def monitored_validation(program,window,validator,*,stopped=None):
             stop_check(force=True)
             if not observed:raise RuntimeError('Final working generation is unconfirmed')
             now=time.monotonic();previous=window.previous
-            reset=previous is None or now<previous or now-previous>15 or observed!=expected
-            admitted=window.observe(observed,now)
+            committed=window.retirement_identity==expected
+            reset=previous is None or now<previous or observed!=expected or (not committed and now-previous>15)
+            if committed and not reset:
+                # No new five-minute credit: the exact running generation was
+                # already admitted before any retirement effects began.
+                window.previous=now;admitted=True
+            else:admitted=window.observe(observed,now)
             if reset:
-                raise TrialRestart('Final validation observed a gap or a new generation; restart the working trial')
+                reason='generation changed' if observed!=expected else 'observation gap or reversed clock'
+                raise TrialRestart('Final validation observed a gap or a new generation; restart the working trial ('+reason+')')
             if not admitted:raise _TrialIncomplete('Five continuous healthy minutes are not confirmed')
         finally:reading.set()
     pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='helene-final-read')

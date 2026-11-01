@@ -102,6 +102,10 @@ class Controller:
                 raise RuntimeError('Earlier child custody remains unconfirmed: ' + str(self.error))
             if self.thread and self.thread.is_alive():
                 return
+            from .channel_port import ensure_available
+            for agent in agents.roster(self.root):
+                changed=ensure_available(agent.config)
+                if changed:self.event('channel-port-changed',{'agent':agent.id,**changed})
             if agents.read_config(self.root/'helene.json').get('mode') == 'remote':
                 self.stop=threading.Event()
                 self.sync_publishers()

@@ -30,6 +30,31 @@ class _Socket:
 
 
 class PortableRetirement(unittest.TestCase):
+    def test_slow_old_process_shutdown_does_not_erase_an_already_confirmed_trial(self):
+        scenario=self._scenario();window=self._window();clock=[float(switch.TRIAL_SECONDS)]
+        original=self.fx.backend.stop
+        def slow_stop(*args,**kwargs):
+            original(*args,**kwargs);clock[0]+=20
+        with patch.object(self.fx.backend,'stop',side_effect=slow_stop), \
+             patch.object(switch,'health',return_value='healthy-generation'), \
+             patch.object(retirement.time,'monotonic',side_effect=lambda:clock[0]):
+            retirement.commit(self.fx.root,scenario.value,window,places=self.fx.places,backend=self.fx.backend)
+        self.assertEqual(start.load(retirement.path(self.fx.root))['state'],'completed')
+        self.assertFalse(any(root.exists() for root in scenario.containers))
+
+    def test_changed_generation_after_shutdown_still_blocks_every_deletion(self):
+        scenario=self._scenario();window=self._window();generation=['healthy-generation']
+        original=self.fx.backend.stop
+        def replaced(*args,**kwargs):
+            original(*args,**kwargs);generation[0]='replacement-generation'
+        with patch.object(self.fx.backend,'stop',side_effect=replaced), \
+             patch.object(switch,'health',side_effect=lambda _root:generation[0]), \
+             patch.object(retirement.time,'monotonic',return_value=float(switch.TRIAL_SECONDS)):
+            with self.assertRaises(switch.TrialRestart):
+                retirement.commit(self.fx.root,scenario.value,window,places=self.fx.places,backend=self.fx.backend)
+        self.assertFalse(any(action[0]=='remove' for action in self.fx.backend.actions))
+        self.assertEqual(start.load(retirement.path(self.fx.root))['state'],'partial')
+
     def setUp(self):
         self.fx = fixture.FirstStart()
         self.addCleanup(self.fx.doCleanups)
