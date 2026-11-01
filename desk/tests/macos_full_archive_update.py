@@ -264,7 +264,7 @@ def subject():
                     state=update_progress.status(root)
                     if (mechanical.active_update(root).is_file() and state and state.get('stage')=='starting'
                             and state.get('updated_at',0)>=began):
-                        for receipt in (root/'.helene/updates').glob('*/updater-admitted.json'):
+                        for receipt in (root/'.helene/updates').glob('*/updater-admitted*.json'):
                             if receipt.stat().st_mtime<began:continue
                             admitted=read(receipt)
                             if admitted.get('target')!=str(root):continue
