@@ -1,0 +1,38 @@
+name: Hélène RC18 native frontend and Node qualification
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_node_qualification.py, .github/workflows/rc18-macos-node.yml]
+permissions:
+  contents: read
+jobs:
+  node:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - id: fronts
+        run: python3 desk/tests/rc18_macos_pipeline.py key >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/rc18-fronts
+          key: helene-rc18-macos-fronts-${{ steps.fronts.outputs.key }}
+      - name: All locked installs and complete native Node test collection
+        run: python3 desk/tests/macos_node_qualification.py
+      - uses: actions/cache/save@v4
+        if: success()
+        with:
+          path: ${{ runner.temp }}/rc18-verification-tools
+          key: helene-rc18-macos-verification-tools-${{ steps.fronts.outputs.key }}-v1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-native-node
+          path: |
+            evidence-node/
+            evidence-rc18/
