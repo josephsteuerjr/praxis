@@ -27,6 +27,10 @@ class FirstStart(unittest.TestCase):
         with patch('localharness.standalone_relay.ensure_configured',side_effect=OSError('offline fixture')):
             with self.assertRaises(OSError):first.create_agent(self.root,dict(name='Fixture',provider='chatgpt',model='fixture'),places=self.places)
         self.assertFalse(first.agent_exists(self.data));self.assertFalse(common.load(self.root/'helene.json')['setup_complete'])
+    def test_receipted_profile_is_ready_without_windows_folder_environment(self):
+        first.prepare(self.root,places=self.places)
+        with patch.dict(os.environ,{},clear=True):
+            self.assertTrue(first.ready(self.root))
     def test_existing_profile_queues_devices_and_source_edits_stay_exact(self):
         files={'memory/groups/1.jsonl':'{"text":"history"}\n','memory/.state/queue.json':'{"queued":[1]}',
                'memory/.state/devices.json':'{"fixture":{}}','memory/.state/phone-pairs.json':'{}','workspace/note.txt':'owner work'}

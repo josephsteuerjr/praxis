@@ -1,4 +1,4 @@
-name: Hélène RC18 Python macOS ARM64
+name: Hélène RC18 extended macOS qualification
 on:
   push:
     branches: [codex/rc18-macos-0111]
@@ -9,33 +9,31 @@ concurrency:
   group: rc18-python-macos
   cancel-in-progress: false
 jobs:
-  native:
+  broad:
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - uses: actions/cache/restore@v4
         id: candidate-cache
         with:
           path: ${{ runner.temp }}/rc18-qualified-input.zip
           key: helene-rc18-native-79ce64094f84499c
-      - name: Reuse unchanged native candidate and prior evidence
+      - name: Reuse fixed native input
         if: steps.candidate-cache.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13077655662/zip > "$RUNNER_TEMP/rc18-qualified-input.zip"
-      - uses: actions/cache/save@v4
-        if: steps.candidate-cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ runner.temp }}/rc18-qualified-input.zip
-          key: helene-rc18-native-79ce64094f84499c
-      - name: Recheck only canonical-path fixtures on native ARM64
-        run: python3 desk/tests/qualify_existing_rc18_macos.py
+      - name: Full native source discovery and observations
+        run: python3 desk/tests/extended_macos.py broad
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: helene-rc18-macos-qualification
-          path: evidence-requalified/
+          name: helene-rc18-macos-broad
+          path: evidence-extended/
           retention-days: 30

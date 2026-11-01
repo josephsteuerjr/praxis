@@ -32,7 +32,10 @@ class Places:
         return cls(default_data().resolve())
 
 
-ready = common.ready
+def ready(root, places=None):
+    return common.ready(root, places or Places.current(root))
+
+
 agent_exists = common.agent_exists
 ensure_config = common.ensure_config
 
