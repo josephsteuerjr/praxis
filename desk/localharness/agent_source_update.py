@@ -258,6 +258,9 @@ def _command(tree,action,**args):
             pipeline.finish_for_verification(operation,directory)
             request['state']=operation['state']
         else:
+            from . import update_composition
+            if (operation.get('coordinator') or {}).get('kind')=='incoming-update-runtime.v1':
+                update_composition.admit_runtime(directory,operation)
             from .app_source_update import finish as finish_app
             finish_app(directory)
             merge.finish(directory,exe=merge.executable(request['program']))

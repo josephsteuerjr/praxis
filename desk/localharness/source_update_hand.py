@@ -123,10 +123,10 @@ def serve(directory,tree,program,binding):
                 if (current.get('id')!=directory.name or current.get('input_sha256')!=operation['input_sha256']
                         or latest.get('input_sha256')!=operation['input_sha256']):
                     raise ValueError('Current update identity changed')
-                # Edits bind the initially admitted immutable runtime. Actual
-                # tests/review/apply still re-read it outside this scope.
+                # These five actions only inspect/repair files. Finish runs
+                # synchronous Git work; it must not inherit editing admission.
                 scope=(update_composition.editing_runtime(runtime_admission)
-                       if action in ('status','read','diff','resolve','patch','finish') else nullcontext())
+                       if action in ('status','read','diff','resolve','patch') else nullcontext())
                 with scope:
                     if action=='status':result=agent_source_update.command(tree,action,**args)
                     else:

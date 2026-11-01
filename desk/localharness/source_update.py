@@ -606,6 +606,11 @@ def finish_for_verification(operation,directory):
             or intent.get('candidate_sha256')!=merge.candidate_signature(directory)):
         raise ValueError('Finished candidate changed; submit finish for the current bytes')
     try:
+        # finish_app/merge.finish may execute the incoming Git synchronously.
+        # Revalidate actual runtime bytes BEFORE either execution boundary,
+        # even if a caller accidentally carries an editing ContextVar.
+        from . import update_composition
+        update_composition.admit_runtime(directory,operation)
         from .app_source_update import finish as finish_app
         finish_app(directory)
         if plan.get('state')!='ready':

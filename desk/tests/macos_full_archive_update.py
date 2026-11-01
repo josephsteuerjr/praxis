@@ -131,8 +131,11 @@ def subject():
                         # the exact immutable native result behind that marker.
                         match=re.search(r'\[ResultRef run=([^ ]+) id=([^ ]+) path=([^ ]+) sha256=([0-9a-f]{64}) size=(\d+)',raw)
                         if match:
-                            target=(places.data/match[3]).resolve()
-                            assert target.is_relative_to(places.data/'memory/runs') and match[1] in target.parts
+                            assert re.fullmatch(r'results/[0-9]+-[A-Za-z0-9_.-]+\.(?:log|bin)',match[3])
+                            runs=list((places.data/'memory/runs').glob('*/'+match[1]+'/manifest.json'))
+                            assert len(runs)==1,'Model ResultRef does not identify one native run'
+                            target=(runs[0].parent/match[3]).resolve()
+                            assert target.is_relative_to(places.data/'memory/runs')
                             payload=target.read_bytes();assert len(payload)==int(match[5]) and hashlib.sha256(payload).hexdigest()==match[4]
                             tool_reply=json.loads(payload)
                             status_tool.update(native_durable_result_sha256=match[4],native_durable_result_size=len(payload),
@@ -288,6 +291,18 @@ def subject():
                 assert not status_tool['error'] and status_tool['returned_state'] in ('waiting_agent','pending','needs_attention'),status_tool
                 assert status_tool['seconds']<30,'Real source-tool status exceeded its30s transport budget'
                 result['steps']['fixture_model_executes_real_readonly_status_tool']=dict(status_tool)
+                if os.environ.get('REQUIRE_NATIVE_MONITOR')=='1':
+                    import native_ax as ax
+                    pid=native.control(root)['pid']
+                    ax.press(ax.find(pid,'Исправления',role='AXButton',timeout=30))
+                    def visible_actions():
+                        rows=ax.walk(pid)
+                        texts={row[key] for row in rows for key in ('AXTitle','AXDescription','AXValue')}
+                        return rows if 'ожидают завершения' in texts and 'ожидает исправлений от агента' in texts else None
+                    rows=native.wait(visible_actions,30)
+                    write('NATIVE-MONITOR-AX.json',[{k:v for k,v in row.items() if k!='element'} for row in rows])
+                    screenshot('source-monitor-actions.png')
+                    result['steps']['native_ax_header_badge_opens_actual_pending_actions']=True
             cancelled=native.invoke(root,'update_cancel');assert cancelled.get('ok')
             finish(identity,timeout=180,failed=True)
             native.wait(lambda:jobs.status(places.data).get('state')=='cancelled',90)

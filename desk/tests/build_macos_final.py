@@ -45,6 +45,7 @@ def build():
     shared_delta=os.environ.get('FINAL_SHARED_DELTA')=='1'
     cases=(['tests.t_update_runtime_status_0111','tests.t_source_update_hand_3010','tests.t_update_activity_3010',
         'tests.t_python_app.PythonApplicationTests.test_pending_mac_profile_migration_reaches_recovery_before_first_start',
+        'tests.t_source_update_pipeline_220.PipelineTests.test_selected_finish_automatically_verifies_reviews_and_reaches_apply_gate',
         'tests.t_app_source_update_3110'] if shared_delta else ['tests.t_component_jobs_0111','tests.t_voice_download_paths_0111',
         'tests.t_observer_exit_0111','tests.t_operation_diagnostics_0111','tests.t_python_app','tests.t_source_work_event_0111'])
     command([sys.executable,'-B','-m','unittest',*cases,'-v'],
