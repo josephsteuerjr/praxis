@@ -61,7 +61,7 @@ def ui_subject(program=None,python=None):
         import Quartz
         def ordinary_window():
             windows=Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly,Quartz.kCGNullWindowID)
-            save('ordinary-windows.json',[dict(w) for w in windows])
+            save('ordinary-windows.json',[{**dict(w),'kCGWindowBounds':dict(w['kCGWindowBounds'])} for w in windows])
             for window in windows:
                 if window.get('kCGWindowOwnerPID')==p.pid and window.get('kCGWindowLayer')==0 and window['kCGWindowBounds']['Width']>600:
                     return window
