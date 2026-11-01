@@ -5,6 +5,8 @@ CF=ctypes.CDLL('/System/Library/Frameworks/CoreFoundation.framework/CoreFoundati
 AX=ctypes.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
 CF.CFStringCreateWithCString.argtypes=[c_void_p,c_char_p,c_int];CF.CFStringCreateWithCString.restype=c_void_p
 CF.CFRelease.argtypes=[c_void_p]
+CF.CFRetain.argtypes=[c_void_p];CF.CFRetain.restype=c_void_p
+_OWNED=[]
 CF.CFGetTypeID.argtypes=[c_void_p];CF.CFGetTypeID.restype=ctypes.c_ulong
 CF.CFStringGetTypeID.restype=ctypes.c_ulong
 CF.CFArrayGetTypeID.restype=ctypes.c_ulong
@@ -36,8 +38,9 @@ def children(element):
     if not value:return []
     try:
         if CF.CFGetTypeID(value)!=CF.CFArrayGetTypeID():return []
-        # AX children survive the array release while their window exists.
-        return [CF.CFArrayGetValueAtIndex(value,i) for i in range(CF.CFArrayGetCount(value))]
+        result=[CF.CFRetain(CF.CFArrayGetValueAtIndex(value,i)) for i in range(CF.CFArrayGetCount(value))]
+        _OWNED.extend(result)
+        return result
     finally:CF.CFRelease(value)
 def walk(pid):
     app=AX.AXUIElementCreateApplication(pid);todo=[(app,0)];result=[]
@@ -48,7 +51,7 @@ def walk(pid):
             result.append(row)
             if depth<40:todo.extend((child,depth+1) for child in reversed(children(element)))
         return result
-    finally:CF.CFRelease(app)
+    finally:_OWNED.append(app)  # Retain returned native element handles through actions.
 def press(element):
     key=string('AXPress')
     try:code=AX.AXUIElementPerformAction(element,key)
@@ -62,7 +65,14 @@ def fill(element,value):
 def find(pid,label,role=None,timeout=20):
     end=time.monotonic()+timeout
     while time.monotonic()<end:
-        for row in walk(pid):
-            if (not role or row['AXRole']==role) and any(row[k]==label for k in ('AXTitle','AXDescription','AXIdentifier','AXValue')):return row['element']
+        matches=[row for row in walk(pid) if (not role or row['AXRole']==role) and any(row[k]==label for k in ('AXTitle','AXDescription','AXIdentifier','AXValue'))]
+        if role and matches:return matches[0]['element']
+        for row in matches:
+            if row['AXRole'] in ('AXButton','AXLink','AXRadioButton','AXPopUpButton','AXMenuItem'):return row['element']
+        for row in matches:
+            parent=get(row['element'],'AXParent')
+            if parent:
+                _OWNED.append(parent)
+                if text(parent,'AXRole') in ('AXButton','AXLink','AXRadioButton','AXPopUpButton'):return parent
         time.sleep(.2)
     raise RuntimeError('Native control not found: '+str((role,label)))
