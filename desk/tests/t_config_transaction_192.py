@@ -8,6 +8,25 @@ from deskd import agentcfg
 from localharness import config_cli
 
 class Transactions(unittest.TestCase):
+    def test_equal_clock_ticks_never_restore_an_old_settings_receipt(self):
+        import contextlib
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'helene.json';path.write_text('{"agent":{"name":"old"}}',encoding='utf-8')
+            original=path.stat().st_mtime_ns;seen=config_cli.mtime_ns(path)
+            factory=config_cli.tempfile.NamedTemporaryFile
+            @contextlib.contextmanager
+            def same_tick(**kwargs):
+                with factory(**kwargs) as output:yield output
+                os.utime(output.name,ns=(original,original))
+            with patch.object(config_cli.tempfile,'NamedTemporaryFile',side_effect=same_tick):
+                first=config_cli.save(path,'{"agent":{"name":"one"}}',seen)
+                second=config_cli.save(path,'{"agent":{"name":"two"}}',first['mtime_ns'])
+            self.assertTrue(first['ok']);self.assertTrue(second['ok'])
+            self.assertLess(int(seen),int(first['mtime_ns']));self.assertLess(int(first['mtime_ns']),int(second['mtime_ns']))
+            stale=config_cli.save(path,'{"agent":{"name":"stale"}}',seen)
+            self.assertEqual(stale['code'],'stale')
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['agent']['name'],'two')
+
     def test_channel_compare_blocks_real_cli_then_stale_conflicts(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'helene.json'

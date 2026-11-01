@@ -8,7 +8,7 @@ import uuid
 
 def default_data():
     """New data default only; existing configured profiles never move silently."""
-    return Path.home() / 'Helene'
+    return Path.home() / 'Helene' / 'data' if os.name=='nt' else Path.home() / 'Helene'
 
 
 def bind_program(root):

@@ -14,7 +14,9 @@
 // Всё — ключевыми списками (ui-kit/feed/keyed): узлы создаются один раз и правятся.
 import { KeyedList } from "../feed/keyed";
 import type { Scroller } from "../feed/scroller";
-import { api } from "./api";
+import { api, cfg } from "./api";
+import { workActivity, observeActivity } from './work-activity';
+import './styles/work-activity.css';
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
 import { fmtK } from "../text";
 import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, subject, toolTraceHTML, terminalLabel, textBox, type RunDetail } from "../steps";
@@ -203,12 +205,18 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
       const mark = failed ? "ошибка" : active ? "выполняется…" : received ? "результат получен" : "результат неизвестен";
       const kind = failed ? "fail" : toolIcon(t.tool || "", t.args);
       const isWord = t.tool === "reply";
-      rows.push({ key: tkey, cls: `st st-hand open${isWord ? " st-word" : ""}${active ? " is-live" : ""}${failed ? " is-failed" : ""}`, html:
-        `<button type="button" class="st-line st-toggle" aria-expanded="true">` +
+      const receipts = [t.execution, ...(t.operations || [])].filter(Boolean);
+      const observed = receipts.at(-1);
+      const harness = observed ? [observed.command || observed.argv?.join(' ') || observed.handler, observed.status].filter(Boolean).join(' · ') : '';
+      const executable=observed?.argv?.[0]?.split(/[\\/]/).at(-1);
+      const observedStatus=({returned:'завершён',running:'выполняется',failed:'ошибка',cancelled:'отменён',started:'запущен'} as Record<string,string>)[observed?.status || ''] || observed?.status;
+      const harnessLabel=observed ? [executable ? `процесс ${executable}` : observed.handler || observed.kind || 'действие',observedStatus].filter(Boolean).join(' · ') : '';
+      rows.push({ key: tkey, cls: `st st-hand${isWord ? " st-word" : ""}${active ? " is-live" : ""}${failed ? " is-failed" : ""}`, html:
+        `<button type="button" class="st-line st-toggle" aria-expanded="false">` +
         `${icon(kind)}<span class="st-label">${esc(title)}</span>` +
         `<span class="st-what">${esc(clip(what.replace(/\s+/g, " "), isWord ? 400 : 160))}</span>` +
         (mark ? `<span class="st-state">${esc(mark)}</span>` : "") +
-        `</button><div class="st-detail"><code class="tool-name">${esc(t.tool || '')}</code>${toolTraceHTML(t, tkey, runId)}</div>` });
+        `</button>${harness ? `<div class="st-harness" title="${esc(harness)}">Харнесс · ${esc(harnessLabel)}</div>` : ''}<div class="st-detail" hidden><code class="tool-name">${esc(t.tool || '')}</code>${toolTraceHTML(t, tkey, runId)}</div>` });
     });
     if (it.text || it.text_ref) {
       rows.push({ key: "text:" + key, cls: "st st-word", html:
@@ -254,9 +262,10 @@ interface Col {
 let col: Col | null = null;
 let forgeRoot: HTMLElement | null = null;
 let forgeView: ReturnType<typeof forgePanel> | null = null;
+let workRoot: HTMLElement | null = null;
 /** Details are readable on opening a turn; remember only the owner's collapses. */
 const openSteps = new Map<string, KeyedList<StepRow>>();
-const closedHands = new Set<string>();
+const openedHands = new Set<string>();
 /** Раскрыты окном, а не владельцем: идущий ход. Закончился — сворачиваем сами. */
 const autoOpen = new Set<string>();
 let liveTimer = 0;
@@ -278,6 +287,10 @@ function mountCol(): Col {
     forgeView = forgePanel(forgeRoot, undefined, 2500, {compact: true,
       onPlans: () => dispatchEvent(new CustomEvent('frame-go', {detail: 'plans'}))});
   }
+  if (!workRoot) {
+    workRoot=document.createElement('section');
+    observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,workActivity(workRoot,{reviewers:false}));
+  }
   box.innerHTML = `<div class="turns-inner">
     <div class="turns-head"><span class="turns-title">Ходы</span><span class="turns-room"></span><span class="turns-n"></span></div>
     <details class="turns-context" hidden><summary>Контекст и расход</summary><div class="turns-strip"></div></details>
@@ -286,6 +299,7 @@ function mountCol(): Col {
   </div>`;
   const inner = box.querySelector<HTMLElement>(".turns-inner")!;
   inner.prepend(forgeRoot);
+  inner.prepend(workRoot);
   forgeView!.start();
   const c: Col = {
     box,
@@ -456,12 +470,35 @@ function stepEl(s: StepRow): HTMLElement {
   return node;
 }
 
-/** A manual collapse survives live receipt updates. */
+/** The PWA uses exactly the desktop's compact action rows and trace markup. */
+export function mountActionSteps(host: HTMLElement) {
+  const expanded=new Set<string>();
+  function paint(node: HTMLElement,row: StepRow) {
+    node.className=row.cls;node.dataset.actionStep=row.key;node.innerHTML=row.html;
+    const toggle=node.querySelector<HTMLElement>('.st-toggle'),body=node.querySelector<HTMLElement>('.st-detail');
+    if(toggle&&body){const open=expanded.has(row.key);toggle.setAttribute('aria-expanded',String(open));body.hidden=!open;}
+  }
+  const rows=new KeyedList<StepRow>(host,{key:row=>row.key,
+    create:row=>{const node=document.createElement('div');paint(node,row);return node},
+    same:(a,b)=>a.html===b.html&&a.cls===b.cls,update:(node,row)=>paint(node,row)});
+  host.addEventListener('click',event=>{
+    const toggle=(event.target as HTMLElement).closest<HTMLElement>('.st-toggle');
+    if(!toggle||!host.contains(toggle))return;
+    const node=toggle.closest<HTMLElement>('[data-action-step]'),body=node?.querySelector<HTMLElement>('.st-detail');
+    if(!node||!body)return;
+    const id=node.dataset.actionStep!;const open=!expanded.has(id);
+    if(open)expanded.add(id);else expanded.delete(id);
+    toggle.setAttribute('aria-expanded',String(open));body.hidden=!open;
+  });
+  return (detail: RunDetail)=>rows.set(stepRows(detail,false),{animate:false});
+}
+
+/** Manual expansion survives live receipt updates; new actions start compact. */
 function restoreHand(node: HTMLElement, runId: string, key: string) {
-  if (!closedHands.has(runId + "/" + key)) return;
   const btn = node.querySelector<HTMLElement>(".st-toggle");
   const det = node.querySelector<HTMLElement>(".st-detail");
-  if (btn && det) { btn.setAttribute("aria-expanded", "false"); det.hidden = true; node.classList.remove("open"); }
+  const open = openedHands.has(runId + "/" + key);
+  if (btn && det) { btn.setAttribute("aria-expanded", String(open)); det.hidden = !open; node.classList.toggle("open", open); }
 }
 
 /** Плавно раскрыть/свернуть по высоте (WAAPI); при reduced-motion — сразу. */
@@ -496,8 +533,8 @@ function onClick(e: MouseEvent) {
     const open = det.hidden === true;
     hand.setAttribute("aria-expanded", String(open));
     node.classList.toggle("open", open);
-    if (open) { det.hidden = false; slide(det, true); closedHands.delete(runId + "/" + key); }
-    else { closedHands.add(runId + "/" + key); slide(det, false, () => { if (closedHands.has(runId + "/" + key)) det.hidden = true; }); }
+    if (open) { det.hidden = false; slide(det, true); openedHands.add(runId + "/" + key); }
+    else { openedHands.delete(runId + "/" + key); slide(det, false, () => { if (!openedHands.has(runId + "/" + key)) det.hidden = true; }); }
     return;
   }
   const head = t.closest<HTMLElement>(".turn-head");

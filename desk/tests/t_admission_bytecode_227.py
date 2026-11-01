@@ -31,13 +31,13 @@ class BytecodeAdmission(unittest.TestCase):
         self.assertTrue(path.is_file())
         return path,path.read_bytes()
 
-    def test_real_startup_bytecode_is_retained_and_real_B_is_promoted(self):
+    def test_real_startup_bytecode_is_retired_after_real_B_is_promoted(self):
         cache,original=self.startup_cache()
         self.assertTrue(admission.activate(self.program))
         self.assertEqual((self.program/'tree/module.py').read_bytes(),self.real)
         self.assertFalse((self.program/'tree/__pycache__').exists())
         recovery=next(self.root.glob('.helene-source-admission-*'))/'previous'
-        self.assertEqual((recovery/cache.relative_to(self.program/'tree')).read_bytes(),original)
+        self.assertFalse(recovery.exists())
 
     def test_private_file_in_cache_is_refused_without_losing_any_bytes(self):
         cache,original=self.startup_cache()
@@ -71,7 +71,7 @@ class BytecodeAdmission(unittest.TestCase):
             with self.assertRaises(OSError):admission.activate(self.program)
         self.assertTrue(admission.activate(self.program))
         recovery=next(self.root.glob('.helene-source-admission-*'))/'previous'
-        self.assertEqual((recovery/cache.relative_to(self.program/'tree')).read_bytes(),original)
+        self.assertFalse(recovery.exists())
 
     def test_ordinary_fresh_entry_runs_after_automatic_site_cache(self):
         self.startup_cache()

@@ -28,6 +28,17 @@ def put(root, name, text):
     return path
 
 
+def seal_delivery(program):
+    """Construct an incoming test delivery before admission, never rebase M."""
+    from localharness import authored_baseline
+    program=Path(program)
+    for name in ('source-update-baseline.json','app-upstream.json','app-upstream.zip'):
+        (program/name).unlink(missing_ok=True)
+    meta=read(program/'python-app.json');meta.pop('source_update_protocol',None);meta.pop('source_update_baseline_sha256',None)
+    write(program/'python-app.json',meta)
+    c.seal(program);authored_baseline.seal(program)
+
+
 class MergeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -40,6 +51,18 @@ class MergeTests(unittest.TestCase):
 
     def create(self):
         return m.create(self.base, self.local, self.new, self.plan)
+
+    def apply_reviewed_files(self,target):
+        # This boundary unit tests filesystem safety after a review. Canonical
+        # review, stale composition and full gate receipts are tested separately.
+        with patch.object(source_update,'validate_ready',return_value={'state':'unit-fixture-clear'}):
+            return m.apply(self.plan,target)
+
+    def test_missing_canonical_review_never_changes_the_target(self):
+        self.create();target=self.root/'target';shutil.copytree(self.local,target)
+        before=m.inventory(target)
+        with self.assertRaisesRegex(ValueError,'canonical independent review'):m.apply(self.plan,target)
+        self.assertEqual(m.inventory(target),before)
 
     def test_same_file_disjoint_edits_merge_with_real_two_parent_commit(self):
         plan = self.create()
@@ -82,7 +105,7 @@ class MergeTests(unittest.TestCase):
         self.assertTrue((self.plan / 'result/authored.py').is_file())
         target = self.root / 'target'
         shutil.copytree(self.local, target)
-        m.apply(self.plan, target)
+        self.apply_reviewed_files(target)
         self.assertFalse((target / 'module.py').exists())
         self.assertTrue((target / 'upstream.py').is_file())
 
@@ -92,13 +115,13 @@ class MergeTests(unittest.TestCase):
         shutil.copytree(self.local, target)
         put(target, 'late.py', 'late = True\n')
         with self.assertRaisesRegex(ValueError, 'changed during'):
-            m.apply(self.plan, target)
+            self.apply_reviewed_files(target)
         self.assertEqual((target / 'module.py').read_text(), LOCAL)
         with self.assertRaisesRegex(ValueError, 'running source'):
-            m.apply(self.plan, self.local)
+            self.apply_reviewed_files(self.local)
         put(self.plan / 'result', 'module.py', 'tampered = True\n')
         with self.assertRaisesRegex(ValueError, 'result changed'):
-            m.apply(self.plan, target)
+            self.apply_reviewed_files(target)
 
     def test_memory_secrets_and_models_are_not_git_inputs(self):
         for name in ('memory/chat.json', 'models/weights.bin', '.env', 'auth.json', '.git/config'):
@@ -139,9 +162,9 @@ class MergeTests(unittest.TestCase):
         shutil.copytree(self.local, merge_target)
         put(merge_target, 'pkg/memory/keep.txt', 'unplanned data')
         with self.assertRaises(OSError):
-            m.apply(self.plan, merge_target)
+            self.apply_reviewed_files(merge_target)
         self.assertEqual((merge_target / 'pkg/memory/keep.txt').read_text(), 'unplanned data')
-        m.apply(self.plan, target)
+        self.apply_reviewed_files(target)
         self.assertEqual((target / 'pkg').read_text(), 'replacement file\n')
         self.assertTrue((self.local / 'pkg/nested/mod.py').exists())
 
@@ -152,7 +175,7 @@ class MergeTests(unittest.TestCase):
         self.assertEqual(m.inventory(self.plan / 'result'), {})
         target = self.root / 'target'
         shutil.copytree(self.local, target)
-        m.apply(self.plan, target)
+        self.apply_reviewed_files(target)
         self.assertEqual(m.inventory(target), {})
 
 
@@ -172,34 +195,24 @@ class UpdateTests(unittest.TestCase):
         write(self.new / 'python-app.json', {'version': '2.1.0', 'delivery': 'portable'})
         write(self.old / 'helene.json', {'tree': str(self.data), 'code': str(self.code), 'runner': '',
                                         'self_authored': {'value': 123}})
+        for program in (self.old,self.new):
+            put(program/'app','fixture.py','app=True\n');seal_delivery(program)
 
-    def test_two_updates_keep_clean_upstream_base_and_profile_then_rollback(self):
-        original = (self.old / 'helene.json').read_bytes()
-        note, recovery = updater.install(self.old, self.new)
-        chosen = Path(read(self.old / 'helene.json')['code'])
-        self.assertEqual((chosen / 'module.py').read_text(), BOTH)
-        self.assertEqual((self.code / 'module.py').read_text(), LOCAL)
-        self.assertEqual(read(self.old / 'helene.json')['tree'], str(self.data))
-        self.assertEqual(note['copied_data'], [])
-        self.assertFalse(list((self.old / 'code').rglob('large.bin')))
-        updater.active_update(self.old).unlink()  # disposable successful-start receipt
-        put(chosen, 'module.py', BOTH.replace('return 11', 'return 111'))
-        second = self.root / 'incoming-22'
-        put(second / 'tree', 'module.py', NEW.replace('title = "original"', 'title = "new release"'))
-        write(second / 'python-app.json', {'version': '2.2.0', 'delivery': 'portable'})
-        before_second = (self.old / 'helene.json').read_bytes()
-        note2, recovery2 = updater.install(self.old, second)
-        latest = Path(read(self.old / 'helene.json')['code'])
-        expected = BOTH.replace('return 11', 'return 111').replace('title = "original"', 'title = "new release"')
-        self.assertEqual((latest / 'module.py').read_text(), expected)
-        updater.rollback(self.old, recovery2)
-        self.assertEqual((self.old / 'helene.json').read_bytes(), before_second)
-        self.assertEqual((chosen / 'module.py').read_text(), BOTH.replace('return 11', 'return 111'))
-        self.assertEqual((self.data / 'memory/chat.json').read_text(), '{"remember":"owner"}')
-        self.assertNotEqual(original, before_second)
+    def test_repeated_unverified_updates_cannot_change_config_code_or_data(self):
+        settings=(self.old/'helene.json').read_bytes();code=(self.code/'module.py').read_bytes()
+        history=(self.data/'memory/chat.json').read_bytes()
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError,'Verified incoming source snapshot|Incoming distribution has no complete update runtime'):
+                updater.install(self.old,self.new)
+        self.assertEqual((self.old/'helene.json').read_bytes(),settings)
+        self.assertEqual((self.code/'module.py').read_bytes(),code)
+        self.assertEqual((self.data/'memory/chat.json').read_bytes(),history)
+        self.assertFalse(updater.active_update(self.old).exists())
+
 
     def test_conflict_cannot_bypass_mandatory_panel_with_agent_tool(self):
         put(self.new / 'tree', 'module.py', BASE.replace('return 1', 'return 99'))
+        seal_delivery(self.new)
         before = (self.old / 'helene.json').read_bytes()
         self.assertEqual(c.preflight(self.old, self.new)['state'], 'needs_resolution')
         with self.assertRaisesRegex(ValueError, 'restricted'):
@@ -214,26 +227,25 @@ class UpdateTests(unittest.TestCase):
     def test_baseline_is_contents_and_is_never_customized_merge(self):
         c.seal(self.old)
         put(self.old / 'tree', 'module.py', 'later accidental seed edit\n')
-        self.assertEqual(c.preflight(self.old, self.new)['state'], 'ready')
+        self.assertEqual(c.preflight(self.old, self.new)['state'], 'needs_resolution')
         archive = self.old / 'code-upstream.zip'
         archive.write_bytes(archive.read_bytes() + b'tampered')
-        with self.assertRaisesRegex(ValueError, 'archive changed'):
+        with self.assertRaisesRegex(ValueError, 'archive changed|baseline identity changed'):
             c.preflight(self.old, self.new)
 
-    def test_existing_git_dirty_and_untracked_code_survive_update(self):
-        subprocess.run(['git', 'init', '-q', str(self.code)], check=True)
-        subprocess.run(['git', '-C', str(self.code), 'add', '.'], check=True)
-        subprocess.run(['git', '-C', str(self.code), '-c', 'user.name=Fixture', '-c',
-                        'user.email=fixture@invalid.local', '-c', 'gc.auto=0',
-                        'commit', '-qm', 'local history'], check=True)
-        head = subprocess.check_output(['git', '-C', str(self.code), 'rev-parse', 'HEAD'])
-        put(self.code, 'draft.py', 'unfinished_but_valid = True\n')
-        note, recovery = updater.install(self.old, self.new)
-        chosen = Path(read(self.old / 'helene.json')['code'])
-        self.assertEqual(subprocess.check_output(['git', '-C', str(chosen), 'rev-parse', 'HEAD']), head)
-        self.assertEqual((chosen / 'draft.py').read_bytes(), (self.code / 'draft.py').read_bytes())
-        self.assertEqual((chosen / 'module.py').read_text(), BOTH)
-        self.assertEqual((self.code / 'module.py').read_text(), LOCAL)
+    def test_unverified_delivery_cannot_change_dirty_git_or_untracked_code(self):
+        subprocess.run(['git','init','-q',str(self.code)],check=True)
+        subprocess.run(['git','-C',str(self.code),'add','.'],check=True)
+        subprocess.run(['git','-C',str(self.code),'-c','user.name=Fixture','-c','user.email=fixture@invalid.local',
+                        '-c','commit.gpgsign=false','-c','gc.auto=0','commit','-qm','local history'],check=True)
+        head=subprocess.check_output(['git','-C',str(self.code),'rev-parse','HEAD'])
+        put(self.code,'draft.py','unfinished_but_valid = True\n')
+        with self.assertRaisesRegex(ValueError,'Verified incoming source snapshot|Incoming distribution has no complete update runtime'):
+            updater.install(self.old,self.new)
+        self.assertEqual(subprocess.check_output(['git','-C',str(self.code),'rev-parse','HEAD']),head)
+        self.assertEqual((self.code/'draft.py').read_text(),'unfinished_but_valid = True\n')
+        self.assertEqual((self.code/'module.py').read_text(),LOCAL)
+
 
     def test_conflict_return_releases_desktop_guard_without_exit(self):
         from localharness import python_updates

@@ -1,7 +1,8 @@
 """Package declarations include actual X11 executor command providers."""
 from pathlib import Path
-import importlib.util,unittest
+import importlib.util,unittest,sys
 P=Path(__file__).resolve().parents[1]/'installer/python_posix_packages.py'
+sys.path.insert(0,str(P.parent))
 s=importlib.util.spec_from_file_location('posix_packages',P);m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
 class Dependencies(unittest.TestCase):
  def test_debian_x11_observations_are_runtime_requirements(self):

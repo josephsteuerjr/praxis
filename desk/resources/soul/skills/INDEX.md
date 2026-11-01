@@ -53,6 +53,8 @@
 
 ## Написаны мной
 
+- [merge-gates-gnome-review](merge-gates-gnome-review.md) — Ревью гномами как обязательный пункт мёржа
+
 - [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) — Классификатор архитектурного жаргона AbstractDL
 - [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) — Живые MTProto-руки модерации AbstractDL
 - [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) — Не повторять автономную проверку по старой подсказке

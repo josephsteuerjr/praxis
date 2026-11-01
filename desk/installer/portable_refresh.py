@@ -17,6 +17,7 @@ import shutil
 import tempfile
 import sys
 import zipfile
+import struct
 
 from portable_zip import (PREFIX, Entry, Package, copy_records, digest, encoded,
                           mode, record_hashes, relative, sha, snapshot)
@@ -24,6 +25,37 @@ from portable_sources import (FRONTS, application, build_frontends, compose_core
                               checked, identities, public, scan, sealed, verify_frontends)
 
 PLATFORMS = ('windows', 'macos', 'debian', 'fedora')
+
+
+def _windows_bootstrap(package,source,binary=None):
+    """Require current source/icon binding; compilation is a separate build."""
+    source_file=source/'desk/installer/windows_launcher.rs'
+    entry=package.get(PREFIX+'helene.exe')
+    if entry is None and binary is None:
+        if package.value('python-app.json',{}).get('format')=='helene-python-app.v1':
+            raise ValueError('Windows Python distribution omits its bootstrap')
+        return None
+    if not source_file.is_file():raise ValueError('Windows bootstrap source is missing')
+    if binary is not None:
+        binary=Path(binary)
+        body=binary.read_bytes()
+        receipt=json.loads(binary.with_name(binary.stem+'-bootstrap.json').read_text(encoding='utf-8'))
+    else:
+        body=entry.data if entry else b''
+        receipt=package.value('helene-bootstrap.json',{})
+    if (receipt.get('source_sha256')!=digest(source_file)
+            or receipt.get('icon_sha256')!=digest(source/'desk/shell/icons/icon.ico')
+            or receipt.get('binary_sha256')!=sha(body)):
+        raise ValueError('Supply the current source-bound Windows bootstrap binary and receipt')
+    if len(body)<64:raise ValueError('Truncated Windows bootstrap')
+    pe=struct.unpack_from('<I',body,0x3c)[0]
+    if (body[:2]!=b'MZ' or body[pe:pe+4]!=b'PE\0\0' or len(body)<pe+94
+            or struct.unpack_from('<H',body,pe+4)[0]!=0x8664 or struct.unpack_from('<H',body,pe+92)[0]!=2):
+        raise ValueError('Expected the x64 Windows GUI bootstrap')
+    if binary is not None:
+        package.put(PREFIX+'helene.exe',Entry(body))
+        package.put_value('helene-bootstrap.json',receipt)
+    return receipt
 
 
 def _tree_inventory(package, prefix):
@@ -176,6 +208,20 @@ def _metadata(p, source, core, origins, version, platform, donor_sha, front, bun
     static = {n[len('static/'):]: h for n, h in files.items() if n.startswith('static/')}
     desk['static'] = sha('\n'.join(f'{n} {h}' for n, h in sorted(static.items())).encode())
     p.put_value('app/desk.json', desk)
+    # Future authored updates need complete pristine app bytes, including the
+    # packaged resources and generated metadata, alongside the existing tree A.
+    app_base=_tree_inventory(p,PREFIX+'app/')
+    app_zip=snapshot(app_base)
+    p.put(PREFIX+'app-upstream.zip',Entry(app_zip))
+    p.put_value('app-upstream.json',{'format':'helene-app-upstream.v1',
+        'files':{n:{'sha256':sha(e.data),'mode':e.mode} for n,e in sorted(app_base.items())},'sha256':sha(app_zip)})
+    baseline={'format':'helene-authored-baseline.v2','surfaces':{
+        'tree':{'archive_sha256':sha(upstream),'manifest_sha256':sha(p.get(PREFIX+'code-upstream.json').data)},
+        'app':{'archive_sha256':sha(app_zip),'manifest_sha256':sha(p.get(PREFIX+'app-upstream.json').data)}}}
+    p.put_value('source-update-baseline.json',baseline)
+    meta=p.value('python-app.json');meta.update(source_update_protocol='helene-authored-source.v2',
+        source_update_baseline_sha256=sha(p.get(PREFIX+'source-update-baseline.json').data))
+    p.put_value('python-app.json',meta)
     old_build = p.value('build-source.json')
     if old_build is not None:
         old_build.update(version=version, app_files=files, native_runtime_rebuilt=False,
@@ -206,7 +252,7 @@ def _requirements(source, core, platform):
 
 def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
          verification_bundle, verification_sha256, legacy_admission=False,
-         runtime_overlay=None, runtime_overlay_sha256=''):
+         runtime_overlay=None, runtime_overlay_sha256='',windows_bootstrap=None):
     donor, source = Path(donor).resolve(), Path(source).resolve()
     if platform not in PLATFORMS or not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?', version):
         raise ValueError('Explicit platform and product semver release version required')
@@ -277,6 +323,11 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
         # Preconfigured distribution defaults are not the selected user's state.
         for name in ('helene.json', 'source-admission-state.json', 'python-migration.json', 'owner-stop.json'):
             p.put(PREFIX + name, None)
+        if platform=='windows':
+            bootstrap=_windows_bootstrap(p,source,windows_bootstrap)
+            from windows_archive_entry import OBSOLETE_ENTRIES,OBSOLETE_INSTRUCTIONS,INSTRUCTION_FILES,instructions
+            for name in (*OBSOLETE_ENTRIES,*OBSOLETE_INSTRUCTIONS):p.put(PREFIX+name,None)
+            for name in INSTRUCTION_FILES:p.put(PREFIX+name,Entry(instructions().encode('utf-8')))
         optional = _metadata(p, source, core, origins, version, platform, expected_sha256,
                              front, verification_sha256, legacy_admission)
         if (identities(compose_core(source)[0]) != core_source_identity
@@ -300,6 +351,7 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
             'replacements': {n: e.identity() for n, e in sorted(p.replacements.items())},
             'removed': sorted(p.removed), 'native_runtime_rebuilt': False,
             'native_qualified': False, 'runtime_changed': bool(overlay_identity)}
+        if platform=='windows':report['windows_bootstrap']=bootstrap
         report['sha256'] = sha(encoded(report))
         return report, dict(p.replacements), set(p.removed)
 
@@ -343,6 +395,12 @@ def verify_archive(path, report):
         for carrier in ('python-app.json', 'helene-build.json', 'app/desk.json', 'source-inputs.json', 'code-upstream.json'):
             if p.value(carrier).get('version') != report['version']:
                 raise ValueError('Version carrier mismatch: ' + carrier)
+        if report.get('windows_bootstrap'):
+            bootstrap=p.value('helene-bootstrap.json')
+            if (bootstrap!=report['windows_bootstrap'] or sha(p.get(PREFIX+'helene.exe').data)!=bootstrap['binary_sha256']
+                    or p.value('source-inputs.json')['files'].get('installer/windows_launcher.rs')!=bootstrap['source_sha256']
+                    or hashes[PREFIX+'app/resources/python-app.ico']!=bootstrap['icon_sha256']):
+                raise ValueError('Windows bootstrap source/icon/binary identity differs')
     return hashes
 
 
@@ -361,7 +419,7 @@ def build(donor, output, report, replacements, removed, *, expected_plan):
     os.close(fd)
     temporary, installed = Path(name), []
     try:
-        copied = copy_records(donor, temporary, replacements, removed)
+        copied = copy_records(donor, temporary, replacements, removed,windows_visibility=report['platform']=='windows')
         hashes = verify_archive(temporary, report)
         if record_hashes(temporary, set(copied)) != copied or digest(donor) != report['input_sha256']:
             raise ValueError('Unchanged compressed records/input changed')
@@ -403,6 +461,7 @@ def main():
     refresh.add_argument('--legacy-admission', action='store_true')
     refresh.add_argument('--runtime-overlay', type=Path)
     refresh.add_argument('--runtime-overlay-sha256', default='')
+    refresh.add_argument('--windows-bootstrap',type=Path)
     refresh.add_argument('--output', type=Path)
     refresh.add_argument('--expect-plan', default='')
     refresh.add_argument('--report', type=Path)
@@ -415,7 +474,7 @@ def main():
         expected_sha256=args.expected_sha256, frontend_receipt=args.frontend_receipt,
         verification_bundle=args.verification_bundle, verification_sha256=args.verification_sha256,
         legacy_admission=args.legacy_admission, runtime_overlay=args.runtime_overlay,
-        runtime_overlay_sha256=args.runtime_overlay_sha256)
+        runtime_overlay_sha256=args.runtime_overlay_sha256,windows_bootstrap=args.windows_bootstrap)
     value = build(args.donor, args.output, report, replacements, removed, expected_plan=args.expect_plan) if args.output else report
     if args.report:
         with args.report.open('xb') as stream:

@@ -62,7 +62,7 @@ class Composition(unittest.TestCase):
     def test_requirements_follow_the_parts(self):
         self.assertEqual(deskpkg.requirements(deskpkg.SERVER), deskpkg.DEPS_CHANNEL)
         self.assertEqual(deskpkg.requirements(deskpkg.WINDOWS),
-                         deskpkg.DEPS_CHANNEL + deskpkg.DEPS_RUNNER)
+                         deskpkg.DEPS_CHANNEL + deskpkg.DEPS_RUNNER + ['pywebview==6.2.1'])
         self.assertEqual(deskpkg.requirements(deskpkg.MACOS),
                          deskpkg.requirements(deskpkg.WINDOWS))
 
@@ -94,8 +94,24 @@ class Build(unittest.TestCase):
 
     def test_standalone_server_channel_imports_without_desktop_runner(self):
         path=self.tmp/'standalone';deskpkg.build(path,deskpkg.SERVER,clean=True,log=lambda *_:None)
-        self.assertFalse((path/'localharness').exists())
-        code="import sys;sys.path.insert(0,sys.argv[1]);import deskapp;assert deskapp._PHONE_ACCESS is None;assert deskapp.connection_checks.check_telegram({})['ok'] is False"
+        self.assertFalse((path/'localharness/runner.py').exists())
+        self.assertTrue((path/'localharness/config_transaction.py').is_file())
+        self.assertTrue((path/'localharness/owner_stop.py').is_file())
+        code="""import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import deskapp
+from deskd import autonomy
+from localharness import owner_stop
+assert deskapp._PHONE_ACCESS is None
+assert deskapp.connection_checks.check_telegram({})['ok'] is False
+tree=Path(sys.argv[1])/'private-data'
+owner_stop.change_pause(tree,True)
+(tree/'memory/.control/autonomy-paused.json').unlink()
+assert autonomy.state(tree)['paused'] is True
+owner_stop.change_pause(tree,False)
+assert autonomy.state(tree)['paused'] is False
+"""
         result=subprocess.run([sys.executable,'-I','-c',code,str(path)],capture_output=True,text=True,timeout=20)
         self.assertEqual(result.returncode,0,result.stderr)
 
@@ -221,7 +237,7 @@ def _copy_repo_without(dest: Path, skip: tuple[str, ...]) -> None:
         if src.is_file():
             shutil.copy2(src, dst)
         elif src.is_dir():
-            shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copytree(src, dst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     for rel in ("shell/Cargo.toml", "setup/Cargo.toml", "svc/Cargo.toml"):
         (dest / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(deskpkg.DESK / rel, dest / rel)

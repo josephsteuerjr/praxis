@@ -65,7 +65,7 @@ const depths = [
   { value: "normal" as const, title: "Обычно", text: "Также связи, читатели и тесты" },
   { value: "deep" as const, title: "Глубоко", text: "Также интеграция и аварийные пути" },
 ];
-const defaults: Policy = { after_update: false, after_self_edit: false, depth: "normal", models: [], max_parallel: 1, max_iters: 20 };
+const defaults: Policy = { after_update: false, after_self_edit: false, depth: "normal", models: [], max_parallel: 1, max_iters: 0 };
 const execution: Record<string, string> = {
   queued: "в очереди", starting: "запускается", running: "работает", finishing: "завершается",
   done: "завершено", error: "ошибка", unavailable: "недоступно", unknown: "состояние неизвестно",
@@ -78,7 +78,7 @@ const decisions: Record<string, string> = {
 export function validateReviewPolicy(policy: Policy): string {
   if (!["quick", "normal", "deep"].includes(policy.depth)) return "Выбери глубину проверки.";
   if (!Number.isInteger(policy.max_parallel) || policy.max_parallel < 1 || policy.max_parallel > 8) return "Одновременно: целое число от 1 до 8.";
-  if (!Number.isInteger(policy.max_iters) || policy.max_iters < 1 || policy.max_iters > 200) return "Шагов на критика: целое число от 1 до 200.";
+  if (!Number.isInteger(policy.max_iters) || policy.max_iters < 0) return "Шагов на критика: целое неотрицательное число; 0 — без ограничения.";
   if (policy.models.length > 8 || policy.models.some(model => !model.trim() || model.length > 200 || /:\/\/|::/.test(model))) return "Укажи не более 8 имён моделей текущего маршрута, без URL и provider::model.";
   return "";
 }
@@ -146,7 +146,7 @@ export function selfReviewCard(context?: Pick<EditionContext, "draft" | "freshne
     const limits = el("div", "form-grid two");
     limits.append(
       field("Одновременно", String(policy.max_parallel), value => edit({ max_parallel: value.trim() ? Number(value) : NaN }), { type: "number", hint: "От 1 до 8 критиков" }),
-      field("Шагов на критика", String(policy.max_iters), value => edit({ max_iters: value.trim() ? Number(value) : NaN }), { type: "number", hint: "От 1 до 200; это предел шагов, не денежный бюджет" }),
+      field("Шагов на критика", String(policy.max_iters), value => edit({ max_iters: value.trim() ? Number(value) : NaN }), { type: "number", hint: "0 — без ограничения. Положительное число — явный предел шагов." }),
     );
     settingsBox.append(limits);
   }

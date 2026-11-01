@@ -105,7 +105,7 @@ migration_wizard.execute(request,lambda _:None)
                     if boundary=='snapshot':
                         entry.assert_called_once_with(new.resolve());short_entry.assert_not_called()
                     else:
-                        short_entry.assert_called_once_with(['--root',str(new.resolve()),'--source-mode','preserve'])
+                        short_entry.assert_called_once_with(['--root',str(new.resolve()),'--source-mode','clean'])
                         entry.assert_not_called()
                     app.assert_not_called()
                 result=wizard.execute(retry,lambda _:None)

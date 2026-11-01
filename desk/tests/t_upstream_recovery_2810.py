@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -22,7 +23,8 @@ class Recovery(unittest.TestCase):
         (data/'memory').mkdir(parents=True);(data/'memory/history.jsonl').write_bytes(b'private-history\n')
         for name,text in [('tree/agent.py','upstream = True\n'),('code/local/agent.py','self_modified = True\n'),
             ('app/python_app.py','# fixture app'),('app/helene_setup.py','# fixture entry'),
-            ('runtime/python.exe','fixture runtime'),('python-app.json','{"version":"2.2.10","delivery":"portable"}')]:
+            ('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3','fixture runtime'),
+            ('python-app.json','{"version":"2.2.10","delivery":"portable"}')]:
             path=program/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text)
         write(program/'helene.json',{'tree':str(data),'code':str(program/'code/local'),'mode':'local',
             'model':{'key':'fixture-key'},'autonomy':{'paused':True},'setup_complete':True})
@@ -38,6 +40,10 @@ class Recovery(unittest.TestCase):
     def test_pristine_stage_uses_only_program_inventory_and_no_data_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             program,data=self.fixture(Path(tmp));new=recovery.stage(program,'a'*32)
+            from localharness.program_state import staging_belongs
+            self.assertTrue(staging_belongs(program,new.parent))
+            self.assertTrue(new.is_relative_to(program/'.helene'))
+            self.assertFalse(list(program.parent.glob('.helene-update-*')))
             self.assertFalse((new/'data').exists());self.assertFalse((new/'helene.json').exists())
             self.assertFalse((new/'code').exists())
             self.assertEqual((new/'tree/agent.py').read_text(),'upstream = True\n')
@@ -49,7 +55,8 @@ class Recovery(unittest.TestCase):
             def perform(args):
                 events.append('perform')
                 note,saved=updater.install(args.old,args.new)
-                cfg=read(program/'helene.json');code=Path(cfg['code'])
+                from localharness.app_migration import code_path
+                cfg=read(program/'helene.json');code=code_path(program/'helene.json',cfg)
                 self.assertEqual((code/'agent.py').read_text(),'upstream = True\n')
                 self.assertEqual(Path(cfg['tree']),data)
                 self.assertEqual(cfg['model'],before['model']);self.assertEqual(cfg['autonomy'],before['autonomy'])
@@ -57,9 +64,9 @@ class Recovery(unittest.TestCase):
                 self.assertTrue((saved/'helene.json').is_file())
                 return 0
             with patch.object(recovery,'receipt',wraps=recovery.receipt), \
-                 patch('localharness.migration_windows.service',return_value=None), \
-                 patch('localharness.migration_windows.stop',side_effect=lambda _:events.append('stop')), \
-                 patch('localharness.migration_windows.quiescent'),patch.object(updater,'perform',side_effect=perform):
+                 patch('localharness.migration_lifecycle.service',return_value=None), \
+                 patch('localharness.migration_lifecycle.stop',side_effect=lambda _:events.append('stop')), \
+                 patch('localharness.migration_lifecycle.quiescent'),patch.object(updater,'perform',side_effect=perform):
                 self.assertEqual(recovery.restore(program,operation='b'*32),0)
             self.assertEqual(events,['stop','perform'])
             self.assertEqual(read(recovery.receipt(program,'b'*32))['state'],'completed')
@@ -81,7 +88,7 @@ class Recovery(unittest.TestCase):
             self.assertEqual(helene_setup.main(['--root','C:/Helene','--old','C:/Old']),0)
             self.assertEqual(wizard.call_args.args[0],['--root',str(Path('C:/Helene')),'--old','C:/Old'])
             helene_setup.main(['--root','C:/Helene','--source-mode','clean','--force-extensions'])
-            self.assertEqual(wizard.call_args.args[0],['--root',str(Path('C:/Helene')),'--source-mode','clean','--force-extensions'])
+            self.assertEqual(wizard.call_args.args[0],['--root',str(Path('C:/Helene')),'--force-extensions'])
         with patch.object(recovery,'restore',return_value=0) as restore:
             self.assertEqual(helene_setup.main(['--root','C:/Helene','--restore-upstream','--confirmed']),0)
             restore.assert_called_once()
@@ -103,13 +110,20 @@ class Recovery(unittest.TestCase):
     @unittest.skipUnless(os.name=='nt','Windows launcher')
     def test_real_helene_exe_forwards_to_bundled_python_without_native_shell(self):
         import windows_archive_entry
+        compiler=shutil.which('rustc')
+        if not compiler or subprocess.run([compiler,'--version'],capture_output=True).returncode:
+            self.skipTest('A runnable native Rust toolchain is not provisioned in this isolated executor')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'runtime').mkdir();(root/'app').mkdir()
             # Use only this disposable runtime entry and an inert app script.
-            os.link(sys.executable,root/'runtime/pythonw.exe')
+            shutil.copyfile(sys.executable,root/'runtime/pythonw.exe')
             dll=Path(sys.base_prefix)/('python'+str(sys.version_info.major)+str(sys.version_info.minor)+'.dll')
-            os.link(dll,root/'runtime'/dll.name)
-            (root/'app/python_app.py').write_text("import json,sys\nfrom pathlib import Path\nPath('entry-proof.json').write_text(json.dumps(sys.argv))\n")
+            shutil.copyfile(dll,root/'runtime'/dll.name)
+            # This inert fixture explicitly acknowledges readiness; real UI
+            # acknowledgement is covered by packaged browser/native tests.
+            from localharness import bootstrap_ready
+            shutil.copyfile(bootstrap_ready.__file__,root/'app/bootstrap_ready.py')
+            (root/'app/python_app.py').write_text("import json,sys,bootstrap_ready\nfrom pathlib import Path\nPath('entry-proof.json').write_text(json.dumps(sys.argv))\nbootstrap_ready.signal()\n")
             windows_archive_entry.write(root)
             self.assertTrue((root/'helene.exe').is_file())
             self.assertFalse((root/'helene.json').exists(),'Packaging must not create an agent profile or bypass first setup')
@@ -117,7 +131,8 @@ class Recovery(unittest.TestCase):
             windows_archive_entry.write(assembled,launcher_binary=root/'helene.exe')
             self.assertEqual((assembled/'helene.exe').read_bytes(),(root/'helene.exe').read_bytes())
             self.assertFalse((assembled/'helene.json').exists())
-            self.assertIn('helene_setup.py',(root/'Helene setup and recovery.vbs').read_text())
+            self.assertFalse(list(root.glob('*.vbs')))
+            self.assertIn('helene.exe --migration-wizard',(root/'START-HERE.md').read_text())
             env=dict(os.environ,PYTHONHOME=sys.base_prefix)
             result=subprocess.run([str(root/'helene.exe'),'--migration-wizard'],env=env,capture_output=True,timeout=10)
             self.assertEqual(result.returncode,0)

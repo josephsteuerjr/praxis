@@ -29,16 +29,20 @@ def program():
 
 
 def status(tree):
-    return read(path(tree)) or {'state': 'none'}
+    value=read(path(tree)) or {'state':'none'}
+    from .update_supersession import blocked
+    return {**value,'state':'superseded'} if blocked(value,protocol='desktop',current_tree=tree) else value
 
 
-def incoming_reference(new):
-    new=Path(new).resolve()
-    return new.parent/('update-job-ref-'+hashlib.sha256(str(new).encode()).hexdigest()[:16]+'.json')
+def incoming_reference(new,*,create=False):
+    from .program_state import root
+    new=Path(new).resolve();canonical=root(new,create=create)/'incoming-job.json'
+    legacy=new.parent/('update-job-ref-'+hashlib.sha256(str(new).encode()).hexdigest()[:16]+'.json')
+    return legacy if not create and not canonical.exists() and legacy.is_file() else canonical
 
 
 def bind_incoming(value,new):
-    write(incoming_reference(new),{'id':value['id'],'path':str(path(value['tree']).resolve()),
+    write(incoming_reference(new,create=True),{'id':value['id'],'path':str(path(value['tree']).resolve()),
         'program':value['program'],'incoming':str(Path(new).resolve())})
 
 
@@ -51,7 +55,8 @@ def producers_pending(value):
         if observations['helper'] not in ('absent','changed'):return True,observations
     if value.get('staging'):
         staging=Path(value['staging']).resolve();program=Path(value['program']).resolve()
-        if staging.parent!=program.parent or not staging.name.startswith('.helene-update-'):
+        from .program_state import staging_belongs
+        if not staging_belongs(program,staging):
             return True,{**observations,'staging':'identity-unknown'}
         record=read(staging/'Helene/code-transition-plan.json')
         for row in record.get('plans',[]):
@@ -88,12 +93,25 @@ def _admission_recovery(program):
 
 
 def _save(tree, value):
+    from .update_supersession import blocked
+    if value.get('state')!='superseded' and blocked(value,protocol='desktop',current_tree=tree):
+        raise RuntimeError('Programme replaced; superseded work cannot write progress')
     target = path(tree)
     value['updated'] = time.time()
     write(target, value)
     # Retain prior requests by identity; the current pointer is not a history DB.
     write(target.parent / 'desktop-update-jobs' / (value['id'] + '.json'), value)
     return value
+
+
+def new_source_mode(mode=None,*,root=None):
+    if mode not in (None,'preserve','clean'):
+        raise ValueError('Choose preserve or clean source mode')
+    if root is not None:
+        from .authored_baseline import mode as eligible
+        return eligible(root,mode)
+    if mode=='preserve':raise ValueError('Preserve mode requires an identified programme and verified source baseline')
+    return 'clean'
 
 
 def request(tree, action, *, source_mode=None, version='latest', reason='', owner_words='',
@@ -115,7 +133,7 @@ def request(tree, action, *, source_mode=None, version='latest', reason='', owne
                 parts(version)
             if owner_words and not owner_spoke:
                 raise ValueError('Only a direct owner turn can consent to an update')
-            mode = source_mode or 'preserve'
+            mode = new_source_mode(source_mode,root=target)
             words = ' '.join(str(owner_words).split())
             # The mind interprets the direct owner's words. Code records exact
             # provenance and an explicitly selected mode, never a keyword vote.
@@ -134,8 +152,11 @@ def request(tree, action, *, source_mode=None, version='latest', reason='', owne
                 raise ValueError('Direct owner confirmation is required')
             value = {**previous, 'state': 'confirmed' if action == 'confirm' else 'declined',
                      'confirmed_by': by, 'owner_words': str(owner_words), 'confirmed_at': time.time()}
-            if by == 'window' and source_mode is not None:
-                value['source_mode'] = source_mode
+            if action == 'confirm':
+                mode=new_source_mode(previous.get('source_mode'),root=target)
+                if source_mode is not None and new_source_mode(source_mode,root=target)!=mode:
+                    raise ValueError('Source policy changed; request a new update')
+                value['source_mode'] = mode
         elif action == 'cancel':
             if previous.get('id') != identity or previous.get('state') not in ACTIVE:
                 raise ValueError('No matching active job')
@@ -168,6 +189,8 @@ def checkpoint(owner, value, **changes):
         current = status(tree)
         if current.get('id') != value['id']:
             raise RuntimeError('Update job identity changed; no effects admitted')
+        from .update_supersession import blocked
+        if blocked(value,protocol='desktop',current_tree=tree):raise RuntimeError('Programme replaced; this update is superseded')
         value.update(changes)
         if cancelled(tree, value['id']):
             value['cancel_requested'] = True
@@ -175,7 +198,7 @@ def checkpoint(owner, value, **changes):
     return value
 
 
-def admit_install(owner, path, forceExtensions=False, sourceMode=None):
+def admit_install(owner, path, forceExtensions=False, sourceMode=None, browser_mode=None):
     """UI returns only after durable admission bound to this process generation."""
     from .python_updates import version
     from .session_host import control_path, process_state
@@ -186,9 +209,9 @@ def admit_install(owner, path, forceExtensions=False, sourceMode=None):
         raise ValueError('Incompatible-extension override is obsolete; use ordinary Update after resolving compatibility')
     archive = Path(path).resolve(strict=True)
     _admission_recovery(owner.root)
-    if archive.suffix.lower() != '.zip' or archive.parent != owner.root.resolve().parent:
-        raise ValueError('Choose the update ZIP beside the working Helene folder')
-    mode = sourceMode or 'preserve'
+    if archive.suffix.lower() != '.zip' or not archive.is_file():
+        raise ValueError('Choose a verified Hélène update ZIP')
+    mode = new_source_mode(sourceMode,root=owner.root)
     if mode not in ('preserve', 'clean'):
         raise ValueError('Choose preserve or clean source mode')
     descriptor = read(control_path(owner.root))
@@ -210,12 +233,13 @@ def admit_install(owner, path, forceExtensions=False, sourceMode=None):
             'tree': str(tree.resolve()), 'agent_id': owner.current().id, 'from_version': version(owner.root),
             'archive': str(archive), 'archive_sha256': digest, 'source_mode': mode,
             'force_extensions': bool(forceExtensions), 'state': 'confirmed', 'phase': 'downloaded',
+            'browser_mode': bool(getattr(owner,'browser_mode',False) if browser_mode is None else browser_mode),
             'confirmed_by': 'window', 'admission': {k: descriptor[k] for k in ('pid', 'birth', 'generation')}}
         _save(tree, value)
     return {'state': 'admitted', 'job': value, 'observer_may_close': True}
 
 
-def admit_download(owner, url, sha256=None, sourceMode=None):
+def admit_download(owner, url, sha256=None, sourceMode=None, browser_mode=None):
     """The ordinary Update click admits BEFORE network/extraction/model work."""
     from .python_updates import version, secure_url
     from .session_host import control_path, process_state
@@ -227,7 +251,7 @@ def admit_download(owner, url, sha256=None, sourceMode=None):
         raise ValueError('Update archives require HTTPS')
     if sha256 and not re.fullmatch('[a-fA-F0-9]{64}', sha256):
         raise ValueError('Invalid update SHA256')
-    mode = sourceMode or 'preserve'
+    mode = new_source_mode(sourceMode,root=owner.root)
     if mode not in ('preserve','clean'):
         raise ValueError('Choose preserve or clean source mode')
     descriptor=read(control_path(owner.root))
@@ -245,10 +269,52 @@ def admit_download(owner, url, sha256=None, sourceMode=None):
         value={'format':'helene-desktop-update-request.v2','id':uuid.uuid4().hex,'kind':'download',
             'created':time.time(),'program':str(owner.root.resolve()),'tree':str(tree.resolve()),
             'agent_id':owner.current().id,'from_version':version(owner.root),'source_mode':mode,
+            'browser_mode':bool(getattr(owner,'browser_mode',False) if browser_mode is None else browser_mode),
             'download_url':url,'download_sha256':sha256 or '', 'state':'confirmed','phase':'requested',
             'confirmed_by':'window','admission':{key:descriptor[key] for key in ('pid','birth','generation')}}
         _save(tree,value)
     return {'state':'admitted','job':value,'observer_may_close':True}
+
+
+def admit_restore(owner, confirmed=False, browser_mode=None):
+    """Admit the same clean installation work before any slow local staging."""
+    from . import upstream_recovery
+    from .python_updates import version
+    from .session_host import control_path, process_state
+    if confirmed is not True:
+        raise ValueError('Подтверди возврат к upstream-коду')
+    upstream_recovery._require_owner(owner)
+    if not upstream_recovery.modern(owner.root):
+        raise ValueError('This restore admission requires the current portable session')
+    descriptor=read(control_path(owner.root))
+    if (not getattr(owner,'session_host',False) or descriptor.get('pid')!=os.getpid()
+            or process_state(descriptor)!='alive'):
+        raise RuntimeError('Restore requires a confirmed persistent session owner')
+    _admission_recovery(owner.root)
+    agent=owner.current();tree=Path(agent.tree).resolve()
+    if not getattr(agent,'enabled',True) or getattr(agent,'conflict',None):
+        raise ValueError('Selected agent is not available for update work')
+    root=str(Path(owner.root).resolve());installed=version(owner.root)
+    with transaction(path(tree)):
+        previous=settle_cancel(tree,status(tree))
+        if previous.get('state')=='cancelled':_save(tree,previous)
+        if previous.get('state') in ACTIVE:
+            if (previous.get('program')==root and previous.get('tree')==str(tree)
+                    and previous.get('kind')=='install' and previous.get('operation')=='restore_upstream'
+                    and previous.get('source_mode')=='clean' and previous.get('from_version')==installed):
+                value=previous;reused=True
+            else:
+                raise ValueError('This agent already owns an update job; inspect or stop it first')
+        else:
+            value={'format':'helene-desktop-update-request.v2','id':uuid.uuid4().hex,
+                'kind':'install','operation':'restore_upstream','created':time.time(),
+                'program':root,'tree':str(tree),'agent_id':agent.id,'from_version':installed,
+                'source_mode':'clean','state':'confirmed','phase':'requested','confirmed_by':'window',
+                'browser_mode':bool(getattr(owner,'browser_mode',False) if browser_mode is None else browser_mode),
+                'admission':{key:descriptor[key] for key in ('pid','birth','generation')}}
+            _save(tree,value);reused=False
+    return {'state':'admitted','job':value,'reused':reused,'operation_id':value['id'],
+        'status':str(path(tree)),'observer_may_close':True}
 
 
 def _run(owner, value):
@@ -256,7 +322,8 @@ def _run(owner, value):
     from .session_host import process_state
     tree = Path(value['tree'])
     def stopped():
-        return owner.stop.is_set() or owner_stop.stopped() or cancelled(tree, value['id'])
+        return (getattr(owner,'exiting',False) or owner.stop.is_set()
+                or owner_stop.stopped() or cancelled(tree, value['id']))
     if stopped():
         checkpoint(owner, value, state='cancelled', cancel_requested=True)
         return
@@ -271,6 +338,17 @@ def _run(owner, value):
     checkpoint(owner, value, state='running', execution_owner=current_owner)
     owner.update_job = value
     owner.update_cancelled = stopped
+    if value.get('operation')=='restore_upstream':
+        try:
+            if value.get('kind')!='install' or value.get('source_mode')!='clean':
+                raise ValueError('Restore job is not an admitted clean installation')
+            from .upstream_recovery import restore_owned
+            result=restore_owned(owner,operation=value['id'])
+            checkpoint(owner,value,state='handed_off',result=result,phase='handoff')
+        finally:
+            owner.update_job=None
+            owner.update_cancelled=None
+        return
     if not value.get('archive'):
         checkpoint(owner, value, phase='downloading')
         if value.get('download_url'):
@@ -303,7 +381,8 @@ def _run(owner, value):
 def consume(owner):
     """Reconcile existing work under the session host; never revive cancellation."""
     from . import agents, owner_stop, python_updates as updater
-    if owner.stop.is_set() or owner_stop.stopped():
+    if (getattr(owner,'exiting',False) or owner.stop.is_set()
+            or owner_stop.stopped() or getattr(owner,'bootstrap',False)):
         return
     for agent in agents.roster(owner.root):
         if not agent.enabled or agent.conflict:

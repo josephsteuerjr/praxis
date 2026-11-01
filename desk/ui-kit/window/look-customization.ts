@@ -3,7 +3,7 @@ import { DEFAULT_LOOK, PAPER_DAY, PAPER_NIGHT, ACCENTS, apply, save, load, type 
 import { resetZoom } from './scroll';
 
 /** Controls edit the same keys the window/agent preference owner stores. */
-export function customizationCard(look: Look, rebuild: () => void): HTMLElement {
+export function customizationCard(look: Look, rebuild: () => void,options:{phone?:boolean}={}): HTMLElement {
   const box=el('div','look-customization');
   const set=<K extends keyof Look>(key:K,value:Look[K])=>{Object.assign(look,load());look[key]=value;save(look);apply(look);};
   const select=(title:string,options:Array<[string,string]>,value:string,change:(v:string)=>void)=>{
@@ -23,7 +23,7 @@ export function customizationCard(look: Look, rebuild: () => void): HTMLElement 
   box.append(select('Форма',[['default','Стандартная'],['round','Мягкая'],['square','Прямые углы']],look.shape,v=>set('shape',v as Look['shape'])));
   box.append(select('Фон',[['plain','Ровный'],['grid','Сетка'],['glow','Световые пятна']],look.backdrop,v=>set('backdrop',v as Look['backdrop'])));
   box.append(select('Плотность',[['comfortable','Свободно'],['compact','Компактно']],look.density,v=>set('density',v as Look['density'])));
-  for(const side of ['rail','panel'] as const) {
+  for(const side of options.phone?[]:['rail','panel'] as const) {
     box.append(select(side==='rail'?'Список чатов':'История ходов',[['0','Показывать'],['1','Свернуть']],localStorage.getItem('frame.'+side)||'0',v=>{localStorage.setItem('frame.'+side,v);window.dispatchEvent(new CustomEvent('helene:appearance'));}));
   }
   for(const [key,title,fallback] of [

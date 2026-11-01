@@ -36,9 +36,8 @@ class CleanupReadonly(unittest.TestCase):
         # PYTHONPATH fallback: cleanup must import before deleting its own source.
         package = self.new / 'app/localharness'
         package.mkdir(parents=True)
-        (package / '__init__.py').write_bytes(b'')
         self.io_source = package / 'update_io.py'
-        self.io_source.write_bytes(Path(update_io.__file__).read_bytes())
+        self.restore_modules()
         self.object = self.new / 'code/authored/.git/objects/00/synthetic-object'
         self.object.parent.mkdir(parents=True)
         self.object.write_bytes(b'synthetic Git object, not a user repository')
@@ -55,6 +54,13 @@ class CleanupReadonly(unittest.TestCase):
             file.write_bytes(data)
         self.args = SimpleNamespace(old=self.old, new=self.new, staging=self.staging,
                                     archive=self.archives, pid=0, cleanup=True, browser=False)
+
+    def restore_modules(self):
+        source=Path(update_io.__file__).parent
+        for original in source.rglob('*.py'):
+            if '__pycache__' in original.parts:continue
+            target=self.io_source.parent/original.relative_to(source);target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(original.read_bytes())
 
     def run_cli(self):
         env = dict(os.environ)
@@ -81,6 +87,43 @@ class CleanupReadonly(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_removed()
 
+    def test_actual_cli_retires_clean_preimages_after_staging_modules_are_gone(self):
+        self.retire_preimages('clean')
+
+    def test_actual_cli_retires_preserved_preimages_after_staging_modules_are_gone(self):
+        self.retire_preimages('preserve')
+
+    def retire_preimages(self,policy):
+        from localharness import package_notice,clean_code_retirement,source_merge
+        (self.io_source.parent/'package_notice.py').write_bytes(Path(package_notice.__file__).read_bytes())
+        (self.io_source.parent/'clean_code_retirement.py').write_bytes(Path(clean_code_retirement.__file__).read_bytes())
+        (self.io_source.parent/'source_merge.py').write_bytes(Path(source_merge.__file__).read_bytes())
+        identity='cleanup-fixture'
+        preimage=self.recovery/'app/old.py';preimage.parent.mkdir();preimage.write_bytes(b'old copied source')
+        (self.recovery/'update-files.json').write_text(json.dumps([{'path':'app/old.py','existed':True,
+            'previous':hashlib.sha256(preimage.read_bytes()).hexdigest()}]))
+        (self.old/'python-migration.json').write_text(json.dumps({'id':identity,'state':'completed','source_policy':policy,
+            'startup_proof':{'fixture_only':True}}))
+        if policy=='preserve':
+            from localharness import source_merge,clean_code_retirement
+            previous=self.old/'code/previous';previous.mkdir(parents=True)
+            (previous/'module.py').write_bytes(b'old authored source')
+            (previous/'.git').mkdir();(previous/'.git/HEAD').write_bytes(b'old history')
+            selected=self.old/'code/selected';selected.mkdir();(selected/'module.py').write_bytes(b'installed authored source')
+            (self.old/'helene.json').write_text(json.dumps({'tree':str(self.old/'memory'),'code':str(selected)}))
+            (self.old/'code-transition.json').write_text(json.dumps({'merges':[{'source':str(previous),
+                'previous_files':source_merge.inventory(previous),'git_signature':clean_code_retirement.git_signature(previous/'.git')}]}))
+        command=[sys.executable,'-B',str(self.script),'--old',str(self.old),'--new',str(self.new),
+                 '--staging',str(self.staging),'--pid','0','--cleanup','--discard-preimages',identity]
+        result=subprocess.run(command,cwd=self.root,capture_output=True,text=True,encoding='utf-8',timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertFalse(preimage.exists());self.assertFalse(self.staging.exists());self.assertFalse(self.script.exists())
+        self.assertEqual(json.loads((self.recovery/'preimages-retired.json').read_text())['state'],'retired')
+        if policy=='preserve':
+            self.assertFalse(previous.exists())
+            self.assertEqual((selected/'module.py').read_bytes(),b'installed authored source')
+        self.assert_outside_unchanged()
+
     @unittest.skipUnless(os.name == 'nt', 'Windows read-only deletion semantics')
     def test_old_rmtree_failure_then_actual_cli_removes_readonly_git_object(self):
         self.object.chmod(stat.S_IREAD)
@@ -98,9 +141,7 @@ class CleanupReadonly(unittest.TestCase):
         self.assert_outside_unchanged()
         # Negative rmtree may already remove app/update_io; restore only this
         # fixture's app files, then run the unchanged corrected CLI.
-        self.io_source.parent.mkdir(parents=True, exist_ok=True)
-        (self.io_source.parent / '__init__.py').write_bytes(b'')
-        self.io_source.write_bytes(Path(update_io.__file__).read_bytes())
+        self.restore_modules()
         self.script.write_text(corrected, encoding='utf-8')
         positive = self.run_cli()
         self.assertEqual(positive.returncode, 0, positive.stderr)

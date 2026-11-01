@@ -45,12 +45,14 @@ existing data folder, or migrate an old installation. It hands the work to the
 host; the mechanical switch confirms the new program's startup or rolls back.
 See [Update and migration ownership](desk/docs/UPDATE-SESSION-HOST-230.md).
 
-Keep your code changes by combining them with the incoming release, running
-full verification, and obtaining independent review of the exact resulting
-composition. This also applies to older native installations. Alternatively,
-choose clean upstream code and keep the current data folder connected.
-Previous source and Git are archived. Memory, conversations, settings and keys
-stay with the selected data folders.
+Updates and migration install clean release code. Memory, conversations,
+settings and keys stay with the selected data folders. Previous program edits
+and Git history are discarded after the new application confirms startup;
+automatic source archives are not kept. If you developed custom program code,
+make your own backup before starting. That code is separate from agent data.
+
+Desktop archives run as your logged-in user: no `su` or root desktop session
+is needed.
 
 **Restore upstream code**, beside Update, is the emergency route back to the
 installed release's clean source while keeping current data. The reusable

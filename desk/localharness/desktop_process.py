@@ -246,6 +246,10 @@ class JobChild:
         if self.job.handle:
             self.request_stop()
             self.job.wait_empty()
+            # An empty Job count can precede the leader's signalled process
+            # handle on Windows. Do not release custody/leases in that gap.
+            if self.handle is not None and _Wait(int(self.handle),5000)!=WAIT_OBJECT_0:
+                raise CustodyFault('Child leader termination unconfirmed after Job emptied')
             self.job.close()
         if self.handle is not None:
             _winapi.CloseHandle(self.handle)

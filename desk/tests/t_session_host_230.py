@@ -11,11 +11,27 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock,patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from localharness import session_host as session, python_updates as updates
 from localharness.package_notice import read, write
+
+
+class ShutdownObservation(unittest.TestCase):
+    def test_lost_exit_reply_accepts_only_confirmed_absence_without_replaying(self):
+        client=object.__new__(session.SessionClient);client.descriptor={'pid':42,'birth':1}
+        client._request=Mock(side_effect=OSError('connection refused'));client.close=Mock()
+        with patch.object(session,'process_state',return_value='absent'):
+            self.assertTrue(client.shutdown()['already_exited'])
+        client._request.assert_called_once_with('exit',timeout=45);client.close.assert_called_once()
+
+    def test_unknown_exit_custody_remains_an_error(self):
+        client=object.__new__(session.SessionClient);client.descriptor={'pid':42,'birth':1}
+        client._request=Mock(side_effect=OSError('connection refused'));client.close=Mock()
+        with patch.object(session,'process_state',return_value='unknown'):
+            with self.assertRaises(OSError):client.shutdown()
+        client._request.assert_called_once();client.close.assert_not_called()
 
 
 class SessionTests(unittest.TestCase):
@@ -77,8 +93,8 @@ session.Host(Path(sys.argv[2]),controller_factory=FixtureController).run()
             except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=5)
         if self.process and self.process.stderr:self.process.stderr.close()
 
-    def client(self, agent=''):
-        client=session.SessionClient(self.root,self.descriptor,lambda *args:None,'http://127.0.0.1:39401',agent)
+    def client(self, agent='', browser_mode=False):
+        client=session.SessionClient(self.root,self.descriptor,lambda *args:None,'http://127.0.0.1:39401',agent,browser_mode)
         self.addCleanup(client.close)
         return client
 
@@ -162,14 +178,14 @@ session.Host(Path(sys.argv[2]),controller_factory=FixtureController).run()
 
     def test_update_admission_precedes_download_and_survives_detach(self):
         self.start();client=self.client()
-        result=client.invoke('update_start',{'url':'https://example.test/Helene-2.3.0-rc.1.zip','sha256':'a'*64,'sourceMode':'preserve'})
+        result=client.invoke('update_start',{'url':'https://example.test/Helene-2.3.0-rc.1.zip','sha256':'a'*64,'sourceMode':'clean'})
         self.assertEqual(result['state'],'admitted')
         identity=result['job']['id']
         from localharness.desktop_update_request import status
         self.assertEqual(status(self.tree)['state'],'confirmed')
         self.assertNotIn('archive',status(self.tree))
         self.assertEqual(status(self.tree)['admission']['pid'],self.process.pid)
-        repeated=client.invoke('update_start',{'url':'https://example.test/Helene-2.3.0-rc.1.zip','sha256':'a'*64,'sourceMode':'preserve'})
+        repeated=client.invoke('update_start',{'url':'https://example.test/Helene-2.3.0-rc.1.zip','sha256':'a'*64,'sourceMode':'clean'})
         self.assertEqual(repeated['job']['id'],identity)
         client.close();self.assertIsNone(self.process.poll())
         self.assertEqual(status(self.tree)['id'],identity)
@@ -177,6 +193,18 @@ session.Host(Path(sys.argv[2]),controller_factory=FixtureController).run()
         from localharness.desktop_update_request import cancelled
         self.assertTrue(cancelled(self.tree,identity))
         self.assertTrue(status(self.tree)['cancel_requested'])
+
+    def test_update_retains_admitting_observer_presentation_after_detach(self):
+        self.start();browser=self.client(browser_mode=True)
+        result=browser.invoke('update_start',{'url':'https://example.test/Helene.zip','sha256':'a'*64})
+        self.assertTrue(result['job']['browser_mode'])
+        browser.close()
+        from localharness.desktop_update_request import status
+        self.assertTrue(status(self.tree)['browser_mode'])
+        self.assertEqual(status(self.tree)['source_mode'],'clean')  # Legacy fixture has no authored baseline.
+        with self.assertRaises(RuntimeError):
+            session._rpc(self.descriptor,'invoke',{'observer':browser.observer,'command':'update_start',
+                'arguments':{'url':'https://example.test/other.zip'}})
 
     def test_rc_version_order_and_direct_feed_checksum(self):
         from types import SimpleNamespace

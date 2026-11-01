@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import subprocess
@@ -163,7 +164,14 @@ class HostTrust(unittest.TestCase):
     def test_helper_starts_with_isolated_python_without_a_running_local_channel(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);config=root/'helene.json';config.write_text('{}')
-            result=subprocess.run([sys.executable,'-I',str(Path(transfer.__file__)),'status','--config',str(config),'--program',str(root)],input='{}',text=True,capture_output=True,timeout=20)
+            argv=[sys.executable,'-I',str(Path(transfer.__file__)),'status','--config',str(config),'--program',str(root)]
+            dependencies=os.environ.get('HELENE_VERIFICATION_DEPENDENCIES')
+            if dependencies:
+                # -I deliberately ignores PYTHONPATH. Supply only the stand's
+                # bound application dependencies, as the packaged runtime does.
+                wrapper='import runpy,sys;deps,entry,*args=sys.argv[1:];sys.path.insert(0,deps);sys.argv=[entry,*args];runpy.run_path(entry,run_name="__main__")'
+                argv=[sys.executable,'-I','-c',wrapper,dependencies,*argv[2:]]
+            result=subprocess.run(argv,input='{}',text=True,capture_output=True,timeout=20)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(json.loads(result.stdout),{'ok':True,'pending':False,'phase':None,'host':'','archive':None,'message':''})
     def test_no_credentials_sent_until_explicit_confirmation(self):

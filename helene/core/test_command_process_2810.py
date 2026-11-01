@@ -31,6 +31,27 @@ def until(fn, seconds=5):
     raise AssertionError('Condition not observed')
 
 
+class AtomicReceipts(unittest.TestCase):
+    def test_concurrent_terminal_receipts_keep_independent_temporary_files(self):
+        import forge
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'result.json'
+            together = threading.Barrier(2)
+            replace = Path.replace
+            def overlap(path, destination):
+                if Path(destination) == target:
+                    together.wait(timeout=5)
+                return replace(path, destination)
+            rows = [{'status': 'stopped', 'writer': n, 'note': 'complete' * 100} for n in range(2)]
+            with mock.patch.object(Path, 'replace', new=overlap), ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(forge._atomic_json, target, row) for row in rows]
+                for future in futures:
+                    future.result(timeout=10)
+            self.assertIn(json.loads(target.read_text(encoding='utf-8')), rows)
+            self.assertEqual(list(target.parent.glob('*.tmp')), [])
+
+
 class CommandCustody(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -154,19 +175,20 @@ sys.exit(forge_worker.run(p))
                     if detached:outcomes.append(forge.process(tid, 'start', command=command(root, 10), timeout=8))
                     else:outcomes.append(forge.run(tid, command(root, 10), timeout=8))
                 except BaseException as exc:errors.append(exc)
+            admission_deadline = time.monotonic() + 8
             thread = threading.Thread(target=run);thread.start()
             try:
-                until(lambda:(root/'ready').exists())
+                until(lambda:(root/'ready').exists(), seconds=max(0, admission_deadline-time.monotonic()))
                 if detached:
                     directory = next((forge._task_dir(tid)/'processes').iterdir())
                     def exited():
                         state = forge._read_json(directory/'state.json', {}) or {}
                         pid = state.get('child_pid')
                         return pid and (Path('/proc')/str(pid)/'stat').read_text().rsplit(')',1)[1].split()[0] == 'Z'
-                    until(exited)
+                    until(exited, seconds=max(0, admission_deadline-time.monotonic()))
                 else:
                     proc = next(iter(forge._RUNNERS.values()))
-                    until(proc._leader_exited)
+                    until(proc._leader_exited, seconds=max(0, admission_deadline-time.monotonic()))
                 units = forge._units(tid, 'processes')
                 self.assertEqual(len(units), 1)
                 self.assertEqual(units[0]['status'], 'running')

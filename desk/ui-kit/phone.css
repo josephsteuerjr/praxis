@@ -1264,6 +1264,68 @@ details.fold > summary .dot {
 .msg-media img { max-width: 100%; border-radius: 8px; display: block; }
 .msg-media a { word-break: break-all; }
 
+/* The same quiet action column as the desktop, opened at the phone's width. */
+.system-heading { display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:16px 14px 8px; }
+.system-heading h1 { margin:0;font:400 28px/1.2 var(--serif);letter-spacing:-.025em; }
+.settings-link { border:0;padding:8px 0;background:none;color:var(--accent);font:inherit;text-decoration:underline;text-underline-offset:4px;cursor:pointer; }
+.sheet.phone-dialog { inset:max(8px,env(safe-area-inset-top)) 8px max(8px,env(safe-area-inset-bottom));max-height:none;border-radius:18px;display:flex;flex-direction:column;min-width:0; }
+.phone-dialog .sheet-head { flex:none;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid var(--line);font:400 23px/1.3 var(--serif); }
+.phone-dialog .sheet-grip { display:none; }
+.phone-dialog-close { display:grid;place-items:center;flex:none;width:44px;height:44px;border:0;background:transparent;border-radius:50%;font:400 27px/1 var(--sans);color:var(--ink-2);cursor:pointer; }
+.phone-dialog-close:active { background:var(--surface-2); }
+.phone-dialog-close:focus-visible,.phone-settings-tabs button:focus-visible { outline:1.5px solid var(--accent);outline-offset:2px; }
+.phone-dialog .sheet-body { min-height:0;flex:1;overflow:auto;padding:0;overscroll-behavior:contain; }
+.phone-actions { padding:16px 14px 32px;min-width:0; }
+.phone-actions .forge-compact { max-height:none;overflow:visible; }
+.phone-actions .forge-compact .forge-unit > summary { min-height:34px;font-size:12px;padding:6px 2px; }
+.phone-actions .forge-unit-status { font-size:10.5px; }
+.phone-actions .turns-head { margin:14px 0 8px; }
+.phone-actions .turn-head { min-height:44px; }
+.phone-actions .turn-body { padding-right:0; }
+.phone-actions .st-list { min-width:0;overflow-wrap:anywhere; }
+.phone-actions .st-detail pre { max-width:100%;overflow:auto; }
+.phone-actions .forge-action > summary { min-height:32px; }
+.phone-dialog .sheet-body:has(.phone-settings) { overflow:hidden; }
+.phone-settings { height:100%;display:flex;flex-direction:column;min-width:0;min-height:0; }
+.phone-settings-tabs { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:none;gap:4px;padding:8px 12px;background:var(--ground);border-bottom:1px solid var(--line); }
+.phone-settings-tabs button { border:0;border-radius:10px;background:none;min-height:38px;padding:8px 4px;color:var(--ink-2);font:500 12px/1.3 var(--sans);cursor:pointer; }
+.phone-settings-tabs button[aria-selected="true"] { background:var(--ink);color:var(--ground); }
+.phone-settings-body { flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 12px 20px; }
+.phone-settings-group { min-width:0; }
+.phone-settings-card { border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;background:var(--surface); }
+.phone-settings-card h3 { margin:0 0 4px;font:400 19px/1.3 var(--serif); }
+.phone-setting { display:flex;flex-direction:column;gap:7px;padding:12px 0;border-bottom:1px solid var(--line);min-width:0; }
+.phone-setting:last-child { border-bottom:0;padding-bottom:0; }
+fieldset.phone-setting { border:0;margin:0; }
+.phone-setting[hidden],.phone-settings-group[hidden],.phone-subscription[hidden],.phone-settings-save[hidden] { display:none!important; }
+.phone-setting .paper-select { width:100%;min-width:0; }
+.phone-settings-permissions { display:flex;flex-direction:column;gap:14px;padding:10px 0 2px; }
+.phone-permission { display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px; }
+.phone-settings-local-note { margin:16px 4px 0;color:var(--ink-3);font:400 12px/1.55 var(--sans); }
+.phone-setting .field-label { font-size:11px;letter-spacing:.04em;color:var(--ink-2); }
+.phone-setting input:not([type="checkbox"]),.phone-setting select { box-sizing:border-box;width:100%;min-width:0;min-height:44px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);padding:10px 12px;font:400 14px/1.4 var(--sans); }
+.phone-setting input:focus,.phone-setting select:focus { outline:1.5px solid var(--accent);outline-offset:1px; }
+.phone-setting.is-toggle { flex-direction:row;justify-content:space-between;align-items:center;min-height:50px; }
+.phone-setting.is-toggle .field-label { text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink); }
+.phone-setting input[type="checkbox"] { width:20px;height:20px;accent-color:var(--accent);flex:none; }
+.phone-setting .field-hint { font:400 11px/1.5 var(--sans);color:var(--ink-3); }
+.phone-setting-clear { align-self:flex-start;border:0;background:none;color:var(--ink-2);text-decoration:underline;text-underline-offset:3px;padding:5px 0;font:400 11px/1.4 var(--sans);cursor:pointer; }
+.phone-settings-save { flex:none;z-index:2;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 16px;background:var(--ground);border-top:1px solid var(--line); }
+.phone-settings-save .btn { min-height:42px;border:1px solid var(--line);border-radius:999px;padding:9px 16px;color:var(--ink);background:var(--surface);font:500 12px/1.4 var(--sans);cursor:pointer; }
+.phone-settings-save .btn-primary { color:var(--ground);background:var(--ink);border-color:var(--ink); }
+.phone-settings-save .btn:disabled { opacity:.45;cursor:default; }
+.phone-settings-save .receipt { flex:1 0 100%;font-size:12px;line-height:1.5;margin:0;overflow-wrap:anywhere; }
+.phone-subscription { padding:14px;border:1px solid var(--line);border-radius:14px;margin:0 0 12px;background:var(--surface); }
+.phone-subscription h3 { margin:4px 0 12px;font:400 21px/1.3 var(--serif); }
+.phone-subscription h4 { margin:4px 0 8px;font:500 13px/1.4 var(--sans); }
+.phone-subscription .field-hint { font:400 12px/1.5 var(--sans);color:var(--ink-3);overflow-wrap:anywhere; }
+.phone-subscription .actions { display:flex;flex-wrap:wrap;gap:6px; }
+.phone-settings .btn { min-height:38px;border:1px solid var(--line);border-radius:999px;padding:8px 13px;color:var(--ink);background:var(--surface);font:500 12px/1.4 var(--sans);cursor:pointer; }
+.phone-settings .btn:disabled { opacity:.45;cursor:default; }
+.phone-settings .look-card,.phone-settings .look-customization { margin-top:12px; }
+.phone-settings .card { margin:10px 0; }
+@media(min-width:700px) { .sheet.phone-dialog { width:620px;left:auto;right:12px; } }
+
 /* ⚠ 17.09. Гасителя движения на телефоне не было вовсе — при четырёх вечных
    `animation: pulse … infinite` (точка живого состояния в шапке, метка на кнопке, точка
    комнаты, метка на вкладке). Системная настройка их не касалась. Форма та же, что в окне,
@@ -1276,3 +1338,19 @@ details.fold > summary .dot {
     transition: none !important;
   }
 }
+
+.phone-dialog [hidden] { display:none !important; }
+#screen .chip { border:1px solid var(--line);border-radius:999px;padding:8px 13px;background:var(--surface);color:var(--ink);font:500 12px/1.4 var(--sans);cursor:pointer; }
+#screen .chip.emergency-stop { color:var(--err);border-color:currentColor; }
+.now-usage { padding:0 14px 16px; }
+.phone-settings .look-row { display:grid;grid-template-columns:1fr;gap:8px;padding:13px 0;border-top:1px solid var(--line); }
+.phone-settings .look-label { font-size:13px;color:var(--ink-2); }
+.phone-settings .look-swatches,.phone-settings .look-pills,.phone-settings .look-color-controls { display:flex;flex-wrap:wrap;align-items:center;gap:10px; }
+.phone-settings .look-swatch { width:34px;height:34px;border-radius:50%;border:1px solid var(--line);background:var(--sw); }
+.phone-settings .look-swatch[aria-checked="true"] { outline:2px solid var(--ink);outline-offset:3px; }
+.phone-settings .look-pill,.phone-settings .look-reset { min-height:36px;border:1px solid var(--line);border-radius:999px;padding:7px 12px;background:transparent;color:var(--ink);font:inherit; }
+.phone-settings .look-pill[aria-checked="true"] { background:var(--ink);color:var(--paper); }
+.phone-settings .look-name { font-size:11px;color:var(--ink-3); }
+.phone-settings .look-customization select { width:100%;min-height:42px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);padding:8px;font:inherit; }
+.phone-settings .look-customization input[type="range"] { width:100%;accent-color:var(--accent); }
+.phone-settings .look-customization input[type="color"] { width:44px;height:32px;border:1px solid var(--line);background:transparent; }

@@ -141,7 +141,7 @@ class ResumeTests(unittest.TestCase):
             (package/'tree/agent.py').write_text('# factory source')
             new=root/'new';note=python_migrate.fresh(package,new,root/'data',extensions=[],launch=False)
             cfg=json.loads((new/'helene.json').read_text());self.assertFalse(cfg['setup_complete'])
-            self.assertFalse(runner_required(cfg,BASE_ID));self.assertEqual(Path(cfg['code']),new/'tree')
+            self.assertFalse(runner_required(cfg,BASE_ID));self.assertEqual((new/Path(cfg['code'])).resolve(),new/'tree')
             repeated=python_migrate.fresh(package,new,root/'data',extensions=[],launch=False)
             self.assertEqual(note['id'],repeated['id']);self.assertEqual(note['data_paths'],repeated['data_paths'])
 

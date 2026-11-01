@@ -19,11 +19,13 @@ import unittest
 import subprocess
 import signal
 import zipfile
+from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'desk'))
-from localharness import code_transition, source_merge, source_update, source_update_host, python_source_updater
+from localharness import code_transition, source_merge, source_update, source_update_host, python_source_updater,authored_baseline
 from localharness.package_notice import read,write
+from localharness.app_migration import code_path
 
 BASE='def value():\n    return 1\n\ndef mine():\n    return 1\n'
 MINE=BASE.replace('return 1\n\n','return 2\n\n')
@@ -75,9 +77,20 @@ time.sleep(3)
         files={p.relative_to(new/'app').as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
                for p in (new/'app').rglob('*') if p.is_file()}
         write(new/'source-inputs.json',{'files':files})
+        # A modern delivery can contain an older controller/Forge capability.
+        # Its exact shipped app/tree A must still predate authored L.
+        code_transition.seal(old);authored_baseline.seal(old)
+        code_transition.seal(new);authored_baseline.seal(new)
+        (code/'upgrade_fixture.py').write_text(MINE)
+        (code/'compatibility_fixture.py').write_text(LOCAL_FEATURE)
+        from update_verification_fixture import bind
+        bind(root,new,version)
+        passport=read(new/'python-package-files.json')
+        passport['files']['runtime/bin/python3']=hashlib.sha256(launcher.read_bytes()).hexdigest()
+        write(new/'python-package-files.json',passport)
         # Old baseline A is genuine for this fixture, never authored L. The
         # shipped view only lets old211 admit the new helper; B remains exact.
-        declaration=view(new,old/'tree')
+        declaration=view(new,old/'tree',sealed=True)
         if mode=='preserve':
             # The selected agent prepares M using its normal isolated hand.
             # No model/worker completion is manufactured by this fixture.
@@ -94,7 +107,7 @@ time.sleep(3)
             source_update.command(home,'resolve',path='compatibility_fixture.py',content=LOCAL_FEATURE+HELPER,
                 reason='Retain authored feature and incoming shared API',expected_candidate_sha256=status['candidate_sha256'])
             source_update.command(home,'finish')
-        before={p.name:p.read_bytes() for p in code.iterdir()}
+        before=source_merge.inventory(code)
         old_config=(old/'helene.json').read_bytes()
         profile_before={'memory/llm.json':(home/'memory/llm.json').read_bytes()}
         (home/'memory/owner-data.txt').write_bytes(b'private fixture data')
@@ -163,9 +176,10 @@ while True:time.sleep(.1)
             selected=read(old/'helene.json')
             self.assertEqual(selected['tree'],str(home))
             self.assertTrue(choice_made)
-            self.assertEqual((Path(selected['code'])/'upgrade_fixture.py').read_text(),INCOMING if mode=='clean' else MERGED)
-            self.assertEqual((Path(selected['code'])/'compatibility_fixture.py').read_text(),HELPER if mode=='clean' else LOCAL_FEATURE+HELPER)
-            self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
+            selected_code=code_path(old/'helene.json',selected)
+            self.assertEqual((selected_code/'upgrade_fixture.py').read_text(),INCOMING if mode=='clean' else MERGED)
+            self.assertEqual((selected_code/'compatibility_fixture.py').read_text(),HELPER if mode=='clean' else LOCAL_FEATURE+HELPER)
+            self.assertEqual(before,source_merge.inventory(code))
             for name,data in profile_before.items():self.assertEqual((home/name).read_bytes(),data)
             self.assertNotEqual(source_merge.inventory(old/'tree'),declaration['view_files'])
             self.assertEqual(bool(requests),mode=='preserve')
@@ -197,33 +211,78 @@ while True:time.sleep(.1)
             except ProcessLookupError:pass
 
     def test_legacy_missing_api_resolved_plan_runs_incoming_merger_and_frozen_panel(self):
+        self._run_host_fixture()
+
+    def _run_host_fixture(self, application=None):
         with tempfile.TemporaryDirectory(prefix='update-host-224-') as temporary:
             root=Path(temporary);old=root/'old';new=root/'.helene-update-fixture/Helene'
             code=root/'authored';home=root/'profile'
+            button=os.environ.get('HELENE_TEST_211_BUTTON')=='1' and application is None
             for p in (old/'tree',code,home/'memory',new/'app',new/'tree',new/'runtime/bin'):p.mkdir(parents=True)
             # Old Forge cannot coordinate review. The selected code must never
             # become an executable import path in the incoming host or workers.
             legacy='raise RuntimeError("AUTHORED_FORGE_MUST_NOT_EXECUTE")\n'
+            # Supply the real incoming runtime/Forge closure. Its protocol gate
+            # uses the tiny declared verification fixture below; copying the
+            # entire product test suite here would execute an undeclared nested
+            # full battery with different dependencies. The release battery
+            # independently runs the complete, canonical product inventory.
+            shutil.copytree(ROOT/'helene/core',new/'tree',dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('__pycache__','.git','test*.py','conftest.py','praxis_test.py'))
+            from update_verification_fixture import BOOTSTRAP
+            (new/'tree/praxis_test.py').write_text(BOOTSTRAP,encoding='utf8')
+            # A real previous release already has the unchanged runtime/core
+            # closure. Keep that shared base in A/L, with a deliberately
+            # unavailable old Forge and the authored overlapping changes below.
+            # Treating every incoming dependency as newly added creates hundreds
+            # of unrelated review units and tests a different transition.
             for directory in (old/'tree',code):
+                shutil.copytree(new/'tree',directory,dirs_exist_ok=True)
                 (directory/'forge.py').write_text(legacy)
-                (directory/'upgrade_fixture.py').write_text(BASE if directory==old/'tree' else MINE)
-            shutil.copytree(ROOT/'helene/core',new/'tree',dirs_exist_ok=True,ignore=shutil.ignore_patterns('__pycache__','.git'))
+                (directory/'upgrade_fixture.py').write_text(BASE)
             (new/'tree/upgrade_fixture.py').write_text(INCOMING)
             for directory in (old/'tree',new/'tree'):
                 (directory/'compatibility_fixture.py').write_text(HELPER)
-            (code/'compatibility_fixture.py').write_text(LOCAL_FEATURE)
+            (code/'compatibility_fixture.py').write_text(HELPER)
             shutil.copytree(ROOT/'desk/localharness',new/'app/localharness',ignore=shutil.ignore_patterns('__pycache__'))
             for name in ('python_migrate.py','python_app.py'):
                 shutil.copy2(ROOT/'desk'/name,new/'app'/name)
+            for name,values in (application or {}).get('files',{}).items():
+                target=new/'app'/name;target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_text(values['incoming'],encoding='utf8')
             shutil.copy2(sys.executable,new/'runtime/bin/python3')
             write(old/'python-app.json',{'version':'2.1.1','delivery':'portable'})
             write(new/'python-app.json',{'version':'2.2.4','delivery':'portable'})
-            write(old/'helene.json',{'tree':str(home),'code':str(code),'runner':'','setup_complete':True})
-            write(new/'code-upstream.json',{'files':source_merge.inventory(new/'tree')})
+            write(old/'helene.json',{'tree':str(home),'code':str(code),'runner':'','setup_complete':True,
+                                      'self_review':{'max_parallel':8}})
+            from localharness import update_source
+            if not button:
+                shutil.copytree(new/'app',old/'app')
+                for name,values in (application or {}).get('files',{}).items():
+                    (old/'app'/name).write_text(values['base'],encoding='utf8')
+                # Genuine A and B, including application source, precede L and
+                # admission. Missing old Forge capability does not imply an
+                # ancient installation with no authored-update baseline.
+                code_transition.seal(old);authored_baseline.seal(old)
+                code_transition.seal(new);authored_baseline.seal(new)
+                (code/'upgrade_fixture.py').write_text(MINE)
+                (code/'compatibility_fixture.py').write_text(LOCAL_FEATURE)
+                for name,values in (application or {}).get('files',{}).items():
+                    (old/'app'/name).write_text(values['local'],encoding='utf8')
+                update_source.select(old,new,'preserve',by='updater',require_review=True,resolution_owner='incoming')
             files={p.relative_to(new/'app').as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
                    for p in (new/'app').rglob('*') if p.is_file()}
             write(new/'source-inputs.json',{'files':files})
-            requests=[];errors=[]
+            from update_verification_fixture import bind
+            bind(root,new,'2.2.4',desk_test=(application or {}).get('desk_test'))
+            passport=read(new/'python-package-files.json')
+            passport['files']['runtime/bin/python3']=hashlib.sha256((new/'runtime/bin/python3').read_bytes()).hexdigest()
+            write(new/'python-package-files.json',passport)
+            requests=[];errors=[];merger_runs=[0]
+            old_app_before={p.relative_to(old/'app').as_posix():p.read_bytes()
+                            for p in (old/'app').rglob('*') if p.is_file()}
+            baseline_names=('app-upstream.zip','app-upstream.json','source-update-baseline.json')
+            incoming_baseline={name:(new/name).read_bytes() for name in baseline_names} if application else {}
             class Provider(BaseHTTPRequestHandler):
                 def log_message(self,*args):pass
                 def do_POST(self):
@@ -235,6 +294,8 @@ while True:time.sleep(.1)
                         prior=[m for m in body['messages'] if m['role']=='assistant' and m.get('tool_calls')]
                         count=len(prior);call=None
                         if tools=={'merge_source'}:
+                            if count==0:merger_runs[0]+=1
+                            if application and count==0:print('APP_PROTOCOL_MERGER',merger_runs[0],flush=True)
                             digest=re.search(r'Input SHA256=([0-9a-f]{64})',system)[1]
                             sequence=[{'action':'read','path':'upgrade_fixture.py'},
                                       {'action':'resolve','path':'upgrade_fixture.py','content':MERGED},
@@ -242,23 +303,42 @@ while True:time.sleep(.1)
                                       {'action':'resolve','path':'compatibility_fixture.py',
                                        'content':LOCAL_FEATURE+HELPER,'reason':'Restore shared dependency while retaining authored feature'},
                                       {'action':'finish'}]
+                            if application:sequence=application['sequence'](merger_runs[0])
                             if count<len(sequence):
                                 args={**sequence[count],'expected_input_sha256':digest}
-                                if count==3:
-                                    status=json.loads([m for m in body['messages'] if m['role']=='tool'][-1]['content'])
-                                    args['expected_candidate_sha256']=status['candidate_sha256']
+                                if args.get('action')=='resolve':
+                                    statuses=[json.loads(m['content']) for m in body['messages'] if m['role']=='tool']
+                                    statuses=[value for value in statuses if 'candidate_sha256' in value]
+                                    if args.get('path','').startswith('app/'):
+                                        args['expected_composition_sha256']=statuses[-1]['composition_sha256']
+                                    elif args.get('reason'):args['expected_candidate_sha256']=statuses[-1]['candidate_sha256']
                                 call=('merge_source',args)
                             content='Candidate finished; independent review required.'
                         elif tools=={'inspect'}:
                             digest=re.search(r'Subject SHA-256: ([0-9a-f]{64})',system)[1]
-                            if count==0:call=('inspect',{'action':'read','path':'resolved/upgrade_fixture.py'})
-                            elif count==1:call=('inspect',{'action':'read','path':'resolved/compatibility_fixture.py'})
+                            findings=[]
+                            expected=[('resolved/upgrade_fixture.py',MERGED),
+                                      ('resolved/compatibility_fixture.py',LOCAL_FEATURE+HELPER)]
+                            expected.extend((application or {}).get('expected',{}).items())
+                            if count<len(expected):call=('inspect',{'action':'read','path':expected[count][0]})
                             else:
-                                returned=[m for m in body['messages'] if m['role']=='tool'][-1]['content']
-                                assert LOCAL_FEATURE+HELPER in json.loads(returned)['text']
-                            content=json.dumps({'subject_sha256':digest,'verdict':'clear','summary':'Deterministic fixture only','findings':[],'gaps':[]})
+                                observed={}
+                                for message in body['messages']:
+                                    if message['role']=='tool':
+                                        returned=json.loads(message['content'])
+                                        observed[returned.get('path')]=returned.get('text')
+                                for path,wanted in expected:
+                                    if observed.get(path)!=wanted:
+                                        findings.append({'path':path,'scenario':'preserve authored behavior and incoming API',
+                                                         'detail':'Candidate differs from the fixture intent: '+wanted})
+                            content=json.dumps({'subject_sha256':digest,'verdict':'findings' if findings else 'clear',
+                                                'summary':'Deterministic fixture only','findings':findings,'gaps':[]})
+                            if application and not call:print('APP_PROTOCOL_REVIEW','findings' if findings else 'clear',flush=True)
                         else:raise AssertionError('Unexpected general-agent tools: '+str(tools))
-                        requests.append({'tools':sorted(tools),'path':self.path,'tool':call[0] if call else None})
+                        requests.append({'tools':sorted(tools),'path':self.path,'tool':call[0] if call else None,
+                            'attempt':merger_runs[0] if tools=={'merge_source'} else None,
+                            'action':call[1].get('action') if call else None,
+                            'logical':call[1].get('path') if call else None})
                         message={'role':'assistant','content':None if call else content}
                         if call:message['tool_calls']=[{'id':'call_'+str(len(requests)),'type':'function','function':{'name':call[0],'arguments':json.dumps(call[1])}}]
                         finish='tool_calls' if call else 'stop'
@@ -280,7 +360,7 @@ while True:time.sleep(.1)
             try:
                 write(home/'memory/llm.json',{'frameworks':{'openai':{'api_key':'fixture','base_url':f'http://127.0.0.1:{server.server_port}/v1','api_mode':'chat_completions'}},
                       'roles':{role:{'framework':'openai','model':'fixture-model','max_tokens':512} for role in ('voice','evaluator')}})
-                if os.environ.get('HELENE_TEST_211_BUTTON')=='1':
+                if button:
                     self._one_click(root,old,new,code,home,requests,errors)
                     return
                 result=code_transition.preflight(old,new)
@@ -289,38 +369,91 @@ while True:time.sleep(.1)
                 source_merge.resolve(directory,'upgrade_fixture.py',side='incoming')
                 source_merge.finish(directory,exe=Path(shutil.which('git')))
                 operation=read(directory/'pipeline.json');operation['created']=time.time()-7200;write(directory/'pipeline.json',operation)
-                before={p.name:p.read_bytes() for p in code.iterdir()}
+                before=source_merge.inventory(code)
                 old_config=(old/'helene.json').read_bytes()
                 (home/'memory/owner-data.txt').write_bytes(b'private fixture: preserve exact bytes')
                 profile_before={name:(home/name).read_bytes() for name in ('memory/llm.json','memory/owner-data.txt')}
                 # The real legacy entry prepares AFTER old-owner exit, with no
                 # capable running agent. Preparation includes the actual host,
                 # worker processes, independent panel and recoverable overlay.
-                prepared=python_source_updater.prepare_install(old,new)
+                try:
+                    # This test explicitly exercises a real SDK against its own
+                    # loopback HTTP fixture. PRAXIS_TEST intentionally disables
+                    # SDK clients; retain the outer network-none sandbox and
+                    # synthetic config, but don't inherit that different seam.
+                    with patch.dict(os.environ):
+                        os.environ.pop('PRAXIS_TEST',None)
+                        prepared=python_source_updater.prepare_install(old,new)
+                except Exception:
+                    # Keep causal child diagnostics when TemporaryDirectory is
+                    # retired; this fixture contains only synthetic local input.
+                    for output in root.rglob('*.output'):
+                        if 'battery' in str(output):
+                            print('CHILD BATTERY',output.name,output.read_text(errors='replace')[-5000:],file=sys.stderr)
+                    raise
                 self.assertFalse(errors,errors)
                 accepted=source_update.validate_ready(directory)
                 self.assertEqual(accepted['state'],'ready_to_apply')
                 self.assertEqual((directory/'result/upgrade_fixture.py').read_text(),MERGED)
                 self.assertEqual((directory/'result/compatibility_fixture.py').read_text(),LOCAL_FEATURE+HELPER)
                 self.assertEqual(read(directory/'plan.json')['repairs'][0]['path'],'compatibility_fixture.py')
-                self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
+                self.assertEqual(before,source_merge.inventory(code))
                 self.assertEqual(read(old/'python-app.json')['version'],'2.1.1')
                 self.assertEqual({tuple(r['tools']) for r in requests},{('merge_source',),('inspect',)})
+                if application:
+                    self.assertEqual(len(accepted['attempts']),3)
+                    self.assertEqual(len(accepted.get('failed_batteries',[])),1)
+                    failed=accepted['failed_batteries'][0]['findings']
+                    self.assertTrue(any('test_authored_identity_uses_new_upstream_contract' in row['case_id']
+                        and 'authored/v2-broken' in row['detail'] for row in failed))
+                    repairs=[r for r in requests if r['action']=='resolve' and r['attempt'] in (2,3)]
+                    self.assertTrue(repairs)
+                    self.assertTrue(all(r['logical'].startswith('app/') for r in repairs))
+                    reports=[read(p) for p in (directory/'test-battery').glob('*/report.json')]
+                    self.assertEqual(len(reports),3)
+                    self.assertEqual(sum(r.get('full_pass') is False for r in reports),1)
+                    self.assertEqual(sum(r.get('full_pass') is True for r in reports),2)
+                    self.assertEqual(len({r['binding']['candidate_sha256'] for r in reports}),1)
+                    self.assertEqual(len({r['binding']['composition_sha256'] for r in reports}),3)
+                    reviews=[read(p) for p in home.glob('memory/.source-update-reviews/review-*/request.json')]
+                    self.assertIn('findings',{r.get('verdict') for r in reviews})
+                    self.assertIn('clear',{r.get('verdict') for r in reviews})
+                    self.assertGreaterEqual(len({r.get('subject_sha256') for r in reviews}),2)
+                    self.assertEqual(old_app_before,{p.relative_to(old/'app').as_posix():p.read_bytes()
+                        for p in (old/'app').rglob('*') if p.is_file() and '__pycache__' not in p.parts})
+                    for name,data in incoming_baseline.items():self.assertEqual((new/name).read_bytes(),data)
+                    for name,values in application['files'].items():
+                        self.assertEqual((directory/'compound/app'/name).read_text(),values['merged'])
                 note,recovery=python_source_updater.install(old,new)
                 self.assertEqual(str(recovery),prepared['recovery'])
                 selected=read(old/'helene.json')
                 self.assertEqual(read(old/'python-app.json')['version'],'2.2.4')
-                self.assertEqual((Path(selected['code'])/'upgrade_fixture.py').read_text(),MERGED)
+                self.assertEqual((code_path(old/'helene.json',selected)/'upgrade_fixture.py').read_text(),MERGED)
                 self.assertEqual(selected['tree'],str(home))
+                if application:
+                    for name,values in application['files'].items():
+                        self.assertEqual((old/'app'/name).read_text(),values['merged'])
+                    for name,data in incoming_baseline.items():self.assertEqual((old/name).read_bytes(),data)
                 for name,data in profile_before.items():self.assertEqual((home/name).read_bytes(),data)
-                self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
+                self.assertEqual(before,source_merge.inventory(code))
                 python_source_updater.rollback(old,recovery)
                 self.assertEqual(read(old/'python-app.json')['version'],'2.1.1')
                 self.assertEqual((old/'helene.json').read_bytes(),old_config)
-                self.assertEqual(before,{p.name:p.read_bytes() for p in code.iterdir()})
+                self.assertEqual(before,source_merge.inventory(code))
+                if application:
+                    self.assertEqual(old_app_before,{p.relative_to(old/'app').as_posix():p.read_bytes()
+                        for p in (old/'app').rglob('*') if p.is_file() and '__pycache__' not in p.parts})
+                    for name,values in application['files'].items():
+                        self.assertEqual((old/'app'/name).read_text(),values['local'])
+                    print('REAL_APP_PROTOCOL_PASS',json.dumps({'merger_attempts':merger_runs[0],
+                        'battery_failed_then_repaired':True,'review_rejected_then_repaired':True,
+                        'corrections_app_only':True,'pristine_B_unchanged':True,
+                        'actual_install_rollback':True,'scope':'synthetic protocol fixture; not product approval'}),flush=True)
                 print('REAL_LEGACY_HOST_PASS',json.dumps({'provider_calls':len(requests),'normal_agent_started':False,'old_source_unchanged':True,'canonical_review_validated':True,'semantic_repair':True,'actual_overlay_and_rollback':True,'profile_preserved':True,'native_gui_started':False}),flush=True)
             except BaseException:
-                for record in home.glob('memory/.self-review/review-*/request.json'):
+                if application:
+                    print('APP_PROVIDER_FLOW',json.dumps(requests),flush=True)
+                for record in home.glob('memory/.source-update-reviews/review-*/request.json'):
                     value=read(record);print('REVIEW_FAILURE',json.dumps({k:value.get(k) for k in ('execution','verdict','gaps','critics','error')}),flush=True)
                 for log in new.parent.glob('source-review-*.log'):print(log.read_text(errors='replace')[-16000:],flush=True)
                 for log in home.glob('memory/.forge/tasks/**/supervisor.log'):print(str(log),log.read_text(errors='replace')[-4000:],flush=True)

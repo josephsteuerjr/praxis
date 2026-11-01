@@ -10,6 +10,7 @@ export interface Cfg {
   /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
   needs_remote?: boolean;
   needs_local_setup?: boolean;
+  needs_subscription_login?: boolean;
   local_agent?: boolean;
   discover_server?: boolean;
 }

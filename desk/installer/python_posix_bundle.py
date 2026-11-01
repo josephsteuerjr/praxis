@@ -125,6 +125,10 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     shutil.copy2(DESK.parent/'NOTICE',output/'NOTICE')
     shutil.copy2(DESK/'installer/THIRD-PARTY.md',output/'THIRD-PARTY.md')
     shutil.copy2(DESK/'installer/PYTHON-START-HERE.md',output/'START-HERE.md')
+    normalize_output_modes(output)
+    from localharness.code_transition import seal as seal_code
+    from localharness.authored_baseline import seal as seal_authored_baseline
+    seal_code(output);seal_authored_baseline(output)
     # Use the same byte inventory the updater preserves. Mutable configuration,
     # user data, component overlays and this inventory itself are not retired.
     files={p.relative_to(output).as_posix():app_components.digest(p) for p in output.rglob('*')

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,7 +22,7 @@ import time
 from . import source_merge as merge, source_verification_bundle as bundle
 from .package_notice import read, write
 
-VERSION = 2
+VERSION = 3
 TIMEOUT = 3600  # per physical command, never the age of an update job
 MAX_OUTPUT = 32 * 1024 * 1024
 
@@ -33,6 +34,8 @@ class CustodyUnconfirmed(RuntimeError):
 def composition(operation, directory, harness=None):
     """One authority for code + app/resources + runtime/manifests (owned by A)."""
     from . import update_composition
+    from .app_source_update import require_ready
+    require_ready(directory)
     value = update_composition.describe(Path(directory), operation)
     if not update_composition.for_plan(directory, operation)['consistent']:
         raise ValueError('Final shared application differs; reconcile before the full battery')
@@ -126,19 +129,19 @@ def _native_inputs(executor):
     """Explicit stand capability, not ambient desktop or native build proof."""
     env = executor.get('native_env', {})
     files = executor.get('native_files', {})
-    allowed = {'HELENE_BODY_DIR', 'HELENE_BODY_BIN', 'DISPLAY',
+    allowed = {'HELENE_BODY_DIR', 'HELENE_BODY_BIN', 'HELENE_HOST_BINARY', 'PRAXIS_HANDS', 'DISPLAY',
                'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR'}
     if (not isinstance(env, dict) or not isinstance(files, dict)
             or set(env) - allowed or any(not isinstance(v, str) or not v.strip() or '\x00' in v for v in env.values())):
         raise ValueError('Invalid explicit native_env/native_files declaration')
     env = dict(env)
-    for key in ('HELENE_BODY_DIR', 'HELENE_BODY_BIN', 'XDG_RUNTIME_DIR'):
+    for key in ('HELENE_BODY_DIR', 'HELENE_BODY_BIN', 'HELENE_HOST_BINARY', 'PRAXIS_HANDS', 'XDG_RUNTIME_DIR'):
         if key in env:
             path = Path(env[key])
             if not path.is_absolute() or path.is_symlink():
                 raise ValueError('Native input requires an absolute non-symlink path: ' + key)
             env[key] = str(path.resolve())
-            if key != 'HELENE_BODY_BIN' and not path.is_dir():
+            if key not in {'HELENE_BODY_BIN', 'HELENE_HOST_BINARY', 'PRAXIS_HANDS'} and not path.is_dir():
                 raise ValueError('Native input directory unavailable: ' + key)
     required = set()
     if 'HELENE_BODY_DIR' in env:
@@ -155,6 +158,12 @@ def _native_inputs(executor):
             raise ValueError('HELENE_BODY_BIN is not the declared native body')
     elif 'HELENE_BODY_BIN' in env:
         raise ValueError('Native body binary requires its body/bridge directory')
+    for key in ('PRAXIS_HANDS','HELENE_HOST_BINARY'):
+        if key in env:
+            binary = Path(env[key])
+            if not binary.is_file():
+                raise ValueError('Declared native binary unavailable: '+key)
+            required.add(str(binary))
     pinned = {}
     for name, digest in files.items():
         if not isinstance(name, str) or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
@@ -167,7 +176,7 @@ def _native_inputs(executor):
             raise ValueError('Native file changed or does not match its SHA256: ' + name)
         pinned[canonical] = digest
     if set(pinned) != required:
-        raise ValueError('Native files must pin exactly the selected body/bridge inputs')
+        raise ValueError('Native files must pin exactly the selected binary inputs')
     return {'native_env': env, 'native_files': pinned}
 
 
@@ -222,10 +231,12 @@ def _environment(home, core, app, operation=None):
     # No owner's API keys, proxy, Telegram session, PRAXIS_BASE or model settings.
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT',
-                             'SYSTEMDRIVE', 'LANG', 'LC_ALL'}}
+                             'SYSTEMDRIVE', 'LANG', 'LC_ALL'}
+           or (os.name=='nt' and key.upper() in {'USERNAME','USERDOMAIN'})}
     env.update(HOME=str(home), USERPROFILE=str(home), APPDATA=str(home / 'appdata'),
                LOCALAPPDATA=str(home / 'local'), TEMP=str(home / 'tmp'), TMP=str(home / 'tmp'),
                TMPDIR=str(home / 'tmp'), PRAXIS_TEST='1', PYTHONNOUSERSITE='1',
+               PRAXIS_BASE=str(home / 'data'),
                PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1', PYTHONIOENCODING='utf-8',
                PYTHONPATH=os.pathsep.join((str(core), str(app), str(app / 'localharness'))),
                HELENE_TREE_SRC=str(core), HF_HUB_OFFLINE='1', CARGO_NET_OFFLINE='true',
@@ -233,10 +244,14 @@ def _environment(home, core, app, operation=None):
                npm_config_offline='true', npm_config_audit='false', npm_config_fund='false')
     env['npm_config_userconfig'] = str(home / 'npm-user.rc')
     env['npm_config_globalconfig'] = str(home / 'npm-global.rc')
-    for name in ('appdata', 'local', 'tmp'):
+    for name in ('appdata', 'local', 'tmp', 'data'):
         (home / name).mkdir(parents=True, exist_ok=True)
     # Only expressly supplied compiler/package caches; never inherit credential config.
     executor = (operation or {}).get('verification_executor') or {}
+    if sys.platform.startswith('linux'):
+        # Deterministic, hermetic Forge consumer tests need real processes to
+        # verify tree scheduling/custody. Never enable these on Windows.
+        env['PRAXIS_TEST_FORGE_PROCESS'] = '1'
     if executor.get('python_dependencies'):
         env['PYTHONPATH'] += os.pathsep + str(Path(executor['python_dependencies']).resolve())
     for key in ('CARGO_HOME', 'RUSTUP_HOME', 'npm_config_cache'):
@@ -358,6 +373,8 @@ def _cargo(listing, text):
 
 
 def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_inputs=None):
+    from .source_update_parallel import native_scope
+    env,native_inputs=native_scope(lane,env,native_inputs)
     identity = hashlib.sha256(lane['id'].encode()).hexdigest()[:20]
     output = cache / (identity + '.output')
     observation = cache / (identity + '.cases.json')
@@ -372,6 +389,8 @@ def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_input
         if kind in {'unittest-file','pytest-file'}:
             command += ['--source', str(repository / lane['source'])]
         if kind=='pytest-file':command+=['--framework','pytest']
+        if lane.get('_shard_count',1)>1:
+            command+=['--shard-index',str(lane['_shard_index']),'--shard-count',str(lane['_shard_count'])]
         commands.append(command)
     elif kind == 'script':
         argv = [arg.replace('{repository}', str(repository)).replace('{work}', str(repository.parent))
@@ -509,6 +528,10 @@ def _binding(operation, directory):
                'input_sha256': operation['input_sha256'], 'target_version': operation['version'],
                'platform': sys.platform, 'executor': observed,
                'host_runner_sha256': bundle.digest(__file__)}
+    from .source_update_parallel import policy
+    binding['scheduling']=policy(operation)
+    if (operation.get('verification_executor') or {}).get('python_dependencies') and not errors.get('python'):
+        observed['dependency_files']=bundle.inventory(operation['verification_executor']['python_dependencies'])
     if merge.candidate_signature(directory) != operation['candidate_sha256']:
         raise ValueError('Battery core candidate changed')
     return binding, value, root, manifest, tools, errors
@@ -527,7 +550,7 @@ def _sources(cache, receipt):
     return {'battery': {'root': str(evidence), 'files': {n: n for n in receipt['files']}}}
 
 
-def _test_copy_changes(repository, before, lanes):
+def _test_copy_changes(repository, before, lanes, stopped=lambda:False):
     """Separate observed build output from mutation of the private test inputs.
 
     This NEVER changes/blesses installed M; _binding rechecks its exact bytes.
@@ -537,7 +560,8 @@ def _test_copy_changes(repository, before, lanes):
         if lane.get('kind') == 'npm-build' and lane.get('root') in
         {'desk/app', 'desk/mobile', 'desk/miniapp'} and
         lane.get('id') == lane['root'] + '/build'})
-    after = bundle.inventory(repository)
+    from . import source_update_parallel
+    after = source_update_parallel.inventory(sys.modules[__name__],repository,stopped)
     changed = sorted(name for name in set(before) | set(after)
                      if before.get(name) != after.get(name))
     authored = [name for name in changed if not any(name.startswith(p) for p in prefixes)]
@@ -549,6 +573,35 @@ def _test_copy_changes(repository, before, lanes):
     return authored, outputs
 
 
+def _cleanup_work(work, cache):
+    """Retire only our private test tree; cleanup cannot erase test evidence."""
+    work = Path(work).absolute()
+    if not work.name.startswith('helene-update-tests-') or work.is_symlink() or getattr(work,'is_junction',lambda:False)():
+        raise ValueError('Unexpected battery cleanup root')
+
+    def readonly(function, name, failure):
+        # Git marks its own loose objects read-only on Windows. Never chmod a
+        # link or shared inode: these files must belong to this disposable copy.
+        path = Path(name)
+        info = path.lstat()
+        if (os.name != 'nt' or not isinstance(failure[1], PermissionError)
+                or function is not os.unlink or not path.resolve().is_relative_to(work)
+                or not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_mode & stat.S_IWRITE or path.is_symlink() or path.is_junction()):
+            raise failure[1]
+        path.chmod(info.st_mode | stat.S_IWRITE)
+        function(name)
+
+    try:
+        shutil.rmtree(work, onerror=readonly)
+        result = {'state': 'removed', 'work': str(work)}
+    except OSError as exc:
+        result = {'state': 'pending', 'work': str(work), 'error': f'{type(exc).__name__}: {exc}'}
+    # Separate maintenance receipt; not part of the immutable test binding.
+    write(Path(cache) / 'cleanup.json', result)
+    return result
+
+
 def prepare(operation, directory, harness, stopped):
     """Full attempts, frozen for review. Caller must persist mutated operation."""
     directory = Path(directory)
@@ -558,6 +611,8 @@ def prepare(operation, directory, harness, stopped):
     binding, value, bundle_root, manifest, tools, errors = _binding(operation, directory)
     key = merge.signature(binding)
     cache = directory / 'test-battery' / key
+    write(directory/'test-battery/current.json',{'key':key,'input_sha256':operation['input_sha256'],
+        'composition_sha256':operation.get('composition_sha256'),'candidate_sha256':operation.get('candidate_sha256')})
     receipt = read(cache / 'receipt.json')
     if receipt.get('binding') == binding and receipt.get('complete') is True:
         sources = _sources(cache, receipt)
@@ -573,7 +628,6 @@ def prepare(operation, directory, harness, stopped):
     rows = []
     work = Path(tempfile.mkdtemp(prefix='helene-update-tests-')).resolve()
     write(cache / 'attempt.json', {'state': 'started', 'binding': binding, 'work': str(work), 'at': time.time()})
-    safe_to_remove = True
     try:
         repository = work / 'repository'
         bundle.copy_files(bundle_root / 'repository', manifest['files'], repository)
@@ -584,46 +638,18 @@ def prepare(operation, directory, harness, stopped):
         actual_files = bundle.inventory(repository)
         native, rebuild = _obligations(directory, value, manifest)
         lanes = bundle.recipe(actual_files, native, rebuild, manifest.get('script_contracts', {}))
-        env = _environment(work / 'home', core, desk, operation)
-        dependencies = (operation.get('verification_executor') or {}).get('python_dependencies')
-        if dependencies:
-            env['HELENE_VERIFICATION_DEPENDENCIES'] = str(Path(dependencies).resolve())
         write(cache / 'executor-lock.json', manifest.get('executor_locks', {}).get(sys.platform, {}))
         runner = bundle_root / 'runner/source_verification_runner.py'
-        for lane in lanes:
-            if stopped():
-                raise InterruptedError('Owner stopped update battery')
-            if lane['kind'] == 'helper':
-                rows.append({'id': lane['id'], 'status': 'support-only', 'reason': lane['reason']})
-                continue
-            reason = lane.get('platform_skip', {}).get(sys.platform)
-            if reason:
-                rows.append({'id': lane['id'], 'status': 'platform-skip', 'reason': reason})
-                continue
-            tool = _lane_tool(lane)
-            missing = errors.get(tool)
-            if lane['kind'] in {'npm-prepare', 'npm-build'}:
-                missing = missing or errors.get('node')
-            if not lane['sources']:
-                missing = 'Full lane sources unavailable: ' + lane['id']
-            if missing:
-                rows.append({'id': lane['id'], 'status': 'unavailable', 'reason': missing})
-                continue
-            try:
-                rows.append(_run_lane(lane, repository, runner, tools, env, cache, stopped,
-                                      binding['executor'].get('native_inputs')))
-            except OSError as exc:
-                rows.append({'id': lane['id'], 'status': 'unavailable', 'reason': type(exc).__name__ + ': ' + str(exc)})
-        # This includes supplied test sources and direct-import edition paths,
-        # not merely files which happened to be included in packaged M.
-        candidate_changes, build_outputs = _test_copy_changes(repository, actual_files, lanes)
+        from . import source_update_parallel
+        rows,candidate_changes,build_outputs=source_update_parallel.run(
+            sys.modules[__name__],lanes,repository,actual_files,work,runner,tools,
+            operation,cache,stopped,binding,errors)
     except CustodyUnconfirmed:
-        safe_to_remove = False
         write(cache / 'custody-unconfirmed.json', {'work': str(work), 'complete': False})
         raise
-    finally:
-        if safe_to_remove:
-            shutil.rmtree(work)
+    except BaseException:
+        _cleanup_work(work, cache)
+        raise
     if stopped():
         raise InterruptedError('Owner stopped update battery')
     if _binding(operation, directory)[0] != binding:
@@ -656,11 +682,14 @@ def prepare(operation, directory, harness, stopped):
     write(cache / 'receipt.json', receipt)
     operation['battery'] = {'key': key, 'receipt_sha256': bundle.digest(cache / 'receipt.json'),
                             'full_pass': report.get('full_pass') is True, 'gate_error': report.get('gate_error', '')}
+    # Commit full observations BEFORE optional temporary-file maintenance.
+    # A locked/read-only Git object must never discard hours of completed work.
+    _cleanup_work(work, cache)
     return _sources(cache, receipt)
 
 
-def validate(operation, directory):
-    """Apply gate: exact current whole composition, immutable full observations."""
+def _observed_report(operation, directory):
+    """Authenticate complete evidence without interpreting a failed test as PASS."""
     directory = Path(directory)
     if operation.get('cancel_requested') or operation.get('paused') or (directory / 'cancel.json').exists():
         raise ValueError('Stopped/paused update has no applicable full battery')
@@ -674,6 +703,8 @@ def validate(operation, directory):
     key = merge.signature(binding)
     pointer = operation.get('battery') or {}
     cache = directory / 'test-battery' / key
+    if (cache/'custody-unconfirmed.json').exists():
+        raise ValueError('Full battery command custody remains unconfirmed')
     if pointer.get('key') != key or not (cache / 'receipt.json').is_file():
         raise ValueError('No full battery for the exact current composition')
     if bundle.digest(cache / 'receipt.json') != pointer.get('receipt_sha256'):
@@ -689,8 +720,52 @@ def validate(operation, directory):
     # list, but cannot remove or replace a required source module.
     if report.get('lanes') != required_lanes:
         raise ValueError('Full battery omitted current release/repair lane sources')
+    return binding,key,pointer,cache,report,manifest
+
+
+def validate(operation, directory):
+    """Apply gate: exact current whole composition, immutable full observations."""
+    binding,key,pointer,_cache,report,manifest=_observed_report(operation,directory)
     _check_results(report, manifest)
     return {'binding': binding, 'key': key, 'full_pass': True, 'receipt_sha256': pointer['receipt_sha256']}
+
+
+def failure_feedback(operation,directory):
+    """Actual test failures can request repair, never grant gate acceptance.
+
+    Missing capabilities, collection/runtime errors, incomplete custody, altered
+    sources, undeclared skips and timeouts remain stopped. Only failed assertions
+    from complete canonical unittest outcomes (other runners need typed failure
+    evidence before they can request automatic source repair)
+    with otherwise exact coverage reach an automatic correction worker.
+    """
+    import copy
+    binding,key,pointer,cache,report,manifest=_observed_report(operation,directory)
+    if report.get('full_pass') is not False:return None
+    normalized=copy.deepcopy(report);findings=[]
+    for row in normalized.get('results',[]):
+        if row.get('status') in ('passed','platform-skip','support-only'):continue
+        if row.get('status')!='failed' or type(row.get('exit')) is not int or row['exit']==0:return None
+        if row.get('kind') not in ('unittest','unittest-file'):return None
+        failed=[case for case in row.get('observation',{}).get('outcomes',[]) if case.get('status')=='failed']
+        if not failed:return None
+        excerpts=[]
+        for name in row.get('logs',{}):
+            logical=Path(name).stem+'.md';target=cache/'evidence'/logical
+            if target.is_file():excerpts.append(target.read_text(encoding='utf8')[-8000:])
+        detail='\n'.join(excerpts)[-12000:]
+        for case in failed:
+            findings.append({'path':'battery/'+row['id'],'scenario':'Failed canonical test: '+case['id'],
+                             'detail':detail,'case_id':case['id']})
+            case['status']='passed'
+        row.update(status='passed',exit=0)
+    if not findings:return None
+    try:_check_results(normalized,manifest)
+    except ValueError:return None
+    # normalized is solely a structural coverage check. Persisted evidence and
+    # report.full_pass remain RED; the next candidate needs an entire new gate.
+    return {'key':key,'composition_sha256':binding['composition_sha256'],
+            'receipt_sha256':pointer['receipt_sha256'],'findings':findings,'full_pass':False}
 
 
 def main():

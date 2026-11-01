@@ -37,6 +37,8 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 import body  # noqa: E402
 import modes  # noqa: E402
 
+HELENE_TEST_NATIVE_INPUTS = ('HELENE_BODY_DIR',)  # Native Windows body shares the desktop.
+
 # Стенд разбирает САМО тело; есть ли оно на этой платформе, решает
 # `body.HAS_BODY` (Windows и macOS). Поднимаем флаг, чтобы разбор шёл на любом
 # раннере; сборка без тела (прочие POSIX) проверяется отдельно (`Absent`).
@@ -845,7 +847,7 @@ def _built_pair() -> Path | None:
     # был жёстко вписан здесь, в сборке и в приборе реле сразу.
     sys.path.insert(0, str(HERE.parent))
     import layout  # noqa: PLC0415
-    candidates = [layout.body_target()]
+    candidates = ([Path(os.environ['HELENE_BODY_DIR'])] if os.environ.get('HELENE_BODY_DIR') else []) + [layout.body_target()]
     for base in candidates:
         if (base / "praxis-body.exe").is_file() and (base / "praxis-bridge.exe").is_file():
             return base
@@ -907,7 +909,9 @@ class Live(unittest.TestCase):
     def test_bridge_and_body_come_up_answer_and_die_with_us(self):
         g = Ground(_cfg())
         self.addCleanup(g.close)
-        os.environ["HELENE_BODY_DIR"] = str(_built_pair())
+        pair=_built_pair()
+        if pair is None:self.skipTest('No declared built body/bridge input; real process acceptance remains pending')
+        os.environ["HELENE_BODY_DIR"] = str(pair)
         self.addCleanup(lambda: os.environ.pop("HELENE_BODY_DIR", None))
         started = body.launch(g.root, g.tree, _cfg(port=9490))
         self.assertIsNotNone(started, body.STATE.get("reason"))

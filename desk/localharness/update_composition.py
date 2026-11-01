@@ -16,21 +16,26 @@ from .package_notice import read, write
 
 FORMAT = 'helene-update-composition.v1'
 MANIFESTS = ('python-app.json', 'source-inputs.json', 'python-package-files.json',
-             'code-upstream.json', 'component-downloads.json')
+             'code-upstream.json', 'app-upstream.json','source-update-baseline.json','component-downloads.json')
 
 
 def _hash(path):
+    from .validation_read import checkpoint,digest
+    checkpoint()
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        return digest(stream)
 
 
 def app_inventory(root):
     """Shipped app resources/soul are program, not a live agent's private soul."""
-    root=Path(root).resolve()
+    from .validation_read import checkpoint
+    checkpoint();root=Path(root).resolve()
     files={}
     for here,dirs,names in os.walk(root,followlinks=False):
+        checkpoint()
         dirs[:]=[name for name in dirs if name!='__pycache__']
         for name in [*dirs,*names]:
+            checkpoint()
             item=Path(here)/name
             relative=item.relative_to(root).as_posix();merge.relative(relative)
             if item.is_symlink() or getattr(item,'is_junction',lambda:False)():
@@ -76,6 +81,8 @@ def prepare(directory, operation=None):
         raise ValueError('Incoming composition omits the full program inventory')
     state = {'format': FORMAT, 'program': str(program), 'input_sha256': operation['input_sha256'],
              'base_app': app_files, 'manifests': manifests, 'package_files': package, 'repairs': []}
+    from .app_source_update import seed
+    seed(directory,operation,state)
     write(directory / 'composition.json', state)
     _frozen(directory, state)
     return state
@@ -85,8 +92,15 @@ def _frozen(directory, state):
     program = Path(state['program'])
     if app_inventory(directory / 'compound/base-app') != state['base_app']:
         raise ValueError('Frozen incoming app snapshot changed')
-    if app_inventory(program / 'app') != state['base_app']:
-        raise ValueError('Verified incoming app changed; compound repairs must use its declared M surface')
+    actual=app_inventory(program/'app')
+    if actual!=state['base_app']:
+        overlay=read(program.parent/'compound-overlay.json')
+        admitted=overlay.get('format')==FORMAT and any(Path(row['directory']).resolve()==directory.resolve()
+            for row in overlay.get('identities',[]))
+        if not admitted or actual!=app_inventory(directory/'compound/app'):
+            raise ValueError('Verified incoming app changed; compound repairs must use its declared M surface')
+    from .app_source_update import validate_inputs
+    validate_inputs(directory,state)
     for name, digest in state['manifests'].items():
         if _hash(program / name) != digest:
             raise ValueError('Incoming manifest changed: ' + name)
@@ -134,6 +148,7 @@ def describe(directory, operation=None):
     payload = {'format': FORMAT, 'input_sha256': state['input_sha256'],
                'core': merge.inventory(directory / 'result'), 'app': app,
                'runtime': runtime, 'manifests': state['manifests']}
+    if state.get('app_source'):payload['app_source']=merge.signature(state['app_source'])
     return {'sha256': merge.signature(payload),
             'core': {'root': str(directory / 'result'), 'files': payload['core']},
             'app': {'root': str(directory / 'compound/app'), 'files': app},
@@ -189,6 +204,8 @@ def repair(directory, name, content=None, *, delete=False, expected='', reason='
     state['repairs'].append({'path': name, 'reason': reason, 'before': before,
         'after': _hash(target) if target.is_file() else None, 'composition_before_sha256': expected, 'at': time.time()})
     write(directory / 'composition.json', state)
+    from .app_source_update import record_resolution
+    record_resolution(directory,local,reason=reason)
 
 
 def shared(new, plans=None):

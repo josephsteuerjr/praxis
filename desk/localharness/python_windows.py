@@ -11,6 +11,9 @@ AUTOMATIC_ARGUMENTS='--launch-intent automatic'
 
 def powershell(script,env=None):
     exe=Path(os.environ.get('SYSTEMROOT','C:/Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
+    # Windows PowerShell 5.1 otherwise writes redirected paths in the OEM code
+    # page. Every owned result/error stream has one explicit Unicode contract.
+    script="[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false);$OutputEncoding=[Console]::OutputEncoding;\n"+script
     result=subprocess.run([str(exe),'-NoProfile','-NonInteractive','-Command',script],
                           env=env,capture_output=True,timeout=30,creationflags=0x08000000)
     if result.returncode:raise RuntimeError(result.stderr.decode('utf-8',errors='replace'))

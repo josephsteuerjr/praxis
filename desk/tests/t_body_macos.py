@@ -48,6 +48,8 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 
 import body  # noqa: E402
 
+HELENE_TEST_NATIVE_INPUTS = ('HELENE_BODY_DIR',)  # Screen/clipboard belong to one native desktop.
+
 DARWIN = sys.platform == "darwin"
 #: Не 9480 (умолчание продукта: там мост установленной программы) и не 9490
 #: (t_body.Live): свой мост на своём порту, pick_port обойдёт занятые.

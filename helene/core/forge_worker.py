@@ -378,9 +378,15 @@ def _loop(journal, request_path, request, adapter):
             _control(request_path)
             journal.save("tool_in_flight", "tool")
             journal.event("tool_start", call_id=call["id"], tool=call["name"], input_ref=input_ref)
+            dispatch = adapter.dispatch if adapter is not None else _dispatch
+            handler = '.'.join(str(part) for part in (getattr(dispatch,'__module__',''),
+                getattr(dispatch,'__qualname__',type(dispatch).__name__)) if part)
+            # Like tool_start, this is a durable journal boundary. A failed
+            # append must abort before effects, never become a model tool result.
+            journal.event('tool_dispatch',call_id=call['id'],tool=call['name'],input_ref=input_ref,
+                receipt={'kind':'python','handler':handler,'status':'entered'})
             try:
-                output = (adapter.dispatch(request, call["name"], args) if adapter is not None
-                          else _dispatch(request, call["name"], args))
+                output = dispatch(request, call["name"], args)
             except Exception as exc:
                 output = f"Tool error {type(exc).__name__}: {exc}"
             output = str(output)
@@ -396,7 +402,7 @@ def _loop(journal, request_path, request, adapter):
             pending["next_call"] += 1
             journal.save("tools_ready", "ready")
             continue
-        if boundary == "model_ready" and state["iteration"] >= state["max_iters"]:
+        if boundary == "model_ready" and state["max_iters"] > 0 and state["iteration"] >= state["max_iters"]:
             journal.save("summary_ready", "finishing")
             continue
         if boundary not in {"model_ready", "summary_ready"}:
@@ -485,7 +491,7 @@ def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=No
         adapter_id = (type(adapter).__module__ + "." + type(adapter).__qualname__) if adapter is not None else ""
         state = journal.start(request, {
             "next_boundary": "model_ready", "iteration": 0,
-            "max_iters": int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2),
+            "max_iters": max(0, int(request.get("max_iters") or 0)),
             "messages": [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}],
             "tools": tools, "call_options": call_options, "adapter_id": adapter_id,
             "trace": [], "pending": {}, "reply": "", "model": "", "stopped_himself": False,

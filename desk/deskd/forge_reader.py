@@ -165,10 +165,16 @@ def _unit(folder: Path, task_id: str) -> dict:
     liveness = {k: live[k] for k in ('state', 'observed_at', 'basis') if k in live}
     if liveness.get('state') not in {'alive', 'exited', 'unknown', 'not_started'}:
         liveness = {'state': 'unknown', 'basis': 'no_owner_observation'}
+    try:
+        observed=dt.datetime.fromisoformat(str(liveness.get('observed_at')).replace('Z','+00:00'))
+        fresh=-5<=(dt.datetime.now(dt.timezone.utc)-observed).total_seconds()<15
+    except (ValueError,TypeError):fresh=False
     effective = ('stop_pending' if unresolved else str(result.get('status') or 'unknown') if result else
                  'paused' if request.get('status') == 'paused' else
                  'waiting' if progress.get('phase') == 'waiting' else
-                 'queued' if request.get('status') == 'queued' else 'unknown')
+                 'queued' if request.get('status') == 'queued' else
+                 'running' if fresh and liveness.get('state')=='alive' and request.get('status') in ('starting','running','finishing') else 'unknown')
+    process=request.get('process_identity') or {}
     return {
         "id": folder.name, "parent_unit_id": str(request.get("parent_unit_id") or ""),
         "role": request.get("role") or result.get("role"),
@@ -178,6 +184,7 @@ def _unit(folder: Path, task_id: str) -> dict:
         "request_status": str(request.get("status") or ""),
         "custody": "unresolved_stop" if unresolved else "result" if result else "unknown",
         "created": request.get("created"), "finished": result.get("finished"),
+        "started": process.get('birth') if isinstance(process,dict) and process.get('adapter')=='psutil-v1' else None,
         "observation": observation, "process_liveness": liveness['state'], "liveness": liveness,
         "result_ref": ref, "request_ref": _ref(folder, "request"),
         "dispositions": [{k: r.get(k) for k in ("parent_unit_id", "disposition", "result_sha256", "revision")} for r in receipts],
@@ -213,6 +220,7 @@ def task_detail(tree: Path, task_id: str) -> dict:
     except OSError as exc:
         raise ReadError(f"Forge participants unreadable: {exc}", 503) from exc
     return {"id": task_id, "goal": task.get("goal") or "", "status": task.get("status") or "unknown",
+            'kind':'review' if task.get('self_review') else 'source_update' if task.get('source_update') else 'work',
             "created": task.get('created') or '',
             "finished": max([str(task.get('finished') or '')] + [str(unit.get('finished') or '') for unit in agents]),
             "priority": task.get("priority"), "control": _read(folder, "control.json"),

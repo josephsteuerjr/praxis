@@ -18,7 +18,8 @@ def settings_snapshot(old, operation, progress=None):
     selected until switching, and program preimages live in the recovery map.
     No memory/runs/media/session/model inventory is walked by this backup.
     """
-    folder = old.parent / 'Helene-update-backups'
+    from .program_state import directory
+    folder = directory(old,'settings-backups')
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / (operation + '-settings.zip')
     staged = path.with_suffix('.tmp')
@@ -46,20 +47,27 @@ def selection(old):
     history can change without changing working source bytes.
     """
     from .source_merge import allowed
+    from .validation_read import checkpoint,digest
+    checkpoint()
     from .update_io import stamp
     old = Path(old).resolve()
     found = app_migration.discover(old)
-    result = {'settings': {}, 'sources': {}, 'git': {}}
+    from .update_composition import app_inventory
+    result = {'settings': {}, 'sources': {}, 'git': {},'app':app_inventory(old/'app')}
     for config in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'))]:
+        checkpoint()
         if config.is_file():
-            result['settings'][config.relative_to(old).as_posix()] = hashlib.sha256(config.read_bytes()).hexdigest()
+            with config.open('rb') as stream:result['settings'][config.relative_to(old).as_posix()]=digest(stream)
     for code in dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents'] if row['value'].get('mode') != 'remote'):
+        checkpoint()
         root = Path(code)
         files = {}
         for directory, dirs, names in os.walk(root, followlinks=False):
+            checkpoint()
             here = Path(directory)
             dirs[:] = sorted(n for n in dirs if allowed((here / n).relative_to(root).as_posix()))
             for name in sorted(names):
+                checkpoint()
                 path = here / name
                 relative = path.relative_to(root).as_posix()
                 if allowed(relative):files[relative] = stamp(path)
@@ -75,7 +83,10 @@ def selection(old):
             if common.is_file():roots.append((roots[0] / common.read_text(encoding='utf-8').strip()).resolve())
         elif git.is_dir():roots.append(git)
         for repo in roots:
-            for path in sorted(repo.rglob('*')):
+            paths=[]
+            for path in repo.rglob('*'):checkpoint();paths.append(path)
+            for path in sorted(paths):
+                checkpoint()
                 if path.is_file():result['git'][str(path)] = stamp(path)
     return result
 
@@ -113,6 +124,9 @@ def prepare(old, new, progress=None, *, attached_data=None):
             folder = Path(value['backup']['dir'])
             if not folder.is_absolute():
                 value['backup'] = dict(value['backup'], dir=str((Path(row['config']).parent / folder).resolve()))
+        if isinstance(value.get('voice'),dict) and value['voice'].get('tts_reference'):
+            reference=Path(value['voice']['tts_reference'])
+            if not reference.is_absolute():value['voice']=dict(value['voice'],tts_reference=str((Path(row['config']).parent/reference).resolve()))
         write(new / row['relative'], value)
     for name in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'):
         if (old / name).is_file():

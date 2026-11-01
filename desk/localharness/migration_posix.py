@@ -6,11 +6,12 @@ from pathlib import Path
 import plistlib
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import time
 
-from .package_notice import write
+from .package_notice import read,write
 
 
 def _inside(value, root, *, cwd=None):
@@ -256,30 +257,99 @@ def install_shortcuts(new,folder=None,*,desktop_only=False):
     return [str(target)]
 
 
-def remove_program(old,new,note):
-    """Delete only verified program files, keeping attached data and old source."""
+def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=None):
+    """Retire stopped program/code files, preserving data, models and links."""
+    def check():
+        if cancelled and cancelled.is_set():raise InterruptedError('Migration retirement cancelled')
+    check()
     old,new=Path(old).resolve(),Path(new).resolve()
-    if old==new or new.is_relative_to(old) or not note.get('startup_proof'):raise ValueError('Unsafe retirement')
-    protected=[Path(p).resolve() for p in note.get('data_paths',[])+note.get('old_data_paths',[])]+[Path(row['old']).resolve() for row in note.get('source_paths',[]) if row.get('old')]
-    protected += [old/name for name in ('data','profile','agents','backups','archives','memory','models','tree','code','code-backup')]
+    if old==new or new.is_relative_to(old) or old.is_relative_to(new):raise ValueError('Unsafe retirement')
+    if before_start:
+        if note.get('source_policy')!='clean' or not note.get('old_quiescent'):raise ValueError('Early retirement requires a quiescent clean migration')
+        quiescent(old)
+        from .migration_windows import owner_lease_available
+        if any(not owner_lease_available(Path(p)/'.desktop-owner.lock') for p in note['data_paths']):raise RuntimeError('Data ownership is still held')
+    elif not note.get('startup_proof'):raise ValueError('Unsafe retirement')
+    protected=[Path(p).resolve() for p in note.get('data_paths',[])+note.get('old_data_paths',[])]
+    protected += [old/name for name in ('data','profile','agents','backups','archives','memory','models')]
+    clean=note.get('source_policy')=='clean'
+    if note.get('normal_python_update'):
+        from .python_archive_update import validate_retirement
+        validate_retirement(old,new,note)
+        clean=True  # the old copy may retire only after its preserved successor
+    if not clean:
+        protected += [Path(row['old']).resolve() for row in note.get('source_paths',[]) if row.get('old')]
+        protected += [old/name for name in ('tree','code','code-backup')]
+    def retained(path):return any(path==p or path.is_relative_to(p) for p in protected)
+    def linked(path):
+        info=path.lstat()
+        return path.is_symlink() or bool(getattr(info,'st_file_attributes',0)&0x400)
+    roots={old/name for name in ('app','runtime','resources','bin','Helene.app','Migrate Helene.app')}
+    if clean:
+        roots.update(old/name for name in ('tree','code','code-backup','components','voice','voice-xtts','relay-product'))
+        roots.update(Path(row['old']).resolve() for row in note.get('source_paths',[])
+                     if row.get('old') and Path(row['old']).resolve()!=old and Path(row['old']).resolve().is_relative_to(old))
     names=set()
-    for directory in ('app','runtime','resources','bin','Helene.app','Migrate Helene.app'):
-        folder=old/directory
-        if folder.is_dir() and not folder.is_symlink():names.update(p.relative_to(old).as_posix() for p in folder.rglob('*') if p.is_file())
-    names.update(n for n in ('python-app.json','python-package-files.json','Start Helene.command','Migrate Helene.command','Start Helene.sh','helene','helene-body','helene-bridge') if (old/n).is_file())
+    declared={}
+    if note.get('normal_python_update'):
+        declared={**note.get('old_runtime_code_inventory',{}),**read(old/'python-package-files.json').get('files',{})}
+        names.update(declared)
+    for folder in sorted(roots):
+        check()
+        if not folder.is_dir() or linked(folder) or retained(folder):continue
+        for directory,dirs,entries in os.walk(folder,followlinks=False):
+            check();here=Path(directory)
+            dirs[:]=[name for name in dirs if name.lower() not in ('models','model','memory','.secrets')
+                     and not retained(here/name) and not linked(here/name)]
+            names.update((here/name).relative_to(old).as_posix() for name in entries if not linked(here/name))
+    entries=('python-app.json','python-package-files.json','Start Helene.command','Migrate Helene.command','Start Helene.sh',
+             'helene','helene-body','helene-bridge','helene.exe','Helene.exe','helene-setup.exe','helene-body.exe',
+             'helene-bridge.exe','helene-svc.exe','helene-host.exe')
+    names.update(name for name in entries if (old/name).is_file())
     files={}
     for name in sorted(names):
-        path=old/name;resolved=path.resolve()
-        if not resolved.is_relative_to(old) or path.is_symlink() or any(p.is_symlink() for p in path.parents if p.is_relative_to(old)):raise ValueError('Linked program path')
-        if any(resolved==p or resolved.is_relative_to(p) for p in protected):continue
-        if any(part.lower() in ('models','model','memory','.secrets') for part in path.relative_to(old).parts):continue
-        files[name]=hashlib.sha256(path.read_bytes()).hexdigest()
-    write(new/'old-program-retirement.json',{'old':str(old),'new':str(new),'files':files,'protected':[str(p) for p in protected]})
-    for name,digest in files.items():
-        path=old/name
-        if hashlib.sha256(path.read_bytes()).hexdigest()!=digest:raise RuntimeError('Old program changed')
-        path.unlink()
+        check();path=old/name
+        if not path.exists() and not path.is_symlink():continue
+        resolved=path.resolve()
+        if not resolved.is_relative_to(old) or linked(path) or any(p.is_symlink() for p in path.parents if p.is_relative_to(old)):raise ValueError('Linked program path')
+        if path.name in ('helene.json','helene.json.bak','owner-stop.json','agent-default.json','window-preferences.json',
+                         '.env','auth.json','credentials.json'):continue
+        parts=path.relative_to(old).parts
+        if retained(resolved) or any(part.lower() in ('memory','.secrets') for part in parts):continue
+        if any(part.lower() in ('models','model') for part in parts):
+            from .python_archive_update import declared_runtime_file
+            if not note.get('normal_python_update') or not declared_runtime_file(old,name,declared):continue
+        if path.is_file():files[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+    write(new/'old-program-retirement.json',{'old':str(old),'new':str(new),'files':files,
+        'protected':[str(p) for p in protected],'policy':'quiescent-clean-program-only;no-code-backup' if clean else 'legacy-retirement'})
+    if progress:progress({'stage':'removing_old','files':0,'total_files':len(files)})
+    # Resolve each parent through held directory descriptors. A directory
+    # exchanged for a link after inventory must never redirect deletion.
+    root_fd=os.open(old,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    try:
+        for number,(name,digest) in enumerate(files.items(),1):
+            check();parent=os.dup(root_fd)
+            try:
+                parts=Path(name).parts
+                for part in parts[:-1]:
+                    next_fd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+                    os.close(parent);parent=next_fd
+                fd=os.open(parts[-1],os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
+                with os.fdopen(fd,'rb') as source:
+                    opened=os.fstat(source.fileno())
+                    if not stat.S_ISREG(opened.st_mode) or hashlib.file_digest(source,'sha256').hexdigest()!=digest:
+                        raise RuntimeError('Old program changed')
+                    current=os.stat(parts[-1],dir_fd=parent,follow_symlinks=False)
+                    if (current.st_dev,current.st_ino)!=(opened.st_dev,opened.st_ino):
+                        raise RuntimeError('Old program changed')
+                    check();os.unlink(parts[-1],dir_fd=parent)
+            except OSError as exc:
+                raise RuntimeError('Old program path changed or became linked') from exc
+            finally:os.close(parent)
+            if progress and number==len(files):progress({'stage':'removing_old','files':number,'total_files':len(files)})
+    finally:os.close(root_fd)
     return {'ok':True,'removed_files':len(files),'purge':False,'data_retained':True}
+
 
 
 def registered_uninstall(old):

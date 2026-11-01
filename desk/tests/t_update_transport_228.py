@@ -45,7 +45,8 @@ class ReviewTransport(unittest.TestCase):
     def test_shared_relay_spec_preserves_legacy_windows_arguments(self):
         from localharness import standalone_relay
         binary=self.root/'helene-relay.exe';binary.write_bytes(b'fixture only')
-        with mock.patch.object(standalone_relay,'executable',return_value=binary),mock.patch.object(transport.supervisor.os,'name','nt'):
+        windows_os=SimpleNamespace(**{**vars(transport.supervisor.os),'name':'nt'})
+        with mock.patch.object(standalone_relay,'executable',return_value=binary),mock.patch.object(transport.supervisor,'os',windows_os):
             spec=transport.supervisor.relay_spec(self.agent['config'],{'relay':{'enabled':True}},self.agent['tree'],Path(sys.executable),install_base=self.root,environ={})
             self.assertEqual(spec.argv,(str(binary),'--minimized','--start-api','--config',str(self.agent['config'].resolve())))
 

@@ -57,6 +57,13 @@ def probe_model(base_url, key="", framework="openai"):
 
 
 def invoke(owner, command, args):
+    if command=='restore_upstream':
+        if args.get('confirmed') is not True:raise ValueError('Подтверди возврат к upstream-коду')
+        from . import upstream_recovery
+        if upstream_recovery.modern(owner.root):
+            from .desktop_update_request import admit_restore
+            return admit_restore(owner,confirmed=True)
+        return upstream_recovery.launch(owner.root)
     agent=owner.current()
     cfg=load(agent.config)
     if command=='window_retire_ack': return {'ok':True}
@@ -69,10 +76,12 @@ def invoke(owner, command, args):
                 'log':str(agent.tree/'deskapp.log'),**desktop_identity()}
     if command=='owner_state':
         from . import owner_stop
-        state=owner.status().get('agents',{}).get(agent.id,{})
+        try:state=owner.status().get('agents',{}).get(agent.id,{})
+        except RuntimeError as error:state={'problems':{'engine':str(error)}}
         return {'agent_id':agent.id,'supported':True,'stopped':owner_stop.stopped(),
                 'runner_alive':'runner' in state.get('roles',[]),'pid':state.get('pids',{}).get('runner'),
-                'enabled':agent.enabled,'service':False,'note':owner.error or ''}
+                'enabled':agent.enabled,'service':False,
+                'note':owner.error or '; '.join(dict.fromkeys(state.get('problems',{}).values()))}
     if command=='owner_control':
         from . import owner_stop
         if args.get('action')=='panic':
@@ -84,12 +93,31 @@ def invoke(owner, command, args):
             return 'Остановлено. Очистка принадлежавших процессов подтверждена.'
         if args.get('action')=='resume':
             if owner.transfer_lock.locked():raise RuntimeError('Server transfer is in progress')
-            if os.name == 'nt' and owner_stop.present(owner_stop.seed_file()):
-                raise RuntimeError('Machine-wide Stop remains set by the previous installation; clear it through that installation before resuming.')
-            latch=owner_stop.client_file()
-            if latch: latch.unlink(missing_ok=True)
-            owner.start()
-            return 'Возобновление запрошено.'
+            if not owner.resume_lock.acquire(blocking=False):raise RuntimeError('Возобновление уже выполняется')
+            from . import owner_resume,startup_diagnostics
+            try:
+                removed=owner_resume.clear(cancelled=lambda:getattr(owner,'exiting',False))
+                deadline=time.monotonic()+30
+                owner.start()
+                proof=owner.readiness(timeout=30,require_runner=True,
+                    cancelled=lambda:getattr(owner,'exiting',False) or owner_stop.stopped())
+                if cfg.get('mode','local')=='local' and (cfg.get('relay') or {}).get('enabled'):
+                    while True:
+                        if getattr(owner,'exiting',False) or owner_stop.stopped():raise InterruptedError('Возобновление отменено владельцем')
+                        state=owner.status().get('agents',{}).get(agent.id,{})
+                        problem=state.get('problems',{}).get('relay')
+                        if problem:raise RuntimeError('Реле не запустилось: '+str(problem))
+                        if 'relay' in state.get('roles',[]) and state.get('pids',{}).get('relay'):
+                            proof={**proof,'relay_pid':state['pids']['relay']};break
+                        if time.monotonic()>=deadline:raise TimeoutError('Реле не подтвердило запуск')
+                        time.sleep(.1)
+                startup_diagnostics.owner_result(owner.root,agent.tree,'resume',proof=proof,removed=removed)
+                return 'Движок запущен.'
+            except Exception as error:
+                try:startup_diagnostics.owner_result(owner.root,agent.tree,'resume',error=error)
+                except Exception:pass
+                raise
+            finally:owner.resume_lock.release()
         raise ValueError('Unknown owner action')
     if command in ('open_path','reveal_path'):
         value=str(args['path'])

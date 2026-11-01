@@ -175,12 +175,12 @@ export function apply(look: Look) {
 }
 
 /** Карточка «Вид» для экрана настроек: варианты кружками и плашками, применяются сразу. */
-export function lookCard(): HTMLElement {
+export function lookCard(options:{phone?:boolean}={}): HTMLElement {
   const look = load();
   const c = el("section", "card look-card");
   c.append(el("h3", "", "Вид"));
   c.append(el("p", "field-hint", "Твой облик окна: готовый вариант или собственная палитра. Изменения применяются сразу; стандартный вид всегда можно вернуть."));
-  c.append(customizationCard(look, () => c.replaceWith(lookCard())));
+  c.append(customizationCard(look, () => c.replaceWith(lookCard(options)),options));
 
   const set = <K extends keyof Look>(k: K, v: Look[K]) => {
     Object.assign(look,load());

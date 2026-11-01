@@ -1,0 +1,19 @@
+.paper-select { display:inline-flex;position:relative;min-width:0;max-width:100%;vertical-align:middle; }
+.field[hidden],.paper-select[hidden] { display:none !important; }
+.paper-select select.paper-select-native { display:none !important; }
+.paper-select-trigger { display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;min-width:0;min-height:40px;border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--surface);color:var(--ink);font:inherit;text-align:left;cursor:pointer; }
+.paper-select-label { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.paper-select-arrow { flex:none;width:7px;height:7px;border-right:1.5px solid var(--ink-2);border-bottom:1.5px solid var(--ink-2);transform:rotate(45deg) translateY(-2px); }
+.paper-select-trigger[aria-expanded="true"] { border-color:var(--accent); }
+.paper-select-trigger:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
+.paper-select-trigger:disabled { opacity:.5;cursor:default; }
+.paper-select-menu { position:fixed;inset:auto;z-index:10000;box-sizing:border-box;min-width:180px;max-width:calc(100vw - 20px);max-height:min(320px,65dvh);overflow:auto;overscroll-behavior:contain;margin:0;padding:5px;border:1px solid var(--line-strong,var(--line));border-radius:12px;background:var(--paper,var(--ground));color:var(--ink);box-shadow:0 8px 28px #00000018;font:400 13px/1.4 var(--sans); }
+.paper-select-menu::backdrop { background:transparent; }
+.paper-select-option { display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:36px;padding:8px 10px;border-radius:7px;cursor:pointer;overflow-wrap:anywhere; }
+.paper-select-option[aria-selected="true"] { background:var(--surface-2);font-weight:500; }
+.paper-select-option[aria-selected="true"]::after { content:'✓';color:var(--accent);flex:none; }
+.paper-select-option:focus,.paper-select-option:hover { outline:none;background:var(--accent-soft,var(--surface-2)); }
+.paper-select-option[aria-disabled="true"] { opacity:.45;cursor:default; }
+.paper-select-group { padding:9px 10px 4px;color:var(--ink-3);font-size:11px; }
+.phone-setting>.paper-select,.look-row>.paper-select,.field>.paper-select { width:100%; }
+@media(prefers-reduced-motion:no-preference) { .paper-select-menu { animation:paper-select-in .12s ease-out; } @keyframes paper-select-in { from { opacity:0;transform:translateY(-3px); } to { opacity:1;transform:translateY(0); } } }

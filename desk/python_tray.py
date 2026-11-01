@@ -2,6 +2,61 @@
 import sys
 
 
+def _popup(native,restore,exit_app):
+    """Application-owned beige tiles, not the Windows context-menu renderer."""
+    from System.Drawing import Color,Font,Point,Size,Region
+    from System.Drawing.Drawing2D import GraphicsPath
+    from System.Windows.Forms import (Form,Button,FormBorderStyle,FormStartPosition,
+        FlatStyle,Padding,Keys,AutoScaleMode)
+    from System.Drawing import ContentAlignment
+    scale=max(1.0,float(native.DeviceDpi)/96.0)
+    px=lambda value:round(value*scale)
+    menu=Form();menu.FormBorderStyle=getattr(FormBorderStyle,'None')
+    menu.ShowInTaskbar=False;menu.ShowIcon=False;menu.TopMost=True
+    menu.StartPosition=FormStartPosition.Manual
+    menu.AutoScaleMode=getattr(AutoScaleMode,'None');menu.KeyPreview=True
+    menu.ClientSize=Size(px(224),px(108))
+    menu.BackColor=Color.FromArgb(248,238,224)
+    menu.Font=Font('Segoe UI',9.5)
+    def rounded(control,radius):
+        path=GraphicsPath();diameter=radius*2
+        path.AddArc(0,0,diameter,diameter,180,90)
+        path.AddArc(control.Width-diameter,0,diameter,diameter,270,90)
+        path.AddArc(control.Width-diameter,control.Height-diameter,diameter,diameter,0,90)
+        path.AddArc(0,control.Height-diameter,diameter,diameter,90,90)
+        path.CloseFigure();control.Region=Region(path);path.Dispose()
+    rounded(menu,px(12))
+    for index,(text,action) in enumerate((('Открыть Hélène',restore),('Выйти',exit_app))):
+        button=Button();button.Text=text;button.AccessibleName=text
+        button.Location=Point(px(6),px(6+index*50));button.Size=Size(px(212),px(46))
+        button.FlatStyle=FlatStyle.Flat;button.FlatAppearance.BorderSize=0
+        button.UseVisualStyleBackColor=False;button.BackColor=Color.FromArgb(255,249,240)
+        button.ForeColor=Color.FromArgb(48,40,31)
+        button.FlatAppearance.MouseOverBackColor=Color.FromArgb(238,220,198)
+        button.FlatAppearance.MouseDownBackColor=Color.FromArgb(225,199,168)
+        button.TextAlign=ContentAlignment.MiddleLeft;button.Padding=Padding(px(13),0,0,0)
+        button.TabIndex=index
+        rounded(button,px(8))
+        def click(sender,event,callback=action):
+            menu.Hide();callback(sender,event)
+        button.Click+=click;menu.Controls.Add(button)
+    def escape(sender,event):
+        if event.KeyCode==Keys.Escape:
+            menu.Hide();event.Handled=True;event.SuppressKeyPress=True
+        elif event.KeyCode in (Keys.Up,Keys.Down):
+            menu.Controls[0 if menu.Controls[1].Focused else 1].Focus()
+            event.Handled=True;event.SuppressKeyPress=True
+        elif event.KeyCode==Keys.Enter:
+            next((button for button in menu.Controls if button.Focused),menu.Controls[0]).PerformClick()
+            event.Handled=True;event.SuppressKeyPress=True
+    menu.KeyDown+=escape
+    menu.Deactivate+=lambda sender,event:menu.Hide()
+    def close_popup(sender,event):
+        event.Cancel=True;menu.Hide()
+    menu.FormClosing+=close_popup
+    return menu
+
+
 def _enable_taskbar_minimize(native):
     """Restore the shell's minimize contract without adding visible chrome.
 
@@ -41,7 +96,8 @@ def install(app):
         return
     from System import Action
     from System.Drawing import Icon, SystemIcons
-    from System.Windows.Forms import CloseReason, ContextMenuStrip, NotifyIcon, ToolStripMenuItem
+    from System.Windows.Forms import CloseReason,NotifyIcon,MouseButtons,Cursor,Screen
+    from System.Drawing import Point
 
     native = app.window.native
 
@@ -61,7 +117,7 @@ def install(app):
             _enable_taskbar_minimize(native)
             native.HandleCreated += handle_created
             app._taskbar_minimize_bound = handle_created
-        menu = ContextMenuStrip()
+        menu = None
         tray = NotifyIcon()
         image = None
 
@@ -77,7 +133,9 @@ def install(app):
             native.Activate()
 
         def exit_app(sender, event):
+            app.relaunch = False
             app.exit_session = True
+            app.session_exit_intent = True
             app.exiting = True
             native.Close()
 
@@ -89,7 +147,7 @@ def install(app):
         def closed(sender, event):
             tray.Visible = False
             tray.Dispose()
-            menu.Dispose()
+            if menu is not None:menu.Dispose()
             if image is not None:
                 image.Dispose()
             app.tray = None
@@ -99,13 +157,15 @@ def install(app):
             image = Icon(str(icon_path)) if icon_path.is_file() else None
             tray.Icon = image if image is not None else SystemIcons.Application
             tray.Text = 'Hélène'
-            open_item = ToolStripMenuItem('Open Hélène')
-            exit_item = ToolStripMenuItem('Exit')
-            open_item.Click += restore
-            exit_item.Click += exit_app
-            menu.Items.Add(open_item)
-            menu.Items.Add(exit_item)
-            tray.ContextMenuStrip = menu
+            menu=_popup(native,restore,exit_app)
+            def mouse_up(sender,event):
+                if event.Button==MouseButtons.Right:
+                    position=Cursor.Position;area=Screen.FromPoint(position).WorkingArea
+                    menu.Location=Point(max(area.Left,min(position.X,area.Right-menu.Width)),
+                                        max(area.Top,min(position.Y,area.Bottom-menu.Height)))
+                    menu.Show();menu.Activate()
+                elif event.Button==MouseButtons.Left:restore(sender,event)
+            tray.MouseUp+=mouse_up
             tray.DoubleClick += restore
             tray.Visible = True
             native.FormClosing += closing
@@ -113,7 +173,7 @@ def install(app):
             app.tray = tray
         except Exception as error:
             tray.Dispose()
-            menu.Dispose()
+            if menu is not None:menu.Dispose()
             if image is not None:
                 image.Dispose()
             app.event('tray-error', {'error': str(error)})

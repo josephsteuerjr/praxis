@@ -23,6 +23,7 @@ class IncomingCoordinator(unittest.TestCase):
         write(f.tree/'memory/.self-review/runtime.json', {'supported':False, 'at':time.time()})
         operation=f.operation()
         operation.update(state='needs_attention', error=pipeline.UNAVAILABLE, created=time.time()-7200)
+        operation.pop('coordinator',None)  # This fixture predates incoming-host admission.
         write(f.directory/'pipeline.json', operation)
         self.binding={'kind':'incoming-update-runtime.v1', 'program':str(f.new), 'plan_id':f.directory.name}
         # Current incoming panels freeze the app/core seam as well as A/L/B/M.
@@ -91,12 +92,14 @@ class IncomingCoordinator(unittest.TestCase):
     def test_runtime_validation_rejects_tampered_core_and_coordinator(self):
         f=self.f
         for name in ('forge.py','forge_worker.py','llm.py'):(f.new/'tree'/name).write_text('# trusted fixture\n')
-        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','source_update_battery','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay','agent_source_update','update_source')]
+        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','source_update_battery','source_update_parallel','source_update_hand','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay','agent_source_update','update_source')]
         for name in names:
             p=f.new/'app'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('# trusted fixture\n')
         core={p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in (f.new/'tree').iterdir()}
         app={n:hashlib.sha256((f.new/'app'/n).read_bytes()).hexdigest() for n in names}
         write(f.new/'code-upstream.json',{'files':core});write(f.new/'source-inputs.json',{'files':app})
+        from update_verification_fixture import bind
+        bind(f.root,f.new,read(f.new/'python-app.json')['version'])
         self.assertEqual(host.verified_runtime(f.new)['kind'],'incoming-update-runtime.v1')
         path=f.new/'tree/forge.py';before=path.read_bytes();path.write_text('tampered=True\n')
         with self.assertRaisesRegex(ValueError,'runtime source changed'):host.verified_runtime(f.new)

@@ -21,7 +21,7 @@ import uuid
 TRIGGERS = ("after_update", "contested_overlay", "after_self_edit", "on_request")
 DEPTHS = ("quick", "normal", "deep")
 DEFAULTS = {"after_update": False, "after_self_edit": False, "depth": "normal",
-            "models": [], "max_parallel": 1, "max_iters": 20}
+            "models": [], "max_parallel": 1, "max_iters": 0}
 TERMINAL = {"done", "error", "failed", "stalled", "stopped", "cancelled", "lost"}
 LIVE = {"starting", "running", "finishing", "unknown"}
 EXCLUDED = {"memory", "data", "workspace", "agents", "backups", "logs", "sessions",
@@ -103,9 +103,10 @@ def settings(config=None):
             raise ValueError(key + " must be a boolean")
     if value["depth"] not in DEPTHS:
         raise ValueError("depth must be quick, normal or deep")
-    for key, maximum in (("max_parallel", 8), ("max_iters", 200)):
-        if type(value[key]) is not int or not 1 <= value[key] <= maximum:
-            raise ValueError(f"{key} must be between 1 and {maximum}")
+    if type(value['max_parallel']) is not int or not 1 <= value['max_parallel'] <= 8:
+        raise ValueError('max_parallel must be between 1 and 8')
+    if type(value['max_iters']) is not int or value['max_iters'] < 0:
+        raise ValueError('max_iters must be a nonnegative integer; 0 means no limit')
     if (not isinstance(value["models"], list) or len(value["models"]) > 8
             or any(not isinstance(model, str) or not model.strip() or len(model) > 200
                    or "://" in model or "::" in model for model in value["models"])):
@@ -845,6 +846,10 @@ class Service:
                                 critic.update(verdict="insufficient", reason="critic execution incomplete or inspection tools failed")
                         else:
                             critic["execution"] = self.forge._unit_state(directory).get("status") or "unknown"
+                        if critic['execution'] in LIVE:
+                            critic.setdefault('started_at',time.time())
+                        elif critic['execution'] not in ('queued','unknown'):
+                            critic.setdefault('finished_at',time.time())
                     self._aggregate(record)
                 except (OSError, ValueError, TypeError, AttributeError) as exc:
                     record.update(execution="error", state="needs_attention", verdict="insufficient",
