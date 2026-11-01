@@ -4,6 +4,7 @@ No second task process or authority store. The descriptor is a short-lived
 capability for one admitted plan; all edits still use the canonical pipeline.
 """
 from contextlib import contextmanager
+from contextlib import nullcontext
 import hmac,json,os,secrets,threading
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -90,7 +91,7 @@ def public_context(directory):
 
 @contextmanager
 def serve(directory,tree,program,binding):
-    from . import source_update as pipeline,agent_source_update,owner_stop
+    from . import source_update as pipeline,agent_source_update,owner_stop,update_composition
     import psutil
     directory,tree,program=(Path(p).resolve() for p in (directory,tree,program))
     operation=read(directory/'pipeline.json');producer=read(directory/'coordinator-process.json')
@@ -99,6 +100,7 @@ def serve(directory,tree,program,binding):
     identity={'pid':os.getpid(),'birth':psutil.Process().create_time(),'invocation':producer.get('invocation','')}
     if producer and any(producer.get(key)!=identity[key] for key in ('pid','birth')):
         raise ValueError('Source-tool transport does not own the named coordinator')
+    runtime_admission=update_composition.admit_runtime(directory,operation)
     token=secrets.token_urlsafe(32);closed=threading.Event()
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
@@ -121,14 +123,21 @@ def serve(directory,tree,program,binding):
                 if (current.get('id')!=directory.name or current.get('input_sha256')!=operation['input_sha256']
                         or latest.get('input_sha256')!=operation['input_sha256']):
                     raise ValueError('Current update identity changed')
-                if action=='status':result=agent_source_update.command(tree,action,**args)
-                else:
-                    if (owner_stop.stopped() or owner_stop.paused() or pipeline._cancelled(directory)
-                            or pipeline.job_blocked(latest)):raise ValueError('Stop/Pause or retired update forbids source edits')
-                    if not pipeline._LOCK.acquire(blocking=False):
-                        raise ValueError('Verification/review is executing; read status and wait for its actual result')
-                    try:result=agent_source_update.command(tree,action,**args)
-                    finally:pipeline._LOCK.release()
+                # Edits bind the initially admitted immutable runtime. Actual
+                # tests/review/apply still re-read it outside this scope.
+                scope=(update_composition.editing_runtime(runtime_admission)
+                       if action in ('status','read','diff','resolve','patch','finish') else nullcontext())
+                with scope:
+                    if action=='status':result=agent_source_update.command(tree,action,**args)
+                    else:
+                        if (owner_stop.stopped() or owner_stop.paused() or pipeline._cancelled(directory)
+                                or pipeline.job_blocked(latest)):raise ValueError('Stop/Pause or retired update forbids source edits')
+                        if not pipeline._LOCK.acquire(blocking=False):
+                            raise ValueError('Verification/review is executing; read status and wait for its actual result')
+                        try:result=agent_source_update.command(tree,action,**args)
+                        finally:pipeline._LOCK.release()
+                if action=='status' and isinstance(result,dict):
+                    result['runtime_validation']='Initial admission for editing; full revalidation before verification and apply'
                 value={'ok':True,'result':result}
             except PermissionError as exc:code=403;value={'ok':False,'error':str(exc)}
             except (OSError,ValueError,RuntimeError,KeyError,TypeError) as exc:code=409;value={'ok':False,'error':str(exc)}

@@ -9,6 +9,8 @@ permissions:
 jobs:
   candidate:
     runs-on: macos-15
+    env:
+      FINAL_SHARED_DELTA: '1'
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4

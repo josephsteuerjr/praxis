@@ -7,6 +7,9 @@ incoming package: source-only repair cannot silently stand in for a rebuild.
 """
 from __future__ import annotations
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
@@ -17,6 +20,67 @@ from .package_notice import read, write
 FORMAT = 'helene-update-composition.v1'
 MANIFESTS = ('python-app.json', 'source-inputs.json', 'python-package-files.json',
              'code-upstream.json', 'app-upstream.json','source-update-baseline.json','component-downloads.json')
+
+@dataclass(frozen=True)
+class RuntimeAdmission:
+    program: str
+    manifests: tuple
+    package_signature: str
+    files: tuple
+
+_EDIT_RUNTIME = ContextVar('source_edit_runtime_admission', default=None)
+
+
+def _runtime_inventory(program,state):
+    """Actual runtime verification, retained for every execution/apply gate."""
+    from .validation_read import current,parallel,scope,checkpoint
+    check=current()
+    if read(program/'python-package-files.json').get('files')!=state['package_files']:
+        raise ValueError('Composition runtime declaration differs from the immutable passport')
+    def measured(item):
+        name,row=item;merge.relative(name);candidate=program/name
+        if candidate.is_symlink() or not candidate.resolve().is_relative_to(program):raise ValueError('Linked runtime input')
+        expected=row.get('sha256') if isinstance(row,dict) else row
+        digest=_hash(candidate)
+        if digest!=expected:raise ValueError('Incoming runtime changed: '+name)
+        return name.removeprefix('runtime/'),{'sha256':digest,
+            'mode':'100755' if os.name!='nt' and candidate.stat().st_mode&0o111 else '100644'}
+    selected=[(name,row) for name,row in state['package_files'].items() if name.startswith('runtime/')
+              and '__pycache__' not in Path(name).parts and not name.endswith('.pyc')]
+    def scoped(item):
+        with scope(check):return measured(item)
+    runtime=dict(parallel(scoped,selected,workers=os.cpu_count() or 1))
+    if not runtime:raise ValueError('Incoming runtime inventory is empty')
+    actual=set()
+    for here,dirs,names in os.walk(program/'runtime',followlinks=False):
+        checkpoint(check)
+        dirs[:]=[name for name in dirs if name!='__pycache__']
+        for name in [*dirs,*names]:
+            checkpoint(check)
+            item=Path(here)/name
+            if item.is_symlink() or getattr(item,'is_junction',lambda:False)():raise ValueError('Linked runtime path')
+            if item.is_file() and not name.endswith('.pyc'):actual.add(item.relative_to(program/'runtime').as_posix())
+    if actual!=set(runtime):raise ValueError('Runtime has undeclared or changed installable files')
+    return runtime
+
+
+def admit_runtime(directory,operation=None):
+    """One actual admission owned in memory by the existing coordinator."""
+    directory=Path(directory).resolve();state=read(directory/'composition.json')
+    if not state:state=prepare(directory,operation)
+    _frozen(directory,state)
+    runtime=_runtime_inventory(Path(state['program']),state)
+    return RuntimeAdmission(str(Path(state['program']).resolve()),tuple(sorted(state['manifests'].items())),
+        merge.signature(state['package_files']),tuple((name,row['sha256'],row['mode']) for name,row in sorted(runtime.items())))
+
+
+@contextmanager
+def editing_runtime(admission):
+    """Candidate editing only; never exported as verification or apply evidence."""
+    if not isinstance(admission,RuntimeAdmission):raise ValueError('A coordinator-owned runtime admission is required')
+    token=_EDIT_RUNTIME.set(admission)
+    try:yield
+    finally:_EDIT_RUNTIME.reset(token)
 
 
 def _hash(path):
@@ -114,37 +178,14 @@ def describe(directory, operation=None):
     _frozen(directory, state)
     plan = merge.validate_inputs(directory)
     app = app_inventory(directory / 'compound/app')
-    runtime = {}
     program = Path(state['program'])
-    for name, row in state['package_files'].items():
-        merge.relative(name)
-        if not name.startswith('runtime/'):
-            continue
-        if '__pycache__' in Path(name).parts or name.endswith('.pyc'):
-            continue
-        expected = row.get('sha256') if isinstance(row, dict) else row
-        candidate = program / name
-        if candidate.is_symlink() or not candidate.resolve().is_relative_to(program):
-            raise ValueError('Linked runtime input')
-        digest = _hash(candidate)
-        if digest != expected:
-            raise ValueError('Incoming runtime changed: ' + name)
-        runtime[name.removeprefix('runtime/')] = {'sha256': digest,
-            'mode': '100755' if os.name != 'nt' and candidate.stat().st_mode & 0o111 else '100644'}
-    if not runtime:
-        raise ValueError('Incoming runtime inventory is empty')
-    # Additional executable/package bytes are not hidden behind the old manifest.
-    actual_runtime = set()
-    for here, dirs, names in os.walk(program / 'runtime', followlinks=False):
-        dirs[:] = [name for name in dirs if name != '__pycache__']
-        for name in [*dirs, *names]:
-            item = Path(here) / name
-            if item.is_symlink() or getattr(item, 'is_junction', lambda: False)():
-                raise ValueError('Linked runtime path')
-            if item.is_file() and not name.endswith('.pyc'):
-                actual_runtime.add(item.relative_to(program / 'runtime').as_posix())
-    if actual_runtime != set(runtime):
-        raise ValueError('Runtime has undeclared or changed installable files')
+    admission=_EDIT_RUNTIME.get()
+    if admission is None:runtime=_runtime_inventory(program,state)
+    else:
+        if (admission.program!=str(program.resolve()) or admission.manifests!=tuple(sorted(state['manifests'].items()))
+                or admission.package_signature!=merge.signature(state['package_files'])):
+            raise ValueError('Runtime editing admission belongs to another immutable input')
+        runtime={name:{'sha256':digest,'mode':mode} for name,digest,mode in admission.files}
     payload = {'format': FORMAT, 'input_sha256': state['input_sha256'],
                'core': merge.inventory(directory / 'result'), 'app': app,
                'runtime': runtime, 'manifests': state['manifests']}

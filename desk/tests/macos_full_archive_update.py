@@ -1,6 +1,6 @@
 """Real complete-archive update and rollback on one disposable native Mac."""
 from pathlib import Path
-import hashlib,http.server,json,os,shutil,ssl,subprocess,sys,threading,time,urllib.error,zipfile
+import hashlib,http.server,json,os,re,shutil,ssl,subprocess,sys,threading,time,urllib.error,zipfile
 REPO=Path(__file__).resolve().parents[2];TEMP=Path(os.environ['RUNNER_TEMP']).resolve()
 OUT=REPO/'evidence-full-update';OUT.mkdir(exist_ok=True)
 sys.path[:0]=[str(REPO/'desk/tests'),str(REPO/'desk/installer'),str(REPO/'desk')]
@@ -124,8 +124,20 @@ def subject():
                 if replies:
                     raw=replies[-1]['content']
                     if isinstance(raw,list):raw='\n'.join(str(part.get('text','')) for part in raw if isinstance(part,dict))
-                    try:tool_reply=json.loads(raw) if isinstance(raw,str) else raw
-                    except ValueError:tool_reply={'error':'Non-JSON model tool observation'}
+                    try:tool_reply=json.JSONDecoder().raw_decode(raw)[0] if isinstance(raw,str) else raw
+                    except ValueError:
+                        # Model observations include ResultRef metadata and may
+                        # externalize the middle of a large JSON status. Audit
+                        # the exact immutable native result behind that marker.
+                        match=re.search(r'\[ResultRef run=([^ ]+) id=([^ ]+) path=([^ ]+) sha256=([0-9a-f]{64}) size=(\d+)',raw)
+                        if match:
+                            target=(places.data/match[3]).resolve()
+                            assert target.is_relative_to(places.data/'memory/runs') and match[1] in target.parts
+                            payload=target.read_bytes();assert len(payload)==int(match[5]) and hashlib.sha256(payload).hexdigest()==match[4]
+                            tool_reply=json.loads(payload)
+                            status_tool.update(native_durable_result_sha256=match[4],native_durable_result_size=len(payload),
+                                model_observed_result_reference=True)
+                        else:tool_reply={'error':'Non-JSON model tool observation without a native result reference'}
                     if not isinstance(tool_reply,dict):tool_reply={'error':'Non-object model tool observation'}
                     status_tool.update(observed=True,seconds=time.monotonic()-status_tool['started'],
                         returned_state=tool_reply.get('state'),error=tool_reply.get('error',''))

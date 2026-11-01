@@ -7,6 +7,7 @@ export interface TestActivity {
 export interface UpdateActivity {
   id?: string; state?: string; version?: string; live?: boolean; role?: string; review_id?: string;
   next?: string; error?: string; tests?: TestActivity;
+  editing?: {completed?: number; total?: number; pending?: string[]};
 }
 interface Reviewer {
   id: string; name?: string; execution?: string; live?: boolean; review_id?: string;
@@ -36,15 +37,23 @@ export function workActivity(root: HTMLElement,options: {reviewers?: boolean} = 
   progress.setAttribute('aria-label','Завершённые этапы проверки');testBody.append(progress,numbers,files);tests.append(testBody);
   const reviewBadge=node('span','work-badge','review'),role=node('span','work-role');heading.append(reviewBadge,role);
   const roster=node('div','work-roster'),error=node('p','work-error');error.setAttribute('role','status');
-  root.append(tests,heading,roster,error);
+  const editing=node('details','work-edits'),editSummary=node('summary');
+  const editBadge=node('span','work-badge','исправления'),editTitle=node('span','work-edit-title'),editCount=node('span','work-count');
+  const editBody=node('div','work-detail');editSummary.append(editBadge,editTitle,editCount);editing.append(editSummary,editBody);
+  root.append(editing,tests,heading,roster,error);
   const rows=new Map<string,{row:HTMLDetailsElement;name:HTMLElement;state:HTMLElement;body:HTMLElement}>();
   let operation='';
   return (value: WorkActivity) => {
     const update=value.update, t=update?.tests;
-    if (operation!==(update?.id || '')) {operation=update?.id || '';tests.open=false;}
+    if (operation!==(update?.id || '')) {operation=update?.id || '';tests.open=false;editing.open=false;}
     const reviewers=value.reviewers || [];
     const displayed=options.reviewers===false ? [] : reviewers;
     root.hidden=!update && reviewers.length===0;
+    editing.hidden=!update || !['waiting_agent','needs_attention'].includes(update.state || '');
+    editTitle.textContent=update?.error ? 'нужно внимание' : 'ожидают завершения';
+    editCount.textContent=update?.editing?.total ? `${count(update.editing.completed)}/${count(update.editing.total)}` : '';
+    editBody.replaceChildren(node('p','',update?.next || 'Агент готовит кандидат.'),
+      ...(update?.editing?.pending || []).map(name=>node('div','work-file',name)));
     tests.hidden=!t;
     if (t) {
       const completed=count(t.completed),total=count(t.total),active=t.active || [];
@@ -60,7 +69,7 @@ export function workActivity(root: HTMLElement,options: {reviewers?: boolean} = 
     reviewBadge.hidden=reviewers.length===0 && !['reviewing','review_requested'].includes(update?.state || '');
     reviewBadge.textContent=`review${reviewers.length ? ` · ${reviewers.filter(row=>row.live).length}/${reviewers.length}` : ''}`;
     if(reviewers.length && reviewers.every(row=>row.execution==='done'))reviewBadge.textContent='review · завершено';
-    role.textContent=update?.error ? 'нужно исправление' : update?.role==='agent' ? 'агент готовит исправления'
+    role.textContent=update?.error ? 'нужно исправление' : update?.role==='agent' ? 'ожидает исправлений от агента'
       : update?.state==='completed' ? 'обновление завершено' : update?.state==='paused' ? 'на паузе'
       : ['cancelled','superseded'].includes(update?.state || '') ? 'продолжение отменено'
       : update?.state==='ready_to_apply' ? 'готово к переключению' : update ? 'обновлятор продолжает' : '';

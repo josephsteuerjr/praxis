@@ -720,7 +720,10 @@ def _main(argv=None):
         raise ValueError('A selected session tree requires an admitted migration job')
     if not args.session_job and program != root:
         raise ValueError("Program and configuration root must currently match; agent data may live elsewhere via absolute tree")
-    if (sys.platform=='darwin' and not (args.session_job or args.migration or args.browser or args.migration_wizard)
+    pending_entry=root/'python-migration.json'
+    recovery_entry=(pending_entry.is_file() and json.loads(pending_entry.read_text(encoding='utf-8')).get('state')
+                    not in ('completed','new_app_started','retirement_incomplete'))
+    if (sys.platform=='darwin' and not (args.session_job or args.migration or args.browser or args.migration_wizard or recovery_entry)
             and (root/'python-app.json').is_file()
             and __import__('localharness.python_platform',fromlist=['target']).target(root)=='macos-arm64'):
         from localharness import posix_first_start as first

@@ -70,6 +70,20 @@ class PythonApplicationTests(unittest.TestCase):
                 self.assertFalse((root/'helene.json').exists())
                 self.assertFalse((root/'.helene/first-start.json').exists())
 
+    def test_pending_mac_profile_migration_reaches_recovery_before_first_start(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary).resolve()
+            (root/'python-app.json').write_text('{"target":"macos-arm64"}')
+            (root/'python-migration.json').write_text('{"state":"preserving","id":"interrupted-copy"}')
+            with patch.object(python_app.sys,'platform','darwin'), \
+                    patch('localharness.owner_stop.stopped',return_value=False), \
+                    patch('first_start_window.main',side_effect=AssertionError('Interrupted copy must keep its recovery entry')), \
+                    patch('helene_setup.main',return_value=0) as recovery:
+                self.assertEqual(python_app._main(['--root',str(root)]),0)
+                recovery.assert_called_once_with(['--root',str(root),'--source-mode','clean'])
+            self.assertFalse((root/'.helene/first-start.json').exists())
+
     def test_close_hides_but_exit_and_relaunch_destroy(self):
         from unittest.mock import Mock
         with tempfile.TemporaryDirectory() as temporary:

@@ -42,16 +42,22 @@ def build():
     from build_python_macos_rc import unpack
     unpack(TEMP/'native-organs.zip',organs)
     command([sys.executable,'-m','pip','check'],'pip-check.log',timeout=120)
-    command([sys.executable,'-B','-m','unittest','tests.t_component_jobs_0111','tests.t_voice_download_paths_0111',
-        'tests.t_observer_exit_0111','tests.t_operation_diagnostics_0111','tests.t_python_app','tests.t_source_work_event_0111','-v'],
+    shared_delta=os.environ.get('FINAL_SHARED_DELTA')=='1'
+    cases=(['tests.t_update_runtime_status_0111','tests.t_source_update_hand_3010','tests.t_update_activity_3010',
+        'tests.t_python_app.PythonApplicationTests.test_pending_mac_profile_migration_reaches_recovery_before_first_start',
+        'tests.t_app_source_update_3110'] if shared_delta else ['tests.t_component_jobs_0111','tests.t_voice_download_paths_0111',
+        'tests.t_observer_exit_0111','tests.t_operation_diagnostics_0111','tests.t_python_app','tests.t_source_work_event_0111'])
+    command([sys.executable,'-B','-m','unittest',*cases,'-v'],
         'shared-regressions.log',cwd=REPO/'desk',timeout=600)
     node_env=dict(os.environ,HELENE_TEST_PYTHON=sys.executable,PATH=str(TOOLS/'bin')+os.pathsep+os.environ.get('PATH',''))
-    node_cases=('contract','pending-voice','speech-status-3010','voice-refresh','voice-session-210','voice-shortcut','session','tray','settings-firstrun')
+    node_cases=(('work-activity-3010','update-monitor-0111','panel-density-2910','panel-widths') if shared_delta else
+        ('contract','pending-voice','speech-status-3010','voice-refresh','voice-session-210','voice-shortcut','session','tray','settings-firstrun'))
     command([TOOLS/'bin/node','--test',*[REPO/'desk/app/test'/(n+'.test.mjs') for n in node_cases]],
         'shared-node-regressions.log',cwd=REPO/'desk/app',env=node_env,timeout=300)
     # Prior contract/custody gates passed; only updater callsites changed now.
-    command([sys.executable,'-B','-m','unittest','tests.t_python_native_update_2410','-v'],
-        'verification-contracts.log',cwd=REPO/'desk',timeout=600)
+    if not shared_delta:
+        command([sys.executable,'-B','-m','unittest','tests.t_python_native_update_2410','-v'],
+            'verification-contracts.log',cwd=REPO/'desk',timeout=600)
     env=dict(os.environ,PATH='/usr/bin:/bin:/usr/sbin:/sbin',PYTHONNOUSERSITE='1')
     for name,args in (('pytest',['--version']),('trafilatura',['--version']),('bottle',['--version']),('pip',['--version'])):
         command([RUNTIME/'bin'/name,*args],'portable-console-'+name+'.log',cwd=TEMP,env=env,timeout=60)
@@ -92,6 +98,9 @@ def build():
     # its final bytes were sealed; further update/matrix jobs reuse this SHA.
     import rc18_macos_pipeline as native
     native.PROGRAM=program
-    native.native()
+    if shared_delta:
+        from macos_final_delta_smoke import smoke
+        smoke(program)
+    else:native.native()
 
 if __name__=='__main__':{'prepare':prepare,'build':build}[sys.argv[1]]()

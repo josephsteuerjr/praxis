@@ -110,7 +110,12 @@ export function start(opts: WindowOptions): void {
   const headTitle = q<HTMLElement>("#head-title");
   const statePill = q<HTMLElement>("#state");
   const stateText = q<HTMLElement>("#state-text");
-  const refreshReviewActivity = reviewActivity(q<HTMLElement>("#review-activity"),
+  const workBadge=q<HTMLElement>("#review-activity");
+  workBadge.setAttribute('role','button');workBadge.tabIndex=0;
+  const openWork=()=>dispatchEvent(new CustomEvent('frame-live-runs'));
+  workBadge.addEventListener('click',openWork);
+  workBadge.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openWork();}});
+  const refreshReviewActivity = reviewActivity(workBadge,
     () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key + "\n" + cfg.agent);
   const stateAction = q<HTMLButtonElement>("#state-action");
   const pulseBox = q<HTMLElement>("#pulse");
@@ -598,8 +603,10 @@ export function start(opts: WindowOptions): void {
     const button = document.querySelector("[data-live-runs]");
     if (button) button.textContent = `Агент: ${(event as CustomEvent<string>).detail} — раскрыть действия`;
   });
-  addEventListener("frame-live-runs", () => {
+  addEventListener("frame-live-runs", async () => {
+    if(S.view!=='talk')await show('talk');
     setCollapsed("panel", false, true);
+    if(matchMedia('(max-width:760px)').matches){app.classList.add('narrow-activity');panelBtn.setAttribute('aria-pressed','true');}
     void panel.revealLiveRun();
   });
 
@@ -1159,7 +1166,9 @@ export function start(opts: WindowOptions): void {
       return;
     }
     statePill.dataset.level = s.level;
-    stateText.textContent = s.level === "live" && s.activity ? "На связи" : s.phrase;
+    stateText.textContent = s.level === "live" && s.activity
+      ? s.activity.phase==='model' ? 'Думает' : s.activity.phase==='tool' ? 'Выполняет действие' : 'Работает'
+      : s.phrase;
     statePill.title = s.phrase;
     if (s.action) {
       stateAction.hidden = false;

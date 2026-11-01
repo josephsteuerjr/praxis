@@ -18,7 +18,10 @@ def activity(tree):
     installed=pipeline.applied_status(tree) if request.get('installed_receipt') else None
     if not installed and Path(operation.get('tree') or '.').resolve()!=tree:return None
     state=operation.get('state','unknown')
-    if state in ('cancelled','superseded') and not installed:return None
+    if state=='superseded' and not installed:return None
+    if state=='cancelled' and not installed:
+        return {'id':request['id'],'state':state,'version':request.get('version',''),'live':False,'role':'none',
+                'next':'Автопродолжение отменено. Предыдущая версия сохранена; проверки и ревью не выполняются.'}
     producer=read(directory/'coordinator-process.json')
     live=not installed and bool(producer) and process_state(producer)=='alive'
     result={'id':request['id'],'state':state,'version':request.get('version',''),
@@ -28,6 +31,18 @@ def activity(tree):
         'next':('Исправить замечания и завершить кандидат' if state in ('waiting_agent','needs_attention')
             else 'Проверки, независимое ревью и переход выполняет обновлятор'),
         'composition':operation.get('composition_sha256','')}
+    # Candidate progress is a passive projection, never a source-tool call or
+    # evidence that a worker/reviewer is executing. Keep the current failure
+    # visible even when the selected agent has returned from its turn.
+    pending=[];completed=total=0
+    for prefix,target in (('',directory/'plan.json'),('app/',directory/'app-merge/plan.json')):
+        plan=read(target)
+        conflicts=plan.get('conflicts',[]);resolved=plan.get('resolved',{})
+        if not isinstance(conflicts,list) or not isinstance(resolved,dict):continue
+        names=[name for name in conflicts if isinstance(name,str)]
+        total+=len(names);completed+=sum(name in resolved for name in names)
+        pending.extend(prefix+name for name in names if name not in resolved)
+    result['editing']={'completed':completed,'total':total,'pending':pending}
     if installed:result.update(state='completed',role='none',live=False,next='Обновление установлено, запуск подтверждён',error='')
     control=(operation.get('coordinator') or {}).get('job_control') or {}
     if not installed and control.get('tree') and control.get('path'):

@@ -1,13 +1,17 @@
 .work-activity { border-bottom: 1px solid var(--line); padding: 3px 0 7px; margin-bottom: 7px; font: 12px/1.5 var(--sans); min-width: 0; }
 .work-activity[hidden], .work-activity [hidden] { display: none !important; }
-.work-heading, .work-tests > summary, .work-reviewer > summary { display: flex; align-items: baseline; gap: 7px; min-width: 0; min-height: 27px; padding: 4px 2px; box-sizing: border-box; }
-.work-tests, .work-reviewer { border: 0; border-radius: 0; background: transparent; margin: 0; }
-.work-tests > summary, .work-reviewer > summary { cursor: pointer; list-style: none; border-bottom: 1px solid var(--line); }
+.work-heading, .work-tests > summary, .work-reviewer > summary, .work-edits > summary { display: flex; align-items: baseline; gap: 7px; min-width: 0; min-height: 27px; padding: 4px 2px; box-sizing: border-box; }
+.work-tests, .work-reviewer, .work-edits { border: 0; border-radius: 0; background: transparent; margin: 0; }
+.work-tests > summary, .work-reviewer > summary, .work-edits > summary { cursor: pointer; list-style: none; border-bottom: 1px solid var(--line); }
+.work-edits > summary::-webkit-details-marker { display: none; }
+.work-edits > summary::before { content: '›'; color: var(--ink-3); }
+.work-edits[open] > summary::before { content: '⌄'; }
 .work-tests > summary::-webkit-details-marker, .work-reviewer > summary::-webkit-details-marker { display: none; }
 .work-tests > summary::before, .work-reviewer > summary::before { content: '›'; color: var(--ink-3); }
 .work-tests[open] > summary::before, .work-reviewer[open] > summary::before { content: '⌄'; }
 .work-badge { flex: none; font: 10px/1.5 var(--mono); letter-spacing: .02em; color: var(--accent); }
-.work-current, .work-name, .work-role { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-current, .work-name, .work-role, .work-edit-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-edits > summary:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; }
 .work-count, .work-state { flex: none; max-width: 48%; color: var(--ink-3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-role { font-size: 11px; color: var(--ink-3); }
 .work-detail { padding: 5px 4px 7px 12px; font-size: 11px; overflow-wrap: anywhere; }

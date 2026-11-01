@@ -8,6 +8,18 @@ from localharness.package_notice import read,write
 
 
 class Projection(unittest.TestCase):
+    def test_idle_correction_progress_is_visible_without_executing_the_pipeline(self):
+        operation=read(self.directory/'pipeline.json');operation['state']='waiting_agent'
+        write(self.directory/'pipeline.json',operation)
+        write(self.directory/'plan.json',{'conflicts':['one.py'],'resolved':{'one.py':{'side':'incoming'}}})
+        write(self.directory/'app-merge/plan.json',{'conflicts':['index.html','sw.js'],'resolved':{'index.html':{'side':'incoming'}}})
+        before={p:p.read_bytes() for p in self.root.rglob('*.json')}
+        with patch.object(pipeline.merge,'validate_inputs',side_effect=AssertionError('No hashing for UI')), \
+             patch.object(session_host,'process_state',return_value='alive'):
+            value=activity.activity(self.tree)
+        self.assertEqual(value['state'],'waiting_agent');self.assertFalse(value.get('review_id'))
+        self.assertEqual(value['editing'],{'completed':2,'total':3,'pending':['app/sw.js']})
+        self.assertEqual(before,{p:p.read_bytes() for p in self.root.rglob('*.json')})
     def test_completed_parent_job_does_not_look_like_an_update_still_running(self):
         from localharness import desktop_update_request as jobs
         operation=read(self.directory/'pipeline.json')

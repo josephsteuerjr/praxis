@@ -2,7 +2,7 @@ name: Hélène native Mac shared regression consumers
 on:
   push:
     branches: [codex/rc18-macos-0111]
-    paths: [desk/tests/macos_shared_regressions.py, desk/tests/macos_archive_delta.py, .github/workflows/rc18-macos-shared.yml]
+    paths: [.github/workflows/rc18-macos-shared.yml]
 permissions:
   contents: read
   actions: read

@@ -24,7 +24,7 @@ export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
 import { forgePanel } from './views/forge-panel';
 import './views/forge-panel.css';
-import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, isWindowRoom, runIsRecent, type Run } from "./state";
+import { LEGACY_WINDOW_KEY, S, WINDOW_ROOM, foreignHarness, runIsRecent, type Run } from "./state";
 
 interface Turn {
   run_id: string;
@@ -289,7 +289,7 @@ function mountCol(): Col {
   }
   if (!workRoot) {
     workRoot=document.createElement('section');
-    observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,workActivity(workRoot,{reviewers:false}));
+    observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,workActivity(workRoot));
   }
   box.innerHTML = `<div class="turns-inner">
     <div class="turns-head"><span class="turns-title">Ходы</span><span class="turns-room"></span><span class="turns-n"></span></div>
@@ -570,7 +570,9 @@ function liveRunId(): string {
   let key = String(run.chat_id ?? "");
   if (key === LEGACY_WINDOW_KEY) key = WINDOW_ROOM;
   if (run.chat_id == null) return r.run;
-  return key === S.room || (isWindowRoom(key) && isWindowRoom(S.room) && key === S.room) ? r.run : "";
+  // The selected agent's current work remains visible while another chat is
+  // open. Historical turns still come from the selected conversation only.
+  return r.run;
 }
 
 function liveSince(runId: string): string {
