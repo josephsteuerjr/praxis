@@ -50,7 +50,7 @@ class Trial(unittest.TestCase):
 
 class UpstreamDiff(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name).resolve()
         self.base,self.local,self.incoming=[self.root/n for n in ('base','authored','upstream')]
         for path,text in ((self.base,BASE),(self.local,LOCAL),(self.incoming,NEW)):put(path,'module.py',text)
         self.plan=self.root/'third-tree';merge.create(self.base,self.local,self.incoming,self.plan)
@@ -108,7 +108,7 @@ class ScratchCustody(unittest.TestCase):
         from types import SimpleNamespace
         from localharness import python_source_updater
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
-        self.root=Path(self.tmp.name);self.old=self.root/'old';self.new=self.root/'Helene-update-fixture/Helene';self.data=self.root/'data'
+        self.root=Path(self.tmp.name).resolve();self.old=self.root/'old';self.new=self.root/'Helene-update-fixture/Helene';self.data=self.root/'data'
         for path in (self.old,self.new,self.data):path.mkdir(parents=True)
         self.args=SimpleNamespace(old=self.old,new=self.new,staging=self.new.parent,admission_name='updater-admitted.json')
         self.value={'format':switch.FORMAT,'old':str(self.old),'new':str(self.new),

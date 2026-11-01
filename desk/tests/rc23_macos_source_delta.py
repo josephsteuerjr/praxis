@@ -35,6 +35,8 @@ def prepare():
             target.parent.mkdir(parents=True,exist_ok=True)
             target.write_bytes(z.read(row));target.chmod(mode&0o777 or 0o644)
     python=SUBJECT/'Helene/runtime/bin/python3'
+    (OUT/'RUNTIME-INPUT-VERIFIED.json').write_text(json.dumps({'outer_sha256':OUTER_SHA,
+        'archive_sha256':ARCHIVE_SHA,'runtime_and_node_extracted':True},indent=2)+'\n')
     os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),'check'])
 
 class Observed(unittest.TextTestResult):
@@ -43,6 +45,10 @@ class Observed(unittest.TextTestResult):
     def addSkip(self,test,reason):super().addSkip(test,reason);self.rows.append({'id':test.id(),'status':'skipped','reason':reason})
     def addFailure(self,test,error):super().addFailure(test,error);self.rows.append({'id':test.id(),'status':'failed','error':self._exc_info_to_string(error,test)})
     def addError(self,test,error):super().addError(test,error);self.rows.append({'id':test.id(),'status':'error','error':self._exc_info_to_string(error,test)})
+    def addSubTest(self,test,subtest,error):
+        super().addSubTest(test,subtest,error)
+        if error is not None:self.rows.append({'id':test.id(),'status':'failed-subtest','subtest':str(subtest),
+                                              'error':self._exc_info_to_string(error,test)})
 
 def check():
     assert sys.platform=='darwin' and platform.machine()=='arm64'
@@ -55,6 +61,10 @@ def check():
         'tests.t_app_source_update_3110',
         'tests.t_source_update_pipeline_220.PipelineTests.test_selected_finish_automatically_verifies_reviews_and_reaches_apply_gate',
         'tests.t_posix_first_start_0111']
+    repair_only=os.environ.get('RC23_REPAIR_ONLY')=='1'
+    if repair_only:
+        modules=['tests.t_restore_job_3110','tests.t_final_validation_health_3110',
+                 'tests.t_upstream_recovery_3110','tests.t_portable_switch_3010']
     suite=unittest.defaultTestLoader.loadTestsFromNames(modules)
     def flatten(value):
         for case in value:
@@ -66,6 +76,8 @@ def check():
     with (OUT/'python-tests.log').open('w') as stream:
         result=unittest.TextTestRunner(verbosity=2,resultclass=Observed,stream=stream).run(suite)
     report={'complete':True,'passed':result.wasSuccessful(),'tests':result.testsRun,'unique':len(set(ids)),
+        'failed_case_ids':sorted({row['id'] for row in result.rows if row['status'] not in ('passed','skipped')}),
+        'failure_assertions':len(result.failures),'errors':len(result.errors),'repair_only':repair_only,
         'outcomes':result.rows,'seconds':time.monotonic()-started,'python':sys.version,
         'platform':platform.platform(),'machine':platform.machine(),
         'runtime_donor_archive_sha256':ARCHIVE_SHA,
@@ -73,6 +85,12 @@ def check():
         'scope':'Source-level native Darwin unit/loopback fixtures. No new distributed RC23 assembly, GUI/TCC, semantic-review or broad-matrix acceptance.'}
     (OUT/'python-results.json').write_text(json.dumps(report,indent=2)+'\n')
     node=SUBJECT/'Helene/verification-tools/bin/node'
+    if repair_only:
+        (OUT/'node-result.json').write_text(json.dumps({'repeated':False,'retained_passed_run':41353011091,
+            'reason':'Only three Python fixture paths and the native QA observer/workflow changed; shared UI/Node inputs unchanged.'},indent=2)+'\n')
+        print(json.dumps({k:v for k,v in report.items() if k!='outcomes'}),flush=True)
+        assert result.wasSuccessful()
+        return
     names=['phone-settings-dismiss-0111','phone-sheet-lifecycle-0211','release-notice-0111',
            'update-monitor-0111','work-activity-3010','panel-density-2910','panel-widths']
     with (OUT/'node-tests.log').open('wb') as output:

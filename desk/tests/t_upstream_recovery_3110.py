@@ -24,7 +24,7 @@ from localharness.package_notice import read,write
 class ModernRecovery(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory(prefix='restore-pristine-private-')
-        self.addCleanup(self.temporary.cleanup);self.base=Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup);self.base=Path(self.temporary.name).resolve()
         self.root=self.base/'Helene';self.data=self.base/'profile/Helene/data'
         self.put(self.data/'memory/history.jsonl',b'owner conversation exact bytes\n')
         self.put(self.data/'memory/.control/autonomy-paused.json',b'{"paused":true}\n')

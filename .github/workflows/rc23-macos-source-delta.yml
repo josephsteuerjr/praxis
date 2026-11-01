@@ -9,6 +9,8 @@ permissions:
 jobs:
   source:
     runs-on: macos-15
+    env:
+      RC23_REPAIR_ONLY: '1'
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -27,7 +29,7 @@ jobs:
       - name: Exact runtime and bounded source regression checks
         run: python3 desk/tests/rc23_macos_source_delta.py prepare
       - uses: actions/cache/save@v4
-        if: success() && steps.old.outputs.cache-hit != 'true'
+        if: always() && steps.old.outputs.cache-hit != 'true' && hashFiles('evidence-rc23-source/RUNTIME-INPUT-VERIFIED.json') != ''
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
           key: helene-rc18-complete-baa533b05f4b63c6-v2

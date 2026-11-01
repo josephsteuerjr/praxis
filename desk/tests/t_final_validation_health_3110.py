@@ -313,7 +313,7 @@ class ReadScope(unittest.TestCase):
 class ScopedGitRead(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='final-read-git-');self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name);self.repo=self.root/'.git'
+        self.root=Path(self.temp.name).resolve();self.repo=self.root/'.git'
         from localharness import source_merge
         self.merge=source_merge
 
@@ -424,7 +424,7 @@ class StopPollBudget(unittest.TestCase):
     """Real private file/Exit reads; pre-aged unit window is not native300."""
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(prefix='stop-poll-budget-');self.addCleanup(self.temp.cleanup)
-        self.base=Path(self.temp.name);self.program=self.base/'programme';self.program.mkdir()
+        self.base=Path(self.temp.name).resolve();self.program=self.base/'programme';self.program.mkdir()
         self.data=self.base/'data';self.data.mkdir();self.payload=self.base/'payload';self.payload.mkdir()
         from localharness.package_notice import write
         write(self.program/'helene.json',{'tree':str(self.data),'code':str(self.payload),'mode':'local','agent':{'name':'Private fixture'}})
@@ -556,7 +556,7 @@ class ReadSamplingPriority(unittest.TestCase):
     """Actual nested file readers park for caller health; no OS authority."""
     def setUp(self):
         temp=tempfile.TemporaryDirectory(prefix='health-read-priority-');self.addCleanup(temp.cleanup)
-        self.file=Path(temp.name)/'private.bin';self.file.write_bytes(b'x'*(4*1024*1024))
+        self.file=Path(temp.name).resolve()/'private.bin';self.file.write_bytes(b'x'*(4*1024*1024))
         self.expected=hashlib.sha256(self.file.read_bytes()).hexdigest()
         now=time.monotonic();self.window=switch.HealthWindow(since=now-300,previous=now,identity='generation')
 
