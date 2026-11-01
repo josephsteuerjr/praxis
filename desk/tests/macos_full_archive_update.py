@@ -91,8 +91,10 @@ def subject():
     places=first.Places(home/'Helene')
     result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'real_complete_release_archive':True,
         'synthetic_profile_only':True,'semantic_model_review_accepted':False,'steps':{}}
-    recheck=os.environ.get('UPDATE_RECHECK')=='remaining'
+    cold_only=os.environ.get('UPDATE_RECHECK')=='cold-only'
+    recheck=os.environ.get('UPDATE_RECHECK') in ('remaining','cold-only')
     if recheck:result['previous_exact_archive_https_clean_support_and_legacy_run']=41301228972
+    if cold_only:result['previous_preserve_cancellation_and_failed_start_rollback_run']=41302093575
     write('FULL-UPDATE.json',result)
     provider_calls=[]
     class Provider(http.server.BaseHTTPRequestHandler):
@@ -197,59 +199,60 @@ def subject():
             assert identity,admission
             finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
             result['steps']['real_full_archive_clean_update_and_native_restart']=cocoa_identity();screenshot('after-clean.png');write('FULL-UPDATE.json',result)
-        # Modified-preserve requires full semantic clearance even without Git
-        # conflicts. A fixture provider cannot grant it. Prove the real gate
-        # retains the old program and its own explicit cancellation settles.
-        from localharness import source_update,python_source_updater as mechanical
-        authored=selected_code()/'archive-preserved-owner.py';authored.write_bytes(b'OWNER_NONCONFLICT=23\n')
-        before_preserve=(root/'helene.json').read_bytes();window_pid=native.control(root)['pid']
-        owner_stop.change_pause(places.data,False,reason='explicit synthetic preserve qualification',via='fixture')
-        admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
-        identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
-        plans=native.wait(lambda:list((places.data/'memory/.source-updates').glob('*/plan.json')),120)
-        gated=[p for p in plans if source_update.requires_gate(read(p),p.parent)]
-        assert gated,'Authored source was not admitted to its mandatory gate'
-        assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
-        assert (root/'helene.json').read_bytes()==before_preserve and not mechanical.active_update(root).exists()
-        result['steps']['modified_preserve_requires_semantic_gate_old_program_retained']=True
-        cancelled=native.invoke(root,'update_cancel');assert cancelled.get('ok')
-        finish(identity,timeout=180,failed=True)
-        native.wait(lambda:jobs.status(places.data).get('state')=='cancelled',90)
-        assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
-        data_exact();owner_stop.change_pause(places.data,True,reason='synthetic preserve cancelled',via='fixture')
-        result['steps']['pending_preserve_explicit_cancel_retains_program_data_and_authored_code']=True
-        screenshot('after-preserve-cancel.png');write('FULL-UPDATE.json',result)
-        # Force only the newly launched, exact-path migration child to fail.
-        # All archive bytes and updater logic remain the real distribution.
-        code=selected_code();(code/'archive-owner-change.py').write_bytes(b'OWNER_CHANGE=1\n')
-        before_cfg=(root/'helene.json').read_bytes();before_file=(code/'archive-owner-change.py').read_bytes()
-        stop_watch=threading.Event();killed=[]
-        existing_pid=native.control(root)['pid'];admission_started=time.time()
-        def fail_new_start():
-            while not stop_watch.is_set():
-                for p in psutil.process_iter(['pid','cmdline','create_time']):
-                    try:
-                        args=p.info.get('cmdline') or []
-                        if (p.pid!=existing_pid and p.info['create_time']>=admission_started-.05
-                                and '--migration' in args and str(root) in args
-                                and any(a in args for a in (str(root/'app/python_app.py'),str(root/'Helene.app/Contents/MacOS/Helene')))):
-                            born=p.info['create_time']
-                            if psutil.Process(p.pid).create_time()==born:
-                                p.kill();killed.append({'pid':p.pid,'birth':born});return
-                    except (psutil.NoSuchProcess,psutil.AccessDenied):pass
-                time.sleep(.01)
-        watcher=threading.Thread(target=fail_new_start,daemon=True);watcher.start()
-        admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'clean'})
-        identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
-        finish(identity,failed=True);stop_watch.set();watcher.join(3)
-        assert len(killed)==1,'No specifically observed new startup child was faulted'
-        native.wait(lambda:info().get('version')=='2.3.0-rc.18',120)
-        assert (code/'archive-owner-change.py').read_bytes()==before_file
-        assert (root/'helene.json').read_bytes()==before_cfg
-        data_exact();result['steps']['full_archive_failed_start_rolls_back_and_reopens_previous']={'faulted':killed,'reopened':cocoa_identity()}
-        screenshot('after-rollback.png');write('FULL-UPDATE.json',result)
-        # Crash the exact admitted updater AFTER measured real replacements,
-        # before new startup. A later ordinary launch must consume the durable
+        if not cold_only:
+            # Modified-preserve requires full semantic clearance even without Git
+            # conflicts. A fixture provider cannot grant it. Prove the real gate
+            # retains the old program and its own explicit cancellation settles.
+            from localharness import source_update,python_source_updater as mechanical
+            authored=selected_code()/'archive-preserved-owner.py';authored.write_bytes(b'OWNER_NONCONFLICT=23\n')
+            before_preserve=(root/'helene.json').read_bytes();window_pid=native.control(root)['pid']
+            owner_stop.change_pause(places.data,False,reason='explicit synthetic preserve qualification',via='fixture')
+            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
+            identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
+            plans=native.wait(lambda:list((places.data/'memory/.source-updates').glob('*/plan.json')),120)
+            gated=[p for p in plans if source_update.requires_gate(read(p),p.parent)]
+            assert gated,'Authored source was not admitted to its mandatory gate'
+            assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
+            assert (root/'helene.json').read_bytes()==before_preserve and not mechanical.active_update(root).exists()
+            result['steps']['modified_preserve_requires_semantic_gate_old_program_retained']=True
+            cancelled=native.invoke(root,'update_cancel');assert cancelled.get('ok')
+            finish(identity,timeout=180,failed=True)
+            native.wait(lambda:jobs.status(places.data).get('state')=='cancelled',90)
+            assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
+            data_exact();owner_stop.change_pause(places.data,True,reason='synthetic preserve cancelled',via='fixture')
+            result['steps']['pending_preserve_explicit_cancel_retains_program_data_and_authored_code']=True
+            screenshot('after-preserve-cancel.png');write('FULL-UPDATE.json',result)
+            # Force only the newly launched, exact-path migration child to fail.
+            # All archive bytes and updater logic remain the real distribution.
+            code=selected_code();(code/'archive-owner-change.py').write_bytes(b'OWNER_CHANGE=1\n')
+            before_cfg=(root/'helene.json').read_bytes();before_file=(code/'archive-owner-change.py').read_bytes()
+            stop_watch=threading.Event();killed=[]
+            existing_pid=native.control(root)['pid'];admission_started=time.time()
+            def fail_new_start():
+                while not stop_watch.is_set():
+                    for p in psutil.process_iter(['pid','cmdline','create_time']):
+                        try:
+                            args=p.info.get('cmdline') or []
+                            if (p.pid!=existing_pid and p.info['create_time']>=admission_started-.05
+                                    and '--migration' in args and str(root) in args
+                                    and any(a in args for a in (str(root/'app/python_app.py'),str(root/'Helene.app/Contents/MacOS/Helene')))):
+                                born=p.info['create_time']
+                                if psutil.Process(p.pid).create_time()==born:
+                                    p.kill();killed.append({'pid':p.pid,'birth':born});return
+                        except (psutil.NoSuchProcess,psutil.AccessDenied):pass
+                    time.sleep(.01)
+            watcher=threading.Thread(target=fail_new_start,daemon=True);watcher.start()
+            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'clean'})
+            identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
+            finish(identity,failed=True);stop_watch.set();watcher.join(3)
+            assert len(killed)==1,'No specifically observed new startup child was faulted'
+            native.wait(lambda:info().get('version')=='2.3.0-rc.18',120)
+            assert (code/'archive-owner-change.py').read_bytes()==before_file
+            assert (root/'helene.json').read_bytes()==before_cfg
+            data_exact();result['steps']['full_archive_failed_start_rolls_back_and_reopens_previous']={'faulted':killed,'reopened':cocoa_identity()}
+            screenshot('after-rollback.png');write('FULL-UPDATE.json',result)
+        # Crash the exact admitted updater AFTER its real full overlay,
+        # before startup commit. A later ordinary launch must consume the durable
         # recovery journal before importing the mixed application.
         from localharness import python_source_updater as mechanical,update_progress
         before_cfg=(root/'helene.json').read_bytes()
@@ -259,8 +262,8 @@ def subject():
             while not stop_watch.is_set():
                 try:
                     state=update_progress.status(root)
-                    if (mechanical.active_update(root).is_file() and state and state.get('stage')=='switching'
-                            and state.get('files',0)>=2 and state.get('updated_at',0)>=began):
+                    if (mechanical.active_update(root).is_file() and state and state.get('stage')=='starting'
+                            and state.get('updated_at',0)>=began):
                         for receipt in (root/'.helene/updates').glob('*/updater-admitted.json'):
                             if receipt.stat().st_mtime<began:continue
                             admitted=read(receipt)
@@ -271,9 +274,21 @@ def subject():
                             pending=read(mechanical.active_update(root))
                             if pending.get('committed'):
                                 process.resume();continue
+                            note=read(root/'python-migration.json')
+                            if note.get('state') in ('new_app_started','completed'):
+                                process.resume();continue
+                            stopped_children=[]
+                            for child in psutil.process_iter(['pid','create_time','cmdline']):
+                                args=child.info.get('cmdline') or []
+                                if (child.info['create_time']>=began and '--migration' in args and str(root) in args
+                                        and str(root/'Helene.app/Contents/MacOS/Helene') in args):
+                                    birth=child.info['create_time']
+                                    if psutil.Process(child.pid).create_time()==birth:
+                                        child.kill();stopped_children.append({'pid':child.pid,'birth':birth})
                             process.kill()
                             interrupted.append({'pid':admitted['pid'],'birth':admitted['birth'],
-                                'replacements_observed':state['files'],'stage':state['stage']})
+                                'point':'full overlay finished, startup uncommitted','stage':state['stage'],
+                                'new_startups_faulted':stopped_children})
                             return
                 except (OSError,ValueError,psutil.Error):pass
                 time.sleep(.005)
