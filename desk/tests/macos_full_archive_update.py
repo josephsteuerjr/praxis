@@ -93,7 +93,7 @@ def subject():
         'synthetic_profile_only':True,'semantic_model_review_accepted':False,'steps':{}}
     cold_only=os.environ.get('UPDATE_RECHECK')=='cold-only'
     recheck=os.environ.get('UPDATE_RECHECK') in ('remaining','cold-only')
-    if recheck:result['previous_exact_archive_https_clean_support_and_legacy_run']=41301228972
+    if recheck:result['previous_exact_archive_https_clean_support_pristine_preserve_run']=41308479060
     if cold_only:result['previous_preserve_cancellation_and_failed_start_rollback_run']=41302093575
     write('FULL-UPDATE.json',result)
     provider_calls=[];provider_users=[];status_tool={'issued':False,'observed':False}
@@ -228,25 +228,29 @@ def subject():
         if not cold_only:
             # The ordinary pristine preserve path needs no invented semantic
             # clearance and must complete through the same real archive.
-            owner_stop.change_pause(places.data,False,reason='explicit synthetic pristine preserve',via='fixture')
-            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
-            identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
-            finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
-            result['steps']['real_full_archive_pristine_preserve_update']=cocoa_identity()
-            owner_stop.change_pause(places.data,True,reason='pristine preserve completed',via='fixture')
-            screenshot('after-pristine-preserve.png');write('FULL-UPDATE.json',result)
+            if not recheck:
+                owner_stop.change_pause(places.data,False,reason='explicit synthetic pristine preserve',via='fixture')
+                admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
+                identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
+                finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
+                result['steps']['real_full_archive_pristine_preserve_update']=cocoa_identity()
+                owner_stop.change_pause(places.data,True,reason='pristine preserve completed',via='fixture')
+                screenshot('after-pristine-preserve.png');write('FULL-UPDATE.json',result)
             # Modified-preserve requires full semantic clearance even without Git
             # conflicts. A fixture provider cannot grant it. Prove the real gate
             # retains the old program and its own explicit cancellation settles.
             from localharness import source_update,python_source_updater as mechanical
             authored=selected_code()/'archive-preserved-owner.py';authored.write_bytes(b'OWNER_NONCONFLICT=23\n')
             before_preserve=(root/'helene.json').read_bytes();window_pid=native.control(root)['pid']
+            prior_plans=set((places.data/'memory/.source-updates').glob('*/plan.json'))
             owner_stop.change_pause(places.data,False,reason='explicit synthetic preserve qualification',via='fixture')
             admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
             identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
-            plans=native.wait(lambda:list((places.data/'memory/.source-updates').glob('*/plan.json')),120)
-            gated=[p for p in plans if source_update.requires_gate(read(p),p.parent)]
-            assert gated,'Authored source was not admitted to its mandatory gate'
+            # Earlier pristine updates retain their plan. Do not treat that
+            # already-completed plan as admission of this new asynchronous job.
+            gated=native.wait(lambda:[p for p in (places.data/'memory/.source-updates').glob('*/plan.json')
+                if p not in prior_plans and source_update.requires_gate(read(p),p.parent)],180)
+            assert gated,'Authored source was not admitted to its new mandatory gate'
             assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
             assert (root/'helene.json').read_bytes()==before_preserve and not mechanical.active_update(root).exists()
             result['steps']['modified_preserve_requires_semantic_gate_old_program_retained']=True
