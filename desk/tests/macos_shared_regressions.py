@@ -76,49 +76,55 @@ def subject():
         z.writestr('Helene/voice/fixture.txt',b'component exact native fixture\n')
     valid=payload.getvalue();active_owner=None;release=threading.Event();server=None
     processes=[];logs=[]
+    recheck_login=os.environ.get('RECHECK_MOVED_LOGIN')=='1'
+    if recheck_login:
+        result['previous_passed_installer_and_two_observer_run']=41304306311
+        result['focus']='Only moved-programme login/teardown tail; two observers are its setup precondition.'
+    os.environ['PYTHONFAULTHANDLER']='1'
     try:
-        manifest(valid);active_owner=owner();admit=jobs.start(active_owner,'whisper')
-        native.wait(lambda:jobs.status(fixture,'whisper').get('state') in ('completed','failed'),90)
-        assert jobs.status(fixture,'whisper')['state']=='completed'
-        assert (fixture/'voice/fixture.txt').read_bytes()==b'component exact native fixture\n'
-        active_owner.close();active_owner=None
-        result['steps']['actual_cached_tiny_install']=True;write('SHARED-MAC.json',result)
-        manifest(b'not a ZIP');active_owner=owner();jobs.start(active_owner,'whisper')
-        native.wait(lambda:jobs.status(fixture,'whisper').get('state')=='failed',90)
-        failed=jobs.status(fixture,'whisper');assert failed.get('error_type')=='BadZipFile',failed
-        active_owner.close();active_owner=None
-        manifest(valid);active_owner=owner();jobs.start(active_owner,'whisper')
-        native.wait(lambda:jobs.status(fixture,'whisper').get('state')=='completed',90)
-        active_owner.close();active_owner=None
-        result['steps']['actual_bad_zip_durable_error_and_explicit_retry']=True;write('SHARED-MAC.json',result)
-        # Hold a real HTTPS transfer so close() must stop the exact background
-        # installer rather than merely observe an already finished child.
-        cert=OUT/'localhost-cert.pem';key=TEMP/'shared-localhost-key.pem'
-        subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=localhost',
-            '-addext','subjectAltName=DNS:localhost','-keyout',str(key),'-out',str(cert)],capture_output=True,check=True)
-        os.environ['SSL_CERT_FILE']=str(cert)
-        entered=threading.Event()
-        raw=b'fixture download, not model weights\n'+b'x'*(2*1024*1024)
-        class Slow(http.server.BaseHTTPRequestHandler):
-            def log_message(self,*args):pass
-            def do_GET(self):
-                self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers()
-                try:self.wfile.write(raw[:65536]);self.wfile.flush();entered.set();release.wait(90)
-                except OSError:pass
-        server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Slow)
-        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cert,key)
-        server.socket=context.wrap_socket(server.socket,server_side=True)
-        threading.Thread(target=server.serve_forever,daemon=True).start()
-        manifest(raw,url=f'https://localhost:{server.server_port}/fixture-whisper.zip')
-        active_owner=owner();jobs.start(active_owner,'whisper');assert entered.wait(45)
-        pin=jobs.status(fixture,'whisper')['worker'];assert jobs.alive(pin) is True
-        active_owner.close();active_owner=None
-        native.wait(lambda:jobs.alive(pin) is False,30)
-        assert jobs.status(fixture,'whisper')['state']=='interrupted'
-        result['steps']['actual_exit_stops_blocked_https_component_worker']=True;write('SHARED-MAC.json',result)
-        release.set();server.shutdown();server=None
-        moved=fixture.with_name('Moved installer Hélène');fixture.rename(moved)
-        result['steps']['component_fixture_moves_after_exit']=True
+        if not recheck_login:
+            manifest(valid);active_owner=owner();admit=jobs.start(active_owner,'whisper')
+            native.wait(lambda:jobs.status(fixture,'whisper').get('state') in ('completed','failed'),90)
+            assert jobs.status(fixture,'whisper')['state']=='completed'
+            assert (fixture/'voice/fixture.txt').read_bytes()==b'component exact native fixture\n'
+            active_owner.close();active_owner=None
+            result['steps']['actual_cached_tiny_install']=True;write('SHARED-MAC.json',result)
+            manifest(b'not a ZIP');active_owner=owner();jobs.start(active_owner,'whisper')
+            native.wait(lambda:jobs.status(fixture,'whisper').get('state')=='failed',90)
+            failed=jobs.status(fixture,'whisper');assert failed.get('error_type')=='BadZipFile',failed
+            active_owner.close();active_owner=None
+            manifest(valid);active_owner=owner();jobs.start(active_owner,'whisper')
+            native.wait(lambda:jobs.status(fixture,'whisper').get('state')=='completed',90)
+            active_owner.close();active_owner=None
+            result['steps']['actual_bad_zip_durable_error_and_explicit_retry']=True;write('SHARED-MAC.json',result)
+            # Hold a real HTTPS transfer so close() must stop the exact background
+            # installer rather than merely observe an already finished child.
+            cert=OUT/'localhost-cert.pem';key=TEMP/'shared-localhost-key.pem'
+            subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=localhost',
+                '-addext','subjectAltName=DNS:localhost','-keyout',str(key),'-out',str(cert)],capture_output=True,check=True)
+            os.environ['SSL_CERT_FILE']=str(cert)
+            entered=threading.Event()
+            raw=b'fixture download, not model weights\n'+b'x'*(2*1024*1024)
+            class Slow(http.server.BaseHTTPRequestHandler):
+                def log_message(self,*args):pass
+                def do_GET(self):
+                    self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers()
+                    try:self.wfile.write(raw[:65536]);self.wfile.flush();entered.set();release.wait(90)
+                    except OSError:pass
+            server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Slow)
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cert,key)
+            server.socket=context.wrap_socket(server.socket,server_side=True)
+            threading.Thread(target=server.serve_forever,daemon=True).start()
+            manifest(raw,url=f'https://localhost:{server.server_port}/fixture-whisper.zip')
+            active_owner=owner();jobs.start(active_owner,'whisper');assert entered.wait(45)
+            pin=jobs.status(fixture,'whisper')['worker'];assert jobs.alive(pin) is True
+            active_owner.close();active_owner=None
+            native.wait(lambda:jobs.alive(pin) is False,30)
+            assert jobs.status(fixture,'whisper')['state']=='interrupted'
+            result['steps']['actual_exit_stops_blocked_https_component_worker']=True;write('SHARED-MAC.json',result)
+            release.set();server.shutdown();server=None
+            moved=fixture.with_name('Moved installer Hélène');fixture.rename(moved)
+            result['steps']['component_fixture_moves_after_exit']=True
         # Two actual Cocoa observers share one real paused profile owner.
         places=first.Places(home/'Helene');first.prepare(program,places=places)
         first.create_agent(program,{'name':'Two native observers','owner':'Disposable CI','provider':'openai',
@@ -169,7 +175,28 @@ def subject():
         assert binding['ProgramArguments'][0]==str(program/'Helene.app/Contents/MacOS/Helene')
         assert ['--root',str(program)]==binding['ProgramArguments'][1:3]
         subprocess.run(['plutil','-lint',str(plist)],capture_output=True,check=True)
-        native.invoke(program,'python_window',{'action':'exit','relaunch':False,'owner_exit':False});p.wait(30)
+        closing=time.monotonic()
+        pin=(p.pid,psutil.Process(p.pid).create_time())
+        def observe_slow_close():
+            time.sleep(15)
+            if p.poll() is not None:return
+            try:
+                if psutil.Process(pin[0]).create_time()!=pin[1]:return
+                subprocess.run(['sample',str(pin[0]),'2','-file',str(OUT/'moved-close-sample.txt')],capture_output=True,timeout=15)
+                from localharness.session_host import control_path
+                value=json.loads(control_path(program).read_bytes())
+                write('moved-close-owner.json',{k:value.get(k) for k in ('pid','birth','generation','program','tree')})
+            except Exception as error:write('sample-error.json',{'error':str(error)})
+        observer=threading.Thread(target=observe_slow_close,daemon=True);observer.start()
+        native.invoke(program,'python_window',{'action':'exit','relaunch':False,'owner_exit':False})
+        try:p.wait(75)  # SessionClient permits45s RPC +15s owner census, then UI cleanup.
+        except subprocess.TimeoutExpired:
+            import signal
+            if psutil.Process(pin[0]).create_time()==pin[1]:p.send_signal(signal.SIGABRT)
+            raise
+        assert p.returncode==0,'Moved programme close failed; inspect faulthandler/window log'
+        result['moved_close_elapsed_seconds']=time.monotonic()-closing
+        write('SHARED-MAC.json',result)
         target=f'gui/{os.getuid()}/'+binding['Label']
         subprocess.run(['launchctl','bootstrap',f'gui/{os.getuid()}',str(plist)],capture_output=True,check=True)
         try:

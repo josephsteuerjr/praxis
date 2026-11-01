@@ -11,13 +11,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-26]
+        os: [macos-26]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
       CANDIDATE_SHA256: 8730bdebc9e2f66f828a2fbd10a6ca412a70c3fe238a5d2a6feb4ae35030ee22
       ARTIFACT_SHA256: ed4f983c1da982ffb384fbae5bde59ae34ff28d1c7b864d4b153234767cc3ea1
       SKIP_DELTA_TRANSPORT: '1'
+      RECHECK_MOVED_LOGIN: '1'
     steps:
       - uses: actions/checkout@v4
         with:

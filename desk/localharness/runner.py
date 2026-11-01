@@ -2258,6 +2258,19 @@ _UPDATE_TRIES = 3          # столько ходов по записке об�
 _UPDATE_RETRY_SEC = 120.0  # пауза между ними: мозг, упавший на минуту, успевает подняться
 
 
+def _source_update_turn(source_id: str, *, speaker: str, origin_text: str) -> str:
+    """Persist the current work event before the ordinary turn reads its tape.
+
+    origin_text supplies recall and authority, not the current conversation.
+    A stable source_id deduplicates replay in both archive and life memory.
+    """
+    now = _now()
+    desk = _room(STREAM)
+    desk.archive(origin_text, outgoing=False, now=now, sender=speaker, source_id=source_id)
+    desk.life(origin_text, direction='in', actor=speaker, source_id=source_id, now=now)
+    return _turn_in_window(source_id, speaker=speaker, origin_text=origin_text)
+
+
 def _update_report_due() -> None:
     """Испытание или итог обновления на сервере — записка в окно и ход агента (27.09).
 
@@ -2272,7 +2285,7 @@ def _update_report_due() -> None:
         return
     from localharness import source_update
     if source_update.pending(_tree):
-        source_update.notify_due(_tree,_turn_in_window)
+        source_update.notify_due(_tree,_source_update_turn)
         return
     receipt = updates.pending_report(_tree)
     if receipt is None:
