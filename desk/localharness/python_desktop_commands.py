@@ -210,7 +210,8 @@ def invoke(owner, command, args):
         if previous is not None and previous.handle is not None:
             if previous.poll() is None:return 'Загрузка уже выполняется; состояние в карточке голоса.'
             previous.stop()
-        children[key]=owner.background([sys.executable,str(owner.root/'app/localharness/voice.py'),'--tree',str(agent.tree),flag,args['model']],agent.tree/'voice-download.log')
+        children[key]=owner.background([sys.executable,str(owner.root/'app/localharness/voice.py'),'--tree',str(agent.tree),flag,args['model']],
+            agent.tree/'voice-download.log',dict(os.environ,PYTHONIOENCODING='utf-8',PYTHONDONTWRITEBYTECODE='1'))
         owner.voice_jobs=children
         return 'Загрузка компонента началась; состояние появится в карточке голоса.'
     if command=='logs_bundle':
