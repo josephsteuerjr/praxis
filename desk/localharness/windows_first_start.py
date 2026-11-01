@@ -535,6 +535,8 @@ class Backend:
         raise RuntimeError('Windows не освободила прежнюю папку: '+str(path)) from failure
 
     def shortcuts(self,roots,current):
+        from .python_windows import retarget_run
+        retarget_run(roots,current)
         from .migration_windows import shortcut_folders,powershell,link_belongs,unpin_shortcut,install_shortcuts,run_privileged
         # Resolve every shortcut in one COM session, not one PowerShell per
         # link per former installation (which used to take minutes).

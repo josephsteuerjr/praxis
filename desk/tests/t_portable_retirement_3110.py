@@ -209,6 +209,16 @@ class PortableRetirement(unittest.TestCase):
             return retirement.commit(self.fx.root, value, window,
                                      places=self.fx.places, backend=self.fx.backend)
 
+    def test_already_removed_captured_programme_does_not_block_remaining_retirement(self):
+        scenario=self._scenario();missing=scenario.programs[0]
+        shutil.rmtree(missing)
+        data_before=self._snapshot(self.data)
+        result=self._commit(scenario.value)
+        self.assertEqual(result['state'],'completed')
+        self.assertIn(str(missing),result['removed'])
+        self.assertFalse(any(action[0]=='remove' and action[1]==missing for action in self.fx.backend.actions))
+        for name,raw in data_before.items():self.assertEqual((self.data/name).read_bytes(),raw)
+
     def _assert_batch_blocked(self, scenario, *, value=None):
         value = scenario.value if value is None else value
         before = {root: self._snapshot(root) for root in scenario.containers}

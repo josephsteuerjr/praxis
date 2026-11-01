@@ -14,6 +14,12 @@ from .package_notice import read
 FORMAT='helene-portable-retirement.v1'
 
 
+def missing(path):
+    try:Path(path).lstat()
+    except FileNotFoundError:return True
+    return False  # Access denied and device errors remain real failures.
+
+
 def path(program):return Path(program)/'.helene/retirement.json'
 
 
@@ -156,6 +162,7 @@ def validate(program,value,places):
             if root.exists():raise ValueError('A retired path has been reused; it is retained')
             continue
         if str(root)==deleting and not root.exists():continue
+        if missing(root):continue  # A captured programme may already have been uninstalled.
         guard_cleanup_data([root],places,[places.data])
         stamp=root.stat()
         if [stamp.st_dev,stamp.st_ino]!=row['directory']:raise ValueError('Retirement directory was replaced')
@@ -172,7 +179,7 @@ def validate(program,value,places):
         owners=[row for row in value['targets'] if source.is_relative_to(plain(row['root']))]
         if not owners or not destination.is_relative_to(places.data/'retained-assets'):
             raise ValueError('Retained trial assets leave admitted scope')
-        source_gone=owners[0]['root'] in removed or (owners[0]['root']==deleting and not Path(deleting).exists())
+        source_gone=owners[0]['root'] in removed or missing(owners[0]['root'])
         if not source_gone and snapshot(source)!=asset['snapshot']:
             raise ValueError('Прежние файлы изменились во время проверки')
         if snapshot(destination)!=asset['snapshot']:raise ValueError('Copied trial assets changed')
@@ -185,7 +192,9 @@ def _validate_target(row,value,places):
     from .first_start_assets import snapshot
     from .validation_read import checkpoint
     checkpoint()
-    root=plain(row['root']);guard_cleanup_data([root],places,[places.data]);stamp=root.stat()
+    root=plain(row['root'])
+    if missing(root):return False
+    guard_cleanup_data([root],places,[places.data]);stamp=root.stat()
     if [stamp.st_dev,stamp.st_ino]!=row['directory']:raise ValueError('Retirement directory was replaced')
     for raw,previous in row['programs'].items():
         checkpoint()
@@ -196,6 +205,7 @@ def _validate_target(row,value,places):
         if source.is_relative_to(root):
             if snapshot(source)!=asset['snapshot'] or snapshot(plain(asset['destination']))!=asset['snapshot']:
                 raise ValueError('Retained asset changed before programme deletion')
+    return True
 
 
 def commit(program,value,window,*,places=None,backend=None):
@@ -216,6 +226,8 @@ def commit(program,value,window,*,places=None,backend=None):
     backend.excluded=[program]
     deleting=value.get('deleting')
     if deleting and not Path(deleting).exists():value['removed'].append(deleting);value.pop('deleting',None)
+    for row in value['targets']:
+        if row['root'] not in value['removed'] and missing(row['root']):value['removed'].append(row['root'])
     roots=[plain(row['root']) for row in value['targets'] if row['root'] not in value['removed']]
     value.update(state='commit-started',healthy_seconds=TRIAL_SECONDS)
     _write(path(program),value,private=True)
@@ -238,7 +250,9 @@ def commit(program,value,window,*,places=None,backend=None):
             if owner_stop.stopped() or session_exit.requested(program):raise InterruptedError('Owner stopped programme retirement')
             if retirement_update.cancelled(value):raise InterruptedError('Owner cancelled this update; remaining former programmes retained')
             captured=next(row for row in value['targets'] if row['root']==str(root))
-            monitored_validation(program,window,lambda:_validate_target(captured,value,places),stopped=stopped)
+            if not monitored_validation(program,window,lambda:_validate_target(captured,value,places),stopped=stopped):
+                value['removed'].append(str(root));_write(path(program),value,private=True)
+                continue
             backend.assert_quiet([root])
             if stopped():raise InterruptedError('Owner stopped before programme retirement')
             value['deleting']=str(root);_write(path(program),value,private=True)
@@ -251,7 +265,11 @@ def commit(program,value,window,*,places=None,backend=None):
             if root.exists():raise RuntimeError('Former programme remains')
             value['removed'].append(str(root));value.pop('deleting',None);_write(path(program),value,private=True)
         if stopped():raise InterruptedError('Owner stopped before final retirement shortcuts')
-        backend.shortcuts(roots,program)
+        for gone in value['removed']:
+            if not missing(gone):raise ValueError('A retired path has been reused; it is retained')
+        # Retarget captured old links even if their programme was already gone.
+        backend.shortcuts([plain(row['root']) for row in value['targets']],program)
+        value.pop('error',None)
         value.update(state='completed',completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
         _write(path(program),value,private=True)
     except BaseException as error:
@@ -294,7 +312,8 @@ def start(program,host=None,*,owner=None):
             return {'started':False,'running':True,'pid':previous.pid}
         command=[str(interpreter_for(program)),'-B','-s',str(program/'app/localharness/portable_retirement.py'),
              '--program',str(program),'--identity',value['id'],'--sha256',authority(value)]
-        owner.retirement_helper=owner.background(command,directory(program,'logs')/'retirement-worker.log',permanent_environment())
+        environment=permanent_environment();environment.update(PYTHONIOENCODING='utf-8',PYTHONDONTWRITEBYTECODE='1')
+        owner.retirement_helper=owner.background(command,directory(program,'logs')/'retirement-worker.log',environment)
         return {'started':True,'pid':owner.retirement_helper.pid}
 
 

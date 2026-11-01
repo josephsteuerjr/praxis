@@ -40,6 +40,7 @@ interface VoiceState {
     got_bytes: number;
     total_bytes: number;
     updated_utc: string;
+    active?: boolean | null;
   } | null;
 }
 
@@ -70,7 +71,7 @@ interface SpeechState {
   model: string;
   library: EngineState;
   catalog: Array<{ id: string; title: string; note: string; size_mb: number; installed: boolean }>;
-  download: { state: string; voice: string; done_mb?: number; size_mb?: number; at?: string; error?: string } | null;
+  download: { state: string; voice: string; note?: string; got_bytes?: number; total_bytes?: number; active?: boolean | null; done_mb?: number; size_mb?: number; at?: string; error?: string } | null;
 }
 
 export interface VoiceCard {
@@ -157,12 +158,12 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const say = (state: VoiceState) => {
     const down = state.download;
-    const busy = !!down && down.state === "running" && fresh(down.updated_utc);
+    const busy = !!down && down.state === "running" && (down.active ?? fresh(down.updated_utc));
     fetchBtn.disabled = busy;
     if (busy) {
       const total = down!.total_bytes || 1;
       note.className = "receipt";
-      note.textContent = `качаю ${down!.model}: ${mb(down!.got_bytes)} из ~${mb(total)}`;
+      note.textContent = `${down!.note || 'Скачиваю'} · ${down!.model}: ${mb(down!.got_bytes)} из ~${mb(total)}`;
     } else if (down && down.state === "failed") {
       note.className = "receipt err";
       note.textContent = down.note;
@@ -244,8 +245,8 @@ export function voiceCard(draft: Config): VoiceCard {
       }
       const down = state.download;
       const dv = speech?.download;
-      if ((down && down.state === "running" && fresh(down.updated_utc))
-          || (dv && dv.state === "running" && fresh(dv.at || ""))
+      if ((down && down.state === "running" && (down.active ?? fresh(down.updated_utc)))
+          || (dv && dv.state === "running" && (dv.active ?? fresh(dv.at || "")))
           || (speak && speech?.library.present && speech.ready)) {
         timer = setTimeout(() => void refresh(), 2000);
       }
@@ -283,7 +284,7 @@ export function voiceCard(draft: Config): VoiceCard {
   const speechPickBox = el("div");
   const speechActions = el("div", "actions");
   const speechNote = el("span", "receipt");
-  const speechBtn = button("Установить XTTS из комплекта", "quiet", () => void startVoice());
+  const speechBtn = button("Скачать и установить XTTS", "quiet", () => void startVoice());
   speechActions.append(speechBtn, speechNote);
   const speechFields = el("div");
   const deviceLabel=el('label','field-label','Вычисления XTTS');
@@ -356,11 +357,11 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const sayVoice = (state: SpeechState) => {
     const down = state.download;
-    const busy = !!down && down.state === "running" && fresh(down.at || "");
+    const busy = !!down && down.state === "running" && (down.active ?? fresh(down.at || ""));
     speechBtn.disabled = busy;
     if (busy) {
       speechNote.className = "receipt";
-      speechNote.textContent = `качаю ${down!.voice}: ${down!.done_mb ?? 0} из ~${down!.size_mb ?? "?"} МБ`;
+      speechNote.textContent = (down!.note || 'Устанавливаю XTTS') + (down!.total_bytes ? ` · ${mb(down!.got_bytes)} из ${mb(down!.total_bytes)}` : '');
     } else if (down && down.state === "failed") {
       speechNote.className = "receipt err";
       speechNote.textContent = String(down.error || "не скачалось");

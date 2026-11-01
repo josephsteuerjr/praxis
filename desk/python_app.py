@@ -139,6 +139,14 @@ class Application:
         return json.loads(line[len(prefix):-1])
 
     def event(self, name, data):
+        if name=='session-exited':
+            if self.exiting:return
+            self.exiting=True;self.exit_session=False;self.stopping.set()
+            if self.window is not None:
+                # Return from the observer before UI cleanup joins it. This
+                # also closes hidden observers without browser timer polling.
+                threading.Thread(target=self.window.destroy,name='helene-observer-exit',daemon=True).start()
+            return
         if name == "relaunch":
             self.relaunch = True
             name = "exit"
@@ -198,10 +206,8 @@ class Application:
                 return standalone_relay.install(self.program,lambda value:self.event('package-progress',value))
             if name == 'toolchain':raise ValueError('Инструменты сборки больше не поставляются с Hélène')
             if name in ('xtts','whisper'):
-                from localharness import component_downloads
                 if self.host is None:raise RuntimeError('Select an agent before installing an optional component')
-                tree=self.host.current().tree
-                return component_downloads.install(self.program,[name],lambda value:self.event('package-progress',value),tree=tree)
+                return self.host.invoke('component_install',{'name':name})
             from localharness import app_components
             if self.host is not None:
                 # Component replacement retires executable readers, unlike a
@@ -471,6 +477,7 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
             def do_POST(self):
                 if urlsplit(self.path).path != "/__python__/invoke" or not self.authorized():
                     return self.reply(403, {"error": "window token required"})
+                request={};args={}
                 try:
                     length = int(self.headers.get("Content-Length", "0"))
                     if not 0 < length <= 90 * 1024 * 1024:
@@ -481,8 +488,13 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
                         raise ValueError("command args must be an object")
                     result = app.invoke(request["command"], args)
                     self.reply(200, {"result": result})
-                except (OSError, ValueError, KeyError, RuntimeError, TimeoutError) as exc:
-                    self.reply(400, {"error": str(exc)})
+                except Exception as exc:
+                    try:
+                        from localharness.operation_diagnostics import record
+                        record(app.root,request.get('command') if isinstance(request,dict) else None,exc,values=args)
+                    except Exception:pass
+                    code=400 if isinstance(exc,(OSError,ValueError,KeyError,RuntimeError,TimeoutError)) else 500
+                    self.reply(code, {"error": str(exc),'error_type':type(exc).__name__})
 
         return Handler
 

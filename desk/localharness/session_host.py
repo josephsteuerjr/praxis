@@ -155,7 +155,11 @@ class SessionClient(Controller):
                         self.event(row['name'], row['data'])
             except (OSError, ValueError, RuntimeError) as exc:
                 if not self._detached.is_set():
-                    self.event('session-unavailable', {'error': str(exc), 'generation': self.descriptor['generation']})
+                    from . import session_exit
+                    if session_exit.matches(self.root,self.descriptor):
+                        self.event('session-exited',{'generation':self.descriptor['generation']})
+                    else:
+                        self.event('session-unavailable', {'error': str(exc), 'generation': self.descriptor['generation']})
                 return  # retain last UI state; no replacement host or replay here
 
     def start(self):
@@ -503,6 +507,7 @@ class Host:
                         or self.headers.get('Origin', origin) != origin
                         or not secrets.compare_digest(self.headers.get('X-Helene-Session', ''), host.descriptor['token'])):
                     return self.reply(403, {'error': 'Session owner authentication required'})
+                body={}
                 try:
                     count = int(self.headers.get('Content-Length') or 0)
                     if not 0 < count <= 90 * 1024 * 1024:
@@ -512,8 +517,15 @@ class Host:
                         raise ValueError('Session generation/arguments differ')
                     result = host.dispatch(body['action'], body['args'])
                     return self.reply(200, {'generation': host.descriptor['generation'], 'result': result})
-                except (OSError, ValueError, KeyError, RuntimeError, TimeoutError) as exc:
-                    return self.reply(400, {'error': str(exc), 'generation': host.descriptor['generation']})
+                except Exception as exc:
+                    try:
+                        from .operation_diagnostics import record
+                        args=body.get('args',{}) if isinstance(body,dict) else {}
+                        command=args.get('command') or (body.get('action') if isinstance(body,dict) else None)
+                        record(host.root,command,exc,values=args,data=host.control_tree)
+                    except Exception:pass
+                    code=400 if isinstance(exc,(OSError,ValueError,KeyError,RuntimeError,TimeoutError)) else 500
+                    return self.reply(code, {'error': str(exc),'error_type':type(exc).__name__,'generation': host.descriptor['generation']})
         return Handler
 
     def run(self):
