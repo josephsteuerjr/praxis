@@ -15,8 +15,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     env:
-      CANDIDATE_SHA256: 29414244dbac27a6ef5beac33a4b754db3db919523c30a6b02c0051f0b972758
-      ARTIFACT_SHA256: e4ff88a30bbb533232be04bae9aa2a84081c0003fdde7b15714ffce61f2ee459
+      CANDIDATE_SHA256: baa533b05f4b63c69be3547122ae38fd21ca87012d68fea20445bd4b19da40f5
+      ARTIFACT_SHA256: a2c375d594aaf31e7cf0f57b598a70a16473ce26dc8acb492ae44afd606970ae
       SKIP_DELTA_TRANSPORT: '1'
       RECHECK_MOVED_LOGIN: '1'
       NATIVE_DITTO_EXTRACT: '1'
@@ -28,11 +28,11 @@ jobs:
         id: archive
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-29414244dbac27a6
+          key: helene-rc18-complete-baa533b05f4b63c6
       - if: steps.archive.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085417762/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085994464/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
       - name: Native extraction, exact modes, Cocoa lifecycle and moved-root login
         run: python3 desk/tests/macos_shared_regressions.py prepare
       - uses: actions/upload-artifact@v4
