@@ -9,11 +9,15 @@ permissions:
 jobs:
   update:
     runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [current, legacy]
     timeout-minutes: 35
     env:
-      UPDATE_RECHECK: failed-start
-      CANDIDATE_SHA256: 43115b145684a98554d3adcbb129580ab9fd783502ac183dbc412576b3a67d88
-      ARTIFACT_SHA256: ed89bd6a5d081f6f4f440e79c3f6b393534e255bbfbbec75e134c90249586b8a
+      UPDATE_SCENARIO: ${{ matrix.scenario }}
+      CANDIDATE_SHA256: 8f133b5238fbea7a300b1eb00c1f37adfc571f5ec4afa9f5f4c29046ff00926b
+      ARTIFACT_SHA256: bcb2e24f6798749a7c01a21fc77955df08d9c3bbc865259e0c863f3a6cec55db
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,15 +26,26 @@ jobs:
         id: archive
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-43115b145684a985
+          key: helene-rc18-complete-8f133b5238fbea7a
       - if: steps.archive.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13078364189/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - uses: actions/cache/save@v4
+        if: steps.archive.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-8f133b5238fbea7a
+      - uses: actions/cache/restore@v4
+        if: matrix.scenario == 'legacy'
+        with:
+          path: ${{ runner.temp }}/rc18-evidence.zip
+          key: helene-macos-runtime-6eb05a4b19951fa9
+          fail-on-cache-miss: true
       - name: Exact HTTPS archive, clean update, native failed-start recovery
         run: python3 desk/tests/macos_full_archive_update.py prepare
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: helene-rc18-full-update-evidence
+          name: helene-rc18-full-update-${{ matrix.scenario }}
           path: evidence-full-update/

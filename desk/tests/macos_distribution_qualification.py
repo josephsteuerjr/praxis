@@ -93,6 +93,10 @@ print(json.dumps({'imports':rows,'python':sys.version,'path':sys.path,'trusted_r
     # Native consumer moved its own complete folder. Quarantine only that
     # disposable copy after its tests; the original downloaded ZIP is intact.
     moved=program.parent/'Moved Hélène'
+    for name,args in (('pytest',['--version']),('trafilatura',['--version']),('bottle',['--version']),('pip',['--version'])):
+        assert command([moved/'runtime/bin'/name,*args],'moved-console-'+name+'.log',env=env,cwd=TEMP)==0
+    receipt['moved_console_commands_os_only_path']=True
+    (OUT/'DISTRIBUTION.json').write_text(json.dumps(receipt,indent=2))
     command(['xattr','-w','com.apple.quarantine','0083;00000000;HeleneRCQualification;',moved/'Helene.app'],'quarantine-set.log')
     command(['spctl','--assess','--type','execute','--verbose=4',moved/'Helene.app'],'quarantined-gatekeeper.log')
 

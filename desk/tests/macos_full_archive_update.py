@@ -16,7 +16,70 @@ def prepare():
     assert digest(archive)==os.environ['CANDIDATE_SHA256']
     unpack(archive,TEMP/'full-update-driver')
     python=TEMP/'full-update-driver/Helene/runtime/bin/python3'
-    os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),'subject'])
+    phase='legacy' if os.environ.get('UPDATE_SCENARIO')=='legacy' else 'subject'
+    os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),phase])
+
+
+def legacy():
+    import datetime,psutil
+    import rc18_macos_pipeline as native
+    from localharness import posix_first_start as first,owner_stop
+    from localharness.package_notice import read,write as store
+    old_evidence=TEMP/'rc18-evidence.zip'
+    assert digest(old_evidence)=='6eb05a4b19951fa9cc27caaca36de0024a5e73fcb5982503798f98959ddc1b91'
+    with zipfile.ZipFile(old_evidence) as z:
+        previous=TEMP/'actual-previous.zip';previous.write_bytes(z.read('Helene-2.1.0-macos-arm64.zip'))
+    assert digest(previous)=='5e4fe949b0ed44c95d9cdd8dbd20885e3ac2f887eaf41901cdbda8b46ec5a921'
+    unpack(previous,TEMP/'legacy-install');root=TEMP/'legacy-install/Helene'
+    home=TEMP/'legacy-home';home.mkdir()
+    os.environ.update(HOME=str(home),CFFIXED_USER_HOME=str(home),PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1')
+    places=first.Places(home/'Helene')
+    # Seed only a synthetic profile/config. No old application/runtime/source
+    # byte is replaced before its own real update command runs.
+    first.ensure_config(root,places=places,refresh_profile=True)
+    first.common._write(first.common.receipt(root),{'format':first.common.FORMAT,'state':'completed',
+        'completed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'data':str(places.data)})
+    first.create_agent(root,{'name':'Actual previous 2.1','owner':'Disposable CI','provider':'openai',
+        'model':'fixture','key':'fixture-unused-local-key','base_url':'http://127.0.0.1:9/v1'},places=places)
+    owner_stop.change_pause(places.data,True,reason='legacy fixture stays paused',via='fixture')
+    cfg=read(root/'helene.json');cfg['fixture_legacy_custom']={'keep':21};store(root/'helene.json',cfg)
+    saved={'memory/groups/legacy-fixture.jsonl':b'{"text":"old history"}\n',
+        'workspace/legacy-owner.txt':b'old owner data','memory/.state/devices.json':b'{"legacy":"device"}'}
+    for name,raw in saved.items():
+        p=places.data/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(raw)
+    archive=root.parent/'Helene-2.3.0-rc.18-macos-arm64.zip';shutil.copy2(TEMP/'full-release.zip',archive)
+    result={'previous_version':'2.1.0','previous_sha256':digest(previous),'incoming_sha256':digest(archive),
+        'profile_setup':'synthetic config only; unmodified actual old application and runtime', 'steps':{}}
+    log=(OUT/'legacy-window.log').open('wb');p=None
+    try:
+        p=subprocess.Popen([str(root/'Helene.app/Contents/MacOS/Helene'),'--root',str(root)],cwd=root,
+            env=dict(os.environ),stdout=log,stderr=subprocess.STDOUT)
+        native.wait(lambda:native.invoke(root,'app_info').get('version')=='2.1.0',120)
+        result['steps']['actual_previous_native_window']=True;write('LEGACY-UPDATE.json',result)
+        admission=native.invoke(root,'update_install',{'path':str(archive)},timeout=300)
+        write('legacy-admission.json',admission)
+        native.wait(lambda:native.invoke(root,'app_info').get('version')=='2.3.0-rc.18',360)
+        assert read(root/'helene.json')['fixture_legacy_custom']=={'keep':21}
+        for name,raw in saved.items():assert (places.data/name).read_bytes()==raw,name
+        current=psutil.Process(native.control(root)['pid'])
+        assert str(root/'Helene.app/Contents/MacOS/Helene') in current.cmdline()
+        result['steps']['real_previous_to_current_full_archive_native_update_data_exact']=True
+        result['steps']['cocoa_identity_retained']=current.cmdline()
+        subprocess.run(['screencapture','-x',str(OUT/'after-legacy-upgrade.png')],check=True)
+        write('LEGACY-UPDATE.json',result)
+    except BaseException as error:
+        result['error']=type(error).__name__+': '+str(error);write('LEGACY-UPDATE.json',result)
+        for path in [*root.parent.glob('helene-update-*.log'),*(root/'.helene/logs').glob('*.log')]:
+            if path.stat().st_size<2*1024*1024:shutil.copy2(path,OUT/path.name)
+        subprocess.run(['screencapture','-x',str(OUT/'legacy-failure.png')]);raise
+    finally:
+        try:
+            if native.control(root):native.invoke(root,'python_window',{'action':'exit','relaunch':False,'owner_exit':False})
+        except Exception:pass
+        if p is not None:
+            try:p.wait(15)
+            except subprocess.TimeoutExpired:p.terminate();p.wait(10)
+        log.close()
 
 def subject():
     import psutil,urllib.request
@@ -86,6 +149,11 @@ def subject():
             time.sleep(.2)
         raise TimeoutError('Full archive update did not settle: '+str(job_public()))
     def screenshot(name):subprocess.run(['screencapture','-x',str(OUT/name)],check=True)
+    def cocoa_identity():
+        row=native.control(root);p=psutil.Process(row['pid'])
+        args=p.cmdline()
+        assert any(str(root/'Helene.app/Contents/MacOS/Helene')==a for a in args),args
+        return {'pid':p.pid,'executable':p.exe(),'command':args}
     cert=OUT/'localhost-cert.pem';key=TEMP/'localhost-key.pem'
     subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost',
         '-keyout',str(key),'-out',str(cert)],check=True,capture_output=True)
@@ -128,7 +196,18 @@ def subject():
             identity=admission.get('id') or admission.get('job',{}).get('id')
             assert identity,admission
             finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
-            result['steps']['real_full_archive_clean_update_and_native_restart']=True;screenshot('after-clean.png');write('FULL-UPDATE.json',result)
+            result['steps']['real_full_archive_clean_update_and_native_restart']=cocoa_identity();screenshot('after-clean.png');write('FULL-UPDATE.json',result)
+            # Non-conflicting authored code must survive a real complete ZIP;
+            # no fake semantic verdict or full-source clearance is injected.
+            authored=selected_code()/'archive-preserved-owner.py';authored.write_bytes(b'OWNER_NONCONFLICT=23\n')
+            owner_stop.change_pause(places.data,False,reason='explicit synthetic preserve qualification',via='fixture')
+            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
+            identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
+            finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120)
+            assert (selected_code()/'archive-preserved-owner.py').read_bytes()==b'OWNER_NONCONFLICT=23\n'
+            data_exact();result['steps']['real_full_archive_nonconflicting_authored_preserve']=cocoa_identity()
+            owner_stop.change_pause(places.data,True,reason='synthetic preserve completed',via='fixture')
+            screenshot('after-preserve.png');write('FULL-UPDATE.json',result)
         # Force only the newly launched, exact-path migration child to fail.
         # All archive bytes and updater logic remain the real distribution.
         code=selected_code();(code/'archive-owner-change.py').write_bytes(b'OWNER_CHANGE=1\n')
@@ -141,7 +220,8 @@ def subject():
                     try:
                         args=p.info.get('cmdline') or []
                         if (p.pid!=existing_pid and p.info['create_time']>=admission_started-.05
-                                and '--migration' in args and str(root/'app/python_app.py') in args and str(root) in args):
+                                and '--migration' in args and str(root) in args
+                                and any(a in args for a in (str(root/'app/python_app.py'),str(root/'Helene.app/Contents/MacOS/Helene')))):
                             born=p.info['create_time']
                             if psutil.Process(p.pid).create_time()==born:
                                 p.kill();killed.append({'pid':p.pid,'birth':born});return
@@ -155,8 +235,47 @@ def subject():
         native.wait(lambda:info().get('version')=='2.3.0-rc.18',120)
         assert (code/'archive-owner-change.py').read_bytes()==before_file
         assert (root/'helene.json').read_bytes()==before_cfg
-        data_exact();result['steps']['full_archive_failed_start_rolls_back_and_reopens_previous']=killed
+        data_exact();result['steps']['full_archive_failed_start_rolls_back_and_reopens_previous']={'faulted':killed,'reopened':cocoa_identity()}
         screenshot('after-rollback.png');write('FULL-UPDATE.json',result)
+        # Crash the exact admitted updater AFTER measured real replacements,
+        # before new startup. A later ordinary launch must consume the durable
+        # recovery journal before importing the mixed application.
+        from localharness import python_source_updater as mechanical,update_progress
+        before_cfg=(root/'helene.json').read_bytes()
+        code=selected_code();authored=code/'archive-cold-owner.py';authored.write_bytes(b'COLD_OWNER=1\n')
+        before_authored=authored.read_bytes();interrupted=[];stop_watch=threading.Event();began=time.time()
+        def interrupt_overlay():
+            while not stop_watch.is_set():
+                try:
+                    state=update_progress.status(root)
+                    if (mechanical.active_update(root).is_file() and state and state.get('stage')=='switching'
+                            and state.get('files',0)>=2 and state.get('updated_at',0)>=began):
+                        for receipt in (root/'.helene/updates').glob('*/updater-admitted.json'):
+                            if receipt.stat().st_mtime<began:continue
+                            admitted=read(receipt)
+                            if admitted.get('target')!=str(root):continue
+                            process=psutil.Process(admitted['pid'])
+                            if process.create_time()!=admitted.get('birth') or str(root) not in process.cmdline():continue
+                            process.suspend()
+                            pending=read(mechanical.active_update(root))
+                            if pending.get('committed'):
+                                process.resume();continue
+                            process.kill()
+                            interrupted.append({'pid':admitted['pid'],'birth':admitted['birth'],
+                                'replacements_observed':state['files'],'stage':state['stage']})
+                            return
+                except (OSError,ValueError,psutil.Error):pass
+                time.sleep(.005)
+        watcher=threading.Thread(target=interrupt_overlay,daemon=True);watcher.start()
+        admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'clean'})
+        native.wait(lambda:interrupted,300);stop_watch.set();watcher.join(3)
+        assert mechanical.active_update(root).is_file(),'No interrupted full overlay journal'
+        launch();native.wait(lambda:info().get('version')=='2.3.0-rc.18',180)
+        assert not mechanical.active_update(root).exists()
+        assert (root/'helene.json').read_bytes()==before_cfg
+        assert authored.read_bytes()==before_authored
+        data_exact();result['steps']['cold_start_recovers_real_interrupted_full_overlay']={'faulted':interrupted,'reopened':cocoa_identity()}
+        screenshot('after-cold-recovery.png');write('FULL-UPDATE.json',result)
         result['provider_calls']=provider_calls;result['steps']['no_owner_account_or_live_provider']=True
         write('FULL-UPDATE.json',result)
     except BaseException as error:
@@ -177,4 +296,4 @@ def subject():
         for log in logs:log.close()
         server.shutdown();provider.shutdown()
 
-if __name__=='__main__':{'prepare':prepare,'subject':subject}[sys.argv[1]]()
+if __name__=='__main__':{'prepare':prepare,'subject':subject,'legacy':legacy}[sys.argv[1]]()
