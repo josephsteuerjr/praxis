@@ -103,19 +103,23 @@ def subject():
             body=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))));provider_calls.append(self.path)
             users=[json.dumps(row.get('content'),ensure_ascii=False) for row in body.get('messages',[]) if row.get('role')=='user']
             if users:provider_users.append(users[-1])
-            tool_reply=None;tool_name=None
+            tool_reply=None;tool_name=None;tool_arguments={'action':'status'}
             if os.environ.get('REQUIRE_WORK_EVENT')=='1':
                 from localharness import source_update as source_ops
                 request=read(source_ops.path(places.data))
                 expected='Событие текущего обновления '+str(request.get('id',''))[:8]
                 offered=[row.get('function',{}).get('name') for row in body.get('tools',[])]
+                catalogued='source_update' in json.dumps(body.get('messages',[]),ensure_ascii=False)
                 provider_meta.append({'offered_tool_names':offered,'source_request_id':request.get('id'),
                     'new_event_in_last_user':bool(request.get('id') and users and expected in users[-1]),
+                    'source_update_in_public_pointer_catalog':catalogued,
                     'tool_reply_ids':[row.get('tool_call_id') for row in body.get('messages',[]) if row.get('role')=='tool']})
                 write('PROVIDER-METADATA.json',provider_meta)
                 if (request.get('id') and users and expected in users[-1]
-                        and 'source_update' in offered and not status_tool['issued']):
-                    tool_name='source_update';status_tool.update(issued=True,started=time.monotonic(),request_id=request['id'])
+                        and ('source_update' in offered or ('call' in offered and catalogued)) and not status_tool['issued']):
+                    tool_name='source_update' if 'source_update' in offered else 'call'
+                    if tool_name=='call':tool_arguments={'name':'source_update','args_json':'{"action":"status"}'}
+                    status_tool.update(issued=True,started=time.monotonic(),request_id=request['id'],public_entry_point=tool_name)
                 replies=[row for row in body.get('messages',[]) if row.get('role')=='tool' and row.get('tool_call_id')=='call_ci_readonly_status']
                 if replies:
                     raw=replies[-1]['content']
@@ -125,7 +129,7 @@ def subject():
                     if not isinstance(tool_reply,dict):tool_reply={'error':'Non-object model tool observation'}
                     status_tool.update(observed=True,seconds=time.monotonic()-status_tool['started'],
                         returned_state=tool_reply.get('state'),error=tool_reply.get('error',''))
-            calls=([{'id':'call_ci_readonly_status','type':'function','function':{'name':tool_name,'arguments':'{"action":"status"}'}}] if tool_name else None)
+            calls=([{'id':'call_ci_readonly_status','type':'function','function':{'name':tool_name,'arguments':json.dumps(tool_arguments)}}] if tool_name else None)
             text='Disposable local CI response.'
             response={'id':'chatcmpl-fixture','object':'chat.completion','created':int(time.time()),'model':'fixture',
                 'choices':[{'index':0,'message':{'role':'assistant','content':text},'finish_reason':'stop'}],
