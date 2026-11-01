@@ -2,7 +2,7 @@ name: Hélène RC18 native body source qualification
 on:
   push:
     branches: [codex/rc18-macos-0111]
-    paths: [desk/tests/macos_native_body_source.py, .github/workflows/rc18-macos-native-source.yml]
+    paths: [desk/tests/macos_native_body_source.py, .github/workflows/rc18-macos-native-source.yml, helene/core/body/**, praxis/body/**]
 permissions:
   contents: read
 jobs:
@@ -23,6 +23,7 @@ jobs:
             ~/.cargo/git
             ${{ runner.temp }}/rc18-body-target
           key: helene-rc18-mac-native-1.94-${{ hashFiles('praxis/body/**','helene/core/body/**') }}
+          restore-keys: helene-rc18-mac-native-1.94-
       - name: Locked actual protocol, body and bridge source tests
         run: python3 desk/tests/macos_native_body_source.py
       - uses: actions/cache/save@v4

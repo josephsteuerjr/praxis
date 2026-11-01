@@ -503,10 +503,39 @@ fn is_reparse(metadata: &fs::Metadata) -> bool {
 
 /// Inspect every existing component: create_dir_all and fs::copy otherwise follow
 /// a pre-existing junction inside the destination tree.
+#[cfg(target_os = "macos")]
+fn apple_system_alias(path: &Path, metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let target = match path.to_str() {
+        Some("/var") => "/private/var",
+        Some("/tmp") => "/private/tmp",
+        Some("/etc") => "/private/etc",
+        _ => return false,
+    };
+    // Only Apple's root-owned aliases are admitted. Never canonicalize a user
+    // path: that would hide a linked destination from the checks below.
+    if !metadata.file_type().is_symlink() || metadata.uid() != 0 {
+        return false;
+    }
+    let Ok(link) = fs::read_link(path) else { return false };
+    if link != Path::new(target) && link != Path::new(target.trim_start_matches('/')) {
+        return false;
+    }
+    let Ok(parent) = fs::symlink_metadata("/private") else { return false };
+    let Ok(destination) = fs::symlink_metadata(target) else { return false };
+    parent.is_dir() && !parent.file_type().is_symlink() && parent.uid() == 0
+        && parent.mode() & 0o022 == 0
+        && destination.is_dir() && !destination.file_type().is_symlink() && destination.uid() == 0
+}
+
 fn check_copy_destination(path: &Path) -> std::io::Result<()> {
     for component in path.ancestors() {
         match fs::symlink_metadata(component) {
             Ok(metadata) if is_reparse(&metadata) => {
+                #[cfg(target_os = "macos")]
+                if apple_system_alias(component, &metadata) {
+                    continue;
+                }
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     format!(
@@ -1698,6 +1727,27 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("praxis-{tag}-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn apple_aliases_work_but_a_user_link_named_var_is_still_refused() {
+        for alias in ["/var", "/tmp", "/etc"] {
+            let path = Path::new(alias);
+            let meta = fs::symlink_metadata(path).unwrap();
+            assert!(apple_system_alias(path, &meta), "{alias}");
+            check_copy_destination(&path.join("helene-nonexistent-destination")).unwrap();
+        }
+        let dir = scratch("apple-alias-guard");
+        let outside = dir.join("outside");
+        fs::create_dir(&outside).unwrap();
+        let link = dir.join("var");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(!apple_system_alias(&link, &fs::symlink_metadata(&link).unwrap()));
+        assert!(check_copy_destination(&link.join("untouched")).is_err());
+        assert!(!outside.join("untouched").exists());
+        fs::remove_file(link).unwrap();
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn text(value: &Value, key: &str) -> String {

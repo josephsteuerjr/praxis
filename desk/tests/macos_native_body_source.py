@@ -21,3 +21,16 @@ record={'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=R
     'scope':'Native source test executables only. Existing release body/bridge bytes not replaced, no legacy shell/tray/service build.'}
 (OUT/'NATIVE-SOURCE.json').write_text(json.dumps(record,indent=2))
 assert result.returncode==0,'Native source unit gate failed; inspect complete log'
+with (OUT/'native-release-build.log').open('wb') as log:
+    subprocess.run(['cargo','build','--release','--locked','--manifest-path',str(body/'Cargo.toml'),
+        '-p','praxis-body','-p','praxis-bridge','-j',str(os.cpu_count())],env=env,cwd=body,
+        stdout=log,stderr=subprocess.STDOUT,check=True,timeout=1800)
+organ=OUT/'organs';organ.mkdir()
+for package in ('body','bridge'):
+    binary=Path(env['CARGO_TARGET_DIR'])/'release'/('praxis-'+package)
+    target=organ/('helene-'+package);shutil.copy2(binary,target)
+    subprocess.run(['codesign','--force','--sign','-',str(target)],check=True)
+    subprocess.run(['codesign','--verify','--strict',str(target)],check=True)
+    record[package+'_sha256']=hashlib.sha256(target.read_bytes()).hexdigest()
+record['scope']='Source-tested, signed standalone body/bridge only. No shell/tray/system service build. Actual release package must separately exercise these exact binaries.'
+(OUT/'NATIVE-SOURCE.json').write_text(json.dumps(record,indent=2))
