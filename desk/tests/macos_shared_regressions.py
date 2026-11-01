@@ -17,30 +17,36 @@ def prepare():
     # The operator already has the independently verified8f ZIP. Transfer a
     # small byte-exact delta instead of downloading unchanged native/runtime
     # payload again; native consumers still use the full original target ZIP.
-    with zipfile.ZipFile(TEMP/'baseline-release-artifact.zip') as z:
-        row=next(i for i in z.infolist() if Path(i.filename).name=='Helene-2.3.0-rc.18-macos-arm64.zip')
-        baseline=TEMP/'baseline-release.zip';baseline.write_bytes(z.read(row))
-    assert digest(baseline)=='8f133b5238fbea7a300b1eb00c1f37adfc571f5ec4afa9f5f4c29046ff00926b'
-    from macos_archive_delta import create,restore
-    patch=OUT/'exact-archive-delta.zip';create(baseline,archive,patch)
-    restored=TEMP/'delta-reconstructed.zip';receipt=restore(baseline,patch,restored)
-    assert digest(restored)==os.environ['CANDIDATE_SHA256']
-    write('DELTA-TRANSPORT.json',receipt)
-    unpack(archive,TEMP/'shared-install');program=TEMP/'shared-install/Helene'
+    if os.environ.get('SKIP_DELTA_TRANSPORT')!='1':
+        with zipfile.ZipFile(TEMP/'baseline-release-artifact.zip') as z:
+            row=next(i for i in z.infolist() if Path(i.filename).name=='Helene-2.3.0-rc.18-macos-arm64.zip')
+            baseline=TEMP/'baseline-release.zip';baseline.write_bytes(z.read(row))
+        assert digest(baseline)=='8f133b5238fbea7a300b1eb00c1f37adfc571f5ec4afa9f5f4c29046ff00926b'
+        from macos_archive_delta import create,restore
+        patch=OUT/'exact-archive-delta.zip';create(baseline,archive,patch)
+        restored=TEMP/'delta-reconstructed.zip';receipt=restore(baseline,patch,restored)
+        assert digest(restored)==os.environ['CANDIDATE_SHA256']
+        write('DELTA-TRANSPORT.json',receipt)
+    from macos_archive_delta import versioned
+    manual=TEMP/'manual-release.zip'
+    receipt=versioned(archive,manual,'Helene-2.3.0-rc.18-macos-arm64')
+    assert receipt['sha256']=='08801e693980a76f1b6431cbe4a19901a0e3ff2052c7e002c6521e391f29af87'
+    write('MANUAL-ARCHIVE.json',receipt)
+    unpack(manual,TEMP/'shared-install');program=TEMP/'shared-install/Helene-2.3.0-rc.18-macos-arm64'
     shutil.copytree(program/'runtime',TEMP/'shared-driver-runtime')
     python=TEMP/'shared-driver-runtime/bin/python3'
     os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),'subject'])
 def subject():
     import psutil
     import rc18_macos_pipeline as native
-    program=TEMP/'shared-install/Helene'
+    program=TEMP/'shared-install/Helene-2.3.0-rc.18-macos-arm64'
     sys.path[:0]=[str(program/'app'),str(program/'tree')]
     from localharness import posix_first_start as first,owner_stop,component_install_job as jobs,component_downloads as downloads
     from localharness.python_controller import Controller
     from localharness.package_notice import write as store
     home=TEMP/'shared-home';home.mkdir()
     os.environ.update(HOME=str(home),CFFIXED_USER_HOME=str(home),PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1')
-    result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'actual_distributed_shared_code':True,
+    result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'manual_archive_sha256':'08801e693980a76f1b6431cbe4a19901a0e3ff2052c7e002c6521e391f29af87','actual_distributed_shared_code':True,
         'scope':'Disposable native Mac with synthetic tiny component archives and paused API profile. No model weights/account/microphone acceptance.', 'steps':{}}
     write('SHARED-MAC.json',result)
     fixture=TEMP/'component-program';(fixture/'runtime/bin').mkdir(parents=True)
@@ -145,8 +151,36 @@ def subject():
             return True
         native.wait(all_gone,60)
         program.rename(program.with_name('Moved two observers Hélène'))
+        program=program.with_name('Moved two observers Hélène')
         result['steps']['actual_owner_exit_closes_two_cocoa_observers_and_all_observed_children']=len(tracked)
         result['steps']['whole_program_folder_moves_after_two_observer_exit']=True
+        write('SHARED-MAC.json',result)
+        # The existing setter must bind the actual moved/versioned programme,
+        # never a guessed ~/Applications/Helene path. No owner Dock is edited.
+        log=(OUT/'moved-login-window.log').open('wb');logs.append(log)
+        p=subprocess.Popen([str(program/'Helene.app/Contents/MacOS/Helene'),'--root',str(program)],cwd=program,
+            env=dict(os.environ),stdout=log,stderr=subprocess.STDOUT);processes.append(p)
+        native.wait(lambda:native.control(program) and native.control(program).get('ui_ready'),120)
+        native.invoke(program,'autostart_set',{'on':True});assert native.invoke(program,'autostart_get') is True
+        import plistlib
+        plist=next((home/'Library/LaunchAgents').glob('app.helene.login.*.plist'))
+        binding=plistlib.loads(plist.read_bytes())
+        assert binding['WorkingDirectory']==str(program)
+        assert binding['ProgramArguments'][0]==str(program/'Helene.app/Contents/MacOS/Helene')
+        assert ['--root',str(program)]==binding['ProgramArguments'][1:3]
+        subprocess.run(['plutil','-lint',str(plist)],capture_output=True,check=True)
+        native.invoke(program,'python_window',{'action':'exit','relaunch':False,'owner_exit':False});p.wait(30)
+        target=f'gui/{os.getuid()}/'+binding['Label']
+        subprocess.run(['launchctl','bootstrap',f'gui/{os.getuid()}',str(plist)],capture_output=True,check=True)
+        try:
+            native.wait(lambda:native.invoke(program,'app_info').get('root')==str(program),120)
+            native.invoke(program,'autostart_set',{'on':False})
+            native.invoke(program,'python_window',{'action':'exit','relaunch':False,'owner_exit':False})
+            native.wait(lambda:native.control(program) is None,45)
+        finally:subprocess.run(['launchctl','bootout',target],capture_output=True,check=True)
+        if plist.exists():plist.unlink()  # exact synthetic-home entry only
+        result['steps']['actual_launchagent_after_versioned_folder_move']=binding
+        result['desktop_pins']='Owner Dock pins not modified/accepted; old-location pins require explicit re-pinning.'
         write('SHARED-MAC.json',result)
     except BaseException as error:
         result['error']=type(error).__name__+': '+str(error);write('SHARED-MAC.json',result)
