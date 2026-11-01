@@ -1,0 +1,75 @@
+name: Hélène RC23 frozen-source Mac package qualification
+on:
+  push:
+    branches: [codex/rc23-macos-0211]
+    paths: [.github/workflows/rc23-macos-candidate-qa.yml, desk/tests/rc23_macos_candidate_qa.py]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package:
+    runs-on: macos-15
+    timeout-minutes: 40
+    outputs:
+      sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: qa
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: 2d6d8f63983747b6ef7ad300c2f0e9f08c4c1b51
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
+          fail-on-cache-miss: true
+      - name: Assemble current frozen source using exact qualified runtime and native organs
+        id: package
+        run: python3 qa/desk/tests/rc23_macos_candidate_qa.py prepare
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helene-rc23-macos-candidate
+          path: |
+            ${{ runner.temp }}/rc23-output/*.zip
+            ${{ runner.temp }}/rc23-output/*.sha256
+            ${{ runner.temp }}/rc23-output/candidate.json
+      - name: Fresh actual Cocoa, native body, Exit, three rapid exits and unicode folder move
+        run: '"$RUNNER_TEMP/rc23-driver-runtime/bin/python3" -B qa/desk/tests/rc23_macos_candidate_qa.py qualify'
+      - name: Actual old18 to new23 HTTPS update and failed-start rollback with private paused profile
+        run: '"$RUNNER_TEMP/rc23-driver-runtime/bin/python3" -B qa/desk/tests/rc23_macos_candidate_qa.py upgrade'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc23-macos-package-evidence
+          path: evidence-rc23-package/
+  distribution26:
+    needs: package
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      CANDIDATE_SHA256: ${{ needs.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: qa
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: 2d6d8f63983747b6ef7ad300c2f0e9f08c4c1b51
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: helene-rc23-macos-candidate
+          path: candidate
+      - name: Exact current archive on macOS26 with isolated imports and real Cocoa lifecycle
+        run: python3 qa/desk/tests/rc23_macos_candidate_qa.py matrix_prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc23-macos26-package-evidence
+          path: evidence-rc23-package/
