@@ -16,6 +16,9 @@ def main():
     sys.path[:0]=[str(REPO/'desk'),str(REPO/'desk/tests')]
     from localharness.source_verification_bundle import inventory
     from rc18_macos_pipeline import fronts
+    from extended_macos import prepare
+    program,python=prepare()
+    os.environ['HELENE_TEST_PYTHON']=str(python)
     fronts()
     TOOLS.mkdir();(TOOLS/'bin').mkdir()
     shutil.copy2(shutil.which('node'),TOOLS/'bin/node')

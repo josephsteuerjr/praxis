@@ -64,6 +64,7 @@ def fill(element,value):
     finally:CF.CFRelease(key)
     if code:raise RuntimeError('Native AX focus refused: '+str(code))
     time.sleep(.15)
+
     for down in (True,False):
         event=Quartz.CGEventCreateKeyboardEvent(None,0,down)
         Quartz.CGEventSetFlags(event,Quartz.kCGEventFlagMaskCommand)
@@ -74,6 +75,13 @@ def fill(element,value):
         Quartz.CGEventSetFlags(event,0)
         Quartz.CGEventPost(Quartz.kCGHIDEventTap,event)
     time.sleep(.15)
+def click(x,y):
+    import Quartz
+    for kind in (Quartz.kCGEventLeftMouseDown,Quartz.kCGEventLeftMouseUp):
+        event=Quartz.CGEventCreateMouseEvent(None,kind,(x,y),Quartz.kCGMouseButtonLeft)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap,event)
+        time.sleep(.1)
+
 def find(pid,label,role=None,timeout=20):
     end=time.monotonic()+timeout
     while time.monotonic()<end:

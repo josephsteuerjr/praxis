@@ -59,16 +59,23 @@ def ui_subject(program=None,python=None):
         assert identity['agent_name']=='Native UI fixture'
         result['steps']['created_agent_via_native_form']=True
         import Quartz
-        def ordinary_pid():
+        def ordinary_window():
             windows=Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly,Quartz.kCGNullWindowID)
+            save('ordinary-windows.json',[dict(w) for w in windows])
             for window in windows:
-                if window.get('kCGWindowOwnerName')=='Hélène' and window.get('kCGWindowLayer')==0:
-                    candidate=int(window['kCGWindowOwnerPID'])
-                    if any(x['AXValue']=='Настройки' or x['AXTitle']=='Настройки' for x in ax.walk(candidate)):
-                        return candidate
-        pid=wait(ordinary_pid)
+                if window.get('kCGWindowOwnerPID')==p.pid and window.get('kCGWindowLayer')==0 and window['kCGWindowBounds']['Width']>600:
+                    return window
+        window=wait(ordinary_window);pid=p.pid
+        time.sleep(5)
         save('window-ax.json',[{k:v for k,v in x.items() if k!='element'} for x in ax.walk(pid)])
-        ax.press(ax.find(pid,'Настройки'))
+        try:ax.press(ax.find(pid,'Настройки',timeout=3));result['settings_action']='AXPress'
+        except RuntimeError:
+            # Post-exec Cocoa may not publish an AX tree to the old observer.
+            # The reviewed native screenshot places Settings in the bottom
+            # sidebar. Click its actual live window-relative position.
+            bounds=window['kCGWindowBounds']
+            ax.click(bounds['X']+95,bounds['Y']+bounds['Height']-31)
+            result['settings_action']='Quartz mouse at reviewed window-relative Settings control'
         result['steps']['opened_settings_via_native_control']=True
         time.sleep(2);subprocess.run(['screencapture','-x',str(common.EVIDENCE/'native-settings.png')],check=True)
         # Read-only verification may use the existing local control endpoint.

@@ -5,6 +5,7 @@ on:
     paths: [desk/tests/macos_node_qualification.py, .github/workflows/rc18-macos-node.yml]
 permissions:
   contents: read
+  actions: read
 jobs:
   node:
     runs-on: macos-15
@@ -16,6 +17,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - uses: actions/cache/restore@v4
+        id: candidate
+        with:
+          path: ${{ runner.temp }}/rc18-qualified-input.zip
+          key: helene-rc18-native-79ce64094f84499c
+      - if: steps.candidate.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13077655662/zip > "$RUNNER_TEMP/rc18-qualified-input.zip"
       - id: fronts
         run: python3 desk/tests/rc18_macos_pipeline.py key >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
