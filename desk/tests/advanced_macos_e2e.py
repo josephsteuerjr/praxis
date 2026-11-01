@@ -40,14 +40,16 @@ def ui_subject(program=None,python=None):
     subprocess.run([str(python),'-B','-c',"import sys;sys.path.insert(0,sys.argv[1]);from localharness import owner_stop;owner_stop.latch_client('native-ui-fixture')",str(program/'app')],env=env,check=True)
     log=(common.EVIDENCE/'native-ui.log').open('wb')
     p=subprocess.Popen([str(program/'Helene.app/Contents/MacOS/Helene'),'--root',str(program)],cwd=program,env=env,stdout=log,stderr=subprocess.STDOUT)
-    result={'source_actions':'native Accessibility AXPress/AXValue, not window RPC','trusted_AX':bool(ax.AX.AXIsProcessTrusted()),'steps':{}}
+    result={'source_actions':'native AX focus/press and Quartz keyboard events, not window RPC','trusted_AX':bool(ax.AX.AXIsProcessTrusted()),'steps':{}}
     try:
         row=wait(lambda:control(program));pid=row['pid']
         wait(lambda:any(x['AXRole']=='AXTextField' for x in ax.walk(pid)))
         tree=ax.walk(pid);save('initial-ax.json',[{k:v for k,v in x.items() if k!='element'} for x in tree])
         fields=[x for x in tree if x['AXRole'] in ('AXTextField','AXSecureTextField')]
         assert len(fields)>=4,[(x['AXRole'],x['AXDescription']) for x in fields]
-        for field,value in zip(fields[:4],('Native UI fixture','Disposable CI','fixture-model','fixture-only-key')):ax.fill(field['element'],value)
+        for label,value in (('Имя агента','Native UI fixture'),('Твоё имя','Disposable CI'),('Модель','fixture-model'),('Ключ доступа','fixture-only-key')):
+            ax.fill(ax.find(pid,label,'AXTextField'),value)
+            if label!='Ключ доступа':wait(lambda:ax.text(ax.find(pid,label,'AXTextField'),'AXValue')==value,5)
         # Native form submission is the action under test. The synthetic owner
         # Stop prevents even the placeholder model from making a network call.
         ax.press(ax.find(pid,'Создать агента','AXButton'))

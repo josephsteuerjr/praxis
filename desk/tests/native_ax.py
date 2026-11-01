@@ -58,10 +58,22 @@ def press(element):
     finally:CF.CFRelease(key)
     if code:raise RuntimeError('Native AXPress refused: '+str(code))
 def fill(element,value):
-    key=string('AXValue');body=string(value)
-    try:code=AX.AXUIElementSetAttributeValue(element,key,body)
-    finally:CF.CFRelease(key);CF.CFRelease(body)
-    if code:raise RuntimeError('Native AX text input refused: '+str(code))
+    import Quartz
+    key=string('AXFocused');truth=c_void_p.in_dll(CF,'kCFBooleanTrue')
+    try:code=AX.AXUIElementSetAttributeValue(element,key,truth)
+    finally:CF.CFRelease(key)
+    if code:raise RuntimeError('Native AX focus refused: '+str(code))
+    time.sleep(.15)
+    for down in (True,False):
+        event=Quartz.CGEventCreateKeyboardEvent(None,0,down)
+        Quartz.CGEventSetFlags(event,Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap,event)
+    for down in (True,False):
+        event=Quartz.CGEventCreateKeyboardEvent(None,0,down)
+        Quartz.CGEventKeyboardSetUnicodeString(event,len(value),value)
+        Quartz.CGEventSetFlags(event,0)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap,event)
+    time.sleep(.15)
 def find(pid,label,role=None,timeout=20):
     end=time.monotonic()+timeout
     while time.monotonic()<end:
