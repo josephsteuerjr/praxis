@@ -25,9 +25,9 @@ def build():
     from build_python_macos_rc import build as package
     fronts()
     command([sys.executable,'-m','pip','check'],'pip-check.log',timeout=120)
-    # The other75 cases already passed on source0a388b1/run41295075384;
+    # Other72 cases passed and3 exact Windows cases skipped on source0a388b1/run41295075384;
     # only the unresolved native output-limit case is repeated here.
-    command([sys.executable,'-B','-m','unittest','tests.t_source_update_battery_2810.Battery.test_output_limit_has_no_passing_coverage','-v'],
+    command([sys.executable,'-B','-m','unittest','tests.t_source_update_battery_2810.Battery.test_output_limit_has_no_passing_coverage','test_command_process_2810.CommandCustody','-v'],
         'verification-contracts.log',cwd=REPO/'desk',timeout=600)
     # Contract tests above include native output-limit custody diagnostics.
     # Materialize only public, immutable cache/tool inputs. The npm cache in

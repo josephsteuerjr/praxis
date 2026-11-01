@@ -98,6 +98,24 @@ class CommandCustody(unittest.TestCase):
             self.assertFalse(proc.stop_tree()[0])
             signal_group.assert_not_called()
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX signal refusal')
+    def test_signal_permission_denial_does_not_bless_a_live_group(self):
+        proc=self.spawn(10)
+        with mock.patch('command_process.os.killpg',side_effect=PermissionError(1,'fixture denial')):
+            stopped,note=proc.stop_tree()
+        self.assertFalse(stopped,note)
+        self.assertIsNone(proc.poll())
+        self.assertIn('PermissionError',note)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX rapid exit race')
+    def test_rapid_exit_and_stop_always_require_an_empty_group(self):
+        for _ in range(20):
+            proc=CommandProcess([sys.executable,'-c','print("complete")'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            self.addCleanup(proc.stop_tree)
+            stopped,note=proc.stop_tree()
+            self.assertTrue(stopped,note)
+            self.assertIsNotNone(proc.poll())
+
 
 @unittest.skipUnless(sys.platform == 'linux', 'Forge process suites run on the owned Linux stand')
 class ForgeCustody(unittest.TestCase):

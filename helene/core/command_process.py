@@ -169,7 +169,16 @@ class CommandProcess:
                     if self._live() is None:return False, 'private group census unavailable'
                     for sig in (signal.SIGTERM, signal.SIGKILL):
                         phase='signal '+str(sig)
-                        os.killpg(self.pid, sig)
+                        try:os.killpg(self.pid, sig)
+                        except (ProcessLookupError,PermissionError):
+                            # Darwin can refuse a signal after the last live
+                            # group member exits. Only a fresh complete poll
+                            # (unreaped-child identity AND empty census) may
+                            # turn that race into success. A live/unknown group
+                            # keeps the original refusal and never falls back
+                            # to a bare PID or another process generation.
+                            if self.poll() is None:raise
+                            break
                         phase='wait after signal '+str(sig)
                         try:self.wait(1);break
                         except subprocess.TimeoutExpired:
