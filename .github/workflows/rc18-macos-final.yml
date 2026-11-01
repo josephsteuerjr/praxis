@@ -11,6 +11,8 @@ jobs:
     runs-on: macos-15
     env:
       FINAL_SHARED_DELTA: '1'
+      FINAL_COCOA_DELTA: '1'
+      COCOA_EXIT_REPETITIONS: '20'
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4

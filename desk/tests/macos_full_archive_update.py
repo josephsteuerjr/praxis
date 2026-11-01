@@ -191,6 +191,8 @@ def subject():
             row=jobs.status(places.data);write('current-job.json',job_public())
             if row.get('id')==identity:
                 if not failed and row.get('state')=='completed':return row
+                if failed and row.get('state')=='completed':
+                    raise AssertionError('Fault injection/cancellation was not observed; the ordinary update completed')
                 if row.get('state') in ('attention','cancelled','superseded'):
                     if failed:return row
                     raise RuntimeError('Full archive update refused: '+str(job_public()))
@@ -325,16 +327,17 @@ def subject():
             existing_pid=native.control(root)['pid'];admission_started=time.time()
             def fail_new_start():
                 while not stop_watch.is_set():
-                    for p in psutil.process_iter(['pid','cmdline','create_time']):
+                    for candidate_pid in psutil.pids():
                         try:
-                            args=p.info.get('cmdline') or []
-                            if (p.pid!=existing_pid and p.info['create_time']>=admission_started-.05
+                            p=psutil.Process(candidate_pid);born=p.create_time()
+                            if p.pid==existing_pid or born<admission_started-.05:continue
+                            args=p.cmdline()
+                            if (p.pid!=existing_pid and born>=admission_started-.05
                                     and '--migration' in args and str(root) in args
                                     and any(a in args for a in (str(root/'app/python_app.py'),str(root/'Helene.app/Contents/MacOS/Helene')))):
-                                born=p.info['create_time']
                                 if psutil.Process(p.pid).create_time()==born:
                                     p.kill();killed.append({'pid':p.pid,'birth':born});return
-                        except (psutil.NoSuchProcess,psutil.AccessDenied):pass
+                        except (psutil.Error,SystemError,OSError,ValueError):pass
                     time.sleep(.01)
             watcher=threading.Thread(target=fail_new_start,daemon=True);watcher.start()
             admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'clean'})
@@ -378,13 +381,16 @@ def subject():
                             if note.get('state') in ('new_app_started','completed'):
                                 process.resume();continue
                             stopped_children=[]
-                            for child in psutil.process_iter(['pid','create_time','cmdline']):
-                                args=child.info.get('cmdline') or []
-                                if (child.info['create_time']>=began and '--migration' in args and str(root) in args
-                                        and str(root/'Helene.app/Contents/MacOS/Helene') in args):
-                                    birth=child.info['create_time']
-                                    if psutil.Process(child.pid).create_time()==birth:
+                            for candidate_pid in psutil.pids():
+                                try:
+                                    child=psutil.Process(candidate_pid);birth=child.create_time()
+                                    if birth<began:continue
+                                    args=child.cmdline()
+                                    if ('--migration' in args and str(root) in args
+                                            and str(root/'Helene.app/Contents/MacOS/Helene') in args
+                                            and psutil.Process(child.pid).create_time()==birth):
                                         child.kill();stopped_children.append({'pid':child.pid,'birth':birth})
+                                except (psutil.Error,SystemError,OSError,ValueError):pass
                             process.kill()
                             interrupted.append({'pid':admitted['pid'],'birth':admitted['birth'],
                                 'point':'full overlay finished, startup uncommitted','stage':state['stage'],

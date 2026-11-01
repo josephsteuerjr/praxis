@@ -43,7 +43,10 @@ def build():
     unpack(TEMP/'native-organs.zip',organs)
     command([sys.executable,'-m','pip','check'],'pip-check.log',timeout=120)
     shared_delta=os.environ.get('FINAL_SHARED_DELTA')=='1'
-    cases=(['tests.t_update_runtime_status_0111','tests.t_source_update_hand_3010','tests.t_update_activity_3010',
+    cocoa_delta=os.environ.get('FINAL_COCOA_DELTA')=='1'
+    cases=(['tests.t_cocoa_js_bridge_0111','tests.t_python_app.PythonApplicationTests.test_close_hides_but_exit_and_relaunch_destroy',
+        'tests.t_python_app.PythonApplicationTests.test_automatic_start_does_not_clear_stop_or_create_window'] if cocoa_delta else
+        ['tests.t_update_runtime_status_0111','tests.t_source_update_hand_3010','tests.t_update_activity_3010',
         'tests.t_python_app.PythonApplicationTests.test_pending_mac_profile_migration_reaches_recovery_before_first_start',
         'tests.t_source_update_pipeline_220.PipelineTests.test_selected_finish_automatically_verifies_reviews_and_reaches_apply_gate',
         'tests.t_app_source_update_3110'] if shared_delta else ['tests.t_component_jobs_0111','tests.t_voice_download_paths_0111',
@@ -53,8 +56,9 @@ def build():
     node_env=dict(os.environ,HELENE_TEST_PYTHON=sys.executable,PATH=str(TOOLS/'bin')+os.pathsep+os.environ.get('PATH',''))
     node_cases=(('work-activity-3010','update-monitor-0111','panel-density-2910','panel-widths') if shared_delta else
         ('contract','pending-voice','speech-status-3010','voice-refresh','voice-session-210','voice-shortcut','session','tray','settings-firstrun'))
-    command([TOOLS/'bin/node','--test',*[REPO/'desk/app/test'/(n+'.test.mjs') for n in node_cases]],
-        'shared-node-regressions.log',cwd=REPO/'desk/app',env=node_env,timeout=300)
+    if not cocoa_delta:
+        command([TOOLS/'bin/node','--test',*[REPO/'desk/app/test'/(n+'.test.mjs') for n in node_cases]],
+            'shared-node-regressions.log',cwd=REPO/'desk/app',env=node_env,timeout=300)
     # Prior contract/custody gates passed; only updater callsites changed now.
     if not shared_delta:
         command([sys.executable,'-B','-m','unittest','tests.t_python_native_update_2410','-v'],

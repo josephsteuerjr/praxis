@@ -515,6 +515,7 @@ catch(e){document.getElementById('status').textContent=String(e)}};paint().catch
 
     def close(self):
         self.stopping.set()
+        if getattr(self,'cocoa_js_bridge',None):self.cocoa_js_bridge.close()
         failures=[]
         def finish(action):
             try:action()
@@ -813,6 +814,9 @@ def _main(argv=None):
             app.window = webview.create_window("Hélène", app.origin, **window_geometry(webview.screens[0]),
                                                frameless=True, easy_drag=False, text_select=True,
                                                background_color="#1d1914", hidden=app.start_in_tray)
+            if sys.platform=='darwin':
+                from localharness.cocoa_js_bridge import install
+                install(app)
             bind_window_state(app)
             bind_native_reload(app)
             # The shared renderer's python_ready is the sole confirmation

@@ -23,7 +23,8 @@ def smoke(program):
     home=temp/'shared-delta-smoke-home';home.mkdir()
     env=dict(os.environ,HOME=str(home),CFFIXED_USER_HOME=str(home),PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1')
     processes=[];logs=[];roots=[program];data=home/'Helene'
-    result={'archive_source':subprocess.check_output(['git','rev-parse','HEAD'],cwd=native.REPO,text=True).strip(),
+    result={'archive_source':json.loads((program/'macos-inputs.json').read_bytes())['source_commit'],
+        'qualification_source':subprocess.check_output(['git','rev-parse','HEAD'],cwd=native.REPO,text=True).strip(),
         'scope':'Actual new package GUI/Exit/move. Frozen native/body/runtime/import/10-module gates retained from run41305717386, not re-executed.',
         'retained_qualification_run':41305717386,'steps':{},'physical_owner_acceptance':False}
     def save():native.save('native-shared-delta.json',result)
@@ -71,6 +72,28 @@ def smoke(program):
         assert (moved/'tree/delta-owner.py').read_bytes()==b'OWNER_DELTA=1\n'
         result['steps']['unicode_whole_folder_move_profile_history_queue_devices_phone_code_exact']=True
         snapshot('delta-moved-window.png');close(moved);native.wait(lambda:p.poll() is not None,75);save()
+        rounds=int(os.environ.get('COCOA_EXIT_REPETITIONS','0'));measurements=[]
+        for number in range(rounds):
+            p=launch(moved);ready(moved)
+            desc=json.loads((data/'memory/.control/desktop-session.json').read_bytes());owner=psutil.Process(desc['pid'])
+            identities=[(q.pid,q.create_time()) for q in [owner,*owner.children(recursive=True)]]
+            started=time.monotonic()
+            native.invoke(moved,'python_window',{'action':'exit','relaunch':False,'owner_exit':False})
+            try:p.wait(20)
+            except subprocess.TimeoutExpired:
+                subprocess.run(['sample',str(p.pid),'2','-file',str(out/('rapid-exit-'+str(number)+'-sample.txt'))],capture_output=True,timeout=15)
+                raise
+            assert p.returncode==0,'Cocoa observer failed to exit normally'
+            def settled():
+                for pid,birth in identities:
+                    try:
+                        current=psutil.Process(pid)
+                        if current.create_time()==birth and current.status()!=psutil.STATUS_ZOMBIE:return False
+                    except psutil.NoSuchProcess:pass
+                return True
+            native.wait(settled,20)
+            measurements.append({'round':number+1,'seconds':time.monotonic()-started,'observed_generations_absent':len(identities)})
+            result['rapid_cocoa_exit']=measurements;save()
     except BaseException as exc:
         result['error']=type(exc).__name__+': '+str(exc);save();native.snapshot('delta-failure.png');raise
     finally:

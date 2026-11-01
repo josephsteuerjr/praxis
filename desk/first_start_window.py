@@ -108,6 +108,9 @@ def main(root,*,places=None,flow=first_start):
         geometry=window_geometry(webview.screens[0]);geometry.update(width=min(500,geometry['width']),height=min(650,geometry['height']))
         app.window=webview.create_window('Hélène',app.origin,**geometry,min_size=(360,420),
             frameless=True,easy_drag=False,text_select=True,background_color='#f8eee0')
+        if sys.platform=='darwin':
+            from localharness.cocoa_js_bridge import install
+            install(app)
         from localharness.bootstrap_ready import signal
         def loaded():
             app.ui_ready=True;app.publish_control();signal()
