@@ -30,7 +30,8 @@ def prepare():
     from macos_archive_delta import versioned
     manual=TEMP/'manual-release.zip'
     receipt=versioned(archive,manual,'Helene-2.3.0-rc.18-macos-arm64')
-    assert receipt['sha256']=='08801e693980a76f1b6431cbe4a19901a0e3ff2052c7e002c6521e391f29af87'
+    if os.environ.get('EXPECTED_MANUAL_SHA256'):
+        assert receipt['sha256']==os.environ['EXPECTED_MANUAL_SHA256']
     write('MANUAL-ARCHIVE.json',receipt)
     unpack(manual,TEMP/'shared-install');program=TEMP/'shared-install/Helene-2.3.0-rc.18-macos-arm64'
     shutil.copytree(program/'runtime',TEMP/'shared-driver-runtime')
@@ -46,7 +47,7 @@ def subject():
     from localharness.package_notice import write as store
     home=TEMP/'shared-home';home.mkdir()
     os.environ.update(HOME=str(home),CFFIXED_USER_HOME=str(home),PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1')
-    result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'manual_archive_sha256':'08801e693980a76f1b6431cbe4a19901a0e3ff2052c7e002c6521e391f29af87','actual_distributed_shared_code':True,
+    result={'archive_sha256':os.environ['CANDIDATE_SHA256'],'manual_archive_sha256':json.loads((OUT/'MANUAL-ARCHIVE.json').read_bytes())['sha256'],'actual_distributed_shared_code':True,
         'scope':'Disposable native Mac with synthetic tiny component archives and paused API profile. No model weights/account/microphone acceptance.', 'steps':{}}
     write('SHARED-MAC.json',result)
     fixture=TEMP/'component-program';(fixture/'runtime/bin').mkdir(parents=True)

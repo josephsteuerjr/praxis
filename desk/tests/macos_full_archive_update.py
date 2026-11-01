@@ -96,18 +96,41 @@ def subject():
     if recheck:result['previous_exact_archive_https_clean_support_and_legacy_run']=41301228972
     if cold_only:result['previous_preserve_cancellation_and_failed_start_rollback_run']=41302093575
     write('FULL-UPDATE.json',result)
-    provider_calls=[]
+    provider_calls=[];provider_users=[];status_tool={'issued':False,'observed':False}
     class Provider(http.server.BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def do_POST(self):
             body=json.loads(self.rfile.read(int(self.headers.get('Content-Length','0'))));provider_calls.append(self.path)
+            users=[json.dumps(row.get('content'),ensure_ascii=False) for row in body.get('messages',[]) if row.get('role')=='user']
+            if users:provider_users.append(users[-1])
+            tool_reply=None;tool_name=None
+            if os.environ.get('REQUIRE_WORK_EVENT')=='1':
+                from localharness import source_update as source_ops
+                request=read(source_ops.path(places.data))
+                expected='Событие текущего обновления '+str(request.get('id',''))[:8]
+                offered=[row.get('function',{}).get('name') for row in body.get('tools',[])]
+                if (request.get('id') and users and expected in users[-1]
+                        and 'source_update' in offered and not status_tool['issued']):
+                    tool_name='source_update';status_tool.update(issued=True,started=time.monotonic(),request_id=request['id'])
+                replies=[row for row in body.get('messages',[]) if row.get('role')=='tool' and row.get('tool_call_id')=='call_ci_readonly_status']
+                if replies:
+                    raw=replies[-1]['content']
+                    if isinstance(raw,list):raw='\n'.join(str(part.get('text','')) for part in raw if isinstance(part,dict))
+                    try:tool_reply=json.loads(raw) if isinstance(raw,str) else raw
+                    except ValueError:tool_reply={'error':'Non-JSON model tool observation'}
+                    if not isinstance(tool_reply,dict):tool_reply={'error':'Non-object model tool observation'}
+                    status_tool.update(observed=True,seconds=time.monotonic()-status_tool['started'],
+                        returned_state=tool_reply.get('state'),error=tool_reply.get('error',''))
+            calls=([{'id':'call_ci_readonly_status','type':'function','function':{'name':tool_name,'arguments':'{"action":"status"}'}}] if tool_name else None)
             text='Disposable local CI response.'
             response={'id':'chatcmpl-fixture','object':'chat.completion','created':int(time.time()),'model':'fixture',
                 'choices':[{'index':0,'message':{'role':'assistant','content':text},'finish_reason':'stop'}],
                 'usage':{'prompt_tokens':1,'completion_tokens':1,'total_tokens':2}}
+            if calls:response['choices'][0].update(message={'role':'assistant','content':None,'tool_calls':calls},finish_reason='tool_calls')
             if body.get('stream'):
-                data=('data: '+json.dumps({'id':'chatcmpl-fixture','object':'chat.completion.chunk','choices':[{'index':0,'delta':{'role':'assistant','content':text},'finish_reason':None}]})+'\n\n'+
-                      'data: '+json.dumps({'id':'chatcmpl-fixture','object':'chat.completion.chunk','choices':[{'index':0,'delta':{},'finish_reason':'stop'}]})+'\n\ndata: [DONE]\n\n').encode()
+                delta=({'role':'assistant','tool_calls':[{'index':0,**calls[0]}]} if calls else {'role':'assistant','content':text})
+                data=('data: '+json.dumps({'id':'chatcmpl-fixture','object':'chat.completion.chunk','choices':[{'index':0,'delta':delta,'finish_reason':None}]})+'\n\n'+
+                      'data: '+json.dumps({'id':'chatcmpl-fixture','object':'chat.completion.chunk','choices':[{'index':0,'delta':{},'finish_reason':'tool_calls' if calls else 'stop'}]})+'\n\ndata: [DONE]\n\n').encode()
                 mime='text/event-stream'
             else:data=json.dumps(response).encode();mime='application/json'
             self.send_response(200);self.send_header('Content-Type',mime);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
@@ -150,7 +173,10 @@ def subject():
                     raise RuntimeError('Full archive update refused: '+str(job_public()))
             time.sleep(.2)
         raise TimeoutError('Full archive update did not settle: '+str(job_public()))
-    def screenshot(name):subprocess.run(['screencapture','-x',str(OUT/name)],check=True)
+    def screenshot(name,ready=True):
+        if ready:
+            native.wait(lambda:native.control(root) and native.control(root).get('ui_ready'),90);time.sleep(2)
+        subprocess.run(['screencapture','-x',str(OUT/name)],check=True)
     def cocoa_identity():
         row=native.control(root);p=psutil.Process(row['pid'])
         args=p.cmdline()
@@ -200,6 +226,15 @@ def subject():
             finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
             result['steps']['real_full_archive_clean_update_and_native_restart']=cocoa_identity();screenshot('after-clean.png');write('FULL-UPDATE.json',result)
         if not cold_only:
+            # The ordinary pristine preserve path needs no invented semantic
+            # clearance and must complete through the same real archive.
+            owner_stop.change_pause(places.data,False,reason='explicit synthetic pristine preserve',via='fixture')
+            admission=native.invoke(root,'update_install',{'path':downloaded['path'],'sourceMode':'preserve'})
+            identity=admission.get('id') or admission.get('job',{}).get('id');assert identity
+            finish(identity);native.wait(lambda:info().get('version')=='2.3.0-rc.18',120);data_exact()
+            result['steps']['real_full_archive_pristine_preserve_update']=cocoa_identity()
+            owner_stop.change_pause(places.data,True,reason='pristine preserve completed',via='fixture')
+            screenshot('after-pristine-preserve.png');write('FULL-UPDATE.json',result)
             # Modified-preserve requires full semantic clearance even without Git
             # conflicts. A fixture provider cannot grant it. Prove the real gate
             # retains the old program and its own explicit cancellation settles.
@@ -215,6 +250,20 @@ def subject():
             assert native.control(root)['pid']==window_pid and authored.read_bytes()==b'OWNER_NONCONFLICT=23\n'
             assert (root/'helene.json').read_bytes()==before_preserve and not mechanical.active_update(root).exists()
             result['steps']['modified_preserve_requires_semantic_gate_old_program_retained']=True
+            if os.environ.get('REQUIRE_WORK_EVENT')=='1':
+                request=native.wait(lambda:read(source_update.path(places.data)),60)
+                expected='Событие текущего обновления '+request['id'][:8]
+                current=native.wait(lambda:next((text for text in provider_users if expected in text),None),120)
+                proof={'request_id':request['id'],'event_prefix':expected,'present_in_actual_last_user_message':True,
+                    'last_user_message_sha256':hashlib.sha256(current.encode()).hexdigest(),
+                    'local_fixture_provider_only':True,'semantic_clearance_injected':False}
+                write('MODEL-CURRENT-PROOF.json',proof)
+                result['steps']['actual_model_current_contains_new_source_update_event']=proof
+                native.wait(lambda:status_tool['observed'],90)
+                write('READONLY-STATUS-TOOL.json',status_tool)
+                assert not status_tool['error'] and status_tool['returned_state'] in ('waiting_agent','pending','needs_attention'),status_tool
+                assert status_tool['seconds']<30,'Real source-tool status exceeded its30s transport budget'
+                result['steps']['fixture_model_executes_real_readonly_status_tool']=dict(status_tool)
             cancelled=native.invoke(root,'update_cancel');assert cancelled.get('ok')
             finish(identity,timeout=180,failed=True)
             native.wait(lambda:jobs.status(places.data).get('state')=='cancelled',90)
@@ -251,6 +300,11 @@ def subject():
             assert (root/'helene.json').read_bytes()==before_cfg
             data_exact();result['steps']['full_archive_failed_start_rolls_back_and_reopens_previous']={'faulted':killed,'reopened':cocoa_identity()}
             screenshot('after-rollback.png');write('FULL-UPDATE.json',result)
+            # A failed durable job is intentionally rejoined, not silently
+            # replayed by another identical click. Explicitly cancel it before
+            # admitting the separate interruption experiment.
+            assert native.invoke(root,'update_cancel').get('ok')
+            native.wait(lambda:jobs.status(places.data).get('state')=='cancelled',90)
         # Crash the exact admitted updater AFTER its real full overlay,
         # before startup commit. A later ordinary launch must consume the durable
         # recovery journal before importing the mixed application.
@@ -310,7 +364,7 @@ def subject():
         for folder in (root/'.helene/logs',places.data/'memory/.control'):
             for p in folder.glob('*.log'):
                 if p.stat().st_size<2*1024*1024:shutil.copy2(p,OUT/p.name)
-        screenshot('failure.png');raise
+        screenshot('failure.png',ready=False);raise
     finally:
         if stop_watch is not None:stop_watch.set()
         try:

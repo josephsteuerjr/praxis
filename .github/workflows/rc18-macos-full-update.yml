@@ -16,9 +16,9 @@ jobs:
     timeout-minutes: 35
     env:
       UPDATE_SCENARIO: ${{ matrix.scenario }}
-      UPDATE_RECHECK: cold-only
-      CANDIDATE_SHA256: 8f133b5238fbea7a300b1eb00c1f37adfc571f5ec4afa9f5f4c29046ff00926b
-      ARTIFACT_SHA256: bcb2e24f6798749a7c01a21fc77955df08d9c3bbc865259e0c863f3a6cec55db
+      REQUIRE_WORK_EVENT: '1'
+      CANDIDATE_SHA256: b992662dc6146ec1431113a62209218e083e7b1f8ff804ab8f5797eab1d1496b
+      ARTIFACT_SHA256: b505c1c2972d95991e207d351ce19c032222b36322698d70468b8d83740e2892
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,16 +27,16 @@ jobs:
         id: archive
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-8f133b5238fbea7a
+          key: helene-rc18-complete-b992662dc6146ec1
       - if: steps.archive.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13083525999/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
       - uses: actions/cache/save@v4
         if: steps.archive.outputs.cache-hit != 'true'
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-8f133b5238fbea7a
+          key: helene-rc18-complete-b992662dc6146ec1
       - uses: actions/cache/restore@v4
         if: matrix.scenario == 'legacy'
         with:

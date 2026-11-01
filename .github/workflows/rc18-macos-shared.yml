@@ -11,14 +11,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
-      CANDIDATE_SHA256: 8730bdebc9e2f66f828a2fbd10a6ca412a70c3fe238a5d2a6feb4ae35030ee22
-      ARTIFACT_SHA256: ed4f983c1da982ffb384fbae5bde59ae34ff28d1c7b864d4b153234767cc3ea1
-      SKIP_DELTA_TRANSPORT: '1'
-      RECHECK_MOVED_LOGIN: '1'
+      CANDIDATE_SHA256: b992662dc6146ec1431113a62209218e083e7b1f8ff804ab8f5797eab1d1496b
+      ARTIFACT_SHA256: b505c1c2972d95991e207d351ce19c032222b36322698d70468b8d83740e2892
+      SKIP_DELTA_TRANSPORT: '0'
+      RECHECK_MOVED_LOGIN: '0'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,15 +27,21 @@ jobs:
         id: base
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-8730bdebc9e2f66f
+          key: helene-rc18-complete-8f133b5238fbea7a
       - if: steps.base.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13082226446/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - name: Retain verified base as transport input
+        run: mv "$RUNNER_TEMP/qualified-release-artifact.zip" "$RUNNER_TEMP/baseline-release-artifact.zip"
+      - name: Exact final source-event candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13083525999/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
       - uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-8730bdebc9e2f66f
+          key: helene-rc18-complete-b992662dc6146ec1
       - name: Native tiny installer errors, retry, Exit and two Cocoa observers
         run: python3 desk/tests/macos_shared_regressions.py prepare
       - uses: actions/upload-artifact@v4
