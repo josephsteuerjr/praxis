@@ -22,7 +22,22 @@ clean code with the current profile. An interrupted update has a recovery path;
 retain its receipts until startup is confirmed. Connecting another data folder
 does not delete the previous one.
 
-Optional voice components download separately. Their terms and the base native
+Source-preserving updates and native patch operations require Git on PATH.
+The base archive does not bundle Git. Check `git --version` before using those
+features; Apple's Command Line Tools provide it. Full source checks can refuse
+an installation when their declared tools or tests are unavailable or fail.
+
+This candidate has no working online voice download: the old release was removed.
+The release packet supplies the pinned **Whisper** library ZIP separately. To
+prepare it offline, with the application closed, run from the Helene folder:
+
+```
+./runtime/bin/python3 -B app/localharness/component_downloads.py --prepare . --extensions whisper --offline /path/to/component-archives
+```
+
+Recognition models are selected separately in the voice card. **XTTS** is marked
+unavailable until a qualified Mac runtime/model pack is supplied; existing voice
+installations are retained. Component terms and the base native
 dependency attribution texts are under **licenses/**; Python dependency licenses
 remain beside their packages in **runtime/**. The application bundle is signed
 ad hoc for this candidate, without Apple notarization. Native CI evidence does

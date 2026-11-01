@@ -34,7 +34,7 @@ def unpack(archive,destination):
             if i.is_dir():target.mkdir(parents=True,exist_ok=True);continue
             target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(z.read(i));target.chmod(mode&0o777 or 0o644)
 
-def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=None,runtime_scripts=None):
+def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=None,runtime_scripts=None,native_organs=None):
     if runtime_target()!='macos-arm64':raise ValueError('Run on native macOS ARM64')
     evidence,work,out=map(lambda p:Path(p).resolve(),(evidence,work,out))
     if digest(evidence)!=EVIDENCE_SHA256:raise ValueError('Reusable CI input digest mismatch')
@@ -47,13 +47,29 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
     for name,e in core.items():
         p=edition/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(e.data);p.chmod(0o755 if e.mode=='100755' else 0o644)
     downloads=work/'component-downloads.json'
-    value=json.loads((donor/'app/component-downloads.json').read_text());value['app_version']=VERSION
+    value=json.loads(Path(__file__).with_name('mac-component-downloads-rc18.json').read_text(encoding='utf-8'))
+    from localharness.component_downloads import for_target,validate
+    for_target(validate(value),'macos-arm64');assert value['app_version']==VERSION
     downloads.write_text(json.dumps(value,indent=2),encoding='utf-8')
+    native_built=None
+    if native_organs:
+        native_organs=Path(native_organs)
+        native_built=json.loads((native_organs/'NATIVE-SOURCE.json').read_text())
+        assert native_built['exit']==0 and native_built['platform']=='arm64'
+        selected={}
+        for prefix in ('praxis/body','helene/core/body'):
+            for p in (repo/prefix).rglob('*'):
+                if p.is_file() and not any(x in p.parts for x in ('.git','target','__pycache__')):
+                    selected[p.relative_to(repo/prefix).as_posix()]=digest(p)
+        assert selected==native_built['source_files'],'Native compilation used different selected edition source'
+        for name in ('body','bridge'):
+            assert digest(native_organs/'organs'/('helene-'+name))==native_built[name+'_sha256']
     program=out/'Helene'
     # assemble owns an initial archive. Final GUI metadata is sealed below;
     # keep only the final archive name and the source-bound final passport.
     first=assemble(runtime or donor/'runtime',edition,None,None,program,version=VERSION,target='macos-arm64',
-        downloads=downloads,body=donor/'helene-body',bridge=donor/'helene-bridge',verification=verification,verification_tools=verification_tools)
+        downloads=downloads,body=(native_organs/'organs/helene-body' if native_organs else donor/'helene-body'),
+        bridge=(native_organs/'organs/helene-bridge' if native_organs else donor/'helene-bridge'),verification=verification,verification_tools=verification_tools)
     first.rename(work/'assembly-before-cocoa.zip')
     bundle=program/'Helene.app'
     shutil.copytree(donor/'Helene.app',bundle)
@@ -62,6 +78,7 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
     unpack(license_input,program)
     shutil.copy2(Path(__file__).with_name('PYTHON-MACOS-START-HERE.md'),program/'START-HERE.md')
     if runtime_scripts:shutil.copy2(runtime_scripts,program/'runtime-script-portability.json')
+    if native_built:shutil.copy2(native_organs/'NATIVE-SOURCE.json',program/'native-build.json')
     info=bundle/'Contents/Info.plist';value=plistlib.loads(info.read_bytes())
     value.update(CFBundleShortVersionString='2.3.0',CFBundleVersion='23018')
     info.write_bytes(plistlib.dumps(value))
@@ -73,10 +90,12 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
     source_commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
     native={'runtime_donor_sha256':digest(payload),'evidence_sha256':EVIDENCE_SHA256,'run_id':40233694345,
             'launcher_sha256':digest(bundle/'Contents/MacOS/Helene'),
-            'body_sha256':digest(program/'helene-body'),'bridge_sha256':digest(program/'helene-bridge')}
+            'scope':'Python runtime base and Cocoa launcher reused; native body/bridge provenance is separate'}
+    if not native_built:
+        native.update(body_sha256=digest(program/'helene-body'),bridge_sha256=digest(program/'helene-bridge'))
     (program/'macos-inputs.json').write_text(json.dumps({'format':'helene-macos-inputs.v1','version':VERSION,
         'source_commit':source_commit,'base_public_commit':'f7b2434965bfc8a4da4e85d1e90811a3f3051199',
-        'native_reused':native,'core_origins':origins,'native_qualification':'see separate CI receipts',
+        'native_reused':native,'native_built':native_built,'core_origins':origins,'native_qualification':'see separate CI receipts',
         'physical_acceptance':'TCC/microphone/owner Mac pending'},indent=2),encoding='utf-8')
     normalize_output_modes(program)
     files={p.relative_to(program).as_posix():digest(p) for p in program.rglob('*') if p.is_file()
@@ -88,7 +107,7 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
             if p.is_file():z.write(p,'Helene/'+p.relative_to(program).as_posix())
     receipt={'format':'helene-macos-candidate.v1','version':VERSION,'target':runtime_target(),
              'source_commit':source_commit,'archive':final.name,'size':final.stat().st_size,'sha256':digest(final),
-             'files':len(files),'native_reused':native}
+             'files':len(files),'native_reused':native,'native_built':native_built}
     (out/'candidate.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
     (out/(final.name+'.sha256')).write_text(receipt['sha256']+'  '+final.name+'\n',encoding='utf-8')
     print(json.dumps(receipt),flush=True)
@@ -97,5 +116,5 @@ def build(evidence,work,out,*,verification=None,verification_tools=None,runtime=
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('evidence','work','output'):p.add_argument('--'+name,type=Path,required=True)
-    for name in ('verification','verification-tools','runtime','runtime-scripts'):p.add_argument('--'+name,type=Path)
-    a=p.parse_args();build(a.evidence,a.work,a.output,verification=a.verification,verification_tools=a.verification_tools,runtime=a.runtime,runtime_scripts=a.runtime_scripts)
+    for name in ('verification','verification-tools','runtime','runtime-scripts','native-organs'):p.add_argument('--'+name,type=Path)
+    a=p.parse_args();build(a.evidence,a.work,a.output,verification=a.verification,verification_tools=a.verification_tools,runtime=a.runtime,runtime_scripts=a.runtime_scripts,native_organs=a.native_organs)

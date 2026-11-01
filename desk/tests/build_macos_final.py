@@ -35,8 +35,12 @@ def prepare():
 def build():
     from rc18_macos_pipeline import fronts
     from localharness import source_verification_bundle as bundle,source_verification_executor as executor,source_update_host
-    from build_python_macos_rc import build as package
+    from build_python_macos_rc import build as package,digest as digest_native
     fronts()
+    organs=TEMP/'native-organs'
+    assert digest_native(TEMP/'native-organs.zip')=='3338c7d903bf6595ee5d1e9a7227101e63e9a0657860c296ec490f430aff2cec'
+    from build_python_macos_rc import unpack
+    unpack(TEMP/'native-organs.zip',organs)
     command([sys.executable,'-m','pip','check'],'pip-check.log',timeout=120)
     # Prior contract/custody gates passed; only updater callsites changed now.
     command([sys.executable,'-B','-m','unittest','tests.t_python_native_update_2410','-v'],
@@ -60,7 +64,7 @@ def build():
     bundle_sha=bundle.digest(verification/'manifest.json')
     bundle.load(verification,bundle_sha,'2.3.0-rc.18')
     program=package(TEMP/'rc18-evidence.zip',TEMP/'final-build-work',TEMP/'final-output',
-        verification=verification,verification_tools=TOOLS,runtime=RUNTIME,runtime_scripts=TEMP/'runtime-script-portability.json')
+        verification=verification,verification_tools=TOOLS,runtime=RUNTIME,runtime_scripts=TEMP/'runtime-script-portability.json',native_organs=organs)
     binding=source_update_host.verified_runtime(program)
     operation=TEMP/'native-executor-probe';operation.mkdir()
     selected=executor.provision(program,manifest,operation)

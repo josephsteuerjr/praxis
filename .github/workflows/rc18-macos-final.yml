@@ -41,6 +41,10 @@ jobs:
           path: ${{ runner.temp }}/rc18-qualified-input.zip
           key: helene-rc18-native-79ce64094f84499c
           fail-on-cache-miss: true
+      - name: Exact source-qualified native body and bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13081405609/zip > "$RUNNER_TEMP/native-organs.zip"
       - name: Build source-complete native candidate and exercise offline consumer
         run: python3 desk/tests/build_macos_final.py prepare
       - uses: actions/upload-artifact@v4
