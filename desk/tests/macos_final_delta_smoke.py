@@ -1,6 +1,20 @@
 """Fresh native GUI consumer after a shared UI/runtime-hand-only source delta."""
 from pathlib import Path
-import json,os,subprocess,time
+import json,os,shutil,subprocess,sys,time,zipfile
+
+def prepare():
+    repo=Path(__file__).resolve().parents[2];temp=Path(os.environ['RUNNER_TEMP']).resolve()
+    sys.path[:0]=[str(repo/'desk/tests'),str(repo/'desk/installer')]
+    from build_python_macos_rc import unpack,digest
+    outer=temp/'qualified-release-artifact.zip';assert digest(outer)==os.environ['ARTIFACT_SHA256']
+    with zipfile.ZipFile(outer) as z:
+        row=next(i for i in z.infolist() if Path(i.filename).name=='Helene-2.3.0-rc.18-macos-arm64.zip')
+        archive=temp/'delta-smoke.zip';archive.write_bytes(z.read(row))
+    assert digest(archive)==os.environ['CANDIDATE_SHA256']
+    unpack(archive,temp/'delta-smoke-install');program=temp/'delta-smoke-install/Helene'
+    shutil.copytree(program/'runtime',temp/'delta-smoke-driver-runtime')
+    python=temp/'delta-smoke-driver-runtime/bin/python3'
+    os.execv(str(python),[str(python),'-B',str(Path(__file__).resolve()),'subject'])
 
 def smoke(program):
     import psutil
@@ -17,7 +31,11 @@ def smoke(program):
         log=(out/('delta-window-'+str(len(logs))+'.log')).open('wb');logs.append(log)
         p=subprocess.Popen([str(root/'Helene.app/Contents/MacOS/Helene'),'--root',str(root)],cwd=root,env=env,stdout=log,stderr=subprocess.STDOUT)
         processes.append(p);return p
-    def ready(root):native.wait(lambda:native.control(root) and native.control(root).get('ui_ready'),120)
+    def ready(root):
+        # First-start publishes ui_ready too. Wait for the NEW ordinary RPC
+        # endpoint after its Cocoa exec, not the disappearing form receipt.
+        native.wait(lambda:native.invoke(root,'app_info').get('root')==str(root),120)
+        native.wait(lambda:native.control(root) and native.control(root).get('ui_ready'),120)
     def snapshot(name):time.sleep(2);native.snapshot(name)
     def close(root):
         if native.control(root):native.invoke(root,'python_window',{'action':'exit','relaunch':False,'owner_exit':False})
@@ -64,3 +82,10 @@ def smoke(program):
             try:p.wait(15)
             except subprocess.TimeoutExpired:p.terminate();p.wait(10)
         for log in logs:log.close()
+
+if __name__=='__main__':
+    if sys.argv[1]=='prepare':prepare()
+    else:
+        repo=Path(__file__).resolve().parents[2]
+        sys.path[:0]=[str(repo/'desk/tests'),str(repo/'desk/installer')]
+        smoke(Path(os.environ['RUNNER_TEMP']).resolve()/'delta-smoke-install/Helene')

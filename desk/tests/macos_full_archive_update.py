@@ -294,11 +294,18 @@ def subject():
                 if os.environ.get('REQUIRE_NATIVE_MONITOR')=='1':
                     import native_ax as ax
                     pid=native.control(root)['pid']
-                    ax.press(ax.find(pid,'Исправления',role='AXButton',timeout=30))
+                    def header_button():
+                        rows=ax.walk(pid)
+                        write('NATIVE-MONITOR-BEFORE-AX.json',[{k:v for k,v in row.items() if k!='element'} for row in rows])
+                        matches=[row for row in rows if row['AXRole']=='AXButton' and any('Открыть действия' in row[key]
+                            for key in ('AXTitle','AXDescription','AXValue'))]
+                        return matches[0]['element'] if len(matches)==1 else None
+                    ax.press(native.wait(header_button,30))
                     def visible_actions():
                         rows=ax.walk(pid)
                         texts={row[key] for row in rows for key in ('AXTitle','AXDescription','AXValue')}
-                        return rows if 'ожидают завершения' in texts and 'ожидает исправлений от агента' in texts else None
+                        joined='\n'.join(texts)
+                        return rows if 'ожидают завершения' in joined and 'ожидает исправлений от агента' in joined else None
                     rows=native.wait(visible_actions,30)
                     write('NATIVE-MONITOR-AX.json',[{k:v for k,v in row.items() if k!='element'} for row in rows])
                     screenshot('source-monitor-actions.png')

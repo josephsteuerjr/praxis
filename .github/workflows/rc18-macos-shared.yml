@@ -15,10 +15,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     env:
-      CANDIDATE_SHA256: b992662dc6146ec1431113a62209218e083e7b1f8ff804ab8f5797eab1d1496b
-      ARTIFACT_SHA256: b505c1c2972d95991e207d351ce19c032222b36322698d70468b8d83740e2892
+      CANDIDATE_SHA256: 29414244dbac27a6ef5beac33a4b754db3db919523c30a6b02c0051f0b972758
+      ARTIFACT_SHA256: e4ff88a30bbb533232be04bae9aa2a84081c0003fdde7b15714ffce61f2ee459
       SKIP_DELTA_TRANSPORT: '0'
-      RECHECK_MOVED_LOGIN: '0'
+      RECHECK_MOVED_LOGIN: '1'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,11 +37,11 @@ jobs:
       - name: Exact final source-event candidate
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13083525999/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085417762/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
       - uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/qualified-release-artifact.zip
-          key: helene-rc18-complete-b992662dc6146ec1
+          key: helene-rc18-complete-29414244dbac27a6
       - name: Native tiny installer errors, retry, Exit and two Cocoa observers
         run: python3 desk/tests/macos_shared_regressions.py prepare
       - uses: actions/upload-artifact@v4

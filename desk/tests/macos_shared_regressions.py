@@ -95,7 +95,7 @@ def subject():
     processes=[];logs=[]
     recheck_login=os.environ.get('RECHECK_MOVED_LOGIN')=='1'
     if recheck_login:
-        result['previous_passed_installer_and_two_observer_run']=41304306311
+        result['previous_passed_installer_and_two_observer_run']=41308478947
         result['focus']='Only moved-programme login/teardown tail; two observers are its setup precondition.'
     os.environ['PYTHONFAULTHANDLER']='1'
     try:
