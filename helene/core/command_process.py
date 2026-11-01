@@ -173,4 +173,4 @@ class CommandProcess:
                 self._stopped = True
                 return True, 'private command group exited'
             except (OSError, subprocess.TimeoutExpired) as exc:
-                return False, f'{type(exc).__name__}; private group exit unconfirmed'
+                return False, f'{type(exc).__name__}: {exc}; private group exit unconfirmed'

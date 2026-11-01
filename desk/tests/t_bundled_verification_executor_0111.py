@@ -7,7 +7,7 @@ from localharness import source_verification_executor as executor
 class BundledExecutor(unittest.TestCase):
     def setUp(self):
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)
-        self.root=Path(temp.name);self.program=self.root/'program';self.tools=self.program/'verification-tools'
+        self.root=Path(temp.name).resolve();self.program=self.root/'program';self.tools=self.program/'verification-tools'
         for name,content in {'bin/node':b'fixture native tool','bin/npm':b'fixture npm wrapper',
                 'npm/bin/npm-cli.js':b'fixture npm JS','cache/_cacache/content-v2/sha512/object':b'public cached tarball'}.items():
             p=self.tools/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(content);p.chmod(0o644)
