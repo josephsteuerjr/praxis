@@ -50,6 +50,19 @@ def requested(program):
     return any(marker.exists() for marker in markers)
 
 
+def matches(program,descriptor):
+    """Close an observer only for the exact owner's durable terminal intent."""
+    program=Path(program).resolve();targets=[path(program)]
+    if descriptor.get('tree'):
+        targets.append(profile_path(program,descriptor['tree']))
+    for marker in targets:
+        value=read(marker)
+        if (value.get('format')==FORMAT and value.get('program')==str(program)
+                and all(value.get(key)==descriptor.get(key) and descriptor.get(key) is not None
+                        for key in ('pid','birth','generation'))):return True
+    return False
+
+
 def clear_for_manual_start(program):
     path(program).unlink(missing_ok=True)
     for marker in profile_paths(program):marker.unlink(missing_ok=True)

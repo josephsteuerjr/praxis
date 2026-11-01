@@ -198,9 +198,20 @@ def invoke(owner, command, args):
             env['HELENE_TG_'+name]=str(args.get(key,''))
         return owner.helper([sys.executable,str(owner.root/'app/localharness/mtproto_login.py'),
             '--session',str(agent.tree/'telegram/account'),'--config',str(agent.config),args['step']],env=env,timeout=90)
+    if command=='component_install':
+        from .component_install_job import start
+        return start(owner,str(args.get('name') or ''))
     if command=='voice_fetch':
+        from .voice import CATALOG
         flag='--get-voice' if args.get('kind')=='speak' else '--get'
-        owner.background([sys.executable,str(owner.root/'app/localharness/voice.py'),'--tree',str(agent.tree),flag,args['model']],agent.tree/'voice-download.log')
+        if args.get('model') not in ({'xtts'} if flag=='--get-voice' else CATALOG):raise ValueError('Unknown voice model')
+        key=(str(agent.tree.resolve()),flag);children=getattr(owner,'voice_jobs',{})
+        previous=children.get(key)
+        if previous is not None and previous.handle is not None:
+            if previous.poll() is None:return 'Загрузка уже выполняется; состояние в карточке голоса.'
+            previous.stop()
+        children[key]=owner.background([sys.executable,str(owner.root/'app/localharness/voice.py'),'--tree',str(agent.tree),flag,args['model']],agent.tree/'voice-download.log')
+        owner.voice_jobs=children
         return 'Загрузка компонента началась; состояние появится в карточке голоса.'
     if command=='logs_bundle':
         from .python_support import bundle

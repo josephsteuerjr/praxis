@@ -245,6 +245,7 @@ def _overlay(program, rows, progress=None, *, xtts_tree=None):
             if entry.name not in {'components', 'voice'} or not entry.is_dir():
                 raise ValueError('Unexpected optional payload root: ' + entry.name)
         from .python_source_updater import apply_files, rollback
+        if progress:progress({'stage':'installing'})
         recovery=program/('.component-recovery-'+uuid.uuid4().hex)
         # The stage lives on this same volume. Move each fully extracted file
         # into place after journalling preimages instead of copying GB again.
@@ -275,11 +276,18 @@ def status(program):
     try:
         manifest=load(program)
         installed=installed_extensions(program)
-        return [({'id':name,'ready':False,'installed':name in installed,
+        rows=[({'id':name,'ready':False,'installed':name in installed,
                   'error':manifest['unavailable'][name]} if name in manifest.get('unavailable',{}) else
                  {'id':name,'ready':True,'installed':name in installed,
                   'download_bytes':sum(row['size'] for row in select(manifest,[name]))})
                 for name in ('xtts','whisper')]
+        from .component_install_job import status as install_status
+        for row in rows:
+            job=install_status(program,row['id'])
+            if job:
+                row['progress']=job
+                if job.get('state')!='completed':row['installed']=False
+        return rows
     except (OSError,ValueError,KeyError) as error:
         return [{'id':name,'ready':False,'installed':False,'error':str(error)} for name in ('xtts','whisper')]
 

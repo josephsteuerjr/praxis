@@ -464,6 +464,18 @@ def worker_live(home: Path, ready: dict, *, require_ready=True):
     except (psutil.AccessDenied,OSError,ValueError):return None
 
 
+def download_progress(path):
+    value=_read(Path(path))
+    if value.get('state')=='running' and value.get('worker'):
+        if __package__:from .component_install_job import alive
+        else:from component_install_job import alive
+        observed=alive(value['worker']);value['active']=observed
+        if observed is False:
+            value.update(state='failed',note='Загрузка прервана. Можно повторить; кеш сохранён.',
+                         error='Загрузка прервана. Можно повторить; кеш сохранён.')
+    return value or None
+
+
 def speech_state(tree: Path, cfg: dict) -> dict:
     tree = Path(tree)
     lib = speech_library()
@@ -490,7 +502,7 @@ def speech_state(tree: Path, cfg: dict) -> dict:
     why = "голос агента выключен" if not enabled else lib["why"] if not lib["present"] else "XTTS модель не установлена" if not ready_model else ""
     return {"enabled":enabled,"voice":"xtts","catalog":[dict(VOICES["xtts"],id="xtts",installed=ready_model)],
             "library":lib,"model":str(model),"dir":str(model),"ready":not bool(why),"why":why,
-            "download":_read(tree / "memory/.state" / SPEECH_PROGRESS) or None,
+            "download":download_progress(tree / "memory/.state" / SPEECH_PROGRESS),
             "speaker":str(block(cfg).get("tts_speaker") or "Ana Florence"),
             "language":str(block(cfg).get("tts_language") or "ru"),
             "speakers":speakers,"languages":languages,"worker_ready":selected_ready if live is True else live,
@@ -547,7 +559,7 @@ def stt_state(tree: Path, cfg: dict) -> dict:
         "library": lib,
         "installed": have if ready_model else {},
         "dir": str(models_dir(tree)),
-        "download": _read(Path(tree) / "memory" / ".state" / PROGRESS) or None,
+        "download": download_progress(Path(tree) / "memory" / ".state" / PROGRESS),
     }
     if not enabled:
         out["ready"] = False
@@ -655,14 +667,23 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
     progress_path = tree / "memory" / ".state" / PROGRESS
     total = int(spec["size_mb"]) * 1024 * 1024
     started = _utc()
+    progress_lock=threading.Lock();terminal=False
+    if __package__:from .component_install_job import identity
+    else:from component_install_job import identity
+    worker=identity()
 
     def say(state_name: str, note: str, got: int, *, of: int | None = None, what: str = "") -> None:
-        _write(progress_path, {
-            "schema": SCHEMA, "model": what or model, "repo": spec["repo"],
-            "state": state_name, "note": note,
-            "got_bytes": got, "total_bytes": total if of is None else of,
-            "started_utc": started, "updated_utc": _utc(),
-        })
+        nonlocal terminal
+        with progress_lock:
+            if terminal and state_name=='running':return
+            if state_name in ('done','failed'):terminal=True
+            _write(progress_path, {
+                "schema": SCHEMA, "model": what or model, "repo": spec["repo"],
+                "state": state_name, "note": note,
+                "worker":worker,
+                "got_bytes": got, "total_bytes": total if of is None else of,
+                "started_utc": started, "updated_utc": _utc(),
+            })
 
     # 1.2.1: движок голоса — первым, той же полосой: владелец нажал одну кнопку.
     lib = library()
@@ -732,17 +753,37 @@ def fetch_voice(tree: Path, voice_id: str, *, quiet: bool = False) -> dict:
     if voice_id!='xtts':raise ValueError('Only the XTTS component can be installed')
     tree = Path(tree)
     progress = tree / 'memory/.state' / SPEECH_PROGRESS
-    _write(progress, {'state':'running','voice':'xtts','at':_utc(),'note':'Устанавливаю runtime и модель из локального комплекта'})
+    if __package__:from .component_install_job import identity
+    else:from component_install_job import identity
+    worker=identity()
+    def publish(value):_write(progress,dict(value,worker=worker))
+    publish({'state':'running','voice':'xtts','at':_utc(),'note':'Подготавливаю XTTS'})
     try:
         if __package__:
-            from .xtts_install import install
+            from .xtts_install import install,runtime_for
         else:
-            from xtts_install import install
-        result = install(tree)
-    except (OSError, ValueError) as exc:
-        _write(progress, {'state':'failed','voice':'xtts','at':_utc(),'error':str(exc)})
+            from xtts_install import install,runtime_for
+        program=install_root();runtime=runtime_for(program)
+        python=runtime/('python.exe' if os.name=='nt' else 'bin/python3')
+        if not (program/'components/xtts/xtts-bundle.json').is_file() or not python.is_file():
+            if __package__:from . import component_downloads
+            else:import component_downloads
+            def report(value):
+                stage=value.get('stage','preparing')
+                note='Скачиваю XTTS' if stage=='downloading' else 'Устанавливаю XTTS'
+                publish({'state':'running','voice':'xtts','at':_utc(),'phase':stage,'note':note,
+                    'got_bytes':value.get('bytes',0),'total_bytes':value.get('total_bytes',0)})
+            # Same pinned release/cache/overlay consumer as the Components card.
+            # It installs into this selected profile before returning.
+            if __package__:from .component_install_job import inline
+            else:from component_install_job import inline
+            result=inline(program,'xtts',tree,report)
+        else:
+            result = install(tree,program=program)
+    except Exception as exc:
+        publish({'state':'failed','voice':'xtts','at':_utc(),'error':str(exc)})
         raise
-    _write(progress, {'state':'done','voice':'xtts','at':_utc(),'note':'XTTS установлен; применяется перезапуском'})
+    publish({'state':'done','voice':'xtts','at':_utc(),'note':'XTTS установлен; применяется перезапуском'})
     return result
 
 

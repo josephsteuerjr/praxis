@@ -42,6 +42,13 @@ def build():
     from build_python_macos_rc import unpack
     unpack(TEMP/'native-organs.zip',organs)
     command([sys.executable,'-m','pip','check'],'pip-check.log',timeout=120)
+    command([sys.executable,'-B','-m','unittest','tests.t_component_jobs_0111','tests.t_voice_download_paths_0111',
+        'tests.t_observer_exit_0111','tests.t_operation_diagnostics_0111','tests.t_python_app','-v'],
+        'shared-regressions.log',cwd=REPO/'desk',timeout=600)
+    node_env=dict(os.environ,HELENE_TEST_PYTHON=sys.executable,PATH=str(TOOLS/'bin')+os.pathsep+os.environ.get('PATH',''))
+    node_cases=('contract','pending-voice','speech-status-3010','voice-refresh','voice-session-210','voice-shortcut','session','tray','settings-firstrun')
+    command([TOOLS/'bin/node','--test',*[REPO/'desk/app/test'/(n+'.test.mjs') for n in node_cases]],
+        'shared-node-regressions.log',cwd=REPO/'desk/app',env=node_env,timeout=300)
     # Prior contract/custody gates passed; only updater callsites changed now.
     command([sys.executable,'-B','-m','unittest','tests.t_python_native_update_2410','-v'],
         'verification-contracts.log',cwd=REPO/'desk',timeout=600)
