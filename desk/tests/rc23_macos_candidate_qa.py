@@ -1,7 +1,7 @@
 """External CI apparatus: package an explicit frozen subject, never this QA checkout."""
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-import hashlib,json,os,plistlib,shutil,subprocess,sys,time,zipfile
+import hashlib,io,json,os,plistlib,shutil,subprocess,sys,time,zipfile
 QA=Path(__file__).resolve();WORKSPACE=Path(os.environ['GITHUB_WORKSPACE']).resolve()
 REPO=WORKSPACE/'subject';TEMP=Path(os.environ['RUNNER_TEMP']).resolve()
 OUT=WORKSPACE/'evidence-rc23-package';OUT.mkdir(exist_ok=True)
@@ -19,20 +19,33 @@ def command(argv,name,**kw):
         done=subprocess.run(list(map(str,argv)),stdout=stream,stderr=subprocess.STDOUT,timeout=kw.pop('timeout',600),**kw)
     if done.returncode:raise RuntimeError(f'{name}: exit {done.returncode}; inspect the retained log')
     return done
-def subject_identity():
+def subject_identity(*,materialize=False):
     assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip()==PRODUCT_COMMIT
-    assert not subprocess.check_output(['git','diff','--name-only'],cwd=REPO)
-    rows={}
+    rows={};entries=[];repairs=[]
     for entry in subprocess.check_output(['git','ls-files','--stage','-z'],cwd=REPO).split(b'\0'):
         if not entry:continue
         head,name=entry.split(b'\t',1);mode,oid,stage=head.decode().split();name=name.decode()
-        body=(REPO/name).read_bytes();assert stage=='0'
+        assert stage=='0' and mode in ('100644','100755');entries.append((name,mode,oid))
+    stream=io.BytesIO(subprocess.check_output(['git','cat-file','--batch'],cwd=REPO,input=''.join(row[2]+'\n' for row in entries).encode()))
+    for name,mode,oid in entries:
+        actual_oid,kind,length=stream.readline().decode().split();assert actual_oid==oid and kind=='blob'
+        expected=stream.read(int(length));assert stream.read(1)==b'\n'
+        path=REPO/name;before=path.read_bytes();wanted=0o755 if mode=='100755' else 0o644
+        if before!=expected or path.stat().st_mode&0o777!=wanted:
+            repairs.append({'path':name,'raw_bytes_differ':before!=expected,'before_sha256':hashlib.sha256(before).hexdigest(),
+                'expected_sha256':hashlib.sha256(expected).hexdigest(),'before_mode':path.stat().st_mode&0o777,'expected_mode':wanted})
+            assert materialize,'Frozen raw source changed after materialization: '+name
+            path.write_bytes(expected);path.chmod(wanted)
+        body=path.read_bytes()
         assert hashlib.sha1(b'blob '+str(len(body)).encode()+b'\0'+body).hexdigest()==oid,name
         rows[name]={'sha256':hashlib.sha256(body).hexdigest(),'mode':mode}
+    assert not stream.read()
+    if materialize:save('CHECKOUT-MATERIALIZATION.json',{'only_exact_frozen_Git_blobs_materialized':True,'changes':repairs,
+        'git_normalized_diff_names':subprocess.check_output(['git','diff','--name-only'],cwd=REPO,text=True).splitlines()})
     save('SUBJECT-SOURCE.json',{'commit':PRODUCT_COMMIT,'files':rows,'QA_script_sha256':digest(QA),
         'instrumentation_external_to_subject':True,'version':VERSION})
 def prepare():
-    assert sys.platform=='darwin' and os.uname().machine=='arm64';subject_identity()
+    assert sys.platform=='darwin' and os.uname().machine=='arm64';subject_identity(materialize=True)
     from build_python_macos_rc import unpack
     outer=TEMP/'qualified-release-artifact.zip';assert digest(outer)==OUTER_SHA
     archive=TEMP/'qualified-base.zip'
