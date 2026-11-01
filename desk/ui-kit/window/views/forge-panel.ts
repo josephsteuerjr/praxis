@@ -1,6 +1,7 @@
 // Owner Forge viewer. Persisted observations are not process-liveness probes.
 import { ApiError, channelURL, cfg } from "../api";
 import { ACTIONS } from "../../steps";
+import {workActivity,type WorkActivity,type Reviewer} from '../work-activity';
 
 export interface ForgeRef { kind: "payload" | "result" | "request"; sha256: string; size_bytes?: number }
 export interface ForgeUnit {
@@ -71,25 +72,32 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   const message = el("p", "muted", "Читаю записи Forge…"); message.setAttribute("role", "status");
   const teams = el("div", "forge-teams");
   const recentTeams = el("div", "forge-teams forge-recent-teams");
+  const activeReviews=el('div','forge-reviewers'),recentReviews=el('div','forge-reviewers');
+  const renderActiveReviews=workActivity(activeReviews,{heading:false}),renderRecentReviews=workActivity(recentReviews,{heading:false});
   const recent = document.createElement('details'); recent.className = 'forge-recent';
-  recent.append(el('summary', '', 'Недавно завершены'), recentTeams);
+  recent.append(el('summary', '', 'Недавно завершены'), recentTeams,recentReviews);
   const next = button('Ещё завершённые', () => void loadRecent()); next.hidden = true; recent.append(next);
+  const reviewNext=button('Ещё ревьюеры',()=>void loadReviewRecent());reviewNext.hidden=true;recent.append(reviewNext);
   const refreshButton = button("Обновить", () => void refresh());
   const heading = el("div", "forge-heading"); heading.append(el("h3", "section-title", options.compact ? 'Субагенты' : "Команды разработки"), refreshButton);
   if (options.onPlans) heading.append(button('Все планы →', options.onPlans));
   root.className += options.compact ? ' forge-compact' : '';
-  root.replaceChildren(heading, message, teams, recent);
+  root.replaceChildren(heading, message, teams,activeReviews, recent);
   const tasks = new Map<string, TaskView>();
   const controllers = new Set<AbortController>();
   let running = false, epoch = 0, timer: ReturnType<typeof setTimeout> | undefined, busy = false;
   const getScope = options.scope || (() => JSON.stringify([cfg.base, cfg.key, cfg.agent]));
   let scope = getScope(), activeRows: ForgeTask[] = [], recentRows: ForgeTask[] = [], nextCursor: string | null = null, recentBusy = false;
+  let reviewers:Reviewer[]=[],recentReviewers:Reviewer[]=[],reviewCursor:string|null=null,reviewHead:string|undefined,reviewBusy=false;
+  let forgeError='',recentError='',reviewError='';
   const pending = new Map<string, { command: Command; feedback: HTMLElement }>();
   const valid = (captured: number) => running && captured === epoch && scope === getScope() && root.isConnected;
   function resetScope() {
     epoch++; for (const controller of controllers) controller.abort(); controllers.clear();
     scope = getScope(); tasks.clear(); pending.clear(); teams.replaceChildren(); recentTeams.replaceChildren();
     activeRows = []; recentRows = []; nextCursor = null; next.hidden = true; recentBusy = false; busy = false;
+    reviewers=[];recentReviewers=[];reviewCursor=null;reviewHead=undefined;reviewBusy=false;reviewNext.hidden=true;renderActiveReviews({});renderRecentReviews({});
+    forgeError='';recentError='';reviewError='';
     message.textContent = 'Читаю записи выбранного агента…';
   }
   async function request<T>(path: string, body?: unknown): Promise<T> {
@@ -322,7 +330,26 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     for (const task of activeRows) updateTask(task, teams);
     for (const task of recentRows) if (!activeRows.some(a => a.id === task.id)) updateTask(task, recentTeams);
     next.hidden = !nextCursor;
-    message.textContent = activeRows.length ? `${activeRows.reduce((n,t) => n + t.agents.length, 0)} участников` : 'Сейчас участников нет.';
+    paintReviewers();
+  }
+  function paintReviewers() {
+    const known=new Set([...activeRows,...recentRows].flatMap(task=>task.agents.map(unit=>task.id+'/'+unit.id)));
+    const external=(rows:Reviewer[])=>rows.filter(row=>!row.task_id||!row.unit_id||!known.has(row.task_id+'/'+row.unit_id));
+    const current=external(reviewers);renderActiveReviews({reviewers:current});renderRecentReviews({reviewers:external(recentReviewers)});
+    reviewNext.hidden=!reviewCursor;
+    const participants=activeRows.reduce((n,task)=>n+task.agents.length,0)+current.length;
+    message.textContent=[forgeError,recentError,reviewError].filter(Boolean).join(' ') || (participants?`${participants} участников`:'Сейчас участников нет.');
+  }
+  async function loadReviewRecent() {
+    if(!running||reviewBusy||!reviewCursor)return;
+    const captured=epoch,cursor=reviewCursor;reviewBusy=true;reviewNext.disabled=true;
+    try {
+      const page=await request<WorkActivity>(query('/api/phone/activity',{review_cursor:cursor}));
+      if(!valid(captured))return;
+      recentReviewers.push(...(page.recent_reviewers||[]).filter(row=>!recentReviewers.some(old=>old.id===row.id)));
+      reviewCursor=page.recent_reviewers_cursor||null;reviewError='';paintReviewers();
+    }catch(e){if(valid(captured)){reviewError='Не удалось прочитать ревьюеров: '+errorText(e);paintReviewers()}}
+    finally{if(captured===epoch){reviewBusy=false;reviewNext.disabled=false}}
   }
   async function loadRecent() {
     if (!running || recentBusy || !nextCursor) return;
@@ -331,8 +358,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       const page = await request<ActivityPage>(query('/api/forge/tasks', {view: 'active', cursor, limit: 20}));
       if (!valid(captured)) return;
       recentRows.push(...page.recent.filter(row => !recentRows.some(old => old.id === row.id)));
-      nextCursor = page.next_cursor; paintTasks();
-    } catch (e) { if (valid(captured)) message.textContent = 'Не удалось прочитать завершённые: ' + errorText(e); }
+      nextCursor = page.next_cursor; recentError='';paintTasks();
+    } catch (e) { if (valid(captured)) {recentError = 'Не удалось прочитать завершённые: ' + errorText(e);paintReviewers();} }
     finally { if (captured === epoch) { recentBusy = false; next.disabled = false; } }
   }
   async function refresh() {
@@ -344,6 +371,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       const page = await request<ActivityPage>('/api/forge/tasks?view=active');
       if (!valid(captured)) return;
       if (!Array.isArray(page.active) || !Array.isArray(page.recent)) throw Error("Некорректный список Forge");
+      forgeError='';
       activeRows = page.active;
       const current = new Map(page.recent.map(t => [t.id, t]));
       recentRows = [...page.recent, ...recentRows.filter(t => !current.has(t.id) && !activeRows.some(a => a.id === t.id))];
@@ -368,7 +396,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
         } catch { /* Unconfirmed transport is retained; never resubmit effects. */ }
       }
     } catch (e) {
-      if (valid(captured)) message.textContent = "Не удалось обновить Forge: " + errorText(e) + (tasks.size ? ". Предыдущие записи сохранены." : "");
+      if (valid(captured)) {forgeError = "Не удалось обновить Forge: " + errorText(e) + (tasks.size ? ". Предыдущие записи сохранены." : "");paintReviewers();}
     } finally {
       if (captured === epoch) { busy = false; if (running && root.isConnected) timer = setTimeout(() => void refresh(), pollMs); }
     }
@@ -377,5 +405,14 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     start() { if (scope !== getScope()) resetScope(); if (running) { void refresh(); return; } running = true; epoch++; busy = false; void refresh(); },
     stop() { running = false; epoch++; clearTimeout(timer); for (const controller of controllers) controller.abort(); controllers.clear(); busy = false; },
     refresh,
+    setReviewers(value:WorkActivity) {
+      if(scope!==getScope())resetScope();
+      reviewers=value.reviewers||[];
+      const incoming=value.recent_reviewers||[],ids=new Set(incoming.map(row=>row.id)),activeIds=new Set(reviewers.map(row=>row.id));
+      recentReviewers=[...incoming,...recentReviewers.filter(row=>!ids.has(row.id)&&!activeIds.has(row.id))];
+      const head=incoming[0]?incoming[0].id+'@'+incoming[0].finished_at:'';
+      if(reviewHead!==head){reviewHead=head;reviewCursor=value.recent_reviewers_cursor||null;}
+      paintReviewers();
+    },
   };
 }

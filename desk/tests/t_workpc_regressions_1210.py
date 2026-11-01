@@ -33,7 +33,10 @@ class WorkPC(unittest.TestCase):
                 initial = client.read_bytes()
                 repeated = emergency.request(cfg, via='telegram')
             self.assertEqual(result['scope'], 'client'); self.assertTrue(repeated['latched'])
-            self.assertEqual(initial, client.read_bytes()); spawn.assert_not_called(); pipe.assert_not_called()
+            # Each explicit panic fences a fresh generation, including when
+            # Stop was already latched. Neither call may spawn/admin-broker.
+            self.assertNotEqual(json.loads(initial)['id'], json.loads(client.read_bytes())['id'])
+            spawn.assert_not_called(); pipe.assert_not_called()
 
     def test_reported_body_argument_kind_is_refused_without_executing_the_body(self):
         source = ast.parse((DESK.parent/'helene/core/agent.py').read_text(encoding='utf8'))

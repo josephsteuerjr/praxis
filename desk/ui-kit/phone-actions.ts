@@ -21,7 +21,7 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
   const list=el('div','turns'),message=el('p','muted');list.setAttribute('role','list');message.setAttribute('role','status');
   root.append(work,forge);
   if(history)root.append(head,list,message);
-  const renderWork=workActivity(work);
+  const renderWork=workActivity(work,{reviewers:false});
   const teams=forgePanel(forge,async<T>(path:string,signal:AbortSignal,body?:unknown)=>{
     if(body!==undefined)throw Error('Управление Forge с этого экрана недоступно');
     return request<T>(path.replace('/api/forge/','/api/phone/forge/'),undefined,signal);
@@ -80,8 +80,8 @@ export function phoneActions(root:HTMLElement,request:Request,scope:()=>string,d
     if(!active||captured!==epoch||capturedScope!==scope()){if(captured===epoch)busy=false;return}
     const [runs,state,work]=results;
     if(state.status==='fulfilled')liveRun=state.value.runner?.alive&&state.value.runner?.busy?state.value.runner.run||'':'';
-    if(work.status==='fulfilled'){activity=work.value;renderWork(activity)}
-    else renderWork({...activity,update:activity.update?{...activity.update,live:false,tests:activity.update.tests?{...activity.update.tests,live:false}:undefined}:undefined,reviewers:activity.reviewers?.map(row=>({...row,live:false}))});
+    if(work.status==='fulfilled'){activity=work.value;renderWork(activity);teams.setReviewers(activity)}
+    else {const stale={...activity,update:activity.update?{...activity.update,live:false,tests:activity.update.tests?{...activity.update.tests,live:false}:undefined}:undefined,reviewers:activity.reviewers?.map(row=>({...row,live:false}))};renderWork(stale);teams.setReviewers(stale)}
     if(history){if(runs.status==='fulfilled')paint(runs.value);else message.textContent='Не удалось обновить ходы. Уже прочитанные записи сохранены.';}
     busy=false;if(active)timer=setTimeout(()=>void refresh(),2500);
   }

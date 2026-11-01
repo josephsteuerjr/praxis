@@ -937,7 +937,9 @@ export function start(opts: WindowOptions): void {
     const before = S.rooms.find((r) => r.key === S.room);
     const { runs, chats, chatsError } = await fetchRooms();
     if (identity !== cfg.base + "\n" + cfg.key) return;
+    const previousRuns = S.runs;
     S.runs = runs;
+    now.runsChanged(previousRuns);
     roomsError = chatsError || "";
     if (chats === undefined && S.rooms.length) {
       renderRooms();

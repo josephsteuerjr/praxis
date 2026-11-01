@@ -53,6 +53,15 @@ def owner(args,value):
     program=Path(args.new).resolve();journal=read(retirement.path(program))
     retirement.validate(program,journal,Places.current())
     if journal['mode']!='update':raise ValueError('Update owner received an archive retirement')
+    from . import probation_settings
+    expected=value['payload']['settings']
+    if journal['payload'].get('settings')!=expected:raise ValueError('Prepared and retirement settings snapshots differ')
+    proof=journal.get('trial_settings')
+    if proof is None:
+        if value.get('trial_settings') is not None:raise ValueError('Unpaired probation settings admission')
+        proof=probation_settings.capture(program,expected,value['note']['id'])
+        journal['trial_settings']=proof;value['trial_settings']=proof
+    elif value.get('trial_settings')!=proof:raise ValueError('Probation settings owner custody differs')
     paths=switch.scratch_paths(args,value)
     # The prepared value refers to the seal, so its material excludes that one
     # recursive reference. All selection, payload, note and scratch facts remain.

@@ -37,7 +37,9 @@ const startupFragment = new Function('cfg', 'loadRooms', 'initialView', `
 // that actual fragment as well, including subscription-login navigation.
 const startup = (cfg, loadRooms) => startupFragment(cfg, loadRooms,
   initial(cfg, {}, {getItem:() => null}));
-const fresh = new Function('cfg', 'opts', 'view', 'show', 'stateText', 'statePill', 'stateAction', `
+// Bind the real module's shell dependency. These shared web-startup cases
+// intentionally have no native shell; native release notices have their own tests.
+const fresh = new Function('cfg', 'opts', 'view', 'show', 'stateText', 'statePill', 'stateAction', 'electron', `
   const LOCAL_AGENT = opts.localAgent !== false;
   ${fragment('  if (opts.firstRun?.(view)) return;', '  connect();')}
   return 'connect';

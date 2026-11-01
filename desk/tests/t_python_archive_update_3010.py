@@ -156,6 +156,13 @@ class Archive(unittest.TestCase):
         write(self.new/'python-migration.json',note)
         write(self.new/'helene.json',{'tree':str(self.data),'code':str(self.new/'tree'),'setup_complete':True})
         ui=self.new/'app/static';ui.mkdir(parents=True);(ui/'index.html').write_text('<html></html>')
+        # Model an admitted profile as well as a committed update. The POSIX
+        # first-start guard must still reject a genuinely unconfigured folder.
+        from localharness import first_start
+        import datetime
+        write(self.data/'memory/.control/profile-identity.json',{'agent_name':'Fixture'})
+        write(first_start.receipt(self.new),{'format':first_start.FORMAT,'state':'completed',
+            'completed_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'data':str(self.data.resolve())})
         result=migration_job.committed_result(note)
         self.assertEqual(result['effect'],'committed');self.assertEqual(result['cleanup_errors'],note['cleanup_errors'])
         with patch.object(helene_setup,'main',side_effect=AssertionError('confirmed startup must not repeat setup')),\

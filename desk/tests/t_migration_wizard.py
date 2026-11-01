@@ -97,13 +97,15 @@ migration_wizard.execute(request,lambda _:None)
                 # Invoke normal startup (no explicit wizard flag). Stop at the UI
                 # boundary so this source test neither needs Qt nor starts an agent.
                 import helene_setup
+                import first_start_window
                 with patch.object(python_app.sys,'platform','linux'), \
+                        patch.object(first_start_window,'main',return_value=0) as fresh_entry, \
                         patch.object(wizard,'run',return_value=False) as entry, \
                         patch.object(helene_setup,'main',return_value=0) as short_entry, \
                         patch.object(python_app,'Application') as app:
                     self.assertEqual(python_app._main(['--root',str(new)]),0)
                     if boundary=='snapshot':
-                        entry.assert_called_once_with(new.resolve());short_entry.assert_not_called()
+                        fresh_entry.assert_called_once();entry.assert_not_called();short_entry.assert_not_called()
                     else:
                         short_entry.assert_called_once_with(['--root',str(new.resolve()),'--source-mode','clean'])
                         entry.assert_not_called()

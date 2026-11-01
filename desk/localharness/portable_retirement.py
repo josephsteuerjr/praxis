@@ -25,7 +25,7 @@ def path(program):return Path(program)/'.helene/retirement.json'
 
 def authority(value):
     material={key:value[key] for key in ('format','id','program','data','mode','targets','assets','payload')}
-    for key in ('completion','supersession'):
+    for key in ('completion','supersession','trial_settings'):
         if key in value:material[key]=value[key]
     return hashlib.sha256(json.dumps(material,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
@@ -133,8 +133,12 @@ def validate(program,value,places):
     deleting=value.get('deleting')
     if deleting is not None and (deleting not in {row['root'] for row in value['targets']} or deleting in removed):
         raise ValueError('Invalid in-flight retirement record')
-    if value['targets'] and programme_payload(program,value['mode'])!=value.get('payload'):
-        raise ValueError('Prepared new programme/runtime changed during the trial')
+    if value['targets']:
+        current=programme_payload(program,value['mode'])
+        from .probation_settings import paired,compare
+        proof=paired(program,value)
+        if proof is not None:current['settings']=compare(program,proof,value['payload']['settings'])
+        if current!=value.get('payload'):raise ValueError('Prepared new programme/runtime changed during the trial')
     from .essential_backup import configs
     retired=[plain(row['root']) for row in value['targets']]
     def independent(item,directory):

@@ -45,7 +45,7 @@ class FirstViewCleanup(unittest.TestCase):
         original_temp=tempfile.TemporaryDirectory;original_unlink=os.unlink
         with original_temp() as private:
             root=Path(private);control=root/'control'/'window.json';control.parent.mkdir()
-            app=MagicMock(worker=None,origin='http://private.invalid',control_file=control,opening=False)
+            app=MagicMock(worker=None,opening=False,origin='http://private.invalid',control_file=control)
             app.serve.side_effect=lambda:control.write_text('{}')
             app.close.side_effect=lambda:control.unlink()
             view=types.SimpleNamespace(settings={},screens=[object()],create_window=MagicMock(return_value=MagicMock()))

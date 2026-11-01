@@ -200,6 +200,9 @@ def _legacy_material(value):
 def _prepared_payload(new,value):
     current=payload(new)
     if _legacy_prepared(value):current.pop('baseline',None)  # Exact accepted old ABI, not a new app-source claim.
+    if value.get('trial_settings') is not None:
+        from .probation_settings import prepared
+        current['settings']=prepared(new,value)
     return current
 
 
@@ -524,8 +527,9 @@ def health(new):
             'code':str(code.resolve()),'autonomy':{key:autonomy[key] for key in ('protocol','paused','stopped')},
             'autonomy_generation':generation['id'] if generation is not None else None}})
     if not proofs:raise RuntimeError('No agent tree is running')
+    from .probation_settings import working
     material={'generation':descriptor['generation'],'pid':descriptor['pid'],'birth':descriptor['birth'],
-              'proofs':proofs,'code':payload(new,runtime=False)}
+              'proofs':proofs,'code':working(new,payload(new,runtime=False))}
     return hashlib.sha256(json.dumps(material,sort_keys=True).encode()).hexdigest()
 
 

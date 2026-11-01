@@ -237,6 +237,7 @@ class Application:
             return essential_backup.listing(self.root)
         if command == "python_window":
             action = args.get("action")
+            if action == 'close':close_without_tray(self)
             if action == "exit":
                 self.exiting = True
                 if args.get('relaunch') is False:
@@ -549,6 +550,15 @@ def window_geometry(screen):
             "y": top + (available_height - height) // 2}
 
 
+def close_without_tray(app):
+    """Linux has no background tray view: closing its last view is Exit."""
+    if (sys.platform.startswith('linux') and getattr(app,'host',None) is not None
+            and app.tray is None and not app.exiting and not app.relaunch):
+        app.exiting=True
+        app.exit_session=True
+        app.session_exit_intent=True
+
+
 def bind_window_state(app):
     def shown():
         if sys.platform == "win32":
@@ -582,6 +592,8 @@ def bind_window_state(app):
     app.window.events.maximized += maximized
     app.window.events.restored += restored
     app.window.events.shown += shown
+    if sys.platform.startswith('linux'):
+        app.window.events.closing += lambda:close_without_tray(app)
 
 
 def set_window_icon(app):
@@ -710,7 +722,9 @@ def _main(argv=None):
             ctypes.windll.user32.MessageBoxW(None, 'Emergency Stop requested. Automatic starts remain paused.', 'Hélène', 0)
         return 0
     os.environ['PYTHONNOUSERSITE']='1'
-    if sys.platform.startswith('linux'):os.environ.setdefault('QT_NO_GLIB','1')
+    if sys.platform.startswith('linux'):
+        from localharness.linux_desktop import configure
+        configure()
     root = args.root.resolve()
     program = (args.program or root).resolve()
     from localharness import owner_stop
@@ -724,9 +738,9 @@ def _main(argv=None):
     pending_entry=root/'python-migration.json'
     recovery_entry=(pending_entry.is_file() and json.loads(pending_entry.read_text(encoding='utf-8')).get('state')
                     not in ('completed','new_app_started','retirement_incomplete'))
-    if (sys.platform=='darwin' and not (args.session_job or args.migration or args.browser or args.migration_wizard or recovery_entry)
+    if (sys.platform in ('darwin','linux') and not (args.session_job or args.migration or args.browser or args.migration_wizard or recovery_entry)
             and (root/'python-app.json').is_file()
-            and __import__('localharness.python_platform',fromlist=['target']).target(root)=='macos-arm64'):
+            and __import__('localharness.python_platform',fromlist=['target']).target(root)==('macos-arm64' if sys.platform=='darwin' else 'linux-x86_64')):
         from localharness import posix_first_start as first
         places=first.Places.current(root)
         if not first.ready(root,places) or not first.agent_exists(places.data):

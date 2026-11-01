@@ -78,7 +78,7 @@ class UpstreamDiff(unittest.TestCase):
 class SwitchIdentity(unittest.TestCase):
     def test_old_new_or_data_overlap_cannot_acquire_retirement_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);old=root/'old';new=root/'new';data=root/'data'
+            root=Path(temporary).resolve();old=root/'old';new=root/'new';data=root/'data'
             for p in (old,new,data):p.mkdir()
             value={'format':switch.FORMAT,'old':str(old),'new':str(new),
                 'note':{'id':'fixture','old_root':str(old),'new_root':str(new),'portable_folder_switch':True,'data_paths':[str(data)]}}
@@ -226,7 +226,7 @@ class AssetCustody(unittest.TestCase):
         from t_first_start_3010 import Backend
         from localharness.package_notice import read
         with tempfile.TemporaryDirectory() as temporary:
-            root=Path(temporary);old=root/'old';new=root/'new'
+            root=Path(temporary).resolve();old=root/'old';new=root/'new'
             places=first_start.Places(root/'User',(),(),root/'Downloads');data=places.data
             put(old/'tree','module.py',BASE);put(new/'tree','module.py',NEW);put(data,'memory/keep','owner data')
             backup=put(old,'backups/one.zip','backup');voice=put(old,'reference.wav','voice')

@@ -62,9 +62,18 @@ def check():
         'tests.t_source_update_pipeline_220.PipelineTests.test_selected_finish_automatically_verifies_reviews_and_reaches_apply_gate',
         'tests.t_posix_first_start_0111']
     repair_only=os.environ.get('RC23_REPAIR_ONLY')=='1'
+    settings_scope=os.environ.get('RC23_SCOPE')=='settings-and-common'
     if repair_only:
         modules=['tests.t_restore_job_3110','tests.t_final_validation_health_3110',
                  'tests.t_upstream_recovery_3110','tests.t_portable_switch_3010']
+    if settings_scope:
+        modules=['tests.t_probation_settings_0211','tests.t_retirement_recovery_3110',
+            'tests.t_portable_retirement_3110','tests.t_final_validation_health_3110','tests.t_portable_switch_3010',
+            'tests.t_config_transaction_192','tests.t_local_config_writer_1710',
+            'tests.t_review_activity_history_0211','tests.t_bounded_discovery_0111',
+            'tests.t_posix_first_start_0111','tests.t_posix_package_2410',
+            'tests.t_python_app.PythonApplicationTests.test_close_hides_but_exit_and_relaunch_destroy',
+            'tests.t_python_app.PythonApplicationTests.test_pending_mac_profile_migration_reaches_recovery_before_first_start']
     suite=unittest.defaultTestLoader.loadTestsFromNames(modules)
     def flatten(value):
         for case in value:
@@ -78,6 +87,7 @@ def check():
     report={'complete':True,'passed':result.wasSuccessful(),'tests':result.testsRun,'unique':len(set(ids)),
         'failed_case_ids':sorted({row['id'] for row in result.rows if row['status'] not in ('passed','skipped')}),
         'failure_assertions':len(result.failures),'errors':len(result.errors),'repair_only':repair_only,
+        'settings_and_common_scope':settings_scope,
         'outcomes':result.rows,'seconds':time.monotonic()-started,'python':sys.version,
         'platform':platform.platform(),'machine':platform.machine(),
         'runtime_donor_archive_sha256':ARCHIVE_SHA,
@@ -93,6 +103,7 @@ def check():
         return
     names=['phone-settings-dismiss-0111','phone-sheet-lifecycle-0211','release-notice-0111',
            'update-monitor-0111','work-activity-3010','panel-density-2910','panel-widths']
+    if settings_scope:names.extend(['forge-panel-220','startup-now-2610','now-history-refresh-0211','passive-chat-fold-1310'])
     with (OUT/'node-tests.log').open('wb') as output:
         done=subprocess.run([str(node),'--test',*[str(REPO/'desk/app/test'/(name+'.test.mjs')) for name in names]],
             cwd=REPO/'desk/app',stdout=output,stderr=subprocess.STDOUT,timeout=120)

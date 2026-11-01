@@ -20,5 +20,7 @@
 .work-files { max-height: 15em; overflow: auto; scrollbar-width: thin; }
 .work-file { padding: 2px 0; font: 10px/1.5 var(--mono); overflow-wrap: anywhere; }
 .work-roster { max-height: min(35vh, 300px); overflow: auto; scrollbar-width: thin; }
+.forge-reviewers.work-activity { margin:0;padding:0;border:0; }
+.forge-reviewers .work-roster { max-height:none;overflow:visible; }
 .work-error { margin: 4px 0; color: var(--accent); font-size: 11px; overflow-wrap: anywhere; }
 .work-tests > summary:focus-visible, .work-reviewer > summary:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 2px; }

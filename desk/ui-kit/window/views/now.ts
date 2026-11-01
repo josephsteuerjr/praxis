@@ -139,6 +139,14 @@ export function onEvent(kind: string) {
   }
 }
 
+/** A room read may recover after startup failed, without a new run event. */
+export function runsChanged(previous: Run[]) {
+  if (S.view !== "now" || !root) return;
+  const visible = (rows: Run[]) => JSON.stringify(rows.filter((r) => r.kind !== "wake").slice(0, 40));
+  // Identical idle polls must leave open details and scroll position alone.
+  if (visible(previous) !== visible(S.runs)) void render(root);
+}
+
 /** Состояние обновилось: ход начался или кончился. */
 export function tick() {
   if (S.view !== "now" || !root) return;

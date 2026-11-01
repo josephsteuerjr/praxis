@@ -56,7 +56,7 @@ class PythonApplicationTests(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as temporary:
             with patch('localharness.owner_stop.stopped', return_value=True):
-                with patch.object(python_app, 'Application') as application, patch('first_start_window.main', side_effect=AssertionError('automatic Stop must precede every window')):
+                with patch.object(python_app, 'Application') as application, patch('first_start_window.main',side_effect=AssertionError('Automatic stop must precede first-start UI')):
                     self.assertEqual(python_app.main(['--root', temporary, '--launch-intent', 'automatic']), 0)
             application.assert_not_called()
 
@@ -160,7 +160,7 @@ class PythonApplicationTests(unittest.TestCase):
             app = python_app.Application(root, root)
             try:
                 app.window = Mock()
-                app.window.events = SimpleNamespace(maximized=Event(), restored=Event(), shown=Event())
+                app.window.events = SimpleNamespace(maximized=Event(), restored=Event(), shown=Event(), closing=Event())
                 python_app.bind_window_state(app)
                 app.invoke('python_window', {'action':'maximize'})
                 app.window.maximize.assert_called_once()

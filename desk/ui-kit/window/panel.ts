@@ -289,7 +289,8 @@ function mountCol(): Col {
   }
   if (!workRoot) {
     workRoot=document.createElement('section');
-    observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,workActivity(workRoot));
+    const renderWork=workActivity(workRoot,{reviewers:false});
+    observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,value=>{renderWork(value);forgeView?.setReviewers(value)});
   }
   box.innerHTML = `<div class="turns-inner">
     <div class="turns-head"><span class="turns-title">Ходы</span><span class="turns-room"></span><span class="turns-n"></span></div>

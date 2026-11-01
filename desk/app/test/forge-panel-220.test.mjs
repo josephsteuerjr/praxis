@@ -9,6 +9,7 @@ class Element {
   set textContent(text) { this.children=[];this._text=String(text); }
   get textContent() { return this._text+this.children.map(c=>c.textContent).join(''); }
   get firstChild() {return this.children[0] || null;}
+  get classList() {return {add:(...names)=>{this.className=[...new Set([...this.className.split(' ').filter(Boolean),...names])].join(' ');}};}
   append(...children) { for(const child of children){if(child.parentNode)child.remove();child.parentNode=this;this.children.push(child);} }
   replaceChildren(...children) {for(const c of this.children)c.parentNode=null;this.children=[];this._text='';this.append(...children);}
   remove() {if(this.parentNode)this.parentNode.children=this.parentNode.children.filter(c=>c!==this);this.parentNode=null;}
@@ -23,7 +24,9 @@ const find=(root,text)=>walk(root).find(n=>n.tag==='button' && n.textContent===t
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const source=readFileSync(new URL('../../ui-kit/window/views/forge-panel.ts',import.meta.url),'utf8');
 const code=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
-const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg','ACTIONS = {}',code+';return {forgePanel};');
+const workSource=readFileSync(new URL('../../ui-kit/window/work-activity.ts',import.meta.url),'utf8');
+const workCode=stripTypeScriptTypes(workSource.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
+const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg','ACTIONS = {}',workCode+'\n'+code+';return {forgePanel};');
 const sha='d'.repeat(64);
 function task() {return {id:'code-fixture',goal:'Implement a parser → independent review → repair',status:'active',agents:[{id:'agent-fixture',role:'worker',model:'fixture-model',subtask:'Preserve authored edits while fixing parser.py',status:'unknown',request_status:'running',custody:'unknown',observation:{generation:'g-one',phase:'tool',tool:'coding_verify',observed_at:'2026-10-26T02:20:00Z'},result_ref:{kind:'result',sha256:sha}}]};}
 function stand(options={}) {
@@ -35,6 +38,7 @@ function stand(options={}) {
     if(body) {if(state.commandError)throw Error('lost reply');return {command_id:body.command_id,state:state.commandState};}
     if(path==='/api/forge/tasks?view=active'){if(state.delay)return await state.delay;if(state.error)throw Error(state.error);return {active:structuredClone(state.tasks),recent:structuredClone(state.recent),next_cursor:state.nextCursor};}
     const url=new URL(path,'http://fixture.invalid');
+    if(url.pathname==='/api/phone/activity'){if(state.reviewError)throw Error(state.reviewError);return structuredClone(state.reviewPage || {recent_reviewers:[],recent_reviewers_cursor:null});}
     if(url.pathname==='/api/forge/tasks')return {active:structuredClone(state.tasks),recent:structuredClone(state.recentPage),next_cursor:null};
     if(url.pathname==='/api/forge/control') {
       if(url.searchParams.has('task_id'))return {commands:[]};
@@ -82,6 +86,9 @@ async function open(test) {
   assert.equal(t.timers.size,1,'manual refresh replaces rather than multiplies poll timers');
   t.state.error='disk unavailable';await t.panel.refresh();await tick();
   assert.match(t.root.textContent,/disk unavailable/);assert.match(t.root.textContent,/fixture-model/);
+  t.panel.setReviewers({reviewers:[{id:'review/critic',name:'Критик',execution:'running',live:true}]});
+  assert.match(t.root.textContent,/disk unavailable/,'review polling cannot erase an independent Forge transport error');
+  t.state.error='';await t.panel.refresh();await tick();assert.doesNotMatch(t.root.textContent,/disk unavailable/);
   t.panel.stop();assert.equal(t.timers.size,0);
 }
 {
@@ -217,4 +224,31 @@ assert.match(main,/if \(from === "plans" && id !== "plans"\) plans\.dispose\(\);
   t.panel.stop();
 }
 assert.match(main,/if \(from === 'talk' && id !== 'talk'\) panel\.dispose\(\);/);
+{
+  const t=stand({compact:true,readOnly:true});t.state.tasks=[];t.panel.start();await tick();
+  const active={id:'review-one/critic-one',name:'Ревью интеграции',execution:'running',live:true,started_at:Date.now()/1000-5};
+  const done={id:'review-old/critic-old',name:'Критик',execution:'done',live:false,started_at:1,finished_at:71,summary:'Исправить parser.py'};
+  t.panel.setReviewers({reviewers:[active],recent_reviewers:[done],recent_reviewers_cursor:'older'});
+  assert.match(t.root.textContent,/1 участников/);assert.match(t.root.textContent,/Ревью интеграции/);assert.match(t.root.textContent,/Исправить parser.py/);
+  const review=walk(t.root).find(n=>n.className==='work-reviewer');review.open=true;
+  t.panel.setReviewers({reviewers:[{...active,summary:'Новый этап'}],recent_reviewers:[done],recent_reviewers_cursor:'older'});
+  assert.equal(walk(t.root).find(n=>n.className==='work-reviewer'),review);assert.equal(review.open,true);
+  t.state.reviewPage={recent_reviewers:[{...done,id:'review-earlier/critic',name:'Предыдущий критик',finished_at:61}],recent_reviewers_cursor:null};
+  t.state.reviewError='review history unavailable';await find(t.root,'Ещё ревьюеры').click();await tick();
+  t.panel.setReviewers({reviewers:[active],recent_reviewers:[done],recent_reviewers_cursor:'older'});
+  await t.panel.refresh();await tick();assert.match(t.root.textContent,/review history unavailable/,'unrelated successful polls retain failed history feedback');
+  t.state.reviewError='';
+  await find(t.root,'Ещё ревьюеры').click();await tick();assert.match(t.root.textContent,/Предыдущий критик/);
+  assert.doesNotMatch(t.root.textContent,/review history unavailable/,'successful retry clears only its own history error');
+  t.panel.setReviewers({reviewers:[active],recent_reviewers:[done],recent_reviewers_cursor:'older'});
+  assert.equal(find(t.root,'Ещё ревьюеры').hidden,true,'poll must not reset an exhausted history cursor');
+  assert.match(t.root.textContent,/Предыдущий критик/,'loaded history remains across refresh');
+  t.state.scope='another';t.panel.setReviewers({});assert.doesNotMatch(t.root.textContent,/Предыдущий критик|Исправить parser.py/);t.panel.stop();
+}
+{
+  const t=stand({compact:true});t.panel.start();await tick();
+  t.panel.setReviewers({reviewers:[{id:'review/agent-fixture',task_id:'code-fixture',unit_id:'agent-fixture',name:'Do not duplicate',execution:'running',live:true}]});
+  assert.equal(walk(t.root).filter(n=>n.className==='work-reviewer').length,0,'same Forge task/unit appears once');
+  assert.match(t.root.textContent,/1 участников/);t.panel.stop();
+}
 console.log('Forge production panel: pagination, inert content, stable expansion, failure preservation, abort/late-response fences, controls/generation/unknown delivery, one poll lifetime PASS');

@@ -22,6 +22,19 @@ import deskpkg
 DESK=Path(__file__).resolve().parents[1]
 
 
+def launcher(target):
+    # Qt/Python stay private; installed OS libraries keep their own driver and
+    # GIO module ABI. The copied closure supplies only missing desktop libs.
+    libraries=('if [ -d "$here/runtime/system-libs" ]; then\n'
+               '    helene_libraries=""\n'
+               '    for directory in "$here"/runtime/lib/python*/site-packages/PySide6/Qt/lib "$here/runtime/lib" /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu /lib64 /usr/lib64 "$here/runtime/system-libs"; do\n'
+               '        if [ -d "$directory" ]; then helene_libraries="${helene_libraries:+$helene_libraries:}$directory"; fi\n'
+               '    done\n'
+               '    export LD_LIBRARY_PATH="$helene_libraries${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"\n'
+               'fi\n') if target.startswith('linux-') else ''
+    return '#!/bin/sh\nset -eu\nhere=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n'+libraries+'exec "$here/runtime/bin/python3" -s "$here/app/python_app.py" --root "$here" "$@"\n'
+
+
 def prepare_qt_process(output):
     """Restore Qt's process entry in an owned runtime copy, never a linked stage.
 
@@ -44,7 +57,31 @@ def normalize_output_modes(output):
         if safe!=mode:path.chmod(safe)
 
 
-def assemble(runtime, edition, relay, relay_source, output, *, version, target, downloads=None, body=None, bridge=None, without_relay=False, verification=None, verification_tools=None):
+def use_host_compiler_runtime(output):
+    """Keep the desktop GPU driver's C++ ABI together with its host runtime.
+
+    Bundling an older libstdc++ ahead of the host makes a newer Mesa driver
+    fail to load (GLIBCXX/CXXABI symbols), even when Qt imports succeed.
+    These base-OS libraries are dependencies of the supported desktop, not
+    portable GUI additions. Only the owned distribution copy is changed.
+    """
+    output=Path(output)
+    notice=output/'linux-libraries.json'
+    if not notice.is_file():raise ValueError('Linux library provenance is missing')
+    record=json.loads(notice.read_text(encoding='utf-8'))
+    host={}
+    for name in ('libstdc++.so.6','libgcc_s.so.1'):
+        path=output/'runtime/system-libs'/name
+        if path.is_symlink():raise ValueError('Linked compiler runtime in owned distribution')
+        if path.is_file():path.unlink()
+        donor=record.get('libraries',{}).pop(name,None)
+        host[name]={'provider':'host operating system','reason':'Keep the host graphics-driver ABI',
+                    'excluded_donor':donor}
+    record['host_dependencies']=host
+    notice.write_text(json.dumps(record,indent=2),encoding='utf-8')
+
+
+def assemble(runtime, edition, relay, relay_source, output, *, version, target, downloads=None, body=None, bridge=None, without_relay=False, verification=None, verification_tools=None, legal=None):
     runtime,edition,output=map(Path,(runtime,edition,output))
     relay=Path(relay) if relay else None
     relay_source=Path(relay_source) if relay_source else None
@@ -61,6 +98,10 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     output.mkdir(parents=True)
     ignore=shutil.ignore_patterns('__pycache__','*.pyc','.git','node_modules','target')
     shutil.copytree(runtime,output/'runtime',symlinks=False,ignore=ignore)
+    if target.startswith('linux-'):
+        from runtime_scripts import make_portable
+        console_receipt=make_portable(output/'runtime')
+        (output/'runtime/portable-console-entries.json').write_text(json.dumps(console_receipt,indent=2),encoding='utf-8')
     prepare_qt_process(output)
     python=output/'runtime/bin/python3'
     gui='from PySide6 import QtCore,QtGui,QtWidgets,QtWebEngineWidgets' if target.startswith('linux-') else 'import Cocoa,WebKit'
@@ -121,12 +162,22 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     cfg={'mode':'local','tree':'data','code':'tree','python':'runtime/bin/python3','app':'app/deskapp.py',
          'runner':'app/localharness/runner.py','setup_complete':False,'port':8094,'relay':{'enabled':False},'voice':{'speak':False}}
     (output/'helene.json').write_text(json.dumps(cfg,indent=2),encoding='utf-8')
-    launcher='#!/bin/sh\nset -eu\nhere=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nexec "$here/runtime/bin/python3" -s "$here/app/python_app.py" --root "$here" "$@"\n'
-    (output/'helene').write_text(launcher,encoding='utf-8');(output/'helene').chmod(0o755)
+    (output/'helene').write_text(launcher(target),encoding='utf-8');(output/'helene').chmod(0o755)
     shutil.copy2(DESK.parent/'LICENSE',output/'LICENSE')
     shutil.copy2(DESK.parent/'NOTICE',output/'NOTICE')
     shutil.copy2(DESK/'installer/THIRD-PARTY.md',output/'THIRD-PARTY.md')
-    shutil.copy2(DESK/'installer/PYTHON-START-HERE.md',output/'START-HERE.md')
+    instructions='PYTHON-LINUX-START-HERE.md' if target.startswith('linux-') else 'PYTHON-START-HERE.md'
+    shutil.copy2(DESK/'installer'/instructions,output/'START-HERE.md')
+    if legal:
+        legal=Path(legal).resolve()
+        for name in ('licenses','THIRD-PARTY-LICENSES','THIRD-PARTY-LICENSES.txt','linux-libraries.json'):
+            entry=legal/name
+            if entry.is_symlink():raise ValueError('Linked native legal material')
+            if entry.is_dir():shutil.copytree(entry,output/name,symlinks=False)
+            elif entry.is_file():shutil.copy2(entry,output/name)
+        if target.startswith('linux-') and not (output/'linux-libraries.json').is_file():
+            raise ValueError('Linux system-library provenance is missing')
+        if target.startswith('linux-'):use_host_compiler_runtime(output)
     # The incoming coordinator verifies actual application bytes before it may
     # import itself for an authored update. This is the same app-relative ABI
     # as Windows portable_refresh, including target-specific downloads.

@@ -9,12 +9,13 @@ export interface UpdateActivity {
   next?: string; error?: string; tests?: TestActivity;
   editing?: {completed?: number; total?: number; pending?: string[]};
 }
-interface Reviewer {
+export interface Reviewer {
   id: string; name?: string; execution?: string; live?: boolean; review_id?: string;
+  task_id?: string; unit_id?: string; model?: string; cancel_requested?: boolean;
   started_at?: number; finished_at?: number; observed_at?: number;
   verdict?: string; summary?: string; findings?: Array<{path?: string; scenario?: string; detail?: string}>;
 }
-export interface WorkActivity { running?: number; queued?: number; update?: UpdateActivity | null; reviewers?: Reviewer[] }
+export interface WorkActivity { running?: number; queued?: number; update?: UpdateActivity | null; reviewers?: Reviewer[]; recent_reviewers?: Reviewer[]; recent_reviewers_cursor?: string | null }
 const count = (n: unknown) => typeof n === 'number' && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
 const states: Record<string,string> = {queued:'в очереди',starting:'запускается',running:'работает',finishing:'завершается',done:'готово',
   error:'ошибка',failed:'сбой',unknown:'нет подтверждения',cancelled:'отменено',unavailable:'недоступен',stopped:'остановлен'};
@@ -28,7 +29,7 @@ function duration(row: Reviewer) {
   const seconds=Math.max(0,Math.floor(end-row.started_at));
   return seconds<60 ? `${seconds} с` : `${Math.floor(seconds/60)} мин ${seconds%60} с`;
 }
-export function workActivity(root: HTMLElement,options: {reviewers?: boolean} = {}) {
+export function workActivity(root: HTMLElement,options: {reviewers?: boolean; heading?: boolean} = {}) {
   root.classList.add('work-activity');root.hidden=true;
   const heading=node('div','work-heading'),tests=node('details','work-tests'),summary=node('summary');
   const testBadge=node('span','work-badge','tests'),testTitle=node('span','work-current'),testCount=node('span','work-count');
@@ -65,7 +66,7 @@ export function workActivity(root: HTMLElement,options: {reviewers?: boolean} = 
       numbers.textContent=`${completed} из ${total} этапов · выполнено тестов: ${count(t.tests_completed)} · ошибок: ${count(t.tests_failed)} · потоков: ${count(t.slots)}`;
       files.replaceChildren(...active.map(row=>node('div','work-file',`${count(row.slot)+1} · ${row.current_test || row.file || 'подготовка'}${row.phase==='preparing' && t.copied_bytes ? ` · ${(t.copied_bytes/1048576).toFixed(1)} МиБ` : ''}`)));
     }
-    heading.hidden=!update && reviewers.length===0;
+    heading.hidden=options.heading===false || (!update && reviewers.length===0);
     reviewBadge.hidden=reviewers.length===0 && !['reviewing','review_requested'].includes(update?.state || '');
     reviewBadge.textContent=`review${reviewers.length ? ` · ${reviewers.filter(row=>row.live).length}/${reviewers.length}` : ''}`;
     if(reviewers.length && reviewers.every(row=>row.execution==='done'))reviewBadge.textContent='review · завершено';
@@ -85,7 +86,9 @@ export function workActivity(root: HTMLElement,options: {reviewers?: boolean} = 
       view.name.textContent=item.name || 'Ревьюер';view.name.title=item.id;
       view.state.textContent=[item.live ? states[item.execution || ''] || 'работает' : states[item.execution || ''] || 'нет подтверждения',duration(item)].filter(Boolean).join(' · ');
       if (!item.live && ['running','starting','finishing'].includes(item.execution || '')) view.state.textContent='нет свежего подтверждения';
-      view.body.replaceChildren(node('p','',item.summary || 'Вывод ещё не получен.'),
+      if(item.cancel_requested&&!item.live&&['running','starting','finishing'].includes(item.execution||''))view.state.textContent='отмена запрошена';
+      const verdict=({clear:'Замечаний нет',findings:'Есть замечания',insufficient:'Недостаточно данных',blocked:'Проверка остановлена'} as Record<string,string>)[item.verdict||''] || item.verdict || '';
+      view.body.replaceChildren(...(item.model?[node('p','muted',item.model)]:[]),...(verdict?[node('p','',verdict)]:[]),node('p','',item.summary || 'Вывод ещё не получен.'),
         ...((item.findings || []).map(f=>node('p','work-finding',[f.path,f.scenario,f.detail].filter(Boolean).join(' · ')))));
     }
     error.textContent=update?.error || '';error.hidden=!error.textContent;

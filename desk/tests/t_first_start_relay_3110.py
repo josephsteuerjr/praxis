@@ -22,7 +22,8 @@ class RelayWindow(unittest.TestCase):
         self.fixture.backend.registered=lambda _places:[self.old]
         self.history=(self.data/'memory/groups/window.jsonl').read_bytes()
         self.window=FirstStartWindow.__new__(FirstStartWindow)
-        self.window.root=self.fixture.root;self.window.places=self.fixture.places;self.window.flow=first_start
+        self.window.flow=first_start
+        self.window.root=self.fixture.root;self.window.places=self.fixture.places
         self.window.value={};self.window.value_lock=threading.Lock()
         self.events=[]
         publish=self.window.publish
@@ -101,7 +102,8 @@ class SubscriptionCreation(unittest.TestCase):
         with patch.object(standalone_relay,'install',side_effect=self.install):self.create()
         standalone_relay.executable(self.fixture.root).unlink()
         window=FirstStartWindow.__new__(FirstStartWindow)
-        window.root=self.fixture.root;window.places=self.fixture.places;window.flow=first_start
+        window.flow=first_start
+        window.root=self.fixture.root;window.places=self.fixture.places
         window.value={};window.value_lock=threading.Lock()
         def restore_install(program,progress=None):
             path=standalone_relay.executable(program);path.write_bytes(b'current pinned component')

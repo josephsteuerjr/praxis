@@ -117,7 +117,7 @@ def main(root,*,places=None,flow=first_start):
         app.window.events.loaded+=loaded
         app.window.events.shown+=lambda:set_window_icon(app)
         with tempfile.TemporaryDirectory(prefix='agent-view-',ignore_cleanup_errors=True) as storage:
-            webview.start(private_mode=True,storage_path=storage)
+            webview.start(gui='qt' if sys.platform.startswith('linux') else None,private_mode=True,storage_path=storage)
     finally:
         # Preparation is mechanical and must settle even if the view closes.
         if app.worker is not None:app.worker.join()

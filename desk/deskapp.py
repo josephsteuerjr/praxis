@@ -980,7 +980,8 @@ async def _r_phone_subscription(c: Call):
 
 async def _r_phone_activity(c: Call):
     from localharness.self_review_integration import activity
-    return await asyncio.to_thread(activity,readers.tree())
+    try:return await asyncio.to_thread(activity,readers.tree(),c.query.get('review_cursor',''),_int_arg(c.query,'review_limit',20,1,100))
+    except ValueError as error:return Fail(400,str(error))
 
 
 async def _r_phone_forge_tasks(c: Call):

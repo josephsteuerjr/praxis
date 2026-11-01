@@ -1,9 +1,11 @@
 """Owner controls and lifecycle hooks for Forge-backed source review."""
 from __future__ import annotations
 
+import base64
 import json
 from functools import lru_cache
 import logging
+import math
 from pathlib import Path
 import re
 import time
@@ -98,14 +100,25 @@ def _activity_counts(path, modified, size):
             sum(c.get("execution") == "queued" for c in critics))
 
 
-def activity(tree):
+def activity(tree,review_cursor='',review_limit=20):
     """Small read-only projection; stale coordinator records cannot light the badge."""
     root = _root(tree)
     running = queued = 0
     from .source_update_activity import activity as update_activity
     try:update=update_activity(tree)
     except (OSError,ValueError,KeyError,TypeError):update=None
-    reviewers=[]
+    after=None
+    if review_cursor:
+        try:
+            after=json.loads(base64.urlsafe_b64decode(review_cursor.encode('ascii')).decode('utf8'))
+            if (not isinstance(after,list) or len(after)!=2 or isinstance(after[0],bool)
+                    or not isinstance(after[0],(int,float)) or not math.isfinite(after[0])
+                    or not isinstance(after[1],str) or len(after[1])>512):raise ValueError()
+            after=tuple(after)
+        except (ValueError,TypeError,UnicodeError):raise ValueError('Invalid reviewer cursor') from None
+    limit=min(max(int(review_limit),1),100)
+    reviewers=[];recent=[]
+    terminal={'done','completed','error','failed','cancelled','stopped','unavailable'}
     now = time.time()
     for store in (root, root.with_name(".source-update-reviews")):
         for path in store.glob("review-*/request.json"):
@@ -114,25 +127,38 @@ def activity(tree):
                 fresh=-5 <= now - stat.st_mtime < 30
                 row=_read(path)
                 selected=bool(update and row.get('id')==update.get('review_id'))
-                if not fresh and not selected:
-                    continue
                 active, waiting = _activity_counts(str(path), stat.st_mtime_ns, stat.st_size)
                 if fresh:
                     running += active
                     queued += waiting
-                if row.get('cancel_requested'):continue
-                if not selected and row.get('execution') not in {'queued','running'}:continue
                 for critic in row.get('critics',[]):
-                    reviewers.append({'id':str(row.get('id',''))+'/'+str(critic.get('unit_id','')),
-                        'name':critic.get('model_actual') or critic.get('model') or 'Ревьюер',
+                    unit=critic.get('unit_id');execution=critic.get('execution','unknown')
+                    if not isinstance(unit,str) or not unit.strip():continue
+                    finished=execution in terminal
+                    if not finished and not selected and (not fresh or row.get('execution') not in {'queued','running'}):continue
+                    focus={'integration':'Ревью интеграции','adversarial':'Критик'}.get(critic.get('focus'),'Ревьюер')
+                    record={'id':str(row.get('id',''))+'/'+unit,'unit_id':unit,'task_id':row.get('task_id'),
+                        'name':critic.get('name') or focus,'model':critic.get('model_actual') or critic.get('model') or '',
                         'review_id':row.get('id'),'execution':critic.get('execution','unknown'),
-                        'live':fresh and critic.get('execution') in {'starting','running','finishing'},
+                        'live':not finished and not row.get('cancel_requested') and fresh and critic.get('execution') in {'starting','running','finishing'},
+                        'cancel_requested':bool(row.get('cancel_requested')),
                         'observed_at':stat.st_mtime,'started_at':critic.get('started_at'),'finished_at':critic.get('finished_at'),
                         'verdict':critic.get('verdict'),'summary':str(critic.get('summary') or critic.get('reason') or '')[:4000],
-                        'findings':critic.get('findings',[])[:50]})
+                        'findings':critic.get('findings',[])[:50]}
+                    if finished:
+                        at=record['finished_at']
+                        if not isinstance(at,(int,float)) or isinstance(at,bool) or not math.isfinite(at):at=stat.st_mtime
+                        record['finished_at']=at;recent.append(record)
+                    else:reviewers.append(record)
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
-    return {"running": running, "queued": queued,'reviewers':reviewers,'update':update}
+    key=lambda record:(record['finished_at'],record['id'])
+    recent.sort(key=key,reverse=True)
+    if after is not None:recent=[record for record in recent if key(record)<after]
+    page=recent[:limit]
+    cursor=(base64.urlsafe_b64encode(json.dumps(key(page[-1])).encode()).decode('ascii') if len(recent)>limit else None)
+    return {"running": running, "queued": queued,'reviewers':reviewers,'update':update,
+        'recent_reviewers':page,'recent_reviewers_cursor':cursor}
 
 
 def status(tree, config=None, review_id=""):
