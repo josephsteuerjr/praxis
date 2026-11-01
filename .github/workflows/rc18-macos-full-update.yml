@@ -1,0 +1,35 @@
+name: Hélène RC18 actual full archive update and rollback
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_full_archive_update.py, .github/workflows/rc18-macos-full-update.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  update:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      CANDIDATE_SHA256: 43115b145684a98554d3adcbb129580ab9fd783502ac183dbc412576b3a67d88
+      ARTIFACT_SHA256: ed89bd6a5d081f6f4f440e79c3f6b393534e255bbfbbec75e134c90249586b8a
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: archive
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-43115b145684a985
+      - if: steps.archive.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13078364189/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - name: Exact HTTPS archive, clean update, native failed-start recovery
+        run: python3 desk/tests/macos_full_archive_update.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-full-update-evidence
+          path: evidence-full-update/
