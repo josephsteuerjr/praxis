@@ -10,7 +10,7 @@ from localharness import config_cli
 class Settings(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name);self.path=self.root/'helene.json';self.tree=self.root/'data';self.tree.mkdir()
+        self.root=Path(self.temp.name).resolve();self.path=self.root/'helene.json';self.tree=self.root/'data';self.tree.mkdir()
         self.api_secret=secrets.token_urlsafe(32);self.bot_secret=secrets.token_urlsafe(32)
         self.config={'tree':str(self.tree),'code':'tree','python':'runtime/python.exe','app':'app/deskapp.py',
             'runner':'app/localharness/runner.py','port':31234,'mode':'local',

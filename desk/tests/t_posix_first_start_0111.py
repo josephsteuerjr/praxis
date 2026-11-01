@@ -43,6 +43,15 @@ class FirstStart(unittest.TestCase):
         (self.data/'app').mkdir(parents=True);(self.data/'app/python_app.py').write_text('retain');(self.data/'app/deskapp.py').write_text('retain')
         with self.assertRaises(ValueError):first.prepare(self.root,places=self.places)
         self.assertEqual((self.data/'app/python_app.py').read_text(),'retain')
+    @unittest.skipUnless(sys.platform=='darwin','Actual macOS system aliases')
+    def test_system_alias_is_accepted_but_user_link_is_still_refused(self):
+        from localharness import program_state
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertEqual(common.plain(raw),Path(raw).resolve())
+            self.assertEqual(program_state._plain(raw),Path(raw).resolve())
+            link=Path(raw)/'owner-link';link.symlink_to(self.root,target_is_directory=True)
+            for guard in (common.plain,program_state._plain):
+                with self.assertRaises(ValueError):guard(link/'new-file')
     @unittest.skipIf(os.name=='nt','POSIX native path spelling')
     def test_macos_login_item_is_per_user_owned_and_foreign_bytes_retained(self):
         from types import SimpleNamespace

@@ -59,7 +59,7 @@ jobs:
         run: python3 desk/installer/build_python_macos_rc.py --evidence "$RUNNER_TEMP/rc18-evidence.zip" --work "$RUNNER_TEMP/rc18-assembly" --output "$RUNNER_TEMP/rc18-output"
       - name: Actual Darwin lifecycle and native GUI consumers
         run: |
-          "$RUNNER_TEMP/rc18-output/Helene/runtime/bin/python3" -B desk/tests/rc18_macos_pipeline.py native
+          "$RUNNER_TEMP/rc18-assembly/donor/Helene/runtime/bin/python3" -B desk/tests/rc18_macos_pipeline.py native
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -60,6 +60,7 @@ def build(evidence,work,out):
     license_input=Path(__file__).with_name('rc18-native-license-texts.zip')
     if not license_input.is_file():raise ValueError('Native dependency license input is missing')
     unpack(license_input,program)
+    shutil.copy2(Path(__file__).with_name('PYTHON-MACOS-START-HERE.md'),program/'START-HERE.md')
     info=bundle/'Contents/Info.plist';value=plistlib.loads(info.read_bytes())
     value.update(CFBundleShortVersionString='2.3.0',CFBundleVersion='23018')
     info.write_bytes(plistlib.dumps(value))

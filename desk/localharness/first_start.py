@@ -56,7 +56,8 @@ def linked(path):
 
 
 def plain(path):
-    path=Path(os.path.abspath(path))
+    from .posix_paths import system_absolute
+    path=system_absolute(path)
     for part in (path,*path.parents):
         try:info=part.lstat()
         except FileNotFoundError:continue

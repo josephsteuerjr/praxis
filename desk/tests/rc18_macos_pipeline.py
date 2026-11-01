@@ -1,7 +1,7 @@
 """Build/qualify RC18 only on a disposable standard Apple Silicon runner."""
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-import hashlib,json,os,shutil,subprocess,sys,time,urllib.request,zipfile
+import hashlib,json,os,plistlib,shutil,subprocess,sys,time,urllib.request,zipfile
 
 REPO=Path(__file__).resolve().parents[2]
 EVIDENCE=REPO/'evidence-rc18';EVIDENCE.mkdir(exist_ok=True)
@@ -13,7 +13,7 @@ def save(name,value):
 
 def run(command,log,*,cwd=REPO,env=None,timeout=600):
     with (EVIDENCE/log).open('wb') as f:
-        p=subprocess.run(list(map(str,command)),cwd=cwd,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=timeout)
+        p=subprocess.run(list(map(str,command)),cwd=cwd,env=env,stdout=f,stderr=subprocess.STDOUT,timeout=timeout,start_new_session=sys.platform!='win32')
     return p.returncode
 
 def fronts():
@@ -117,6 +117,7 @@ def native():
     # Always collect real GUI evidence even if a source-focused lane has a
     # regression; final success still requires every intended test to pass.
     logs=[];children=[];roots=[PROGRAM]
+    login_target=None
     def launch(root):
         log=(EVIDENCE/('window-'+str(len(logs))+'.log')).open('wb');logs.append(log)
         p=subprocess.Popen([str(root/'Helene.app/Contents/MacOS/Helene'),'--root',str(root)],env=baseenv,cwd=root,stdout=log,stderr=subprocess.STDOUT)
@@ -164,6 +165,20 @@ def native():
                 except psutil.NoSuchProcess:pass
             return True
         wait(gone,45);result['steps']['explicit_exit_all_observed_descendants']=True
+        # Register a real per-user login entry in this disposable home, ask
+        # launchd to start it, then remove only that exact registration.
+        p=launch(PROGRAM);wait(lambda:invoke(PROGRAM,'app_info').get('version')=='2.3.0-rc.18')
+        invoke(PROGRAM,'autostart_set',{'on':True});assert invoke(PROGRAM,'autostart_get') is True
+        plist=next((home/'Library/LaunchAgents').glob('app.helene.login.*.plist'))
+        value=plistlib.loads(plist.read_bytes());login_target=f'gui/{os.getuid()}/'+value['Label']
+        subprocess.run(['plutil','-lint',str(plist)],check=True,capture_output=True)
+        exit(PROGRAM);wait(lambda:p.poll() is not None,45)
+        subprocess.run(['launchctl','bootstrap',f'gui/{os.getuid()}',str(plist)],check=True,capture_output=True)
+        wait(lambda:invoke(PROGRAM,'app_info').get('root')==str(PROGRAM))
+        result['steps']['native_per_user_login_item_started']=True
+        invoke(PROGRAM,'autostart_set',{'on':False});assert invoke(PROGRAM,'autostart_get') is False
+        exit(PROGRAM)
+        subprocess.run(['launchctl','bootout',login_target],check=True,capture_output=True);login_target=None
         # Move the entire portable code folder; data and durable phone state
         # remain external. Reopening checks its exact candidate passport.
         moved=PROGRAM.parent/'Moved Hélène';PROGRAM.rename(moved);roots.append(moved)
@@ -171,7 +186,7 @@ def native():
         for name,body in preserved.items():assert (data/name).read_bytes()==body,name
         assert (moved/'tree/rc18-owner-edit.py').read_text().startswith('# owner edit')
         result['steps']['folder_move_profile_queue_pairing_code_exact']=True
-        time.sleep(2);snapshot('03-moved-window.png');exit(moved);wait(lambda:p.poll() is not None,45)
+        time.sleep(7);snapshot('03-moved-window.png');exit(moved);wait(lambda:p.poll() is not None,45)
         # Full overlay/recovery consumers run above. This adds an independent
         # real-filesystem rollback with the shipped runtime and a later edit.
         sys.path.insert(0,str(moved/'app'))
@@ -199,6 +214,7 @@ def native():
             try:p.wait(15)
             except subprocess.TimeoutExpired:p.terminate();p.wait(10)
         for log in logs:log.close()
+        if login_target:subprocess.run(['launchctl','bootout',login_target],capture_output=True)
 
 if __name__=='__main__':
     {'fronts':fronts,'native':native,'key':key}[sys.argv[1]]()
