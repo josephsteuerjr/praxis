@@ -139,7 +139,7 @@ class Battery(unittest.TestCase):
                          'class Focus(unittest.TestCase):\n def test_bootstrap(self):self.assertTrue(True)\n')
         env=battery._environment(self.root/'home',self.core,self.app)
         observation=self.root/'focused-observation.json'
-        command=[sys.executable,'-B','-s',str(self.bundle/'runner/source_verification_runner.py'),
+        command=[sys.executable,'-I','-S','-B','-s',str(self.bundle/'runner/source_verification_runner.py'),
                  '--root',str(self.core),'--source',str(source),'--report',str(observation),'--sandbox',str(self.root)]
         result=subprocess.run(command,env=env,capture_output=True,text=True,timeout=20)
         self.assertEqual(result.returncode,0,result.stderr)
