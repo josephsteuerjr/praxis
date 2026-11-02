@@ -135,7 +135,8 @@ def write_note(root, note):
     temporary=path.with_suffix('.tmp')
     with temporary.open('w',encoding='utf-8') as stream:
         stream.write(json.dumps(note,indent=2));stream.flush();os.fsync(stream.fileno())
-    temporary.replace(path)
+    from .package_notice import replace_with_retry
+    replace_with_retry(temporary,path)
     if os.name != 'nt':
         directory=os.open(path.parent,os.O_RDONLY | os.O_DIRECTORY)
         try:os.fsync(directory)

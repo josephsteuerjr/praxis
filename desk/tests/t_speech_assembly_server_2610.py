@@ -51,7 +51,7 @@ class SpeechAssemblyServer(unittest.TestCase):
                      'mobile/dist/index.html', 'miniapp/dist/index.html', 'resources/entry',
                      'shell/icons/icon.ico', 'shell/icons/python-app.png',
                      'installer/ЛИЦЕНЗИЯ.md', 'installer/THIRD-PARTY.md',
-                     'installer/PYTHON-START-HERE.md'):
+                     'installer/PYTHON-START-HERE.md','installer/PYTHON-LINUX-START-HERE.md'):
             put(self.desk, name)
         for name in ('speech_worker.py', 'speech_protocol.py', 'speech_encode.py'):
             put(self.desk, 'localharness/' + name, (DESK / 'localharness' / name).read_bytes())

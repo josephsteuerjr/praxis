@@ -39,10 +39,10 @@ class LegacyTool(unittest.TestCase):
         self.assertEqual(source_update.path(f.tree).read_bytes(),before)
         self.assertNotEqual(turn.call_args_list[0].args[0],turn.call_args_list[1].args[0])
     def setUp(self):
-        self.f=fixtures.PipelineTests('runTest');self.f.setUp();self.addCleanup(self.f.doCleanups)
-        helper=self.f.new/'app/localharness/legacy_update_tool.py';helper.parent.mkdir(parents=True,exist_ok=True)
-        helper.write_bytes(Path(bridge.__file__).read_bytes())
-        code_transition.seal(self.f.new)
+        self.f=fixtures.PipelineTests('runTest')
+        # Incoming helpers are publisher input, before pristine app B is sealed.
+        self.f.incoming_app_files={'localharness/legacy_update_tool.py':Path(bridge.__file__).read_bytes()}
+        self.f.setUp();self.addCleanup(self.f.doCleanups)
         self.target=self.f.old/'app/localharness/source_update.py';self.target.parent.mkdir(parents=True)
         self.original=b"from pathlib import Path\nimport json,time\nfrom .package_notice import read,write\nTOOL={'input_schema':{'properties':{'action':{'enum':['read','resolve','finish']}}}}\ndef path(tree):return Path(tree)/'memory/.control/source-update.json'\n"
         self.target.write_bytes(self.original)
@@ -78,8 +78,9 @@ class LegacyTool(unittest.TestCase):
                     status=json.loads(hand());diff=json.loads(hand('diff',path='module.py'))
                     self.assertIn('text',diff,{'reply':diff,'launched':launched,'expected_python':str(packaged_python)})
                     self.assertIn('result/module.py',diff['text'])
-                    hand('patch',path='module.py',before=(f.directory/'result/module.py').read_text(),after=BOTH,expected_candidate_sha256=status['candidate_sha256'])
-                    status=json.loads(hand('finish'));self.assertIn('candidate_state',status,status);self.assertEqual(status['candidate_state'],'ready')
+                    patched=json.loads(hand('patch',path='module.py',before=(f.directory/'result/module.py').read_text(),after=BOTH,expected_candidate_sha256=status['candidate_sha256']))
+                    self.assertNotIn('error',patched,patched)
+                    status=json.loads(hand('finish'));self.assertIn('candidate_state',status,status);self.assertEqual(status['candidate_state'],'ready',status)
                 self.assertFalse(f.spawns)
             self.assertEqual(self.target.read_bytes(),self.original);self.assertEqual(len(self.restarts),2)
     def test_failure_restores_exact_legacy_bytes_and_restarts(self):

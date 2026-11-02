@@ -17,7 +17,8 @@ class FirstStart(unittest.TestCase):
     def test_new_profile_and_api_creation_separate_data_and_code(self):
         self.assertFalse(first.prepare(self.root,places=self.places)['agent'])
         value=common.load(self.root/'helene.json')
-        self.assertEqual(value['tree'],str(self.data));self.assertTrue(value['python'].endswith('runtime/bin/python3'))
+        self.assertEqual(value['tree'],str(self.data))
+        self.assertEqual(Path(value['python']),self.root/('runtime/python.exe' if os.name=='nt' else 'runtime/bin/python3'))
         with patch('localharness.standalone_relay.install',side_effect=AssertionError('API must not download relay')):
             first.create_agent(self.root,dict(name='Fixture',provider='openai',model='fixture',key='fixture-only'),places=self.places)
         self.assertTrue(first.agent_exists(self.data));self.assertFalse((self.root/'data').exists())

@@ -491,14 +491,9 @@ class TestShell(Base):
         self.assertIn("hello", agent.tool_shell("echo hello"))
 
     def test_truncation(self):
-        # ⚠ Было `$(seq 1 5000)`. В bash на Windows (MSYS рядом с git) `seq` нет:
-        # подстановка отдавала пустоту, числа уходили командами, и стенд мерил
-        # длину двухсот строк «command not found» плюс срыв по сроку. Красный
-        # каждый прогон на платформе, ПОД КОТОРУЮ продукт и выпускается.
-        # Раскрытие скобок — сам bash, без внешних утилит: проверяем ту же
-        # границу и на Linux, и на Windows.
-        out = agent.tool_shell("printf 'a%.0s' {1..5000}")
-        self.assertEqual(len(out), 5000)
+        # Shell builtins work in both the packaged BusyBox and ordinary Bash.
+        out = agent.tool_shell('i=0; while [ "$i" -lt 5000 ]; do printf a; i=$((i+1)); done')
+        self.assertEqual(len(out), 5000, repr(out))
         self.assertEqual(set(out), {"a"}, "в выводе оказалось не только то, что печатали")
 
     def test_timeout(self):

@@ -44,6 +44,9 @@ class PipelineTests(unittest.TestCase):
         # a tiny declared app/runtime, never an installed profile/distribution.
         for program in (self.old, self.new):
             put(program/'app','fixture.py','# synthetic application\n')
+            if program==self.new:
+                for name,content in getattr(self,'incoming_app_files',{}).items():
+                    path=program/'app'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
             # Both sides represent actual authored-update-capable deliveries.
             # Seal pristine A/B before the selected owner code is changed, not
             # by relabelling a legacy fixture or resealing an authored result.

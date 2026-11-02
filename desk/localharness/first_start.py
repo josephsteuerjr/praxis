@@ -148,24 +148,45 @@ def programme_container(directory):
     return False
 
 
-def _roots(base,current,*,require_marker=False):
-    """Only direct named children; native install paths also come from registry."""
+def _roots(base,current,*,require_marker=False,empty_only=None):
+    """Direct programme roots or one vendor container; never traverse deeper.
+
+    A vendor's directory is not itself a cleanup member. Outside AppData its
+    named child must still carry programme evidence; registrations are separate.
+    """
     result=[]
     if not base.is_dir():return result
     base=plain(base)
     try:entries=list(os.scandir(base))
     except PermissionError:return result
+    nested=[]
     for entry in entries:
-        # Unrelated applications, caches and device files are never traversed.
+        if (not branded(entry.name) and not entry.is_symlink() and not linked(entry.path)
+                and entry.is_dir(follow_symlinks=False)):
+            try:
+                with os.scandir(entry.path) as children:nested.extend(children)
+            except (FileNotFoundError,PermissionError):pass
+    for entry in [*entries,*nested]:
+        # A second level finds Vendor/Helene without admitting Vendor or
+        # searching inside its unrelated application/data trees.
         if not branded(entry.name):continue
+        nested_entry=Path(entry.path).parent!=base
         if linked(entry.path):
-            if not require_marker:result.append(Path(entry.path))
+            if not require_marker and not nested_entry:result.append(Path(entry.path))
             continue
         if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):continue
         try:path=plain(Path(entry.path))
         except ValueError:continue
         if current==path or current.is_relative_to(path):continue
-        if not require_marker or programme_container(path):result.append(path)
+        marked=programme_container(path) if require_marker or nested_entry else False
+        empty_remnant=False
+        if nested_entry and not require_marker and not marked:
+            try:
+                with os.scandir(path) as contents:empty_remnant=next(contents,None) is None
+            except (FileNotFoundError,PermissionError):continue
+        if not (require_marker or nested_entry) or marked or empty_remnant:
+            result.append(path)
+            if empty_remnant and empty_only is not None:empty_only.append(path)
     return result
 
 def characteristic(path):
@@ -198,7 +219,7 @@ def characteristic(path):
     return False
 
 
-def discover(root,places):
+def discover(root,places,*,empty_only=None):
     root=plain(root)
     # Programs is an explicit Windows install container, not permission to
     # descend through every application's folders while searching for data.
@@ -210,9 +231,12 @@ def discover(root,places):
         raise ValueError('Распакуй программу в отдельную папку, вне данных агента в профиле')
     if any(root==base or root.is_relative_to(base) for base in bases):
         raise ValueError('Распакуй новую Hélène в отдельную папку вне AppData и Program Files: прежние установки там очищаются.')
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
-        groups=list(pool.map(lambda base:_roots(base,root,require_marker=base not in local_bases),bases))
-    found=[path for group in groups for path in group]
+    def group(base):
+        empty=[]
+        roots=_roots(base,root,require_marker=base not in local_bases,empty_only=empty)
+        return roots,empty
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:groups=list(pool.map(group,bases))
+    found=[path for roots,_empty in groups for path in roots]
     keep=root
     # Windows' default extraction adds an outer archive-name directory around
     # the shipped Helene/ root. Its neighbours, not a hardcoded Downloads path,
@@ -232,6 +256,9 @@ def discover(root,places):
     result=[]
     for path in sorted(set(found),key=lambda p:len(p.parts)):
         if not any(path.is_relative_to(parent) for parent in result):result.append(path)
+    if empty_only is not None:
+        broader={path for roots,empty in groups for path in roots if path not in empty}
+        empty_only.extend(path for _roots,empty in groups for path in empty if path in result and path not in broader)
     return result,siblings
 
 
@@ -289,6 +316,12 @@ def data_sources(roots,configs,places):
         while todo:
             here,depth=todo.pop()
             if agent_exists(here) and _data_allowed(here,places):
+                configured=any(Path(row['tree'])==here for row in configs)
+                if not configured and any((here/name).exists() for name in ('agent.py','llm.py','app','runtime')):
+                    # An unbound mixed programme/memory root is not a known
+                    # data folder. Leave it for guard_cleanup_data to refuse
+                    # before retiring any programme or touching its bytes.
+                    continue
                 found.add(plain(here));continue
             if depth>=3:continue
             for child in here.iterdir():
@@ -447,7 +480,7 @@ def _bind(config,old,root,data):
     value['installed']=dict(value.get('installed') or {},service=False)
     value['read_dotenv']=False
     phone=value.get('phone') or {}
-    if phone.get('mode')=='stable' or (phone.get('mode')!='automatic' and phone.get('external') and type(phone.get('local_port')) is int):
+    if phone.get('mode')=='stable' or (phone.get('external') and type(phone.get('local_port')) is int):
         port=phone.get('local_port') or value.get('port')
         if type(port) is not int or not 1<=port<=65535:raise ValueError('Для постоянного адреса телефона нужен сохранённый локальный порт канала')
         value['port']=port;value['phone']=dict(phone,local_port=port)
@@ -642,7 +675,8 @@ def _adopt_brain(root,data,config):
 
 def legacy_plan(root,places,backend):
     """The receipt, not a caller's keep-list, protects a modern programme."""
-    old_roots,siblings=discover(root,places)
+    empty_only=[]
+    old_roots,siblings=discover(root,places,empty_only=empty_only)
     for path in getattr(backend,'registered',lambda _places:[])(places):
         path=plain(path)
         if path!=root and path not in old_roots:old_roots.append(path)
@@ -663,12 +697,17 @@ def legacy_plan(root,places,backend):
     stamps={str(path):hashlib.sha256(receipt(path).read_bytes()).hexdigest()
             for path in protected if ready(path,places)}
     plan={'old_roots':old_roots,'siblings':siblings,'all_roots':all_roots,
-          'retained':retained,'retained_roots':containers,'protected':protected,'receipts':stamps}
+          'retained':retained,'retained_roots':containers,'protected':protected,'receipts':stamps,
+          'empty_only':[path for path in empty_only if path in old_roots]}
     validate_legacy_plan(plan,places)
     return plan
 
 
 def validate_legacy_plan(plan,places):
+    for path in plan.get('empty_only',[]):
+        if not os.path.lexists(path):continue  # A prior confirmed empty-only removal is idempotent.
+        if linked(path) or not path.is_dir() or any(path.iterdir()):
+            raise ValueError('Прежняя пустая папка изменилась. Повтори подготовку: '+str(path))
     for raw,digest in plan['receipts'].items():
         path=plain(raw)
         if not ready(path,places) or hashlib.sha256(receipt(path).read_bytes()).hexdigest()!=digest:
@@ -721,6 +760,7 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
     settle_legacy_jobs(root,places,plan,configurations([*old_roots,*[p for p in siblings if p.is_dir()]],places))
     if old_roots:report({'stage':'removing','label':'Удаляем прежние программы'})
     for old in old_roots:
+        if old in plan.get('empty_only',[]):continue
         backend.retire(old)
         if old.is_dir():
             if hasattr(backend,'prune'):backend.prune(old,sources)
@@ -741,7 +781,9 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
     report({'stage':'cleanup','label':'Убираем старые копии и ярлыки'})
     validate_legacy_plan(plan,places)
     for path in [*old_roots,*siblings]:
-        if os.path.lexists(path):backend.remove(path)
+        if os.path.lexists(path):
+            if path in plan.get('empty_only',[]):path.rmdir()  # Atomic empty-only removal; never recursive/elevated.
+            else:backend.remove(path)
     backend.shortcuts(roots,root if shortcuts else None)
     backend.assert_quiet(roots)
     for path in [*old_roots,*siblings]:

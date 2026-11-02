@@ -13,6 +13,9 @@ from localharness import migration_wizard as wizard, app_migration, python_platf
 
 
 class WizardEngine(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+
     def fixture(self,base):
         old=base/'Offline profile with spaces';new=base/'New Helene';home=base/'Preserved data'
         (old/'data/memory').mkdir(parents=True);(old/'code').mkdir();new.mkdir()
@@ -99,6 +102,7 @@ migration_wizard.execute(request,lambda _:None)
                 import helene_setup
                 import first_start_window
                 with patch.object(python_app.sys,'platform','linux'), \
+                        patch.object(python_platform,'target',return_value='linux-x86_64'), \
                         patch.object(first_start_window,'main',return_value=0) as fresh_entry, \
                         patch.object(wizard,'run',return_value=False) as entry, \
                         patch.object(helene_setup,'main',return_value=0) as short_entry, \

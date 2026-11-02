@@ -200,11 +200,11 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop)", source)
 
     def test_selected_agent_update_notifier_owns_the_pending_request(self):
-        self.runner.update(_tree=self.tree, _desk=object(), updates=mock.Mock(), _turn_in_window=mock.Mock())
+        self.runner.update(_tree=self.tree, _desk=object(), updates=mock.Mock(), _turn_in_window=mock.Mock(),_source_update_turn=mock.Mock())
         with mock.patch.object(source_update, "pending", return_value={"state": "queued"}):
             with mock.patch.object(source_update, "notify_due") as notify:
                 self.runner["_update_report_due"]()
-        notify.assert_called_once_with(self.tree,self.runner['_turn_in_window'])
+        notify.assert_called_once_with(self.tree,self.runner['_source_update_turn'])
         self.runner["updates"].pending_report.assert_not_called()
         self.runner["_turn_in_window"].assert_not_called()
 

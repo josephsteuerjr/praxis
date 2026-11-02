@@ -231,7 +231,7 @@ def _pytest(source,value,sandbox=None):
     return 0 if value['successful'] and value['coverage_complete'] and value['collected'] else 1
 
 
-def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None, dependencies=None,framework='unittest',shard_index=0,shard_count=1):
+def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None, dependencies=None,framework='unittest',shard_index=0,shard_count=1,python_sdk=None):
     root = Path(root).resolve()
     value = {'format': 'helene-unittest-observation.v1', 'collected': [], 'executed': [], 'outcomes': [], 'complete': False}
     live=LiveProgress(sandbox,report,value) if sandbox and framework=='unittest' else None
@@ -243,6 +243,38 @@ def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None,
             for key in ('TEMP','TMP','TMPDIR'):os.environ[key]=str(temporary)
             tempfile.tempdir=str(temporary)
             _write_fence(sandbox, report)
+        if python_sdk:
+            sdk=Path(python_sdk).resolve()
+            expected=Path(sys.executable).resolve().parent/'Lib/site-packages'
+            if (not sandbox or sdk!=expected or not sdk.is_relative_to(Path(sandbox).resolve())
+                    or not sdk.is_dir() or not sys.flags.no_site):
+                raise ValueError('Unbound private verification Python SDK')
+            # The trusted adapter installs its write fence before any candidate
+            # startup hook can run. Only the exact copied SDK is added here.
+            sys.path.append(str(sdk))
+            # -I keeps candidate PYTHONPATH out of the adapter's startup
+            # imports. Admit those paths only now, after the fence exists.
+            candidate_paths=[]
+            for raw in os.environ.get('PYTHONPATH','').split(os.pathsep):
+                path=Path(raw)
+                if not raw or not path.is_absolute() or not path.resolve().is_relative_to(Path(sandbox).resolve()):
+                    raise ValueError('Candidate import path leaves isolated verification work')
+                candidate_paths.append(str(path.resolve()))
+            sys.path[:0]=candidate_paths
+            # The Windows edition normally installs its own LF/loopback port
+            # hook at startup. Keep that candidate behavior, but execute it
+            # only after the trusted adapter's fence has been installed.
+            tree=Path(os.environ.get('HELENE_TREE_SRC',''))
+            if not tree.is_absolute() or str(tree.resolve()) not in candidate_paths:
+                raise ValueError('Candidate startup tree is not an admitted import path')
+            hook=tree/'sitecustomize.py'
+            if hook.is_file():
+                if not hook.resolve().is_relative_to(Path(sandbox).resolve()):
+                    raise ValueError('Candidate startup hook leaves isolated verification work')
+                spec=importlib.util.spec_from_file_location('sitecustomize',hook)
+                module=importlib.util.module_from_spec(spec)
+                sys.modules['sitecustomize']=module
+                spec.loader.exec_module(module)
         if live:live(phase='collecting',force=True)
         if dependencies:
             sys.path.insert(0, str(Path(dependencies).resolve()))
@@ -327,11 +359,12 @@ def main():
     p.add_argument('--lock')
     p.add_argument('--sandbox')
     p.add_argument('--dependencies')
+    p.add_argument('--python-sdk')
     p.add_argument('--framework',choices=('unittest','pytest'),default='unittest')
     p.add_argument('--shard-index',type=int,default=0)
     p.add_argument('--shard-count',type=int,default=1)
     a = p.parse_args()
-    return run(a.root, a.report, source=a.source, pattern=a.pattern, lock=a.lock, sandbox=a.sandbox, dependencies=a.dependencies,framework=a.framework,shard_index=a.shard_index,shard_count=a.shard_count)
+    return run(a.root, a.report, source=a.source, pattern=a.pattern, lock=a.lock, sandbox=a.sandbox, dependencies=a.dependencies,framework=a.framework,shard_index=a.shard_index,shard_count=a.shard_count,python_sdk=a.python_sdk)
 
 
 if __name__ == '__main__':

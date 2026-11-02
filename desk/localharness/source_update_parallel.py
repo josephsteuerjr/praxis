@@ -241,7 +241,11 @@ def execution_lanes(lanes,repository,actual_files):
     return result
 
 
-def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,stopped,binding,errors):
+def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,stopped,binding,errors,*,runtime=None):
+    from . import source_verification_python as private_python
+    layout=private_python.describe(runtime,tools['python']) if runtime is not None and not errors.get('python') else None
+    if layout is not None and battery.merge.signature(layout)!=binding['executor'].get('private_python_layout_sha256'):
+        raise ValueError('Private Python layout differs from the exact battery binding')
     execution=execution_lanes(lanes,repository,actual_files)
     quiescent=[(i,lane) for i,lane in enumerate(execution) if lane.get('isolation')=='quiescent']
     scheduled=groups(execution,policy(operation)['workers']) or [[]]
@@ -275,7 +279,8 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
                 for directory,dirs,names in os.walk(source):
                     _check(stopped)
                     for name in names:cache_bytes+=(Path(directory)/name).lstat().st_size
-    required=(source_bytes+dependency_bytes)*len(scheduled)+cache_bytes+256*1024*1024
+    python_bytes=sum((Path(layout['root'])/name).stat().st_size for name in layout['files']) if layout else 0
+    required=(source_bytes+dependency_bytes+python_bytes)*len(scheduled)+cache_bytes+256*1024*1024
     if shutil.disk_usage(work).free<required:
         raise OSError('Insufficient free space for isolated battery slots: '+str(required)+' bytes required')
     abort=threading.Event()
@@ -316,6 +321,11 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
         _copy(repository,repo,cancelled,copy_progress)
         if inventory(battery,repo,cancelled,expected=actual_files)!=actual_files:raise ValueError('Private source copy differs')
         env=battery._environment(private/'home',repo/'live',repo/'desk',operation)
+        selected_tools=dict(tools)
+        if layout is not None:
+            selected_tools['python']=private_python.provision(layout,private/'interpreter',cancelled,copy_progress)
+            env['PYTHONHOME']=str(private/'interpreter')
+            env['HELENE_VERIFICATION_PYTHON_SDK']=str(private/'interpreter/Lib/site-packages')
         kinds={lane['kind'] for _,lane in group}
         needed=({'npm_config_cache'} if kinds&{'npm-prepare','npm-build','node'} else set())|({'CARGO_HOME','RUSTUP_HOME'} if kinds&{'cargo','cargo-build'} else set())
         for key in ('CARGO_HOME','RUSTUP_HOME','npm_config_cache'):
@@ -349,7 +359,7 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
                 if not lane['sources']:missing='Full lane sources unavailable: '+lane['id']
                 if missing:row={'id':lane['id'],'status':'unavailable','reason':missing}
                 else:
-                    try:row=battery._run_lane(lane,repo,runner,tools,env,cache,cancelled,binding['executor'].get('native_inputs'))
+                    try:row=battery._run_lane(lane,repo,runner,selected_tools,env,cache,cancelled,binding['executor'].get('native_inputs'))
                     except InterruptedError:raise
                     except OSError as exc:row={'id':lane['id'],'status':'unavailable','reason':str(exc)}
             if dependencies and inventory(battery,target,cancelled,expected=expected)!=expected:
@@ -366,6 +376,7 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
                 observed_failed+=sum(value.get('status') not in {'passed','skipped'} for value in observation.get('outcomes',[]))
                 active.pop(number,None)
                 publish(force=True)
+        private_python.verify(layout,private/'interpreter',cancelled)
         changes,outputs=battery._test_copy_changes(repo,actual_files,executed,cancelled)
         with progress_lock:active.pop(number,None);publish(force=True)
         return results,[f'slot-{number}/{name}' for name in changes],[dict(row,slot=number) for row in outputs]
@@ -389,9 +400,8 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
             # Every parallel command and descendant has settled. Reclaim its
             # disposable copies before a fresh latency-measurement context, so
             # peak disk use does not grow to thirteen dependency overlays.
-            cleanup=battery._cleanup_work(work,cache)
-            if cleanup.get('state')!='removed':raise OSError('Could not retire parallel test copies before quiescent checks')
-            Path(work).mkdir()
+            cleanup=battery._cleanup_work(work,cache,retain_repository=True)
+            if cleanup.get('state')!='slots-removed':raise OSError('Could not retire parallel test copies before quiescent checks')
             found,changed,built=slot(0,quiescent)
             results.extend(found);changes.extend(changed);outputs.extend(built)
         except BaseException as exc:

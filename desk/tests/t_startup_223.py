@@ -25,7 +25,7 @@ class Event:
 
 def window():
     value = Mock()
-    value.events = SimpleNamespace(**{name: Event() for name in ('shown', 'maximized', 'restored', 'loaded')})
+    value.events = SimpleNamespace(**{name: Event() for name in ('shown', 'maximized', 'restored', 'loaded', 'closing')})
     return value
 
 
@@ -87,6 +87,9 @@ class StartupShell(unittest.TestCase):
 
 
 class AutomaticWindow(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+
     def test_automatic_windows_hidden_manual_and_other_platforms_visible(self):
         screen = SimpleNamespace(x=0, y=0, width=1920, height=1080,
                                  frame=SimpleNamespace(X=0, Y=0, Width=1920, Height=1040))
@@ -135,7 +138,7 @@ class AutomaticWindow(unittest.TestCase):
                         free(words)
                     self.assertEqual(parsed[:2], ['-s', str(root/'app/python_app.py')])
                     launch = parsed[2:]
-                with patch.dict(sys.modules, webview=webview), patch.object(python_app.sys, 'platform', platform), patch('localharness.session_host.attach', return_value=Host()):
+                with patch.dict(sys.modules, webview=webview), patch.object(python_app.sys, 'platform', platform), patch('localharness.session_host.attach', return_value=Host()), patch('localharness.cocoa_js_bridge.install'):
                     with patch('localharness.owner_stop.stopped', return_value=False), patch('localharness.portable_start.initialize'), patch.object(python_app, 'Application', side_effect=create), patch.object(python_app.os, 'execv') as execute:
                         self.assertEqual(python_app._main(launch), 0)
                 if relaunch:

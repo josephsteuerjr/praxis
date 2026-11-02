@@ -390,12 +390,13 @@ class FirstStartAudit(unittest.TestCase):
     def test_selected_candidate_walk_error_propagates_before_backend_effects(self):
         old, _data = self.fx.old()
         before = self._snapshot(old)
-        def unreadable_walk(top, *args, onerror=None, **kwargs):
-            if Path(top).resolve()==old.resolve() and onerror is not None:
-                onerror(PermissionError('synthetic selected candidate unreadable'))
-            return iter(())
+        scandir=start.os.scandir
+        def unreadable_directory(top,*args,**kwargs):
+            if not isinstance(top,int) and Path(top).resolve()==old.resolve():
+                raise PermissionError('synthetic selected candidate unreadable')
+            return scandir(top,*args,**kwargs)
 
-        with patch.object(start.os, 'walk', side_effect=unreadable_walk):
+        with patch.object(start.os, 'scandir', side_effect=unreadable_directory):
             with self.assertRaisesRegex(PermissionError, 'synthetic selected candidate unreadable'):
                 self.fx.prepare()
 

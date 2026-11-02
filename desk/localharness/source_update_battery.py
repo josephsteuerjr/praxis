@@ -392,6 +392,10 @@ def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_input
         env=dict(env,HELENE_TEST_NODE=tools.get('node') or '',HELENE_TEST_NPM=tools.get('npm') or '')
         command = [tools['python'], '-B', '-s', str(runner), '--root', str(root), '--report', str(observation),
                    '--lock', str(cache / 'executor-lock.json'), '--sandbox', str(repository.parent)]
+        if env.get('HELENE_VERIFICATION_PYTHON_SDK'):
+            command.insert(1,'-S')
+            command.insert(1,'-I')
+            command+=['--python-sdk',env['HELENE_VERIFICATION_PYTHON_SDK']]
         if env.get('HELENE_VERIFICATION_DEPENDENCIES'):
             command += ['--dependencies', env['HELENE_VERIFICATION_DEPENDENCIES']]
         if kind in {'unittest-file','pytest-file'}:
@@ -533,6 +537,10 @@ def _binding(operation, directory):
     if (not python_sha or python_sha not in {row['sha256'] for row in value['runtime']['files'].values()}
             or python_path is None or not python_path.is_relative_to(Path(value['runtime']['root']).resolve())):
         errors['python'] = 'Verification Python is not a member of the exact incoming runtime composition'
+    if not errors.get('python'):
+        from . import source_verification_python
+        layout=source_verification_python.describe(value['runtime'],tools['python'])
+        if layout is not None:observed['private_python_layout_sha256']=merge.signature(layout)
     binding = {'version': VERSION, 'candidate_sha256': operation['candidate_sha256'],
                'composition_sha256': value['sha256'], 'bundle_sha256': manifest_sha,
                'input_sha256': operation['input_sha256'], 'target_version': operation['version'],
@@ -583,7 +591,7 @@ def _test_copy_changes(repository, before, lanes, stopped=lambda:False):
     return authored, outputs
 
 
-def _cleanup_work(work, cache):
+def _cleanup_work(work, cache, *, retain_repository=False):
     """Retire only our private test tree; cleanup cannot erase test evidence."""
     work = Path(work).absolute()
     if not work.name.startswith('helene-update-tests-') or work.is_symlink() or getattr(work,'is_junction',lambda:False)():
@@ -603,8 +611,22 @@ def _cleanup_work(work, cache):
         function(name)
 
     try:
-        shutil.rmtree(work, onerror=readonly)
-        result = {'state': 'removed', 'work': str(work)}
+        if retain_repository:
+            # The quiescent phase still needs this exact seed. Retire only the
+            # now-settled slots, never the source they must copy next.
+            children = list(work.iterdir())
+            for child in children:
+                if (child.is_symlink() or getattr(child,'is_junction',lambda:False)()
+                        or not child.is_dir() or
+                        child.name != 'repository' and not re.fullmatch(r'slot-\d+',child.name)):
+                    raise ValueError('Unexpected battery phase cleanup entry: '+str(child))
+            for child in children:
+                if child.name != 'repository':
+                    shutil.rmtree(child, onerror=readonly)
+            result = {'state': 'slots-removed', 'work': str(work), 'retained': ['repository']}
+        else:
+            shutil.rmtree(work, onerror=readonly)
+            result = {'state': 'removed', 'work': str(work)}
     except OSError as exc:
         result = {'state': 'pending', 'work': str(work), 'error': f'{type(exc).__name__}: {exc}'}
     # Separate maintenance receipt; not part of the immutable test binding.
@@ -653,7 +675,7 @@ def prepare(operation, directory, harness, stopped):
         from . import source_update_parallel
         rows,candidate_changes,build_outputs=source_update_parallel.run(
             sys.modules[__name__],lanes,repository,actual_files,work,runner,tools,
-            operation,cache,stopped,binding,errors)
+            operation,cache,stopped,binding,errors,runtime=value['runtime'])
     except CustodyUnconfirmed:
         write(cache / 'custody-unconfirmed.json', {'work': str(work), 'complete': False})
         raise

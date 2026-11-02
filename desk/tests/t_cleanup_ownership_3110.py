@@ -312,7 +312,32 @@ class CleanupOwnership(unittest.TestCase):
         start.retire_legacy(self.root, self.places.data, self.places, self.backend,
             plan, [], self.places.data, lambda row: None, modern=True, shortcuts=False)
         self.assertFalse(remnant.exists())
-        self.assertIn(('remove', remnant), self.backend.actions)
+        self.assertIn(remnant,plan['empty_only'])
+        self.assertNotIn(('remove', remnant), self.backend.actions)
+
+    def test_empty_vendor_remnant_changed_after_plan_refuses_before_retirement(self):
+        remnant=self.local/'Vendor/prefix-Helene-obsolete';remnant.mkdir(parents=True)
+        plan=start.legacy_plan(self.root,self.places,self.backend)
+        personal=self.put(remnant/'personal.txt',b'keep my file')
+        with self.assertRaisesRegex(ValueError,'пустая папка изменилась'):
+            start.retire_legacy(self.root,self.places.data,self.places,self.backend,
+                plan,[],self.places.data,lambda row:None,modern=True,shortcuts=False)
+        self.assertEqual(personal.read_bytes(),b'keep my file')
+        self.assertEqual(self.backend.actions,[])
+
+    def test_empty_vendor_remnant_late_writer_cannot_reach_recursive_remove(self):
+        remnant=self.local/'Vendor/prefix-Helene-obsolete';remnant.mkdir(parents=True)
+        plan=start.legacy_plan(self.root,self.places,self.backend)
+        original=Path.rmdir;personal=remnant/'late.txt'
+        def raced(path,*args,**kwargs):
+            self.assertEqual(path,remnant)
+            personal.write_bytes(b'late personal file')
+            return original(path,*args,**kwargs)
+        with patch.object(Path,'rmdir',raced),self.assertRaises(OSError):
+            start.retire_legacy(self.root,self.places.data,self.places,self.backend,
+                plan,[],self.places.data,lambda row:None,modern=True,shortcuts=False)
+        self.assertEqual(personal.read_bytes(),b'late personal file')
+        self.assertFalse(any(action[0]=='remove' for action in self.backend.actions))
 
 
 if __name__=='__main__':unittest.main()

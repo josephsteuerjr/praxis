@@ -53,7 +53,8 @@ class PortablePaths(unittest.TestCase):
 
     def test_new_default_is_home_Helene_existing_default_is_untouched(self):
         with patch.object(Path,'home',return_value=self.base):
-            self.assertEqual(setup.default_data(None),str(self.base/'Helene'))
+            expected=self.base/('Helene/data' if os.name=='nt' else 'Helene')
+            self.assertEqual(setup.default_data(None),str(expected))
         self.config();self.assertEqual(setup.default_data(self.root),str(self.data))
         value=setup.blank_config(self.root,self.data)
         for key in ('code','python','app','runner'):self.assertFalse(Path(value[key]).is_absolute())
