@@ -1,0 +1,50 @@
+name: Hélène RC23 owner UX frozen delta qualification
+on:
+  push:
+    branches: [codex/rc23-macos-0211]
+    paths: [.github/workflows/rc23-macos-owner-ux-qa.yml, desk/tests/rc23_macos_owner_ux_qa.py, desk/tests/rc23_macos_owner_ux_window.py]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  owner-ux:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: qa
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: d299ac425a21980ce63f6f590cea831d8793b4a2
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
+          fail-on-cache-miss: true
+      - name: Restore the exact qualified current RC23 via its small sealed archive delta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
+      - name: Changed contracts, offline affected frontends and frozen-source repackage
+        id: package
+        run: python3 qa/desk/tests/rc23_macos_owner_ux_qa.py prepare
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helene-rc23-owner-ux-macos-candidate
+          path: |
+            ${{ runner.temp }}/owner-ux-output/*.zip
+            ${{ runner.temp }}/owner-ux-output/*.sha256
+            ${{ runner.temp }}/owner-ux-output/candidate.json
+      - name: Installed native constitution form and visible update warning before admission
+        run: '"$RUNNER_TEMP/owner-ux-driver-runtime/bin/python3" -B qa/desk/tests/rc23_macos_owner_ux_qa.py native'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc23-owner-ux-macos-evidence
+          path: evidence-rc23-owner-ux/
