@@ -30,7 +30,9 @@ jobs:
       - name: Restore the exact qualified current RC23 via its small sealed archive delta
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
+        run: |
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13109134214/zip > "$RUNNER_TEMP/owner-ux-prior-checks.zip"
       - name: Changed contracts, offline affected frontends and frozen-source repackage
         id: package
         run: python3 qa/desk/tests/rc23_macos_owner_ux_qa.py prepare

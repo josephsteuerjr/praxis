@@ -19,6 +19,20 @@ os.environ['PYTHONDONTWRITEBYTECODE']='1'
 def prepare():
     assert sys.platform=='darwin' and os.uname().machine=='arm64'
     base.subject_identity(materialize=True)
+    prior=TEMP/'owner-ux-prior-checks.zip'
+    assert digest(prior)=='504302dc7e73b1cc3373235c71357a71536cac6a4224da398a55beb629abfd27'
+    with zipfile.ZipFile(prior) as z:
+        assert z.testzip() is None
+        expected=json.loads(z.read('SUBJECT-SOURCE.json'))
+        current=json.loads((OUT/'SUBJECT-SOURCE.json').read_text())
+        assert expected['commit']==current['commit']==COMMIT and expected['files']==current['files']
+        checked=json.loads(z.read('TARGETED-PYTHON.json'))
+        assert checked['passed'] and checked['unique']==checked['ran'] and all(r['status']=='passed' for r in checked['outcomes'])
+        for name in ('TARGETED-PYTHON.json','targeted-python.log','targeted-node.log'):(OUT/name).write_bytes(z.read(name))
+        assert 'ℹ fail 0' in z.read('targeted-node.log').decode()
+    save('RETAINED-CHANGED-CONTRACTS.json',{'source_commit':COMMIT,'prior_run':41371366915,
+        'prior_evidence_outer_sha256':digest(prior),'full_source_manifest_exact':True,
+        'python_unique_passed':checked['unique'],'node_log':'targeted-node.log','no_healthy_contract_repeat':True})
     from build_python_macos_rc import unpack
     from macos_archive_delta import restore
     outer=TEMP/'qualified-release-artifact.zip';assert digest(outer)==base.OUTER_SHA
@@ -97,7 +111,7 @@ def build():
     from portable_sources import compose_core,frontend_inputs,frontend_outputs
     from python_posix_bundle import assemble,normalize_output_modes
     from localharness import source_verification_bundle as bundle,source_verification_executor as executor,source_update_host
-    base.subject_identity();focused()
+    base.subject_identity()
     command([sys.executable,'-m','pip','check'],'pip-check.log')
     old=bundle.load(BASE/'verification',digest(BASE/'verification/manifest.json'),VERSION)
     tools=BASE/'verification-tools';selected=executor.provision(BASE,old,TEMP/'owner-ux-frontend-operation')
@@ -112,7 +126,6 @@ def build():
     names=('app','remote')
     def install(n):command([selected['npm'],'ci','--offline','--ignore-scripts','--audit=false','--fund=false'],'npm-ci-'+n+'.log',cwd=REPO/'desk'/n,env=env)
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:list(pool.map(install,names))
-    command([tools/'bin/node','--test','test/first-start-3010.test.mjs','test/update-admission-230.test.mjs'],'targeted-node.log',cwd=REPO/'desk/app',env=env)
     def build_front(n):command([selected['npm'],'run','build'],'frontend-'+n+'.log',cwd=REPO/'desk'/n,env=env)
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:list(pool.map(build_front,names))
     assert frontend_inputs(REPO)==before
@@ -120,6 +133,10 @@ def build():
         'base_archive_sha256':OLD_SHA,'rebuilt_commands':[{'cwd':'desk/'+n,'argv':['npm','run','build'],'returncode':0} for n in names],
         'retained_outputs':retained,'closure':closure,'inputs':before,'outputs':frontend_outputs(REPO),
         'no_claim_of_rebuilding_mobile_or_miniapp':True,'offline':True})
+    with zipfile.ZipFile(OUT/'observed-frontends.zip','x',zipfile.ZIP_DEFLATED) as z:
+        for name in (*names,'mobile','miniapp'):
+            for p in sorted((REPO/'desk'/name/'dist').rglob('*')):
+                if p.is_file():z.write(p,p.relative_to(REPO).as_posix())
     native=json.loads((BASE/'native-build.json').read_text());assert native['exit']==0 and native['platform']=='arm64'
     sources={}
     for prefix in ('praxis/body','helene/core/body'):
@@ -143,14 +160,26 @@ def build():
             assert not Path(dst).exists() and Path(dst).resolve().is_relative_to(PROGRAM.resolve())
             return shutil.move(str(src),str(dst))
         return copytree(src,dst,*a,**k)
-    PACK.mkdir();shutil.copytree=owned_transfer
+    # The assembler's isolated import smoke uses -I, which ignores the
+    # environment's PYTHONDONTWRITEBYTECODE. -B preserves the qualified cache
+    # bytes while executing the same native import check.
+    run=subprocess.run;import_checks=[]
+    def native_readonly_import(argv,*a,**k):
+        if isinstance(argv,(tuple,list)) and str(argv[0])==str(PROGRAM/'runtime/bin/python3'):
+            assert '-I' in argv and '-c' in argv
+            argv=[argv[0],'-B',*argv[1:]];import_checks.append(list(map(str,argv)))
+        return run(argv,*a,**k)
+    PACK.mkdir();shutil.copytree=owned_transfer;subprocess.run=native_readonly_import
     try:
         initial=assemble(BASE/'runtime',edition,None,None,PROGRAM,version=VERSION,target='macos-arm64',
             downloads=REPO/'desk/installer/mac-component-downloads-rc23.json',body=BASE/'helene-body',bridge=BASE/'helene-bridge',
             verification=verification,verification_tools=tools)
-    finally:shutil.copytree=copytree
+    finally:shutil.copytree=copytree;subprocess.run=run
     initial.rename(TEMP/'owner-ux-assembly-before-cocoa.zip')
-    assert runtime_rows=={p.relative_to(PROGRAM/'runtime').as_posix():digest(p) for p in (PROGRAM/'runtime').rglob('*') if p.is_file()}
+    actual_runtime={p.relative_to(PROGRAM/'runtime').as_posix():digest(p) for p in (PROGRAM/'runtime').rglob('*') if p.is_file()}
+    changed={n:{'before':runtime_rows.get(n),'after':actual_runtime.get(n)} for n in set(runtime_rows)|set(actual_runtime) if runtime_rows.get(n)!=actual_runtime.get(n)}
+    save('RUNTIME-EXACT-CHECK.json',{'passed':not changed,'files':len(runtime_rows),'changes':changed,'actual_isolated_import_invocations':import_checks})
+    assert not changed and import_checks
     shutil.copytree(BASE/'Helene.app',PROGRAM/'Helene.app')
     command(['codesign','--verify','--deep','--strict',PROGRAM/'Helene.app'],'codesign-verify.log')
     from build_python_macos_rc import unpack
