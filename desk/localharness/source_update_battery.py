@@ -372,6 +372,13 @@ def _cargo(listing, text):
             'coverage_complete': bool(collected) and Counter(collected) == Counter(r['id'] for r in outcomes)}
 
 
+def _npm_command(tools):
+    # A pinned JS entry runs directly under the pinned Node on Windows. No
+    # cmd.exe quoting, global npm wrapper or ambient npm installation is needed.
+    npm=tools['npm']
+    return [tools['node'],npm] if Path(npm).name=='npm-cli.js' else [npm]
+
+
 def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_inputs=None):
     from .source_update_parallel import native_scope
     env,native_inputs=native_scope(lane,env,native_inputs)
@@ -382,6 +389,7 @@ def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_input
     root = repository / lane.get('root', 'desk')
     commands = []
     if kind in {'unittest', 'unittest-file', 'pytest-file'}:
+        env=dict(env,HELENE_TEST_NODE=tools.get('node') or '',HELENE_TEST_NPM=tools.get('npm') or '')
         command = [tools['python'], '-B', '-s', str(runner), '--root', str(root), '--report', str(observation),
                    '--lock', str(cache / 'executor-lock.json'), '--sandbox', str(repository.parent)]
         if env.get('HELENE_VERIFICATION_DEPENDENCIES'):
@@ -424,8 +432,8 @@ def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_input
         # still use the normal local node_modules/.bin resolution.
         env = dict(env, PATH=os.pathsep.join((str(Path(tools['node']).parent),
                     str(Path(tools['npm']).parent), env.get('PATH', ''))))
-        command = ([tools['npm'], 'ci', '--ignore-scripts'] if kind == 'npm-prepare'
-                   else [tools['npm'], 'run', 'build'])
+        command = (_npm_command(tools) + ['ci', '--ignore-scripts'] if kind == 'npm-prepare'
+                   else _npm_command(tools) + ['run', 'build'])
         commands.append(command + ['--offline', '--cache', env['npm_config_cache'], '--audit=false', '--fund=false'])
     else:
         raise ValueError('Unknown trusted verification lane kind: ' + str(kind))

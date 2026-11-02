@@ -95,6 +95,38 @@ def _bundle(root, expected, version):
     return entries
 
 
+def _verification_tools(package, bundle, platform, root=None):
+    """Include exactly the native test tools pinned by this verification bundle."""
+    native={'windows':'win32','macos':'darwin','debian':'linux','fedora':'linux'}[platform]
+    manifest=json.loads(bundle['manifest.json'].data)
+    row=manifest.get('bundled_executors',{}).get(native)
+    if row is None:
+        if root is not None:raise ValueError('Verification tools have no native manifest declaration')
+        return None
+    expected=({'node':'bin/node.exe','npm':'npm/bin/npm-cli.js'} if native=='win32'
+              else {'node':'bin/node','npm':'bin/npm'})
+    if row.get('root')!='verification-tools' or row.get('tools')!=expected or row.get('npm_cache')!='cache':
+        raise ValueError('Unsupported native verification tool declaration')
+    prefix=PREFIX+'verification-tools/'
+    entries=(sealed(root) if root is not None else
+             {name[len(prefix):]:package.get(name) for name in package.names() if name.startswith(prefix) and not name.endswith('/')})
+    files=row.get('files',{})
+    if not files or set(entries)!=set(files):raise ValueError('Native verification tools differ from the manifest')
+    locks=manifest.get('executor_locks',{}).get(native,{}).get('tools',{})
+    for tool,name in expected.items():
+        if name not in files or locks.get(tool)!={'sha256':files[name].get('sha256')}:
+            raise ValueError('Native verification tool differs from its executor lock: '+tool)
+    if not any(name.startswith('cache/_cacache/') for name in files):
+        raise ValueError('Native verification tools omit their offline cache')
+    for name,value in files.items():
+        relative(name);entry=entries[name]
+        if (entry is None or sha(entry.data)!=value.get('sha256') or len(entry.data)!=value.get('size')
+                or int(entry.mode[-3:],8)!=value.get('mode')):
+            raise ValueError('Native verification tool changed: '+name)
+    package.replace_tree(prefix,entries)
+    return sha(encoded(row))
+
+
 def _bundle_source_closure(source, bundle, core, core_origins, app, app_origins):
     """A same-version stale suite/source bundle is not the candidate's material."""
     manifest = json.loads(bundle['manifest.json'].data)
@@ -252,7 +284,7 @@ def _requirements(source, core, platform):
 
 def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
          verification_bundle, verification_sha256, legacy_admission=False,
-         runtime_overlay=None, runtime_overlay_sha256='',windows_bootstrap=None):
+         runtime_overlay=None, runtime_overlay_sha256='',windows_bootstrap=None,verification_tools=None):
     donor, source = Path(donor).resolve(), Path(source).resolve()
     if platform not in PLATFORMS or not re.fullmatch(r'\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?', version):
         raise ValueError('Explicit platform and product semver release version required')
@@ -306,6 +338,7 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
             origins['upstream/' + n] = {'source': core_origins[n], **entry.identity()}
         for n, entry in bundle.items():
             p.put(PREFIX + 'verification/' + n, entry)
+        tools_identity=_verification_tools(p,bundle,platform,verification_tools)
         overlay_identity = None
         if runtime_overlay:
             replacements, overlay_identity = _overlay(runtime_overlay, runtime_overlay_sha256, platform)
@@ -338,11 +371,12 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
         full_files = p.value('python-package-files.json')['files']
         runtime_files = {n: h for n, h in full_files.items() if n.startswith('runtime/')}
         wrappers = {n: h for n, h in full_files.items()
-                    if '.app/' in n or n.endswith(('.exe', '.dll', '.dylib', '.so')) and not n.startswith(('runtime/', 'tree/', 'verification/'))}
+                    if '.app/' in n or n.endswith(('.exe', '.dll', '.dylib', '.so')) and not n.startswith(('runtime/', 'tree/', 'verification/', 'verification-tools/'))}
         report = {'format': 'helene-portable-refresh-plan.v1', 'version': version, 'platform': platform,
             'input_sha256': expected_sha256, 'input_size': donor.stat().st_size,
             'source_composition_sha256': sha(p.get(PREFIX + 'source-composition.json').data),
             'verification_bundle_sha256': verification_sha256,
+            'verification_tools_sha256': tools_identity,
             'frontend_receipt_sha256': digest(frontend_receipt),
             'runtime_overlay_sha256': runtime_overlay_sha256 if runtime_overlay else None,
             'runtime_files_sha256': sha(encoded(runtime_files)), 'runtime_files': len(runtime_files),
@@ -462,6 +496,7 @@ def main():
     refresh.add_argument('--runtime-overlay', type=Path)
     refresh.add_argument('--runtime-overlay-sha256', default='')
     refresh.add_argument('--windows-bootstrap',type=Path)
+    refresh.add_argument('--verification-tools',type=Path)
     refresh.add_argument('--output', type=Path)
     refresh.add_argument('--expect-plan', default='')
     refresh.add_argument('--report', type=Path)
@@ -474,7 +509,8 @@ def main():
         expected_sha256=args.expected_sha256, frontend_receipt=args.frontend_receipt,
         verification_bundle=args.verification_bundle, verification_sha256=args.verification_sha256,
         legacy_admission=args.legacy_admission, runtime_overlay=args.runtime_overlay,
-        runtime_overlay_sha256=args.runtime_overlay_sha256,windows_bootstrap=args.windows_bootstrap)
+        runtime_overlay_sha256=args.runtime_overlay_sha256,windows_bootstrap=args.windows_bootstrap,
+        verification_tools=args.verification_tools)
     value = build(args.donor, args.output, report, replacements, removed, expected_plan=args.expect_plan) if args.output else report
     if args.report:
         with args.report.open('xb') as stream:

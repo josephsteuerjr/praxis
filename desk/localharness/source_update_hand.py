@@ -13,6 +13,7 @@ from .package_notice import read,write
 
 PROTOCOL=2
 NAME='coordinator-hand.json'
+REQUEST_LOCK_WAIT=2.0
 
 
 def try_request(tree,action,args,expected_program=None):
@@ -72,7 +73,8 @@ def try_request(tree,action,args,expected_program=None):
     call=urllib.request.Request(origin+'/source-update',data=body,headers={
         'Content-Type':'application/json','X-Helene-Update':token,'X-Helene-Plan':identity})
     try:
-        with http.open(call,timeout=30) as response:value=json.load(response)
+        # Keep this client self-contained: legacy hands embed this function.
+        with http.open(call,timeout=120) as response:value=json.load(response)
     except urllib.error.HTTPError as exc:
         try:error=json.loads(exc.read(65536)).get('error')
         except (ValueError,AttributeError):error=None
@@ -102,6 +104,20 @@ def serve(directory,tree,program,binding):
         raise ValueError('Source-tool transport does not own the named coordinator')
     runtime_admission=update_composition.admit_runtime(directory,operation)
     token=secrets.token_urlsafe(32);closed=threading.Event()
+    def current_operation():
+        if closed.is_set():raise ValueError('Update hand is closed')
+        current=read(pipeline.path(tree));latest=read(directory/'pipeline.json')
+        if (current.get('id')!=directory.name or current.get('input_sha256')!=operation['input_sha256']
+                or latest.get('input_sha256')!=operation['input_sha256']
+                or latest.get('coordinator')!=binding):
+            raise ValueError('Current update identity changed')
+        return latest
+    def editable(latest):
+        if (owner_stop.stopped() or owner_stop.paused() or pipeline._cancelled(directory)
+                or pipeline.job_blocked(latest)):
+            raise ValueError('Stop/Pause or retired update forbids source edits')
+        if latest.get('state') in ('verification_requested','review_requested','reviewing','merging'):
+            raise ValueError('Candidate is frozen for coordinator work (state='+str(latest['state'])+')')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def do_POST(self):
@@ -119,10 +135,7 @@ def serve(directory,tree,program,binding):
                 action=request.get('action');args=request.get('args')
                 if action not in pipeline.TOOL['input_schema']['properties']['action']['enum'] or not isinstance(args,dict):
                     raise ValueError('Unsupported source-tool action')
-                current=read(pipeline.path(tree));latest=read(directory/'pipeline.json')
-                if (current.get('id')!=directory.name or current.get('input_sha256')!=operation['input_sha256']
-                        or latest.get('input_sha256')!=operation['input_sha256']):
-                    raise ValueError('Current update identity changed')
+                latest=current_operation()
                 # These five actions only inspect/repair files. Finish runs
                 # synchronous Git work; it must not inherit editing admission.
                 scope=(update_composition.editing_runtime(runtime_admission)
@@ -130,11 +143,17 @@ def serve(directory,tree,program,binding):
                 with scope:
                     if action=='status':result=agent_source_update.command(tree,action,**args)
                     else:
-                        if (owner_stop.stopped() or owner_stop.paused() or pipeline._cancelled(directory)
-                                or pipeline.job_blocked(latest)):raise ValueError('Stop/Pause or retired update forbids source edits')
-                        if not pipeline._LOCK.acquire(blocking=False):
-                            raise ValueError('Verification/review is executing; read status and wait for its actual result')
-                        try:result=agent_source_update.command(tree,action,**args)
+                        editable(latest)
+                        # An idle maintenance tick or another RPC also owns this
+                        # mutex. Brief contention is not evidence of a review.
+                        if not pipeline._LOCK.acquire(timeout=REQUEST_LOCK_WAIT):
+                            latest=current_operation();editable(latest)
+                            raise ValueError('Coordinator custody is busy (state='+str(latest.get('state'))+
+                                '); no source edit was admitted. Read status after the current operation settles')
+                        try:
+                            # Ownership, Stop and phase may change while queued.
+                            latest=current_operation();editable(latest)
+                            result=agent_source_update.command(tree,action,**args)
                         finally:pipeline._LOCK.release()
                 if action=='status' and isinstance(result,dict):
                     result['runtime_validation']='Initial admission for editing; full revalidation before verification and apply'

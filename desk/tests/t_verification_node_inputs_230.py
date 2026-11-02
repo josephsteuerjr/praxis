@@ -36,7 +36,8 @@ class NodeInputs(unittest.TestCase):
         self.repository = self.work / 'repository'
         self.cache = self.work / 'npm-cache'; self.cache.mkdir()
         self.logs = self.work / 'evidence'; self.logs.mkdir()
-        self.tools = {name: shutil.which(name) for name in ('node', 'npm')}
+        self.tools = {name: os.environ.get('HELENE_TEST_'+name.upper()) or shutil.which(name) for name in ('node', 'npm')}
+        self.tools['python']=sys.executable
 
     def put(self, relative, text):
         path = self.repository / relative
@@ -127,7 +128,9 @@ class NodeInputs(unittest.TestCase):
         with mock.patch.object(battery, '_execute', side_effect=execute):
             row = self.run_lane(lane)
         self.assertEqual(len(row['commands']), 1)
-        self.assertEqual(row['commands'][0][1:3], ['run', 'build'])
+        command=row['commands'][0]
+        start=command.index('run')
+        self.assertEqual(command[start:start+2], ['run', 'build'])
         self.assertEqual(row['observation']['checks_run'], 1)
         self.assertNotIn('tests_run', row['observation'])
         battery._check_results({'lanes': [lane], 'results': [row]}, {})
@@ -152,7 +155,7 @@ class NodeInputs(unittest.TestCase):
                 archive.addfile(info, io.BytesIO(data))
         integrity = 'sha512-' + base64.b64encode(hashlib.sha512(tar.read_bytes()).digest()).decode()
         if fill_cache:
-            done = subprocess.run([self.tools['npm'], 'cache', 'add', str(tar), '--offline', '--ignore-scripts',
+            done = subprocess.run(battery._npm_command(self.tools) + ['cache', 'add', str(tar), '--offline', '--ignore-scripts',
                                    '--cache', str(self.cache)], cwd=self.work, env=self.environment(),
                                   capture_output=True, text=True, encoding='utf8', timeout=30,
                                   creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

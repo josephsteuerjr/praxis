@@ -75,6 +75,40 @@ def _check(stopped):
     if stopped():raise InterruptedError('Owner stopped update battery')
 
 
+def _fresh_check(stopped,abort):
+    """Latch a fresh Stop or unreadable control before any sibling can admit."""
+    _check(abort.is_set)
+    try:
+        if stopped():abort.set()
+    except BaseException:
+        abort.set()
+        raise
+    _check(abort.is_set)
+
+
+def _cancellation(stopped,abort):
+    """Share a20ms durable-control poll interval across the private file slots.
+
+    File/chunk checkpoints stay cheap; each command still admits against a fresh
+    owner read. A positive observation is latched for this one battery attempt.
+    """
+    lock=threading.Lock();last=-float('inf')
+    def observe():
+        nonlocal last
+        if abort.is_set():return True
+        if time.monotonic()-last>=.02:
+            with lock:
+                if not abort.is_set() and time.monotonic()-last>=.02:
+                    try:
+                        if stopped():abort.set()
+                    except BaseException:
+                        abort.set()
+                        raise
+                    last=time.monotonic()
+        return abort.is_set()
+    return observe
+
+
 def _copy(source,target,stopped,progress=None):
     """No links/shared writable inodes; cancellation is checked per chunk."""
     source,target=Path(source),Path(target)
@@ -99,7 +133,7 @@ def _copy(source,target,stopped,progress=None):
             if progress:progress(copied,1)
 
 
-def inventory(battery,root,stopped):
+def inventory(battery,root,stopped,expected=None):
     rows={};root=Path(root)
     for directory,dirs,names in os.walk(root):
         _check(stopped);here=Path(directory)
@@ -113,10 +147,20 @@ def inventory(battery,root,stopped):
                 while chunk:=stream.read(1024*1024):_check(stopped);digest.update(chunk)
             row={'sha256':digest.hexdigest(),'size':info.st_size,
                 'mode':'100755' if info.st_mode&0o111 and os.name!='nt' else '100644'}
-            if battery.bundle.python_framework(path)=='pytest':row['framework']='pytest'
-            native=battery.bundle.python_native_inputs(path)
-            if native is not None:row['native_inputs']=native
-            rows[path.relative_to(root).as_posix()]=row
+            name=path.relative_to(root).as_posix()
+            if expected is None:
+                if battery.bundle.python_framework(path)=='pytest':row['framework']='pytest'
+                native=battery.bundle.python_native_inputs(path)
+                if native is not None:row['native_inputs']=native
+            else:
+                # The full current composition was already classified before
+                # spawning slots. Reuse its annotations ONLY after independently
+                # hashing every byte, size and mode of this private copy.
+                prior=expected.get(name,{})
+                if all(prior.get(key)==value for key,value in row.items()):
+                    for key in ('framework','native_inputs'):
+                        if key in prior:row[key]=prior[key]
+            rows[name]=row
     return rows
 
 
@@ -235,7 +279,7 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
     if shutil.disk_usage(work).free<required:
         raise OSError('Insufficient free space for isolated battery slots: '+str(required)+' bytes required')
     abort=threading.Event()
-    def cancelled():return abort.is_set() or stopped()
+    cancelled=_cancellation(stopped,abort)
     progress_lock=threading.RLock();finished_parts=Counter();active={};last_write=0.0
     observed_tests=0;observed_failed=0;copied_bytes=0;copied_files=0
     def publish(state='running',*,force=False,error=''):
@@ -270,7 +314,7 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
         with progress_lock:
             active[number]={'phase':'preparing','started_at':time.time()};publish(force=True)
         _copy(repository,repo,cancelled,copy_progress)
-        if inventory(battery,repo,cancelled)!=actual_files:raise ValueError('Private source copy differs')
+        if inventory(battery,repo,cancelled,expected=actual_files)!=actual_files:raise ValueError('Private source copy differs')
         env=battery._environment(private/'home',repo/'live',repo/'desk',operation)
         kinds={lane['kind'] for _,lane in group}
         needed=({'npm_config_cache'} if kinds&{'npm-prepare','npm-build','node'} else set())|({'CARGO_HOME','RUSTUP_HOME'} if kinds&{'cargo','cargo-build'} else set())
@@ -284,12 +328,13 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
             expected=binding['executor'].get('dependency_files')
             if expected is None:raise ValueError('Missing bound Python dependencies')
             _copy(source,target,cancelled,copy_progress)
-            if inventory(battery,target,cancelled)!=expected:raise ValueError('Private Python dependencies differ')
+            if inventory(battery,target,cancelled,expected=expected)!=expected:raise ValueError('Private Python dependencies differ')
             env['PYTHONPATH']=os.pathsep.join(str(target) if part==str(source) else part for part in env['PYTHONPATH'].split(os.pathsep))
             env['HELENE_VERIFICATION_DEPENDENCIES']=str(target)
         results=[]
         executed=[]
         for index,lane in jobs(group):
+            _fresh_check(stopped,abort)  # No cached poll and no transient Stop gap.
             _check(cancelled)
             with progress_lock:
                 active[number]={'phase':'running','lane':lane['id'],'kind':lane['kind'],
@@ -307,7 +352,7 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
                     try:row=battery._run_lane(lane,repo,runner,tools,env,cache,cancelled,binding['executor'].get('native_inputs'))
                     except InterruptedError:raise
                     except OSError as exc:row={'id':lane['id'],'status':'unavailable','reason':str(exc)}
-            if dependencies and inventory(battery,target,cancelled)!=expected:
+            if dependencies and inventory(battery,target,cancelled,expected=expected)!=expected:
                 raise ValueError('Tests changed private Python dependencies')
             # Each finished lane survives a later lane/cleanup failure.
             write(cache/(hashlib.sha256(lane['id'].encode()).hexdigest()[:20]+'.lane.json'),row)
