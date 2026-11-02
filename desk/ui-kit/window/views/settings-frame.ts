@@ -431,6 +431,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const modeChoice = el('select', 'field-input'); modeChoice.setAttribute('aria-label', 'Код программы'); modeChoice.hidden = true;
   const sourceHint = el('p', 'field-hint', 'Проверяем доступные режимы обновления…');
   sourceHint.id = 'update-source-mode-hint';
+  const reopenHint = el('p', 'field-hint', 'Во время обновления окно закроется. Hélène откроется сама — это может занять несколько минут. Не запускай программу повторно.');
+  reopenHint.id = 'update-reopen-hint';
   const developerDetails = el('details', 'muted');
   developerDetails.append(el('summary', '', 'Если вы меняли код'), el('p', 'field-hint', 'При конфликте агент подготовит совмещённый код в отдельном кандидате. Обновление продолжится после проверок и ревью. До подтверждения нового запуска прежняя программа пригодна для восстановления.'));
   const showMode = () => {
@@ -445,7 +447,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     sourceMode = modeChoice.value === 'preserve' ? 'preserve' : modeChoice.value === 'clean' ? 'clean' : undefined;
     showMode();
   });
-  sourceChoices.append(modeChoice, sourceHint, developerDetails); sourceChoices.hidden = !pythonUpdate;
+  sourceChoices.append(modeChoice, sourceHint, reopenHint, developerDetails); sourceChoices.hidden = !pythonUpdate;
   let agentProposalId = '';
   const confirmAgentUpdate = button('Подтвердить предложение агента', 'primary', async () => {
     if (!agentProposalId) return;
@@ -556,7 +558,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         const admitted = await requestAgentUpdate(shell, updUrl, updSha, sourceMode);
         observedUpdateId = admitted.job.id;
         updateHandedOff = true;
-        updOut.textContent = `Обновление ${admitted.job.id} принято вне окна. Его можно закрыть: агент продолжит работу; повторное открытие покажет это же задание.`;
+        updOut.textContent = 'Обновление принято. Окно закроется, затем Hélène откроется сама. Это может занять несколько минут — не запускай программу повторно.';
         setTimeout(restoreUpdateProgress, 600);
       } catch (error) {
         // A lost reply is not permission to submit another job or silently
@@ -613,7 +615,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         return;
       }
       updateHandedOff = true;
-      updOut.textContent = pythonUpdate ? 'Обновление передано Python. Программа перезапустится; неудачный запуск откатится. Установщик не нужен.' : 'Установщик запущен; программа закроется для обновления.';
+      updOut.textContent = pythonUpdate ? 'Окно закроется. Hélène откроется сама через несколько минут — не запускай программу повторно. Если запуск не удастся, вернём прежнюю версию.' : 'Установщик запущен; программа закроется для обновления.';
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (!pythonUpdate && /not found|неизвестн|unknown|command/i.test(text)) {

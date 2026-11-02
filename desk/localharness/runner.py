@@ -3320,15 +3320,7 @@ def main() -> None:
         # 1.4.0: сид души — `soul-seed.md` рядом с конфигом (кладёт agents.create;
         # файл НЕ удаляем — это запись о рождении). BOM-толерантно, как конфиг:
         # файл мог пройти через руки владельца.
-        seed_path = config_path.with_name(agents.SEED_NAME)
-        soul_seed: str | None = None
-        try:
-            if seed_path.is_file():
-                soul_seed = boot.read_config_text(seed_path)
-        except (OSError, ValueError) as exc:
-            log.warning("сид души не читается (%s): родится каноническая конституция — %s",
-                        seed_path, exc)
-            soul_seed = None
+        soul_seed=boot.initial_soul_seed(config_path,tree)
         # Знания рождения (1.4.1, доктор): skills-seed/ рядом с конфигом. Раннер
         # только переносит — КУДА ложить, знает ensure_layout; неудача чтения
         # не роняет старт (канон без знаний живёт), но говорится aloud.

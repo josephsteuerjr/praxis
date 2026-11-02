@@ -152,6 +152,27 @@ def _names(text: str, cfg: dict) -> str:
                                                               owner_name(cfg))
 
 
+def initial_soul_seed(config_path: Path, tree: Path) -> str | None:
+    """Profile birth choice survives code updates before the first model login.
+
+    Existing secondary-agent seeds keep their legacy location and behaviour.
+    An unreadable explicit profile choice must never silently become canonical.
+    """
+    seed=tree/'memory/.state/soul-seed.md'
+    if seed.exists() or seed.is_symlink():
+        try:
+            text=read_config_text(seed)
+            if not text.strip():raise ValueError('пустой текст')
+            return text
+        except (OSError,ValueError) as error:
+            raise LayoutError(f'Не удалось прочитать выбранную конституцию ({seed}): {error}') from error
+    seed=config_path.with_name('soul-seed.md')
+    try:return read_config_text(seed) if seed.is_file() else None
+    except (OSError,ValueError) as error:
+        log.warning('сид души не читается (%s): родится каноническая конституция — %s',seed,error)
+        return None
+
+
 def soul_text(cfg: dict) -> str:
     """Каноническая конституция с подставленными именами."""
     try:

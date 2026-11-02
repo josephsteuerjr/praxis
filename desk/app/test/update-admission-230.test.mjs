@@ -30,9 +30,11 @@ const pollerBegin=frame.indexOf('  // Reconnecting the old UI reads the same ope
 const pollerEnd=frame.indexOf('\n  const updateWork=',pollerBegin);
 assert.ok(pollerBegin>=0 && pollerEnd>pollerBegin,'existing Settings poller and its actual observation state are available');
 const poller=stripTypeScriptTypes(frame.slice(pollerBegin,pollerEnd));
+const controls=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/update-operation-controls.ts',import.meta.url),'utf8')).replace(/export /g,'');
 const makeObserver=new Function('shell',`
+ ${controls}
  const pythonUpdate=true,activityScope=()=> 'private-selected',settingsScope='private-selected';
- const updOut={isConnected:true,textContent:'new admission'},cancelUpdate={},dlBtn={},timers=[];
+ const updOut={isConnected:true,textContent:'new admission'},cancelUpdate={},dlBtn={},restoreUpstream={},timers=[];
  const setTimeout=(fn,ms)=>timers.push({fn,ms}),renderSettingsWork=()=>{},humanError=e=>({text:e.message});
  let progressUpdate;
  ${poller}

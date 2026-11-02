@@ -34,10 +34,12 @@ body.done .track:before{animation:none;width:100%}body.failed .track:before{anim
 @media(max-width:430px){body{padding:22px}h1{font-size:28px}}
 </style><!--shared-appearance--><main><header id="update-chrome"><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><div class="update-actions"><button id="minimize" aria-label="Свернуть окно">−</button><button id="close" aria-label="Закрыть окно" disabled>×</button></div></header><h1 id="stage">Подготавливаю обновление</h1>
 <div class="track" aria-hidden="true"></div><p id="detail" role="status" aria-live="polite"></p><p id="error"></p>
+<p id="reopen-note">Основное окно может закрыться на несколько минут. Hélène откроется сама — не запускай программу повторно.</p>
 <section id="source-choice" hidden><strong id="source-version"></strong><p>Сохранить изменения — агент совместит ваши правки с выпуском. Чистое обновление заменит локальные изменения кода. Прежний код останется для отката; память, переписка и настройки сохранятся.</p><div class="source-options"><button data-source="preserve">Сохранить правки · поручить агенту</button><button data-source="clean">Установить чистый код выпуска</button><button id="cancel-choice">Отмена</button></div></section>
 <p id="history"></p></main><script>
 const stage=document.getElementById('stage'),detail=document.getElementById('detail'),error=document.getElementById('error'),history=document.getElementById('history');
 function paint(r){stage.textContent=r.label||r.stage||'Подготавливаю переключение';
+document.getElementById('reopen-note').hidden=['completed','failed','cancelled'].includes(r.stage);
 const choice=r.stage==='choosing_source'&&r.source_choice;document.getElementById('source-choice').hidden=!choice;if(choice)document.getElementById('source-version').textContent='Код Hélène '+(choice.version||'нового выпуска');
 const now=r.finished_at||Date.now()/1000, s=r.stages?.at(-1); const seconds=s?Math.max(0,now-s.started_at):0;
 const parts=[`Этап: ${Math.floor(seconds)} с`];

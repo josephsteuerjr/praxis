@@ -1013,6 +1013,19 @@ def _create_agent(root,values,*,places,progress=None):
         raise ValueError('Введи имя агента и модель, выбери подключение')
     if provider!='chatgpt' and not key:raise ValueError('Введи ключ доступа к API')
     config=load(root/'helene.json');config.update(setup_complete=True,agent={'name':name},owner={'name':owner})
+    # Explicit birth choice lives with the profile, even while subscription
+    # sign-in is pending and before the first runner has created soul/SOUL.md.
+    # Legacy callers that omit this field retain their existing canonical path.
+    seed=None
+    if 'soul' in values:
+        soul=values['soul']
+        if not isinstance(soul,dict) or soul.get('kind') not in ('canonical','text'):
+            raise ValueError('Выбери конституцию Hélène или свой текст')
+        from .agents import _soul_seed_text
+        seed=_soul_seed_text(root,soul,None)
+        if seed is None:
+            from .boot import soul_text
+            seed=soul_text(config)
     if provider=='chatgpt':
         import secrets
         from deskd.readers import RELAY_PORT_DEFAULT
@@ -1034,6 +1047,9 @@ def _create_agent(root,values,*,places,progress=None):
         config['relay']=dict(config.get('relay') or {},enabled=False)
         config['model']={'framework':provider,'model':model,'key':key,
             'base_url':str(values.get('base_url') or ('https://api.anthropic.com' if provider=='anthropic' else 'https://api.openai.com/v1')).strip()}
+    if seed is not None:
+        from .vision_policy import _write as atomic
+        atomic(plain(places.data/'memory/.state/soul-seed.md'),seed.encode('utf-8'),private=True)
     _write(root/'helene.json',config,private=True)
     _write(places.data/'memory/.control/profile-identity.json',{'format':'helene-profile-identity.v1',
         'id':uuid.uuid4().hex,'agent_name':name,'owner_name':owner})

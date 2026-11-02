@@ -6,7 +6,7 @@ import vm from 'node:vm';
 const html=readFileSync(new URL('../../resources/first-start.html',import.meta.url),'utf8');
 function fixture(){
   const elements={},calls=[],timers=[];
-  const document={getElementById(id){return elements[id]??={value:'',hidden:false,disabled:false,textContent:'',focus(){this.focused=true}};}};
+  const document={getElementById(id){return elements[id]??={value:'',hidden:false,disabled:false,textContent:'',attributes:{},setAttribute(name,value){this.attributes[name]=value},focus(){this.focused=true}};}};
   const context=vm.createContext({document,setTimeout(fn,delay){timers.push({fn,delay})},window:{__HELENE__:{
     async invoke(command,args){calls.push({command,args});return command==='first_start'?{stage:'starting'}:{created:true};}
   }}});
@@ -34,7 +34,7 @@ test('minimal credential form sends only its values and clears the key before op
   }
   await view.elements.form.onsubmit({preventDefault(){}});
   const created=view.calls.find(c=>c.command==='first_create');
-  assert.deepEqual(JSON.parse(JSON.stringify(created.args)),{name:'Вера',owner:'Марк',provider:'openai',model:'fixture',key:'private-fixture',base_url:''});
+  assert.deepEqual(JSON.parse(JSON.stringify(created.args)),{name:'Вера',owner:'Марк',provider:'openai',model:'fixture',key:'private-fixture',base_url:'',soul:{kind:'canonical'}});
   assert.equal(view.elements.key.value,'');
   assert.equal(view.calls.filter(c=>c.command==='first_open').length,1);
   assert.ok(!Object.values(view.elements).some(el=>el.textContent.includes('private-fixture')));
@@ -80,4 +80,35 @@ test('failed subscription installation returns to the form without opening the a
   assert.equal(view.elements.form.hidden,false);assert.equal(view.elements.create.disabled,false);
   assert.match(view.elements.error.textContent,/offline/);
   assert.equal(view.calls.filter(c=>c.command==='first_open').length,0);
+});
+
+test('the selected custom constitution survives switching choices and is passed verbatim',async()=>{
+  const view=fixture();await Promise.resolve();
+  view.elements['soul-custom'].onclick();
+  assert.equal(view.elements['soul-editor'].hidden,false);
+  view.elements['soul-text'].value='\uFEFF# Свой текст\n<script>plain text only</script>\n';
+  view.elements['soul-canonical'].onclick();view.elements['soul-custom'].onclick();
+  await view.elements.form.onsubmit({preventDefault(){}});
+  const created=view.calls.find(row=>row.command==='first_create');
+  assert.deepEqual(JSON.parse(JSON.stringify(created.args.soul)),{kind:'text',text:view.elements['soul-text'].value});
+  assert.equal(view.elements['soul-text'].required,true);
+});
+
+test('an empty custom constitution is refused before creation and keeps the form usable',async()=>{
+  const view=fixture();await Promise.resolve();view.elements['soul-custom'].onclick();
+  view.elements['soul-text'].value=' \n\t';
+  await view.elements.form.onsubmit({preventDefault(){}});
+  assert.equal(view.calls.some(row=>row.command==='first_create'),false);
+  assert.equal(view.elements.create.disabled,false);
+  assert.match(view.elements.error.textContent,/конституции/);
+});
+
+test('a selected text file supplies editable constitution text without creating the agent',async()=>{
+  const view=fixture();await Promise.resolve();
+  const text='# Из файла\nUnicode: Привет\n';
+  view.elements['soul-file'].files=[{async text(){return text}}];
+  await view.elements['soul-file'].onchange();
+  assert.equal(view.elements['soul-text'].value,text);
+  assert.equal(view.elements['soul-editor'].hidden,false);
+  assert.equal(view.calls.some(row=>row.command==='first_create'),false);
 });
