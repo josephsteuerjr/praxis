@@ -856,8 +856,6 @@ def _built_pair() -> Path | None:
     return None
 
 
-@unittest.skipUnless(os.name == "nt" and _built_pair() is not None,
-                     "мост и тело не собраны (HELENE_BODY_DIR или ../_body_target/release)")
 class Spool(unittest.TestCase):
     """п. 1.14: спул моста подчищается — старые кадры контроллера и отвеченные
     ответы уходят, свежее и чужое (`to_device`) остаётся."""
