@@ -1,4 +1,4 @@
-name: Hélène RC23 owner UX frozen delta qualification
+name: Hélène RC23 sealed owner UX warning proof
 on:
   push:
     branches: [codex/rc23-macos-0211]
@@ -32,19 +32,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
-          gh api repos/josephsteuerjr/praxis/actions/artifacts/13109134214/zip > "$RUNNER_TEMP/owner-ux-prior-checks.zip"
-      - name: Changed contracts, offline affected frontends and frozen-source repackage
-        id: package
-        run: python3 qa/desk/tests/rc23_macos_owner_ux_qa.py prepare
-      - uses: actions/upload-artifact@v4
-        with:
-          name: helene-rc23-owner-ux-macos-candidate
-          path: |
-            ${{ runner.temp }}/owner-ux-output/*.zip
-            ${{ runner.temp }}/owner-ux-output/*.sha256
-            ${{ runner.temp }}/owner-ux-output/candidate.json
-      - name: Installed native constitution form and visible update warning before admission
-        run: '"$RUNNER_TEMP/owner-ux-driver-runtime/bin/python3" -B qa/desk/tests/rc23_macos_owner_ux_qa.py native'
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13109203623/zip > "$RUNNER_TEMP/owner-ux-sealed-evidence.zip"
+      - name: Exact sealed candidate and visible update warning in Programme settings
+        run: python3 qa/desk/tests/rc23_macos_owner_ux_qa.py prepare_warning
       - uses: actions/upload-artifact@v4
         if: always()
         with:

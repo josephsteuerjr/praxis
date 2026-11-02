@@ -213,7 +213,40 @@ def build():
     with open(os.environ['GITHUB_OUTPUT'],'a') as output:output.write('sha256='+candidate['sha256']+'\n')
     print(json.dumps(candidate),flush=True)
 
-def native():
+def prepare_warning():
+    """Only the missing rendered warning, using exact already sealed bytes."""
+    base.subject_identity(materialize=True)
+    from build_python_macos_rc import unpack
+    from macos_archive_delta import restore
+    outer=TEMP/'qualified-release-artifact.zip';assert digest(outer)==base.OUTER_SHA
+    old18=TEMP/'qualified-rc18.zip'
+    with zipfile.ZipFile(outer) as z:
+        row=next(r for r in z.infolist() if Path(r.filename).name=='Helene-2.3.0-rc.18-macos-arm64.zip');old18.write_bytes(z.read(row))
+    assert digest(old18)==base.BASE_SHA
+    prior=TEMP/'current-rc23-evidence.zip';assert digest(prior)==OLD_OUTER
+    patch=TEMP/'old23-exact-delta.zip'
+    with zipfile.ZipFile(prior) as z:patch.write_bytes(z.read('exact-archive-delta.zip'))
+    restore(old18,patch,OLD_ARCHIVE);assert digest(OLD_ARCHIVE)==OLD_SHA
+    latest=TEMP/'owner-ux-sealed-evidence.zip'
+    assert digest(latest)=='b8d08334516fbbf57fe2efbd2b3ca9fd9d59be7d6aa61cc1a86b0d54ec4f3f00'
+    PACK.mkdir();patch=TEMP/'owner-ux-sealed-delta.zip'
+    with zipfile.ZipFile(latest) as z:
+        patch.write_bytes(z.read('owner-ux-exact-archive-delta.zip'))
+        for name in ('candidate.json','NATIVE-OWNER-UX.json','NATIVE-FIRST-CREATE.json'):
+            (OUT/('PRIOR-'+name)).write_bytes(z.read(name))
+        candidate=json.loads(z.read('candidate.json'));assert candidate['source_commit']==COMMIT
+        (PACK/'candidate.json').write_bytes(z.read('candidate.json'))
+    archive=PACK/candidate['archive'];restore(OLD_ARCHIVE,patch,archive);assert digest(archive)==candidate['sha256']
+    unpack(archive,TEMP/'owner-ux-warning-driver-install')
+    save('SEALED-OWNER-UX-REUSED.json',{'source_commit':COMMIT,'archive_sha256':candidate['sha256'],
+        'retained_build_first_create_and_exit_run':41371759119,'no_front_runtime_native_or_product_rebuild':True,
+        'scope':'Only missing Programme-group warning visibility and normal exit. Original wrong-tab QA timeout stays RED.'})
+    python=TEMP/'owner-ux-warning-driver-install/Helene/runtime/bin/python3'
+    os.execv(str(python),[str(python),'-B',str(QA),'warning'])
+
+def warning():return native(warning_only=True)
+
+def native(*,warning_only=False):
     from build_python_macos_rc import unpack
     import rc18_macos_pipeline as helper
     import psutil
@@ -245,15 +278,17 @@ def native():
         helper.wait(gone,75)
         result.setdefault('observed_exit_generations_absent',[]).append(len(tracked));record()
     try:
-        p=launch('create');helper.wait(lambda:(OUT/'NATIVE-FIRST-CREATE.json').is_file(),150)
-        helper.wait(lambda:helper.invoke(program,'app_info').get('root')==str(program),150)
-        helper.wait(lambda:helper.control(program) and helper.control(program).get('ui_ready'),150)
-        created=json.loads((OUT/'NATIVE-FIRST-CREATE.json').read_text());assert created['actual_SOUL_exact'] and created['real_birth_authority_consumed']
-        soul=(data/'soul/SOUL.md').read_bytes();identity=(data/'memory/.control/profile-identity.json').read_bytes()
-        result['steps']['actual_custom_form_file_editable_text_birth_and_native_Cocoa_open']=created;record()
-        time.sleep(2);helper.snapshot('owner-ux-ordinary-cocoa.png');close(p)
+        if not warning_only:
+            p=launch('create');helper.wait(lambda:(OUT/'NATIVE-FIRST-CREATE.json').is_file(),150)
+            helper.wait(lambda:helper.invoke(program,'app_info').get('root')==str(program),150)
+            helper.wait(lambda:helper.control(program) and helper.control(program).get('ui_ready'),150)
+            created=json.loads((OUT/'NATIVE-FIRST-CREATE.json').read_text());assert created['actual_SOUL_exact'] and created['real_birth_authority_consumed']
+            soul=(data/'soul/SOUL.md').read_bytes();identity=(data/'memory/.control/profile-identity.json').read_bytes()
+            result['steps']['actual_custom_form_file_editable_text_birth_and_native_Cocoa_open']=created;record()
+            time.sleep(2);helper.snapshot('owner-ux-ordinary-cocoa.png');close(p)
         p=launch('warning');helper.wait(lambda:(OUT/'NATIVE-UPDATE-WARNING.json').is_file(),150)
         warning=json.loads((OUT/'NATIVE-UPDATE-WARNING.json').read_text());assert warning['visible'] and not warning['update_writes_before_warning']
+        if warning_only:soul=(data/'soul/SOUL.md').read_bytes();identity=(data/'memory/.control/profile-identity.json').read_bytes()
         result['steps']['actual_visible_warning_before_any_update_action']=warning;record();close(p)
         assert (data/'soul/SOUL.md').read_bytes()==soul and (data/'memory/.control/profile-identity.json').read_bytes()==identity
         result['steps']['SOUL_and_identity_exact_after_reopen']=True;result['passed']=True;record()

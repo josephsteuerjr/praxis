@@ -52,6 +52,7 @@ def warning_dom(win):
     wait(lambda:evaluate(win,"!!document.querySelector('.rail-item[data-view=settings]')"))
     evaluate(win,"document.querySelector('.rail-item[data-view=settings]').click();true")
     wait(lambda:evaluate(win,"!!document.getElementById('update-reopen-hint')"))
+    evaluate(win,"(()=>{const tab=Array.from(document.querySelectorAll('.settings-tabs [role=tab]')).find(n=>n.textContent.trim()==='Программа');if(!tab)throw Error('Programme settings group unavailable');tab.click();return true})()")
     evaluate(win,"(()=>{const about=Array.from(document.querySelectorAll('nav a')).find(a=>a.textContent.trim()==='О программе');if(about)about.click();return true})()")
     evaluate(win,"document.getElementById('update-reopen-hint').scrollIntoView({block:'center'});true")
     def current():
@@ -92,5 +93,13 @@ if MODE=='create':
         return result
     first_start_window.FirstStartWindow.invoke=invoke
     raise SystemExit(first_start_window.main(ROOT,places=posix_first_start.Places(DATA),flow=posix_first_start))
-elif MODE=='warning':raise SystemExit(python_app.main(['--root',str(ROOT)]))
+elif MODE=='warning':
+    # A new sealed-archive warning-only run needs one disposable paused profile.
+    # No relay/provider login or first-start GUI is repeated for this fixture.
+    if not posix_first_start.agent_exists(DATA):
+        places=posix_first_start.Places(DATA);posix_first_start.prepare(ROOT,places=places)
+        posix_first_start.create_agent(ROOT,{'name':NAME,'owner':OWNER,'provider':'openai','model':'fixture-unused',
+            'key':'fixture-unused','base_url':'http://127.0.0.1:9/v1','soul':{'kind':'text','text':TEXT}},places=places)
+        owner_stop.change_pause(DATA,True,reason='Warning-only disposable fixture remains paused',via='fixture')
+    raise SystemExit(python_app.main(['--root',str(ROOT)]))
 else:raise ValueError(MODE)
