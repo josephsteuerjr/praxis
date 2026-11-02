@@ -243,15 +243,27 @@ def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None,
             for key in ('TEMP','TMP','TMPDIR'):os.environ[key]=str(temporary)
             tempfile.tempdir=str(temporary)
             _write_fence(sandbox, report)
-        if python_sdk:
-            sdk=Path(python_sdk).resolve()
-            expected=Path(sys.executable).resolve().parent/'Lib/site-packages'
-            if (not sandbox or sdk!=expected or not sdk.is_relative_to(Path(sandbox).resolve())
-                    or not sdk.is_dir() or not sys.flags.no_site):
-                raise ValueError('Unbound private verification Python SDK')
-            # The trusted adapter installs its write fence before any candidate
-            # startup hook can run. Only the exact copied SDK is added here.
-            sys.path.append(str(sdk))
+        if python_sdk and not sandbox:raise ValueError('Unbound private verification Python SDK')
+        if sandbox:
+            if not sys.flags.isolated or not sys.flags.no_site:
+                raise ValueError('Verification adapter requires isolated startup without site')
+            if python_sdk:
+                sdk=Path(python_sdk).resolve()
+                expected=Path(sys.executable).resolve().parent/'Lib/site-packages'
+                if (sdk!=expected or not sdk.is_relative_to(Path(sandbox).resolve()) or not sdk.is_dir()):
+                    raise ValueError('Unbound private verification Python SDK')
+                # Windows uses the exact private, post-checked SDK copy.
+                sys.path.append(str(sdk))
+            else:
+                # POSIX uses its qualified runtime directly. -S suppresses site
+                # hooks; admit only SDK directories derived from that prefix,
+                # after the write fence, without processing .pth/user site.
+                import site
+                prefix=Path(sys.prefix).resolve()
+                for location in site.getsitepackages([str(prefix)]):
+                    sdk=Path(location).resolve()
+                    if not sdk.is_relative_to(prefix):raise ValueError('Runtime SDK leaves its qualified prefix')
+                    if sdk.is_dir() and str(sdk) not in sys.path:sys.path.append(str(sdk))
             # -I keeps candidate PYTHONPATH out of the adapter's startup
             # imports. Admit those paths only now, after the fence exists.
             candidate_paths=[]
@@ -261,9 +273,8 @@ def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None,
                     raise ValueError('Candidate import path leaves isolated verification work')
                 candidate_paths.append(str(path.resolve()))
             sys.path[:0]=candidate_paths
-            # The Windows edition normally installs its own LF/loopback port
-            # hook at startup. Keep that candidate behavior, but execute it
-            # only after the trusted adapter's fence has been installed.
+            # Keep the edition's own LF/loopback/network port hook, but execute
+            # candidate code only after the trusted fence on every platform.
             tree=Path(os.environ.get('HELENE_TREE_SRC',''))
             if not tree.is_absolute() or str(tree.resolve()) not in candidate_paths:
                 raise ValueError('Candidate startup tree is not an admitted import path')

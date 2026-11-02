@@ -390,11 +390,9 @@ def _run_lane(lane, repository, runner, tools, env, cache, stopped, native_input
     commands = []
     if kind in {'unittest', 'unittest-file', 'pytest-file'}:
         env=dict(env,HELENE_TEST_NODE=tools.get('node') or '',HELENE_TEST_NPM=tools.get('npm') or '')
-        command = [tools['python'], '-B', '-s', str(runner), '--root', str(root), '--report', str(observation),
+        command = [tools['python'], '-I', '-S', '-B', '-s', str(runner), '--root', str(root), '--report', str(observation),
                    '--lock', str(cache / 'executor-lock.json'), '--sandbox', str(repository.parent)]
         if env.get('HELENE_VERIFICATION_PYTHON_SDK'):
-            command.insert(1,'-S')
-            command.insert(1,'-I')
             command+=['--python-sdk',env['HELENE_VERIFICATION_PYTHON_SDK']]
         if env.get('HELENE_VERIFICATION_DEPENDENCIES'):
             command += ['--dependencies', env['HELENE_VERIFICATION_DEPENDENCIES']]
