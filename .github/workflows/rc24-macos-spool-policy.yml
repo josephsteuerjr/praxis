@@ -1,0 +1,47 @@
+name: Hélène RC24 final Spool unit and native policy binding
+on:
+  push:
+    branches: [codex/rc23-macos-0211]
+    paths: [.github/workflows/rc24-macos-spool-policy.yml, desk/tests/rc24_spool_source_qa.py, desk/tests/rc24_spool_policy_expected.json]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  spool-policy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      RC24_LANE: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: qa
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: 3b4341021db54486868a2966a4938e4672812455
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
+          fail-on-cache-miss: true
+      - name: Restore exact qualified Runtime without rebuilding or downloading payloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13109203623/zip > "$RUNNER_TEMP/owner-ux-sealed-evidence.zip"
+      - name: One pure SQLite Spool case and native Darwin policy facts
+        run: python3 qa/desk/tests/rc24_spool_source_qa.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc24-spool-${{ matrix.os }}-evidence
+          path: evidence-rc24-spool-${{ matrix.os }}/
