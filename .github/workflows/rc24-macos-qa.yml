@@ -34,6 +34,7 @@ jobs:
         run: |
           gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
           gh api repos/josephsteuerjr/praxis/actions/artifacts/13109203623/zip > "$RUNNER_TEMP/owner-ux-sealed-evidence.zip"
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13115916613/zip > "$RUNNER_TEMP/rc24-prior-focused.zip"
       - name: Assemble frozen RC24 with exact qualified native bytes and affected contracts only
         run: python3 qa/desk/tests/rc24_macos_qa.py prepare
       - uses: actions/upload-artifact@v4

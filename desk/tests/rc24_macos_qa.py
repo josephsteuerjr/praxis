@@ -60,10 +60,28 @@ def focused():
                 cases.extend(t.id() for t in unittest.defaultTestLoader.loadTestsFromTestCase(cls))
     cases.append('tests.t_source_update_hand_3010.HandTransport.test_actual_legacy_client_process_reuses_three_calls_without_cli_or_runtime_rechecks')
     assert len(cases)==len(set(cases))
+    retained=[];previous=TEMP/'rc24-prior-focused.zip'
+    if os.environ['RC24_LANE']=='15' and previous.is_file():
+        assert digest(previous)=='f998db3b8c3edd9d4767528713daf30e7aee895d17cfe343d90db05da4de8705'
+        with zipfile.ZipFile(previous) as z:
+            assert z.testzip() is None
+            subject=json.loads(z.read('SUBJECT-SOURCE.json'));current=json.loads((OUT/'SUBJECT-SOURCE.json').read_text())
+            assert subject['commit']==current['commit']==COMMIT and subject['files']==current['files']
+            report=json.loads(z.read('TARGETED-PYTHON.json'))
+            assert {r['id'] for r in report['outcomes']}==set(cases)
+            for row in report['outcomes']:
+                if row['passed']:
+                    (OUT/row['log']).write_bytes(z.read(row['log']));retained.append({**row,'retained_from_run':41387562900})
+            (OUT/'PRIOR-TARGETED-PYTHON.json').write_bytes(z.read('TARGETED-PYTHON.json'))
+        save('RETAINED-FOCUSED.json',{'exact_frozen_source_manifest':True,'prior_run':41387562900,
+            'retained_passed':len(retained),'only_previous_failed_case_repeated':True,
+            'prior_RED':'External runner omitted composed core from PYTHONPATH; command_process import failed before the actual child scenario.'})
+    pending=[c for c in cases if c not in {r['id'] for r in retained}]
     def execute(case):
         work=TEMP/'rc24-targeted'/case;work.mkdir(parents=True)
         env=dict(os.environ,HOME=str(work),CFFIXED_USER_HOME=str(work),TMPDIR=str(work),
-            PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1')
+            PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1',
+            PYTHONPATH=os.pathsep.join(map(str,(REPO/'helene/core',REPO/'praxis'))))
         start=time.monotonic();log=OUT/(case+'.log')
         with log.open('wb') as stream:
             p=subprocess.run([sys.executable,'-B','-m','unittest',case,'-v'],cwd=REPO/'desk',env=env,
@@ -71,7 +89,7 @@ def focused():
         text=log.read_text(errors='replace')
         return {'id':case,'exit':p.returncode,'seconds':time.monotonic()-start,'log':log.name,
             'passed':p.returncode==0 and 'Ran 1 test' in text and 'skipped' not in text.lower()}
-    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:rows=list(pool.map(execute,cases))
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:rows=retained+list(pool.map(execute,pending))
     report={'source_commit':COMMIT,'platform':sys.platform,'macos':subprocess.check_output(['sw_vers','-productVersion'],text=True).strip(),
         'unique':len(cases),'workers':os.cpu_count(),'outcomes':rows,'passed':all(r['passed'] for r in rows),
         'scope':'Affected scheduler, Stop/Pause, source-hand custody/real legacy HTTP, executor layout/cache and packer units only; prior broad RED retained.'}
