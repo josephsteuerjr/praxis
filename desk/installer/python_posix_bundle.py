@@ -154,7 +154,7 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
         if binary:
             shutil.copy2(binary,output/name);(output/name).chmod(0o755)
     (output/'python-app.json').write_text(json.dumps({'format':'helene-python-app.v1','version':version,
-        'entry':'app/python_app.py','window':'pywebview','target':target,'local_candidate':'-rc.' in version,
+        'entry':'app/python_app.py','window':'pywebview','target':target,'local_candidate':re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) is None,
         'native_inputs':{'relay':bool(relay),'body':bool(body),'bridge':bool(bridge)},
         'qualification':'Native GUI/custody/update require platform consumer evidence',
         'extensions':{n:{'default':False,'available':n not in manifest.get('unavailable',{})} for n in sorted(component_downloads.EXTENSIONS)}},indent=2),encoding='utf-8')
