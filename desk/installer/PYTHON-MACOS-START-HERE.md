@@ -1,4 +1,4 @@
-# Hélène 2.3.0 RC23 for Apple silicon
+# Hélène 2.3.0 for Apple silicon
 
 Unpack the complete archive into a permanent writable folder and open
 **Helene.app** inside it. Python, the interface and the agent code are included.
@@ -6,7 +6,8 @@ Do not move Helene.app out of the surrounding Helene folder. No system service,
 administrator installation, Tauri shell or global Python installation is used.
 
 The first window creates an agent or connects an existing data folder. The new
-profile defaults to **~/Helene**, outside the program folder. API connections do
+profile defaults to **~/Helene**, outside the program folder. For a new agent,
+choose the Hélène constitution or your own editable text or file. API connections do
 not install a relay. Choosing a ChatGPT subscription installs the separate pinned
 MIT praxis-relay component, then opens its sign-in settings. The agent remains
 paused until you sign in and explicitly continue it.
@@ -20,7 +21,9 @@ temporary automatic tunnel addresses can change.
 Use the application's update controls to preserve authored changes or choose
 clean code with the current profile. An interrupted update has a recovery path;
 retain its receipts until startup is confirmed. Connecting another data folder
-does not delete the previous one.
+does not delete the previous one. During an update, the window can close for
+several minutes and reopen automatically. Do not launch a second copy while
+the update is running.
 
 Source-preserving updates and native patch operations require Git on PATH.
 The base archive does not bundle Git. Check `git --version` before using those
@@ -40,6 +43,6 @@ unavailable until a qualified Mac runtime/model pack is supplied; existing voice
 installations are retained. Component terms and the base native
 dependency attribution texts are under **licenses/**; Python dependency licenses
 remain beside their packages in **runtime/**. The application bundle is signed
-ad hoc for this candidate, without Apple notarization. Native CI evidence does
+ad hoc for this distribution, without Apple notarization. Native CI evidence does
 not replace acceptance of microphone, screen recording and Accessibility
 permissions on the owner's Mac.

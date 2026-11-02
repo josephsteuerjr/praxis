@@ -1,3 +1,21 @@
+# 2.3.0
+
+Portable Python desktop archives for Windows x64, Apple silicon, Debian/Ubuntu
+and Fedora x86_64. Durable updates remain owned by the host when the observing
+window closes. Preserved source uses conflict resolution, checks and independent
+review; clean mode selects verified release code while retaining the profile.
+
+New agents can use the Hélène constitution or editable custom text/file. The
+explicit Create action materializes the first SOUL before provider sign-in,
+preserves existing agents, and refuses ambiguous rebirth after lost data.
+The window explains automatic reopening before an update closes it. Cancellation
+settles only the identified operation after its producers are confirmed absent.
+
+Native runtime/tool identities and source/package inventories are independently
+bound. Optional voice payloads retain their existing immutable release pins.
+Full historical broad-test and physical-device acceptance remain separate from
+the platform evidence supplied with the release.
+
 # 2.3.0-rc.4
 
 Keep an incoming Python window available during legacy handoff. Confirm the cold runner's exact PID, source and heartbeat with cancellable startup waiting. Failed bootstrap releases its own workers and profile lease before allowing the legacy launcher to reopen. The migration window can explicitly stop RC3's identified failed heartbeat handoff without replaying or applying its saved work. Update review and apply gates remain in force.

@@ -1,4 +1,4 @@
-# Hélène for Linux
+# Hélène 2.3.0 for Linux
 
 Extract the complete archive to a permanent folder, then run `./helene` there.
 Python is included. Keep the executable permissions when extracting.

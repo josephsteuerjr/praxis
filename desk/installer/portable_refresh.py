@@ -179,7 +179,7 @@ def _metadata(p, source, core, origins, version, platform, donor_sha, front, bun
         value = p.value(name)
         if not isinstance(value, dict):
             raise ValueError('Missing distribution carrier: ' + name)
-        value.update(version=version, local_candidate=True)
+        value.update(version=version, local_candidate='-rc.' in version)
         if name == 'python-app.json':
             value.update(delivery='portable', verification_bundle_sha256=bundle_sha)
         p.put_value(name, value)

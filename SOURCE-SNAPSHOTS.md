@@ -1,4 +1,21 @@
-# Hélène 2.2.9 source and package bindings
+# Hélène source and package bindings
+
+The 2.3.0 delivery uses one frozen source composition: current `praxis/`, the
+explicit `helene/core/` overlay and current `desk/`. Its source ZIP binds the raw
+Git files and executable modes. Each platform archive carries its actual
+application/core inventories and version-bound verification material. Match
+those inventories and the release evidence; a common version label alone does
+not prove equal source or native inputs.
+
+The records below describe historical 2.2.9 deliveries. Their immutable tags,
+digests and older voice references are provenance, not the current 2.3.0 source
+selection. `HELENE-SOURCE.json` and `helene/PLATFORM-SOURCE.json` are retained as
+historical inputs; current composition inventories are generated for each new
+archive.
+
+## Historical 2.2.9 bindings
+
+### Hélène 2.2.9 source and package bindings
 
 Implementation `f043cb73cebaea40778d8f445762247d00fd8f27`; qualified package/runtime base2.2.4 `63682382f50c0031f791fd31760502a0fd4d2dd9`. Platform snapshots are immutable tags.
 

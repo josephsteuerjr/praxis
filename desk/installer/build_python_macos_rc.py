@@ -1,4 +1,4 @@
-"""Native Python macOS candidate from a hash-bound reusable runtime input.
+"""Native Python macOS distribution from a hash-bound reusable runtime input.
 
 No legacy build_mac invocation, compiler toolchain, system service or release
 mutation. The small Cocoa interpreter launcher is reused as an OS organ; all
@@ -13,7 +13,7 @@ from python_posix_bundle import assemble,normalize_output_modes
 from localharness import app_components
 from localharness.python_platform import runtime_target
 
-VERSION='2.3.0-rc.23'
+VERSION='2.3.0'
 # Last successful native Python distribution from public CI 40233694345.
 EVIDENCE_SHA256='6eb05a4b19951fa9cc27caaca36de0024a5e73fcb5982503798f98959ddc1b91'
 

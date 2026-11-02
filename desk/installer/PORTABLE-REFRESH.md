@@ -35,7 +35,7 @@ choose `windows`, `macos`, `debian`, or `fedora` explicitly.
 ```text
 python desk/installer/portable_refresh.py build-frontends --source SOURCE --receipt NEW-frontends.json
 
-python desk/installer/portable_refresh.py refresh --source SOURCE --donor PINNED17.zip --expected-sha256 DONOR_SHA --platform windows --version 2.3.0-rc.1 --frontend-receipt NEW-frontends.json --verification-bundle BUNDLE --verification-sha256 MANIFEST_SHA --report NEW-plan.json
+python desk/installer/portable_refresh.py refresh --source SOURCE --donor PINNED17.zip --expected-sha256 DONOR_SHA --platform windows --version 2.3.0 --frontend-receipt NEW-frontends.json --verification-bundle BUNDLE --verification-sha256 MANIFEST_SHA --report NEW-plan.json
 ```
 
 Planning does not extract a runtime or write a package. It streams donor bytes to
@@ -43,7 +43,7 @@ regenerate inventories; budget I/O accordingly. Read the plan, then run the same
 arguments **with a different report path**, plus:
 
 ```text
---output NEW-Helene-2.3.0-rc.1.zip --expect-plan PLAN_SHA --report NEW-build.json
+--output NEW-Helene-2.3.0.zip --expect-plan PLAN_SHA --report NEW-build.json
 ```
 
 `PLAN_SHA` is the top-level `sha256` in `NEW-plan.json`. Any source/build/bundle

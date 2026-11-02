@@ -154,9 +154,9 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
         if binary:
             shutil.copy2(binary,output/name);(output/name).chmod(0o755)
     (output/'python-app.json').write_text(json.dumps({'format':'helene-python-app.v1','version':version,
-        'entry':'app/python_app.py','window':'pywebview','target':target,'local_candidate':True,
+        'entry':'app/python_app.py','window':'pywebview','target':target,'local_candidate':'-rc.' in version,
         'native_inputs':{'relay':bool(relay),'body':bool(body),'bridge':bool(bridge)},
-        'qualification':'Private candidate; native GUI/custody/update require platform consumer evidence',
+        'qualification':'Native GUI/custody/update require platform consumer evidence',
         'extensions':{n:{'default':False,'available':n not in manifest.get('unavailable',{})} for n in sorted(component_downloads.EXTENSIONS)}},indent=2),encoding='utf-8')
     (output/'helene-build.json').write_text(json.dumps({'format':'helene-python-version.v1','product':'Hélène','version':version,'platform':target,'version_source':'python-app.json'}),encoding='utf-8')
     cfg={'mode':'local','tree':'data','code':'tree','python':'runtime/bin/python3','app':'app/deskapp.py',

@@ -12,8 +12,9 @@ need Git, a compiler or a separate Python installation to start.
 | Debian/Ubuntu x86_64 | `Helene-…-linux-x86_64.zip` | `Start Helene.sh` |
 | Fedora x86_64 | `Helene-…-fedora-x86_64.zip` | `Start Helene.sh` |
 
-The first window helps you create an agent or connect your existing data. Choose
-a permanent program folder, then configure your model provider. Local voice is
+The first window helps you create an agent or connect your existing data. A new
+agent can start with the Hélène constitution or your own editable text or file.
+Choose a permanent program folder, then configure your model provider. Local voice is
 optional. Files named `SHA256SUMS` and `release-evidence` are verification
 material; download the application archive for your system.
 
@@ -45,11 +46,13 @@ existing data folder, or migrate an old installation. It hands the work to the
 host; the mechanical switch confirms the new program's startup or rolls back.
 See [Update and migration ownership](desk/docs/UPDATE-SESSION-HOST-230.md).
 
-Updates and migration install clean release code. Memory, conversations,
-settings and keys stay with the selected data folders. Previous program edits
-and Git history are discarded after the new application confirms startup;
-automatic source archives are not kept. If you developed custom program code,
-make your own backup before starting. That code is separate from agent data.
+Updates offer preserved source with conflict resolution, checks and independent
+review, or clean release code. Memory, conversations, settings and keys stay
+with the selected data folders. Legacy migration follows its explicit preview;
+program code and agent data have separate ownership.
+
+During an update the window can close for several minutes. Hélène opens it
+again automatically; do not launch another copy while the update is running.
 
 Desktop archives run as your logged-in user: no `su` or root desktop session
 is needed.
