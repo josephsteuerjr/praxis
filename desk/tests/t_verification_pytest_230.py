@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,10 +18,17 @@ class PytestCoverage(unittest.TestCase):
         self.assertEqual(bundle.python_framework(source),'pytest')
         with tempfile.TemporaryDirectory(prefix='helene-pytest-consumer-') as tmp:
             work=Path(tmp);report=work/'cases.json'
-            done=subprocess.run([sys.executable,'-B',str(desk/'localharness/source_verification_runner.py'),
-                '--root',str(desk),'--source',str(source),'--framework','pytest','--report',str(report),'--sandbox',str(work)],
+            localdesk=work/'repository/desk';core=work/'repository/live';core.mkdir(parents=True)
+            # The nested adapter owns its inputs and startup paths, rather than
+            # borrowing the enclosing lane's broader writable/import scope.
+            for relative in ('tests/test_python_package_version.py','localharness/package_notice.py','localharness/runner.py'):
+                target=localdesk/relative;target.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(desk/relative,target)
+            env=battery._environment(work/'home',core,localdesk)
+            done=subprocess.run([sys.executable,'-I','-S','-B',str(desk/'localharness/source_verification_runner.py'),
+                '--root',str(localdesk),'--source',str(localdesk/'tests'/source.name),'--framework','pytest','--report',str(report),'--sandbox',str(work)],
                 capture_output=True,text=True,encoding='utf8',timeout=60,
-                env=dict(os.environ,PYTHONDONTWRITEBYTECODE='1'),creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                env=env,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
             self.assertEqual(done.returncode,0,done.stdout+'\n'+done.stderr)
             value=json.loads(report.read_text(encoding='utf8'))
         self.assertEqual(len(value['collected']),3)

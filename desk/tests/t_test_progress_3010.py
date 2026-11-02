@@ -2,7 +2,7 @@
 import ast,hashlib,json,os,subprocess,sys,tempfile,time,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from localharness import source_update_parallel as parallel
+from localharness import source_update_parallel as parallel,source_update_battery as battery
 from localharness.package_notice import read,write
 
 
@@ -24,9 +24,10 @@ class Cases(unittest.TestCase):
             source.write_text(body,encoding='utf8')
             methods=[node.name for node in ast.walk(ast.parse(body)) if isinstance(node,ast.FunctionDef) and node.name.startswith('test_')]
             adapter=Path(__file__).resolve().parents[1]/'localharness/source_verification_runner.py'
-            env=dict(os.environ,PROGRESS_STARTED=str(started),PROGRESS_RELEASE=str(release),PYTHONDONTWRITEBYTECODE='1')
+            env=battery._environment(private/'home',root,root)
+            env.update(PROGRESS_STARTED=str(started),PROGRESS_RELEASE=str(release))
             with (base/'child.log').open('wb') as log:
-                child=subprocess.Popen([sys.executable,'-B',str(adapter),'--root',str(root),'--source',str(source),
+                child=subprocess.Popen([sys.executable,'-I','-S','-B',str(adapter),'--root',str(root),'--source',str(source),
                     '--report',str(report),'--sandbox',str(private)],env=env,stdout=log,stderr=subprocess.STDOUT,
                     creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
                 try:

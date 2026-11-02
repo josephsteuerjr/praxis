@@ -196,11 +196,12 @@ class AuditDirectoryDescriptors(unittest.TestCase):
                 "   (p/'leaf').write_text('x');shutil.rmtree(p.parent)\n"
                 "   self.assertFalse(p.parent.exists())\n", encoding='utf8')
             report = base / 'report.json'
-            done = subprocess.run([sys.executable, '-B', str(RUNNER),
+            done = subprocess.run([sys.executable, '-I', '-S', '-B', str(RUNNER),
                 '--root', str(work), '--source', str(source),
                 '--sandbox', str(work), '--report', str(report)],
                 cwd=base, capture_output=True, text=True, encoding='utf8',
-                env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1'),
+                env=dict(os.environ, PYTHONDONTWRITEBYTECODE='1',
+                    PYTHONPATH=str(work), HELENE_TREE_SRC=str(work), HELENE_TEST_SOURCE_ROOT=str(work)),
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             self.assertEqual(done.returncode, 0, done.stdout + '\n' + done.stderr)
             value = json.loads(report.read_text(encoding='utf8'))

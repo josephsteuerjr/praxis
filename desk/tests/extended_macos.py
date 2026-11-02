@@ -70,12 +70,12 @@ def broad():
         env=dict(os.environ,HOME=str(home),CFFIXED_USER_HOME=str(home),USERPROFILE=str(home),TMPDIR=str(home),TMP=str(home),TEMP=str(home),
             PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1',PRAXIS_TEST='1',HELENE_BODY_DIR=str(program),
             HELENE_TEST_SOURCE_ROOT=str(source),HELENE_TREE_SRC=str(localcore),PRAXIS_TEST_FORGE_PROCESS='1',
-            PYTHONPATH=os.pathsep.join([str(deps),str(localcore),str(localdesk),str(localdesk/'localharness')]))
+            PYTHONPATH=os.pathsep.join([str(localcore),str(localdesk),str(localdesk/'localharness')]))
         result=EVIDENCE/'reports'/(identity+'.json');result.parent.mkdir(exist_ok=True)
         if row.get('script'):command=[python,'-B',source/row['script'].relative_to(REPO)]
         else:
             root=localcore if row['root']==core else localdesk
-            command=[python,'-B',runner,'--root',root,'--report',result,'--sandbox',home,'--dependencies',deps]
+            command=[python,'-I','-S','-B',runner,'--root',root,'--report',result,'--sandbox',home,'--dependencies',deps]
             if row.get('source'):
                 original=row['source'];relative=original.relative_to(core) if original.is_relative_to(core) else original.relative_to(REPO/'desk')
                 command+=['--source',root/relative,'--framework',row['framework']]
