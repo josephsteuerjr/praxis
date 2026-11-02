@@ -134,7 +134,10 @@ def _write_fence(root, report):
     executor. A denied write is a real test error, never a permitted skip.
     """
     root = Path(root).resolve()
-    report = Path(report).resolve()
+    # Tests may simulate os.name. Path's dynamic factory must not switch the
+    # real executor's filesystem while this installed audit floor is active.
+    NativePath = type(root)
+    report = NativePath(report).resolve()
     # CPython audit_events: each *at operation carries its own dir_fd slot.
     # Resolve the live descriptor, not a cached name or the process cwd. Darwin
     # has no /proc; F_GETPATH=50 is its public fcntl(2) ABI (sys/fcntl.h).
@@ -151,14 +154,14 @@ def _write_fence(root, report):
                 name = os.fsdecode(fcntl.fcntl(fd, getattr(fcntl, 'F_GETPATH', 50), b'\0' * 1024).split(b'\0', 1)[0])
             else:
                 raise OSError('descriptor paths unsupported on this executor')
-            base = Path(name)
+            base = NativePath(name)
             if not base.is_absolute() or not os.path.samestat(opened, base.stat()):
                 raise OSError('descriptor path identity unavailable')
             return base
         except OSError as exc:
             raise PermissionError('Verification directory descriptor unresolved: ' + str(fd)) from exc
     def resolved(path, dir_fd=None, *, entry=False):
-        p = Path(os.fsdecode(path))
+        p = NativePath(os.fsdecode(path))
         if not p.is_absolute() and dir_fd not in (None, -1):
             p = directory(dir_fd) / p
         # unlink/rmdir mutate the directory entry, not its symlink target.
@@ -171,7 +174,7 @@ def _write_fence(root, report):
         if isinstance(path, int) or path is None:
             return
         p = resolved(path, dir_fd,entry=entry)
-        if p not in {Path(os.devnull).resolve(), report} and not p.is_relative_to(root):
+        if p not in {NativePath(os.devnull).resolve(), report} and not p.is_relative_to(root):
             raise PermissionError('Verification write outside isolated work: ' + str(p))
     def audit(event, args):
         if event == 'open':

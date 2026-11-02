@@ -44,6 +44,22 @@ if scenario=='common':
     os.mkdir('sub');os.rmdir('sub');os.unlink('relative')
     assert (root/'absolute').read_text()=='yes'
     assert not (outside/'forbidden').exists()
+elif scenario=='platform-mock':
+    from unittest import mock
+    NativePath=type(root)
+    os.chdir(root)
+    module._write_fence(root,report)
+    fake_platform='posix' if os.name=='nt' else 'nt'
+    with mock.patch.object(os,'name',fake_platform):
+        NativePath('relative').write_text('yes')
+        (root/'absolute').write_text('yes')
+        report.write_text('report allowed')
+        denied(lambda:(outside/'forbidden').write_text('no'))
+        denied(lambda:os.mkdir(outside/'forbidden-dir'))
+        os.mkdir('sub');os.rmdir('sub');os.unlink('relative')
+    assert (root/'absolute').read_text()=='yes'
+    assert not (outside/'forbidden').exists()
+    assert not (outside/'forbidden-dir').exists()
 elif os.name!='posix':
     os.chdir(root)
     module._write_fence(root,report)
@@ -194,6 +210,9 @@ class AuditDirectoryDescriptors(unittest.TestCase):
             self.assertEqual(value['collected'], value['executed'])
             self.assertEqual(value['tests_run'], 1)
             self.assertEqual([row['status'] for row in value['outcomes']], ['passed'])
+
+    def test_mocked_platform_keeps_native_paths_and_outside_write_refusal(self):
+        self.check('platform-mock')
 
     def test_default_absolute_fd_nullsink_report_and_outside_floor(self):
         self.check('common')

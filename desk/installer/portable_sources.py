@@ -84,8 +84,14 @@ def identities(entries):
     return {n: e.identity() for n, e in sorted(entries.items())}
 
 
-def sealed(root):
+def sealed(root,*,max_file_bytes=32*1024*1024,max_bytes=512*1024*1024,expected_files=None):
     """Read a manifest-sealed artifact, including legitimate test soul/lock fixtures."""
+    if (type(max_file_bytes) is not int or type(max_bytes) is not int
+            or not 0<max_file_bytes<=max_bytes<=512*1024*1024):
+        raise ValueError('Invalid sealed artifact byte budget')
+    if expected_files is not None:
+        expected_files=frozenset(expected_files)
+        for name in expected_files:relative(name)
     root = Path(root)
     if not root.is_dir() or linked(root):
         raise ValueError('Sealed artifact directory unavailable')
@@ -97,11 +103,13 @@ def sealed(root):
             relative(path.relative_to(root).as_posix())
             if linked(path):
                 raise ValueError('Linked sealed artifact input')
+        if expected_files is not None and any((here/name).relative_to(root).as_posix() not in expected_files for name in names):
+            raise ValueError('Sealed artifact has undeclared files')
         for name in sorted(names):
             path = here / name
             size = path.stat().st_size
             total += size
-            if not path.is_file() or size > 32 * 1024 * 1024 or total > 512 * 1024 * 1024:
+            if not path.is_file() or size>max_file_bytes or total>max_bytes:
                 raise ValueError('Sealed source artifact exceeds byte budget')
             executable = '100755' if os.name != 'nt' and path.stat().st_mode & 0o111 else '100644'
             entries[path.relative_to(root).as_posix()] = Entry(path.read_bytes(), executable)

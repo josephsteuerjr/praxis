@@ -63,6 +63,13 @@ def _tree_inventory(package, prefix):
             if n.startswith(prefix) and not n.endswith('/')}
 
 
+def _sealed_declared(root,sizes):
+    """Exact manifest sizes bound this read; the512MiB artifact ceiling remains."""
+    if not sizes or any(type(size) is not int or size<0 for size in sizes.values()):
+        raise ValueError('Invalid declared sealed file sizes')
+    return sealed(root,max_file_bytes=max(1,max(sizes.values())),max_bytes=max(1,sum(sizes.values())),expected_files=sizes)
+
+
 def _bundle(root, expected, version):
     root = Path(root)
     if digest(root / 'manifest.json') != expected:
@@ -72,13 +79,19 @@ def _bundle(root, expected, version):
         raise ValueError('Verification bundle version/format mismatch')
     # The published bundle's own loader owns full lane completeness. Packaging
     # binds exact manifest/repository/runner bytes without executing source code.
-    entries = sealed(root)
-    expected_names = {'manifest.json'}
     groups = [('repository', value.get('files')), ('runner', value.get('runners'))]
     for platform, dependency in value.get('dependencies', {}).items():
         if platform not in ('win32', 'linux', 'darwin'):
             raise ValueError('Invalid verification dependency platform')
         groups.append(('dependencies/' + platform, dependency.get('files')))
+    sizes={'manifest.json':(root/'manifest.json').stat().st_size}
+    for folder,rows in groups:
+        if not isinstance(rows,dict) or not rows:raise ValueError('Verification bundle sources/runner missing')
+        for name,row in rows.items():
+            relative(name)
+            sizes[folder+'/'+name]=row.get('size') if isinstance(row,dict) else None
+    entries=_sealed_declared(root,sizes)
+    expected_names=set(sizes)
     for folder, rows in groups:
         if not isinstance(rows, dict) or not rows:
             raise ValueError('Verification bundle sources/runner missing')
@@ -108,9 +121,10 @@ def _verification_tools(package, bundle, platform, root=None):
     if row.get('root')!='verification-tools' or row.get('tools')!=expected or row.get('npm_cache')!='cache':
         raise ValueError('Unsupported native verification tool declaration')
     prefix=PREFIX+'verification-tools/'
-    entries=(sealed(root) if root is not None else
-             {name[len(prefix):]:package.get(name) for name in package.names() if name.startswith(prefix) and not name.endswith('/')})
     files=row.get('files',{})
+    if not isinstance(files,dict) or not files:raise ValueError('Native verification tool inventory is missing')
+    entries=(_sealed_declared(root,{name:value.get('size') if isinstance(value,dict) else None for name,value in files.items()}) if root is not None else
+             {name[len(prefix):]:package.get(name) for name in package.names() if name.startswith(prefix) and not name.endswith('/')})
     if not files or set(entries)!=set(files):raise ValueError('Native verification tools differ from the manifest')
     locks=manifest.get('executor_locks',{}).get(native,{}).get('tools',{})
     for tool,name in expected.items():

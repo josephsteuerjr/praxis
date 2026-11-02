@@ -100,7 +100,7 @@ class GlmEffortWireTests(unittest.TestCase):
             print("wire-create-and-stream-ok")
         ''')
         result = subprocess.run(
-            [sys.executable, "-I", "-c", script, str(Path(__file__).resolve().parent)],
+            [sys.executable, "-I", "-B", "-c", script, str(Path(__file__).resolve().parent)],
             capture_output=True, text=True, timeout=30,
             cwd=Path(__file__).resolve().parent,
         )

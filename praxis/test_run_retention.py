@@ -701,6 +701,10 @@ class TestInventory(RetentionFixture):
                          "open_evidence_state_unreadable")
 
     def test_bad_open_evidence_state_fails_closed_for_all_candidates(self):
+        if not rr._SAFE_OPENAT_SUPPORTED:
+            with self.assertRaisesRegex(rr.ContractError, "POSIX openat/no-follow support"):
+                self.inventory()
+            return
         self.create_run("run-old")
         desires = self.base / "memory/desires"
         desires.mkdir(parents=True)
