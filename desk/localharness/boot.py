@@ -20,9 +20,11 @@ Telegram, поднятые рычаги), и локальный харнесс �
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
 import hashlib
 import json
 import logging
+import math
 import os
 import sys
 import platform
@@ -918,6 +920,7 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
 # пишет отдельный поток.
 _LOCK_FRESH_SEC = 180.0
 _LOCK: dict = {"path": None, "token": ""}
+_BIRTH_CUSTODY = threading.Lock()
 
 
 def tree_lock_path(tree: Path) -> Path:
@@ -967,6 +970,19 @@ def _lock_is_live(holder: dict) -> bool:
     """Владелец замка жив? Сомнение — в пользу ЖИВОГО: два агента хуже, чем один."""
     if not holder:
         return False
+    if holder.get('role')=='explicit first-create':
+        # Component installation can outlast the legacy heartbeat TTL. This
+        # short-lived lease is tied to an actual process generation instead;
+        # an unknown or remote owner never becomes permission to take it.
+        import psutil
+        if holder.get('host')!=platform.node():return True
+        try:
+            pid=holder.get('pid');birth=holder.get('birth')
+            if type(pid) is not int or pid<=0 or type(birth) not in (int,float) or not math.isfinite(birth) or birth<=0:return True
+            process=psutil.Process(pid)
+            return process.create_time()==birth and process.status()!=psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:return False
+        except (psutil.Error,OSError,ValueError,OverflowError):return True
     try:
         pid = int(holder.get("pid") or 0)
         at = float(holder.get("at") or 0.0)
@@ -997,7 +1013,7 @@ def _lock_is_live(holder: dict) -> bool:
     return True
 
 
-def claim_tree(tree: Path, *, agent: str = "", role: str = "") -> dict:
+def claim_tree(tree: Path, *, agent: str = "", role: str = "", reclaim_stale: bool = True) -> dict:
     """Забрать дерево себе. -> {} наш; иначе снимок ЖИВОГО владельца замка.
 
     ⚠ Замок по ПОРТУ (оболочка, служба) закрывает только случай «порт занят».
@@ -1026,6 +1042,11 @@ def claim_tree(tree: Path, *, agent: str = "", role: str = "") -> dict:
             handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             holder = _read_lock(path)
+            # A creator may have just reserved this name but not written its
+            # JSON yet. Unknown is not a dead process. Explicit first birth
+            # also never reclaims a pre-existing record, including stale ones.
+            if not holder or not reclaim_stale:
+                return holder or {"pid": 0, "state": "identity-unknown"}
             if _lock_is_live(holder):
                 return holder
             if attempt == 2:
@@ -1080,6 +1101,28 @@ def release_tree() -> None:
             path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+@contextmanager
+def birth_custody(tree: Path):
+    """First Create must own a real tree lock; legacy fail-open is insufficient."""
+    with _BIRTH_CUSTODY:
+        if _LOCK['path'] is not None:
+            raise LayoutError('Этот процесс уже владеет деревом; новое рождение не начато')
+        if os.path.lexists(tree_lock_path(tree)):
+            raise LayoutError('Есть прежняя запись владения данными; первое создание не удаляет чужие или неопределённые замки')
+        busy=claim_tree(tree,role='explicit first-create',reclaim_stale=False)
+        try:
+            path=tree_lock_path(tree);holder=_read_lock(path)
+            if (busy or _LOCK['path']!=path or not _LOCK['token']
+                    or holder.get('token')!=_LOCK['token'] or holder.get('pid')!=os.getpid()):
+                raise LayoutError('Не подтверждено исключительное владение данными; первое создание не начато')
+            import psutil
+            from .vision_policy import _document, _write
+            holder['birth']=psutil.Process(os.getpid()).create_time()
+            _write(path,_document(holder),private=True)
+            yield
+        finally:release_tree()
 
 
 # --------------------------------------------------------------------------- #

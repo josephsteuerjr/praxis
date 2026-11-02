@@ -46,6 +46,30 @@ def bind_incoming(value,new):
         'program':value['program'],'incoming':str(Path(new).resolve())})
 
 
+def _incoming_stage_owned(value,staging):
+    """A retired old root cannot classify its now-running incoming folder.
+
+    This only admits inspection of that exact stage. It never settles a live
+    helper, coordinator, merger or reviewer and never authorizes deletion.
+    """
+    from .program_state import _plain
+    from .session_host import FORMAT,process_state
+    try:
+        identity=value.get('id');tree=value.get('tree');program=value.get('program')
+        if not all(isinstance(item,str) and item for item in (identity,tree,program)):return False
+        suffix=('recovery-' if value.get('operation')=='restore_upstream' else '')+identity
+        if staging.name not in ('Helene-update-'+suffix,'.helene-update-'+suffix):return False
+        incoming=_plain(staging/'Helene');profile=_plain(tree)
+        reference=read(incoming_reference(incoming))
+        if not isinstance(reference,dict) or reference!={'id':identity,'path':str(path(profile).resolve()),
+                'program':program,'incoming':str(incoming)}:return False
+        owner=read(profile/'memory/.control/desktop-session.json')
+        return (isinstance(owner,dict) and owner.get('format')==FORMAT and owner.get('state')=='running'
+            and isinstance(owner.get('generation'),str) and bool(owner['generation']) and owner.get('program')==str(incoming)
+            and owner.get('tree')==str(profile) and process_state(owner)=='alive')
+    except (OSError,ValueError,TypeError):return False
+
+
 def producers_pending(value):
     """Current-job custody only; a failed observation is never terminal."""
     from .session_host import process_state
@@ -56,8 +80,10 @@ def producers_pending(value):
     if value.get('staging'):
         staging=Path(value['staging']).resolve();program=Path(value['program']).resolve()
         from .program_state import staging_belongs
-        if not staging_belongs(program,staging):
+        incoming_owned=_incoming_stage_owned(value,staging)
+        if not incoming_owned and not staging_belongs(program,staging):
             return True,{**observations,'staging':'identity-unknown'}
+        if incoming_owned:observations['staging']='admitted-incoming-owner'
         record=read(staging/'Helene/code-transition-plan.json')
         for row in record.get('plans',[]):
             directory=Path(row['directory']);operation=read(directory/'pipeline.json')
@@ -125,6 +151,8 @@ def request(tree, action, *, source_mode=None, version='latest', reason='', owne
     with transaction(path(tree)):
         previous = settle_cancel(tree,status(tree))
         if previous.get('state')=='cancelled':_save(tree,previous)
+        if action=='cancel' and previous.get('state')=='cancelled' and previous.get('id')==identity:
+            return previous
         if action == 'plan':
             _admission_recovery(target)
             if previous.get('state') in ACTIVE:

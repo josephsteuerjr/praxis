@@ -1006,13 +1006,20 @@ def create_agent(root,values,*,places=None,progress=None):
 def _create_agent(root,values,*,places,progress=None):
     places=places or Places.current();root=plain(root)
     if not ready(root,places):raise ValueError('Сначала нужно завершить подготовку')
-    if agent_exists(places.data):raise ValueError('В этой папке уже есть агент')
+    from .boot import birth_custody
+    with birth_custody(plain(places.data)):
+        return _create_agent_locked(root,values,places=places,progress=progress)
+
+
+def _create_agent_locked(root,values,*,places,progress=None):
+    if not ready(root,places):raise ValueError('Сначала нужно завершить подготовку')
     name=str(values.get('name') or '').strip();owner=str(values.get('owner') or '').strip()
     provider=values.get('provider');model=str(values.get('model') or '').strip();key=str(values.get('key') or '').strip()
     if not name or not model or provider not in ('openai','anthropic','chatgpt'):
         raise ValueError('Введи имя агента и модель, выбери подключение')
     if provider!='chatgpt' and not key:raise ValueError('Введи ключ доступа к API')
-    config=load(root/'helene.json');config.update(setup_complete=True,agent={'name':name},owner={'name':owner})
+    previous=load(root/'helene.json');config=copy.deepcopy(previous)
+    config.update(setup_complete=True,agent={'name':name},owner={'name':owner})
     # Explicit birth choice lives with the profile, even while subscription
     # sign-in is pending and before the first runner has created soul/SOUL.md.
     # Legacy callers that omit this field retain their existing canonical path.
@@ -1026,6 +1033,11 @@ def _create_agent(root,values,*,places,progress=None):
         if seed is None:
             from .boot import soul_text
             seed=soul_text(config)
+    from . import boot,first_birth
+    if 'soul' not in values:seed=boot.initial_soul_seed(root/'helene.json',places.data)
+    choice=first_birth.intent(config,seed)
+    ticket=first_birth.admit(root,places.data,choice,
+        configured=previous.get('setup_complete') is True,has_agent=agent_exists(places.data))
     if provider=='chatgpt':
         import secrets
         from deskd.readers import RELAY_PORT_DEFAULT
@@ -1048,12 +1060,16 @@ def _create_agent(root,values,*,places,progress=None):
         config['model']={'framework':provider,'model':model,'key':key,
             'base_url':str(values.get('base_url') or ('https://api.anthropic.com' if provider=='anthropic' else 'https://api.openai.com/v1')).strip()}
     if seed is not None:
-        from .vision_policy import _write as atomic
-        atomic(plain(places.data/'memory/.state/soul-seed.md'),seed.encode('utf-8'),private=True)
+        if 'soul' in values:
+            from .vision_policy import _write as atomic
+            atomic(plain(places.data/'memory/.state/soul-seed.md'),seed.encode('utf-8'),private=True)
+    selected=boot.initial_soul_seed(root/'helene.json',places.data)
+    birth=first_birth.materialize(root,places.data,config,choice,ticket,selected)
     _write(root/'helene.json',config,private=True)
     _write(places.data/'memory/.control/profile-identity.json',{'format':'helene-profile-identity.v1',
         'id':uuid.uuid4().hex,'agent_name':name,'owner_name':owner})
     _write(places.data/'memory/.state/helene-profile.json',
            {key:value for key,value in config.items() if key not in ('tree','code','python','app','runner','port','installed')},private=True)
+    first_birth.published(root,birth)
     (root/'portable-program.json').unlink(missing_ok=True)
     return {'created':True,'name':name}
