@@ -60,5 +60,11 @@ class Constitution(unittest.TestCase):
         legacy=self.root/'soul-seed.md';legacy.write_bytes(b'\xef\xbb\xbflegacy birth\n')
         self.assertEqual(boot.initial_soul_seed(self.root/'helene.json',self.data),'legacy birth\n')
 
+    def test_a_damaged_birth_record_never_blocks_an_existing_live_constitution(self):
+        soul=self.data/'soul/SOUL.md';soul.parent.mkdir();soul.write_text('Living owner-authored constitution',encoding='utf-8')
+        self.seed.parent.mkdir(parents=True,exist_ok=True);self.seed.mkdir()
+        self.assertIsNone(boot.initial_soul_seed(self.root/'helene.json',self.data))
+        self.assertEqual(soul.read_text(encoding='utf-8'),'Living owner-authored constitution')
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

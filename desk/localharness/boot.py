@@ -165,6 +165,9 @@ def initial_soul_seed(config_path: Path, tree: Path) -> str | None:
             if not text.strip():raise ValueError('пустой текст')
             return text
         except (OSError,ValueError) as error:
+            if (tree/'soul/SOUL.md').is_file():
+                log.warning('запись рождения не читается (%s); существующая конституция сохранена: %s',seed,error)
+                return None
             raise LayoutError(f'Не удалось прочитать выбранную конституцию ({seed}): {error}') from error
     seed=config_path.with_name('soul-seed.md')
     try:return read_config_text(seed) if seed.is_file() else None
