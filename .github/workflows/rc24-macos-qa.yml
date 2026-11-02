@@ -1,0 +1,89 @@
+name: Hélène RC24 exact reuse and affected contracts
+on:
+  push:
+    branches: [codex/rc23-macos-0211]
+    paths: [.github/workflows/rc24-macos-qa.yml, desk/tests/rc24_macos_qa.py]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package15:
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      RC24_LANE: '15'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: qa
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: 61d984508fad19e1b0f95b77f92fde42ae18da45
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
+          fail-on-cache-miss: true
+      - name: Restore immutable qualified Mac inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13109203623/zip > "$RUNNER_TEMP/owner-ux-sealed-evidence.zip"
+      - name: Assemble frozen RC24 with exact qualified native bytes and affected contracts only
+        run: python3 qa/desk/tests/rc24_macos_qa.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc24-macos15-evidence
+          path: evidence-rc24-macos-15/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: helene-rc24-macos-candidate
+          path: |
+            ${{ runner.temp }}/rc24-output/*.zip
+            ${{ runner.temp }}/rc24-output/*.sha256
+            ${{ runner.temp }}/rc24-output/candidate.json
+  native26:
+    needs: package15
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      RC24_LANE: '26'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: qa
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          path: subject
+          ref: 61d984508fad19e1b0f95b77f92fde42ae18da45
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-baa533b05f4b63c6-v2
+          fail-on-cache-miss: true
+      - name: Restore immutable qualified Mac inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13105805715/zip > "$RUNNER_TEMP/current-rc23-evidence.zip"
+          gh api repos/josephsteuerjr/praxis/actions/artifacts/13109203623/zip > "$RUNNER_TEMP/owner-ux-sealed-evidence.zip"
+      - uses: actions/download-artifact@v4
+        with:
+          name: helene-rc24-macos15-evidence
+          path: ${{ runner.temp }}/rc24-sealed
+      - name: Same sealed RC24 on macOS26 with affected contracts and ordinary Cocoa lifecycle
+        run: python3 qa/desk/tests/rc24_macos_qa.py prepare26
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc24-macos26-evidence
+          path: evidence-rc24-macos-26/
