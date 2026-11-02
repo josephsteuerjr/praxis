@@ -1,6 +1,8 @@
 """Native Qt consumer; run in the packaged Linux runtime with DISPLAY (or offscreen)."""
 import importlib.util
 import json
+import os
+from unittest import mock
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +17,19 @@ HELENE_TEST_NATIVE_INPUTS = ('DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME
 
 @unittest.skipUnless(importlib.util.find_spec('PySide6'),'Native packaged PySide6 required')
 class NativeWizard(unittest.TestCase):
+    def setUp(self):
+        # Importing PySide6 itself adds environment options. Restore them along
+        # with the optional headless fixture before the hermetic stand checks.
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        if sys.platform.startswith('linux') and not os.environ.get('DISPLAY'):
+            os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+            if not os.environ.get('XDG_RUNTIME_DIR'):
+                runtime = tempfile.TemporaryDirectory(prefix='helene-qt-fixture-')
+                self.addCleanup(runtime.cleanup)
+                os.environ['XDG_RUNTIME_DIR'] = runtime.name
+
     def test_actual_dialog_preview_copy_and_close(self):
         from PySide6 import QtCore,QtWidgets,QtWebEngineWidgets
         if QtWidgets.QApplication.instance() is None:
