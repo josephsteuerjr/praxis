@@ -28,6 +28,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 
 log = logging.getLogger("frame.transport")
@@ -235,6 +236,8 @@ class Desk:
         self.agent_name = str(agent_name)
         self._life = memory_life
         self.sent: list[str] = []          # что ушло рукой в ЭТОМ ходе
+        self.last_delivery_id = ''
+        self.last_delivery_key = ''
 
     # ------------------------------------------------------------- запись
     def archive(self, text: str, *, outgoing: bool, now: dt.datetime | None = None,
@@ -256,7 +259,8 @@ class Desk:
         """
         stamp = (now or dt.datetime.now(dt.timezone.utc)).isoformat(timespec="seconds")
         row = {"timestamp": stamp, "outgoing": bool(outgoing), "text": str(text),
-               "sender_name": (self.agent_name if outgoing else (sender or self.speaker))}
+               "sender_name": (self.agent_name if outgoing else (sender or self.speaker)),
+               'source_audience': {'chat': self.stream, 'is_dm': True, 'owner': True}}
         if source_id:
             row["source_id"] = str(source_id)
         # Вложение — ПУТЁМ ОТ ДЕРЕВА и видом, а не строкой в тексте. Окно по этим
@@ -425,7 +429,8 @@ class Desk:
             else:
                 row = {"timestamp": now.isoformat(timespec="seconds"), "outgoing": True,
                        "text": body, "sender_name": self.agent_name,
-                       "delivery_key": key, "message_id": message_id}
+                       "delivery_key": key, "message_id": message_id,
+                       'source_audience': {'chat': self.stream, 'is_dm': True, 'owner': True}}
                 data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
                 with archive.open("ab+") as sink:
                     if sink.tell():
@@ -437,6 +442,7 @@ class Desk:
                     os.fsync(sink.fileno())
         _registry(self.tree, self.stream, archive)
         self.life(body, direction="out", actor=self.agent_name, source_id=key, now=now)
+        self.last_delivery_id, self.last_delivery_key = str(message_id), str(key)
         return str(message_id)
 
     def deliver(self, text: str, *, source_id: str = "", label: str = "",
@@ -455,6 +461,10 @@ class Desk:
         """
         now = dt.datetime.now(dt.timezone.utc)
         body = str(text or "")
+        if not system and not media_path:
+            message_id = self.deliver_once(body, key=source_id or ('window:' + uuid.uuid4().hex))
+            self.sent.append(body)
+            return f'Отправлено → {label or self.title} (окно Frame, id {message_id})'
         self.archive(body, outgoing=True, now=now, system=system, kind=kind,
                      media_path=media_path, media_kind=media_kind)
         if system:
@@ -590,15 +600,22 @@ def install(agent_mod, desks: Desks) -> None:
 
     hooks = agent_mod._TELETHON
 
-    def _deliver(desk, text, *, label=""):
+    def _deliver(desk, text, *, label="", reply_evidence=False):
         scope = getattr(agent_mod, "_TOOL_EXECUTION", None)
         execution = scope.get() if scope is not None else None
         key = str((execution or {}).get("idempotency_key") or "")
         if key:
             message_id = desk.deliver_once(text, key=key)
             desk.sent.append(str(text))
-            return f"Отправлено → {label or desk.title} (окно Hélène, id {message_id})"
-        return desk.deliver(text, label=label)
+            result = f"Отправлено → {label or desk.title} (окно Hélène, id {message_id})"
+        else:
+            result = desk.deliver(text, label=label)
+            message_id, key = desk.last_delivery_id, desk.last_delivery_key
+        observation = getattr(agent_mod, 'addressed_replies', None)
+        current = agent_mod.run_context.current_run() if hasattr(agent_mod, 'run_context') else None
+        if reply_evidence and observation is not None and current is not None:
+            observation.safe_accepted(desks.tree, current.run_id, desk.stream, message_id, delivery_key=key)
+        return result
 
     def _refusal(target: str):
         # ⚠ Отказ СТРОКОЙ особого типа, а не исключением и не обычной квитанцией:
@@ -615,7 +632,7 @@ def install(agent_mod, desks: Desks) -> None:
             return agent_mod.DirectSendRefusal(
                 f"не отправлено: адрес «{chat_id}» — не комната окна. "
                 f"Комнаты окна: {desks.listing()}.")
-        return _deliver(desk, text, label=desks.speaker)
+        return _deliver(desk, text, label=desks.speaker, reply_evidence=True)
 
     def _send_message(to, text) -> str:
         target = str(to or "").strip()

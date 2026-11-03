@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 import uuid
 
 
@@ -46,7 +47,21 @@ def atomic_json(path: Path, value: dict) -> None:
             stream.write(_json_bytes(value))
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(tmp, path)
+        # Ordinary Windows readers may briefly omit FILE_SHARE_DELETE. Keep
+        # this exact durable staging file until one atomic replacement works;
+        # a persistent or unrelated denial must still fail the journal write.
+        deadline = time.monotonic() + 2.5
+        delay = .01
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError as error:
+                remaining = deadline - time.monotonic()
+                if getattr(error, 'winerror', None) not in (5, 32, 33) or remaining <= 0:
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, .05)
         _sync_directory(path.parent)
     finally:
         tmp.unlink(missing_ok=True)
@@ -133,7 +148,7 @@ def _events(directory):
 def request_identity(request: dict) -> str:
     # Core adds PID/birth/status after spawning; none changes the assignment.
     stable = {k: v for k, v in request.items() if k not in {
-        "supervisor_pid", "supervisor_started_at", "status", "_verified_request_path"}}
+        "supervisor_pid", "supervisor_started_at", "process_identity", "status", "_verified_request_path"}}
     return hashlib.sha256(_json_bytes(stable)).hexdigest()
 
 

@@ -44,6 +44,10 @@ class Findings(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['parent_unit_id'], parent.name)
         forge._atomic_json(parent/'result.json', {'status': 'done'})
+        # The parent is a synthetic settled worker on every platform. Its
+        # terminal result alone cannot stand in for Windows Job exit proof.
+        forge._atomic_json(parent/'stop.json', {'state':'settled',
+            'result_sha256':forge._result_identity(parent/'result.json')})
         self.patch('_pid_alive', lambda *args: False)
         self.assertIn('shared-root writer', forge._agent_capacity(self.tid, {'id':'agent-new', 'role':'worker'}))
         self.assertEqual(forge.control(self.tid, 'stop')['status'], 'settled')

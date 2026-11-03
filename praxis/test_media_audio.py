@@ -83,7 +83,7 @@ class MediaAudioTests(unittest.TestCase):
         )
         self.assertTrue(config.stt_local_files_only)
         self.assertEqual(config.stt_beam_size, 5)
-        self.assertEqual(config.tts_backend, "edge")
+        self.assertEqual(config.tts_backend, "disabled")
         self.assertEqual(config.edge_voice, "ru-RU-SvetlanaNeural")
         self.assertEqual(
             config.piper_model,
@@ -316,13 +316,33 @@ class MediaAudioTests(unittest.TestCase):
             return_value=fake_primary,
         ) as client_factory:
             backend = media_audio.MediaAudio(config, stt=SimpleNamespace())
+            from_env.assert_not_called()
+            client_factory.assert_not_called()
+            # Materialize the lazy property while its optional factory is mocked.
+            self.assertIsInstance(backend.tts, media_audio.FallbackTTS)
+            self.assertIs(backend.tts.primary, fake_primary)
+            self.assertIsInstance(backend.tts.fallback, media_audio.PiperTTS)
+            self.assertTrue(backend.tts.skip_warmup)
+            self.assertIs(backend.tts.primary, fake_primary)
+            from_env.assert_called_once_with(output_dir=self.output_dir)
+            client_factory.assert_called_once_with(expected_config)
 
-        self.assertIsInstance(backend.tts, media_audio.FallbackTTS)
-        self.assertIs(backend.tts.primary, fake_primary)
-        self.assertIsInstance(backend.tts.fallback, media_audio.PiperTTS)
-        self.assertTrue(backend.tts.skip_warmup)
-        from_env.assert_called_once_with(output_dir=self.output_dir)
-        client_factory.assert_called_once_with(expected_config)
+    def test_disabled_default_keeps_stt_usable_and_tts_requires_opt_in(self) -> None:
+        config = media_audio.AudioConfig.from_env({})
+        stt = SimpleNamespace(transcribe=mock.Mock(return_value="recognized"))
+        with mock.patch.object(media_audio, "EdgeTTS") as edge, \
+                mock.patch.object(media_audio, "PiperTTS") as piper:
+            backend = media_audio.MediaAudio(config, stt=stt)
+            self.assertEqual(backend.transcribe(self.root / "voice.ogg"), "recognized")
+            with self.assertRaisesRegex(media_audio.AudioConfigurationError, "disabled"):
+                backend.synthesize("speech")
+            edge.assert_not_called()
+            piper.assert_not_called()
+            selected = media_audio.MediaAudio(replace(config, tts_backend="edge"), stt=stt)
+            edge.assert_not_called()
+            self.assertIsInstance(selected.tts, media_audio.FallbackTTS)
+            edge.assert_called_once()
+            piper.assert_called_once()
 
     def test_silero_warmup_never_starts_the_isolated_worker(self) -> None:
         calls: list[str] = []

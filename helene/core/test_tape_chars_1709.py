@@ -96,14 +96,32 @@ class WindowFrameUsesTheCeiling(unittest.TestCase):
         # в гейте, который гоняют внутри одного дерева, его рядом нет. Тогда случай
         # пропускается — честнее, чем красный гейт на верной правке.
         from pathlib import Path
-        runner = Path(__file__).resolve().parent.parent / "praxis-repo" / "desk" / "localharness" / "runner.py"
+        import os
+        source_root = os.environ.get('HELENE_TEST_SOURCE_ROOT')
+        runner = (Path(source_root) / 'desk/localharness/runner.py' if source_root else
+                  Path(__file__).resolve().parent.parent / "praxis-repo" / "desk" / "localharness" / "runner.py")
         if not runner.is_file():
             self.skipTest("поставка рядом не лежит: этот случай проверяется на машине сборки")
         source = runner.read_text(encoding="utf-8")
-        self.assertIn("tape_window", source,
-                      "раннер издания берёт горячий слой мимо потолка в знаках")
-        self.assertIn("tape_chars_for", source,
-                      "раннер издания не спрашивает потолок у МЕСТА")
+        import ast
+        import importlib.util
+        from types import SimpleNamespace
+        dialogue=next(node for node in ast.parse(source).body if isinstance(node,ast.FunctionDef) and node.name=='_dialogue')
+        def windows(node):
+            return [item for item in ast.walk(node) if isinstance(item,ast.Call)
+                    and isinstance(item.func,ast.Attribute) and isinstance(item.func.value,ast.Name)
+                    and item.func.value.id=='owner_context' and item.func.attr=='window']
+        guarded=[item for node in ast.walk(dialogue) if isinstance(node,ast.If)
+                 and ast.unparse(node.test)=='continuation is None' for item in windows(node)]
+        self.assertTrue(windows(dialogue),'actual conversation must use the shared owner window')
+        self.assertEqual({id(item) for item in windows(dialogue)},{id(item) for item in guarded},
+                         'continuations must preserve previously admitted context')
+        spec=importlib.util.spec_from_file_location('ceiling_owner_context',runner.with_name('owner_context.py'))
+        owner_context=importlib.util.module_from_spec(spec);spec.loader.exec_module(owner_context)
+        life=SimpleNamespace(tape_window=ml.tape_window,tape_chars_for=lambda place:250)
+        rows=_rows(10,100);kept=owner_context.window(life,'independent-ceiling-fixture',rows)
+        self.assertLess(len(kept),len(rows));self.assertEqual(kept[-1]['id'],rows[-1]['id'])
+        self.assertLessEqual(sum(len(row['line'])+1 for row in kept),250+max(len(row['line'])+1 for row in rows))
 
 
 if __name__ == "__main__":

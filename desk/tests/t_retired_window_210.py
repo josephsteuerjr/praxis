@@ -39,14 +39,14 @@ class Retirement(unittest.TestCase):
             root=Path(temp);old=root/'old';new=root/'new';old.mkdir();new.mkdir()
             events=[];command=[str(old/'helene-setup.exe'),'--uninstall','--quiet']
             note={'id':'proof','state':'new_app_started','startup_proof':{'stopped':True}}
-            with patch.object(migration,'registered_uninstall',return_value=command),patch.object(migration,'uninstall_registered',side_effect=lambda *a:events.append('uninstall') or {'ok':True}),patch.object(migration,'retire',side_effect=lambda *a:events.append('shortcuts') or {}):
+            with patch.object(python_migrate,'migration_windows',migration),patch.object(migration,'quiescent'),patch.object(migration,'registered_uninstall',return_value=command),patch.object(migration,'uninstall_registered',side_effect=lambda *a:events.append('uninstall') or {'ok':True}),patch.object(migration,'retire',side_effect=lambda *a:events.append('shortcuts') or {}):
                 result=python_migrate.finish_retirement(old,new,new,note,lambda v:None)
             self.assertEqual(events,['uninstall','shortcuts']);self.assertEqual(result['state'],'completed')
     def test_uninstaller_failure_keeps_new_receipt_pending(self):
         import python_migrate
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);note={'id':'proof','state':'new_app_started','startup_proof':{'stopped':True}}
-            with patch.object(migration,'registered_uninstall',return_value=['old.exe']),patch.object(migration,'uninstall_registered',side_effect=RuntimeError('not removed')),patch.object(migration,'retire') as retire:
+            with patch.object(python_migrate,'migration_windows',migration),patch.object(migration,'quiescent'),patch.object(migration,'registered_uninstall',return_value=['old.exe']),patch.object(migration,'uninstall_registered',side_effect=RuntimeError('not removed')),patch.object(migration,'retire') as retire:
                 with self.assertRaises(RuntimeError):python_migrate.finish_retirement(root,root,root,note,lambda v:None)
             retire.assert_not_called();self.assertEqual(note['state'],'new_app_started')
     def test_stale_active_word_is_not_a_live_owner_and_is_not_erased(self):
@@ -61,13 +61,15 @@ class Retirement(unittest.TestCase):
     def test_pythonw_owner_uses_authenticated_exit_without_service(self):
         with tempfile.TemporaryDirectory() as temp:
             old=Path(temp);(old/'tree').mkdir();(old/'tree/.desktop-owner.lock').write_bytes(b'active\n')
-            row={'ProcessId':123,'CommandLine':f'"{old}/runtime/pythonw.exe" -s "{old}/app/python_app.py" --root "{old}"'}
-            def ps(script,env):
-                if 'Win32_Process' in script:
-                    self.assertIn('pythonw.exe',script);return json.dumps([row])
-                return ''
-            with patch.object(migration,'powershell',side_effect=ps),patch.object(migration,'request_python_exit') as exit_,patch('localharness.app_migration.discover',return_value={'agents':[{'tree':str(old/'tree'),'value':{}}]}):
+            row={'ProcessId':123,'Birth':100.0,'ExecutablePath':str(old/'runtime/pythonw.exe'),
+                 'CommandLine':f'"{old}/runtime/pythonw.exe" -s "{old}/app/python_app.py" --root "{old}"'}
+            with patch.object(migration,'process_snapshot',return_value=[row]), \
+                    patch('psutil.Process') as process,patch.object(migration,'powershell') as ps, \
+                    patch.object(migration,'request_python_exit') as exit_, \
+                    patch('localharness.app_migration.discover',return_value={'agents':[{'tree':str(old/'tree'),'value':{}}]}):
+                process.return_value.create_time.return_value=row['Birth']
                 migration.close_python(old);exit_.assert_called_once_with(old,123)
+                process.return_value.wait.assert_called_once_with(timeout=25);ps.assert_not_called()
     def test_pinned_shortcut_is_retargeted_and_unrelated_binding_is_untouched(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);old=root/'old';new=root/'new';folders=[root/str(i) for i in range(6)]

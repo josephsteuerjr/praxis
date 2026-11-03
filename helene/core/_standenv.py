@@ -32,6 +32,7 @@ from pathlib import Path
 ENV_KEEP = frozenset({
     "PRAXIS_BASE",
     "PRAXIS_TEST",
+    "PRAXIS_TEST_FORGE_PROCESS",  # explicit deterministic process consumer stand
     # ⚠ 03.08.2026, урок этой же прививки. PRAXIS_HANDS ставит Dockerfile
     # (ENV PRAXIS_HANDS=/usr/local/bin/praxis-hands), а не .env. Первая редакция
     # сняла его вместе со всем остальным → hands.available() стал False →

@@ -10,6 +10,7 @@ export interface Cfg {
   /** Поставка распакована, но адрес сервера ещё не вписан: окно спрашивает его само. */
   needs_remote?: boolean;
   needs_local_setup?: boolean;
+  needs_subscription_login?: boolean;
   local_agent?: boolean;
   discover_server?: boolean;
 }
@@ -62,7 +63,7 @@ export const electron: ElectronBridge | undefined = (window as unknown as { __HE
  * Окно — в оболочке программы, а не веб-версия за каналом. Имя историческое: с 28.09
  * оболочка — Electron (`electron`), прежние выпуски — Tauri; для окна разницы нет.
  */
-export const inTauri = "__TAURI_INTERNALS__" in window || !!electron;
+export const inTauri = !!electron;
 
 export function channelURL(path: string): string {
   const full = (cfg.base || "") + path;
@@ -248,10 +249,8 @@ async function request<T>(method: string, path: string, body: unknown): Promise<
   return r.json();
 }
 
-/** Команда оболочки; вне Tauri — честная ошибка, а не тишина. */
+/** Python/Electron bridge; a plain browser has no desktop command surface. */
 export async function shell<T = unknown>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!inTauri) throw new Error("доступно только в приложении Hélène");
-  if (electron) return electron.invoke(cmd, args) as Promise<T>;
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
+  if (!electron) throw new Error("доступно только в приложении Hélène");
+  return electron.invoke(cmd, args) as Promise<T>;
 }

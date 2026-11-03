@@ -1,12 +1,16 @@
 """Upgrade projection -> the actual retained pre-alias normalizer, no code replacement."""
 import os,sys,json,tempfile,importlib.util,unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2];os.environ['PRAXIS_TEST']='1'
 sys.path[:0]=[str(ROOT/'desk'),str(ROOT/'praxis')]
 import _sandbox
 _sandbox.activate_if_testing()
 from localharness import boot
-spec=importlib.util.spec_from_file_location('legacy_brain_consumer',ROOT/'praxis/llm.py')
+# Frozen pre-alias consumer; both direct-source aliases are M in real verification.
+LEGACY=Path(__file__).resolve().parent/'fixtures/pre-alias-praxis-llm.py.txt'
+spec=importlib.util.spec_from_file_location('legacy_brain_consumer',LEGACY,
+    loader=SourceFileLoader('legacy_brain_consumer',str(LEGACY)))
 legacy=importlib.util.module_from_spec(spec);sys.modules[spec.name]=legacy;spec.loader.exec_module(legacy)
 class Preserved(unittest.TestCase):
     def test_controller_save_projects_through_actual_retained_normalizer(self):
@@ -14,7 +18,7 @@ class Preserved(unittest.TestCase):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);code=root/'code';code.mkdir()
-            (code/'llm.py').write_bytes((ROOT/'praxis/llm.py').read_bytes())
+            (code/'llm.py').write_bytes(LEGACY.read_bytes())
             cfg={'tree':'data','code':'code','model':{'framework':'openai','key':'TEST-ONLY','model':'after-save'}}
             (root/'helene.json').write_text(json.dumps(cfg))
             controller=Controller(root,lambda *a:None)
@@ -26,7 +30,7 @@ class Preserved(unittest.TestCase):
             self.assertEqual(actual['roles']['voice']['model'],'after-save')
     def test_old_openai_only_normalizer_receives_legacy_role_and_key(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root=Path(tmp);code=root/'code';code.mkdir();(code/'llm.py').write_bytes((ROOT/'praxis/llm.py').read_bytes())
+            root=Path(tmp);code=root/'code';code.mkdir();(code/'llm.py').write_bytes(LEGACY.read_bytes())
             cfg={'model':{'framework':'openai','base_url':'http://127.0.0.1:59999/v1','key':'TEST-ONLY','model':'primary'}}
             before=(code/'llm.py').read_bytes()
             boot.project_brain(root/'data',cfg,code_dir=code)

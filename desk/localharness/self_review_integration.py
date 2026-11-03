@@ -1,9 +1,11 @@
 """Owner controls and lifecycle hooks for Forge-backed source review."""
 from __future__ import annotations
 
+import base64
 import json
 from functools import lru_cache
 import logging
+import math
 from pathlib import Path
 import re
 import time
@@ -16,14 +18,34 @@ log = logging.getLogger("helene.self-review")
 SCHEMA = "helene.self-review.status.v1"
 ACTIONS = {"request", "cancel", "disposition"}
 DECISIONS = {"accepted", "fix", "deferred", "continue-with-reason"}
+SUBJECT_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {
+    "kind": {"type": "string", "enum": ["plan", "change", "task_result"]},
+    "task_id": {"type": "string"}, "question": {"type": "string"},
+    "criteria": {"type": "array", "items": {"type": "string"}},
+    "text": {"type": "string", "description": "plan: exact authored plan text"},
+    "assignment": {"type": "string", "description": "task_result: original assignment"},
+    "answer": {"type": "string", "description": "task_result: exact answer, not a summary substituted later"},
+    "observed_effects": {"type": "array", "items": {"type": "string"}, "description": "author claims, not host attestations"},
+    "checks": {"type": "array", "items": {"type": "string"}, "description": "author claims; attach exact evidence as materials"},
+    "materials": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {
+        "name": {"type": "string", "description": "logical name, same on both change sides"},
+        "side": {"type": "string", "enum": ["base", "candidate", "context"]},
+        "root": {"type": "string", "enum": ["workspace", "agent", "app"]},
+        "path": {"type": "string", "description": "explicit relative UTF-8 file; no memory/config/credentials or links"},
+        "sha256": {"type": "string", "description": "exact bytes; absent material omits SHA"},
+        "exists": {"type": "boolean"}}, "required": ["name", "root", "path"]}}},
+    "required": ["kind", "question", "criteria"]}
 TOOL = {
     "name": "self_review",
-    "description": "Read source-review status or request independent Forge reviewers. Acceptance delegated by the owner is your task: run review, address findings and report evidence without asking the owner to perform it. For a source update use source_update status and its incoming coordinator, even when the old live Forge lacks this API; an ordinary self_review of live code does not accept an update candidate. Source-only review never proves installed behavior. Available only in an owner dialogue. Use explicit disposition with the exact subject_sha256 and reason; this does not rewrite the critic verdict.",
+    "description": "Voluntary independent Forge review: choose your question, criteria, materials and depth when criticism helps. Ordinary work may finish without review or a skip ritual. Omit subject for legacy source-only review; otherwise freeze typed plan (text), change (matching base/candidate material refs, explicit absences), or task_result (assignment/exact answer/artifacts/effect and check claims). All refs require exact SHA and remain owner-only; no ambient memory or execution. For conflict updates use source_update and its strict full-battery panel, never ordinary disposition. Verdicts and author decisions stay separate; source/material clear is not installed proof. Owner dialogue only.",
     "input_schema": {"type": "object", "properties": {
         "action": {"type": "string", "enum": ["status", "request", "cancel", "disposition"]},
         "id": {"type": "string"}, "depth": {"type": "string", "enum": list(self_review.DEPTHS)},
         "intent": {"type": "string"}, "decision": {"type": "string", "enum": sorted(DECISIONS)},
         "retry": {"type": "boolean"},
+        "critics": {"type": "integer", "minimum": 1, "maximum": 8,
+                    "description": "ordinary request: choose critic count on existing configured voice models; default follows policy/depth"},
+        "subject": SUBJECT_SCHEMA,
         "reason": {"type": "string"}, "subject_sha256": {"type": "string"}},
         "required": ["action"]},
 }
@@ -41,7 +63,14 @@ def command(tree, body):
     if not isinstance(body, dict) or body.get("action") not in ACTIONS:
         raise ValueError("action must be request, cancel or disposition")
     value = {key: body[key] for key in
-             ("action", "id", "depth", "intent", "decision", "reason", "subject_sha256", "retry") if key in body}
+             ("action", "id", "depth", "intent", "decision", "reason", "subject_sha256", "retry", "subject", "critics") if key in body}
+    if 'critics' in value and (value['action'] != 'request' or type(value['critics']) is not int or not 1 <= value['critics'] <= 8):
+        raise ValueError('critics must be 1..8 for a review request')
+    if 'subject' in value:
+        if value['action'] != 'request' or value.get('intent'):
+            raise ValueError('typed subject belongs to request and supplies its own question')
+        from localharness.self_review_subjects import normalize
+        value['subject'] = normalize(value['subject'])
     if "retry" in value and not isinstance(value["retry"], bool):
         raise ValueError("retry must be a boolean")
     if value.get("depth") is not None and value["depth"] not in self_review.DEPTHS:
@@ -71,23 +100,65 @@ def _activity_counts(path, modified, size):
             sum(c.get("execution") == "queued" for c in critics))
 
 
-def activity(tree):
+def activity(tree,review_cursor='',review_limit=20):
     """Small read-only projection; stale coordinator records cannot light the badge."""
     root = _root(tree)
     running = queued = 0
+    from .source_update_activity import activity as update_activity
+    try:update=update_activity(tree)
+    except (OSError,ValueError,KeyError,TypeError):update=None
+    after=None
+    if review_cursor:
+        try:
+            after=json.loads(base64.urlsafe_b64decode(review_cursor.encode('ascii')).decode('utf8'))
+            if (not isinstance(after,list) or len(after)!=2 or isinstance(after[0],bool)
+                    or not isinstance(after[0],(int,float)) or not math.isfinite(after[0])
+                    or not isinstance(after[1],str) or len(after[1])>512):raise ValueError()
+            after=tuple(after)
+        except (ValueError,TypeError,UnicodeError):raise ValueError('Invalid reviewer cursor') from None
+    limit=min(max(int(review_limit),1),100)
+    reviewers=[];recent=[]
+    terminal={'done','completed','error','failed','cancelled','stopped','unavailable'}
     now = time.time()
     for store in (root, root.with_name(".source-update-reviews")):
         for path in store.glob("review-*/request.json"):
             try:
                 stat = path.stat()
-                if not -5 <= now - stat.st_mtime < 30:
-                    continue
+                fresh=-5 <= now - stat.st_mtime < 30
+                row=_read(path)
+                selected=bool(update and row.get('id')==update.get('review_id'))
                 active, waiting = _activity_counts(str(path), stat.st_mtime_ns, stat.st_size)
-                running += active
-                queued += waiting
+                if fresh:
+                    running += active
+                    queued += waiting
+                for critic in row.get('critics',[]):
+                    unit=critic.get('unit_id');execution=critic.get('execution','unknown')
+                    if not isinstance(unit,str) or not unit.strip():continue
+                    finished=execution in terminal
+                    if not finished and not selected and (not fresh or row.get('execution') not in {'queued','running'}):continue
+                    focus={'integration':'Ревью интеграции','adversarial':'Критик'}.get(critic.get('focus'),'Ревьюер')
+                    record={'id':str(row.get('id',''))+'/'+unit,'unit_id':unit,'task_id':row.get('task_id'),
+                        'name':critic.get('name') or focus,'model':critic.get('model_actual') or critic.get('model') or '',
+                        'review_id':row.get('id'),'execution':critic.get('execution','unknown'),
+                        'live':not finished and not row.get('cancel_requested') and fresh and critic.get('execution') in {'starting','running','finishing'},
+                        'cancel_requested':bool(row.get('cancel_requested')),
+                        'observed_at':stat.st_mtime,'started_at':critic.get('started_at'),'finished_at':critic.get('finished_at'),
+                        'verdict':critic.get('verdict'),'summary':str(critic.get('summary') or critic.get('reason') or '')[:4000],
+                        'findings':critic.get('findings',[])[:50]}
+                    if finished:
+                        at=record['finished_at']
+                        if not isinstance(at,(int,float)) or isinstance(at,bool) or not math.isfinite(at):at=stat.st_mtime
+                        record['finished_at']=at;recent.append(record)
+                    else:reviewers.append(record)
             except (OSError, ValueError, TypeError, AttributeError):
                 continue
-    return {"running": running, "queued": queued}
+    key=lambda record:(record['finished_at'],record['id'])
+    recent.sort(key=key,reverse=True)
+    if after is not None:recent=[record for record in recent if key(record)<after]
+    page=recent[:limit]
+    cursor=(base64.urlsafe_b64encode(json.dumps(key(page[-1])).encode()).decode('ascii') if len(recent)>limit else None)
+    return {"running": running, "queued": queued,'reviewers':reviewers,'update':update,
+        'recent_reviewers':page,'recent_reviewers_cursor':cursor}
 
 
 def status(tree, config=None, review_id=""):
@@ -148,14 +219,14 @@ class Integration:
                 tools.append(TOOL)
             purposes = getattr(self.agent, "HAND_PURPOSE", None)
             if isinstance(purposes, dict):
-                purposes[TOOL["name"]] = "request independent source review and read its exact evidence"
+                purposes[TOOL["name"]] = "voluntary independent source/plan/change/task_result criticism with exact frozen evidence"
         self.publish()
         return self
 
     def publish(self, error=""):
         supported = getattr(self.service.forge, "SELF_REVIEW_API", 0) == 1
         hook = getattr(self.agent, "SELF_EDIT_REVIEW_API", 0) == 1
-        reason = ("Source-only Forge review; installed/runtime checks remain separate." if supported
+        reason = ("Voluntary frozen source/plan/change/task_result Forge review; installed/runtime checks remain separate." if supported
                   else "Selected preserved Forge lacks self-review API v1; shipped stock code is not the executing code.")
         self_review._write(_root(self.tree) / "runtime.json", {
             "at": time.time(), "supported": supported, "self_edit_supported": hook,
@@ -276,7 +347,8 @@ class Integration:
                         if record is None:
                             record = self.service.request(operation_id=asked["command_id"],
                                                           depth=asked.get("depth"), intent=asked.get("intent", ""),
-                                                          retry=asked.get("retry", False))
+                                                          retry=asked.get("retry", False), subject=asked.get('subject'),
+                                                          critics=asked.get('critics'))
                     elif action == "cancel":
                         record = self.service.cancel(asked["id"])
                     else:

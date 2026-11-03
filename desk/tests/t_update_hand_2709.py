@@ -70,8 +70,8 @@ class Hand(unittest.TestCase):
                 mock.patch.object(updates.Path, "exists", return_value=False):
             self.assertTrue(updates.install(desk, self.tree, {}))
         schema = desk.BASE_TOOLS[0]["input_schema"]["properties"]["action"]["enum"]
-        self.assertEqual(schema, ["status"])
-        self.assertIn("кнопкой в окне", desk.TOOL_IMPL[updates.TOOL_NAME](action="plan"))
+        self.assertEqual(schema, ["status","plan","confirm","decline","cancel","resume"])
+        self.assertEqual(desk.BASE_TOOLS[0]['input_schema']['properties']['source_mode']['enum'], ['preserve','clean'])
         agent = fake_agent()
         self.hand(agent)
         self.hand(agent)

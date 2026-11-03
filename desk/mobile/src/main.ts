@@ -8,14 +8,15 @@ import { setAudioPlayer } from '../../ui-kit/paper-audio';
 setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
 import { setAnimationPlayer } from '../../ui-kit/paper-media';
 setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
-import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
+import { mountPhone, remember, remembered, type Redeem } from "../../ui-kit/phone";
 import { toast } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
+import type { Cfg } from '../../ui-kit/window/api';
 
 declare global {
   interface Window {
-    DESK_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
-    DESK_CONFIG?: { base: string; key: string; agent?: string } | null;
+    DESK_CONFIG_OVERRIDE?: Cfg;
+    DESK_CONFIG?: Cfg | null;
   }
 }
 
@@ -27,7 +28,8 @@ const override = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG || undefined;
 const base = override?.base || "";
 const STORAGE = "frame.device";
 
-// Манифест с токеном: чтобы установленное приложение открылось с ним же.
+// A fixed manifest identity and the existing device session survive shell
+// upgrades. Enrollment itself stays short-lived and never goes in storage.
 const pairToken = params.get("pair") || "";
 const manifest = document.createElement("link");
 manifest.rel = "manifest";
@@ -38,6 +40,24 @@ document.head.append(manifest);
 // входит веб-версия окна. Обычный путь телефона — QR.
 const directKey = params.get("key") || override?.key || "";
 if (directKey) remember(STORAGE, directKey);
+
+function keepDevice(key: string) {
+  remember(STORAGE,key);
+  // Safari and an installed iPhone PWA have separate stores. The fragment
+  // bootstraps the same revocable device without a second enrollment.
+  const fragment='#device='+encodeURIComponent(key);
+  history.replaceState(null,'','/m/'+(standalone && remembered(STORAGE)===key ? '' : fragment));
+  manifest.href='/m/manifest.webmanifest?session=1';
+}
+const fragmentDevice=new URLSearchParams(location.hash.slice(1)).get('device') || '';
+if (/^dk-[A-Za-z0-9_-]{20,128}$/.test(fragmentDevice)) {
+  remember(STORAGE,fragmentDevice);
+  if(standalone && remembered(STORAGE)===fragmentDevice)history.replaceState(null,'','/m/');
+  // Put back only this device's HttpOnly cookie so its install manifest can
+  // retain the session too. No owner key, new device, or URL credential.
+  void fetch(base+'/pair/redeem',{headers:{Authorization:'Bearer '+fragmentDevice},cache:'no-store'})
+    .then(response=>{if(response.ok)keepDevice(fragmentDevice)}).catch(()=>{});
+}
 
 /** Обмен токена пары на ключ. Раньше любой не-2xx звался «код устарел». */
 async function redeem(token: string): Promise<{ result: Redeem; key?: string; agent?: string }> {
@@ -66,9 +86,7 @@ async function redeem(token: string): Promise<{ result: Redeem; key?: string; ag
     return { result: "broke" };
   }
   if (!d.key) return { result: "broke" };
-  // Токен из адреса убираем ТОЛЬКО в установленном приложении: в Safari он
-  // должен остаться — «На экран „Домой“» берёт текущий адрес.
-  if (standalone) history.replaceState(null, "", "/m/");
+  keepDevice(d.key);
   return { result: "ok", key: d.key, agent: d.agent };
 }
 
@@ -79,7 +97,7 @@ function pairScreen(pair: Redeem | null): { title: string; text: string; retry: 
     case "broke":
       return { title: "Компьютер ответил ошибкой", text: "Обмен кода на ключ не удался на стороне компьютера. Покажи QR заново и попробуй ещё раз.", retry: true };
     case "offline":
-      return { title: "Нет связи", text: "Компьютер с агентом не отвечает. Дождись подключения в Hélène; если её адрес изменился после перезапуска, открой новый QR или кнопку миниаппа в боте.", retry: true };
+      return { title: "Нет связи", text: "Компьютер с агентом не отвечает. Дождись подключения в Hélène и попробуй снова. Привязка устройства сохраняется при обновлении.", retry: true };
     case "spent":
       return { title: "Код устарел", text: "Ссылка из QR живёт десять минут и годится трижды. Покажи QR на компьютере заново и открой его снова.", retry: true };
     case "foreign":

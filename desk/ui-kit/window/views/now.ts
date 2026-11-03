@@ -83,7 +83,7 @@ export async function render(container: HTMLElement): Promise<void> {
     ${frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа", '<a href="#" data-go="frame">Посмотреть кадр →</a>')}
     <h3 class="section-title">Последние действия <span class="muted">${rest.length}</span></h3>
     ${rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || `<div class="empty"><b>Здесь появятся действия и результаты</b>
-      Свежая установка открывается этим экраном, и он пуст по-честному: агент ещё ничего не делал.
+      <p>Здесь будут завершённые ходы. Поручи агенту дело в чате или выбери идею в онбординге.</p>
       <button class="btn btn-quiet" type="button" data-go="learn">Что ему можно поручить →</button></div>`}
   </div>`;
   for (const a of container.querySelectorAll<HTMLElement>("[data-go]")) {
@@ -137,6 +137,14 @@ export function onEvent(kind: string) {
     clearTimeout(liveTimer);
     liveTimer = window.setTimeout(() => void refreshLive(), 300);
   }
+}
+
+/** A room read may recover after startup failed, without a new run event. */
+export function runsChanged(previous: Run[]) {
+  if (S.view !== "now" || !root) return;
+  const visible = (rows: Run[]) => JSON.stringify(rows.filter((r) => r.kind !== "wake").slice(0, 40));
+  // Identical idle polls must leave open details and scroll position alone.
+  if (visible(previous) !== visible(S.runs)) void render(root);
 }
 
 /** Состояние обновилось: ход начался или кончился. */

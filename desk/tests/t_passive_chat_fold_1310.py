@@ -11,11 +11,14 @@ class Operation(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);self.root=Path(self.temp.name)
         self.ctl=self.root/'memory/.control';self.ctl.mkdir(parents=True);self.st=self.root/'memory/.state';self.st.mkdir()
     def write(self,path,value):path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value),encoding='utf8')
-    def test_request_waiting_is_not_running_and_pause_is_preserved(self):
-        control.fold_request(self.root,'window');(self.ctl/'autonomy-paused.json').write_text('{}')
+    def test_legacy_request_waiting_is_not_running_and_pause_is_preserved(self):
+        self.write(self.ctl/control.FOLD_REQUEST,{'id':'legacy','room':'window','at':time.time()})
+        (self.ctl/'autonomy-paused.json').write_text('{}')
         state=control.fold_state(self.root,'window')
         self.assertEqual(state['operation']['state'],'queued');self.assertTrue(state['paused'])
         self.assertIn('возобновления',state['operation']['note'])
+        self.assertFalse(control.fold_request(self.root,'window')['ok'])
+
     def test_old_processing_from_previous_runner_is_interrupted_without_deleting_evidence(self):
         asked={'id':'old','room':'window','at':'2026-01-01T00:00:00Z'}
         self.write(self.ctl/'fold.processing.json',asked);self.write(self.st/'fold-receipt.json',{**asked,'state':'running','pid':111})
@@ -71,43 +74,17 @@ class PassiveWatcher(unittest.TestCase):
             self.assertFalse(any(e['t']=='run' for _,e in events))
 
 class Worker(unittest.TestCase):
-    def test_archive_failure_preserves_old_claim_and_new_request(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);ctl=root/'memory/.control';ctl.mkdir(parents=True)
-            before=b'{"id":"old","room":"window"}'
-            (ctl/'fold.processing.json').write_bytes(before)
-            control.fold_request(root,'window');request=(ctl/'fold.json').read_bytes();life=mock.Mock()
-            with mock.patch.object(runner,'_life',life),mock.patch.object(runner.owner_stop,'paused',return_value=False),\
-                 mock.patch('shutil.copy2',side_effect=PermissionError('fixture denied')):
-                runner._fold_tick(root)
-            self.assertEqual((ctl/'fold.processing.json').read_bytes(),before)
-            self.assertEqual((ctl/'fold.json').read_bytes(),request);life.fold_now.assert_not_called()
-    def test_unreadable_claim_is_retained_without_model_call(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);ctl=root/'memory/.control';ctl.mkdir(parents=True)
-            before=b'{broken request';(ctl/'fold.json').write_bytes(before);life=mock.Mock()
-            with mock.patch.object(runner,'_life',life),mock.patch.object(runner.owner_stop,'paused',return_value=False):runner._fold_tick(root)
-            self.assertEqual((ctl/'fold.processing.json').read_bytes(),before);life.fold_now.assert_not_called()
-    def test_pause_never_claims_or_calls_fold(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);control.fold_request(root,'window');life=mock.Mock()
-            with mock.patch.object(runner,'_life',life),mock.patch.object(runner.owner_stop,'paused',return_value=True):runner._fold_tick(root)
-            self.assertTrue((root/'memory/.control/fold.json').is_file());life.fold_now.assert_not_called()
-    def test_retry_preserves_orphan_and_previous_receipt(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root=Path(directory);ctl=root/'memory/.control';ctl.mkdir(parents=True);st=root/'memory/.state';st.mkdir()
-            before=b'{"id":"old","room":"window"}'
-            receipt=b'{"id":"old","room":"window","state":"running"}'
-            (ctl/'fold.processing.json').write_bytes(before);(st/'fold-receipt.json').write_bytes(receipt)
-            control.fold_request(root,'window');life=types.SimpleNamespace(fold_now=lambda _: {'folded':1})
-            with mock.patch.object(runner,'_life',life),mock.patch.object(runner.owner_stop,'paused',return_value=False),\
-                 mock.patch.object(runner,'_FOLD_BUSY',[False]),mock.patch.object(runner,'_FOLD_ACTIVE',[None]):
-                runner._fold_tick(root)
-                deadline=time.monotonic()+3
-                while runner._FOLD_BUSY[0] and time.monotonic()<deadline:time.sleep(.01)
-                self.assertFalse(runner._FOLD_BUSY[0]);self.assertIsNone(runner._FOLD_ACTIVE[0])
-            history=list((st/'fold-history').iterdir());self.assertEqual(len(history),1)
-            self.assertEqual((history[0]/'request.json').read_bytes(),before);self.assertEqual((history[0]/'receipt.json').read_bytes(),receipt)
-            self.assertEqual(json.loads((st/'fold-receipt.json').read_text())['pid'],os.getpid())
+    def test_retired_worker_does_not_consume_a_legacy_claim_while_paused_or_running(self):
+        for paused in (False,True):
+            with self.subTest(paused=paused),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);claim=root/'memory/.control/fold.processing.json'
+                claim.parent.mkdir(parents=True);claim.write_text('{"id":"legacy","room":"window"}')
+                if paused:(claim.parent/'autonomy-paused.json').write_text('{}')
+                before={p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                with mock.patch.object(runner,'_life',mock.Mock()) as life,mock.patch.object(runner,'_turn_in_window') as turn:
+                    runner._fold_tick(root)
+                after={p.relative_to(root).as_posix():p.read_bytes() for p in root.rglob('*') if p.is_file()}
+                self.assertEqual(after,before);life.fold_now.assert_not_called();turn.assert_not_called()
+
 
 if __name__=='__main__':unittest.main()

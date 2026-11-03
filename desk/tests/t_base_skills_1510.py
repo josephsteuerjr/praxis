@@ -6,6 +6,8 @@ Run: python tests/t_base_skills_1510.py (from desk/).
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -20,6 +22,25 @@ STOCK = DESK / "resources" / "soul" / "skills"
 
 
 class IncidentStarterSkills(unittest.TestCase):
+    def test_public_before_sending_seed_is_revisable_not_a_private_persona_requirement(self):
+        # Only the application's public stock template, never source soul/ or
+        # an installed agent profile. Core test_say_hand exercises write_skill.
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory)
+            boot._seed_kit(tree, {})
+            skill = tree / 'soul/skills/before_sending.md'
+            text = skill.read_text(encoding='utf-8')
+            self.assertEqual(skill.read_bytes(), (STOCK/'before_sending.md').read_bytes())
+            self.assertIn('write_skill', text)
+            self.assertIn('законный ответ', text)
+            index=(tree/'soul/skills/INDEX.md').read_text(encoding='utf-8')
+            self.assertEqual(index.count('](before_sending.md)'),1)
+            authored = '# A synthetic later norm\n\nI did not check; I say so.\n'
+            skill.write_text(authored, encoding='utf-8', newline='\n')
+            boot._seed_kit(tree, {})
+            boot.refresh_kit(tree, {})
+            self.assertEqual(skill.read_text(encoding='utf-8'), authored)
+
     def test_fresh_seed_places_real_files_and_index_describes_each(self):
         with tempfile.TemporaryDirectory() as directory:
             tree = Path(directory)
@@ -70,11 +91,26 @@ class IncidentStarterSkills(unittest.TestCase):
             self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
             self.assertEqual(boot.refresh_kit(tree, {}), [])
             self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
-            candidate = next((tree / "memory/.state/kit-proposals").glob("*.json"))
-            import json
-            self.assertEqual(json.loads(candidate.read_text(encoding="utf-8"))["candidate"],
-                             (STOCK / "INDEX.md").read_text(encoding="utf-8"))
+            folder = tree / "memory/.state/kit-proposals"
+            records = [json.loads(path.read_text(encoding="utf-8"))
+                       for path in folder.glob("*.json")]
+            # Day-zero persona and other kit proposals share this store. Its
+            # directory iteration order is not the INDEX proposal identity.
+            indexes = [row for row in records if row.get("schema") == 1
+                       and row.get("target") == "soul/skills/INDEX.md"
+                       and row.get("source") == "kit"]
+            self.assertEqual(len(indexes), 1)
+            candidate = indexes[0]
+            stock = (STOCK / "INDEX.md").read_bytes()
+            self.assertEqual(candidate["candidate"], stock.decode("utf-8"))
+            self.assertEqual(candidate["source_sha256"], hashlib.sha256(stock).hexdigest())
+            self.assertEqual(candidate["previous"], history[-1])
+            self.assertEqual(candidate["current_sha256"],
+                             hashlib.sha256(history[-1].encode("utf-8")).hexdigest())
+            retained = {path.name: path.read_bytes() for path in folder.glob("*.json")}
             self.assertEqual(boot.refresh_kit(tree, {}), [])
+            self.assertEqual({path.name: path.read_bytes() for path in folder.glob("*.json")}, retained)
+            self.assertEqual(index.read_text(encoding="utf-8"), history[-1])
 
 
 if __name__ == "__main__":

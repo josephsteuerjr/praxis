@@ -1,6 +1,6 @@
-# Hélène 2.2.10 — portable Python desktop
+# Hélène 2.3.0 — portable Python desktop
 
-Windows x64, macOS Apple Silicon, Debian and Fedora x86_64 archives carry their own Python runtime. Extract once into a permanent writable folder. Migration preserves the old profile, memory, authored code and Git; later updates stay in the same folder. Optional downloads are Whisper and XTTS only; the subscription relay is independently distributed.
+Windows x64, macOS Apple Silicon, Debian and Fedora x86_64 archives carry their own Python runtime. Extract once into a permanent writable folder. Current updates offer preserved source with independent review or clean release code; the selected profile stays separate from the program. Legacy migration follows its explicit preview. Optional downloads are Whisper and XTTS only; the subscription relay is independently distributed.
 
 See the [release overview](../README.md), [platform source snapshots](../SOURCE-SNAPSHOTS.md) and [release workflow](installer/RELEASE.md). Older native builder documentation below describes previous editions.
 

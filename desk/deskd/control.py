@@ -214,7 +214,8 @@ def fold_state(tree: Path, room: str) -> dict:
         bounds = owner
     delivery = _read(_state_dir(tree) / "telegram-delivery.json").get(room.split('__topic__', 1)[0])
     reader = _read(Path(tree) / 'memory/.control/desk_inbox/.reader.json')
-    paused = (ctl / 'autonomy-paused.json').exists()
+    from .autonomy import is_paused
+    paused = is_paused(tree)
     operation = _fold_operation(room, queued, processing, receipt, reader, paused, time.time())
     if delivery and (delivery.get('pid') != reader.get('pid')
                      or time.time() - float(reader.get('at') or 0) > 30):

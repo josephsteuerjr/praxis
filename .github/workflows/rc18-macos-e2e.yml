@@ -1,0 +1,37 @@
+name: Hélène RC18 native user actions
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths:
+      - desk/tests/advanced_macos_e2e.py
+      - desk/tests/native_ax.py
+      - .github/workflows/rc18-macos-e2e.yml
+permissions:
+  contents: read
+  actions: read
+jobs:
+  native-ui:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: candidate-cache
+        with:
+          path: ${{ runner.temp }}/rc18-qualified-input.zip
+          key: helene-rc18-native-79ce64094f84499c
+      - name: Reuse native input if cache absent
+        if: steps.candidate-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13077655662/zip > "$RUNNER_TEMP/rc18-qualified-input.zip"
+      - name: Native AX form and user controls
+        run: python3 desk/tests/advanced_macos_e2e.py ui
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-native-ui
+          path: evidence-extended/
+          retention-days: 30

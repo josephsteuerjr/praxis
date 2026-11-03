@@ -21,7 +21,7 @@ const initial = new Function('cfg', 'opts', 'localStorage', `
 `);
 // Execute the actual initial navigation, request, and completion handlers, not
 // a copy of their ordering. In particular the request can stay pending forever.
-const startup = new Function('cfg', 'loadRooms', `
+const startupFragment = new Function('cfg', 'loadRooms', 'initialView', `
   let showSeq = 0;
   const LOCAL_AGENT = true, S = {agent:'Fixture'}, shown = [], states = [], timers = [];
   const viewInner = {innerHTML:'', querySelector:() => false};
@@ -33,12 +33,21 @@ const startup = new Function('cfg', 'loadRooms', `
   ${fragment('  connect();', '  void refreshPulse();')}
   return {shown, states, timers, viewInner, navigate:show};
 `);
-const fresh = new Function('cfg', 'opts', 'view', 'show', 'stateText', 'statePill', 'stateAction', `
+// initialView belongs to the outer production initialization. Bind it using
+// that actual fragment as well, including subscription-login navigation.
+const startup = (cfg, loadRooms) => startupFragment(cfg, loadRooms,
+  initial(cfg, {}, {getItem:() => null}));
+// Bind the real module's shell dependency. These shared web-startup cases
+// intentionally have no native shell; native release notices have their own tests.
+const fresh = new Function('cfg', 'opts', 'view', 'show', 'stateText', 'statePill', 'stateAction', 'electron', `
   const LOCAL_AGENT = opts.localAgent !== false;
   ${fragment('  if (opts.firstRun?.(view)) return;', '  connect();')}
   return 'connect';
 `);
 const storage = value => ({getItem:() => value});
+test('subscription sign-in starts in settings', () => {
+  assert.equal(initial({needs_subscription_login:true}, {}, storage(null)), 'settings');
+});
 const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
 const deferred = () => {
   let resolve, reject;

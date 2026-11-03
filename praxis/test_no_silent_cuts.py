@@ -7,10 +7,14 @@
 """
 import json
 import os
+from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 import agent
 import forge
+import forge_worker
 
 
 class CutsSayTheirName(unittest.TestCase):
@@ -63,20 +67,42 @@ class CutsSayTheirName(unittest.TestCase):
 class CeilingIsNotCompletion(unittest.TestCase):
     """Исчерпание потолка ходов — не «сделано» и не «упал»."""
 
+    def run_worker(self, exhausted):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task_id, unit_id = 'code-ceiling', 'agent-ceiling'
+            directory = root / task_id
+            request = directory / 'agents' / unit_id / 'request.json'
+            request.parent.mkdir(parents=True)
+            (directory / 'task.json').write_text(json.dumps({
+                'id': task_id, 'status': 'active', 'root': str(root)}), encoding='utf-8')
+            request.write_text(json.dumps({'id': unit_id, 'task_id': task_id, 'role': 'scout',
+                                           'max_iters': 1, 'brief': 'read'}), encoding='utf-8')
+            answer = forge_worker.llm.LLMResponse(model='offline', text='summary',
+                blocks=[{'type': 'text', 'text': 'summary'}], stop_reason='end_turn')
+            tool = forge_worker.llm.LLMResponse(model='offline', text='', stop_reason='tool_use',
+                blocks=[{'type': 'tool_use', 'id': 'read', 'name': 'inspect', 'input': {'action': 'status'}}])
+            with mock.patch.object(forge, 'TASKS_DIR', root), \
+                 mock.patch.object(forge, 'BASE', root), \
+                 mock.patch.object(forge_worker, '_system', return_value='offline'), \
+                 mock.patch.object(forge_worker.llm, 'chat', side_effect=[tool, answer] if exhausted else [answer]), \
+                 mock.patch.object(forge, 'inspect', return_value='observed'), \
+                 mock.patch.object(forge, '_event') as event, mock.patch.object(forge, 'emit_unit_event'):
+                self.assertEqual(forge_worker.run(request), 0)
+            return json.loads((request.parent / 'result.json').read_text(encoding='utf-8')), event.call_args_list
+
     def test_worker_distinguishes_two_ways_to_end(self):
-        src = open(os.path.join(os.path.dirname(agent.__file__), "forge_worker.py"),
-                   encoding="utf-8").read()
-        self.assertIn("stopped_himself", src, "воркер не различает исходы цикла")
-        self.assertIn('"status": "done" if stopped_himself else "stalled"', src,
-                      "статус по-прежнему безусловно done")
-        self.assertIn("iters_used", src, "не записано, сколько ходов израсходовано")
-        self.assertIn("tool_errors", src, "не видно, сколько рук упало внутри прогона")
+        completed, _ = self.run_worker(False)
+        exhausted, _ = self.run_worker(True)
+        self.assertEqual((completed['status'], completed['complete']), ('done', True))
+        self.assertEqual((exhausted['status'], exhausted['complete']), ('stalled', False))
+        self.assertEqual((exhausted['iters_used'], exhausted['iters_max'], exhausted['tool_errors']), (1, 1, 0))
 
     def test_worker_event_does_not_say_done_on_exhaustion(self):
-        src = open(os.path.join(os.path.dirname(agent.__file__), "forge_worker.py"),
-                   encoding="utf-8").read()
-        chunk = src[src.index("agent_finished"):][:400]
-        self.assertIn("исчерпал", chunk, "событие всё ещё сообщает о завершении")
+        exhausted, events = self.run_worker(True)
+        finished = [call.kwargs['summary'] for call in events if call.args[1] == 'agent_finished']
+        self.assertEqual(finished, ['agent-ceiling stalled; tools=1'])
+        self.assertEqual(exhausted['status'], 'stalled')
 
     def test_her_invitation_has_three_outcomes_not_two(self):
         items = [{"priority": "normal", "status": "done", "goal": "g", "task_id": "t",

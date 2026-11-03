@@ -39,6 +39,46 @@ def reply(text):
                                  blocks=[{"type": "text", "text": text}])
 
 
+def deep_provider(request,results):
+    """Three editing generations share ONE slot; another branch must wait."""
+    brief,root,step=request['brief'],Path(request['root']),len(results)
+    if brief in ('deep-root','deep-middle'):
+        if step==0:
+            if brief=='deep-root':
+                (root/'deep-root.started').write_text('entered',encoding='utf-8')
+                deadline=time.monotonic()+8
+                while not (root/'deep-peer.queued').exists():
+                    if time.monotonic()>deadline:raise AssertionError('peer admission did not arrive')
+                    time.sleep(.02)
+                return tool('edit',action='write',path='deep.txt',content='R')
+            return tool('edit',action='replace',path='deep.txt',old='R',new='RM')
+        if step==1:return tool('delegate',action='spawn',role='worker',brief='deep-middle' if brief=='deep-root' else 'deep-leaf')
+        child=re.search(r'agent-[0-9a-f]{8}',results[1]).group()
+        if step==2:return tool('delegate',action='wait',agent_id=child)
+        result=json.loads(results[2])
+        assert result['status']=='settled' and result['result']['status']=='done',result
+        if step==3:return tool('delegate',action='disposition',agent_id=child,result_sha256=result['result_sha256'],disposition='integrated')
+        if step==4:return tool('edit',action='replace',path='deep.txt',old='RMLM' if brief=='deep-root' else 'RML',new='RMLMR' if brief=='deep-root' else 'RMLM')
+        return reply(brief+' consumed exact child')
+    if brief=='deep-leaf':
+        if step==0:
+            parent=request['parent_unit_id'];grandparent=forge._parent_of(request['task_id'],parent)
+            for ancestor in (parent,grandparent):
+                pp=forge._unit_dir(request['task_id'],'agents',ancestor)/'request.json'
+                denied=forge.edit(request['task_id'],'write',path='unsafe-deep.txt',content='overlap',_parent_request_path=str(pp))
+                assert 'yielded' in denied,denied
+            peers=[r for r in forge._units(request['task_id'],'agents') if r.get('brief')=='deep-peer']
+            assert len(peers)==1 and peers[0]['status']=='queued',peers
+            return tool('edit',action='replace',path='deep.txt',old='RM',new='RML')
+        return reply('leaf complete')
+    if brief=='deep-peer':
+        if not step:
+            assert (root/'deep.txt').read_text(encoding='utf-8')=='RMLMR'
+            return tool('edit',action='replace',path='deep.txt',old='RMLMR',new='RMLMRS')
+        return reply('other branch ran after root release')
+    raise AssertionError(brief)
+
+
 def provider(*args, **kwargs):
     """The only fake cognitive component. Tools/dispatcher/journal/core are real."""
     request = json.loads(kwargs["system"])
@@ -47,6 +87,7 @@ def provider(*args, **kwargs):
                and isinstance(message["content"], list) for item in message["content"]
                if item.get("type") == "tool_result"]
     step = len(results)
+    if brief.startswith('deep-'):return deep_provider(request,results)
     if brief in {"read-a", "read-b"}:
         if not step:
             (root / (brief + ".started")).write_text("provider entered", encoding="utf-8")
@@ -131,7 +172,7 @@ class TeamConsumers:
     process_mode = False
 
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="forge-team-", dir=CORE)
+        self.tmp = tempfile.TemporaryDirectory(prefix="forge-team-", dir=os.environ.get('HELENE_TEST_SCRATCH') or CORE)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.tid = "code-12345678"
@@ -179,13 +220,18 @@ class TeamConsumers:
 
     def wait_result(self, ident):
         path = self.directory / "agents" / ident
-        end = time.monotonic() + 15
+        # Twelve isolated suites share the bounded CPU/disk executor. Durable
+        # three-generation receipts can take longer under that load; success
+        # still requires the real terminal result and released ownership.
+        end = time.monotonic() + 45
         while time.monotonic() < end:
             if forge._root_released(self.tid, ident):
                 result = forge._read_json(path / "result.json")
                 self.assertEqual(result["status"], "done", result)
                 return result
             time.sleep(.02)
+        import faulthandler
+        faulthandler.dump_traceback()
         self.fail("worker did not complete: " + ident + " " + str(forge._read_json(path / "result.json"))
                   + " log=" + forge._tail(path / "supervisor.log", 4000))
 
@@ -217,6 +263,29 @@ class TeamConsumers:
         events = [json.loads(line) for line in (self.directory / "events.jsonl").read_text(encoding="utf-8").splitlines()]
         kinds = [r["kind"] for r in events]
         self.assertLess(kinds.index("worker_yielded"), kinds.index("worker_reacquired"))
+
+    def test_three_generations_transfer_one_slot_without_admitting_another_branch(self):
+        forge._atomic_json(self.directory/'task.json',{**forge.get(self.tid),'max_active_workers':1})
+        root=re.search(r'agent-[0-9a-f]{8}',forge.agent(self.tid,'spawn',brief='deep-root')).group()
+        deadline=time.monotonic()+8
+        while not (self.root/'deep-root.started').exists() and time.monotonic()<deadline:time.sleep(.02)
+        self.assertTrue((self.root/'deep-root.started').exists())
+        peer=re.search(r'agent-[0-9a-f]{8}',forge.agent(self.tid,'spawn',brief='deep-peer')).group()
+        self.assertEqual(forge._unit_state(self.directory/'agents'/peer)['status'],'queued')
+        (self.root/'deep-peer.queued').write_text('queued',encoding='utf-8')
+        result=self.wait_result(root)
+        self.assertEqual(result['iters_used'],6)
+        middle_receipt=json.loads(result['trace'][2]['output']);middle=middle_receipt['agent_id']
+        middle_result=forge._read_json(self.directory/'agents'/middle/'result.json')
+        leaf_receipt=json.loads(middle_result['trace'][2]['output']);leaf=leaf_receipt['agent_id']
+        self.assertEqual(middle_result['iters_used'],6)
+        self.assertEqual(forge._parent_of(self.tid,middle),root);self.assertEqual(forge._parent_of(self.tid,leaf),middle)
+        for ident,receipt in ((middle,middle_receipt),(leaf,leaf_receipt)):
+            self.assertEqual(receipt['result_sha256'],forge._result_identity(self.directory/'agents'/ident/'result.json'))
+            self.assertEqual(forge._agent_snapshot(self.tid,ident)['current_disposition']['disposition'],'integrated')
+        self.assertFalse((self.root/'unsafe-deep.txt').exists())
+        forge.tick_queued(self.tid);self.wait_result(peer)
+        self.assertEqual((self.root/'deep.txt').read_text(encoding='utf-8'),'RMLMRS')
 
     def test_coordinator_parallel_reads_review_repair_accept_dependent(self):
         plan = [{"id": "read-a", "role": "scout", "brief": "read-a"},

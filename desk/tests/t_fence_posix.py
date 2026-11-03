@@ -167,6 +167,30 @@ class Live(unittest.TestCase):
                                self.workspace, 30)
         self.assertIn("НЕТ-СЕТИ", out, out)
 
+    def test_network_flag_blocks_a_private_reachable_loopback_witness(self):
+        # A network-none outer test container must not supply a false proof:
+        # the same private TCP witness is reachable with network=True first.
+        from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+        import secrets,threading
+        token='private-network-witness-'+secrets.token_hex(12)
+        observed=[]
+        class Witness(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):
+                observed.append(self.path);raw=token.encode()
+                self.send_response(200);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
+        server=ThreadingHTTPServer(('127.0.0.1',0),Witness)
+        worker=threading.Thread(target=server.serve_forever,daemon=True);worker.start()
+        try:
+            client='import urllib.request;print(urllib.request.build_opener(urllib.request.ProxyHandler({})).open('+repr('http://127.0.0.1:'+str(server.server_port)+'/witness')+',timeout=2).read().decode())'
+            allowed,code,timed=self.box.run([sys.executable,'-c',client],self.workspace,10)
+            self.assertEqual(code,0,allowed);self.assertFalse(timed);self.assertIn(token,allowed)
+            blocked=fence_posix.Container(self.root,self.workspace,False,tree=self.tree);blocked.prepare()
+            denied,code,_=blocked.run([sys.executable,'-c',client],self.workspace,10)
+            self.assertNotEqual(code,0,denied);self.assertNotIn(token,denied)
+            self.assertEqual(observed,['/witness'])
+        finally:server.shutdown();server.server_close();worker.join(timeout=5)
+
     def test_таймаут_обрывает_дерево(self):
         out, code, timed = self.box.run(["bash", "-lc", "sleep 30"], self.workspace, 3)
         self.assertTrue(timed)

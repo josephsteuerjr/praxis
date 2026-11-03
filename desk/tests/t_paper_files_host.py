@@ -111,6 +111,7 @@ class FileRules(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows native-host consumer")
+@unittest.skipUnless(os.environ.get('HELENE_HOST_BINARY'), 'Optional legacy native host was not declared by this verification stand')
 class NativeHost(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.TemporaryDirectory(prefix="paper-host-")
@@ -129,9 +130,9 @@ class NativeHost(unittest.TestCase):
             "mode": "remote", "base": "http://127.0.0.1:9", "key": "not-a-live-key",
             "setup_complete": True, "python": "runtime/python.exe", "tree": "data", "port": 8094,
         }), encoding="utf-8")
-        binary = DESK / "shell/target/debug/helene-host.exe"
+        binary = Path(os.environ['HELENE_HOST_BINARY'])
         if not binary.is_file():
-            self.fail("build the source helene-host before this consumer test")
+            self.fail("Declared HELENE_HOST_BINARY is unavailable")
         self.events = queue.Queue()
         self.process = subprocess.Popen([str(binary), "--root", str(self.root)],
                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,

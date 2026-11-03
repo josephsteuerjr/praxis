@@ -23,6 +23,7 @@ class IncomingCoordinator(unittest.TestCase):
         write(f.tree/'memory/.self-review/runtime.json', {'supported':False, 'at':time.time()})
         operation=f.operation()
         operation.update(state='needs_attention', error=pipeline.UNAVAILABLE, created=time.time()-7200)
+        operation.pop('coordinator',None)  # This fixture predates incoming-host admission.
         write(f.directory/'pipeline.json', operation)
         self.binding={'kind':'incoming-update-runtime.v1', 'program':str(f.new), 'plan_id':f.directory.name}
         # Current incoming panels freeze the app/core seam as well as A/L/B/M.
@@ -72,6 +73,52 @@ class IncomingCoordinator(unittest.TestCase):
             pipeline.ensure(f.tree,f.old,f.code,f.directory,'2.2.4',coordinator={**self.binding,'program':'different'})
         self.assertEqual(len(f.spawns),1)
 
+    def test_parent_teardown_preserves_waiting_candidate_and_failed_battery(self):
+        from localharness import owner_stop, session_exit
+        f=self.f;operation=self.admit()
+        binding={**self.binding,'job_control':{'id':'bound-job'}}
+        operation.update(state='waiting_agent',coordinator=binding,
+                         verification_error='fixture failed assertion',
+                         battery={'key':'fixture-evidence','full_pass':False})
+        write(f.directory/'pipeline.json',operation)
+        before=source_merge.candidate_signature(f.directory)
+        with patch.object(owner_stop,'stopped',return_value=False), \
+             patch.object(session_exit,'requested',return_value=False):
+            host._handle_parent_stop(f.old,f.tree,f.forge,f.service,f.directory,binding,
+                                     {'id':'bound-job','state':'running'})
+        kept=f.operation()
+        self.assertEqual(kept['state'],'waiting_agent')
+        self.assertEqual(kept['verification_error'],operation['verification_error'])
+        self.assertEqual(kept['battery'],operation['battery'])
+        self.assertEqual(source_merge.candidate_signature(f.directory),before)
+        self.assertFalse((f.directory/'cancel.json').exists())
+        self.assertFalse(kept.get('cancel_requested'))
+        self.assertIn('coordinator_interruption',kept)
+        self.assertEqual(pipeline.ensure(f.tree,f.old,f.code,f.directory,'2.2.4',
+                         coordinator=binding)['state'],'waiting_agent')
+
+    def test_explicit_owner_controls_still_cancel_after_parent_teardown(self):
+        from localharness import owner_stop, session_exit
+        f=self.f;operation=self.admit()
+        for mode in ('job-cancel','owner-stop','owner-exit','legacy'):
+            with self.subTest(mode=mode):
+                write(f.directory/'pipeline.json',operation)
+                (f.directory/'cancel.json').unlink(missing_ok=True)
+                binding=self.binding if mode=='legacy' else {**self.binding,'job_control':{'id':'bound-job'}}
+                with patch.object(owner_stop,'stopped',return_value=mode=='owner-stop'), \
+                     patch.object(session_exit,'requested',return_value=mode=='owner-exit'):
+                    host._handle_parent_stop(f.old,f.tree,f.forge,f.service,f.directory,binding,
+                        {'id':'bound-job','cancel_requested':mode=='job-cancel'})
+                self.assertEqual(f.operation()['state'],'cancelled')
+                self.assertTrue((f.directory/'cancel.json').exists())
+
+    def test_unknown_job_identity_cannot_be_treated_as_mechanical_restart(self):
+        f=self.f;self.admit();before=(f.directory/'pipeline.json').read_bytes()
+        with self.assertRaisesRegex(ValueError,'job changed'):
+            host._handle_parent_stop(f.old,f.tree,f.forge,f.service,f.directory,
+                {**self.binding,'job_control':{'id':'bound-job'}},{'id':'replacement-job'})
+        self.assertEqual((f.directory/'pipeline.json').read_bytes(),before)
+
     def test_incoming_host_does_not_advance_unrelated_review(self):
         f=self.f
         other=f.service.request(operation_id='unrelated-owner-review',sources={'mine':f.code})
@@ -91,12 +138,14 @@ class IncomingCoordinator(unittest.TestCase):
     def test_runtime_validation_rejects_tampered_core_and_coordinator(self):
         f=self.f
         for name in ('forge.py','forge_worker.py','llm.py'):(f.new/'tree'/name).write_text('# trusted fixture\n')
-        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','source_update_battery','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay','agent_source_update','update_source')]
+        names=['localharness/'+n+'.py' for n in ('source_update_host','source_update','source_update_worker','source_update_battery','source_update_parallel','source_update_hand','self_review','self_review_worker','source_update_transport','desktop_supervisor','python_relay','agent_source_update','update_source')]
         for name in names:
             p=f.new/'app'/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text('# trusted fixture\n')
         core={p.name:{'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in (f.new/'tree').iterdir()}
         app={n:hashlib.sha256((f.new/'app'/n).read_bytes()).hexdigest() for n in names}
         write(f.new/'code-upstream.json',{'files':core});write(f.new/'source-inputs.json',{'files':app})
+        from update_verification_fixture import bind
+        bind(f.root,f.new,read(f.new/'python-app.json')['version'])
         self.assertEqual(host.verified_runtime(f.new)['kind'],'incoming-update-runtime.v1')
         path=f.new/'tree/forge.py';before=path.read_bytes();path.write_text('tampered=True\n')
         with self.assertRaisesRegex(ValueError,'runtime source changed'):host.verified_runtime(f.new)

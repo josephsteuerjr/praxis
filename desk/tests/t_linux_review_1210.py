@@ -54,7 +54,11 @@ class Contracts(unittest.TestCase):
         self.assertEqual(changes,[(12,2,[1,1,2,2],2),(15,2,[3,3],1),(16,4,[4,4,4,4],1)])
 
     def test_activation_waits_for_a_new_window_without_forcing_its_initial_map(self):
-        with patch.object(linux,'session',return_value=('x11','')), patch.object(linux.os,'geteuid',return_value=1000), \
+        # Test activation ordering independently of the POSIX lock primitive.
+        # Native input-lock/process-group coverage runs on Linux.
+        from contextlib import nullcontext
+        with patch.object(linux,'session',return_value=('x11','')), patch.object(linux.os,'geteuid',return_value=1000,create=True), \
+             patch.object(linux,'input_lock',side_effect=nullcontext), \
              patch.object(linux,'property_of',side_effect=['WM_STATE: not found.','window state: Normal']), \
              patch.object(linux,'command',return_value='Map State: IsViewable'):
             result=linux.dispatch('desktop.window.activate',{'hwnd':16,'timeout_ms':1000},'.')
@@ -196,6 +200,7 @@ class Contracts(unittest.TestCase):
         with patch.object(harness,'call',return_value={'ok':False,'error':'desktop probe timeout'}):
             harness.Body.probe_desktop(SimpleNamespace(),timeout=.1)
         self.assertEqual(harness.STATE['platform'],'linux'); self.assertIsNone(harness.STATE['console'])
+    @unittest.skipUnless(os.name=='posix','requires POSIX process groups and SIGTERM cleanup')
     def test_group_stop_gives_descendant_cleanup_grace_after_leader_exits(self):
         sys.path.insert(0,str(SOURCE/'desk/localharness'))
         spec=importlib.util.spec_from_file_location('review_group_body',SOURCE/'desk/localharness/body.py')
