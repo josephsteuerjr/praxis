@@ -25,6 +25,13 @@ class AutostartTests(unittest.TestCase):
         self.environment=patch.dict(os.environ,APPDATA=str(self.root/'appdata'))
         self.environment.start()
         self.addCleanup(self.environment.stop)
+        # The current implementation uses HKCU Run for new registrations.
+        # APPDATA isolates shortcut files, not the Windows registry.
+        self.registration=None
+        def save(value):self.registration=value
+        for stub in (patch.object(python_windows,'run_binding',side_effect=lambda:self.registration),
+                     patch.object(python_windows,'set_run',side_effect=save)):
+            stub.start();self.addCleanup(stub.stop)
 
     def invoke(self,command,**args):
         return python_windows.invoke(self.owner,command,args)
@@ -32,12 +39,13 @@ class AutostartTests(unittest.TestCase):
     def test_exact_binding_unicode_spaces_apostrophe_and_remove(self):
         self.assertFalse(self.invoke('autostart_get'))
         self.invoke('autostart_set',on=True)
-        binding=python_windows.shortcut_binding(self.startup)
-        self.assertEqual(binding,{'target':str(self.install/'helene.exe'),'cwd':str(self.install),'arguments':'--launch-intent automatic'})
+        self.assertFalse(self.startup.exists())
+        self.assertEqual(self.registration,python_windows.run_command(self.install))
         self.assertTrue(self.invoke('autostart_get'))
         self.invoke('autostart_set',on=False)
         self.assertFalse(self.startup.exists())
         self.assertFalse(self.invoke('autostart_get'))
+        self.assertIsNone(self.registration)
 
     def test_on_is_boolean_not_truthy(self):
         for value in ('false',1,0,None,[],{}):
@@ -64,21 +72,23 @@ class AutostartTests(unittest.TestCase):
         self.assertFalse(self.invoke('autostart_get'))
         self.invoke('autostart_set',on=True)
         self.assertTrue(self.invoke('autostart_get'))
+        self.assertFalse(self.startup.exists())
+        self.assertEqual(self.registration,python_windows.run_command(self.install))
 
     def test_readback_mismatch_and_save_or_delete_denials_propagate(self):
-        with patch.object(python_windows,'powershell',return_value=''),patch.object(python_windows,'shortcut_binding',return_value=None):
+        with patch('localharness.windows_shortcuts.write'),patch.object(python_windows,'shortcut_binding',return_value=None):
             with self.assertRaisesRegex(RuntimeError,'did not match'):
                 python_windows.shortcut(self.startup,self.install/'helene.exe',self.install)
         binding={'target':str(self.install/'helene.exe'),'cwd':str(self.install),'arguments':python_windows.AUTOMATIC_ARGUMENTS}
         for key in binding:
             wrong=dict(binding);wrong[key]='foreign'
-            with self.subTest(key=key),patch.object(python_windows,'powershell',return_value=''),patch.object(python_windows,'shortcut_binding',return_value=wrong):
+            with self.subTest(key=key),patch('localharness.windows_shortcuts.write'),patch.object(python_windows,'shortcut_binding',return_value=wrong):
                 with self.assertRaisesRegex(RuntimeError,'did not match'):
                     python_windows.shortcut(self.startup,self.install/'helene.exe',self.install,python_windows.AUTOMATIC_ARGUMENTS)
-        with patch.object(python_windows,'powershell',side_effect=PermissionError('save denied')):
+        with patch.object(python_windows,'set_run',side_effect=PermissionError('save denied')):
             with self.assertRaisesRegex(PermissionError,'save denied'):
                 self.invoke('autostart_set',on=True)
-        self.invoke('autostart_set',on=True)
+        python_windows.shortcut(self.startup,self.install/'helene.exe',self.install,python_windows.AUTOMATIC_ARGUMENTS)
         before=self.startup.read_bytes()
         with patch.object(Path,'unlink',side_effect=PermissionError('delete denied')):
             with self.assertRaisesRegex(PermissionError,'delete denied'):
@@ -90,7 +100,7 @@ class AutostartTests(unittest.TestCase):
         self.startup.parent.mkdir(parents=True)
         self.startup.write_bytes(b'fixture')
         for value in ({'target':'foreign'},{'target':None,'cwd':'','arguments':''}):
-            with patch.object(python_windows,'powershell',return_value=json.dumps(value)):
+            with patch('localharness.windows_shortcuts.read',return_value=value):
                 with self.assertRaisesRegex(RuntimeError,'Invalid shortcut binding'):
                     self.invoke('autostart_get')
 

@@ -137,7 +137,10 @@ def safe_evidence_stream(path: Path):
             # or replaced ancestors are unsafe rather than evidence of a cold body.
             raise EvidenceNotFound(f"evidence unavailable: {exc}") from exc
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        # Atomic manifest replacement may unlink the already opened old inode
+        # before fstat. Its FD still pins that regular evidence object; zero links
+        # is not a hardlink alias. Multiple names remain forbidden.
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
             raise ContractError("evidence must be a single regular file")
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = None
@@ -688,8 +691,12 @@ def inventory(base: Path, *, min_age: dt.timedelta, now: dt.datetime | None = No
                         if ref["size"] > MAX_ARCHIVE_OBJECT_SIZE:
                             continue
                         try:
-                            payload = read_evidence_bytes(run_dir / ref["path"],
-                                                          max_bytes=ref["size"])
+                            # A pinned unlinked FD is valid reading evidence, but
+                            # cannot certify bytes reclaimable at the current name.
+                            with safe_evidence_stream(run_dir / ref["path"]) as stream:
+                                payload = stream.read(ref["size"] + 1)
+                                if os.fstat(stream.fileno()).st_nlink != 1:
+                                    continue
                         except ContractError:
                             continue
                         if (len(payload) == ref["size"]

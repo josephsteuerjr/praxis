@@ -30,6 +30,7 @@ import time
 from aiohttp import web
 from pathlib import Path
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -181,6 +182,11 @@ class ForeignPair(unittest.TestCase):
     неизвестный каналу токен — отдельный отказ.
     """
 
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.environment=patch.dict(os.environ,{'HELENE_DESK_STATE':self.temp.name})
+        self.environment.start();self.addCleanup(self.environment.stop)
+
     def test_unknown_token_does_not_assert_foreign_issuer(self):
         deskapp._PAIRS.pop("no-such-token", None)
         with self.assertRaises(web.HTTPForbidden) as caught:
@@ -189,13 +195,11 @@ class ForeignPair(unittest.TestCase):
         self.assertNotIn('другого адреса', caught.exception.text)
 
     def test_expired_pair_keeps_the_old_words(self):
-        deskapp._PAIRS["dead-token"] = {"expires": time.time() - 1, "uses": 3}
-        try:
+        pair=deskapp._new_pair()
+        with patch.object(deskapp.time,'time',return_value=time.time()+deskapp._PAIR_TTL+1):
             with self.assertRaises(web.HTTPForbidden) as caught:
-                deskapp._redeem("dead-token", "iPhone", "10.0.0.5")
+                deskapp._redeem(pair['token'], "iPhone", "10.0.0.5")
             self.assertIn("устарел", str(caught.exception.text))
-        finally:
-            deskapp._PAIRS.pop("dead-token", None)
 
 
 class ConfigJs(unittest.TestCase):

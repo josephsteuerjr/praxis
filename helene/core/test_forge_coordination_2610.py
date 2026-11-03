@@ -260,7 +260,7 @@ class Coordination(unittest.TestCase):
             if len(calls) == 1:
                 raise PermissionError("synthetic Windows open-reader sharing violation")
             return replace(path, destination)
-        win = types.SimpleNamespace(name="nt", getpid=forge.os.getpid)
+        win = types.SimpleNamespace(name="nt", getpid=forge.os.getpid, fdopen=forge.os.fdopen)
         with mock.patch.object(forge, "os", win), mock.patch.object(Path, "replace", reader_overlap), \
              mock.patch.object(forge.time, "sleep") as pause:
             forge._atomic_json(target, {"new": True})
@@ -430,7 +430,7 @@ class Coordination(unittest.TestCase):
         core = types.ModuleType("core")
         core.events = types.SimpleNamespace(emit=mock.Mock(), known_keys=lambda: set())
         core.notices = types.SimpleNamespace(note_node=mock.Mock())
-        core.subagents = types.SimpleNamespace(normalize=mock.Mock(return_value={"status": "done"}),
+        core.subagents = types.SimpleNamespace(normalize=mock.Mock(return_value={"status": "done", "work_ref": {"task_id": self.tid}}),
             event_key=lambda *args, **kwargs: "key", overdue_minutes=lambda: 1,
             load_unit=lambda d: (forge._read_json(d / "request.json"), forge._read_json(d / "result.json")))
         d = self.unit(result={"status": "done", "finished": forge._now(), "role": "worker"})

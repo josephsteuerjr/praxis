@@ -490,13 +490,19 @@ def _open_private_directory(path: Path) -> tuple[Path, int]:
         current_fd = os.open(parts[0], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         for component in parts[1:]:
             try:
-                os.mkdir(component, mode=0o700, dir_fd=current_fd)
-            except FileExistsError:
-                pass
-            next_fd = os.open(
-                component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                dir_fd=current_fd,
-            )
+                next_fd = os.open(
+                    component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
+                )
+            except FileNotFoundError:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(
+                    component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=current_fd,
+                )
             os.close(current_fd)
             current_fd = next_fd
         os.fchmod(current_fd, 0o700)

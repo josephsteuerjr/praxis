@@ -25,15 +25,21 @@ class SourceMergeAdapter:
     tools = [{'name': 'merge_source', 'description':
         'Inspect frozen A/base, L/local, B/incoming and M/result. Resolve conflicts '
         'and repair integration in any declared source input, preserving both intents. '
-        'Nonconflict repairs require reason and expected_candidate_sha256 from status. Finish '
+        'Explicit surface core/app uses root-relative paths; omitted surface retains app/ '
+        'application shorthand. All app writes require a reason and '
+        'expected_composition_sha256 from status. Nonconflict core repairs require '
+        'reason and expected_candidate_sha256. Finish '
         'validates the isolated candidate; this never applies or approves the update.',
         'input_schema': {'type': 'object', 'properties': {
             'action': {'type': 'string', 'enum': ['status', 'read', 'resolve', 'finish']},
             'path': {'type': 'string'}, 'content': {'type': 'string'},
+            'surface': {'type':'string','enum':['core','app'],
+                        'description':'Explicit surface uses paths relative to that root; core paths may begin app/.'},
             'delete': {'type': 'boolean'},
             'side': {'type': 'string', 'enum': ['base', 'local', 'incoming']},
             'offset': {'type': 'integer', 'minimum': 0},
             'reason': {'type': 'string'}, 'expected_candidate_sha256': {'type': 'string'},
+            'expected_composition_sha256': {'type': 'string'},
             'expected_input_sha256': {'type': 'string'}},
             'required': ['action', 'expected_input_sha256']}}]
 
@@ -54,8 +60,8 @@ class SourceMergeAdapter:
                 or operation.get('task_id') != request.get('task_id')
                 or operation.get('input_sha256') != self.input_sha256):
             raise ValueError('Source update attempt is stopped, superseded or not active')
-        from localharness import owner_stop
-        if owner_stop.stopped() or owner_stop.present(Path(operation['tree']) / 'memory/.control/autonomy-paused.json'):
+        from localharness.source_update import _owner_blocked
+        if _owner_blocked(operation['tree']):
             raise ValueError('Owner Stop/Pause forbids merger tool admission')
         self.request = request
         return plan, operation
@@ -78,8 +84,13 @@ class SourceMergeAdapter:
                 'every conflict and resolve the entire file or explicitly delete/select '
                 'a side. Inspect the combined source for semantic compatibility, including '
                 'automatically merged files. Repair declared nonconflict source with a '
-                'specific reason and the current candidate SHA from status. Preserve '
-                'authored changes; selecting an entire incoming file needs justification. '
+                'specific reason and the current candidate SHA from status. '
+                'Application and resource inputs use app/ paths, including immutable '
+                'binary side selection. Every app write needs a reason and the current '
+                'full composition SHA from status. Finish validates both app and core. '
+                'Use explicit surface core or app with paths relative to that root. '
+                'Core may itself contain app/ directories: select surface core to access them. '
+                'Preserve authored changes; selecting an entire incoming file needs justification. '
                 'Read supports character offset pagination (8000 characters per side); '
                 'continue reading relevant sections and consumers before resolving. '
                 'A failed tool call is feedback to correct and continue, not a reason to stop. '
@@ -93,66 +104,128 @@ class SourceMergeAdapter:
         plan, operation = self._check(request)
         if args.get('expected_input_sha256') != self.input_sha256:
             raise ValueError('Exact expected_input_sha256 required')
+        surface=args.get('surface')
+        if 'surface' in args and surface not in ('core','app'):
+            raise ValueError('Unknown source surface; choose core or app')
         action = args.get('action', 'status')
         if action == 'status':
-            return json.dumps({'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
+            status = {'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
                 'state': plan['state'], 'conflicts': plan['conflicts'],
                 'resolved': plan['resolved'], 'findings': operation.get('findings', []),
                 'repairs': plan.get('repairs', []),
-                'candidate_sha256': merge.candidate_signature(self.root)}, ensure_ascii=False)
+                'path_surfaces':['core','app'] if plan.get('app_source') else ['core'],
+                'candidate_sha256': merge.candidate_signature(self.root)}
+            if plan.get('app_source'):
+                from localharness import app_source_update, update_composition
+                state = update_composition.prepare(self.root, operation)
+                app = app_source_update.validate_inputs(self.root, state)
+                status.update(composition_sha256=update_composition.signature(self.root),
+                    app_state=app['state'], app_conflicts=app['conflicts'],
+                    app_resolved=app['resolved'], app_repairs=app.get('repairs', []))
+            return json.dumps(status, ensure_ascii=False)
         if action in {'read', 'resolve'}:
             logical = args.get('path', '')
             merge.relative(logical)
+            application=(surface=='app' or (surface is None and logical.startswith('app/') and plan.get('app_source')))
+            if application:
+                if not plan.get('app_source'):
+                    raise ValueError('This source plan has no authored application surface')
+                from localharness import app_source_update, update_composition
+                state = update_composition.prepare(self.root, operation)
+                app = app_source_update.validate_inputs(self.root, state)
+                # Validates the complete frozen delivery, runtime and app inputs,
+                # including when reading a side rather than changing M.
+                update_composition.signature(self.root)
+                local = logical.removeprefix('app/') if surface is None else logical
+                merge.relative(local)
+                if action == 'read':
+                    roots = {side: self.root/'app-merge'/side for side in ('base','local','incoming')}
+                    roots['result'] = self.root/'compound/app'
+                    return self._read(app, local, roots, args)
+                if args.get('side'):
+                    if 'content' in args or args.get('delete'):
+                        raise ValueError('Choose exact immutable app bytes or an authored repair')
+                    app_source_update.resolve_side(self.root, local, args['side'],
+                        expected=args.get('expected_composition_sha256', ''), reason=args.get('reason', ''))
+                else:
+                    update_composition.repair(self.root, 'app/'+local, args.get('content'),
+                        delete=args.get('delete') is True,
+                        expected=args.get('expected_composition_sha256', ''), reason=args.get('reason', ''))
+                return self.dispatch(request, name, {'action':'status','expected_input_sha256':self.input_sha256})
             # All declared source inputs can participate in semantic repair.
             # The merge journal binds nonconflict writes to the current M.
             if action == 'read':
-                if logical not in set().union(*(set(v) for v in plan['files'].values()),
-                                              set(merge.inventory(self.root / 'result'))):
-                    raise ValueError('Not a declared source input')
-                result = {}
-                offset = max(0, int(args.get('offset', 0)))
-                for side in ('base', 'local', 'incoming', 'result'):
-                    path = self.root / side / logical
-                    if not path.is_file():
-                        result[side] = {'exists': False}
-                        continue
-                    raw = path.read_bytes()
-                    row = {'exists': True, 'sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw)}
-                    try:
-                        text = raw.decode('utf-8-sig')
-                        if '\x00' in text:
-                            raise UnicodeError('binary input')
-                        published = any(row['sha256'] == (plan['files'][label].get(logical) or {}).get('sha256')
-                                        for label in ('base', 'incoming'))
-                        if (any(p.lower() in PRIVATE_NAMES for p in Path(logical).parts)
-                                or source_credential(text, published=published)):
-                            row['withheld'] = 'private or possible embedded credential'
-                        else:
-                            row.update(text=text[offset:offset + 8000], offset=offset, total_chars=len(text))
-                    except UnicodeError:
-                        row['binary'] = True
-                    result[side] = row
-                return json.dumps(result, ensure_ascii=False)
+                return self._read(plan, logical,
+                    {side:self.root/side for side in ('base','local','incoming','result')}, args)
             merge.resolve(self.root, logical, args.get('content'),
                           delete=args.get('delete') is True, side=args.get('side', ''),
                           reason=args.get('reason', ''),
                           expected_candidate=args.get('expected_candidate_sha256', ''))
         elif action == 'finish':
+            if plan.get('app_source'):
+                from localharness import app_source_update
+                app_source_update.finish(self.root)
             merge.finish(self.root, exe=merge.executable(operation['program']))
         else:
             raise ValueError('Unknown merge_source action')
         return self.dispatch(request, name, {'action': 'status', 'expected_input_sha256': self.input_sha256})
 
+    def _read(self, plan, logical, roots, args):
+        if logical not in set().union(*(set(v) for v in plan['files'].values()),
+                                      set(merge.inventory(roots['result'],application=plan.get('application',False)))):
+            raise ValueError('Not a declared source input')
+        result = {}
+        offset = max(0, int(args.get('offset', 0)))
+        for side, root in roots.items():
+            path = root / logical
+            if not path.is_file():
+                result[side] = {'exists': False}
+                continue
+            raw = path.read_bytes()
+            row = {'exists': True, 'sha256': hashlib.sha256(raw).hexdigest(), 'size': len(raw)}
+            try:
+                text = raw.decode('utf-8-sig')
+                if '\x00' in text:
+                    raise UnicodeError('binary input')
+                published = any(row['sha256'] == (plan['files'][label].get(logical) or {}).get('sha256')
+                                for label in ('base', 'incoming'))
+                factory_text = plan.get('application') and (logical.startswith('resources/soul/')
+                    or logical in {'resources/SOUL.md','resources/self-day-zero.md'})
+                if ((not factory_text and any(p.lower() in PRIVATE_NAMES for p in Path(logical).parts))
+                        or source_credential(text, published=published)):
+                    row['withheld'] = 'private or possible embedded credential'
+                else:
+                    row.update(text=text[offset:offset + 8000], offset=offset, total_chars=len(text))
+            except UnicodeError:
+                row['binary'] = True
+            result[side] = row
+        return json.dumps(result, ensure_ascii=False)
+
     def diff(self):
         plan, _ = self._check(self.request)
-        return json.dumps({'input_sha256': self.input_sha256, 'conflicts': plan['conflicts'],
-                           'result': merge.inventory(self.root / 'result')}, ensure_ascii=False)
+        result = {'input_sha256': self.input_sha256, 'conflicts': plan['conflicts'],
+                  'result': merge.inventory(self.root / 'result')}
+        if plan.get('app_source'):
+            from localharness.update_composition import describe
+            result['composition'] = describe(self.root)
+        return json.dumps(result, ensure_ascii=False)
 
     def completion_feedback(self, request):
         plan, _ = self._check(request)
-        if plan.get('state') == 'ready' and merge.inventory(self.root / 'result') == plan.get('result'):
+        unresolved_app = []
+        if plan.get('app_source'):
+            from localharness import app_source_update, update_composition
+            state = update_composition.prepare(self.root)
+            app = app_source_update.validate_inputs(self.root, state)
+            unresolved_app = ['app/'+name for name in app['conflicts'] if name not in app['resolved']]
+            try:
+                app_source_update.require_ready(self.root)
+            except ValueError:
+                unresolved_app.append('application finish required')
+        if (not unresolved_app and plan.get('state') == 'ready'
+                and merge.inventory(self.root / 'result') == plan.get('result')):
             return ''
-        unresolved = [name for name in plan['conflicts'] if name not in plan['resolved']]
+        unresolved = [name for name in plan['conflicts'] if name not in plan['resolved']] + unresolved_app
         return ('The source merge is still incomplete. Continue using merge_source within '
                 'the remaining turn budget; a textual report cannot finish this task. '
                 'Unresolved files: ' + json.dumps(unresolved) + '. '
@@ -168,9 +241,14 @@ class SourceMergeAdapter:
             unresolved = [name for name in plan['conflicts'] if name not in plan['resolved']]
             raise ValueError('Source merge remains incomplete; unresolved files: '
                              + ', '.join(unresolved) + '; successful finish is required')
-        return {'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
+        result = {'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
                 'candidate_sha256': merge.signature(actual), 'candidate_verified': True,
                 'framework_requested': self.framework, 'review_scope': 'isolated-conflict-candidate'}
+        if plan.get('app_source'):
+            from localharness import app_source_update, update_composition
+            app_source_update.require_ready(self.root)
+            result.update(composition_verified=True, composition_sha256=update_composition.signature(self.root))
+        return result
 
 
 def run(request_path):

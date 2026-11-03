@@ -1,0 +1,54 @@
+name: Hélène RC18 actual full archive update and rollback
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_full_archive_update.py, .github/workflows/rc18-macos-full-update.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  update:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [current]
+    timeout-minutes: 35
+    env:
+      UPDATE_SCENARIO: ${{ matrix.scenario }}
+      REQUIRE_WORK_EVENT: '1'
+      REQUIRE_NATIVE_MONITOR: '1'
+      UPDATE_RECHECK: remaining
+      CANDIDATE_SHA256: 29414244dbac27a6ef5beac33a4b754db3db919523c30a6b02c0051f0b972758
+      ARTIFACT_SHA256: e4ff88a30bbb533232be04bae9aa2a84081c0003fdde7b15714ffce61f2ee459
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: archive
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-29414244dbac27a6
+      - if: steps.archive.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085417762/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - uses: actions/cache/save@v4
+        if: steps.archive.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-29414244dbac27a6
+      - uses: actions/cache/restore@v4
+        if: matrix.scenario == 'legacy'
+        with:
+          path: ${{ runner.temp }}/rc18-evidence.zip
+          key: helene-macos-runtime-6eb05a4b19951fa9
+          fail-on-cache-miss: true
+      - name: Exact HTTPS archive, clean update, native failed-start recovery
+        run: python3 desk/tests/macos_full_archive_update.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-full-update-${{ matrix.scenario }}
+          path: evidence-full-update/

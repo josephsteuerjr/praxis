@@ -100,18 +100,21 @@ class SideCares(unittest.TestCase):
     def test_side_tick_survives_a_failing_care(self):
         calls: list[int] = []
 
-        async def boom() -> None:
-            calls.append(1)
-            raise RuntimeError("упала")
-
         async def scenario() -> None:
+            repeated = asyncio.Event()
+            async def boom() -> None:
+                calls.append(1)
+                if len(calls) >= 3:repeated.set()
+                raise RuntimeError("упала")
             task = asyncio.create_task(mr._clock_side("boom", 0.02, boom))
-            await asyncio.sleep(0.15)
-            task.cancel()
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
+                # Observe actual repeated execution after failures. Logging and
+                # twelve busy QA slots need not fit three ticks into150ms.
+                await asyncio.wait_for(repeated.wait(), timeout=5)
+            finally:
+                task.cancel()
+                try:await task
+                except asyncio.CancelledError:pass
 
         with mock.patch.object(mr, "_CLOCK_STARTUP_DUE", frozenset({"boom"})):
             asyncio.run(scenario())

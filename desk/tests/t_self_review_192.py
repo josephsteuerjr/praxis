@@ -83,6 +83,8 @@ class ReviewTests(unittest.TestCase):
             row = self.request(trigger="after_update", operation_id=key, overlay={key: ["agent.py"]})
             self.assertTrue(row["required"])
             self.assertIn("contested_overlay", row["triggers"])
+        self.assertEqual(self.request(trigger="after_self_edit")["state"], "disabled")
+        self.service.settings({"after_self_edit": True})
         self.assertEqual(self.request(trigger="after_self_edit")["trigger"], "after_self_edit")
         self.assertIn("on_request", self.request()["triggers"])
         self.service.settings({"after_update": True})
@@ -374,12 +376,17 @@ class ReviewTests(unittest.TestCase):
 
     def test_unavailable_cannot_be_accepted_and_settings_preserve_unknown(self):
         self.assertEqual(self_review.settings({"self_review": {"future": 4}})["future"], 4)
-        for config in ({"models": ["openai::model"]}, {"max_iters": 0}, {"after_update": "yes"}):
+        for config in ({"models": ["openai::model"]}, {"max_iters": -1}, {"max_iters": True}, {"after_update": "yes"}):
             with self.assertRaises(ValueError):
                 self_review.settings(config)
         row = self.request()
         with self.assertRaises(ValueError):
             self.service.disposition(row["id"], "accepted", "too early", row["subject_sha256"])
+
+    def test_ordinary_review_default_is_unbounded_and_explicit_step_limits_survive(self):
+        self.assertEqual(self_review.settings({})['max_iters'],0)
+        self.assertEqual(self_review.settings({'max_iters':7})['max_iters'],7)
+        self.assertEqual(self_review.settings({'max_iters':400})['max_iters'],400)
 
     def test_actual_service_forge_worker_fake_provider_readonly_result(self):
         row = self.request()

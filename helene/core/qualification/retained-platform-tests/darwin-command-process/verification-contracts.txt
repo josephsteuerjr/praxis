@@ -1,0 +1,12 @@
+test_output_limit_has_no_passing_coverage (tests.t_source_update_battery_2810.Battery.test_output_limit_has_no_passing_coverage) ... ok
+test_lost_unreaped_child_authority_never_signals_a_pid (test_command_process_2810.CommandCustody.test_lost_unreaped_child_authority_never_signals_a_pid) ... ok
+test_natural_descendant_completion_releases_group (test_command_process_2810.CommandCustody.test_natural_descendant_completion_releases_group) ... ok
+test_rapid_exit_and_stop_always_require_an_empty_group (test_command_process_2810.CommandCustody.test_rapid_exit_and_stop_always_require_an_empty_group) ... ok
+test_signal_permission_denial_does_not_bless_a_live_group (test_command_process_2810.CommandCustody.test_signal_permission_denial_does_not_bless_a_live_group) ... ok
+test_successful_shell_exit_does_not_release_live_descendant (test_command_process_2810.CommandCustody.test_successful_shell_exit_does_not_release_live_descendant) ... ok
+test_unknown_census_keeps_command_unsettled (test_command_process_2810.CommandCustody.test_unknown_census_keeps_command_unsettled) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 30.864s
+
+OK

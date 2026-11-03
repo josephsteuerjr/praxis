@@ -788,30 +788,31 @@ function hero(): string {
   const alive = foreignHarness() ? S.connected : !!st?.runner?.alive;
   const model = (st?.brain?.model || "").trim();
   const lead = LOCAL_AGENT
-    ? "Агент живёт на этом компьютере. Дай ему понятное поручение: он прочитает, найдёт, подготовит результат и покажет, что сделал. " +
-      "Переписка и память останутся здесь; с телефона ты обращаешься к тому же агенту."
-    : "Агент живёт на сервере, а это окно — дверь к нему: разговор, его память и то, как идёт каждый ход.";
+    ? "Дай агенту конкретное дело: разобрать файл, найти информацию или довести проект до результата. " +
+      "Здесь — разговор, память и действия. С телефона можно продолжить с тем же агентом."
+    : "Это окно твоего агента на сервере. Здесь можно следить за его работой, читать память и разбирать результаты.";
   const status = st
     ? `<span class="hero-pill${alive ? " is-live" : ""}"><i></i>${alive ? "на связи" : "не на связи"}</span>` +
       (model ? `<span class="hero-pill">думает моделью <b>${esc(model)}</b></span>` : "")
     : "";
   return `<header class="lrn-hero lrn-welcome" id="lrn-top">
     <div class="lrn-hero-text"><p class="lrn-kicker">Hélène · твой агент</p>
-      <h2 class="lrn-hero-title">Начнём с того,<br>что важно тебе.</h2>
+      <h2 class="lrn-hero-title">Твоё первое дело<br>с Hélène.</h2>
       <p class="lrn-lead">${esc(lead)}</p>
-      <div class="lrn-welcome-actions"><button class="btn btn-primary" type="button" data-onboarding-done>${cfg.needs_local_setup ? 'Подключить модель' : 'Начать разговор'}</button><button class="btn btn-quiet" type="button" data-voice-help>Можно голосом</button></div>
+      <div class="lrn-welcome-actions"><button class="btn btn-primary" type="button" data-onboarding-done>${cfg.needs_local_setup ? 'Подключить модель' : 'Начать разговор'}</button><button class="btn btn-quiet" type="button" data-jump="lrn-tasks">Выбрать первое дело →</button></div>
       ${status ? `<div class="hero-pills">${status}</div>` : ''}
     </div>
-    <aside class="lrn-welcome-note"><span class="lrn-kicker">С чего начинается помощь</span><p>«Помоги разобраться с…»</p><p>«Посмотри этот файл…»</p><p>«Давай закончим…»</p><span>Добавь своё дело. Дальше разберётесь вместе.</span></aside>
-  </header><div class="lrn-start-cards"><article><span>01</span><h3>Подключись</h3><p>Выбери модель в настройках. Реле устанавливается отдельно; инструменты для сборки не нужны.</p><button class="flow-go" data-go="settings">Открыть настройки →</button></article><article><span>02</span><h3>Скажи, что нужно</h3><p>Текстом или голосом. Приложи файл, укажи желаемый результат — и начни разговор.</p><button class="flow-go" data-voice-help>Как записать голосовое →</button></article><article><span>03</span><h3>Продолжай с того же места</h3><p>Переписка, память и проекты остаются с агентом. Его действия видны рядом с разговором.</p><button class="flow-go" data-go="talk">Перейти в чат →</button></article></div>`;
+    <aside class="lrn-welcome-note"><span class="lrn-kicker">Хорошее начало</span><p>«Разбери этот файл и подготовь краткий вывод. Если данных не хватит — спроси».</p><span>Добавь файл и уточни, какой результат тебе нужен.</span><button class="flow-go" type="button" data-voice-help>Можно сказать голосом →</button></aside>
+  </header>`;
 }
 
 function toc(): string {
   const items: Array<[string, string]> = [
     ["lrn-start", "С чего начать"],
     ["lrn-connect", "Связь и перенос"],
-    ["lrn-flow", "Как идёт ход"],
     ["lrn-tasks", "Что поручить"],
+    ["lrn-map", "Разделы окна"],
+    ["lrn-flow", "Как идёт ход"],
     ["lrn-how", "Как говорить"],
     ["lrn-rhythm", "Между ходами"],
     ["lrn-contracts", "Договорённости"],
@@ -828,8 +829,8 @@ function firstSteps(): string {
     `<li class="lrn-step">
       <span class="lrn-step-num">1</span>
       <div class="lrn-step-body">
-        <b>Представься</b>
-        <p>Расскажи, кто ты и что тебе важно, — агент запомнит это о тебе.</p>
+        <b>Подключи модель и представься</b>
+        <p>В «Настройки → Мозг и связь» выбери подключение. Затем расскажи агенту, как к тебе обращаться и чем помочь.</p>
         <div class="frame-line" data-card="intro">${sentence(INTRO, "intro")}</div>
         <button class="btn btn-primary lrn-take" type="button" data-take="intro">${takeLabel()} <span aria-hidden="true">→</span></button>
       </div>
@@ -838,7 +839,7 @@ function firstSteps(): string {
       <span class="lrn-step-num">2</span>
       <div class="lrn-step-body">
         <b>Поручи первое дело</b>
-        <p>Выбери рамку ниже — пропуски заполняются прямо в карточке, отправляешь ты сам.</p>
+        <p>Укажи исходные материалы, нужный результат и ограничения. Шаблоны ниже помогут начать; сообщение отправляешь ты сам.</p>
         <button class="btn btn-quiet" type="button" data-jump="lrn-tasks">К рамкам задач <span aria-hidden="true">↓</span></button>
       </div>
     </li>`,
@@ -852,6 +853,20 @@ function firstSteps(): string {
     </li>`,
   ];
   return `<ol class="lrn-steps">${steps.join("")}</ol>`;
+}
+
+function windowMap(): string {
+  const places: Array<[View, string, string]> = [
+    ['talk', 'Чат', 'Поручения, ответы и готовые файлы.'],
+    ['now', 'Сейчас', 'Текущая работа и последние результаты.'],
+    ['plans', 'Задачи', 'Дела, которые стоит держать перед глазами.'],
+    ['wakes', 'Пробуждения', 'Когда агент вернётся к работе.'],
+    ['frame', 'Контекст', 'Из чего собирается следующий ход.'],
+    ['files', 'Файлы', 'Документы, память и рабочие материалы.'],
+    ['journal', 'Журнал', 'События и ошибки для разбора проблем.'],
+    ['anatomy', 'Система', 'Состояние программы и её подключений.'],
+  ];
+  return `<div class="lrn-map">${places.map(([view,title,note]) => `<button type="button" class="lrn-map-item" data-go="${view}"><span><b>${title}</b><small>${note}</small></span><span aria-hidden="true">↗</span></button>`).join('')}</div>`;
 }
 
 /** Читает ли агент это окно. Окно к серверу (её харнесс) записок окна не читает:
@@ -915,6 +930,26 @@ export async function render(container: HTMLElement): Promise<void> {
       <h3 class="lrn-h">Где тебе удобнее быть с агентом</h3>
       <p class="lrn-sub">Выбери нужное — введём данные, проверим связь и покажем следующий шаг здесь.</p>
       <div id="connection-guide"></div>
+      ${local ? '<p class="lrn-connection-note">При первом подключении Telegram сохрани настройки и нажми «Перезапустить сейчас». Новое подключение запускается вместе с агентом.</p>' : ''}
+    </section>
+
+    <section class="lrn-sec reveal" id="lrn-map">
+      <p class="lrn-kicker">Ориентиры</p><h3 class="lrn-h">Всё под рукой</h3>
+      ${windowMap()}
+    </section>
+
+    <section class="lrn-sec reveal" id="lrn-tasks">
+      <p class="lrn-kicker">Что поручить</p>
+      <div class="lrn-h-row">
+        <h3 class="lrn-h">Рамки задач <span class="lrn-count">${tasks.length}</span></h3>
+        <div class="lrn-chips" role="group" aria-label="Какие задачи показать">
+          <button type="button" class="lrn-chip" data-cat="all" aria-pressed="true">Все</button>
+          ${cats.map((c) => `<button type="button" class="lrn-chip" data-cat="${c.id}" aria-pressed="false">${esc(c.label)}</button>`).join("")}
+        </div>
+      </div>
+      <p class="lrn-sub">Впиши своё прямо в пропуски и нажми «В поле ввода»: рамка уедет в разговор с агентом, а отправишь её ты.
+        Пустой пропуск останется рамкой — его можно дописать и там.</p>
+      <div class="tasks">${tasks.map(taskCard).join("")}</div>
     </section>
 
     <section class="lrn-sec reveal" id="lrn-flow">
@@ -930,20 +965,6 @@ export async function render(container: HTMLElement): Promise<void> {
         <div class="flow-canvas">${flowSvg(list)}${flowList(list)}</div>
         <div class="flow-detail" aria-live="polite">${detailHTML(undefined)}</div>
       </div>
-    </section>
-
-    <section class="lrn-sec reveal" id="lrn-tasks">
-      <p class="lrn-kicker">Что поручить</p>
-      <div class="lrn-h-row">
-        <h3 class="lrn-h">Рамки задач <span class="lrn-count">${tasks.length}</span></h3>
-        <div class="lrn-chips" role="group" aria-label="Какие задачи показать">
-          <button type="button" class="lrn-chip" data-cat="all" aria-pressed="true">Все</button>
-          ${cats.map((c) => `<button type="button" class="lrn-chip" data-cat="${c.id}" aria-pressed="false">${esc(c.label)}</button>`).join("")}
-        </div>
-      </div>
-      <p class="lrn-sub">Впиши своё прямо в пропуски и нажми «В поле ввода»: рамка уедет в разговор с агентом, а отправишь её ты.
-        Пустой пропуск останется рамкой — его можно дописать и там.</p>
-      <div class="tasks">${tasks.map(taskCard).join("")}</div>
     </section>
 
     <section class="lrn-sec reveal" id="lrn-how">

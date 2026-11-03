@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -124,7 +125,9 @@ class FakeClient:
 
 class TransportHooks(unittest.TestCase):
     def _bot(self):
-        bot = botapi.BotTransport.__new__(botapi.BotTransport)
+        temporary = tempfile.TemporaryDirectory(prefix="t_review_bot_")
+        self.addCleanup(temporary.cleanup)
+        bot = botapi.BotTransport(types.SimpleNamespace(), Path(temporary.name), None, {})
         bot.client = FakeClient()
         bot.before_send = None
         bot.last_incoming = {}
@@ -132,7 +135,6 @@ class TransportHooks(unittest.TestCase):
         bot.agent_name = "Агент"
         bot.log = None
         bot.rooms = mock.Mock()      # архив комнаты — не предмет стенда
-        bot.tree = Path(tempfile.mkdtemp(prefix="t_review_bot_"))
         bot.memory_life = None
         return bot
 

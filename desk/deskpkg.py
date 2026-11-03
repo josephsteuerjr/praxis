@@ -94,6 +94,10 @@ PARTS: tuple[Part, ...] = (
          why="канал: HTTP, вебсокет, ключи, комнаты"),
     Part("deskd", "deskd", FLAVORS, kind="py",
          why="читалки канала: состояние, комнаты, расход, разрезы кадра"),
+    *(Part(name,name,(SERVER,),kind="file",why="shared configuration snapshots and kernel locks; no desktop runner")
+      for name in ('localharness/config_transaction.py',
+                   'localharness/program_state.py','localharness/package_notice.py','localharness/owner_stop.py',
+                   'localharness/phone_tunnel/__init__.py','localharness/phone_tunnel/platform_support.py')),
     # Окно — ДВА разных фронта, а не один на оба места. Приложения разделены
     # 10.09: у Элен агент рядом (настройки правят helene.json на этой машине), у
     # Praxis агент на сервере (тех карточек нет вовсе). До разделения фронт был
@@ -402,7 +406,7 @@ def top_level(flavor: str) -> list[str]:
     Всё, чего здесь нет (``desk.env``, данные, чужие копии), установка не
     трогает: пакет отвечает за себя и только за себя.
     """
-    return [p.dest for p in parts(flavor)] + [REQUIREMENTS, MANIFEST]
+    return list(dict.fromkeys([Path(p.dest).parts[0] for p in parts(flavor)] + [REQUIREMENTS, MANIFEST]))
 
 
 def read_manifest(root: Path) -> dict | None:

@@ -24,8 +24,8 @@ interface TelegramWebApp {
 declare global {
   interface Window {
     Telegram?: { WebApp?: TelegramWebApp };
-    DESK_CONFIG_OVERRIDE?: { base: string; key: string; agent?: string };
-    DESK_CONFIG?: { base: string; key: string; agent?: string } | null;
+    DESK_CONFIG_OVERRIDE?: import('../../ui-kit/window/api').Cfg;
+    DESK_CONFIG?: import('../../ui-kit/window/api').Cfg | null;
   }
 }
 

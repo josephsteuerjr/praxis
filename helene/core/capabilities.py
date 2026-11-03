@@ -691,13 +691,16 @@ def describe(scope: str = "owner", *, offered: list[str] | None = None) -> str:
         # момент удара. Молчаливых пределов не бывает: называем заранее.
         def _brain_bit(role: str, b: dict) -> str:
             cap = b.get("max_tokens")
-            line = f"{role}: {b['model']} ({b['framework']}"
+            line = f"{role}: {b['model']} ({b['framework']}, protocol={b.get('protocol') or llm._protocol(b['framework'])}"
             line += f", потолок ответа {int(cap)} токенов)" if cap else ", потолок ответа не назван)"
+            fallback = str(b.get("fallback_framework") or "")
+            route = (f"{fallback} (protocol={llm._protocol(fallback)})/"
+                     f"{b.get('fallback_model') or '—'}") if fallback else "не названа"
             if b.get("on_fallback"):
-                return line + " ⚠ФОЛБЭК"
+                return line + f" ⚠ФОЛБЭК; запасной аккаунт {route}"
             if b.get("fallback_armed"):
-                return line + f"; подстраховка {b.get('fallback_model')} взведена"
-            return line + "; подстраховки нет"
+                return line + f"; подстраховка {route} взведена"
+            return line + f"; подстраховки нет; запасной аккаунт {route}"
 
         brain = ", ".join(_brain_bit(r, b) for r, b in s["brain"].items())
         lim = s["limits"]

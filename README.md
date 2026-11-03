@@ -12,8 +12,9 @@ need Git, a compiler or a separate Python installation to start.
 | Debian/Ubuntu x86_64 | `Helene-…-linux-x86_64.zip` | `Start Helene.sh` |
 | Fedora x86_64 | `Helene-…-fedora-x86_64.zip` | `Start Helene.sh` |
 
-The first window helps you create an agent or connect your existing data. Choose
-a permanent program folder, then configure your model provider. Local voice is
+The first window helps you create an agent or connect your existing data. A new
+agent can start with the Hélène constitution or your own editable text or file.
+Choose a permanent program folder, then configure your model provider. Local voice is
 optional. Files named `SHA256SUMS` and `release-evidence` are verification
 material; download the application archive for your system.
 
@@ -35,16 +36,31 @@ the result returned to the model.
 
 ## Install, connect, update
 
-First launch and **Update** open the same setup wizard. Create a new agent,
-connect an existing data folder, or migrate an old installation. Choose the
-program location and whether to remove the previous program after the new one
-has confirmed startup.
+Normal **Update** starts a durable, in-place job owned by the Python host,
+not the setup window. Closing an observing window does not cancel that job;
+Pause, Continue and Stop remain explicit controls. Reopening the interface
+attaches to the same operation. The selected data folders stay connected.
 
-Keep your code changes by combining them with the incoming release and letting
-the new Python runtime's independent panel review the result. This also applies
-to older native installations. Alternatively, choose clean upstream code and
-keep the current data folder connected. Previous source and Git are archived.
-Memory, conversations, settings and keys stay with the selected data folders.
+The short setup/migration entry is separate: create a new agent, connect an
+existing data folder, or migrate an old installation. It hands the work to the
+host; the mechanical switch confirms the new program's startup or rolls back.
+See [Update and migration ownership](desk/docs/UPDATE-SESSION-HOST-230.md).
+
+Updates offer preserved source with conflict resolution, checks and independent
+review, or clean release code. Memory, conversations, settings and keys stay
+with the selected data folders. Legacy migration follows its explicit preview;
+program code and agent data have separate ownership. With several selected code
+roots, each resolution channel is admitted before the common application barrier.
+Ready channels stay reachable for explicit peer reconciliation; every changed
+composition needs its own current verification and independent review. Stop is
+sent to all admitted coordinators, and the final shared application is checked
+again after they settle.
+
+During an update the window can close for several minutes. Hélène opens it
+again automatically; do not launch another copy while the update is running.
+
+Desktop archives run as your logged-in user: no `su` or root desktop session
+is needed.
 
 **Restore upstream code**, beside Update, is the emergency route back to the
 installed release's clean source while keeping current data. The reusable

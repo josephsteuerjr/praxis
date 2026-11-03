@@ -12,14 +12,15 @@ import subprocess
 from unittest import mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from localharness import source_admission as admission, source_merge as merge, code_transition
+from localharness import source_admission as admission, source_merge as merge, code_transition,authored_baseline,update_source
 from localharness.package_notice import read,write
+from localharness.app_migration import code_path
 
 
-def view(program, baseline):
+def view(program, baseline,*,sealed=False):
     """Packager fixture: keep real B ZIP, expose the explicitly declared A view."""
     program,baseline=Path(program),Path(baseline)
-    code_transition.seal(program)
+    if not sealed:code_transition.seal(program)
     declaration={'format':admission.FORMAT,'baseline_version':'2.1.1',
         'target_version':read(program/'python-app.json')['version'],
         'view_files':merge.inventory(baseline),
@@ -100,8 +101,7 @@ class SourceAdmission(unittest.TestCase):
         self.assertTrue(admission.activate(self.program))
         self.assertEqual((self.program/'tree/module.py').read_bytes(),self.real)
         retained=list(self.root.glob('.helene-source-admission-*/retained-view-*'))
-        self.assertEqual(len(retained),1)
-        self.assertEqual((retained[0]/'module.py').read_bytes(),(self.base/'module.py').read_bytes())
+        self.assertEqual(retained,[])
         self.assertFalse(admission.activate(self.program))
 
     def test_duplicate_recovery_never_overwrites_authored_tree(self):
@@ -144,7 +144,11 @@ class SourceAdmission(unittest.TestCase):
         archive=(self.program/'code-upstream.zip').read_bytes()
         manifest=(self.program/'code-upstream.json').read_bytes()
         os.utime(self.program/'tree/module.py',(1577836800,1577836800))
-        code_transition.prepare(self.root/'old',self.program,{'source_paths':[]})
+        old=self.root/'old';home=self.root/'profile';home.mkdir()
+        shutil.copytree(self.base,old/'tree')
+        write(old/'helene.json',{'tree':str(home),'code':'tree','runner':''})
+        update_source.select(old,self.program,'clean',by='window')
+        code_transition.prepare(old,self.program,{'source_paths':[{'old':str(old/'tree')}]})
         self.assertEqual((self.program/'code-upstream.zip').read_bytes(),archive)
         self.assertEqual((self.program/'code-upstream.json').read_bytes(),manifest)
 
@@ -168,12 +172,13 @@ class SourceAdmission(unittest.TestCase):
             note=fresh(self.program,new,data,launch=False)
         self.assertEqual(note['state'],'prepared')
         self.assertEqual((new/'tree/module.py').read_bytes(),self.real)
-        self.assertEqual(read(new/'helene.json')['code'],str(new/'tree'))
+        self.assertEqual(code_path(new/'helene.json',read(new/'helene.json')),new/'tree')
         self.assertEqual((self.program/'tree/module.py').read_bytes(),(self.base/'module.py').read_bytes())
 
-    def test_actual_211_preflight_admits_custody_but_not_real_conflicted_merge(self):
+    def test_actual_211_preflight_admits_custody_but_requires_explicit_clean(self):
         old=self.root/'old';code=self.root/'authored';home=self.root/'home'
         shutil.copytree(self.base,old/'tree');shutil.copytree(self.base,code);home.mkdir()
+        (home/'owner-history.txt').write_bytes(b'owner history remains exact\n')
         (code/'module.py').write_text('old_stock = "authored"\n')
         write(old/'helene.json',{'tree':str(home),'code':str(code),'runner':''})
         write(old/'python-app.json',{'version':'2.1.1'})
@@ -184,11 +189,17 @@ class SourceAdmission(unittest.TestCase):
         self.assertEqual(gate['state'],'ready')
         self.assertEqual((code/'module.py').read_text(),'old_stock = "authored"\n')
         admission.activate(self.program)
-        real=code_transition.preflight(old,self.program,notify=False)
-        self.assertEqual(real['state'],'needs_resolution')
-        plan=read(Path(real['plans'][0]['directory'])/'plan.json')
-        self.assertNotEqual(plan['files']['incoming'],self.declaration['view_files'])
-        self.assertEqual(plan['files']['incoming'],read(self.program/'code-upstream.json')['files'])
+        with self.assertRaisesRegex(ValueError,'чистая замена'):
+            update_source.select(old,self.program,'preserve',by='window')
+        update_source.select(old,self.program,'clean',by='window')
+        note={'source_paths':[{'old':str(code)}]}
+        code_transition.prepare(old,self.program,note)
+        self.assertEqual(note['source_policy'],'clean')
+        self.assertEqual(Path(note['source_paths'][0]['selected']),self.program/'tree')
+        self.assertEqual(merge.inventory(self.program/'tree'),read(self.program/'code-upstream.json')['files'])
+        self.assertNotEqual(merge.inventory(self.program/'tree'),self.declaration['view_files'])
+        self.assertEqual((code/'module.py').read_text(),'old_stock = "authored"\n')
+        self.assertEqual((home/'owner-history.txt').read_bytes(),b'owner history remains exact\n')
 
     def test_legacy_prepare_reseal_cannot_replace_protected_pristine_source(self):
         pristine=(self.program/'code-upstream.zip').read_bytes()
@@ -240,7 +251,14 @@ class SourceAdmission(unittest.TestCase):
         previous=f.directory
         f.tick(stopped=True)
         self.assertEqual(read(previous/'pipeline.json')['state'],'cancelled')
-        write(f.new/'python-app.json',{'version':'2.2.6'})
+        # A new delivery has complete, pristine B before its first admission.
+        # Never erase the protocol marker or reseal the previously admitted B.
+        incoming=f.root/'next-delivery'
+        for name in ('tree','app','runtime'):shutil.copytree(f.new/name,incoming/name)
+        for name in ('source-inputs.json','python-package-files.json'):shutil.copy2(f.new/name,incoming/name)
+        write(incoming/'python-app.json',{'version':'2.2.6'})
+        code_transition.seal(incoming);authored_baseline.seal(incoming)
+        f.new=incoming
         f.preflight()
         request=read(source_update.path(f.tree))
         self.assertNotEqual(Path(request['directory']),previous)

@@ -175,12 +175,13 @@ export function apply(look: Look) {
 }
 
 /** Карточка «Вид» для экрана настроек: варианты кружками и плашками, применяются сразу. */
-export function lookCard(): HTMLElement {
+export function lookCard(options:{phone?:boolean}={}): HTMLElement {
   const look = load();
   const c = el("section", "card look-card");
   c.append(el("h3", "", "Вид"));
   c.append(el("p", "field-hint", "Твой облик окна: готовый вариант или собственная палитра. Изменения применяются сразу; стандартный вид всегда можно вернуть."));
-  c.append(customizationCard(look, () => c.replaceWith(lookCard())));
+  const customization = customizationCard(look, () => c.replaceWith(lookCard(options)),options);
+  c.append(customization);
 
   const set = <K extends keyof Look>(k: K, v: Look[K]) => {
     Object.assign(look,load());
@@ -204,9 +205,14 @@ export function lookCard(): HTMLElement {
       b.style.setProperty("--sw", it.color ?? it.fill ?? "transparent");
       b.dataset.id = it.id;
       b.addEventListener("click", () => {
+        // Choosing a palette color replaces an earlier custom override.
+        const custom = key === 'paperDay' ? 'dayColor' : key === 'paperNight' ? 'nightColor' : 'accentColor';
+        Object.assign(look, load());look[custom] = '';save(look);
         set(key, it.id as never);
         mark(box, it.id);
         name.textContent = it.name;
+        const input = customization.querySelector<HTMLInputElement>(`[data-look-color="${custom}"]`);
+        if (input) input.value = it.color ?? it.fill ?? '#000000';
       });
       box.append(b);
     }
@@ -241,10 +247,16 @@ export function lookCard(): HTMLElement {
     return row;
   };
 
-  c.append(
+  const palette = el('section', 'look-section look-palette');
+  palette.append(el('h4', 'look-section-title', 'Палитра'));
+  palette.append(
     swatches("Бумага днём", PAPER_DAY, "paperDay"),
     swatches("Бумага ночью", PAPER_NIGHT, "paperNight", true),
     swatches("Акцент", ACCENTS, "accent"),
+  );
+  const details = customization.querySelector('.look-details');
+  customization.insertBefore(palette, details);
+  (details || customization).append(
     pills("Фактура", GRAIN, "grain"),
     pills("Текст ленты", TEXT, "text"),
     pills("Движение", FEELS, "feel", (f) => f.hint),

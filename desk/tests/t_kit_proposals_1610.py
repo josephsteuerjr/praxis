@@ -271,7 +271,7 @@ class DistributionBoundary(unittest.TestCase):
 
     @unittest.skipUnless(sys.version_info >= (3, 12), "agent workshop uses Python 3.12+ f-string grammar")
     def test_index_candidate_can_use_existing_agent_fs_write_cas(self):
-        sys.path.insert(0, str(DESK.parent / "praxis"))
+        sys.path.insert(0, os.environ.get('HELENE_TREE_SRC',str(DESK.parent/'helene/core')))
         import workshop
         idx = self.tree / "soul/skills/INDEX.md"
         idx.parent.mkdir(parents=True)

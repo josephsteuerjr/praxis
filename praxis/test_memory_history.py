@@ -6,8 +6,11 @@ import tempfile
 import unittest
 
 from memory_history import HistoryError, snapshot
+import memory_history
+from unittest import mock
 
 
+@unittest.skipUnless(os.name == 'posix', 'POSIX ownership and no-follow memory history; unsupported refusal tested separately')
 class MemoryHistoryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -158,6 +161,28 @@ class MemoryHistoryTests(unittest.TestCase):
                                     'GIT_DIR': str(redirected)}):
             self.snap(True)
         self.assertFalse(redirected.exists())
+
+
+class UnsupportedHistoryTests(unittest.TestCase):
+    def test_unsupported_platform_refuses_before_paths_reads_writes_or_git(self):
+        sentinel = object()
+        with mock.patch.object(memory_history.os, 'name', 'nt'), \
+             mock.patch.object(memory_history, 'plain_path', side_effect=AssertionError('path accessed')), \
+             mock.patch.object(Path, 'read_text', side_effect=AssertionError('file read')), \
+             mock.patch.object(memory_history.os, 'open', side_effect=AssertionError('file opened')), \
+             mock.patch.object(memory_history.subprocess, 'run', side_effect=AssertionError('Git invoked')):
+            for operation in (lambda: memory_history.collect(sentinel, sentinel),
+                              lambda: snapshot(sentinel, sentinel, sentinel, sentinel, initialize=True),
+                              lambda: memory_history._snapshot(sentinel, {}, True)):
+                with self.subTest(operation=operation), self.assertRaisesRegex(HistoryError, 'POSIX ownership'):
+                    operation()
+
+    def test_missing_no_follow_capability_refuses_before_manifest_read(self):
+        with mock.patch.object(memory_history.os, 'name', 'posix'), \
+             mock.patch.object(memory_history.os, 'O_NOFOLLOW', 0, create=True), \
+             mock.patch.object(Path, 'read_text', side_effect=AssertionError('file read')):
+            with self.assertRaisesRegex(HistoryError, 'no-follow support'):
+                memory_history.collect(object(), object())
 
 
 if __name__ == '__main__':

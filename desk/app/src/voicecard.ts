@@ -40,6 +40,7 @@ interface VoiceState {
     got_bytes: number;
     total_bytes: number;
     updated_utc: string;
+    active?: boolean | null;
   } | null;
 }
 
@@ -59,6 +60,9 @@ interface SpeechState {
   speakers?: string[];
   languages?: string[];
   worker_ready?: boolean | null;
+  worker_phase?: string;
+  worker_error?: string;
+  device_actual?: string;
   enabled: boolean;
   voice: string;
   ready: boolean;
@@ -67,7 +71,7 @@ interface SpeechState {
   model: string;
   library: EngineState;
   catalog: Array<{ id: string; title: string; note: string; size_mb: number; installed: boolean }>;
-  download: { state: string; voice: string; done_mb?: number; size_mb?: number; at?: string; error?: string } | null;
+  download: { state: string; voice: string; note?: string; got_bytes?: number; total_bytes?: number; active?: boolean | null; done_mb?: number; size_mb?: number; at?: string; error?: string } | null;
 }
 
 export interface VoiceCard {
@@ -80,6 +84,22 @@ export interface VoiceCard {
 }
 
 const MB = 1024 * 1024;
+
+export function speechStatusText(state: SpeechState): string {
+  if (!state.ready) return `Агент отвечает текстом: ${state.why}.`;
+  const device = state.device_actual ? ` · ${state.device_actual.toUpperCase()}` : '';
+  switch (state.worker_phase) {
+    case 'loading': return 'XTTS загружает модель. Первый запуск займёт больше времени.';
+    case 'warming_voice': return 'XTTS подготавливает выбранный голос. Пробный синтез проходит без звука.';
+    case 'busy': return `XTTS озвучивает ответ${device}.`;
+    case 'paused': return 'Голос на паузе. Продолжи работу агента, чтобы он снова говорил.';
+    case 'error': return `Не удалось подготовить голос: ${state.worker_error || 'подробности в журнале XTTS'}`;
+    case 'unknown': return 'XTTS установлен. Не удалось проверить процесс; смотри журнал.';
+  }
+  return state.worker_ready === true
+    ? `Голос готов${device}. Модель и выбранный голос прогреты.`
+    : 'XTTS установлен. Ожидаю запуск голоса после сохранения настроек.';
+}
 
 function mb(bytes: number | undefined): string {
   return bytes ? `${Math.round(bytes / MB)} МБ` : "0 МБ";
@@ -138,12 +158,12 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const say = (state: VoiceState) => {
     const down = state.download;
-    const busy = !!down && down.state === "running" && fresh(down.updated_utc);
+    const busy = !!down && down.state === "running" && (down.active ?? fresh(down.updated_utc));
     fetchBtn.disabled = busy;
     if (busy) {
       const total = down!.total_bytes || 1;
       note.className = "receipt";
-      note.textContent = `качаю ${down!.model}: ${mb(down!.got_bytes)} из ~${mb(total)}`;
+      note.textContent = `${down!.note || 'Скачиваю'} · ${down!.model}: ${mb(down!.got_bytes)} из ~${mb(total)}`;
     } else if (down && down.state === "failed") {
       note.className = "receipt err";
       note.textContent = down.note;
@@ -218,16 +238,16 @@ export function voiceCard(draft: Config): VoiceCard {
           speakerCount.textContent = names.length ? `${names.length} голосов установленной модели` : 'Каталог появится после установки XTTS';
         }
         previewBtn.disabled = previewing || speech.worker_ready !== true;
-        if (!previewing && speech.worker_ready !== true) previewNote.textContent = speech.worker_ready === null ? 'Не удалось проверить процесс XTTS; смотри журнал.' : 'Процесс XTTS ещё не готов. Включи голос, сохрани настройки и проверь журнал, если ожидание затянулось.';
+        if (!previewing) previewNote.textContent = speech.worker_ready === true ? '' : speechStatusText(mine);
       } else {
         speechStatus.textContent = "этот канал про голос агента ничего не знает";
         speechBtn.disabled = true;
       }
       const down = state.download;
       const dv = speech?.download;
-      if ((down && down.state === "running" && fresh(down.updated_utc))
-          || (dv && dv.state === "running" && fresh(dv.at || ""))
-          || (speak && speech?.library.present && speech.speakers?.length && speech.worker_ready !== true)) {
+      if ((down && down.state === "running" && (down.active ?? fresh(down.updated_utc)))
+          || (dv && dv.state === "running" && (dv.active ?? fresh(dv.at || "")))
+          || (speak && speech?.library.present && speech.ready)) {
         timer = setTimeout(() => void refresh(), 2000);
       }
     } catch (e) {
@@ -264,7 +284,7 @@ export function voiceCard(draft: Config): VoiceCard {
   const speechPickBox = el("div");
   const speechActions = el("div", "actions");
   const speechNote = el("span", "receipt");
-  const speechBtn = button("Установить XTTS из комплекта", "quiet", () => void startVoice());
+  const speechBtn = button("Скачать и установить XTTS", "quiet", () => void startVoice());
   speechActions.append(speechBtn, speechNote);
   const speechFields = el("div");
   const deviceLabel=el('label','field-label','Вычисления XTTS');
@@ -337,11 +357,11 @@ export function voiceCard(draft: Config): VoiceCard {
 
   const sayVoice = (state: SpeechState) => {
     const down = state.download;
-    const busy = !!down && down.state === "running" && fresh(down.at || "");
+    const busy = !!down && down.state === "running" && (down.active ?? fresh(down.at || ""));
     speechBtn.disabled = busy;
     if (busy) {
       speechNote.className = "receipt";
-      speechNote.textContent = `качаю ${down!.voice}: ${down!.done_mb ?? 0} из ~${down!.size_mb ?? "?"} МБ`;
+      speechNote.textContent = (down!.note || 'Устанавливаю XTTS') + (down!.total_bytes ? ` · ${mb(down!.got_bytes)} из ${mb(down!.total_bytes)}` : '');
     } else if (down && down.state === "failed") {
       speechNote.className = "receipt err";
       speechNote.textContent = String(down.error || "не скачалось");
@@ -362,9 +382,7 @@ export function voiceCard(draft: Config): VoiceCard {
       speechBtn.disabled = true;
       return;
     }
-    speechStatus.textContent = state.ready
-      ? `XTTS установлен. Время синтеза зависит от устройства; модель держит отдельный процесс под общим Stop. Модель: ${state.dir}.`
-      : `Агент отвечает текстом: ${state.why}. Голоса лежат в ${state.dir}.`;
+    speechStatus.textContent = speechStatusText(state);
   };
 
   const startVoice = async () => {
@@ -385,12 +403,12 @@ export function voiceCard(draft: Config): VoiceCard {
 
   box.append(voicePreferencesFields(), onOff, status, pickBox, actions, keepOff,
     el("p", "field-hint",
-      "Модель держится в памяти около 1,5 ГБ. Дома это дорого за несколько голосовых в день, поэтому по умолчанию " +
-      "она загружается на время расшифровки и отпускается; на сервере наоборот. Применяется перезапуском."),
+      "Распознавание использует около 1,5 ГБ памяти. На компьютере модель выгружается после обработки, " +
+      "на сервере остаётся в памяти. Изменения применяются после перезапуска."),
     el("hr", "card-split"),
     speakOff, speechStatus, speechPickBox, speechFields, speechActions,
     el("p", "field-hint",
-      "XTTS местный, без Piper и сетевого fallback. Модель XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License). Whisper распознаёт твои голосовые, XTTS озвучивает ответы. Настройки применяются перезапуском."));
+      "Whisper распознаёт твои голосовые, XTTS озвучивает ответы локально. Выбранный голос применяется после сохранения. XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License)."));
 
   const onSection = (event: Event) => {
     if (!box.closest(".page")) {

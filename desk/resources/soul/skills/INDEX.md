@@ -53,6 +53,8 @@
 
 ## Написаны мной
 
+- [merge-gates-gnome-review](merge-gates-gnome-review.md) — Ревью гномами как обязательный пункт мёржа
+
 - [abstractdl-architecture-jargon](abstractdl-architecture-jargon.md) — Классификатор архитектурного жаргона AbstractDL
 - [abstractdl-mtproto-moderation](abstractdl-mtproto-moderation.md) — Живые MTProto-руки модерации AbstractDL
 - [anti-repeat-autonomous-checks](anti-repeat-autonomous-checks.md) — Не повторять автономную проверку по старой подсказке
@@ -92,7 +94,7 @@
 - [linked_memory](linked_memory.md) — Linked memory (graph)
 - [long-c-runs-stdbuf](long-c-runs-stdbuf.md) — Длинные C-прогоны: stdbuf перед nohup
 - [md-file-bom-telegram](md-file-bom-telegram.md) — Отправка .md-файлов в Telegram с BOM
-- [merge-gates-gnome-review](merge-gates-gnome-review.md) — Ревью гномами как обязательный пункт мёржа
+- [merge-gates-gnome-review](merge-gates-gnome-review.md) — Добровольный независимый взгляд; строгий source-update отдельно
 - [mode_ratchet](mode_ratchet.md) — Room Mode — моя обратимая ручка
 - [model-selection](model-selection.md) — Выбор модели
 - [no_performance_layer](no_performance_layer.md) — Authored Voice — без постредактора

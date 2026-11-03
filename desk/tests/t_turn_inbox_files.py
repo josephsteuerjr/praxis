@@ -41,6 +41,7 @@ class TurnFiles(unittest.TestCase):
             _seal_claim=lambda p, **kw: (True, ''), _message_text=runner._message_text,
             _split_attachments=runner._split_attachments, _hear_attachments=runner._hear_attachments,
             _IMAGE_EXT=runner._IMAGE_EXT, _batch_files=runner._batch_files,
+            _archive_inputs=runner._archive_inputs,
             _batch_images=lambda text, paths, **kw: (text, text),
             _room=lambda room: desk, _now=lambda: None,
             _mark_done=lambda p, n, why: (self.done.append(n), (p / (n + '.done')).write_text(why)))
@@ -48,6 +49,7 @@ class TurnFiles(unittest.TestCase):
         manager = SimpleNamespace(path=lambda run_id: self.run_root / run_id)
         self.agent = SimpleNamespace(_runs=lambda: manager)
         self.patch(patch.object(runner, '_tree', self.root))
+        self.patch(patch.object(runner, '_room', return_value=desk))
         self.patch(patch.object(runner, '_agent', self.agent))
         self.current = SimpleNamespace(run_id='run-20261001T000000Z-test',
                                        delivery_chat_id='window')
@@ -74,7 +76,7 @@ class TurnFiles(unittest.TestCase):
         self.assertIn('report.pdf', content)
         # Исходник в inbox жив до ACK: replay до checkpoint требует source.
         self.assertTrue(self.source.exists())
-        self.assertIn('report.pdf', self.archived[0])
+        self.assertIn('report.pdf', self.archived[-1])
 
     def test_precheckpoint_retry_is_idempotent(self):
         self.note()

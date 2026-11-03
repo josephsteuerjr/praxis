@@ -49,12 +49,18 @@ class ServerStop(unittest.TestCase):
         finally:done.set();thread.join(2)
     def test_child_stop_terminates_its_real_grandchild_group(self):
         pidfile=self.tree/'grandchild.pid'
-        script='import subprocess,sys,time; from pathlib import Path; p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"]); Path(sys.argv[1]).write_text(str(p.pid)); time.sleep(60)'
+        script='import subprocess,sys,time; from pathlib import Path; p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"]); ready=Path(sys.argv[1]); pending=ready.with_suffix(".publishing"); pending.write_text(str(p.pid)); pending.replace(ready); time.sleep(60)'
         child=serverboot.Child('runner','fixture',[sys.executable,'-c',script,str(pidfile)],dict(os.environ),self.tree,self.tree/'fixture.log')
         child.spawn()
         try:
-            deadline=time.monotonic()+3
-            while not pidfile.exists() and time.monotonic()<deadline:time.sleep(.01)
+            # Wait for actual group readiness before measuring Stop. Cold
+            # interpreter startup under the all-core gate is not the Stop
+            # deadline; the three-second post-Stop contract below is retained.
+            deadline=time.monotonic()+10
+            while not pidfile.exists() and time.monotonic()<deadline:
+                self.assertIsNone(child.proc.poll(),'Fixture parent exited before publishing its grandchild')
+                time.sleep(.01)
+            self.assertTrue(pidfile.is_file(),'Fixture grandchild did not become ready before the startup deadline')
             pid=int(pidfile.read_text())
             self.assertEqual(os.getpgid(pid),child.proc.pid)
             child.stop()
