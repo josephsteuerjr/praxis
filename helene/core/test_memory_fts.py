@@ -802,16 +802,39 @@ class ExplicitSearchHotPathTests(unittest.TestCase):
 
     def test_refresh_request_has_one_cross_process_owner(self) -> None:
         ctx = multiprocessing.get_context("fork" if "fork" in multiprocessing.get_all_start_methods() else "spawn")
-        gate, output = ctx.Event(), ctx.Queue()
-        # Издание: работник — функция модуля, а не замыкание: под spawn (Windows) замыкание
-        # не пересылается в дочерний процесс, и гонка за владение не проверялась вовсе.
+        gate, ready, output = ctx.Event(), ctx.Queue(), ctx.Queue()
+        # Spawn imports are not part of the ownership race. Release both workers
+        # only after they acknowledge readiness; retain the three-second result
+        # deadline and require both real processes to exit successfully.
         children = [ctx.Process(target=_request_refresh_race,
-                                args=(str(self.memory), gate, output)) for _ in range(2)]
-        for child in children: child.start()
-        gate.set()
-        owners = [output.get(timeout=3) for _ in children]
-        for child in children: child.join(3)
-        self.assertEqual(owners.count(True), 1)
+                                args=(str(self.memory), gate, ready, output)) for _ in range(2)]
+        started = []
+        try:
+            for child in children:
+                child.start()
+                started.append(child)
+            deadline = time.monotonic() + 120
+            identities = [ready.get(timeout=max(.01, deadline-time.monotonic()))
+                          for _ in children]
+            self.assertCountEqual(identities, [child.pid for child in children])
+            gate.set()
+            owners = [output.get(timeout=3) for _ in children]
+            for child in children:
+                child.join(3)
+                self.assertEqual(child.exitcode, 0)
+            self.assertCountEqual(owners, [True, False])
+        finally:
+            gate.set()
+            for child in started:
+                if child.is_alive():
+                    child.terminate()
+                child.join(10)
+                if child.is_alive():
+                    child.kill()
+                    child.join(10)
+                child.close()
+            ready.close()
+            output.close()
 
     def test_new_request_during_rebuild_survives_prior_ack(self) -> None:
         memory_fts.request_refresh(memory_dir=self.memory, reason="old")
@@ -883,8 +906,10 @@ class ExplicitSearchHotPathTests(unittest.TestCase):
         self.assertLess(elapsed, .5)
         self.assertTrue(memory_fts.refresh_requested(memory_dir=self.memory))
 
-def _request_refresh_race(memory, gate, output):
-    gate.wait(3)
+def _request_refresh_race(memory, gate, ready, output):
+    ready.put(os.getpid())
+    if not gate.wait(120):
+        raise RuntimeError("test did not release ready refresh workers")
     output.put(memory_fts.request_refresh(memory_dir=Path(memory), reason="race"))
 
 

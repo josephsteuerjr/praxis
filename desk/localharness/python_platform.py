@@ -7,16 +7,27 @@ import sys
 TARGETS = {'windows-x86_64', 'linux-x86_64', 'macos-arm64'}
 
 
+def _machine():
+    machine=platform.machine().strip().lower()
+    if not machine and sys.platform=='win32':
+        # WMI can return an empty machine under concurrent Windows startup.
+        # CPython's Windows build ABI comes from sys.version, not another WMI
+        # query. Unknown/unsupported ABIs still cannot select an x64 runtime.
+        import sysconfig
+        machine={'win-amd64':'amd64','win-arm64':'arm64','win-arm32':'arm'}.get(sysconfig.get_platform().lower(),'')
+    return machine
+
+
 def desktop_identity():
     """UI names are distinct from Python's internal sys.platform spelling."""
     system = {'win32':'windows', 'darwin':'macos'}.get(sys.platform, sys.platform)
     if system.startswith('linux'):system='linux'
-    machine = platform.machine().lower()
+    machine = _machine()
     return {'platform':system, 'arch':{'amd64':'x86_64','aarch64':'arm64'}.get(machine,machine)}
 
 
 def runtime_target():
-    machine = platform.machine().lower()
+    machine = _machine()
     if sys.platform == 'win32' and machine in ('amd64','x86_64'):
         return 'windows-x86_64'
     if sys.platform.startswith('linux') and machine in ('amd64','x86_64'):

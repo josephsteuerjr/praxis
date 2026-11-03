@@ -3,10 +3,18 @@ import hashlib
 import os
 from pathlib import Path
 import sys
+import plistlib
 
 
 def startup_binding(root):
     root=Path(root).resolve()
+    if sys.platform=='darwin':
+        from .python_platform import desktop_argv
+        identity=hashlib.sha256(str(root).encode()).hexdigest()[:12]
+        label='app.helene.login.'+identity
+        value={'Label':label,'ProgramArguments':desktop_argv(root,['--root',str(root),'--launch-intent','automatic']),
+               'RunAtLoad':True,'ProcessType':'Interactive','WorkingDirectory':str(root)}
+        return Path.home()/'Library/LaunchAgents'/(label+'.plist'),plistlib.dumps(value).decode('utf-8')
     name='helene-'+hashlib.sha256(str(root).encode()).hexdigest()[:12]+'.desktop'
     base=Path(os.environ.get('XDG_CONFIG_HOME',str(Path.home()/'.config')))
     # Desktop Exec values are not shell text. Escape the desktop-entry grammar,
@@ -27,10 +35,10 @@ def invoke(owner,command,args):
         owner.event('notification',{'title':str(args.get('title','')),'body':str(args.get('body',''))})
         return None
     if command in ('autostart_get','autostart_set'):
-        if not sys.platform.startswith('linux'):
-            raise RuntimeError('macOS login integration awaits native qualification')
+        if not (sys.platform.startswith('linux') or sys.platform=='darwin'):
+            raise RuntimeError('Login integration is unavailable on this platform')
         path,text=startup_binding(owner.root)
-        if command=='autostart_get':return path.is_file() and path.read_text(encoding='utf-8')==text
+        if command=='autostart_get':return not path.is_symlink() and path.is_file() and path.read_text(encoding='utf-8')==text
         if type(args.get('on')) is not bool:raise ValueError('Autostart on must be boolean')
         if path.exists() and (path.is_symlink() or not path.is_file() or path.read_text(encoding='utf-8')!=text):
             raise RuntimeError('Autostart entry differs; existing bytes retained')
@@ -38,6 +46,7 @@ def invoke(owner,command,args):
             if path.is_file():return None
             path.parent.mkdir(parents=True,exist_ok=True)
             with path.open('x',encoding='utf-8') as out:out.write(text)
+            path.chmod(0o600 if sys.platform=='darwin' else 0o644)
         else:path.unlink(missing_ok=True)
         return None
     raise RuntimeError('This OS does not expose the requested desktop integration: '+command)

@@ -47,6 +47,7 @@ import math
 import os
 import re
 import shutil
+import stat as stat_mode
 import threading
 import time
 import unicodedata
@@ -287,6 +288,10 @@ class MediaError(ValueError):
 
 class MediaValidationError(MediaError):
     """The object or its on-disk representation is inconsistent."""
+
+
+class MediaMissingError(MediaValidationError):
+    """A metadata/scope/path-validated reference no longer has local bytes."""
 
 
 class UnsupportedMediaError(MediaValidationError):
@@ -1564,19 +1569,29 @@ class MediaSpool:
             actual = _id_text(ref.chat_id, "chat_id")
             if actual != expected:
                 raise MediaSecurityError("media belongs to another chat")
-        if not path.is_file():
-            raise MediaValidationError("spooled media file is missing")
-        stat = path.stat()
+        # Missing historical bytes may be described as unavailable, but never
+        # use that path to excuse a malformed ref, wrong scope or unsafe path.
+        if type(ref.size) is not int:
+            raise MediaValidationError("media size must be an integer")
+        self.check_size(kind, ref.size)
+        if not isinstance(ref.sha256, str) or (ref.sha256 and not _SHA256.fullmatch(ref.sha256)):
+            raise MediaValidationError("invalid spooled media sha256")
+        if kind == "document" and not ref.sha256:
+            raise MediaValidationError("guarded document requires sha256")
+        if kind != "document" and path.suffix.lower() != _MIME_EXTENSIONS[declared_mime]:
+            raise MediaValidationError("spooled media extension is not canonical for its MIME")
+        try:
+            stat = path.lstat()
+        except FileNotFoundError as exc:
+            raise MediaMissingError("spooled media file is missing") from exc
+        if not stat_mode.S_ISREG(stat.st_mode):
+            raise MediaSecurityError("spooled media is not a regular file")
         if stat.st_size != ref.size:
             raise MediaValidationError("spooled media size no longer matches its reference")
         self.check_size(kind, stat.st_size)
         if ref.sha256:
-            if not _SHA256.fullmatch(ref.sha256):
-                raise MediaValidationError("invalid spooled media sha256")
             if _file_sha256(path) != ref.sha256:
                 raise MediaValidationError("spooled media sha256 no longer matches its reference")
-        elif kind == "document":
-            raise MediaValidationError("guarded document requires sha256")
         detected = sniff_mime(path) or (
             "application/octet-stream" if kind == "document" else None
         )
@@ -1584,8 +1599,6 @@ class MediaSpool:
             raise MediaValidationError(
                 f"spooled media magic is {detected!r}, reference says {declared_mime!r}"
             )
-        if kind != "document" and path.suffix.lower() != _MIME_EXTENSIONS[declared_mime]:
-            raise MediaValidationError("spooled media extension is not canonical for its MIME")
         return ref
 
     def validate_ref(

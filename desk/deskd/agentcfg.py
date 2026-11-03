@@ -67,25 +67,7 @@ def server_access(cfg: dict) -> dict | None:
             "socket_present": bool(socket_path and Path(socket_path).exists())}
 
 
-def _read_snapshot(path: Path) -> tuple[dict, str]:
-    with path.open('rb') as source:
-        before = os.fstat(source.fileno())
-        raw = source.read()
-        after = os.fstat(source.fileno())
-    live = path.stat()
-    if (before.st_mtime_ns != after.st_mtime_ns or before.st_size != after.st_size
-            or (live.st_ino, live.st_mtime_ns) != (after.st_ino, after.st_mtime_ns)):
-        raise ValueError('файл изменился во время чтения — перечитай настройки')
-    for encoding in ("utf-8-sig", "utf-16", "cp1251"):
-        try:
-            text = raw.decode(encoding)
-        except (UnicodeDecodeError, LookupError):
-            continue
-        got = json.loads(text)
-        if not isinstance(got, dict):
-            raise ValueError("верхний уровень должен быть объектом {…}")
-        return got, str(after.st_mtime_ns)
-    raise ValueError("файл не читается ни как UTF-8, ни как UTF-16, ни как CP1251")
+from localharness.config_transaction import read_snapshot as _read_snapshot
 
 
 def mtime_ns(path: Path) -> str:
@@ -206,7 +188,8 @@ def _save(patch: Any, seen: str | None = None, path: Path | None = None) -> dict
     tmp = path.with_name(f".tmp-{path.name}")
     try:
         tmp.write_text(text, encoding="utf-8", newline="\n")
-        os.replace(tmp, path)
+        from localharness.config_transaction import replace_config
+        replace_config(tmp, path)
     except OSError:
         try:
             tmp.unlink(missing_ok=True)

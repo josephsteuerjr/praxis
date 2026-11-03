@@ -32,7 +32,7 @@ export async function render(container: HTMLElement): Promise<void> {
           <span title="${esc(s.stream)}">${esc(streamTitle(s.stream))}</span><span class="n">${s.captures}</span></div>`,
       )
       .join("")}
-      <p class="field-hint" style="margin:14px 10px">Здесь сохранён контекст, который агент отправлял модели. Выбери чат и нужный момент.</p>
+      <p class="field-hint" style="margin:14px 10px">Здесь сохранена теневая сборка контекста. Выбери чат и нужный момент; это не точная запись запроса провайдеру.</p>
     </div>
     <div class="reading" id="frame-main"><div class="empty">…</div></div>
   </div>`;
@@ -92,7 +92,7 @@ async function doView(main: HTMLElement) {
   const raw = (name || "").split("-")[0];
   const stamp = raw.length >= 13 ? `${raw.slice(6, 8)}.${raw.slice(4, 6)} ${raw.slice(9, 11)}:${raw.slice(11, 13)}${raw.length >= 15 ? ':' + raw.slice(13, 15) : ''}` : name;
   out.innerHTML = `<p class="muted">Захват <b class="mono">${esc(stamp)}</b> · поток <span class="mono">${esc(S.stream)}</span> ·
-      ${fmtN((c.text || "").length)} знаков. Это текст кадра целиком, как он уезжает модели.</p>
+      ${fmtN((c.text || "").length)} знаков. Сохранённая теневая сборка; фактический вход модели может отличаться.</p>
     <div class="card md">${md(c.text || "")}</div>`;
 }
 

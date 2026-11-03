@@ -25,6 +25,8 @@ EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+JOB_OBJECT_BASIC_PROCESS_ID_LIST = 3
+JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 8
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
 
@@ -49,6 +51,8 @@ _ResumeThread = _api("ResumeThread", wintypes.DWORD, wintypes.HANDLE)
 _CloseHandle = _api("CloseHandle", wintypes.BOOL, wintypes.HANDLE)
 _Wait = _api("WaitForSingleObject", wintypes.DWORD, wintypes.HANDLE, wintypes.DWORD)
 _GetExit = _api("GetExitCodeProcess", wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+_OpenProcess = _api("OpenProcess", wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+_InJob = _api("IsProcessInJob", wintypes.BOOL, wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
 
 
 class BasicLimits(ctypes.Structure):
@@ -99,6 +103,11 @@ _UNCONFIRMED_HANDLES: list[int] = []
 
 class ChildJob:
     def __init__(self):
+        self.sealed = False
+        self.stop_requested = False
+        self.capture_complete = False
+        self.members: dict[int, int] = {}
+        self.pending: set[int] = set()
         self.handle = _CreateJobObject(None, None)
         if not self.handle:
             raise _last_error("CreateJobObject")
@@ -111,6 +120,7 @@ class ChildJob:
             raise error
 
     def assign(self, process_handle: int) -> None:
+        if self.stop_requested:raise CustodyFault('Stopped Job refuses process admission')
         if not _AssignJob(self.handle, process_handle):
             raise _last_error("AssignProcessToJobObject")
 
@@ -125,8 +135,74 @@ class ChildJob:
         if not _TerminateJob(self.handle, 1):
             raise _last_error("TerminateJobObject")
 
+    def seal(self) -> None:
+        """Stop future admissions before taking a finite member snapshot."""
+        if self.sealed:return
+        self.stop_requested=True
+        info=ExtendedLimits()
+        if not _QueryJob(self.handle,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                         ctypes.byref(info),ctypes.sizeof(info),None):
+            raise _last_error('Query job limits before Stop')
+        info.BasicLimitInformation.LimitFlags|=JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        info.BasicLimitInformation.ActiveProcessLimit=0
+        if not _SetJob(self.handle,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                       ctypes.byref(info),ctypes.sizeof(info)):
+            raise _last_error('Seal job process admission')
+        confirmed=ExtendedLimits()
+        if not _QueryJob(self.handle,JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                         ctypes.byref(confirmed),ctypes.sizeof(confirmed),None):
+            raise _last_error('Confirm sealed job limits')
+        flags=confirmed.BasicLimitInformation.LimitFlags
+        if (flags&info.BasicLimitInformation.LimitFlags!=info.BasicLimitInformation.LimitFlags
+                or confirmed.BasicLimitInformation.ActiveProcessLimit!=0):
+            raise CustodyFault('Job process admission seal was not confirmed')
+        self.sealed=True
+
+    def capture(self) -> None:
+        """Bind wait handles to the exact Job, never signal by enumerated PID."""
+        if not self.sealed:raise CustodyFault('Job admissions were not sealed')
+        capacity=16
+        while True:
+            class ProcessIds(ctypes.Structure):
+                _fields_=[('assigned',wintypes.DWORD),('count',wintypes.DWORD),
+                          ('pids',ctypes.c_size_t*capacity)]
+            info=ProcessIds()
+            ok=_QueryJob(self.handle,JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                         ctypes.byref(info),ctypes.sizeof(info),None)
+            if not ok and ctypes.get_last_error()!=234:raise _last_error('Query job members')
+            if info.count<info.assigned or not ok:
+                capacity=max(capacity*2,info.assigned)
+                if capacity>1048576:raise CustodyFault('Job member census exceeds bounded storage')
+                continue
+            if info.count>capacity or info.count>info.assigned:
+                raise CustodyFault('Incomplete Job process identifier census')
+            self.pending.update(int(pid) for pid in info.pids[:info.count] if pid not in self.members)
+            self.capture_complete=True
+            break
+        for pid in tuple(self.pending):
+            if not 0<pid<=0xffffffff:raise CustodyFault('Invalid Job process identifier')
+            handle=_OpenProcess(0x00100000|0x1000,False,pid)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+            if not handle:
+                error=ctypes.get_last_error()
+                if error==87:
+                    # Valid nonzero DWORD from the kernel census, with fixed
+                    # access/argtypes: its process object has gone before open.
+                    # Unlike active=0, this does not infer exit from accounting.
+                    self.pending.remove(pid);continue
+                raise OSError(error,'Open job member for Stop confirmation')
+            belongs=wintypes.BOOL()
+            if not _InJob(handle,self.handle,ctypes.byref(belongs)):
+                error=_last_error('Verify exact child Job');_CloseHandle(handle);raise error
+            if not belongs.value:
+                done=_Wait(handle,0)==WAIT_OBJECT_0
+                _CloseHandle(handle)
+                if done:self.pending.remove(pid);continue
+                raise CustodyFault('Enumerated process no longer belongs to the exact Job')
+            self.members[pid]=handle;self.pending.remove(pid)
+
     def release(self) -> None:
         """Drop only the installer's outer crash fuse after owner handoff."""
+        if self.stop_requested or self.members or self.pending:raise CustodyFault('Stopped Job cannot be handed off')
         info = ExtendedLimits()
         if not _SetJob(self.handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
                        ctypes.byref(info), ctypes.sizeof(info)):
@@ -136,13 +212,24 @@ class ChildJob:
     def wait_empty(self, seconds: float = 5) -> None:
         deadline = time.monotonic() + seconds
         while True:
-            if self.active() == 0:
-                return
-            if time.monotonic() >= deadline:
-                raise TimeoutError("Job still has live members; replacement forbidden")
-            time.sleep(.05)
+            self.capture()
+            for pid,handle in tuple(self.members.items()):
+                remaining=max(0,int((deadline-time.monotonic())*1000))
+                if _Wait(handle,remaining)!=WAIT_OBJECT_0:
+                    raise CustodyFault('Job member termination remains unconfirmed')
+                _CloseHandle(handle);del self.members[pid]
+            if self.active()==0:
+                self.capture()
+                if not self.members and not self.pending:return
+            if time.monotonic()>=deadline:
+                raise CustodyFault('Job still has live members; replacement forbidden')
+            # No compensating sleep can establish process termination. A fresh
+            # census must identify a waitable member or Stop remains unknown.
+            self.capture()
+            if not self.members:raise CustodyFault('Active Job members have no confirmed wait handles')
 
     def close(self) -> None:
+        if self.members or self.pending:raise CustodyFault('Unconfirmed Job member custody retained')
         if self.handle:
             _CloseHandle(self.handle)  # kill-on-close is the last crash fuse
             self.handle = None
@@ -238,14 +325,33 @@ class JobChild:
 
     def request_stop(self) -> None:
         """Request kernel termination without waiting for another child's teardown."""
-        if self.job.handle and not getattr(self, '_termination_requested', False):
-            self.job.terminate()
-            self._termination_requested = True  # request, not measured emptiness
+        if self.job.handle:
+            if getattr(self,'_uncaptured_stop',False):
+                try:self.job.terminate()
+                except (OSError,RuntimeError) as exc:
+                    raise CustodyFault('Initial Job snapshot unavailable; termination retry failed') from exc
+                raise CustodyFault('Initial Job Stop member snapshot remains unavailable')
+            fault=None
+            try:self.job.seal();self.job.capture()
+            except (OSError,RuntimeError) as exc:fault=exc
+            if fault is not None and not self.job.capture_complete:
+                # Even a failed termination call can have partial effects.
+                # Preserve the lost initial witness before entering the kernel.
+                self._uncaptured_stop=True
+            # A failed census must not prevent the termination request itself.
+            if not getattr(self, '_termination_requested', False):
+                self.job.terminate()
+                self._termination_requested = True  # request, not measured emptiness
+            if fault is not None:raise CustodyFault('Child Job Stop capture remains unconfirmed') from fault
 
     def stop(self) -> None:
         if self.job.handle:
             self.request_stop()
             self.job.wait_empty()
+            # An empty Job count can precede the leader's signalled process
+            # handle on Windows. Do not release custody/leases in that gap.
+            if self.handle is not None and _Wait(int(self.handle),5000)!=WAIT_OBJECT_0:
+                raise CustodyFault('Child leader termination unconfirmed after Job emptied')
             self.job.close()
         if self.handle is not None:
             _winapi.CloseHandle(self.handle)

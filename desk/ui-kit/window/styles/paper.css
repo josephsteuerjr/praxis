@@ -547,6 +547,25 @@ body::before {
   letter-spacing: 0.02em;
 }
 
+/* Preserve native menus and keyboard semantics; match the closed control. */
+select.field-input:not([multiple]):not([size]) {
+  appearance: none;
+  padding-right: 36px;
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-2) 50%),
+    linear-gradient(135deg, var(--ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+select.field-input option { background: var(--surface); color: var(--ink); }
+select.field-input:disabled { cursor: not-allowed; opacity: .55; }
+@media (forced-colors: active) {
+  select.field-input:not([multiple]):not([size]) { appearance: auto; background-image: none; }
+}
+
 /* ---------------------------------------------------------------- замечания дизайнера 29.09 */
 
 /* Таксономия. Ржавый — только то, что нажимается. Переход в другое место — ржавый со

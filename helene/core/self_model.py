@@ -447,23 +447,38 @@ class _FileLock:
         if heartbeat is not None:
             heartbeat.stop()
         try:
+            deadline = time.monotonic() + 2.5
+            delay = .01
             # ⚠ Раньше здесь стоял безусловный unlink: выходящий снимал ЧУЖОЙ замок,
             # если его собственный успели отобрать, и следующий писатель входил внутрь
             # чужой транзакции. Свой токен — единственное доказательство, что замок наш.
-            try:
-                record = json.loads(self.path.read_text(encoding="utf-8", errors="replace"))
-                mine = str(record.get("token") or "") == self._token
-            except (OSError, TypeError, ValueError):
-                mine = False
-            if mine:
-                self.path.unlink(missing_ok=True)
-            else:
-                # Замок уже не наш: либо его перехватили, либо он исчез. И то и другое
-                # значит, что запись могла идти одновременно с чужой — молчать нельзя.
-                self.lost_to_takeover = True
-                _LOG.warning(
-                    "self store lock was taken over while held (%s): %s — this write may "
-                    "have raced another writer", self.path, _lock_holder_note(self.path))
+            while True:
+                try:
+                    record = json.loads(self.path.read_text(encoding="utf-8", errors="replace"))
+                    mine = str(record.get("token") or "") == self._token
+                except (OSError, TypeError, ValueError):
+                    mine = False
+                if mine:
+                    try:
+                        self.path.unlink(missing_ok=True)
+                    except PermissionError as error:
+                        # Windows readers can briefly deny deletion. Retain the
+                        # local ownership registry, then re-read the token before
+                        # every retry: a replacement owner's lock is never ours.
+                        remaining = deadline - time.monotonic()
+                        if getattr(error, 'winerror', None) not in (32, 33) or remaining <= 0:
+                            raise
+                        time.sleep(min(delay, remaining))
+                        delay = min(delay * 2, .05)
+                        continue
+                else:
+                    # Замок уже не наш: либо его перехватили, либо он исчез. И то и другое
+                    # значит, что запись могла идти одновременно с чужой — молчать нельзя.
+                    self.lost_to_takeover = True
+                    _LOG.warning(
+                        "self store lock was taken over while held (%s): %s — this write may "
+                        "have raced another writer", self.path, _lock_holder_note(self.path))
+                break
         finally:
             # Снимать запись реестра строго последним: пока она есть, свой же сосед не
             # тронет замок. Протёкший файл в реестре не числится и стареет как чужой.

@@ -19,10 +19,8 @@ def _now() -> str:
 
 
 def _atomic(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    from forge_runtime import atomic_json
+    atomic_json(path, data)
 
 
 def _load(path: Path, default=None):

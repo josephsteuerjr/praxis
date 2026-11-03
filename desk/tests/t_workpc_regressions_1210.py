@@ -28,12 +28,15 @@ class WorkPC(unittest.TestCase):
             client = root/'user-state/owner-stop.json'
             with patch.object(emergency, 'WINDOWS', True), patch.object(owner_stop, 'client_file', return_value=client), \
                     patch.object(owner_stop, 'stopped', side_effect=lambda: client.exists()), \
-                    patch.object(emergency.subprocess, 'run') as spawn, patch('broker.call_service') as pipe:
+                    patch.object(emergency, 'subprocess', types.SimpleNamespace(run=Mock())) as commands, patch('broker.call_service') as pipe:
                 result = emergency.request(cfg, via='phone')
                 initial = client.read_bytes()
                 repeated = emergency.request(cfg, via='telegram')
             self.assertEqual(result['scope'], 'client'); self.assertTrue(repeated['latched'])
-            self.assertEqual(initial, client.read_bytes()); spawn.assert_not_called(); pipe.assert_not_called()
+            # Each explicit panic fences a fresh generation, including when
+            # Stop was already latched. Neither call may spawn/admin-broker.
+            self.assertNotEqual(json.loads(initial)['id'], json.loads(client.read_bytes())['id'])
+            commands.run.assert_not_called(); pipe.assert_not_called()
 
     def test_reported_body_argument_kind_is_refused_without_executing_the_body(self):
         source = ast.parse((DESK.parent/'helene/core/agent.py').read_text(encoding='utf8'))
@@ -80,7 +83,8 @@ class WorkPC(unittest.TestCase):
             self.assertTrue(event['author'].startswith('deploy:'))
             self.assertEqual(life.hot_bounds('window')[2],600)
             self.assertFalse((tree/'memory/.context-policy-change.json').exists())
-            self.assertFalse(update_inspection.read(tree/'memory/.state/context-policy-notice.json')['done'])
+            self.assertFalse((tree/'memory/.state/context-policy-notice.json').exists())
+            self.assertFalse(event['notify_owner'])
 
     def test_user_stop_and_protected_machine_stop_are_both_observed(self):
         with tempfile.TemporaryDirectory() as tmp:

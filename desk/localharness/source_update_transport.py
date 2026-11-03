@@ -128,5 +128,25 @@ def review_transport(agent, program, directory, effective, stopped):
                                  install_base=Path(program))
     if spec is None:
         raise RuntimeError('Configured managed model relay has no launch specification')
-    with RelayLease(agent, spec, directory, stopped) as lease:
-        yield lease
+    # Resolution hands remain concurrent. Only the profile-authenticated relay
+    # execution scope takes a turn on its configured local port; it is released
+    # before waiting for shared-app reconciliation. Never borrow a peer's auth.
+    from .phone_tunnel.platform_support import acquire_file_lock, release_file_lock, PlatformSupportError
+    lock_path = Path(program).resolve().parent / '.review-relay-locks' / (str(spec.port) + '.lock')
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = None
+    while descriptor is None:
+        if stopped():
+            raise RuntimeError('Owner Stop/Pause forbids waiting for update relay')
+        try:
+            descriptor = acquire_file_lock(lock_path, timeout_sec=.2)
+        except PlatformSupportError as exc:
+            # The existing lock owner distinguishes contention by this outcome;
+            # path/open/identity errors remain failures, never a waiting bypass.
+            if str(exc) != 'Another process still holds the private lock.':
+                raise
+    try:
+        with RelayLease(agent, spec, directory, stopped) as lease:
+            yield lease
+    finally:
+        release_file_lock(descriptor)

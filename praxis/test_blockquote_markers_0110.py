@@ -2,12 +2,19 @@
 # Проверяет _apply_blockquote_markers: снятие маркера, офсеты UTF-16, сдвиг чужих
 # entities, подряд идущие цитаты, кириллица, отсутствие маркеров, hermetic-фолбэк.
 import copy
+import types
+from unittest.mock import patch
 
 import pytest
 
 
 def _fn():
-    from mtproto_runner import _apply_blockquote_markers
+    # The runner constructs its transport during import. Keep real Telethon TL
+    # entities/Markdown, but do not create a session or require account secrets
+    # merely to exercise this production formatting helper.
+    with patch("telethon.TelegramClient", return_value=types.SimpleNamespace(
+            on=lambda *a, **kw: (lambda function: function))):
+        from mtproto_runner import _apply_blockquote_markers
     return _apply_blockquote_markers
 
 
@@ -90,14 +97,23 @@ def test_entity_before_any_marker_not_shifted():
     assert (code2.offset, code2.length) == (0, 2)
 
 
-def test_hermetic_fallback_keeps_marker():
+def test_hermetic_fallback_keeps_marker(monkeypatch):
     apply_bq = _fn()
-    # Без telethon в окружении функция обязана вернуть текст как есть.
-    # Симулируем отсутствие через monkeypatch импорта: просто проверяем,
-    # что вызов не падает и возвращает строку.
-    t, ents = apply_bq("> цитата", [])
+    import builtins
+    original = builtins.__import__
+
+    def without_tl(name, *args, **kwargs):
+        if name == "telethon.tl":
+            raise ImportError("deliberate absent optional TL package")
+        return original(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_tl)
+    original_entities = [types.SimpleNamespace(offset=2, length=6)]
+    t, ents = apply_bq("> цитата", original_entities)
     assert isinstance(t, str)
     assert isinstance(ents, list)
+    assert t == "> цитата"
+    assert ents == original_entities and ents is not original_entities
 
 
 def test_crlf_stripped_from_quotes():

@@ -3,11 +3,14 @@ import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
 
 const source=readFileSync(new URL('../../ui-kit/window/connection-guide.ts',import.meta.url),'utf8');
+const availabilitySource=readFileSync(new URL('../../ui-kit/window/feature-availability.ts',import.meta.url),'utf8');
+const {SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE}=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(availabilitySource)).toString('base64'));
 const calls=[];
 const nodes=[];
-function node(tag,text=''){const item={tag,text,children:[],isConnected:true,append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},querySelectorAll(){return [];}};nodes.push(item);return item;}
+function node(tag,text=''){const item={tag,text,children:[],attributes:{},isConnected:true,setAttribute(key,value){this.attributes[key]=value;},append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},querySelectorAll(){return [];}};nodes.push(item);return item;}
 let current={path:'owner-config',mtime_ns:'100',config:{mode:'local',telegram:{bot_token:'private-token',owner_id:'1'},phone:{enabled:false},model:{name:'owned-model'}}};
 globalThis.__guideTest={
+  SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE,
   el:(tag,cls,text)=>node(tag,text),
   button:(text,cls,action)=>Object.assign(node('button',text),{action}),
   field:(label,value,change)=>Object.assign(node('field'),{label,value,change}),toggle:()=>node('toggle'),
@@ -28,7 +31,7 @@ globalThis.__guideTest={
     return null;
   },
 };
-const stub=`const {api,post,shell,el,button,field,toggle,humanError,collectConnection}=globalThis.__guideTest;const cfg={base:''};const inTauri=true;`;
+const stub=`const {api,post,shell,el,button,field,toggle,humanError,collectConnection,SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE}=globalThis.__guideTest;const cfg={base:''};const inTauri=true;`;
 const stripped=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')+'\nexport {save,stopForTransfer,drawExistingServer,drawNewServer};');
 const {save,stopForTransfer,drawExistingServer,drawNewServer}=await import('data:text/javascript;base64,'+Buffer.from(stub+stripped).toString('base64'));
 
@@ -64,6 +67,14 @@ try{
 }finally{globalThis.fetch=originalFetch;}
 
 current.config.mode='local';calls.length=0;
+if (!SERVER_TRANSFER_AVAILABLE) {
+  const host=node('new-server');
+  drawNewServer(host);
+  assert.equal(host.children.at(-1).text,SERVER_TRANSFER_NOTICE);
+  assert.equal(host.children.at(-1).attributes.role,'status');
+  assert.equal(host.children.some(item=>item.tag==='button'),false,'unavailable migration must expose no active transfer action');
+  assert.deepEqual(calls,[],'unavailable migration must not stop the agent or invoke a server');
+} else {
 drawNewServer(node('new-server'));
 await Promise.resolve();await Promise.resolve();
 nodes.findLast(item=>item.label==='Адрес сервера').change('server.test');
@@ -77,6 +88,7 @@ const stopped=calls.findIndex(row=>row.command==='owner_state');
 assert.ok(move>stopped&&stopped>=0,'transfer must wait for the local stop receipt');
 assert.equal(current.config.mode,'remote');assert.equal(current.config.server_locator,'telegram-menu');
 assert.equal(calls.at(-1).command,'restart_self');
+}
 
 const rpc=readFileSync(new URL('../../shell/src/host_rpc.rs',import.meta.url),'utf8');
 assert.match(rpc,/"server_transfer"\s*=>\s*server_transfer\(/,'Electron must expose the same migration helper as Tauri');

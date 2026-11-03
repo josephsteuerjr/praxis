@@ -940,6 +940,16 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
             current["tools"].append(card)
         elif kind in ('tool_dispatch', 'tool_execution', 'tool_model_response'):
             card = tools_by_call.get(str(row.get('call_id') or ''))
+            if card is None and row.get('call_id'):
+                # The bounded event tail may start AFTER tool_started. Keep
+                # actual observed execution rather than silently losing it.
+                if current is None:
+                    current={'at':row.get('at'),'seq':row.get('seq'),'call_id':None,'tools':[],'text':''}
+                    iterations.append(current)
+                card={'tool':row.get('tool'),'call_id':row['call_id'],'seq':row.get('seq'),
+                      'at':row.get('at'),'args':None,'result':None,'status':'unknown'}
+                current['tools'].append(card)
+                tools_by_call[str(row['call_id'])]=card
             if card is not None:
                 if kind == 'tool_dispatch':
                     card['execution'] = row.get('receipt') or {}
@@ -2256,7 +2266,8 @@ def _state_impl() -> dict:
         except ValueError:
             continue
         if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=_dt.timezone.utc)
+            # Legacy tasks.parse_when uses local wall time for naive dates.
+            stamp = stamp.astimezone()
         if stamp.timestamp() > now and (next_wake is None or stamp < next_wake):
             next_wake = stamp
     transports = list(anatomy.get("transports") or [])

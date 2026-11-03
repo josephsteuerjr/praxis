@@ -1,0 +1,46 @@
+name: Hélène RC18 exact complete archive native OS qualification
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_distribution_qualification.py, .github/workflows/rc18-macos-matrix.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  distribution:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CANDIDATE_SHA256: 8f133b5238fbea7a300b1eb00c1f37adfc571f5ec4afa9f5f4c29046ff00926b
+      ARTIFACT_SHA256: bcb2e24f6798749a7c01a21fc77955df08d9c3bbc865259e0c863f3a6cec55db
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: archive
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-8f133b5238fbea7a
+      - if: steps.archive.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13080324726/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - uses: actions/cache/save@v4
+        if: steps.archive.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-8f133b5238fbea7a
+      - name: Exact archive, isolated runtime, native GUI and distribution policy
+        run: python3 desk/tests/macos_distribution_qualification.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-${{ matrix.os }}-evidence
+          path: |
+            evidence-distribution/
+            evidence-rc18/

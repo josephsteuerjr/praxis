@@ -10,9 +10,11 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 import bootguard
 
@@ -66,10 +68,28 @@ class TheSupervisorBuriesOrphansWhileTheRunnerLives(unittest.TestCase):
             os.waitpid(-1, os.WNOHANG)
 
     def test_a_runner_that_outlives_many_orphans_still_reports_its_code(self):
-        for _ in range(5):
-            self._spawn("import sys; sys.exit(0)")
-        runner = self._spawn("import time; time.sleep(0.4); raise SystemExit(9)")
-        self.assertEqual(bootguard._wait_runner_reaping(runner, poll=0.01), 9)
+        with tempfile.TemporaryDirectory() as folder:
+            released = pathlib.Path(folder)/'children-reaped'
+            children = {self._spawn("import sys; sys.exit(0)").pid for _ in range(5)}
+            runner = self._spawn(f"""
+                from pathlib import Path
+                import time
+                released=Path({str(released)!r});deadline=time.monotonic()+15
+                while not released.exists() and time.monotonic()<deadline:time.sleep(.01)
+                raise SystemExit(9 if released.exists() else 88)
+            """)
+            waitpid=os.waitpid;reaped=set()
+            def observed(pid,flags):
+                result=waitpid(pid,flags)
+                if result[0] in children:
+                    reaped.add(result[0])
+                    if reaped==children:released.touch()
+                return result
+            # Release the real runner only after real waitpid receipts prove its
+            # siblings were reaped. Child startup speed is not the assertion.
+            with mock.patch.object(bootguard.os,'waitpid',side_effect=observed):
+                self.assertEqual(bootguard._wait_runner_reaping(runner,poll=.01),9)
+            self.assertEqual(reaped,children)
         with self.assertRaises(ChildProcessError):
             os.waitpid(-1, os.WNOHANG)
 

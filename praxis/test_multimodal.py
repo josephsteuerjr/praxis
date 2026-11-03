@@ -27,7 +27,9 @@ class FakeAudio:
     def transcribe(self, path):
         return "Проверочная расшифровка"
 
-    def synthesize(self, text):
+    def synthesize(self, text, *, stopped=None):
+        if stopped is not None and stopped():
+            raise InterruptedError("synthetic speech cancelled")
         p = self.root / "spoken.wav"
         with wave.open(str(p), "wb") as out:
             out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)

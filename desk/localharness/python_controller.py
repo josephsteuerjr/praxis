@@ -8,19 +8,44 @@ import secrets
 import threading
 import time
 import typing  # Complete before GUI imports and owner-thread dataclasses can race.
+import contextvars
+from contextlib import contextmanager
 
 from . import agents, config_cli
 from .essential_backup import load
 
 
 class Controller:
+    @property
+    def selected(self):
+        scoped = self._selection.get() if hasattr(self, '_selection') else None
+        return scoped if scoped is not None else self._selected
+
+    @selected.setter
+    def selected(self, value):
+        if hasattr(self, '_selection') and self._selection.get() is not None:
+            self._selection.set(value)
+        else:
+            self._selected = value
+
+    @contextmanager
+    def selection(self, identity):
+        """Each attached observer selects independently; no cross-window race."""
+        token = self._selection.set(identity)
+        try:
+            yield
+        finally:
+            self._selection.reset(token)
+
     def __init__(self, root: Path, event, origin='', agent=''):
         self.root = root.resolve()
         self.event = event
         self.origin = origin
+        self._selection = contextvars.ContextVar('helene_observer_agent', default=None)
         self.selected = agent or self._default()
         self.thread = None
         self.stop = threading.Event()
+        self.exiting = False
         self.commands = Queue()
         self.nonce = secrets.token_hex(16)
         self.error = None
@@ -28,6 +53,7 @@ class Controller:
         self.helpers = []
         self.publishers = {}
         self.transfer_lock=threading.Lock()
+        self.resume_lock=threading.Lock()
 
     def _default(self):
         try:
@@ -55,12 +81,17 @@ class Controller:
                         local_agent=False, needs_remote=not cfg.get('base'),
                         discover_server=cfg.get('server_locator') == 'telegram-menu')
         from .desktop_supervisor import _token
+        from .python_relay import signature
+        needs_login=bool((cfg.get('onboarding') or {}).get('subscription_login') and
+            (cfg.get('relay') or {}).get('enabled') is True and
+            not any(signature(agent.tree/'relay',slot) for slot in ('primary','secondary')))
         return dict(common, base=f'http://127.0.0.1:{agent.port}', key=_token(agent.tree),
-                    needs_local_setup=cfg.get('setup_complete') is False)
+                    needs_local_setup=cfg.get('setup_complete') is False,needs_subscription_login=needs_login)
 
     def start(self):
         """Jobs live in this Python process: process death closes every Job handle."""
         with self.lock:
+            if self.exiting:raise RuntimeError('Programme Exit is already in progress')
             from . import owner_stop
             # Portable delivery: inherit the absent broker in every child.
             os.environ['HELENE_BROKER_DISABLED'] = '1'
@@ -71,6 +102,10 @@ class Controller:
                 raise RuntimeError('Earlier child custody remains unconfirmed: ' + str(self.error))
             if self.thread and self.thread.is_alive():
                 return
+            from .channel_port import ensure_available
+            for agent in agents.roster(self.root):
+                changed=ensure_available(agent.config)
+                if changed:self.event('channel-port-changed',{'agent':agent.id,**changed})
             if agents.read_config(self.root/'helene.json').get('mode') == 'remote':
                 self.stop=threading.Event()
                 self.sync_publishers()
@@ -82,8 +117,16 @@ class Controller:
             def own():
                 try:
                     from . import desktop_supervisor
+                    environment=dict(os.environ)
+                    for key in ('HELENE_MIGRATION_SESSION_TREE','HELENE_MIGRATION_SESSION_JOB'):
+                        environment.pop(key,None)
+                    job=getattr(self,'update_job',None) or {}
+                    if getattr(self,'bootstrap',False) and job.get('kind')=='migration':
+                        environment.update(HELENE_MIGRATION_SESSION_TREE=str(Path(job['tree']).resolve()),
+                                           HELENE_MIGRATION_SESSION_JOB=job['id'])
                     desktop_supervisor.run(self.root/'helene.json', stop=self.stop,
-                        desktop_roster=True, status_nonce=self.nonce, commands=self.commands)
+                        desktop_roster=True, status_nonce=self.nonce, commands=self.commands,
+                        runtime_program=getattr(self,'runtime_program',None),environ=environment)
                 except BaseException as exc:
                     # Transfer the same uncertain handles, not just their text.
                     # Do not take self.lock: close() may be joining this thread.
@@ -94,7 +137,8 @@ class Controller:
                     self.error = str(exc)
                     try:
                         import traceback
-                        with (self.root/'engine-startup-error.log').open('a',encoding='utf-8') as log:
+                        from .program_state import directory
+                        with (directory(self.root,'logs')/'engine-startup-error.log').open('a',encoding='utf-8') as log:
                             traceback.print_exception(exc,file=log)
                     except OSError:pass
                     self.event('engine-error', {'error':self.error})
@@ -158,7 +202,7 @@ class Controller:
                   'run','--config',str(agent.config),'--data',str(agent.tree)]
             self.publishers[identity]=self.background(argv,agent.tree/'remote-computer.log')
 
-    def readiness(self, timeout=30, require_runner=False, agent=None):
+    def readiness(self, timeout=30, require_runner=False, agent=None, cancelled=None):
         """Identify anonymously before sending a tree key; measure owned runner."""
         import urllib.request
         import urllib.error
@@ -179,6 +223,8 @@ class Controller:
         end=time.monotonic()+timeout
         last='channel is starting'
         while True:
+            if self.stop.is_set() or (cancelled is not None and cancelled()):
+                raise InterruptedError('Startup cancelled before readiness confirmation')
             try:
                 state=self.status().get('agents',{}).get(target.id,{})
                 who=json.load(http.open(base+'/api/who',timeout=2))
@@ -189,9 +235,12 @@ class Controller:
                     raise ValueError('Channel data identity differs')
                 if not state.get('raised') or who.get('pid')!=state.get('pids',{}).get('channel'):
                     raise RuntimeError('Channel is not owned by this Python generation')
-                proof={'id':target.id,'tree':str(target.tree.resolve()),'channel_pid':who['pid']}
+                proof={'id':target.id,'tree':str(target.tree.resolve()),'channel_pid':who['pid'],
+                       'problems':state.get('problems',{})}
                 from .desktop_supervisor import runner_required
                 if require_runner and runner_required(cfg, target.id):
+                    if state.get('problems',{}).get('runner'):
+                        raise ValueError(state['problems']['runner'])
                     reader=load(target.tree/'memory/.control/desk_inbox/.reader.json')
                     code=Path(str(cfg.get('code') or '../../live'))
                     code=(code if code.is_absolute() else target.config.parent/code).resolve()
@@ -207,8 +256,11 @@ class Controller:
             time.sleep(.2)
 
     def close(self):
-        from .python_updates import cancel_waiting
-        cancel_waiting(self)
+        self.stop.set()  # No cancellation/import/config failure may skip this barrier.
+        try:
+            from .python_updates import cancel_waiting
+            cancel_waiting(self)
+        except Exception:pass  # Bookkeeping cannot bypass captured child custody.
         from .desktop_supervisor import stop_children
         with self.lock:
             self.stop.set()  # also wakes the primary supervisor's own fanout
@@ -242,6 +294,7 @@ class Controller:
         from .desktop_supervisor import JobChild, CustodyFault
         from . import owner_stop
         with self.lock:
+            if self.exiting:raise RuntimeError('Programme Exit is already in progress')
             if any(c.handle is not None and getattr(c, 'custody_uncertain', False)
                    for c in self.helpers):
                 raise CustodyFault('Earlier helper admission remains unconfirmed')
@@ -290,15 +343,33 @@ class Controller:
             return update_progress(self)
         agent = self.current()
         if command == 'config_load':
-            return {'config':load(agent.config), 'path':str(agent.config),
+            from .config_transaction import read_snapshot
+            try:value,seen=read_snapshot(agent.config)
+            except FileNotFoundError:value,seen={},None
+            return {'config':value, 'path':str(agent.config),
                     'tree':str(agent.tree), 'exe_dir':str(self.root),
                     'agent_id':agent.id,'agent_name':agent.name,
-                    'mtime_ns':config_cli.mtime_ns(agent.config)}
+                    'mtime_ns':seen}
         if command == 'config_save':
+            operation=args.get('phone_operation')
+            if operation is not None and (not isinstance(operation,str) or not __import__('re').fullmatch('[a-f0-9]{32}',operation)):
+                raise ValueError('Invalid phone settings operation')
             result = config_cli.save(agent.config,args['config'],args.get('mtimeNs'))
             if result.get('ok'):
                 from . import boot, brain_trail
                 saved=load(agent.config)
+                from .package_notice import write
+                # Manual archive updates recover the latest agent settings
+                # from data, independently of the previous code directory.
+                try:
+                    write(agent.tree/'memory/.state/helene-profile.json',
+                        {key:value for key,value in saved.items() if key not in ('tree','code','python','app','runner','port','installed')})
+                except OSError as error:result['warning']='Настройки сохранены; копия настроек в данных не обновилась: '+str(error)
+                if operation:
+                    try:
+                        write(agent.tree/'memory/.state/phone-settings-receipt.json',{'operation':operation,
+                            'state':'saved','mtime_ns':result.get('mtime_ns'),'at':time.time()})
+                    except OSError as error:result['warning']='Настройки сохранены; квитанция сохранения не записалась: '+str(error)
                 code=Path(str(saved.get('code') or '../../live'))
                 if not code.is_absolute():code=(agent.config.parent/code).resolve()
                 try:

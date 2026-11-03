@@ -18,12 +18,24 @@ def _write(path,value):
     temp.write_text(json.dumps(value,ensure_ascii=False)+'\n',encoding='utf8')
     os.replace(temp,path)
 
+def is_paused(tree):
+    """Read selected-tree pause truth; never probe this process's global Stop."""
+    from localharness import owner_stop
+    tree=Path(tree)
+    if owner_stop.present(tree/'memory/.control/autonomy-paused.json'):
+        return True
+    try:
+        generation=owner_stop.pause_generation(tree)
+    except RuntimeError:
+        return True
+    return generation is not None and generation['paused']
+
 def state(tree):
     ctl=Path(tree)/'memory/.control';reader=_read(ctl/'desk_inbox/.reader.json');worker=reader.get('autonomy')
     try:fresh=type(reader.get('pid')) is int and reader['pid']>0 and 0<=time.time()-float(reader.get('at'))<15
     except (TypeError,ValueError,OverflowError):fresh=False
     supported=isinstance(worker,dict) and worker.get('protocol')==1 and bool(reader.get('started'))
-    paused=(ctl/'autonomy-paused.json').exists()
+    paused=is_paused(tree)
     return {'supported':supported,'available':fresh and supported,'paused':paused,
             'stopped':bool(worker.get('stopped')) if supported and fresh else None,
             'pid':reader.get('pid') if fresh else None,'started':reader.get('started') if fresh else None,

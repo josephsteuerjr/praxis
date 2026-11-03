@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import signal
 import socket
 import subprocess
@@ -55,7 +56,8 @@ class Pipe:
 @unittest.skipUnless(sys.platform == "linux" and BINARY, "requires real Linux host binary")
 class HostContract(unittest.TestCase):
     def fixture(self, root, local=False):
-        cfg = {"mode": "remote", "base": "http://127.0.0.1:9", "key": "fixture", "setup_complete": True}
+        cfg = {"mode": "remote", "base": "http://127.0.0.1:9", "key": "fixture", "setup_complete": True,
+               "python": sys.executable}
         if local:
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]
@@ -74,7 +76,17 @@ class HostContract(unittest.TestCase):
 
     def test_rpc_reads_and_preserves_stale_or_broken_configuration(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp); cfg = self.fixture(root); host = Pipe(root)
+            root = Path(tmp); cfg = self.fixture(root)
+            # The retained native transport delegates document writes to the
+            # real Python writer. Supply its genuine closure and interpreter,
+            # just as a distribution does; no fake config-save responses.
+            harness = Path(__file__).resolve().parents[1] / 'localharness'
+            for name in ('config_cli.py', 'config_transaction.py', 'relay_network.py',
+                         'phone_tunnel/__init__.py', 'phone_tunnel/platform_support.py'):
+                target = root / 'app/localharness' / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(harness / name, target)
+            host = Pipe(root)
             try:
                 info = host.request("app_info")["result"]
                 self.assertEqual(info["root"], str(root)); self.assertEqual(info["platform"], "linux")
@@ -83,7 +95,9 @@ class HostContract(unittest.TestCase):
                 self.assertIn("error", host.request("config_save", config="{"))
                 self.assertEqual(json.loads((root / "helene.json").read_text()), cfg)
                 changed = {**cfg, "lang": "ru"}
-                saved = host.request("config_save", config=json.dumps(changed), mtimeNs=loaded["mtime_ns"])["result"]
+                response = host.request("config_save", config=json.dumps(changed), mtimeNs=loaded["mtime_ns"])
+                self.assertNotIn("error", response, response)
+                saved = response["result"]
                 self.assertTrue(saved["ok"])
                 stale = host.request("config_save", config=json.dumps(cfg), mtimeNs=loaded["mtime_ns"])["result"]
                 self.assertFalse(stale["ok"]); self.assertEqual(stale["code"], "stale")
@@ -124,17 +138,18 @@ class HostContract(unittest.TestCase):
                 "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
                 "tree=Path('data'); receipt=tree/'memory/.control/desk_inbox/.reader.json'\n"
                 "receipt.parent.mkdir(parents=True,exist_ok=True)\n"
-                "receipt.write_text(json.dumps({'pid':os.getpid(),'at':time.time()}))\n"
                 "p=subprocess.Popen([sys.executable,'-c','import time; time.sleep(120)'])\n"
-                "(tree/'grandchild.pid').write_text(str(p.pid))\n"
+                "pending=tree/'grandchild.pid.pending'; pending.write_text(str(p.pid))\n"
+                "pending.replace(tree/'grandchild.pid')\n"
+                "receipt.write_text(json.dumps({'pid':os.getpid(),'at':time.time()}))\n"
                 "ask=tree/'memory/.state/supervisor-request.json'\n"
                 "while True:\n"
                 " if ask.exists():\n"
                 "  ask.unlink(); sys.exit(6)\n"
                 " time.sleep(.05)\n")
             host = Pipe(root)
-            def wait_for(predicate):
-                deadline = time.monotonic() + 12
+            def wait_for(predicate, deadline=None):
+                if deadline is None: deadline = time.monotonic() + 12
                 while time.monotonic() < deadline:
                     value = host.request("owner_state")["result"]
                     if predicate(value): return value
@@ -148,10 +163,23 @@ class HostContract(unittest.TestCase):
                 after = wait_for(lambda s: s["runner_alive"] is True and s["pid"] != pid)
                 self.assertNotEqual(pid, after["pid"])
                 grandchild = int((root / "data/grandchild.pid").read_text())
+                def descendant():
+                    try: raw = Path(f"/proc/{grandchild}/stat").read_text()
+                    except FileNotFoundError: return None
+                    fields = raw[raw.rfind(")") + 2:].split()
+                    return int(fields[19]), int(fields[2]), fields[0]
+                captured = descendant()
+                self.assertIsNotNone(captured, "new runner descendant never became ready")
+                self.assertEqual(captured[1], after["pid"], "descendant belongs to another runner generation")
+                stop_deadline = time.monotonic() + 12
                 self.assertNotIn("error", host.request("owner_control", action="panic"))
-                stopped = wait_for(lambda s: s["stopped"] and s["runner_alive"] is False)
-                status = Path(f"/proc/{grandchild}/status")
-                if status.exists(): self.assertIn("State:\tZ", status.read_text(), "stop left a running descendant")
+                stopped = wait_for(lambda s: s["stopped"] and s["runner_alive"] is False, stop_deadline)
+                current = descendant()
+                while current is not None and current[0] == captured[0] and current[2] != "Z" and time.monotonic() < stop_deadline:
+                    time.sleep(.03)
+                    current = descendant()
+                if current is not None and current[0] == captured[0]:
+                    self.assertEqual(current[2], "Z", "stop left a running descendant")
                 self.assertIn("error", host.request("engine_restart"))
                 self.assertNotIn("error", host.request("owner_control", action="resume"))
                 resumed = wait_for(lambda s: not s["stopped"] and s["runner_alive"] is True)

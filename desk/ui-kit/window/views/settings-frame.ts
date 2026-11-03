@@ -23,6 +23,7 @@
 import { api, cfg, electron, inTauri, post, shell } from "../api";
 import { componentsCard } from "../components-card";
 import { updateError } from "../../update-error";
+import { requestAgentUpdate } from '../update-admission';
 import { keepBlock } from "../config";
 import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
@@ -36,6 +37,10 @@ import { collectConnection } from "../server-connection";
 import { paperDialog } from "../../paper-dialog";
 import { ownerContextCard, validateOwnerContext } from "./owner-context-card";
 import { selfReviewCard } from "./self-review-card";
+import { workActivity, observeActivity, type WorkActivity, type UpdateActivity } from '../work-activity';
+import '../styles/work-activity.css';
+import { SERVER_TRANSFER_NOTICE } from '../feature-availability';
+import { updateOperationControls } from '../update-operation-controls';
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -70,7 +75,8 @@ export interface Config {
   agent?: { name?: string };
   // `external` — внешний адрес канала (06.10): сервер с белым IP, под которым
   // этот компьютер виден из любой сети. QR по нему работает и вне этой Wi-Fi.
-  phone?: { enabled?: boolean; mode?: string; external?: string };
+  phone?: { enabled?: boolean; mode?: string; external?: string; local_port?: number };
+  port?: number;
   update?: { url?: string };
   // 1.2: копии памяти по расписанию (common/backup.rs): раз в `every_days` дней (0 —
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
@@ -181,6 +187,15 @@ export const GROUP = {
   look: "look",
 } as const;
 
+export function focusUpdates(container: HTMLElement): void {
+  container.querySelector<HTMLButtonElement>('[role="tab"][data-group="app"]')?.click();
+  // The section navigation owns the custom scroller and sticky-tab offset.
+  const about=Array.from(container.querySelectorAll<HTMLAnchorElement>('nav a'))
+    .find(link=>link.textContent?.trim()==='О программе');
+  if (about)about.click();
+  else container.querySelector<HTMLElement>('[data-updates]')?.scrollIntoView({block:'start'});
+}
+
 /** Пометить карточку группой. Непомеченная не теряется — см. `mountSettings`. */
 export function inGroup(el: HTMLElement, group: string): HTMLElement {
   el.dataset.group = group;
@@ -238,6 +253,7 @@ export const UPDATE_URL_DEFAULT =
   "https://api.github.com/repos/josephsteuerjr/praxis/releases/latest";
 
 export async function render(container: HTMLElement, edition: EditionFactory): Promise<void> {
+  const activityScope=()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,settingsScope=activityScope();
   delete container.dataset.settingsDirty; // Explicit reload discards the old draft.
   if (!inTauri) {
     const center = el("div", "center");
@@ -254,10 +270,12 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   try {
     loaded = await shell<Loaded>("config_load");
   } catch (e) {
+    if(activityScope()!==settingsScope)return;
     container.innerHTML = failHTML(e);
     bindFail(container, () => void render(container, edition));
     return;
   }
+  if(activityScope()!==settingsScope)return;
   // Срез «как лежит файл» — let: рамка тянет его вперёд за записями самой
   // карточки (freshness.accept ниже); черновик и издание остаются при срезе
   // открытия, а базой расписки перезапуска становится живой файл.
@@ -280,6 +298,9 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       "Первый запуск. Чтобы агент поднялся, заполни карточку «Модель» в разделе «Мозг и связь»: " +
       "выбери пресет, вставь ключ и сохрани. Без ключа модели движок не запускается, " +
       "и окно останется без связи с агентом. Имена и остальные разделы можно заполнить потом."));
+  }
+  if (cfg.needs_subscription_login) {
+    center.append(el('div','notice','Реле установлено. В карточке «Подписки и реле» войди в ChatGPT, затем нажми «Продолжить» вверху. До этого агент остаётся на паузе.'));
   }
 
   // Система агента — от оболочки, один раз (host.ts): на macOS автозапуск
@@ -376,6 +397,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // --- о программе
   draft.update = draft.update || {};
   const about = el("div");
+  about.dataset.updates='';
   const aboutRow = el("div", "actions");
   const ver = el("span", "mono", "версия …");
   let aboutInfo: { version: string; exe_dir: string; log: string } | null = null;
@@ -398,42 +420,41 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // ряд, и она оставалась висеть даже рядом с «Это последняя версия».
   let updUrl = "";
   let updSha = "";
-  // 25.09 (K): «обновить, даже если моё расширение не пройдёт» — явное слово
-  // владельца. Без него установщик остановится до подмены папок и назовёт причину;
-  // отчёт репетиции — в карточке «Расширения».
-  let forceExt = false;
-  const forceToggle = toggle("Обновлять, даже если мои расширения не пройдут проверку", false, (v) => { forceExt = v; });
   // Скачать и поставить — оболочка (КОНТРАКТ A→B §5: update_download →
   // update_install). Несовпадение суммы оболочка отвергает сама (throw, файл
   // удалён); `sha_ok: null` — сверять было не с чем. Установщик гасит
   // программу; положительная квитанция появляется лишь ПОСЛЕ handoff.
   // Python обновляет рабочую папку собственным helper, без setup.
   const pythonUpdate = electron?.shell === 'python';
-  const installationWizard = pythonUpdate;
-  let sourceMode: 'preserve' | 'clean' = 'preserve';
+  let sourceMode: 'preserve' | 'clean' | undefined;
   const sourceChoices = el('div', 'field');
-  const sourceLabel = el('label', '', 'Локальные изменения кода');
-  const sourceSelect = el('select');
-  for (const [value, label] of [['preserve', 'Сохранить правки · конфликты поручить агенту'], ['clean', 'Установить чистый код выпуска']]) {
-    const option = el('option', '', label); option.value = value; sourceSelect.append(option);
-  }
-  const sourceHint = el('p', 'field-hint', installationWizard
-    ? 'Откроется мастер: перенос и совмещение кода с ревью нового Python, включая версии до 2.2.1. Чистый код с текущими данными можно выбрать отдельно.'
-    : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.');
-  sourceSelect.onchange = () => {
-    sourceMode = sourceSelect.value === 'clean' ? 'clean' : 'preserve';
-    if (installationWizard) return;
-    sourceHint.textContent = sourceMode === 'clean'
-      ? 'Локальные изменения кода будут заменены чистым кодом выпуска. Прежний код останется для отката. Память, переписка и настройки сохранятся.'
-      : 'Агент совместит локальные правки с новым выпуском. Память и настройки сохранятся.';
+  const modeChoice = el('select', 'field-input'); modeChoice.setAttribute('aria-label', 'Код программы'); modeChoice.hidden = true;
+  const sourceHint = el('p', 'field-hint', 'Проверяем доступные режимы обновления…');
+  sourceHint.id = 'update-source-mode-hint';
+  const reopenHint = el('p', 'field-hint', 'Во время обновления окно закроется. Hélène откроется сама — это может занять несколько минут. Не запускай программу повторно.');
+  reopenHint.id = 'update-reopen-hint';
+  const developerDetails = el('details', 'muted');
+  developerDetails.append(el('summary', '', 'Если вы меняли код'), el('p', 'field-hint', 'При конфликте агент подготовит совмещённый код в отдельном кандидате. Обновление продолжится после проверок и ревью. До подтверждения нового запуска прежняя программа пригодна для восстановления.'));
+  const showMode = () => {
+    sourceHint.textContent = sourceMode === 'preserve'
+      ? 'Обновление сохранит правки программы и совместит их с новым выпуском. Память, переписка и настройки сохранятся.'
+      : sourceMode === 'clean'
+        ? 'Установим чистый код нового выпуска. Память, переписка и настройки сохранятся.'
+        : 'Не удалось проверить возможность сохранения правок. Можно выбрать чистую замену кода.';
+    developerDetails.hidden = sourceMode !== 'preserve';
   };
-  sourceChoices.append(sourceLabel, sourceSelect, sourceHint); sourceChoices.hidden = !pythonUpdate;
+  modeChoice.addEventListener('change', () => {
+    sourceMode = modeChoice.value === 'preserve' ? 'preserve' : modeChoice.value === 'clean' ? 'clean' : undefined;
+    showMode();
+  });
+  sourceChoices.append(modeChoice, sourceHint, reopenHint, developerDetails); sourceChoices.hidden = !pythonUpdate;
   let agentProposalId = '';
   const confirmAgentUpdate = button('Подтвердить предложение агента', 'primary', async () => {
     if (!agentProposalId) return;
     confirmAgentUpdate.disabled = true;
+    beginUpdateObservation();
     try {
-      await shell('update_agent_confirm', {id: agentProposalId, sourceMode});
+      await shell('update_agent_confirm', {id: agentProposalId});
       updOut.textContent = 'Предложение подтверждено. Скачиваю и проверяю выбранный выпуск…';
       confirmAgentUpdate.hidden = true;
       setTimeout(restoreUpdateProgress, 600);
@@ -442,30 +463,73 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   confirmAgentUpdate.hidden = true;
   sourceChoices.append(confirmAgentUpdate);
   about.append(sourceChoices);
-  if (pythonUpdate) void shell<{id?: string; state?: string; source_mode?: string}>('update_agent_request').then(row => {
-    if (row.state !== 'awaiting' || !row.id || !sourceChoices.isConnected) return;
+  const loadSourceModes = async () => {
+    const row = await shell<{id?: string; state?: string; source_mode?: string; proposal_current?: boolean;
+      source_modes?: string[]; default_source_mode?: 'preserve' | 'clean' | null; source_mode_error?: string}>('update_agent_request');
+    const modes = (row.source_modes || []).filter(v => v === 'clean' || v === 'preserve');
+    sourceMode = row.default_source_mode && modes.includes(row.default_source_mode) ? row.default_source_mode : undefined;
+    modeChoice.replaceChildren();
+    if (!sourceMode) { const option = el('option', '', 'Выберите режим'); option.value = ''; modeChoice.append(option); }
+    for (const mode of modes) { const option = el('option', '', mode === 'preserve' ? 'Сохранить правки' : 'Чистый код'); option.value = mode; modeChoice.append(option); }
+    modeChoice.hidden = modes.length < 2 && !!sourceMode; modeChoice.value = sourceMode || ''; showMode();
+    if (row.state !== 'awaiting' || !row.id || !row.proposal_current || !sourceChoices.isConnected) return;
+    if (row.source_mode !== 'clean' && row.source_mode !== 'preserve') return;
+    if (!modes.includes(row.source_mode)) return;
+    sourceMode = row.source_mode; modeChoice.value = sourceMode; modeChoice.disabled = true; showMode();
     agentProposalId = row.id;
-    sourceSelect.value = row.source_mode === 'clean' ? 'clean' : 'preserve';
-    sourceSelect.dispatchEvent(new Event('change'));
     confirmAgentUpdate.hidden = false;
-  }).catch(() => {});
+  };
+  if (pythonUpdate) void loadSourceModes().catch(() => { sourceHint.textContent = 'Не удалось проверить режим обновления. Повтори попытку.'; });
   // Reconnecting the old UI reads the same operation, not a fresh invented
   // progress counter. Poll only while that operation is nonterminal; leaving
   // Settings ends the observer without retaining the removed view.
+  let observedUpdateId = '';
+  let updateObservationGeneration = 0, issuedProgressRead = 0, appliedProgressRead = 0;
+  const beginUpdateObservation = () => {
+    observedUpdateId = '';
+    updateObservationGeneration++;
+  };
   const restoreUpdateProgress = async () => {
     if (!pythonUpdate) return;
+    const scope=activityScope();
+    const generation=updateObservationGeneration, sequence=++issuedProgressRead;
     try {
-      const row = await shell<{ stage: string; label?: string; error?: string; bytes?: number } | null>('update_progress');
-      if (!updOut.isConnected || !row) return;
+      const row = await shell<{ id?: string; stage: string; label?: string; error?: string; bytes?: number; source_update?: UpdateActivity } | null>('update_progress');
+      if (!updOut.isConnected || scope!==activityScope() || scope!==settingsScope
+          || generation!==updateObservationGeneration || sequence<appliedProgressRead) return;
+      appliedProgressRead=sequence;
+      if (!row) return;
+      // An older in-flight overview reply may arrive after a new admission.
+      // Never display or finish that prior operation as the accepted job.
+      if (observedUpdateId && row.id !== observedUpdateId) {
+        setTimeout(restoreUpdateProgress, 600);
+        return;
+      }
       updOut.textContent = [row.label || row.stage, row.error || ''].filter(Boolean).join(' · ');
-      const waiting = ['waiting_review','waiting_agent'].includes(row.stage);
-      cancelUpdate.hidden = !waiting;
-      const active = !['completed', 'failed', 'needs_resolution', 'cancelled'].includes(row.stage);
+      progressUpdate=row.source_update;renderSettingsWork();
+      const controls=updateOperationControls(row.stage);
+      cancelUpdate.hidden = !controls.cancellable;
+      cancelUpdate.textContent = controls.cancelLabel;
+      const active = controls.active;
       dlBtn.disabled = active;
+      restoreUpstream.disabled = active;
       if (active) setTimeout(restoreUpdateProgress, 600);
     } catch (error) {
-      if (updOut.isConnected) updOut.textContent = `Состояние обновления недоступно: ${humanError(error).text}`;
+      if (updOut.isConnected && scope===activityScope() && scope===settingsScope
+          && generation===updateObservationGeneration && sequence>=appliedProgressRead) {
+        appliedProgressRead=sequence;
+        updOut.textContent = `Состояние обновления недоступно: ${humanError(error).text}`;
+      }
     }
+  };
+  const updateWork=el('section');about.append(updateWork);const renderUpdateWork=workActivity(updateWork);
+  let activity: WorkActivity = {}, progressUpdate: UpdateActivity | undefined;
+  const renderSettingsWork=()=>{
+    if(activityScope()!==settingsScope){renderUpdateWork({});return;}
+    const progress=progressUpdate;
+    const update=progress && activity.update?.id!==progress.id ? progress : activity.update ?? progress;
+    const reviewers=(activity.reviewers || []).filter(row=>!update || !!update.review_id && row.review_id===update.review_id);
+    renderUpdateWork({...activity,update,reviewers});
   };
   if (pythonUpdate) setTimeout(restoreUpdateProgress, 0);
   const legacyLinux = linux && !pythonUpdate;
@@ -484,9 +548,30 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   manualUpdate.hidden = true;
   const dlBtn = button(legacyLinux ? "Открыть выпуск Linux" : pythonUpdate ? 'Обновить Hélène' : "Скачать и установить", "primary", async () => {
     if (!updUrl) return;
+    if (pythonUpdate) {
+      if (!sourceMode) { try { await loadSourceModes(); } catch { /* admission has not been sent */ } }
+      if (!sourceMode) { toast('Выберите режим обновления кода.'); return; }
+      dlBtn.disabled = true;
+      updOut.className = 'receipt'; updOut.textContent = 'Передаю задание владельцу процессов…';
+      beginUpdateObservation();
+      try {
+        const admitted = await requestAgentUpdate(shell, updUrl, updSha, sourceMode);
+        observedUpdateId = admitted.job.id;
+        updateHandedOff = true;
+        updOut.textContent = 'Обновление принято. Окно закроется, затем Hélène откроется сама. Это может занять несколько минут — не запускай программу повторно.';
+        setTimeout(restoreUpdateProgress, 600);
+      } catch (error) {
+        // A lost reply is not permission to submit another job or silently
+        // fall back to the old window-owned download/installer path.
+        updOut.className = 'receipt err';
+        updOut.textContent = `Принятие не подтверждено: ${humanError(error).text} Перечитываю состояние без повторной отправки.`;
+        setTimeout(restoreUpdateProgress, 600);
+      }
+      return;
+    }
     if (legacyLinux) {
       await shell("open_path", { path: updUrl }).catch((e) => toast(humanError(e).text));
-      updOut.textContent = "Установи новый .deb/.rpm через пакетный менеджер. Данные останутся в твоём доме.";
+      updOut.textContent = "Установи новый .deb/.rpm через пакетный менеджер. Данные сохранятся.";
       return;
     }
     dlBtn.disabled = true;
@@ -513,12 +598,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       const got = await shell<{ path: string; bytes?: number; sha256?: string; sha_ok: boolean | null }>("update_download", { url: updUrl, sha256: updSha });
       const checked = got.sha_ok === true ? "отпечаток сошёлся" : got.sha_ok === null ? "отпечатка в выпуске нет, сверить было не с чем" : "отпечаток проверен";
       updOut.textContent = `Скачано (${checked}). Подготавливаю обновление…`;
-      // 25.09 (K): установщик сначала репетирует расширения владельца под новой
-      // версией и без явного слова не подменяет папки, если хоть одно не грузится.
-      // ⚠ Имена аргументов команд Tauri — camelCase (как `mtimeNs` у config_save):
-      // `force_extensions` молча превращался бы в None (ревью 25.09, A4/A7 F1).
+      // Compatibility belongs to the current agent-owned update protocol.
+      // The obsolete extension-incompatibility bypass is no longer an action.
       updateStage = 'install';
-      const installed = await shell("update_install", { path: got.path, forceExtensions: forceExt, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
+      const installed = await shell("update_install", { path: got.path, ...(pythonUpdate ? {sourceMode} : {}) }) as { state?: string; message?: string } | null;
       if (installed?.state === 'installer_opened') {
         updOut.textContent = installed.message || 'Мастер установки открыт. Выбери папку данных и подтверди обновление.';
         return;
@@ -532,7 +615,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         return;
       }
       updateHandedOff = true;
-      updOut.textContent = pythonUpdate ? 'Обновление передано Python. Программа перезапустится; неудачный запуск откатится. Установщик не нужен.' : 'Установщик запущен; программа закроется для обновления.';
+      updOut.textContent = pythonUpdate ? 'Окно закроется. Hélène откроется сама через несколько минут — не запускай программу повторно. Если запуск не удастся, вернём прежнюю версию.' : 'Установщик запущен; программа закроется для обновления.';
     } catch (e) {
       const text = e instanceof Error ? e.message : String(e ?? "");
       if (!pythonUpdate && /not found|неизвестн|unknown|command/i.test(text)) {
@@ -557,18 +640,27 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     modal.body.append(el('p', '', 'Вернём чистый код текущей установки. Программа перезапустится. Текущие папки данных, память, переписка и настройки сохранятся; прежние правки останутся для отката.'));
     const apply = button('Восстановить код', 'primary', async () => {
       apply.disabled = true;
+      beginUpdateObservation();
       try {
-        await shell('restore_upstream', {confirmed: true});
+        const admitted = await shell<{state?: string; operation_id?: string}>('restore_upstream', {confirmed: true});
+        observedUpdateId = admitted?.state === 'admitted' ? admitted.operation_id || '' : '';
         restoreUpstream.disabled = true;
-        updOut.textContent = 'Подготавливаю чистый upstream-код. После проверки программа перезапустится с прежними данными.';
+        updOut.textContent = admitted?.state === 'admitted'
+          ? 'Задание принято. Ход восстановления появится здесь.'
+          : 'Подготавливаю чистый upstream-код. После проверки программа перезапустится с прежними данными.';
+        setTimeout(restoreUpdateProgress, 600);
         modal.dialog.close();
-      } catch (error) { apply.disabled = false; toast(humanError(error).text); }
+      } catch (error) {
+        apply.disabled = false; toast(humanError(error).text);
+        // A lost admission reply is observed through the existing durable job;
+        // it never launches another window-owned recovery worker.
+        setTimeout(restoreUpdateProgress, 600);
+      }
     });
     modal.footer.append(button('Отмена', 'quiet', () => modal.dialog.close()), apply);
   });
-  restoreUpstream.hidden = !installationWizard;
+  restoreUpstream.hidden = !pythonUpdate;
   about.append(manualUpdate);
-  forceToggle.hidden = true;
   aboutRow.append(
     ver,
     button("Проверить обновления", "quiet", async () => {
@@ -584,26 +676,24 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
           updUrl = r.url || "";
           updSha = r.sha256 || "";
           dlBtn.hidden = !updUrl;
-          forceToggle.hidden = legacyLinux || !updUrl;
         } else {
-          updOut.textContent = `Это последняя версия (${r.current}).`;
+          updOut.textContent = r.latest === r.current
+            ? `Это последняя версия (${r.current}).`
+            : `Установлена ${r.current}. В источнике обновлений — ${r.latest}.`;
           updUrl = "";
           updSha = "";
           dlBtn.hidden = true;
-          forceToggle.hidden = true;
         }
       } catch (e) {
         updOut.className = "receipt err";
         updOut.textContent = humanError(e).text;
         updUrl = "";
         dlBtn.hidden = true;
-        forceToggle.hidden = true;
       }
     }),
     dlBtn,
     restoreUpstream,
     cancelUpdate,
-    forceToggle,
     updOut,
   );
   const logsRow = el("div", "actions");
@@ -643,7 +733,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     field("Адрес обновлений", String(draft.update?.url || ""), (v) => (draft.update!.url = v), {
       mono: true,
       placeholder: "https://api.github.com/repos/<владелец>/helene/releases/latest",
-      hint: "Адрес выпусков на GitHub (…/releases/latest) или свой JSON с полями version, url и notes. Программа только сообщает о новой версии и даёт ссылку, сама ничего не подменяет.",
+      hint: "Адрес выпусков на GitHub (…/releases/latest) или свой JSON с полями version, url и notes.",
     }),
     logsRow,
   );
@@ -665,6 +755,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         return;
       }
       out.phone = keepBlock(out.phone, { enabled: !!draft.phone?.enabled, mode: draft.phone?.mode || "automatic" });
+      if(out.phone?.mode==='stable')out.phone.local_port=draft.phone?.local_port || draft.port;
       const connectionError = collectConnection(out, draft);
       if (connectionError) {
         saveOut.className = "receipt err";
@@ -882,7 +973,17 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   sourceInfo.append(el("summary", "", "Где хранятся настройки"), el("p", "mono", loaded.path));
   center.append(sourceInfo, saveCard);
 
+  if(activityScope()!==settingsScope)return;
   mountSettings(container, center, built.groups || []);
+  // The frame attaches this cached page after render() resolves.
+  setTimeout(()=>{
+    if(!updateWork.isConnected)return;
+    let unobserve=()=>{};
+    unobserve=observeActivity(activityScope,value=>{
+      if(!updateWork.isConnected){unobserve();return;}
+      activity=value;renderSettingsWork();
+    });
+  },0);
 }
 
 /**
@@ -938,7 +1039,8 @@ function mountSettings(container: HTMLElement, center: HTMLElement, groups: Sett
     } catch {
       // без хранилища вкладка просто не запомнится
     }
-    const start = live.some((g) => g.id === saved) ? saved : live[0].id;
+    const start = cfg.needs_subscription_login && live.some(g => g.id === GROUP.brain)
+      ? GROUP.brain : live.some((g) => g.id === saved) ? saved : live[0].id;
     const pick = (id: string) => {
       for (const g of live) {
         const box = boxes.get(g.id)!;
@@ -1163,8 +1265,8 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   const exportRow = el("div", "actions");
   exportRow.append(exportBtn, exportOut);
   const steps = el("ol", "field-hint");
-  steps.append(el("li", "", "Для переноса на сервер открой «Онбординг» → «Телефон, Telegram и сервер». Приложение проверит сервер, сохранит архив и подключит окно."),
-    el("li", "", "Кнопка ниже собирает отдельный архив памяти, навыков, настроек и входов. Она сама не переносит и не останавливает агента."),
+  const unavailable = el('p','receipt',SERVER_TRANSFER_NOTICE);unavailable.setAttribute('role','status');box.append(unavailable);
+  steps.append(el("li", "", "Кнопка ниже собирает отдельный архив памяти, навыков, настроек и входов. Она сама не переносит и не останавливает агента."),
     el("li", "", "Ручные настройки ниже нужны, если адрес и ключ уже работающего сервера у тебя есть."));
   box.append(button("Настроить подключения","primary",()=>dispatchEvent(new CustomEvent("frame-go",{detail:"learn"}))));
   const details = el("details");
@@ -1183,7 +1285,7 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   const baseField = field("Адрес канала на сервере", String(draft.base || ""), (v) => (draft.base = v), {
     mono: true,
     placeholder: "https://helene.example.com",
-    hint: "HTTPS-адрес уже работающего агента. Для нового сервера используй пошаговый перенос в знакомстве с приложением.",
+    hint: "HTTPS-адрес уже работающего агента. Автоматический перенос на новый сервер пока недоступен.",
   });
   const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
     type: "password",
@@ -1220,7 +1322,7 @@ interface PhoneState { state: string; message: string; url?: string; telegram?: 
 export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: string,
                    remoteBase: string, qrSvg: (text: string) => Promise<string>, opts:{showToggle?:boolean}={}): HTMLElement {
   draft.phone = draft.phone || {};
-  draft.phone.mode = "automatic";
+  if(!['automatic','stable'].includes(draft.phone.mode || ''))draft.phone.mode = "automatic";
   const remote = !!remoteBase;
   const phone = el("div");
   const hint = el("p", "field-hint", remote
@@ -1295,10 +1397,13 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
   botLink.rel = "noopener noreferrer";
   botLink.hidden = true;
   function sync() {
-    const saved = remote || (savedEnabled && savedMode === "automatic");
+    if(!remote)hint.textContent=draft.phone?.mode==='stable'
+      ? 'Постоянный адрес использует уже настроенный прокси или туннель к этому компьютеру. Он должен запускаться самостоятельно. Hélène проверяет адрес перед выдачей QR; временный Cloudflare-туннель в этом режиме выключен.'
+      : 'Hélène сама открывает защищённый HTTPS-доступ. Сервер и настройка роутера не нужны. После следующего обновления открой на телефоне новую ссылку из Telegram или отсканируй свежий QR-код. Временный адрес может измениться и при перезапуске.';
+    const saved = remote || (savedEnabled && ['automatic','stable'].includes(savedMode) && savedMode===draft.phone?.mode);
     const on = remote || !!draft.phone?.enabled;
     receipt.textContent = !on ? "Подключение выключено. Нажми «Сохранить», чтобы применить." : !saved
-      ? "Нажми «Сохранить» — Hélène подготовит HTTPS-подключение сама." : status.message;
+      ? draft.phone?.mode==='stable'?'Нажми «Сохранить» — Hélène проверит настроенный постоянный адрес.':'Нажми «Сохранить» — Hélène подготовит HTTPS-подключение сама.' : status.message;
     receipt.classList.toggle("err", status.state === "error" || status.state === "retry");
     qrBtn.disabled = busy || !on || !saved || status.state !== "ready";
     retry.hidden = remote || !saved || !on || status.state === "ready";
@@ -1308,7 +1413,7 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     if (!on || status.state !== "ready") closeQR();
   }
   async function refresh() {
-    if (remote || !savedEnabled || savedMode !== "automatic") { sync(); return; }
+    if (remote || !savedEnabled || !['automatic','stable'].includes(savedMode)) { sync(); return; }
     try {
       const fresh = await api<PhoneState>("/api/phone");
       if (status.url && status.url !== fresh.url) { qrOut.replaceChildren(); closeQR(); }
@@ -1323,6 +1428,15 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     draft.phone!.enabled = v;
     sync();
   }));
+  if(!remote){
+    const route=document.createElement('select');route.setAttribute('aria-label','Адрес телефона');
+    for(const [value,label] of [['automatic','Автоматический временный адрес'],['stable','Постоянный HTTPS-адрес']]){const option=document.createElement('option');option.value=value;option.textContent=label;route.append(option)}
+    route.value=draft.phone.mode || 'automatic';
+    const fixed=field('Постоянный HTTPS-адрес',draft.phone.external || '',value=>{draft.phone!.external=value.trim()},{placeholder:'https://…',hint:'Уже настроенный адрес прокси или туннеля к этому компьютеру. Он сохраняется при обновлении.'});
+    fixed.hidden=route.value!=='stable';
+    route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;fixed.hidden=route.value!=='stable';sync()});
+    phone.append(route,fixed);
+  }
   phone.append(hint, receipt);
   const actions = el("div", "actions");
   actions.append(qrBtn, botLink, retry);

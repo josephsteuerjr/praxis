@@ -48,6 +48,8 @@ sys.path.insert(0, str(HERE.parent / "localharness"))
 
 import body  # noqa: E402
 
+HELENE_TEST_NATIVE_INPUTS = ('HELENE_BODY_DIR',)  # Screen/clipboard belong to one native desktop.
+
 DARWIN = sys.platform == "darwin"
 #: Не 9480 (умолчание продукта: там мост установленной программы) и не 9490
 #: (t_body.Live): свой мост на своём порту, pick_port обойдёт занятые.
@@ -185,6 +187,25 @@ class Contract(unittest.TestCase):
         answer = body.call(capability, args, timeout=timeout)
         self.assertIsInstance(answer, dict, capability)
         return answer
+
+    def test_9_raw_apple_alias_copy_and_user_link_refusal(self):
+        base = Path(tempfile.mkdtemp(prefix='helene-body-alias-')).resolve()
+        try:
+            self.assertTrue(str(base).startswith('/private/var/'), str(base))
+            raw = Path('/var') / base.relative_to('/private/var')
+            source = raw / 'source'; source.mkdir(); (source / 'kept.txt').write_bytes(b'native-alias')
+            answer = self.call('fs.copy', {'from':str(source),'to':str(raw/'copied'),'recursive':True})
+            self.assertTrue(answer.get('complete'), answer)
+            self.assertEqual((raw/'copied/kept.txt').read_bytes(), b'native-alias')
+            outside = raw/'outside'; outside.mkdir()
+            link = raw/'user-link'; link.symlink_to(outside, target_is_directory=True)
+            denied = self.call('fs.copy', {'from':str(source),'to':str(link/'blocked'),'recursive':True})
+            self.assertFalse(denied.get('complete'), denied)
+            self.assertGreater(denied.get('failed_count',0), 0, denied)
+            self.assertFalse((outside/'blocked').exists())
+        finally:
+            import shutil
+            shutil.rmtree(base)
 
     # ---- desktop.status --------------------------------------------------- #
 

@@ -1,23 +1,25 @@
-import ast,dataclasses,json,os,pathlib,types,unittest
+import json,os,types,unittest
 from unittest.mock import patch
+import agent
+import llm
 import provider_observation as po
 
-BASE=pathlib.Path(__file__).resolve().parent
 def packet(events=(),coverage='complete'):
     return {'schema':po.SCHEMA,'coverage':coverage,'response_id':'resp_1','events':list(events)}
 def event(status='completed',**extra):
     return {'tool_type':'web_search','item_id':'ws_1','status':status,**extra}
 def real_stream_adapter():
-    tree=ast.parse((BASE/'llm.py').read_text(encoding='utf8'))
-    names={'LLMResponse','_openai_from_stream','_openai_stream_result','_relay_terminal_of',
-           '_openai_cached_tokens','_stream_transport_error'}
-    keep=[n for n in tree.body if isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in names]
-    ns={'dataclass':dataclasses.dataclass,'field':dataclasses.field,'provider_observation':po,
-        'json':json,'USAGE_SCHEMA':2,'MALFORMED_JSON_KEY':'_bad_json','MALFORMED_JSON_KEEP':1000,
-        '_OPENAI_STOP':{'stop':'end_turn','tool_calls':'tool_use','length':'max_tokens'},
-        '_terminal_error':lambda term:None,'_guard_answer':lambda response:response}
-    exec(compile(ast.Module(body=keep,type_ignores=[]),'llm.py','exec'),ns)
-    return ns['_openai_from_stream']
+    # Import the composed edition, not selected AST nodes from the sibling mirror.
+    # The fake SDK controls only transport; conversion/collection/guard stay real.
+    def parse(frames, model):
+        create = unittest.mock.Mock(return_value=frames)
+        cli = types.SimpleNamespace(base_url='http://127.0.0.1:1/v1',
+            chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create)))
+        response = llm._call_openai(cli, model, system='s', messages=[], tools=[],
+                                    max_tokens=100, thinking=0)
+        create.assert_called_once()
+        return response
+    return parse
 
 class ObservationTests(unittest.TestCase):
     def test_old_relay_absence_is_unknown(self):
@@ -77,30 +79,27 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(r.text,'hello')
 
     def test_feedback_lever_and_no_unknown_claim(self):
-        tree=ast.parse((BASE/'agent.py').read_text(encoding='utf8'))
-        node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_provider_action_feedback')
-        ns={'os':os,'provider_observation':po}
-        exec(compile(ast.Module(body=[node],type_ignores=[]),'agent.py','exec'),ns)
-        with patch.dict(os.environ,{},clear=True):self.assertEqual(ns['_provider_action_feedback'](packet()),[])
+        with patch.dict(os.environ,{'PRAXIS_PROVIDER_EVENT_FEEDBACK':'0'}):
+            self.assertEqual(agent._provider_action_feedback(packet()),[])
         with patch.dict(os.environ,{'PRAXIS_PROVIDER_EVENT_FEEDBACK':'1'},clear=True):
-            self.assertEqual(ns['_provider_action_feedback']({}),[])
-            self.assertIn('runtime evidence',ns['_provider_action_feedback'](packet([event()]))[0]['text'])
+            self.assertEqual(agent._provider_action_feedback({}),[])
+            self.assertIn('runtime evidence',agent._provider_action_feedback(packet([event()]))[0]['text'])
 
     def test_text_continuation_keeps_provider_receipt(self):
-        tree=ast.parse((BASE/'agent.py').read_text(encoding='utf8'))
-        names={'_provider_action_feedback','_work_loop_continue'}
-        nodes=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
-        ns={'os':os,'provider_observation':po,'_current_run_kind':lambda:'chat',
-            'work_loop':types.SimpleNamespace(decide=lambda **kw:(True,'continue'),spend=lambda:1,taken=lambda:None),
-            'run_context':types.SimpleNamespace(current_run=lambda:None),
-            'work_store':types.SimpleNamespace(for_run=lambda run:None),
-            '_append_captured_messages':lambda messages,additions:messages.extend(additions)}
-        exec(compile(ast.Module(body=nodes,type_ignores=[]),'agent.py','exec'),ns)
-        resp=types.SimpleNamespace(blocks=[{'type':'text','text':'searched'}],
-                                  provider_observation=packet([event(action_type='search')]))
+        resp=llm.LLMResponse(text='searched',blocks=[{'type':'text','text':'searched'}],
+                            stop_reason='end_turn',
+                            provider_observation=packet([event(action_type='search')]))
         messages=[]
-        with patch.dict(os.environ,{'PRAXIS_PROVIDER_EVENT_FEEDBACK':'1'},clear=True):
-            self.assertTrue(ns['_work_loop_continue']('searched',resp,messages,None))
+        with patch.dict(os.environ,{'PRAXIS_PROVIDER_EVENT_FEEDBACK':'1'}), \
+                patch.object(agent, '_current_run_kind', return_value='chat'), \
+                patch.object(agent.work_loop, 'decide', return_value=(True,'continue')), \
+                patch.object(agent.work_loop, 'taken', return_value=None), \
+                patch.object(agent.work_loop, 'spend', return_value=1), \
+                patch.object(agent.work_store, 'for_run', return_value=None), \
+                patch.object(agent.keat_live, 'capture_appended'):
+            self.assertTrue(agent._work_loop_continue('searched',resp,messages,None))
+        self.assertEqual(messages[0]['role'], 'assistant')
+        self.assertEqual(messages[0]['content'], resp.blocks)
         evidence=messages[-1]['content'][-1]['text']
         self.assertIn('ws_1',evidence)
         self.assertIn('runtime evidence',evidence)

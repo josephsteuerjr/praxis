@@ -11,14 +11,17 @@
 // отдаёт (КОНТРАКТ-B→A §4); на 403 честно говорит «телефону не отдаётся».
 import { applyTheme, el, q, toast, type Theme } from "./dom";
 import "./version";
-import { esc, fmtDay, fmtDur, fmtTime, md } from "./text";
-import { frameStripHTML, setResultFetcher, stepsHTML, type RunDetail } from "./steps";
-import { activityHTML, selectActivity, updateActivity } from "./activity";
+import { esc, fmtDay, fmtTime, md } from "./text";
+import { setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
 import { mountUsage, usageShell } from "./usage";
 import { artifactCaption, mediaDescriptor, paperMediaHTML, mountPaperMedia } from "./paper-media";
 import { artifactBytes, browserSave } from "./paper-transfer";
 import { mountAutonomy, type AutonomyState } from "./autonomy";
+import { phoneSettings } from './phone-settings';
+import { phoneActions } from './phone-actions';
+import { mountPaperSelects } from './paper-select';
+import { apply as applyLook,load as loadLook } from './window/look';
 
 export type Level = "ok" | "live" | "warn" | "error" | "off";
 
@@ -209,6 +212,8 @@ const noteLabel = (note: string) => {
 
 export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   applyTheme(opts.theme ? opts.theme() : "system");
+  applyLook(loadLook());
+  if(opts.theme)applyTheme(opts.theme());
   const base = (opts.base || "").replace(/\/+$/, "");
 
   // ---------------------------------------------------------------- DOM
@@ -219,6 +224,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         <div class="top-state" id="top-state"><span class="state-dot"></span><span id="top-phrase">Подключение…</span></div>
       </div>
       <div class="top-btns">
+        <button class="icon-btn" id="btn-actions" type="button" aria-label="Действия"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12M4 10h12M4 16h12M2 4h.1M2 10h.1M2 16h.1"/></svg></button>
         <button class="icon-btn" id="btn-more" type="button" aria-label="Ещё"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.more}</svg></button>
       </div>
     </header>
@@ -303,7 +309,11 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       }
     }
     if (r.status === 403) throw new Denied("нет доступа");
-    if (!r.ok) throw new Broke(path + ": " + r.status);
+    if (!r.ok) {
+      const text=await r.text();let detail='';
+      try{detail=JSON.parse(text).error||''}catch{/* non-JSON refusal */}
+      throw new Broke(detail||path+': '+r.status);
+    }
     if (sendKey && key && cookieWorks) sendKey = false;
     return r;
   }
@@ -347,7 +357,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
   const artifact = (path: string) => withKey("/api/artifact?path=" + encodeURIComponent(path) + "&preview=1");
   const disposeMedia = mountPaperMedia(root, { key: m => artifact(m.path), bytes: m => artifactBytes(artifact(m.path)), save: browserSave, voice: (m,retry) => retry ? post('/api/voice/attachment',{path:m.path}) : api('/api/voice/attachment?path='+encodeURIComponent(m.path)) });
-  window.addEventListener('pagehide',e=>{if(!e.persisted) disposeMedia();},{once:true});
+  const disposeSelects=mountPaperSelects(root);
+  window.addEventListener('pagehide',e=>{if(!e.persisted){disposeMedia();disposeSelects()}},{once:true});
 
   /** Ручка из области окна: 403 запоминаем и больше не спрашиваем. null — не отдаётся / не прочиталось. */
   async function scoped<T>(path: string, mark: string): Promise<T | null> {
@@ -515,8 +526,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   // целиком, и вешать слушателей на каждую кнопку значило бы копить их пачками.
   screen.addEventListener("click", async (ev) => {
     const spot = (ev.target as HTMLElement).closest<HTMLElement>(
-      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-panic]");
+      "[data-restart-box],[data-box-log],[data-brain-apply],[data-interrupt],[data-panic],[data-open-agent-settings]");
     if (!spot) return;
+    if(spot.hasAttribute('data-open-agent-settings')){openSettings();return;}
     const note = screen.querySelector<HTMLElement>("#sys-note");
     const view = screen.querySelector<HTMLPreElement>("#sys-log");
     const say = (text: string, bad = false) => {
@@ -605,6 +617,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   });
 
   function render() {
+    if(tab!=="now")nowView?.stop();
     const my = ++gen;
     const guard = () => my === gen;
     if (tab === "now") void renderNow(guard);
@@ -616,110 +629,19 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   // ---------------------------------------------------------------- «Сейчас»
   let liveTimer = 0;
-  let liveBusy = false;
-  let focusedRun: Run | undefined;
-  let nowGeneration = 0;
-
-  /** Нарисовать экран «Сейчас» из того, что УЖЕ в тулах. Ничего не ждёт. */
-  function paintNow(list: Run[], live: Run | undefined, shown: Run | undefined,
-                    detail: RunDetail | undefined, strip: RunDetail | undefined,
-                    pending = false): void {
-    const since = live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "";
-    const liveHTML = shown
-      ? activityHTML(shown, detail, live ? since : fmtTime(shown.created_at), { pending })
-      : `<div class="now-idle"><span class="dot ${state && !foreign() && state.level === "error" ? "failed" : ""}"></span><span>${esc(state ? (foreign() ? "Нет текущих действий · " + foreignPhrase().phrase.replace(/^На связи · /, "") : state.phrase) : "Подключение…")}${state?.next_wake ? ` · пробуждение ${esc(fmtTime(state.next_wake) || state.next_wake)}` : ""}</span></div>`;
-    const rest = list.filter((r) => r.id !== shown?.id);
-    screen.innerHTML =
-      liveHTML +
-      usageShell(true) +
-      frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа") +
-      `<div class="screen-title">Последние действия</div>` +
-      (closed.has("runs") ? notGiven("Действия") : rest.map((r) => runRow(r, { showRoom: true })).join("") || '<div class="empty">Здесь появятся действия и результаты</div>');
-    bindRuns(screen, () => void renderNow());
-    mountUsage(screen, api);
-    scheduleLive(!!live);
+  let nowRoot:HTMLElement|undefined,nowView:ReturnType<typeof phoneActions>|undefined;
+  async function renderNow(guard:()=>boolean=()=>tab==='now') {
+    if(!guard()||tab!=='now')return;
+    if(!nowRoot?.isConnected) {
+      nowView?.stop();nowRoot=el('section');
+      const usage=el('section','now-usage');usage.innerHTML=usageShell(true);
+      screen.replaceChildren(usage,nowRoot);mountUsage(usage,api);
+      nowView=phoneActions(nowRoot,settingsRequest,()=>base+'\n'+key,
+        undefined,{history:false});
+    }
+    if(!sheetKind&&!document.hidden)nowView!.start();
   }
-
-  async function renderNow(guard: () => boolean = () => tab === "now") {
-    const mine = ++nowGeneration;
-    const valid = () => mine === nowGeneration && guard() && tab === "now";
-    if (!runs.length) await loadRuns();
-    if (!valid()) return;
-    const live = liveRun();
-    const list = runs.filter((r) => r.kind !== "wake").slice(0, 30);
-    focusedRun = selectActivity(focusedRun, live, list);
-    const shown = focusedRun;
-    const existing = screen.querySelector<HTMLElement>("#turn-live");
-    const sameCard = !!(shown && existing?.dataset.run === shown.id);
-
-    // ⚠⚠ ПЕРВЫЙ ПОКАЗ НЕ ЖДЁТ ПОДРОБНОСТЕЙ ЖИВОГО ХОДА.
-    //
-    // Раньше `screen.innerHTML` присваивался ОДИН раз, в самом конце цепочки
-    // ожиданий: список ходов, потом подробности живого хода, потом слова. На
-    // сервере это 13 секунд БЕЛОГО ЭКРАНА — замерено 11.09 на живой Праксис:
-    // `/api/runs` 1.3 с, а `/api/run/<живой>` 5.7 с и 206 КБ, потому что в
-    // длинном ходу 23 шага и 59 тулов. Владелец видит пустоту и читает её как
-    // «ходы не отображаются» — и он прав: показывать нечего, хотя список уже
-    // приехал три секунды назад.
-    //
-    // Теперь рисуем дважды: сразу — списком и шапкой живого хода из того, что
-    // уже есть в памяти (`evCache`), потом — тем же кодом, когда подробности
-    // доедут. Если карточка уже та же, работает прежний путь: обновление на
-    // месте, без перерисовки.
-    const known = shown ? evCache.get(shown.id) : undefined;
-    if (!sameCard) paintNow(list, live, shown, known, known, !known);
-
-    const liveDetail = shown ? await runDetail(shown.id, true) || known : undefined;
-    if (!valid()) return;
-    const card = screen.querySelector<HTMLElement>("#turn-live");
-    if (shown && card?.dataset.run === shown.id && liveDetail) {
-      updateActivity(card, liveDetail, live?.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "");
-    }
-    if (sameCard) {
-      scheduleLive(!!live);
-      return;
-    }
-    await loadWords(list.slice(0, 12));
-    if (!valid()) return;
-    let strip = liveDetail;
-    if (!strip) {
-      const last = list.find((r) => r.id !== live?.id && r.kind === "chat_turn");
-      if (last) strip = await runDetail(last.id);
-      if (!valid()) return;
-    }
-    paintNow(list, live, shown, liveDetail, strip);
-  }
-
-  function scheduleLive(on: boolean) {
-    clearTimeout(liveTimer);
-    if (!on) return;
-    liveTimer = window.setTimeout(() => void refreshLive(), 1500);
-  }
-
-  async function refreshLive() {
-    if (tab !== "now" || document.hidden) return;
-    if (liveBusy) { scheduleLive(true); return; }
-    const live = liveRun();
-    const card = screen.querySelector<HTMLElement>("#turn-live");
-    if (!live || !card || card.dataset.run !== live.id) {
-      if (card || live) void renderNow();
-      return;
-    }
-    liveBusy = true;
-    try {
-      const d = await runDetail(live.id, true);
-      if (!card.isConnected || liveRun()?.id !== live.id) return;
-      const steps = card.querySelector<HTMLElement>("#turn-live-steps");
-      const t = card.querySelector<HTMLElement>("#turn-live-t");
-      if (t && live.created_at) t.textContent = fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000);
-      if (steps && d) updateActivity(card, d, live.created_at ? fmtDur((Date.now() - new Date(live.created_at).getTime()) / 1000) : "");
-    } catch {
-      // После ошибки связи продолжаем перечитывать текущие действия.
-    } finally {
-      liveBusy = false;
-    }
-    scheduleLive(true);
-  }
+  async function refreshLive(){await renderNow()}
 
   // ---------------------------------------------------------------- «Чаты»
   async function loadRooms(): Promise<void> {
@@ -1027,7 +949,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     ]);
     if (!guard()) return;
     // 12.09: прерывание живого хода — просьба в memory/.control, движок снимает ход на тике.
-    const interruptHTML = `<div class="screen-title">Агент</div>
+    const interruptHTML = `<div class="system-heading"><h1>Система</h1><button type="button" class="settings-link" data-open-agent-settings>Настройки</button></div><div class="screen-title">Агент</div>
       <div class="task-row">
         <div class="actions"><button type="button" class="chip emergency-stop" data-panic${panicState?.stopped ? " disabled" : ""}>${panicState?.stopped ? "Аварийный стоп включён" : "Аварийный стоп"}</button></div>
         <div class="muted">Останавливает всех агентов Hélène и их процессы, включая привилегированные поручения. Работает при закрытом окне. Возобновление — явным действием владельца на компьютере или сервере.</div>
@@ -1042,7 +964,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     };
     if (!boxes || !boxes.available) {
       screen.innerHTML = interruptHTML + `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
-        `<div class="screen-title">Система</div>` +
         (closed.has("containers")
           ? notGiven("Система")
           : `<div class="empty">${esc(boxes?.why || "управление контейнерами рядом с этим каналом не объявлено")}</div>`);
@@ -1181,12 +1102,45 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   // ---------------------------------------------------------------- «Ещё»
-  let sheetKind: "" | "more" = "";
+  let sheetKind: "" | "more" | "actions" | "settings" = "";
+  let settingsRoot:HTMLElement|undefined;
+  let actionsRoot:HTMLElement|undefined;
+  let actionsView:ReturnType<typeof phoneActions>|undefined;
+  let dialogFocus:HTMLElement|null=null;
+  let sheetEpoch=0,sheetCloseTimer:ReturnType<typeof setTimeout>|undefined;
+  async function settingsRequest<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T> {
+    const response=await call(path,body===undefined?{signal,cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal,cache:'no-store'});
+    return response.json();
+  }
+  function openDialog(kind:'settings'|'actions',title:string) {
+    const opening=++sheetEpoch;clearTimeout(sheetCloseTimer);
+    dialogFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
+    nowView?.stop();actionsView?.stop();sheetKind=kind;sheet.classList.add('phone-dialog');
+    sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',title);
+    sheetHead.replaceChildren(el('span','',title));
+    const close=el('button','phone-dialog-close','×') as HTMLButtonElement;close.type='button';close.setAttribute('aria-label','Закрыть '+title.toLowerCase());close.addEventListener('click',closeSheet);sheetHead.append(close);
+    veil.hidden=false;sheet.hidden=false;requestAnimationFrame(()=>{if(opening!==sheetEpoch||sheetKind!==kind)return;veil.classList.add('show');sheet.classList.add('show');close.focus()});opts.onSheet?.(true);
+  }
+  function openSettings() {
+    openDialog('settings','Настройки');
+    if(!settingsRoot){settingsRoot=el('div');phoneSettings(settingsRoot,settingsRequest)}
+    sheetBody.replaceChildren(settingsRoot);
+  }
+  function openActions() {
+    openDialog('actions','Действия');
+    void loadWords(runs.slice(0,12));
+    if(!actionsRoot){actionsRoot=el('div');actionsView=phoneActions(actionsRoot,settingsRequest,()=>base+'\n'+key,run=>words.get(run.id)?.out||noteLabel(words.get(run.id)?.note||''))}
+    sheetBody.replaceChildren(actionsRoot);actionsView!.start();
+  }
+  q('#btn-actions',root).addEventListener('click',openActions);
   function openSheet() {
+    const opening=++sheetEpoch;clearTimeout(sheetCloseTimer);
+    nowView?.stop();actionsView?.stop();sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');
     sheetKind = "more";
     veil.hidden = false;
     sheet.hidden = false;
     requestAnimationFrame(() => {
+      if(opening!==sheetEpoch||sheetKind!=='more')return;
       veil.classList.add("show");
       sheet.classList.add("show");
     });
@@ -1195,22 +1149,43 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
   function closeSheet() {
     if (!sheetKind) return;
+    const closing=++sheetEpoch;clearTimeout(sheetCloseTimer);
+    actionsView?.stop();
     sheetKind = "";
+    if(dialogFocus?.isConnected)dialogFocus.focus({preventScroll:true});dialogFocus=null;
     veil.classList.remove("show");
     sheet.classList.remove("show");
-    setTimeout(() => {
-      if (!sheetKind) {
+    sheetCloseTimer=setTimeout(() => {
+      if (closing===sheetEpoch&&!sheetKind) {
         veil.hidden = true;
         sheet.hidden = true;
+        sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');sheet.removeAttribute('aria-label');
+        sheetBody.replaceChildren();
       }
     }, 220);
     opts.onSheet?.(false);
+    if(tab==='now'&&running&&!document.hidden)nowView?.start();
   }
-  veil.addEventListener("click", closeSheet);
+  veil.addEventListener("click", () => { if(sheetKind==='more')closeSheet(); });
+  root.addEventListener('keydown',event=>{
+    if(event.key==='Escape'&&sheetKind){event.preventDefault();closeSheet();return}
+    if(event.key==='Tab'&&['settings','actions'].includes(sheetKind)){
+      const items=[...sheet.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]')].filter(node=>node.getClientRects().length>0);
+      const first=items[0],last=items.at(-1);
+      if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}
+      else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}
+    }
+  });
+  window.addEventListener('helene:shell-update',event=>{
+    if(sheetKind==='settings'&&settingsRoot?.dataset.dirty==='true'){
+      event.preventDefault();toast('Доступна новая версия. Сначала сохрани правки настроек.');
+    }
+  });
   q("#btn-more", root).addEventListener("click", () => (sheetKind ? closeSheet() : openSheet()));
   let dragY = 0;
   sheet.addEventListener("touchstart", (e) => (dragY = e.touches[0].clientY), { passive: true });
   sheet.addEventListener("touchend", (e) => {
+    if(sheetKind==='settings'||sheetKind==='actions')return;
     if (e.changedTouches[0].clientY - dragY > 70 && sheetBody.scrollTop <= 0) closeSheet();
   });
 
@@ -1415,6 +1390,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   function accessLost() {
+    nowView?.stop();actionsView?.stop();
     running = false;
     clearTimeout(feedTimer);
     clearTimeout(stateTimer);
@@ -1447,6 +1423,17 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   async function start() {
     let pair: Redeem | null = null;
+    // Updating or reopening an authorized PWA must not redeem its old QR
+    // again. Keep enrollment for the initial connection/replacement only.
+    if (key) {
+      const current = await renderState();
+      if (current === 'ok') { enter(); return; }
+      if (current === 'offline') {
+        const s=opts.auth.pairScreen('offline');
+        showPair(s.title,s.text,{label:'Попробовать снова',onClick:()=>void start()});
+        return;
+      }
+    }
     if (opts.auth.hasCredential()) {
       const got = await opts.auth.redeem();
       pair = got.result;
@@ -1482,6 +1469,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
+      nowView?.stop();actionsView?.stop();
       clearTimeout(feedTimer);
       clearTimeout(stateTimer);
       clearTimeout(runsTimer);
@@ -1490,6 +1478,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       return;
     }
     if (!running) return;
+    if(sheetKind==='actions')actionsView?.start();
     openLive();
     bumpState();
     void tickRuns();

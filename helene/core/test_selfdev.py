@@ -316,66 +316,52 @@ class ReviewIsHers(unittest.TestCase):
         self.assertEqual(selfdev.get(pid5)["status"], "merged", msg5)
 
 
-class GnomeGate(SelfdevFlow):
-    """28.09 (#43744/#43746): гномье ревью — гейт мёржа наравне с тестами, в самой рельсе."""
+class VoluntaryCritic(SelfdevFlow):
+    """Ordinary real submit/merge needs no external critic or skip ceremony."""
 
-    def test_missing_reviewer_refused_before_commit(self):
-        # Пустой reviewer — отказ ДО коммита и тестов, предложение не burned.
+    def test_no_reviewer_merges_without_skip(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
         msg = selfdev.submit(pid, "поднять VALUE", review=RV)
-        self.assertIn("гномье ревью", msg)
-        self.assertEqual(selfdev.get(pid)["status"], "building", "гейт сработал до коммита")
-        self.assertIn("VALUE = 1", (self.repo / "core.py").read_text(encoding="utf-8"))
-
-    def test_skip_without_reason_refused(self):
-        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer="skip:")
-        self.assertIn("право пропуска", msg)
-        self.assertEqual(selfdev.get(pid)["status"], "building")
-
-    def test_skip_with_reason_merges(self):
-        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        msg = selfdev.submit(pid, "поднять VALUE", review=RV,
-                             reviewer="skip: тривиальная правка одной константы, гном не нужен по пакетной приёмке 12.09")
-        self.assertIn("смёржено самостоятельно", msg)
-        self.assertIn("гном пропущен", msg)
-        self.assertEqual(selfdev.get(pid)["status"], "merged")
-        self.assertIn("skip", str(selfdev.get(pid).get("reviewer", "")))
-
-    def test_blocked_verdict_needs_override(self):
-        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        msg = selfdev.submit(pid, "поднять VALUE", review=RV,
-                             reviewer="VERDICT: BLOCKED — гном нашёл дыру в проверке ветвления")
-        self.assertIn("BLOCKED", msg)
-        self.assertEqual(selfdev.get(pid)["status"], "building")
-        self.assertNotIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
-        # осознанный override открывает мёрж с provenance
-        msg = selfdev.submit(pid, "поднять VALUE", review=RV,
-                             reviewer="VERDICT: BLOCKED — гном нашёл дыру в проверке ветвления",
-                             override_reason="находка гнома относится к другому файлу, не к этому диффу")
         self.assertEqual(selfdev.get(pid)["status"], "merged", msg)
         self.assertIn("VALUE = 2", (self.repo / "core.py").read_text(encoding="utf-8"))
+        self.assertEqual(selfdev.get(pid)["reviewer_evidence"], [])
 
-    def test_token_reviewer_verdict_refused(self):
+    def test_legacy_skip_is_optional_evidence_not_required_reason(self):
         pid = self._begin_and_edit("core.py", "VALUE = 2\n")
-        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer="ок")
-        self.assertIn("отписка", msg)
-        self.assertEqual(selfdev.get(pid)["status"], "building")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer="skip:")
+        self.assertEqual(selfdev.get(pid)["status"], "merged", msg)
+        self.assertEqual(selfdev.get(pid)["reviewer"], "skip:")
 
-    def test_verdict_extraction_variants(self):
-        for text, expect in [
-            ("VERDICT: APPROVED — чисто", "approved"),
-            ("Вердикт: BLOCKED по трём пунктам", "blocked"),
-            ("## Вердикт: **BLOCKED**", "blocked"),
-            ("смотрел, всё чисто, замечаний нет", None),
-            ("VERDICT: CLEAR", "approved"),
-        ]:
-            self.assertEqual(selfdev.reviewer_gate(text).get("verdict"), expect, text)
-            self.assertEqual(selfdev.reviewer_gate(text)["status"], "ok", text)
-        # skip-формы
-        self.assertEqual(selfdev.reviewer_gate("")["status"], "missing")
-        self.assertEqual(selfdev.reviewer_gate("skip: причина длиннее сорока символов, осознанная")["status"], "skip")
-        self.assertEqual(selfdev.reviewer_gate("skip: коротко")["status"], "missing")
+    def test_blocked_verdict_merges_without_override_and_keeps_exact_evidence(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        text = "VERDICT: BLOCKED — " + "конкретная находка; " * 400
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=text)
+        row = selfdev.get(pid)
+        self.assertEqual(row["status"], "merged", msg)
+        self.assertEqual(row["reviewer"], text)
+        self.assertEqual(row["reviewer_evidence"][0]["text"], text)
+        self.assertEqual(row["reviewer_evidence"][0]["verdict"], "blocked")
+        self.assertEqual(row["override_reason"], "")
+        self.assertIn("BLOCKED", msg)
+
+    def test_prior_blocked_critic_survives_omitted_resubmission(self):
+        pid = self._begin_and_edit("core.py", "VALUE = 2\n")
+        text = "VERDICT: BLOCKED — keep this disagreement"
+        with mock.patch.object(selfdev, "run_tests", return_value={"status": "timed_out"}):
+            selfdev.submit(pid, "поднять VALUE", review=RV, reviewer=text)
+        self.assertEqual(selfdev.get(pid)["status"], "proposed")
+        msg = selfdev.submit(pid, "поднять VALUE", review=RV)
+        row = selfdev.get(pid)
+        self.assertEqual(row["status"], "merged", msg)
+        self.assertEqual(row["reviewer"], text)
+        self.assertEqual(row["reviewer_evidence"][0]["verdict"], "blocked")
+
+    def test_verdict_extraction_is_observation_only(self):
+        self.assertEqual(selfdev.reviewer_gate("")["status"], "not_requested")
+        self.assertEqual(selfdev.reviewer_gate("VERDICT: BLOCKED")["verdict"], "blocked")
+        self.assertEqual(selfdev.reviewer_gate("VERDICT: APPROVED")["verdict"], "approved")
+        self.assertEqual(selfdev.reviewer_gate("ок")["status"], "ok")
+        self.assertEqual(selfdev.reviewer_gate("skip:")["status"], "skip")
 
 
 class ReconcileShells(SelfdevFlow):

@@ -62,13 +62,15 @@ def preserve_source(source: Path, destination: Path, progress=None, *, source_on
             if progress: progress({'stage':'preserving', 'bytes':copied, 'source':str(source)})
         return result
     if (source / '.git').is_file():
+        from .update_process import background_flags
         def git(*args):
-            return subprocess.check_output(['git', '-C', str(source), *args]).decode('utf-8').strip()
+            return subprocess.check_output(['git', '-C', str(source), *args],
+                                           creationflags=background_flags()).decode('utf-8').strip()
         head = git('rev-parse', 'HEAD')
         subprocess.run(['git', 'clone', '--no-hardlinks', '--no-checkout', str(source), str(destination)],
-                       check=True, capture_output=True)
+                       check=True, capture_output=True, creationflags=background_flags())
         subprocess.run(['git', '-C', str(destination), 'update-ref', 'HEAD', head],
-                       check=True, capture_output=True)
+                       check=True, capture_output=True, creationflags=background_flags())
         gitdir = Path(git('rev-parse', '--absolute-git-dir'))
         if (gitdir / 'index').is_file():
             shutil.copy2(gitdir / 'index', destination / '.git/index')
@@ -133,7 +135,8 @@ def write_note(root, note):
     temporary=path.with_suffix('.tmp')
     with temporary.open('w',encoding='utf-8') as stream:
         stream.write(json.dumps(note,indent=2));stream.flush();os.fsync(stream.fileno())
-    temporary.replace(path)
+    from .package_notice import replace_with_retry
+    replace_with_retry(temporary,path)
     if os.name != 'nt':
         directory=os.open(path.parent,os.O_RDONLY | os.O_DIRECTORY)
         try:os.fsync(directory)

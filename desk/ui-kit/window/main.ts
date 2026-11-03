@@ -16,7 +16,6 @@ import "./styles/turns.css";
 import { reviewActivity } from "./review-activity";
 import { ApiError, api, cfg, channelURL, connect, electron, inTauri, onConnection, onEvent, post, shell } from "../../ui-kit/window/api";
 import { mountAutonomy, type AutonomyState } from "../autonomy";
-import { applyTheme } from "../../ui-kit/dom";
 import * as scroll from "./scroll";
 import * as look from "./look";
 import { mountPanelWidths } from "./panel-widths";
@@ -31,6 +30,7 @@ import { buildRooms, createRoom, deleteRoom, fetchRooms, renameRoom } from "../.
 import { mountSwitch } from "../../ui-kit/window/agents";
 import { mountWindowMedia, pickPaperFiles } from "./paper-files";
 import { mountTextMenu } from "./text-menu";
+import { mountPaperSelects } from '../paper-select';
 import * as panel from "../../ui-kit/window/panel";
 import * as now from "../../ui-kit/window/views/now";
 import * as talk from "../../ui-kit/window/views/talk";
@@ -43,6 +43,9 @@ import * as anatomy from "../../ui-kit/window/views/anatomy";
 import { mountVoiceComposer, mountVoiceAttachment } from "./voice-composer";
 import * as learn from "../../ui-kit/window/views/learn";
 import * as settings from "../../ui-kit/window/views/settings-frame";
+import { releaseNotice, type ReleaseSummary } from './release-notice';
+import './styles/release-notice.css';
+import './styles/interface-refresh.css';
 
 /** Чем издание отличается от голого окна. */
 export interface WindowOptions {
@@ -78,9 +81,10 @@ export interface WindowOptions {
 export function start(opts: WindowOptions): void {
   setProductName(opts.productName);
   setLocalAgent(opts.localAgent !== false && cfg.local_agent !== false);
-  // The home screen is always Now. Setup remains an explicit action there;
-  // neither a changed origin nor a setup flag redirects into onboarding.
-  S.view = 'now';
+  // Ordinary launches open Now. A newly created subscription agent continues
+  // the owner's explicit setup choice at its sign-in controls.
+  const initialView: View = cfg.needs_subscription_login ? 'settings' : 'now';
+  S.view = initialView;
 
 
   // Длинный результат руки или её слово дочитываются файлом прогона по кнопке в ленте шагов.
@@ -98,6 +102,7 @@ export function start(opts: WindowOptions): void {
   const app = q<HTMLElement>("#app");
   const disposeMedia = mountWindowMedia(app, opts.localAgent !== false);
   const disposeTextMenu = mountTextMenu(app);
+  const disposeSelects = mountPaperSelects(app);
   const railNav = q<HTMLElement>("#rail-nav");
   const railBottom = q<HTMLElement>("#rail-bottom");
   const railSign = q<HTMLElement>("#rail-sign");
@@ -107,8 +112,13 @@ export function start(opts: WindowOptions): void {
   const headTitle = q<HTMLElement>("#head-title");
   const statePill = q<HTMLElement>("#state");
   const stateText = q<HTMLElement>("#state-text");
-  const refreshReviewActivity = reviewActivity(q<HTMLElement>("#review-activity"),
-    () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key);
+  const workBadge=q<HTMLElement>("#review-activity");
+  workBadge.setAttribute('role','button');workBadge.tabIndex=0;
+  const openWork=()=>dispatchEvent(new CustomEvent('frame-live-runs'));
+  workBadge.addEventListener('click',openWork);
+  workBadge.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openWork();}});
+  const refreshReviewActivity = reviewActivity(workBadge,
+    () => api("/api/self-review?activity=1"), () => cfg.base + "\n" + cfg.key + "\n" + cfg.agent);
   const stateAction = q<HTMLButtonElement>("#state-action");
   const pulseBox = q<HTMLElement>("#pulse");
   const alarmBox = q<HTMLElement>("#alarm");
@@ -413,11 +423,8 @@ export function start(opts: WindowOptions): void {
   const panelBox = q<HTMLElement>("#panel");
   const menu = q<HTMLElement>("#menu");
 
-  // ---------------------------------------------------------------- тема
-
-  // Тема — как в системе (слово владельца 07.09): светлая днём, тёмная ночью,
-  // без переключателя в окне.
-  applyTheme("system");
+  // look.apply above restores the owner's theme before first render. The
+  // system theme is the default, not a second override after restoration.
 
   // Веб-версия окна (Praxis за каналом) обновляется сама, когда на сервере новая
   // сборка; в оболочке helene:// сверка тихо не срабатывает — там статика с диска.
@@ -558,11 +565,21 @@ export function start(opts: WindowOptions): void {
   window.addEventListener("helene:appearance",appearanceChanged);
   colorScheme.addEventListener("change",appearanceChanged);
   window.addEventListener("pagehide", (event: PageTransitionEvent) => {
-    if (!event.persisted) { disposeWidths(); disposeMedia(); disposeTextMenu(); window.removeEventListener("helene:appearance",appearanceChanged); colorScheme.removeEventListener("change",appearanceChanged); }
+    if (!event.persisted) { disposeWidths(); disposeMedia(); disposeTextMenu(); disposeSelects(); window.removeEventListener("helene:appearance",appearanceChanged); colorScheme.removeEventListener("change",appearanceChanged); }
   });
   function togglePanel(which: "rail" | "panel") {
     if(which==='rail' && matchMedia('(max-width:760px)').matches){
-      const open=app.classList.toggle('narrow-navigation');railBtn.setAttribute('aria-pressed',String(open));return;
+      const open=app.classList.toggle('narrow-navigation');
+      if(open){app.classList.remove('narrow-activity');panelBtn.setAttribute('aria-pressed','false');}
+      railBtn.setAttribute('aria-pressed',String(open));return;
+    }
+    if(which==='panel' && matchMedia('(max-width:760px)').matches){
+      const open=app.classList.toggle('narrow-activity');
+      app.classList.remove('narrow-navigation');
+      railBtn.setAttribute('aria-pressed','false');
+      panelBtn.setAttribute('aria-pressed',String(open));
+      if(open){panelBox.tabIndex=-1;panelBox.focus({preventScroll:true});}
+      return;
     }
     setCollapsed(which, !app.classList.contains(which + "-collapsed"), true);
     // Focus without scrolling the history or changing the draft/selection.
@@ -570,13 +587,25 @@ export function start(opts: WindowOptions): void {
   }
   railBtn.addEventListener("click", () => togglePanel("rail"));
   document.getElementById('rail')?.addEventListener('click',e=>{if((e.target as Element).closest('button'))app.classList.remove('narrow-navigation');});
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape' && app.classList.contains('narrow-activity')){
+      app.classList.remove('narrow-activity');panelBtn.setAttribute('aria-pressed','false');panelBtn.focus();event.preventDefault();
+    }
+  });
+  document.addEventListener('click',event=>{
+    if(app.classList.contains('narrow-activity') && !(event.target as Element).closest('#panel,#toggle-panel')){
+      app.classList.remove('narrow-activity');panelBtn.setAttribute('aria-pressed','false');
+    }
+  });
   panelBtn.addEventListener("click", () => togglePanel("panel"));
   addEventListener("frame-live-action", (event) => {
     const button = document.querySelector("[data-live-runs]");
     if (button) button.textContent = `Агент: ${(event as CustomEvent<string>).detail} — раскрыть действия`;
   });
-  addEventListener("frame-live-runs", () => {
+  addEventListener("frame-live-runs", async () => {
+    if(S.view!=='talk')await show('talk');
     setCollapsed("panel", false, true);
+    if(matchMedia('(max-width:760px)').matches){app.classList.add('narrow-activity');panelBtn.setAttribute('aria-pressed','true');}
     void panel.revealLiveRun();
   });
 
@@ -731,6 +760,7 @@ export function start(opts: WindowOptions): void {
     // Plans owns mounted-only polling and in-flight detail reads. Its cached
     // page survives navigation, its network/listeners must not survive it.
     if (from === "plans" && id !== "plans") plans.dispose();
+    if (from === 'talk' && id !== 'talk') panel.dispose();
     // Прокрутку помним, только если в #view правда лежит узел ТОГО раздела: в него умеет
     // писать напрямую ветка отказа загрузки комнат, и чужая прокрутка уехала бы в память.
     if (from !== id && pages.get(from)?.parentNode === viewInner) {
@@ -904,7 +934,9 @@ export function start(opts: WindowOptions): void {
     const before = S.rooms.find((r) => r.key === S.room);
     const { runs, chats, chatsError } = await fetchRooms();
     if (identity !== cfg.base + "\n" + cfg.key) return;
+    const previousRuns = S.runs;
     S.runs = runs;
+    now.runsChanged(previousRuns);
     roomsError = chatsError || "";
     if (chats === undefined && S.rooms.length) {
       renderRooms();
@@ -1135,7 +1167,9 @@ export function start(opts: WindowOptions): void {
       return;
     }
     statePill.dataset.level = s.level;
-    stateText.textContent = s.level === "live" && s.activity ? "На связи" : s.phrase;
+    stateText.textContent = s.level === "live" && s.activity
+      ? s.activity.phase==='model' ? 'Думает' : s.activity.phase==='tool' ? 'Выполняет действие' : 'Работает'
+      : s.phrase;
     statePill.title = s.phrase;
     if (s.action) {
       stateAction.hidden = false;
@@ -1595,6 +1629,17 @@ export function start(opts: WindowOptions): void {
   // грузит, потому что подключаться пока не к чему.
   window.dispatchEvent(new Event('helene:ui-ready'));
   if (opts.firstRun?.(view)) return;
+  if (LOCAL_AGENT && electron?.shell === 'python') {
+    const notice=document.createElement('section');q<HTMLElement>('#head').after(notice);
+    releaseNotice(notice, async()=>{
+      const loaded=await shell<settings.Loaded>('config_load');
+      const url=String(loaded.config.update?.url || '').trim() || settings.UPDATE_URL_DEFAULT;
+      return shell<ReleaseSummary>('update_check',{url});
+    },()=>{
+      try{localStorage.setItem('settings.group',settings.GROUP.app);}catch{}
+      void show('settings').then(()=>settings.focusUpdates(pageFor('settings')));
+    });
+  }
   if (LOCAL_AGENT && cfg.needs_local_setup) {
     // The local engine intentionally waits for a configured provider/model.
     // Native settings remain available without a running agent or API channel.
@@ -1609,10 +1654,10 @@ export function start(opts: WindowOptions): void {
   // The configured window has a page even when Stop keeps the channel offline.
   // Room reads enrich Now, never gate its first render or take back navigation.
   // Reconnection and the ordinary room poll below own subsequent retries.
-  void show("now");
+  void show(initialView);
   const firstShowSeq = showSeq;
   void loadRooms()
-    .then(() => { if (showSeq === firstShowSeq) return show("now", { quiet: true }); })
+    .then(() => { if (showSeq === firstShowSeq) return show(initialView, { quiet: true }); })
     .catch(() => { renderState(null, false); });
   void refreshPulse();
   void refreshOwner();

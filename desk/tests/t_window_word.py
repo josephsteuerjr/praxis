@@ -87,29 +87,25 @@ class _StubAgent:
 class Boundary(unittest.TestCase):
     """`boundary_word` — чистое правило над записью хода."""
 
-    def test_note_after_outcome_is_her_word(self):
-        row = {"held": "unspoken",
-               "note": "done: done: Проверила руку computer по шагам: всё удалось."}
-        self.assertEqual(runner.boundary_word(row),
-                         (runner.WORD, "Проверила руку computer по шагам: всё удалось."))
+    def test_internal_note_after_outcome_is_never_published_as_a_reply(self):
+        row={"held":"unspoken","note":"done: done: internal reasoning and private draft"}
+        self.assertEqual(runner.boundary_word(row),(runner.BLANK,""))
 
-    def test_single_word_answer_is_not_a_machine_outcome(self):
-        for note in ("Спасибо.", "42", "Готово"):
-            self.assertEqual(runner.boundary_word({"held": "unspoken", "note": note}),
-                             (runner.WORD, note))
+
+    def test_prose_in_an_internal_note_is_not_delivery_authority(self):
+        for note in ("Спасибо.","42","Готово"):
+            self.assertEqual(runner.boundary_word({"held":"unspoken","note":note}),(runner.BLANK,""))
+
 
     def test_bare_outcome_is_not_a_word(self):
         for note in ("done", "done: представилась", "", "wait:"):
             self.assertEqual(runner.boundary_word({"held": "unspoken", "note": note}),
                              (runner.BLANK, ""), note)
 
-    def test_wait_and_blocked_keep_their_meaning(self):
-        self.assertEqual(
-            runner.boundary_word({"held": "unspoken", "note": "wait: пока Егор не пришлёт ключ"}),
-            (runner.WORD, "Жду: пока Егор не пришлёт ключ"))
-        self.assertEqual(
-            runner.boundary_word({"held": "unspoken", "note": "blocked: нужен доступ к папке"}),
-            (runner.WORD, "Препятствие: нужен доступ к папке"))
+    def test_internal_wait_and_blocked_notes_remain_internal(self):
+        for note in ("wait: owner has not sent a key","blocked: private access details"):
+            self.assertEqual(runner.boundary_word({"held":"unspoken","note":note}),(runner.BLANK,""))
+
 
     def test_declared_silence(self):
         self.assertEqual(runner.boundary_word({"held": "voice", "why": "нечего  добавить"}),
@@ -167,19 +163,17 @@ class WindowTurn(unittest.TestCase):
         self.assertFalse(any(row.get("outgoing") for row in rows))
         self.assertEqual(agent.receipts, [])
 
-    def test_report_in_end_turn_note_reaches_the_window(self):
-        outcome, rows, agent = self._turn(
-            {"held": "unspoken", "note": "done: Всё проверила: окно нашла, текст набран."},
-            _Envelope("run-1"))
-        self.assertEqual(outcome, "spoken")
-        last = rows[-1]
-        self.assertEqual(last["text"], "Всё проверила: окно нашла, текст набран.")
-        self.assertTrue(last["outgoing"])
-        self.assertNotIn("system", last, "слово агента — не плашка")
-        self.assertIn(("text", "Всё проверила: окно нашла, текст набран."), agent.receipts)
+    def test_report_in_internal_end_turn_note_does_not_leak_to_the_window(self):
+        secret="INTERNAL_NOTE_CANARY"
+        outcome,rows,agent=self._turn({"held":"unspoken","note":"done: "+secret},_Envelope("run-private"))
+        self.assertEqual(outcome,"silent")
+        self.assertNotIn(secret,"\n".join(row.get('text','') for row in rows if row.get('outgoing')))
+        self.assertTrue(rows[-1].get('system'))
+        self.assertFalse(any(row[0]=='text' for row in agent.receipts))
+
 
     def test_short_authored_answer_reaches_archive_and_delivery_receipt(self):
-        outcome, rows, agent = self._turn({"held": "unspoken", "note": "Спасибо."}, _Envelope("run-short"))
+        outcome, rows, agent = self._turn({"held": "unspoken", "note": "Спасибо."}, _Envelope("run-short",text="Спасибо."))
         self.assertEqual(outcome, "spoken")
         self.assertEqual(rows[-1]["text"], "Спасибо.")
         self.assertNotIn("system", rows[-1])
@@ -192,7 +186,7 @@ class WindowTurn(unittest.TestCase):
         shot.write_bytes(b"png")
         outcome, rows, _ = self._turn(
             {"held": "unspoken", "note": "done: Снимок сделала, строка в Блокноте верная."},
-            _Envelope("run-2", outbound=[_Media(str(shot))]))
+            _Envelope("run-2",text="Снимок сделала, строка в Блокноте верная.",outbound=[_Media(str(shot))]))
         self.assertEqual(outcome, "spoken")
         texts = [r["text"] for r in rows if r.get("outgoing")]
         media = next(r for r in rows if r.get("media_path"))

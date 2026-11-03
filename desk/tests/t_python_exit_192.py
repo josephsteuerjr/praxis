@@ -2,9 +2,9 @@
 import json,os,sys,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 ROOT=Path(__file__).resolve().parents[2];sys.path.insert(0,str(ROOT/'desk'))
 from localharness import python_source_updater as updater,migration_windows
-from localharness.desktop_process import JobChild
 import python_app
 class Exit(unittest.TestCase):
     def test_actual_window_bridge_exit_and_descriptor_identity(self):
@@ -20,7 +20,9 @@ class Exit(unittest.TestCase):
     def test_legacy_without_control_requires_manual_exit_not_force(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(RuntimeError,'tray Exit'):migration_windows.request_python_exit(Path(tmp),123)
+    @unittest.skipUnless(os.name == 'nt', 'Windows Job handle custody')
     def test_graceful_failure_cannot_skip_job_stop_or_race_rollback(self):
+        from localharness.desktop_process import JobChild
         for unconfirmed in (False,True):
             with self.subTest(unconfirmed=unconfirmed),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);old=root/'old';staging=root/'.helene-update-fixture';new=staging/'Helene';recovery=root/'recovery'
@@ -39,8 +41,10 @@ class Exit(unittest.TestCase):
                         if unconfirmed:raise RuntimeError('job emptiness unconfirmed')
                         self.handle=None
                 child=Child()
-                def install(a,b):
+                def install(a,b,*,stopped):
+                    self.assertIsNotNone(stopped)
                     updater.apply_files(b,a,recovery)
+                    updater.active_update(a).parent.mkdir(parents=True,exist_ok=True)
                     updater.active_update(a).write_text(json.dumps({'target':str(a),'recovery':str(recovery)}))
                     return {'id':'fixture','data_paths':[]},recovery
                 original=updater.rollback
@@ -48,7 +52,11 @@ class Exit(unittest.TestCase):
                     self.assertEqual(events,['stop']);events.append('rollback');return original(a,b)
                 args=['updater','--old',str(old),'--new',str(new),'--pid','0','--staging',str(staging)]
                 with patch.object(sys,'argv',args),patch.object(updater,'wait_owner'),patch.object(updater,'install',side_effect=install),patch.object(JobChild,'spawn',return_value=child),patch.object(migration_windows,'close_python',side_effect=TimeoutError('hidden window')),patch.object(updater,'rollback',side_effect=rollback),patch.object(updater.subprocess,'Popen') as reopened:
-                    with self.assertRaisesRegex(RuntimeError,'unconfirmed' if unconfirmed else 'startup failed'):updater.main()
+                    # Exercise the mechanical switch/rollback consumer. The
+                    # CLI now admits legacy updates through a separate owner.
+                    mechanical=SimpleNamespace(old=old,new=new,pid=0,staging=staging,archive=[],
+                        cleanup=False,browser=False,job=None,job_id='',source_mode=None,discard_preimages='')
+                    with self.assertRaisesRegex(RuntimeError,'unconfirmed' if unconfirmed else 'startup failed'):updater.perform(mechanical)
                     self.assertEqual(reopened.call_count,0 if unconfirmed else 1)
                 self.assertEqual((old/'app/python_app.py').read_text(),'new' if unconfirmed else 'old')
                 self.assertEqual(updater.active_update(old).exists(),unconfirmed)

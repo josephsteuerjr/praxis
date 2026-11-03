@@ -8,7 +8,7 @@ type AccountView = { reachable?: boolean; active_slot?: Slot; port?: number; slo
 type Surface = HTMLElement & { onMount?: () => void; onDispose?: () => void };
 
 /** Two persistent identities, never two labels for the same login command. */
-export function relayAccounts() {
+export function relayAccounts(transport:typeof shell=shell) {
   if (!customElements.get("helene-relay-accounts")) {
     customElements.define("helene-relay-accounts", class extends HTMLElement {
       connectedCallback() { (this as Surface).onMount?.(); }
@@ -31,7 +31,7 @@ export function relayAccounts() {
     const generation = epoch;
     inflight = true;
     try {
-      const view = await shell<AccountView>("relay_account");
+      const view = await transport<AccountView>("relay_account");
       if (generation !== epoch) return;
       authorized = !!view.slots?.some(row => row.stored);
       overview.textContent = view.reachable
@@ -50,7 +50,7 @@ export function relayAccounts() {
         row.logout.disabled = changing || !state?.stored && !state?.pending;
         row.use.disabled = changing || !state?.stored || !view.reachable || !!state?.serving;
         row.use.textContent = state?.serving ? "Используется" : "Использовать";
-        row.url = state?.pending ? (await shell<string | null>("relay_login_url", { slot })) || "" : "";
+        row.url = state?.pending ? (await transport<string | null>("relay_login_url", { slot })) || "" : "";
         if (generation !== epoch) return;
         row.links.hidden = !row.url;
         row.links.style.display = row.url ? "flex" : "none";
@@ -64,7 +64,7 @@ export function relayAccounts() {
     if (changing) return;
     changing = true;
     for (const row of rows.values()) for (const control of [row.login, row.logout, row.use]) control.disabled = true;
-    try { await shell(command, { slot }); }
+    try { await transport(command, { slot }); }
     catch (error) { toast(humanError(error).text); }
     finally { changing = false; await refresh(); schedule(); }
   }
@@ -80,7 +80,7 @@ export function relayAccounts() {
     const actions = el("div", "actions"); actions.append(use, login, logout);
     const links = el("div", "actions"); links.hidden = true; links.style.display = "none";
     links.append(button("Открыть страницу входа", "quiet", async () => {
-      try { await shell("open_login_page", { slot }); } catch (error) { toast(humanError(error).text); }
+      try { await transport("open_login_page", { slot }); } catch (error) { toast(humanError(error).text); }
     }), button("Скопировать ссылку", "quiet", async () => {
       toast(await copyText(rows.get(slot)?.url || "") ? "Ссылка скопирована" : "Ссылка недоступна");
     }));

@@ -305,8 +305,9 @@ class Rooms:
     """Записи и чтение переписки по чатам — в тех же файлах, что читают её кадр,
     group_context и окно: memory/groups/<id>.jsonl + реестр .state/group_context."""
 
-    def __init__(self, tree: Path, memory_life, agent_name: str):
+    def __init__(self, tree: Path, memory_life, agent_name: str, *, owner_id=''):
         self.tree = Path(tree)
+        self.owner_id = str(owner_id)
         self._life = memory_life
         self.agent_name = agent_name
         self._titles: dict[str, dict] = {}   # chat_id -> {title, is_dm, size}
@@ -358,7 +359,10 @@ class Rooms:
         # сказанной новым именем — и в окне, и в ленте, которую читает модель.
         row = {"timestamp": moment.isoformat(timespec="seconds"),
                "outgoing": bool(outgoing), "text": str(text),
-               "sender_name": (self.agent_name if outgoing else (sender or "?"))}
+               "sender_name": (self.agent_name if outgoing else (sender or "?")),
+               'source_audience': {'chat': str(chat_id), 'is_dm': bool(self.meta(chat_id).get('is_dm', True)),
+                                   'owner': bool(self.meta(chat_id).get('is_dm', True) and str(chat_id) == self.owner_id),
+                                   'owner_id': self.owner_id}}
         if sender_id: row['sender_id']=sender_id
         if media: row.update(media)
         if reply and reply.get('message_id'):
@@ -644,7 +648,7 @@ class BotTransport:
         owner_name = str((cfg.get("owner") or {}).get("name") or "владелец")
         self.owner_name = owner_name
         agent_name = boot.agent_name(cfg)
-        self.rooms = Rooms(tree, memory_life, agent_name)
+        self.rooms = Rooms(tree, memory_life, agent_name, owner_id=self.owner_id)
         self.contacts = Contacts(tree)
         self.me: dict = {}
         self.username = ""
@@ -1234,7 +1238,7 @@ class BotTransport:
         result, retries = self._cooldown.call(str(peer), method, confirmed_operation)
         return result, retries
 
-    def deliver_text(self, chat_id: str, text: str, reply_to: str = "") -> str:
+    def deliver_text(self, chat_id: str, text: str, reply_to: str = "", *, reply_evidence=False, run_id='') -> str:
         self._before_send(chat_id)
         peer, thread = peer_thread(chat_id)
         parts = _chunks(text)
@@ -1268,6 +1272,12 @@ class BotTransport:
                               ts=float((sent or {}).get("date") or 0) or None,
                               **({'reply': {'message_id': int(target)}} if i == 0 and target.isdigit() else {}))
         self.sent_now.append((str(chat_id), str(text)))
+        observation = getattr(self.agent, 'addressed_replies', None)
+        current = self.agent.run_context.current_run() if hasattr(self.agent, 'run_context') else None
+        observed_run = run_id or (current.run_id if current is not None else '')
+        if reply_evidence and observation is not None:
+            observation.safe_accepted(self.tree, observed_run, chat_id, first_id,
+                                      delivery_key='telegram:' + str(chat_id) + ':' + str(first_id))
         label = str(self.rooms.meta(chat_id).get("title") or "") \
             or self.contacts.label(peer)
         extra = (f", частей {len(parts)}" if len(parts) > 1 else "") + (", после ожидания Telegram" if cooldown_retries else "")
@@ -1364,7 +1374,7 @@ def install(agent_mod, desks, bot: BotTransport) -> None:
     def _reply(chat_id, text, reply_to="") -> str:
         if _is_desk(chat_id):
             return desk_hooks["reply"](chat_id, text, reply_to)
-        return bot.deliver_text(str(chat_id), str(text), str(reply_to or ""))
+        return bot.deliver_text(str(chat_id), str(text), str(reply_to or ""), reply_evidence=True)
 
     def _send_message(to, text) -> str:
         # ⚠ Владелец окна и человек в Telegram — ОДИН И ТОТ ЖЕ человек с двумя

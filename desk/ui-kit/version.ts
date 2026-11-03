@@ -2,7 +2,7 @@
 // так-то просто»). WKWebView в Telegram и PWA на экране «Домой» держат старую
 // сборку, что бы ни говорил Cache-Control. Поэтому страница сама сверяет свою
 // сборку с той, что лежит на сервере: имя главного скрипта в index.html несёт
-// хэш содержимого (Vite), и если на сервере оно другое — чистим кэши, будим
+// хэш содержимого (Vite), и если на сервере оно другое — будим
 // service worker и перезагружаемся на адрес с новым `v=`, который для WebView
 // — новый документ. Серверу ничего нового не нужно: index.html и так отдаётся
 // с no-cache и окном, и телефоном, и мини-аппом.
@@ -41,16 +41,14 @@ export async function checkShellVersion(): Promise<boolean> {
   if (!mine) return false;
   const theirs = await serverBundle();
   if (!theirs || theirs === mine) return false;
+  // A new shell must not discard an agent-settings draft. No credential or
+  // application storage is cleared; the new worker retires its own old cache.
+  if(!window.dispatchEvent(new Event('helene:shell-update',{cancelable:true})))return false;
   try {
     if (sessionStorage.getItem(FORCED_KEY) === theirs) return false;
     sessionStorage.setItem(FORCED_KEY, theirs);
   } catch {
     // без хранилища — рискуем одной лишней перезагрузкой
-  }
-  try {
-    if ("caches" in window) for (const k of await caches.keys()) await caches.delete(k);
-  } catch {
-    // кэша нет — нечего чистить
   }
   try {
     const regs = (await navigator.serviceWorker?.getRegistrations?.()) || [];

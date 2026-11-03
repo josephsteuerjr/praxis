@@ -763,7 +763,7 @@ html.electron #chrome a {
 
 #head {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
@@ -809,7 +809,7 @@ html.electron #chrome a {
 
 .head-side {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
@@ -868,6 +868,8 @@ html.electron #chrome a {
   white-space: nowrap;
 }
 .review-activity[hidden] { display: none; }
+.review-activity[role="button"] { cursor: pointer; }
+.review-activity[role="button"]:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 3px; }
 
 .state-pill {
   display: flex;
@@ -883,7 +885,8 @@ html.electron #chrome a {
   white-space: nowrap;
   /* 38cqi, а не 38vw: мерить надо свой контейнер, а не окно. */
   max-width: min(46ch, 38cqi);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 #state-text {
@@ -2152,6 +2155,13 @@ select.field-input {
   flex-wrap: wrap;
 }
 
+.component-install { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.component-install:last-child { border-bottom: 0; }
+.component-install > .field-hint { margin: 6px 0 10px; }
+.component-install > progress { display: block; width: 100%; height: 4px; accent-color: var(--accent); margin: 10px 0; }
+.component-install > progress[hidden] { display: none; }
+.component-install > .receipt:empty { display: none; }
+
 .receipt {
   font-size: 13px;
   color: var(--ink-3);
@@ -2803,6 +2813,11 @@ select.field-input {
   #app { --rail-track:0px;--panel-track:0px; }
   #app .chrome-left { width:auto;min-width:0; }
   #app.narrow-navigation #rail { position:fixed;left:0;top:var(--chrome-h);bottom:0;width:min(290px,90vw);background:var(--paper);z-index:40;box-shadow:6px 0 24px #0003; }
+  #app.narrow-activity.with-panel #panel {
+    position:fixed;right:0;top:var(--chrome-h);bottom:0;
+    width:min(380px,calc(100vw - 18px));background:var(--paper);z-index:40;
+    border-left:var(--lw) solid var(--line);box-shadow:-6px 0 24px #0002;
+  }
   /* ⚠ Форма селектора повторена дословно НАМЕРЕННО. `#app.with-panel` весит (1,1,0), а
      базовое `#app.with-panel:not(.panel-collapsed)` — (1,2,0): :not() несёт вес своего
      аргумента, а медиазапрос специфичности не добавляет. Короткая запись проиграла бы, и
@@ -4325,6 +4340,15 @@ body.first-run #state {
 .engine-controls button:hover:not(:disabled) { background: var(--surface); color: var(--ink); }
 .engine-controls button:disabled { opacity: .5; cursor: default; }
 .engine-controls .emergency-stop { color: var(--err, #a3332d); border-color: currentColor; font-weight: 600; }
+/* Status receipts must not decide whether the header gains a row. Only the
+   available centre width selects that layout; pulse/state text may shrink. */
+.head-side [data-autonomy-note] { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 1000px) {
+  #head { flex-wrap: wrap; gap: 6px; }
+  .head-copy { flex-basis: 100%; }
+  .head-side { flex: 1 1 100%; }
+  .head-side .pulse { display: none; }
+}
 .composer-status { position: absolute; left: 32px; right: 32px; bottom: 100%;
   max-width: 800px; min-height: 24px; margin: 0 auto 6px; display: flex; pointer-events: none;
   align-items: center; gap: 10px; color: var(--ink-3); font: 400 12px/1.4 var(--sans); }

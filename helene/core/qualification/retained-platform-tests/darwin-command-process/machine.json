@@ -1,0 +1,7 @@
+{
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t15.8.2\nBuildVersion:\t\t24H232\n",
+  "arch": "arm64",
+  "cpus": 3,
+  "base_sha256": "79ce64094f84499c1225feeb498b5310131d9122dfa37f2766279d8d9de66255",
+  "source_commit": "94407f1f6b5ddc3593dc1335c81ccf7fa820004d"
+}

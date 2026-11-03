@@ -2,7 +2,7 @@
 
 Что закреплено (срез 20.09.2026, аудит):
 
-  stop(done)      → терминальный результат юнита сохранён байт-в-байт; kill не нужен
+  stop(done)      → результат сохранён; без живого супервизора/группы kill не нужен
   kill отказался  → «stopped» НЕ пишется; прежний result не тронут; ход не умер
   taskkill rc!=0  → не «остановлен» (раньше rc молча считался успехом)
   спавн с занятым id → отказ, вторая копия юнита не создаётся
@@ -21,6 +21,17 @@ from unittest import mock
 import forge
 
 
+def admit_task(test, base, task_id):
+    """Publish durable metadata, so current admission really executes."""
+    for name, value in [('BASE', base), ('STATE_DIR', base / 'state'),
+                        ('TASKS_DIR', base / 'state/tasks')]:
+        patch = mock.patch.object(forge, name, value)
+        patch.start()
+        test.addCleanup(patch.stop)
+    forge._save_task({'id': task_id, 'root': str(base), 'goal': 'custody fixture',
+                     'scope': 'self', 'status': 'active'})
+
+
 class StopCustody(unittest.TestCase):
     def setUp(self):
         import tempfile
@@ -28,6 +39,7 @@ class StopCustody(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.base = Path(self.tmp.name)
         self.task_id = "custody-task"
+        admit_task(self, self.base, self.task_id)
         self.unit = forge._unit_dir(self.task_id, "agents", "agent-abc123")
         self.unit.mkdir(parents=True, exist_ok=True)
 
@@ -46,6 +58,8 @@ class StopCustody(unittest.TestCase):
         (self.unit / "result.json").write_text(json.dumps(golden, ensure_ascii=False),
                                                encoding="utf-8")
         with mock.patch.object(forge, "_kill_tree") as kill, \
+                mock.patch.object(forge, "_pid_alive", return_value=False), \
+                mock.patch.object(forge, "_group_live_members", return_value=False), \
                 mock.patch.object(forge, "_task_root",
                                   return_value=({"goal": "g"}, self.base, "")), \
                 mock.patch.object(forge, "_event") as ev, \
@@ -80,6 +94,7 @@ class StopCustody(unittest.TestCase):
         (self.unit / "result.json").write_text(json.dumps(partial, ensure_ascii=False),
                                                encoding="utf-8")
         with mock.patch.object(forge, "_kill_tree", return_value="остановлен"), \
+                mock.patch.object(forge, "_pid_alive", return_value=False), \
                 mock.patch.object(forge, "_task_root",
                                   return_value=({"goal": "g"}, self.base, "")), \
                 mock.patch.object(forge, "_event"), \
@@ -109,14 +124,15 @@ class SpawnReservation(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             task_id = "spawn-task"
+            admit_task(self, base, task_id)
             unit = forge._unit_dir(task_id, "agents", "agent-dedup")
             unit.mkdir(parents=True)
             (unit / "request.json").write_text(json.dumps(
                 {"id": "agent-dedup", "task_id": task_id, "role": "worker",
                  "brief": "x", "status": "running"}), encoding="utf-8")
-            with mock.patch.object(forge, "_task_root",
-                                   return_value=({"goal": "g"}, base, "")):
+            with mock.patch.object(forge, '_spawn_runner') as spawn:
                 out = forge.agent(task_id, "spawn", brief="новый", agent_id="agent-dedup")
+            spawn.assert_not_called()
             self.assertIn("уже существует", out)
             self.assertIn("отклонён", out)
 
@@ -126,7 +142,8 @@ class SpawnReservation(unittest.TestCase):
         import tempfile
         import forge_swarm
         with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
+            admit_task(self, Path(tmp), 't')
+            directory = forge._task_dir('t')
             plan = forge_swarm.create(directory, [
                 {"id": "n1", "role": "worker", "brief": "первый", "deps": []},
                 {"id": "n2", "role": "worker", "brief": "второй", "deps": ["n1"]},
@@ -150,17 +167,18 @@ class SpawnReservation(unittest.TestCase):
                 return directory / kind / unit_id
 
             with mock.patch.object(forge, "agent", side_effect=fake_agent), \
-                    mock.patch.object(forge, "_task_root",
-                                      return_value=({"goal": "g"}, Path(tmp), "")), \
-                    mock.patch.object(forge, "_task_dir", return_value=directory), \
-                    mock.patch.object(forge, "_unit_dir", side_effect=fake_unit_dir), \
                     mock.patch.object(forge, "_event"), \
                     mock.patch.object(forge, "forge_swarm", forge_swarm):
                 out = forge.swarm("t", "tick")
             self.assertEqual(spawned, [], "второго спавна для существующего юнита нет")
-            self.assertIn("n1 [starting] worker agent=agent-ghost", out)
+            self.assertIn('agent=agent-ghost', out)
             saved = forge_swarm.load(directory)
             self.assertEqual(saved["nodes"][0]["agent_id"], "agent-ghost")
+            self.assertIn(saved['nodes'][0]['status'], {'starting', 'unknown', 'lost'})
+            self.assertNotEqual(saved['nodes'][0]['status'], 'done')
+            with mock.patch.object(forge, 'agent') as spawn:
+                forge.swarm('t', 'tick')
+            spawn.assert_not_called()
 
 
 if __name__ == "__main__":       # pragma: no cover

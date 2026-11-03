@@ -1,4 +1,6 @@
 """Startup must not probe WSL; automatic Windows launches stay reachable in tray."""
+import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -24,7 +26,7 @@ class Event:
 
 def window():
     value = Mock()
-    value.events = SimpleNamespace(**{name: Event() for name in ('shown', 'maximized', 'restored', 'loaded')})
+    value.events = SimpleNamespace(**{name: Event() for name in ('shown', 'maximized', 'restored', 'loaded', 'closing')})
     return value
 
 
@@ -36,12 +38,22 @@ class StartupShell(unittest.TestCase):
         before_path = sys.path[:]
         try:
             with tempfile.TemporaryDirectory() as tmp, patch.dict(sys.modules, modules), patch.dict(os.environ):
-                with patch.object(runner.boot, 'env_knobs', return_value={}), patch.object(runner.boot, 'dotenv_gate'), patch.object(runner, '_publish_fold_policy'):
-                    with patch('shutil.which', return_value='C:/Windows/System32/bash.exe') as lookup, patch('subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='praxis-shell-ok')) as execute:
-                        result = runner._load_tree(Path(tmp), Path(tmp), {})
-                self.assertEqual(result, (modules['agent'], modules['memory_life']))
-                lookup.assert_not_called()
-                execute.assert_not_called()
+                logger=logging.getLogger();before_handlers=set(logger.handlers)
+                try:
+                    with patch.object(runner.boot, 'env_knobs', return_value={}), patch.object(runner.boot, 'dotenv_gate'), patch.object(runner, '_publish_fold_policy'):
+                        with patch('shutil.which', return_value='C:/Windows/System32/bash.exe') as lookup, patch('subprocess.run', return_value=SimpleNamespace(returncode=0, stdout='praxis-shell-ok')) as execute:
+                            result = runner._load_tree(Path(tmp), Path(tmp), {})
+                    self.assertEqual(result, (modules['agent'], modules['memory_life']))
+                    lookup.assert_not_called()
+                    execute.assert_not_called()
+                finally:
+                    # The real runner owns this handler until process exit.
+                    # This in-process fixture must close its own temporary log
+                    # before TemporaryDirectory removes it on Windows.
+                    for handler in list(logger.handlers):
+                        if (handler not in before_handlers and isinstance(handler,logging.FileHandler)
+                                and Path(handler.baseFilename).resolve().is_relative_to(Path(tmp).resolve())):
+                            logger.removeHandler(handler);handler.close()
         finally:
             sys.path[:] = before_path
             runner._agent = runner._life = None
@@ -86,6 +98,9 @@ class StartupShell(unittest.TestCase):
 
 
 class AutomaticWindow(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ))
+
     def test_automatic_windows_hidden_manual_and_other_platforms_visible(self):
         screen = SimpleNamespace(x=0, y=0, width=1920, height=1080,
                                  frame=SimpleNamespace(X=0, Y=0, Width=1920, Height=1040))
@@ -96,7 +111,10 @@ class AutomaticWindow(unittest.TestCase):
             with self.subTest(platform=platform, intent=intent), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); (root/'app/static').mkdir(parents=True)
                 (root/'app/static/index.html').write_text('<html>fixture</html>')
-                (root/'helene.json').write_text('{"setup_complete":true}')
+                # Use a valid independent portable profile; the current startup
+                # consumer binds it before attaching the Python session owner.
+                (root/'data').mkdir()
+                (root/'helene.json').write_text(json.dumps({'setup_complete':True,'tree':'data'}))
                 class Host:
                     def __init__(self, *args): pass
                     def start(self): pass
@@ -108,7 +126,30 @@ class AutomaticWindow(unittest.TestCase):
                 def create(*args):
                     app = application(*args); app.relaunch = relaunch; return app
                 launch = ['--root', str(root)] + ([f'--launch-intent={intent}'] if inline else ['--launch-intent', intent])
-                with patch.dict(sys.modules, webview=webview), patch.object(python_app.sys, 'platform', platform), patch.object(python_app, 'Controller', Host):
+                if os.name == 'nt' and platform == 'win32' and not inline:
+                    # Exercise the actual shortcut producer's fallback binding,
+                    # including Windows quoting, through the startup consumer.
+                    import ctypes
+                    from ctypes import wintypes
+                    from localharness.python_windows import launch_binding
+                    target, command = launch_binding(root, '--launch-intent ' + intent)
+                    self.assertEqual(target, root/'runtime/pythonw.exe')
+                    parse = ctypes.windll.shell32.CommandLineToArgvW
+                    parse.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+                    parse.restype = ctypes.POINTER(wintypes.LPWSTR)
+                    count = ctypes.c_int()
+                    words = parse(command, ctypes.byref(count))
+                    self.assertTrue(words)
+                    try:
+                        parsed = [words[i] for i in range(count.value)]
+                    finally:
+                        free = ctypes.windll.kernel32.LocalFree
+                        free.argtypes = [ctypes.c_void_p]
+                        free.restype = ctypes.c_void_p
+                        free(words)
+                    self.assertEqual(parsed[:2], ['-s', str(root/'app/python_app.py')])
+                    launch = parsed[2:]
+                with patch.dict(sys.modules, webview=webview), patch.object(python_app.sys, 'platform', platform), patch('localharness.session_host.attach', return_value=Host()), patch('localharness.cocoa_js_bridge.install'):
                     with patch('localharness.owner_stop.stopped', return_value=False), patch('localharness.portable_start.initialize'), patch.object(python_app, 'Application', side_effect=create), patch.object(python_app.os, 'execv') as execute:
                         self.assertEqual(python_app._main(launch), 0)
                 if relaunch:
@@ -118,6 +159,12 @@ class AutomaticWindow(unittest.TestCase):
                     self.assertIn(str(root), execute.call_args.args[1])
                 else: execute.assert_not_called()
                 self.assertEqual(webview.create_window.call_args.kwargs.get('hidden', False), hidden)
+
+    def test_automatic_stop_returns_without_attaching_or_clearing_stop(self):
+        with tempfile.TemporaryDirectory() as tmp, patch('localharness.owner_stop.stopped', return_value=True), patch('localharness.session_host.attach') as attach, patch('localharness.owner_stop.latch_client') as latch:
+            self.assertEqual(python_app._main(['--root', tmp, '--launch-intent', 'automatic']), 0)
+            attach.assert_not_called()
+            latch.assert_not_called()
 
     def test_tray_failure_shows_hidden_window_and_success_does_not(self):
         system = ModuleType('System'); system.Action = lambda fn: fn

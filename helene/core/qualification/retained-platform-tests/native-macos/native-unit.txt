@@ -1,0 +1,213 @@
+   Compiling praxis-body-protocol v0.1.0 (/Users/runner/work/_temp/rc18-native-source/crates/praxis-protocol)
+   Compiling praxis-body v0.1.0 (/Users/runner/work/_temp/rc18-native-source/crates/praxis-body)
+   Compiling praxis-bridge v0.1.0 (/Users/runner/work/_temp/rc18-native-source/crates/praxis-bridge)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.83s
+     Running unittests src/main.rs (/Users/runner/work/_temp/rc18-body-target/debug/deps/praxis_body-e958e01fdf6610a7)
+
+running 171 tests
+test artifact::tests::local_resume_policy_restarts_only_incompatible_stage_offsets ... ok
+test artifact::tests::preferred_artifact_routes_stay_first_and_are_deduplicated ... ok
+test artifact::tests::artifact_metadata_is_strict_and_hash_is_canonicalized_before_slicing ... ok
+test artifact::tests::server_chunk_size_and_offsets_form_one_authoritative_resume_grid ... ok
+test ax::tests::a_missing_pattern_is_refused_with_what_the_element_has_and_no_click_fallback ... ok
+test ax::tests::a_name_is_title_then_description_then_label_then_help_then_static_value ... ok
+test artifact::tests::artifact_resolver_appends_direct_dns_after_matching_candidates ... ok
+test ax::tests::a_password_field_hides_its_value_and_refuses_set_value_but_not_focus ... ok
+test ax::tests::a_rect_comes_in_points_with_a_centre_and_offscreen_is_computed ... ok
+test ax::tests::a_revoked_permission_stops_the_walk_by_name ... ok
+test ax::tests::a_tab_is_selected_when_its_value_is_one ... ok
+test ax::tests::a_vanished_element_is_absence_and_any_other_failure_tears_the_search ... ok
+test ax::tests::an_unreadable_element_is_counted_and_shown_as_custom_not_dropped ... ok
+test ax::tests::attributes_are_read_in_the_declared_order ... ok
+test ax::tests::ax_errors_have_names_and_strangers_keep_their_number ... ok
+test ax::tests::an_unfinished_sweep_names_what_stopped_it ... ok
+test ax::tests::describe_carries_the_same_fields_as_a_read_node ... ok
+test ax::tests::every_dictionary_word_is_one_uia_prints ... ok
+test ax::tests::every_limit_is_named_when_it_cuts ... ok
+test ax::tests::expand_prefers_a_settable_attribute_and_collapse_has_no_menu_road ... ok
+test ax::tests::focus_writes_axfocused_and_select_needs_a_settable_axselected ... ok
+test ax::tests::invoke_presses_and_set_value_writes_into_the_field_not_into_focus ... ok
+test ax::tests::numbers_and_booleans_become_text_without_a_trailing_zero ... ok
+test ax::tests::long_text_is_clipped_by_utf16_units_and_marked ... ok
+test ax::tests::roles_speak_the_same_words_as_uia_on_windows ... ok
+test ax::tests::the_guard_runs_before_the_change_and_can_stop_it ... ok
+test ax::tests::patterns_follow_actions_and_settable_attributes ... ok
+test ax::tests::the_refusal_without_accessibility_names_the_permission_and_the_road_to_it ... ok
+test ax::tests::the_walk_keeps_parent_links_depth_and_order ... ok
+test ax::tests::visible_only_skips_offscreen_elements_with_everything_under_them ... ok
+test ax::tests::the_sweep_matches_by_dictionary_role_or_raw_role_and_never_picks_for_her ... ok
+test compose::tests::a_condition_without_its_subject_is_refused_by_name ... ok
+test compose::tests::a_partial_last_reading_makes_not_found_say_where_it_did_not_look ... ok
+test compose::tests::a_silent_element_is_not_reported_as_available ... ok
+test compose::tests::a_timeout_says_it_did_not_wait_long_enough_and_never_says_the_condition_is_false ... ok
+test compose::tests::a_truncated_window_list_is_called_truncated ... ok
+test compose::tests::a_window_matcher_needs_every_named_part_to_agree ... ok
+test compose::tests::an_unknown_argument_is_named_instead_of_silently_dropped ... ok
+test compose::tests::an_unknown_composed_name_is_refused_by_name ... ok
+test compose::tests::arguments_the_condition_does_not_use_are_named_out_loud ... ok
+test compose::tests::limits_are_pulled_to_the_boundary_and_the_pull_is_declared ... ok
+test compose::tests::live_a_condition_that_already_holds_costs_one_poll ... ignored, нужен живой рабочий стол хотя бы с одним видимым окном
+test compose::tests::live_one_call_both_acts_and_observes ... ignored, нужен живой рабочий стол: шлёт настоящий ввод и читает окно переднего плана
+test compose::tests::live_text_waiting_really_reads_the_window_before_giving_up ... ignored, нужен живой рабочий стол с окном на переднем плане
+test compose::tests::plain_text_waiting_does_not_care_about_the_enabled_state ... ok
+test compose::tests::probes_that_all_failed_are_not_reported_as_an_absent_condition ... ok
+test compose::tests::the_act_verb_settle_pause_is_clamped_and_declared ... ok
+test compose::tests::the_module_declares_exactly_what_it_handles ... ok
+test compose::tests::waiting_for_a_window_that_will_never_appear_times_out_honestly ... ignored, ожидание опирается на desktop.window.list, которого нет вне Windows
+test compose::tests::window_closed_is_met_by_the_absence_of_a_match ... ok
+test config::tests::cleartext_transport_is_loopback_only ... ok
+test config::tests::dial_addresses_are_bounded_explicit_and_share_endpoint_identity ... ok
+test config::tests::missing_dial_addresses_is_backward_compatible ... ok
+test compose::tests::a_failed_reading_after_a_successful_act_is_not_an_empty_window ... ok
+test config::tests::transport_and_router_tokens_are_separate_compartments ... ok
+test desktop::tests::adapter_is_only_advertised_as_available_where_it_runs ... ok
+test desktop::tests::capture_declares_a_provider_owned_image_artifact ... ok
+test desktop::tests::capability_names_are_unique_and_versioned ... ok
+test desktop::tests::capture_has_independent_pixel_and_raw_byte_limits ... ok
+test desktop::tests::desktop_dispatch_refuses_to_block_a_current_thread_runtime ... ok
+test desktop::tests::mac_app_bundle_is_cut_from_the_executable_path ... ok
+test desktop::tests::capture_name_is_windows_component_safe ... ok
+test desktop::tests::mac_capture_plan_measures_the_image_not_the_frame ... ok
+test desktop::tests::mac_downscale_box_averages_and_nearest_resamples ... ok
+test desktop::tests::mac_hwnd_parses_like_windows ... ok
+test desktop::tests::mac_input_plan_paces_text_and_counts_drag_pauses ... ok
+test desktop::tests::mac_key_table_maps_windows_names_to_kvk ... ok
+test desktop::tests::mac_input_plan_refuses_the_same_limits_as_windows_and_counts_clamps ... ok
+test ax::live_tests::without_accessibility_the_application_element_refuses_and_with_it_windows_are_read ... ok
+test desktop::tests::mac_live_a_lone_modifier_down_is_released_and_named ... ok
+test desktop::tests::mac_live_dispatch_runs_from_tokio_via_the_blocking_pool ... ok
+test desktop::tests::mac_live_input_and_activation_refuse_without_accessibility ... ok
+test desktop::tests::mac_live_status_answers_with_platform_and_tcc ... ok
+test desktop::tests::mac_live_clipboard_round_trip ... ok
+test desktop::tests::mac_page_and_process_filters_share_the_windows_shape ... ok
+test desktop::tests::mac_pixel_layout_reads_bitmap_info_and_to_bgra_handles_padding ... ok
+test desktop::tests::mac_ps_parser_survives_leading_spaces_and_paths_with_spaces ... ok
+test desktop::tests::mac_wheel_delta_maps_to_lines_without_silent_zero ... ok
+test desktop::tests::mac_window_row_has_the_windows_shape_and_names_hidden_titles ... ok
+test desktop::tests::png_encoder_preserves_bgra_colors_as_lossless_rgb ... ok
+test desktop::tests::png_output_writer_enforces_its_byte_limit_before_overflow ... ok
+test element::tests::a_name_written_off_the_screen_matches_regardless_of_case ... ok
+test element::tests::ambiguity_is_answered_with_the_candidates_themselves ... ok
+test element::tests::an_automation_id_is_compared_exactly ... ok
+test element::tests::an_empty_selector_is_refused_by_name ... ok
+test element::tests::an_unfinished_walk_is_never_called_absence ... ok
+test element::tests::an_unknown_action_lists_the_known_ones ... ok
+test element::tests::blank_conditions_never_widen_action_or_find ... ok
+test element::tests::choosing_refuses_to_pick_for_her ... ok
+test element::tests::every_selector_field_must_match_at_once ... ok
+test element::tests::exact_fields_keep_whitespace_and_unknown_selectors_fail_closed ... ok
+test element::tests::find_keeps_exact_selector_whitespace_and_refuses_unknown_top_level_fields ... ok
+test element::tests::find_receipt_says_when_it_showed_fewer_than_it_found ... ok
+test element::tests::find_refuses_an_empty_selector_and_points_at_reading_the_window ... ok
+test element::tests::find_says_that_nth_is_not_its_word ... ok
+test element::tests::find_waits_only_when_asked ... ok
+test element::tests::limits_are_clamped_and_never_zero ... ok
+test element::tests::moving_the_view_is_not_called_a_change_of_data ... ok
+test element::tests::setting_a_value_without_text_is_a_forgotten_argument_not_an_empty_field ... ok
+test element::tests::text_offered_to_an_action_that_ignores_it_is_refused_rather_than_dropped ... ok
+test element::tests::the_receipt_does_not_claim_success ... ok
+test fsops::tests::a_move_into_an_existing_directory_reports_where_it_actually_landed ... ok
+test desktop::tests::mac_live_window_list_and_process_list_answer_honestly ... ok
+test fsops::tests::a_move_refuses_to_replace_silently_and_replaces_when_told ... ok
+test fsops::tests::a_recursive_delete_counts_exactly_what_it_removed ... ok
+test fsops::tests::apple_aliases_work_but_a_user_link_named_var_is_still_refused ... ok
+test fsops::tests::a_recursive_copy_says_what_it_kept_and_what_it_overwrote ... ok
+test fsops::tests::copying_a_directory_without_recursive_names_the_word_that_unlocks_it ... ok
+test fsops::tests::copying_a_tree_into_itself_is_named_instead_of_looping_forever ... ok
+test fsops::tests::complete_cross_volume_copy_reports_source_removed_only_after_copy ... ok
+test fsops::tests::cross_volume_move_keeps_late_link_and_its_external_target ... ok
+test fsops::tests::cross_volume_move_keeps_new_source_child_created_after_copy ... ok
+test fsops::tests::cross_volume_move_keeps_source_file_rewritten_after_copy ... ok
+test fsops::tests::deleting_a_full_directory_without_recursive_names_the_word_that_unlocks_it ... ok
+test fsops::tests::deleting_a_missing_path_says_it_was_missing_and_not_that_it_removed_something ... ok
+test fsops::tests::cross_volume_move_retains_source_when_destination_keeps_an_existing_file ... ok
+test fsops::tests::exact_replace_refuses_ambiguous_text ... ok
+test fsops::tests::every_tree_verb_carries_its_limits_in_the_answer ... ok
+test fsops::tests::mkdir_lists_exactly_the_directories_it_created_and_repeats_without_lying ... ok
+test fsops::tests::expected_hash_prevents_stale_write ... ok
+test fsops::tests::mkdir_without_parents_names_the_missing_level_and_still_makes_one ... ok
+test fsops::tests::the_cross_volume_path_is_recognised_by_its_error_code_and_moves_the_whole_tree ... ok
+test fsops::tests::unknown_arguments_come_back_by_name_instead_of_silently_defaulting ... ok
+test identity::macos_identity_tests::user_identity_does_not_depend_on_console_presence ... ok
+test journal::tests::same_request_is_reused_and_changed_args_conflict ... ok
+test journal::tests::sequence_survives_calls ... ok
+test local_router::tests::rejects_uncorrelated_local_frames ... ok
+test fsops::tests::unified_patch_runs_native_git_and_applies_only_after_a_successful_check ... ok
+test process::tests::existing_operation_id_cannot_alias_different_process_arguments ... ok
+test process::tests::an_early_supervisor_failure_is_a_recorded_outcome_not_a_shrug ... ok
+test process::tests::list_and_status_agree_on_a_finished_operation ... ok
+test process::tests::power_shell_is_the_wire_name_and_maps_to_zsh_on_macos ... ok
+test runtime::tests::a_capability_error_keeps_its_cause_on_the_way_to_her ... ok
+test runtime::tests::every_declared_capability_has_somewhere_to_go ... ok
+test runtime::tests::every_new_verb_is_declared_and_answers_to_its_name ... ok
+test process::tests::on_macos_power_shell_runs_zsh_without_bom_or_preamble ... ok
+test runtime::tests::expired_replay_returns_the_saved_result_but_new_work_is_rejected ... ok
+test runtime::tests::missing_in_process_executor_is_durably_in_doubt ... ok
+test runtime::tests::replay_of_a_live_detached_process_stays_nonterminal ... ok
+test runtime::tests::expired_active_replay_waits_for_the_durable_terminal_result ... ok
+test runtime::tests::window_read_and_composed_steps_are_routed_before_the_desktop_prefix ... ok
+test transport::tests::configured_dial_keeps_canonical_websocket_identity ... ok
+test transport::tests::response_is_enqueued_before_the_spool_ack ... ok
+test runtime::tests::replay_waits_for_the_original_terminal_result ... ok
+test uia::tests::a_cap_out_of_range_is_pulled_to_the_border_and_said_out_loud ... ok
+test uia::tests::a_fallback_answer_is_an_answer_and_names_why_it_is_the_lesser_one ... ok
+test uia::tests::a_filter_keeps_the_path_in_a_tree_and_only_the_hits_when_flat ... ok
+test uia::tests::a_misspelled_argument_is_named_instead_of_ignored ... ok
+test uia::tests::a_tree_answer_keeps_parent_links_and_child_order ... ok
+test uia::tests::a_truncated_label_is_marked_on_the_node_that_lost_it ... ok
+test uia::tests::a_whole_reading_says_so_and_a_cut_one_says_how_much_is_left ... ok
+test uia::tests::action_only_display_properties_may_be_unavailable ... ok
+test uia::tests::action_provider_failure_is_not_successful_null ... ok
+test uia::tests::action_unreadable_competing_name_aborts_before_exact_or_nth_choice ... ok
+test uia::tests::an_unknown_capability_is_refused_by_name ... ok
+test uia::tests::an_unknown_state_is_absent_and_never_printed_as_false ... ok
+test uia::tests::cached_description_never_calls_live_provider_and_live_description_never_reads_cache ... ok
+test uia::tests::coordinates_come_with_a_point_that_can_actually_be_clicked ... ok
+test uia::tests::dispatch_refuses_to_block_a_current_thread_runtime ... ok
+test uia::tests::every_named_cap_ships_its_ceiling_and_nothing_else_hides ... ok
+test uia::tests::every_uia_control_type_has_a_word_and_a_stranger_keeps_its_number ... ok
+test uia::tests::find_worker_wait_never_expires_before_its_sweep ... ok
+test uia::tests::on_macos_a_node_carries_its_raw_role_and_patterns_and_coordinates_are_points ... ok
+test uia::tests::on_macos_without_accessibility_the_verbs_refuse_with_words_and_never_lie ... ok
+test uia::tests::shape_and_hwnd_are_parsed_the_same_way_window_list_prints_them ... ok
+test uia::tests::text_is_clipped_by_utf16_units_not_by_characters ... ok
+test uia::tests::the_module_declares_its_verbs_by_name ... ok
+test uia::tests::the_plain_win32_path_can_be_asked_for_by_name ... ok
+test uia::tests::win32_classes_map_to_readable_roles ... ok
+test desktop::tests::mac_live_capture_gives_a_png_or_refuses_with_hints ... ok
+test transport::tests::websocket_falls_back_from_configured_address_to_canonical_dns ... ok
+
+test result: ok. 167 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 5.63s
+
+     Running unittests src/lib.rs (/Users/runner/work/_temp/rc18-body-target/debug/deps/praxis_body_protocol-5d4135f74a00a3b2)
+
+running 3 tests
+test tests::protocol_mismatch_is_explicit ... ok
+test tests::terminal_status_is_not_guessed_from_strings ... ok
+test tests::system_execution_round_trips_without_becoming_interactive ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/Users/runner/work/_temp/rc18-body-target/debug/deps/praxis_bridge-05dfd3f6f3dcf1c3)
+
+running 11 tests
+test artifacts::tests::rejects_paths_disguised_as_hashes ... ok
+test spool::tests::invoke_binding_covers_both_ids_deadline_and_legacy_cache ... ok
+test spool::tests::ack_is_cumulative_per_device_and_direction ... ok
+test spool::tests::responses_are_isolated_by_device ... ok
+test spool::tests::startup_resequences_duplicate_legacy_rows_and_enforces_unique_sequences ... ok
+test spool::tests::terminal_response_obeys_operation_and_outcome_priority ... ok
+test tests::changed_intent_conflicts_before_cached_success_can_be_polled ... ok
+test tests::device_token_cannot_become_a_controller_token ... ok
+test tests::stale_disconnect_does_not_remove_replacement_peer ... ok
+test tests::concurrent_http_invokes_are_enqueued_in_bridge_sequence_order ... ok
+test spool::tests::pending_pages_are_bounded_and_keyset_ordered ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s
+
+   Doc-tests praxis_body_protocol
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

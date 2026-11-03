@@ -1,10 +1,29 @@
-# Source and package bindings
+# Hélène source and package bindings
 
-Implementation `8b2819ef13eea47865758043f94a5b1244f12f9d`. Each platform tag binds the exact application files, actual pristine upstream and the separate legacy custody-admission view shipped in its archive.
+The 2.3.0 delivery uses one frozen source composition: current `praxis/`, the
+explicit `helene/core/` overlay and current `desk/`. Its source ZIP binds the raw
+Git files and executable modes. Each platform archive carries its actual
+application/core inventories and version-bound verification material. Match
+those inventories and the release evidence; a common version label alone does
+not prove equal source or native inputs.
 
-- windows: `source/helene-2.2.17-windows` / `b022da330f1a94796f7d307d40955740d13dfe8e`.
-- macos: `source/helene-2.2.17-macos` / `3ee30e9c9122d6a835ec6aa4319ce18d0310b5b1`.
-- debian: `source/helene-2.2.17-debian` / `f03cdfc29c075598640c964b2f92a17a9b94ecb3`.
-- fedora: `source/helene-2.2.17-fedora` / `cc901aec9b559dd5d47b161d2d6ca7bbf1146f9a`.
+The records below describe historical 2.2.9 deliveries. Their immutable tags,
+digests and older voice references are provenance, not the current 2.3.0 source
+selection. `HELENE-SOURCE.json` and `helene/PLATFORM-SOURCE.json` are retained as
+historical inputs; current composition inventories are generated for each new
+archive.
 
-Native runtimes retain qualified immutable inputs. The release evidence records targeted changes, native fixture results and remaining limits.
+## Historical 2.2.9 bindings
+
+### Hélène 2.2.9 source and package bindings
+
+Implementation `f043cb73cebaea40778d8f445762247d00fd8f27`; qualified package/runtime base2.2.4 `63682382f50c0031f791fd31760502a0fd4d2dd9`. Platform snapshots are immutable tags.
+
+- **windows**: tag `source/helene-2.2.9-windows`, commit `119ceec841d3f6afd0d413ca66852f21babb5561`, archive `Helene-2.2.9.zip`.
+- **macos**: tag `source/helene-2.2.9-macos`, commit `68e16a8d023123fb0c0409a9d131e3da11600337`, archive `Helene-2.2.9-macos-arm64.zip`.
+- **debian**: tag `source/helene-2.2.9-debian`, commit `e6a6b11ecff7a9d7fac440aea28d0177f352fdf5`, archive `Helene-2.2.9-linux-x86_64.zip`.
+- **fedora**: tag `source/helene-2.2.9-fedora`, commit `1f614f3cf406b377c06f78b8d7cf54821629bf00`, archive `Helene-2.2.9-fedora-x86_64.zip`.
+
+Snapshots bind exact packaged application inputs and actual pristine2.2.9B in helene/core/. The explicitly separate helene/admission/source/ is the shipped official2.1.1 compatibility view used only to hand custody to the incoming helper. That helper verifies/materializes realB before the selected preserve or pristine source policy. Preserve still requires independent review after agent resolution. See desk/docs/SOURCE-ADMISSION.md.
+
+The updater offers both policies without a separate preparation command. Legacy pending agent work safely reopens the previous app; the next invocation carries only a matching resolved candidate into independent review. Native runtimes/platform adaptations retain qualified2.2.4 inputs; all five interfaces were rebuilt for the source-mode controls. Voice references remain pinned2.1.1. Rejected2.2.5 was removed;2.2.6 was withdrawn after the normal-startup-cache failure;2.2.7 was withdrawn after the owner-owned relay lifetime failure. 2.2.8 is withdrawn after its restricted merger ended without resolving conflicts. The Praxis public source mirror is unchanged.

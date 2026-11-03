@@ -35,7 +35,12 @@ class Server(paramiko.ServerInterface):
                 if reply.stdout:channel.sendall(reply.stdout)
                 if reply.stderr:channel.sendall_stderr(reply.stderr)
                 channel.send_exit_status(reply.returncode)
-            finally:channel.close()
+            finally:
+                # End command output without racing Paramiko's exec-success
+                # reply. A fast local command can finish before this request
+                # callback returns; CHANNEL_CLOSE would reject valid exec.
+                # The client/fixture transport retains channel-close custody.
+                channel.shutdown_write()
         threading.Thread(target=run,daemon=True).start();return True
 
 
@@ -87,7 +92,11 @@ class SSH(unittest.TestCase):
         reply=transfer.probe(self.raw)
         self.assertTrue(reply['trust_needed']);self.assertEqual(self.auths,[])
         result=transfer.probe({**self.raw,'confirmed_host':True,'fingerprint':reply['fingerprint']})
-        self.assertTrue(result['ok']);self.assertTrue(result['root']);self.assertTrue(result['supported'])
+        # The real fixture executes commands under this executor's UID. A
+        # claimed SSH login cannot turn an ordinary account into real root.
+        self.assertEqual(result['root'],os.geteuid()==0,result)
+        self.assertEqual(result['ok'],os.geteuid()==0,result)
+        self.assertTrue(result['supported'],result)
         self.assertIn('root',self.auths)
     def test_sftp_actual_bytes_hash_and_wrong_host_key_refusal(self):
         checked={**self.raw,'fingerprint':transfer.fingerprint(self.key),'confirmed_host':True}
