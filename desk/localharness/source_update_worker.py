@@ -25,7 +25,7 @@ class SourceMergeAdapter:
     tools = [{'name': 'merge_source', 'description':
         'Inspect frozen A/base, L/local, B/incoming and M/result. Resolve conflicts '
         'and repair integration in any declared source input, preserving both intents. '
-        'Explicit surface core/app uses root-relative paths; omitted surface retains app/ '
+        'status lists selected_cores; address core-0/path or core-1/path for each core in the ONE transition. Explicit surface core/app uses root-relative paths; omitted surface retains app/ '
         'application shorthand. All app writes require a reason and '
         'expected_composition_sha256 from status. Nonconflict core repairs require '
         'reason and expected_candidate_sha256. Finish '
@@ -61,7 +61,8 @@ class SourceMergeAdapter:
                 or operation.get('input_sha256') != self.input_sha256):
             raise ValueError('Source update attempt is stopped, superseded or not active')
         from localharness.source_update import _owner_blocked
-        if _owner_blocked(operation['tree']):
+        from localharness.source_update import job_blocked
+        if _owner_blocked(operation['tree']) or job_blocked(operation):
             raise ValueError('Owner Stop/Pause forbids merger tool admission')
         self.request = request
         return plan, operation
@@ -108,6 +109,8 @@ class SourceMergeAdapter:
         if 'surface' in args and surface not in ('core','app'):
             raise ValueError('Unknown source surface; choose core or app')
         action = args.get('action', 'status')
+        from localharness import direct_update,update_composition
+        grouped=direct_update.group(self.root)
         if action == 'status':
             status = {'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
                 'state': plan['state'], 'conflicts': plan['conflicts'],
@@ -115,6 +118,9 @@ class SourceMergeAdapter:
                 'repairs': plan.get('repairs', []),
                 'path_surfaces':['core','app'] if plan.get('app_source') else ['core'],
                 'candidate_sha256': merge.candidate_signature(self.root)}
+            if grouped:
+                status['selected_cores']=direct_update.core_rows(self.root)
+                status['composition_sha256']=update_composition.signature(self.root)
             if plan.get('app_source'):
                 from localharness import app_source_update, update_composition
                 state = update_composition.prepare(self.root, operation)
@@ -126,6 +132,18 @@ class SourceMergeAdapter:
         if action in {'read', 'resolve'}:
             logical = args.get('path', '')
             merge.relative(logical)
+            if grouped and logical.split('/',1)[0] in {r['key'] for r in direct_update.core_rows(self.root)}:
+                key,relative=logical.split('/',1)
+                selected=next(r for r in direct_update.core_rows(self.root) if r['key']==key)
+                directory=Path(selected['directory']);core=merge.validate_inputs(directory)
+                if action=='read':
+                    return self._read(core,relative,{side:directory/side for side in ('base','local','incoming','result')},args)
+                if args.get('expected_composition_sha256')!=update_composition.signature(self.root):
+                    raise ValueError('Use current whole composition identity')
+                if core.get('state')=='ready':merge.reopen(directory)
+                merge.resolve(directory,relative,args.get('content'),delete=args.get('delete') is True,
+                    side=args.get('side',''),reason=args.get('reason',''),expected_candidate=merge.candidate_signature(directory))
+                return self.dispatch(request,name,{'action':'status','expected_input_sha256':self.input_sha256})
             application=(surface=='app' or (surface is None and logical.startswith('app/') and plan.get('app_source')))
             if application:
                 if not plan.get('app_source'):
@@ -165,7 +183,8 @@ class SourceMergeAdapter:
             if plan.get('app_source'):
                 from localharness import app_source_update
                 app_source_update.finish(self.root)
-            merge.finish(self.root, exe=merge.executable(operation['program']))
+            from localharness.direct_update import finish as finish_cores
+            finish_cores(self.root,merge.executable(operation['program']))
         else:
             raise ValueError('Unknown merge_source action')
         return self.dispatch(request, name, {'action': 'status', 'expected_input_sha256': self.input_sha256})
@@ -205,7 +224,7 @@ class SourceMergeAdapter:
         plan, _ = self._check(self.request)
         result = {'input_sha256': self.input_sha256, 'conflicts': plan['conflicts'],
                   'result': merge.inventory(self.root / 'result')}
-        if plan.get('app_source'):
+        if plan.get('app_source') or plan.get('direct_update'):
             from localharness.update_composition import describe
             result['composition'] = describe(self.root)
         return json.dumps(result, ensure_ascii=False)
@@ -222,6 +241,9 @@ class SourceMergeAdapter:
                 app_source_update.require_ready(self.root)
             except ValueError:
                 unresolved_app.append('application finish required')
+        from localharness.direct_update import require_ready as require_cores
+        try:require_cores(self.root)
+        except ValueError:unresolved_app.append('Finish every selected core')
         if (not unresolved_app and plan.get('state') == 'ready'
                 and merge.inventory(self.root / 'result') == plan.get('result')):
             return ''
@@ -244,8 +266,9 @@ class SourceMergeAdapter:
         result = {'plan_id': self.plan_id, 'input_sha256': self.input_sha256,
                 'candidate_sha256': merge.signature(actual), 'candidate_verified': True,
                 'framework_requested': self.framework, 'review_scope': 'isolated-conflict-candidate'}
-        if plan.get('app_source'):
-            from localharness import app_source_update, update_composition
+        if plan.get('app_source') or plan.get('direct_update'):
+            from localharness import app_source_update, update_composition,direct_update
+            direct_update.require_ready(self.root)
             app_source_update.require_ready(self.root)
             result.update(composition_verified=True, composition_sha256=update_composition.signature(self.root))
         return result

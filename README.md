@@ -49,12 +49,13 @@ See [Update and migration ownership](desk/docs/UPDATE-SESSION-HOST-230.md).
 Updates offer preserved source with conflict resolution, checks and independent
 review, or clean release code. Memory, conversations, settings and keys stay
 with the selected data folders. Legacy migration follows its explicit preview;
-program code and agent data have separate ownership. With several selected code
-roots, each resolution channel is admitted before the common application barrier.
-Ready channels stay reachable for explicit peer reconciliation; every changed
-composition needs its own current verification and independent review. Stop is
-sent to all admitted coordinators, and the final shared application is checked
-again after they settle.
+program code and agent data have separate ownership. New preserve updates bind
+all selected core variants and one shared application into one candidate. One
+coordinator/hand reconciles it, then one separate test launcher produces the
+whole-composition report for independent review. Every affected profile's Stop
+and Pause remain binding. Changed candidates need fresh matching evidence;
+programme application/rollback does not move or mandatorily archive agent data.
+Earlier admitted per-core operations retain their original protocol and receipts.
 
 The incoming package owns the coordinator and verification policy, before the
 installed program is replaced. Experimental preserve protocol v2 does not emulate

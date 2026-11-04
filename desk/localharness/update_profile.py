@@ -91,11 +91,12 @@ def selection(old):
     return result
 
 
-def prepare(old, new, progress=None, *, attached_data=None):
+def prepare(old, new, progress=None, *, attached_data=None, snapshot=True):
     old, new = Path(old).resolve(), Path(new).resolve()
     found = app_migration.discover(old)
     operation = uuid.uuid4().hex
-    backup = settings_snapshot(old, operation, progress)
+    backup = (settings_snapshot(old, operation, progress) if snapshot else
+              {'path':'','scope':'programme-preimages-only','bytes':0,'archive_bytes':0})
     sources, trees = [], []
     for row in found['agents']:
         value = dict(row['value'])

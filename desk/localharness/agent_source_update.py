@@ -125,7 +125,8 @@ def _command(tree,action,**args):
                 'evidence_handling':'Frozen snapshots and incoming files are read-only evidence. Never import or execute them in place: Python may write __pycache__. Use AST or copy files to a separate temporary directory and run python -B there.',
                 'candidate_sha256':merge.candidate_signature(directory), 'composition_sha256':composition,
                 'compound_paths':['app/'+name for name in sorted(app_paths)],
-                'shared_application': shared}
+                'shared_application': shared,
+                'selected_cores':__import__(__package__+'.direct_update',fromlist=['core_rows']).core_rows(directory)}
     pipeline._fresh(operation,directory)
     if owner_stop.stopped() or owner_stop.paused() or operation.get('paused') or operation.get('cancel_requested'):
         raise ValueError('Owner Stop/Pause forbids source resolution')
@@ -175,12 +176,16 @@ def _command(tree,action,**args):
                 raise
         request['state']=operation['state'];write(pipeline.path(tree),request)
         return _command(tree,'status')
+    from .direct_update import group,core_command
+    if group(directory):
+        handled,result=core_command(directory,action,args,operation)
+        if handled:return result
     if action in ('read','diff','resolve','patch'):
         name=args.get('path','');merge.relative(name)
         if name.startswith('app/') and (directory/'composition.json').is_file():
             from . import update_composition
             relative=name.removeprefix('app/')
-            target=directory/'compound/app'/relative
+            target=update_composition.app_root(directory)/relative
             if action in ('read','diff'):
                 app_plan=read(directory/'app-merge/plan.json')
                 side=args.get('side') or 'result'

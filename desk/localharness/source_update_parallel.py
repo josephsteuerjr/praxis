@@ -294,7 +294,7 @@ def execution_lanes(lanes,repository,actual_files):
     return result
 
 
-def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,stopped,binding,errors,*,runtime=None):
+def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,stopped,binding,errors,*,runtime=None,shared=None):
     from . import source_verification_python as private_python
     layout=private_python.describe(runtime,tools['python']) if runtime is not None and not errors.get('python') else None
     if layout is not None and battery.merge.signature(layout)!=binding['executor'].get('private_python_layout_sha256'):
@@ -366,22 +366,33 @@ def run(battery,lanes,repository,actual_files,work,runner,tools,operation,cache,
             try:yield pending.get_nowait()
             except queue.Empty:return
     with progress_lock:publish(force=True)
+    shared_state=shared
     shared=work/'shared-inputs'
     shared_python=None
     shared_dependencies=None
     dependencies=(operation.get('verification_executor') or {}).get('python_dependencies')
     dependency_expected=binding['executor'].get('dependency_files')
     if shared_mode:
-        shared.mkdir()
-        shared_python=private_python.provision(layout,shared/'interpreter',cancelled,copy_progress)
-        if dependencies:
-            if dependency_expected is None:raise ValueError('Missing bound Python dependencies')
-            shared_dependencies=shared/'dependencies'
-            _copy(Path(dependencies),shared_dependencies,cancelled,copy_progress)
-            if inventory(battery,shared_dependencies,cancelled,expected=dependency_expected)!=dependency_expected:
-                raise ValueError('Shared Python dependencies differ')
-        from .verification_readonly import protect
-        _check(cancelled);protect(shared,cache);_check(cancelled)
+        identity=battery.merge.signature({'layout':layout,'dependencies':dependency_expected})
+        if shared_state is not None and shared_state.get('identity'):
+            if shared_state['identity']!=identity:raise ValueError('Transition immutable test inputs changed')
+            shared_python=str(shared/'interpreter/python.exe')
+            shared_dependencies=shared/'dependencies' if dependencies else None
+            private_python.verify(layout,shared/'interpreter',cancelled)
+            if shared_dependencies and inventory(battery,shared_dependencies,cancelled,expected=dependency_expected)!=dependency_expected:
+                raise ValueError('Shared transition dependencies changed')
+        else:
+            shared.mkdir()
+            shared_python=private_python.provision(layout,shared/'interpreter',cancelled,copy_progress)
+            if dependencies:
+                if dependency_expected is None:raise ValueError('Missing bound Python dependencies')
+                shared_dependencies=shared/'dependencies'
+                _copy(Path(dependencies),shared_dependencies,cancelled,copy_progress)
+                if inventory(battery,shared_dependencies,cancelled,expected=dependency_expected)!=dependency_expected:
+                    raise ValueError('Shared Python dependencies differ')
+            from .verification_readonly import protect
+            _check(cancelled);protect(shared,cache);_check(cancelled)
+            if shared_state is not None:shared_state.update(identity=identity,cache=str(cache))
     preparation=threading.BoundedSemaphore(policy(operation)['preparation_workers'])
     def slot(number,group):
         nonlocal observed_tests,observed_failed

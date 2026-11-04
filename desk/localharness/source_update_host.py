@@ -42,6 +42,7 @@ def verified_runtime(new):
     required = {'localharness/source_update_host.py', 'localharness/source_update.py',
                 'localharness/source_update_worker.py', 'localharness/source_update_battery.py',
                 'localharness/source_update_parallel.py', 'localharness/self_review.py',
+                'localharness/direct_update.py','localharness/source_update_launcher.py',
                 'localharness/source_update_hand.py',
                 'localharness/self_review_worker.py', 'localharness/source_update_transport.py',
                 'localharness/agent_source_update.py', 'localharness/update_source.py',
@@ -218,8 +219,10 @@ def coordinate(old, new, directory, cancel_file):
                 value=read(control['path'])
                 if value.get('id')!=control['id']:raise ValueError('Durable update job changed')
                 return value
-            stopped = lambda: Path(cancel_file).exists() or owner_stop.stopped() or job_state().get('cancel_requested') is True
-            paused = lambda: owner_stop.paused() or job_state().get('state')=='paused'
+            from localharness.direct_update import controls as member_controls
+            stopped = lambda: (Path(cancel_file).exists() or owner_stop.stopped()
+                or job_state().get('cancel_requested') is True or member_controls(directory)['stop'])
+            paused = lambda: owner_stop.paused() or job_state().get('state')=='paused' or member_controls(directory)['pause']
             service.battery_cancelled = lambda:stopped() or paused()
             from localharness.source_update_hand import serve
             hand=(serve(directory,tree,new,binding)
@@ -239,7 +242,7 @@ def coordinate(old, new, directory, cancel_file):
                         time.sleep(.25)
                         continue
                     operation = read(directory / 'pipeline.json')
-                    needs_transport = operation['state'] not in ('waiting_agent', 'ready_to_apply')
+                    needs_transport = operation['state'] in ('queued','merging','review_requested','reviewing')
                     if needs_transport and not transport_open:
                         transport = transport_scope.enter_context(review_transport(agent, old, directory, llm._config(), stopped))
                         transport_open = True
@@ -250,16 +253,15 @@ def coordinate(old, new, directory, cancel_file):
                     # model work from a waiting phase without its relay turn.
                     with source_update._LOCK:
                         current = read(directory / 'pipeline.json')
-                        deferred = current['state'] not in ('waiting_agent', 'ready_to_apply') and not transport_open
+                        deferred = current['state'] in ('queued','merging','review_requested','reviewing') and not transport_open
                         if not deferred:
                             source_update.tick(tree, forge, service, coordinator=binding)
                             operation = read(directory / 'pipeline.json')
-                            if operation.get('review_id') and transport_open:
-                                service.tick(review_ids={operation['review_id']})
+                            advance_review(service,operation,transport_open,stopped,paused)
                     if deferred:
                         time.sleep(.25)
                         continue
-                    if operation['state'] in ('waiting_agent', 'ready_to_apply') and transport_open:
+                    if operation['state'] not in ('queued','merging','review_requested','reviewing') and transport_open:
                         transport_scope.close()
                         transport = None
                         transport_open = False
@@ -291,6 +293,12 @@ def coordinate(old, new, directory, cancel_file):
             raise
 
 
+def advance_review(service,operation,transport_open,stopped,paused):
+    """Last control observation before the existing review owner may admit work."""
+    if operation.get('review_id') and transport_open and not stopped() and not paused():
+        service.tick(review_ids={operation['review_id']})
+
+
 def _shared_batch_ready(directory, operation, observation=None):
     """Keep a ready peer's hand alive until the shared acceptance barrier.
 
@@ -298,7 +306,10 @@ def _shared_batch_ready(directory, operation, observation=None):
     peer must be reachable for explicit reconciliation, not strand old approval
     behind an exited hand. No candidate is copied and no receipt is invented.
     """
-    from localharness import update_composition, agent_source_update
+    from localharness import update_composition, agent_source_update,direct_update
+    if direct_update.group(directory):
+        direct_update.require_ready(directory)
+        return True
     new = Path(operation['coordinator']['program'])
     plans = read(new / 'code-transition-plan.json').get('plans', [])
     # Waiting is reconciliation, not approval. Compare actual editable app bytes
@@ -385,6 +396,9 @@ def review(old, new, plans, progress=None, cancelled=None):
         plan = merge.validate_inputs(directory)
         update_composition.prepare(directory, {'coordinator': binding,
             'input_sha256': merge.input_signature(plan)})
+    from localharness import direct_update
+    if plans and direct_update.group(plans[0]['directory']):
+        plans=[plans[0]]
     producers = []
     pristine_observation = None
     def admit(row):

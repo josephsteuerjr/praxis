@@ -648,7 +648,7 @@ def _test_copy_changes(repository, before, lanes, stopped=lambda:False):
     return authored, outputs
 
 
-def _cleanup_work(work, cache, *, retain_repository=False):
+def _cleanup_work(work, cache, *, retain_repository=False,retain_shared=False):
     """Retire only our private test tree; cleanup cannot erase test evidence."""
     work = Path(work).absolute()
     if not work.name.startswith('helene-update-tests-') or work.is_symlink() or getattr(work,'is_junction',lambda:False)():
@@ -668,12 +668,12 @@ def _cleanup_work(work, cache, *, retain_repository=False):
         function(name)
 
     try:
-        if not retain_repository:
+        if not retain_repository and not retain_shared:
             from .verification_readonly import release
             release(work,cache)
         if not work.exists():
             result={'state':'removed','work':str(work)}
-        elif retain_repository:
+        elif retain_repository or retain_shared:
             # The quiescent phase still needs this exact seed. Retire only the
             # now-settled slots, never the source they must copy next.
             children = list(work.iterdir())
@@ -683,7 +683,7 @@ def _cleanup_work(work, cache, *, retain_repository=False):
                         child.name not in {'repository','shared-inputs'} and not re.fullmatch(r'slot-\d+',child.name)):
                     raise ValueError('Unexpected battery phase cleanup entry: '+str(child))
             for child in children:
-                if child.name not in {'repository','shared-inputs'}:
+                if child.name!='shared-inputs' and (not retain_repository or child.name!='repository'):
                     shutil.rmtree(child, onerror=readonly)
             result = {'state': 'slots-removed', 'work': str(work), 'retained': ['repository']}
         else:
@@ -696,7 +696,7 @@ def _cleanup_work(work, cache, *, retain_repository=False):
     return result
 
 
-def prepare(operation, directory, harness, stopped):
+def prepare(operation, directory, harness, stopped, *, shared=None):
     """Full attempts, frozen for review. Caller must persist mutated operation."""
     directory = Path(directory)
     if stopped():
@@ -723,7 +723,7 @@ def prepare(operation, directory, harness, stopped):
     evidence = cache / 'evidence'
     evidence.mkdir(exist_ok=True)
     rows = []
-    work = Path(tempfile.mkdtemp(prefix='helene-update-tests-')).resolve()
+    work = Path(shared['work']) if shared is not None else Path(tempfile.mkdtemp(prefix='helene-update-tests-')).resolve()
     retained = None
     uncertain = False
     try:
@@ -747,7 +747,7 @@ def prepare(operation, directory, harness, stopped):
         from . import source_update_parallel
         rows,candidate_changes,build_outputs=source_update_parallel.run(
             sys.modules[__name__],lanes,repository,actual_files,work,runner,tools,
-            operation,cache,stopped,binding,errors,runtime=value['runtime'])
+            operation,cache,stopped,binding,errors,runtime=value['runtime'],shared=shared)
         if stopped():
             raise InterruptedError('Owner stopped update battery')
         if _binding(operation, directory)[0] != binding:
@@ -806,7 +806,7 @@ def prepare(operation, directory, harness, stopped):
         # Stop, revalidation and report-publication failures share the same
         # lifetime owner. Unconfirmed children, not red tests, retain the tree.
         if not uncertain:
-            _cleanup_work(work, cache)
+            _cleanup_work(work, cache,retain_shared=shared is not None)
 
 
 
@@ -844,7 +844,7 @@ def _observed_report(operation, directory):
     return binding,key,pointer,cache,report,manifest
 
 
-def validate(operation, directory):
+def validate_single(operation, directory):
     """Authenticate review evidence; test success is not an apply prerequisite.
 
     Independent review decides whether a failure is a regression, an obsolete
@@ -874,6 +874,14 @@ def validate(operation, directory):
             'case_states': dict(Counter(case.get('status') for row in rows
                 for case in (row.get('observation') or {}).get('outcomes', []))),
             'receipt_sha256': pointer['receipt_sha256']}
+
+
+def validate(operation,directory):
+    from .direct_update import group
+    if group(directory):
+        from .source_update_launcher import validate as transition_report
+        return transition_report(operation,directory)
+    return validate_single(operation,directory)
 
 
 def failure_feedback(operation,directory):

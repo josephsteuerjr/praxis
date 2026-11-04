@@ -31,6 +31,15 @@ class RuntimeAdmission:
 _EDIT_RUNTIME = ContextVar('source_edit_runtime_admission', default=None)
 
 
+def app_directory(directory):
+    from .direct_update import leader
+    return leader(directory)
+
+
+def app_root(directory):
+    return app_directory(directory)/'compound/app'
+
+
 def _runtime_inventory(program,state):
     """Actual runtime verification, retained for every execution/apply gate."""
     from .validation_read import current,parallel,scope,checkpoint
@@ -126,11 +135,19 @@ def prepare(directory, operation=None):
             raise ValueError('Composition belongs to another update')
         _frozen(directory, state)
         return state
+    owner = app_directory(directory)
+    if owner != directory:
+        from .direct_update import operation as core_operation
+        parent = prepare(owner, core_operation(owner, operation))
+        state = {**parent, 'input_sha256':operation['input_sha256']}
+        write(directory/'composition.json',state)
+        _frozen(directory,state)
+        return state
     app_files = app_inventory(program / 'app')
     if not app_files:
         raise ValueError('Incoming application composition is empty')
-    base = directory / 'compound/base-app'
-    result = directory / 'compound/app'
+    base = app_directory(directory) / 'compound/base-app'
+    result = app_root(directory)
     if base.exists() or result.exists():
         raise ValueError('Interrupted composition snapshot retained; inspect it before retry')
     for name, row in app_files.items():
@@ -154,7 +171,7 @@ def prepare(directory, operation=None):
 
 def _frozen(directory, state):
     program = Path(state['program'])
-    if app_inventory(directory / 'compound/base-app') != state['base_app']:
+    if app_inventory(app_directory(directory) / 'compound/base-app') != state['base_app']:
         raise ValueError('Frozen incoming app snapshot changed')
     actual=app_inventory(program/'app')
     if actual!=state['base_app']:
@@ -177,7 +194,7 @@ def describe(directory, operation=None):
         state = prepare(directory, operation)
     _frozen(directory, state)
     plan = merge.validate_inputs(directory)
-    app = app_inventory(directory / 'compound/app')
+    app = app_inventory(app_root(directory))
     program = Path(state['program'])
     admission=_EDIT_RUNTIME.get()
     if admission is None:runtime=_runtime_inventory(program,state)
@@ -190,9 +207,11 @@ def describe(directory, operation=None):
                'core': merge.inventory(directory / 'result'), 'app': app,
                'runtime': runtime, 'manifests': state['manifests']}
     if state.get('app_source'):payload['app_source']=merge.signature(state['app_source'])
+    from .direct_update import group,core_rows
+    if group(directory):payload['selected_cores']=core_rows(directory)
     return {'sha256': merge.signature(payload),
             'core': {'root': str(directory / 'result'), 'files': payload['core']},
-            'app': {'root': str(directory / 'compound/app'), 'files': app},
+            'app': {'root': str(app_root(directory)), 'files': app},
             'runtime': {'root': str(program / 'runtime'), 'files': runtime},
             'manifests': dict(state['manifests'])}
 
@@ -235,12 +254,12 @@ def repair(directory, name, content=None, *, delete=False, expected='', reason='
     if not state or not expected or signature(directory) != expected or not str(reason).strip():
         raise ValueError('Compound repair needs a reason and exact current composition SHA256')
     local = name.removeprefix('app/')
-    declared = set(state['base_app']) | set(app_inventory(directory / 'compound/app'))
+    declared = set(state['base_app']) | set(app_inventory(app_root(directory)))
     # Additions must be in the same declared application surface, never a path
     # into private state or the frozen verifier/runtime.
     if local not in declared and not local.startswith(('localharness/', 'deskd/', 'resources/', 'static/')):
         raise ValueError('New compound file is outside the declared application surface')
-    target = directory / 'compound/app' / local
+    target = app_root(directory) / local
     before = _hash(target) if target.is_file() else None
     if delete:
         target.unlink(missing_ok=True)
@@ -323,7 +342,7 @@ def overlay(new, plans):
             if base.get(name) == app.get(name):
                 continue
             key = 'app/' + name
-            value = {'source': str(directory / 'compound/app' / name), 'sha256': app[name]['sha256']} if name in app else {'delete': True}
+            value = {'source': str(app_root(directory) / name), 'sha256': app[name]['sha256']} if name in app else {'delete': True}
             if key in mapping and (mapping[key].get('sha256'),mapping[key].get('delete')) != (value.get('sha256'),value.get('delete')):
                 raise ValueError('Agents propose different shared application repairs; reconcile before apply')
             mapping.setdefault(key,value)
@@ -354,12 +373,12 @@ def selected_files(new):
             raise ValueError('Compound candidate changed after preparation')
         directory = Path(row['directory'])
         state = read(directory / 'composition.json')
-        app = app_inventory(directory / 'compound/app')
+        app = app_inventory(app_root(directory))
         for name in set(state['base_app']) | set(app):
             if state['base_app'].get(name) == app.get(name):
                 continue
             target = 'app/' + name
-            item = {'source': str(directory / 'compound/app' / name), 'sha256': app[name]['sha256']} if name in app else {'delete': True}
+            item = {'source': str(app_root(directory) / name), 'sha256': app[name]['sha256']} if name in app else {'delete': True}
             if target in expected_files and expected_files[target].get('sha256') != item.get('sha256'):
                 raise ValueError('Shared application repairs disagree')
             expected_files.setdefault(target, item)

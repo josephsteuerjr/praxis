@@ -52,6 +52,8 @@ def seed(directory,operation,state):
 
 
 def validate_inputs(directory,state):
+    from .direct_update import leader
+    directory=leader(directory)
     selected=state.get('app_source')
     if not selected:return None
     directory=Path(directory);value=merge.validate_inputs(directory/'app-merge',selected['input_sha256'])
@@ -62,6 +64,8 @@ def validate_inputs(directory,state):
 
 def record_resolution(directory,name,*,reason,side=''):
     """Mirror an admitted compound repair into its app A/L/B resolution record."""
+    from .direct_update import leader
+    directory=leader(directory)
     from .update_composition import app_inventory
     directory=Path(directory);state=read(directory/'composition.json')
     if not state.get('app_source'):return
@@ -80,6 +84,8 @@ def record_resolution(directory,name,*,reason,side=''):
 
 def resolve_side(directory,name,side,*,expected,reason):
     """Choose exact frozen bytes, including binary resources, without decoding."""
+    from .direct_update import leader
+    directory=leader(directory)
     from . import update_composition as composition
     directory=Path(directory);merge.relative(name)
     if side not in ('base','local','incoming'):raise ValueError('Choose an immutable application side')
@@ -102,6 +108,8 @@ def resolve_side(directory,name,side,*,expected,reason):
 
 
 def finish(directory):
+    from .direct_update import leader
+    directory=leader(directory)
     from .update_composition import app_inventory
     directory=Path(directory);state=read(directory/'composition.json')
     if not state.get('app_source'):return
@@ -112,6 +120,8 @@ def finish(directory):
 
 
 def require_ready(directory):
+    from .direct_update import leader
+    directory=leader(directory)
     from .update_composition import app_inventory
     directory=Path(directory);state=read(directory/'composition.json')
     value=validate_inputs(directory,state)

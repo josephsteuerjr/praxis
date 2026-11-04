@@ -28,7 +28,7 @@ CONTINUATION_PROTOCOL = 2
 UNAVAILABLE = ('Running application/selected Forge lacks an available source-update coordinator API v1. '
                'Old application retained; no ordinary agent conflict turn or generic worker fallback.')
 TOOL = {'name': 'source_update', 'description':
-    'Resolve the owner-requested update in its isolated candidate. status lists inputs; '
+    'Resolve ONE complete owner-requested update: status lists all selected_cores; core-0/path and core-1/path address each distinct core, app/path is the ONE common application. '
     'diff shows A->local and A->incoming changes; read returns one side with pagination. '
     'resolve supplies full UTF8 or a side; patch replaces one exact fragment using before/after. '
     'Repairs outside conflicts need reason and expected_candidate_sha256 from status. '
@@ -58,6 +58,7 @@ TOOL = {'name': 'source_update', 'description':
 
 def requires_gate(plan, directory=None):
     """Modified-preserve is semantic reconciliation, even without Git markers."""
+    if directory is not None and plan.get('direct_update'):return True
     compound = read(Path(directory) / 'composition.json') if directory is not None else {}
     return bool(plan.get('conflicts') or plan.get('repairs') or plan.get('shared_app_required') or plan.get('app_source') or compound.get('repairs')
                 or plan.get('files', {}).get('local') != plan.get('files', {}).get('base'))
@@ -107,6 +108,9 @@ def _require_active(operation,directory):
 
 
 def job_blocked(operation):
+    if operation.get('directory'):
+        from .direct_update import blocked as group_blocked
+        if group_blocked(operation['directory']):return True
     from .update_supersession import blocked
     if blocked(operation,protocol='source'):return True
     control=(operation.get('coordinator') or {}).get('job_control')
@@ -306,8 +310,10 @@ def notify_due(tree, turn):
 
 
 def _fresh(operation, directory):
+    from .direct_update import core_rows,group
     if _cancelled(directory):
         raise ValueError('Source update was cancelled or superseded')
+    if group(directory):core_rows(directory,fresh=True)
     plan = merge.validate_inputs(directory, operation['input_sha256'])
     if merge.inventory(operation['source']) != plan['files']['local']:
         raise ValueError('Local code changed during update preparation; retry Update')
@@ -315,6 +321,8 @@ def _fresh(operation, directory):
 
 
 def _materials(directory, plan):
+    from .direct_update import group,materials
+    if group(directory):return materials(directory)
     files = {**plan['files'], 'result': plan['result']}
     names = set().union(*(set(side) for side in files.values()))
     published = {name: sorted({entry['sha256'] for side in ('base', 'incoming')
@@ -392,6 +400,12 @@ def _clear(service, record, expected_subject):
 
 def validate_ready(directory):
     directory = Path(directory)
+    if _cancelled(directory):raise ValueError('Source update cancelled; old application retained')
+    from . import direct_update
+    if direct_update.group(directory):
+        owner=direct_update.leader(directory)
+        if owner!=directory.resolve():return validate_ready(owner)
+        direct_update.require_ready(directory)
     from .app_source_update import require_ready
     require_ready(directory)
     operation = read(directory / 'pipeline.json')
@@ -429,10 +443,11 @@ def _stop(operation, forge, service):
     """Intent is already durable. Stop only existing work; never admit here."""
     if operation.get('stop_confirmed'):
         return
-    confirmed = True
+    from .source_update_launcher import cancel as cancel_tests
+    confirmed = cancel_tests(operation,operation['directory'])
     if operation.get('review_id'):
         record = service.cancel(operation['review_id'])
-        confirmed = record.get('execution') == 'cancelled'
+        confirmed = confirmed and record.get('execution') == 'cancelled'
     if operation.get('task_id'):
         directory = forge._unit_dir(operation['task_id'], 'agents', operation['unit_id'])
         try:
@@ -474,7 +489,7 @@ def _start_attempt(operation, directory, forge):
     merge.reopen(directory)
     attempt = {'task_id': 'code-' + uuid.uuid4().hex[:8], 'unit_id': 'agent-' + uuid.uuid4().hex[:8],
                'started': time.time(), 'before_sha256': merge.candidate_signature(directory)}
-    if read(directory/'plan.json').get('app_source'):
+    if read(directory/'plan.json').get('app_source') or read(directory/'plan.json').get('direct_update'):
         from . import update_composition
         update_composition.prepare(directory,operation)
         attempt['before_composition_sha256']=update_composition.signature(directory,operation)
@@ -531,7 +546,9 @@ def _merge_tick(operation, directory, forge):
             or (unit / 'stop.json').exists()):
         raise ValueError('Source merger returned incomplete, stale or stopped candidate evidence')
     app_composition=None
-    if plan.get('app_source'):
+    if plan.get('app_source') or plan.get('direct_update'):
+        from .direct_update import require_ready as require_cores
+        require_cores(directory)
         from . import app_source_update,update_composition
         app_source_update.require_ready(directory)
         app_composition=update_composition.signature(directory,operation)
@@ -560,16 +577,21 @@ def _review_request(operation, directory, service):
     _persist(directory,operation)  # publish exact test composition before long work
     stopped = lambda: (_cancelled(directory) or _owner_blocked(operation['tree']) or job_blocked(operation)
                        or getattr(service, 'battery_cancelled', lambda: False)())
-    battery = source_update_battery.prepare(operation, directory, harness, stopped)
+    if read(Path(directory)/'plan.json').get('direct_update'):
+        from .source_update_launcher import collect
+        battery=collect(operation,directory)
+    else:battery = source_update_battery.prepare(operation, directory, harness, stopped)
     if stopped():raise InterruptedError('Owner stopped verification before review admission')
     # Automatic merges have no agent-issued verify call yet. Run (or reuse)
     # the exact full battery before validating its receipt and admitting review.
     source_update_battery.validate(operation, directory)
     if stopped():raise InterruptedError('Owner stopped independent review admission')
+    from .direct_update import group,conflicts as group_conflicts
+    all_conflicts,all_repairs=(group_conflicts(directory) if group(directory) else (plan['conflicts'],plan.get('repairs',[])))
     record = service.request(trigger='contested_overlay',
         operation_id='source-update:' + operation['id'] + ':' + operation['composition_sha256'],
-        overlay={'conflicts': plan['conflicts'], 'merge_identity': identity,
-                 'repairs': [{'path': row['path'], 'reason': row.get('reason', '')} for row in plan.get('repairs', [])],
+        overlay={'conflicts': all_conflicts, 'merge_identity': identity,
+                 'repairs': [{'path': row['path'], 'reason': row.get('reason', '')} for row in all_repairs],
                  'compound_repairs':read(Path(directory)/'composition.json').get('repairs',[])},
         sources={**_materials(directory, plan), **harness, **battery},
         intent='Review isolated A/L/B/M source update. Preserve authored and upstream intent; never execute code.',
@@ -609,6 +631,8 @@ def finish_for_verification(operation,directory):
         finish_app(directory)
         if plan.get('state')!='ready':
             merge.finish(directory,exe=merge.executable((operation.get('coordinator') or {}).get('program') or operation['program']))
+        from .direct_update import finish as finish_cores
+        finish_cores(directory,merge.executable((operation.get('coordinator') or {}).get('program') or operation['program']))
         from . import update_composition
         if not update_composition.for_plan(directory,operation)['consistent']:
             raise ValueError('Reconcile the shared application before finishing the candidate')
@@ -660,6 +684,9 @@ def _advance(operation, directory, forge, service):
         finish_for_verification(operation,directory)
         return
     if operation['state'] == 'verification_requested':
+        if operation.get('test_launcher'):
+            from .source_update_launcher import _observe
+            if _observe(Path(operation['test_launcher']['root']))[1] is None:return
         plan=_fresh(operation,directory)
         from . import update_composition, source_update_battery
         if plan.get('state') != 'ready' or merge.inventory(directory/'result') != plan.get('result'):
@@ -672,33 +699,48 @@ def _advance(operation, directory, forge, service):
                            or getattr(service, 'battery_cancelled', lambda: False)())
         try:
             _verification_dependencies(operation,directory,stopped)
-            operation['verification_sources'] = source_update_battery.prepare(operation, directory, harness, stopped)
+            if read(directory/'plan.json').get('direct_update'):
+                from .source_update_launcher import tick as launcher_tick
+                sources=launcher_tick(operation,directory,stopped)
+                if sources is None:return
+                operation['verification_sources']=sources
+            else:operation['verification_sources'] = source_update_battery.prepare(operation, directory, harness, stopped)
             source_update_battery.validate(operation, directory)
             operation.pop('verification_error', None)
         except (OSError, ValueError, RuntimeError) as exc:
             operation['verification_error'] = f'{type(exc).__name__}: {exc}'
-        operation['state'] = ('review_requested' if operation.get('continuation')==AUTOMATIC
-                              and not operation.get('verification_error') else 'waiting_agent')
+        automatic=operation.get('resolution_owner')!='agent' or operation.get('continuation')==AUTOMATIC
+        operation['state'] = ('review_requested' if automatic and not operation.get('verification_error')
+                              else 'needs_attention' if operation.get('resolution_owner')!='agent' else 'waiting_agent')
+        if operation['state']=='needs_attention':operation['error']=operation.get('verification_error','')
         current = read(path(operation['tree']))
-        current.update(state=operation['state'] if operation.get('continuation')==AUTOMATIC else 'pending', tries=0, retry_at=0)
+        current.update(state=operation['state'] if automatic else 'pending', tries=0, retry_at=0)
         write(path(operation['tree']), current)
         return
     if operation['state'] == 'review_requested':
         _review_request(operation, directory, service)
     if operation['state'] == 'queued':
         plan=_fresh(operation,directory)
-        if plan.get('state')=='ready' and not plan.get('repairs') and not plan.get('app_source'):
+        from .direct_update import automatic
+        automatic_ready=(automatic(directory) if plan.get('direct_update') else
+                         plan.get('state')=='ready' and not plan.get('repairs') and not plan.get('app_source'))
+        if automatic_ready:
             # An automatic merge still goes through the incoming independent
             # panel. It needs no legacy agent API or redundant merger worker.
             if merge.inventory(directory/'result')!=plan.get('result'):
                 raise ValueError('Automatic merge candidate changed before review')
             operation['candidate_sha256']=merge.candidate_signature(directory)
             operation['attempts'].append({'kind':'automatic-merge','before_sha256':operation['candidate_sha256']})
-            _review_request(operation,directory,service)
+            if plan.get('direct_update'):
+                from .direct_update import require_ready as require_cores
+                require_cores(directory)
+                operation['state']='verification_requested'
+            else:_review_request(operation,directory,service)
         else:
             _start_attempt(operation, directory, forge)
     if operation['state'] == 'merging' and _merge_tick(operation, directory, forge):
-        _review_request(operation, directory, service)
+        if read(directory/'plan.json').get('direct_update'):operation['state']='verification_requested'
+        else:_review_request(operation, directory, service)
     if operation['state'] == 'reviewing':
         record = service.status(operation['review_id'])
         operation['review_evidence'] = review_evidence(record)
@@ -778,6 +820,9 @@ def _observe(tree, paused, stopped):
 
 def _producer_pending(operation, forge, service):
     """Keep named live/unknown work observed even after a pipeline error."""
+    from .source_update_launcher import reference,_observe
+    launcher=reference(operation,operation['directory'])
+    if launcher and _observe(Path(launcher['root']))[1] is None:return True
     if operation.get('review_id'):
         record = service.status(operation['review_id'])
         if record.get('execution') not in {'done', 'error', 'cancelled'}:
@@ -815,7 +860,7 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
             active = operation['state'] in ACTIVE
             try:
                 producer = False if active or operation.get('cancel_requested') else _producer_pending(operation, forge, review_service)
-            except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+            except (OSError, ValueError, TypeError, AttributeError, KeyError, RuntimeError) as exc:
                 producer = True
                 operation['producer_error'] = str(exc)
             if stopped and (current or active or producer) and not operation.get('cancel_requested'):
@@ -829,7 +874,7 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
                 _persist(operation_path.parent, operation)
                 try:
                     _stop(operation, forge, review_service)
-                except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
+                except (OSError, ValueError, TypeError, AttributeError, KeyError, RuntimeError) as exc:
                     operation['stop_error'] = str(exc)
             elif operation['state'] in ACTIVE and not paused:
                 try:
@@ -847,7 +892,7 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
                 observe = (operation['state'] in ACTIVE
                            or (operation.get('cancel_requested') and not operation.get('stop_confirmed'))
                            or (not operation.get('cancel_requested') and _producer_pending(operation, forge, review_service)))
-            except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            except (OSError, ValueError, TypeError, AttributeError, KeyError, RuntimeError):
                 observe = True  # failed producer observation is uncertainty, not retirement
             if not observe:
                 cache['watch'].pop(identity, None)

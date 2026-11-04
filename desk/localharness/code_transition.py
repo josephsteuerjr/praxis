@@ -82,6 +82,12 @@ def preflight(old, new, *, notify=True):
     from .app_migration import discover
     from . import source_update
     old, new = Path(old).resolve(), Path(new).resolve()
+    carrier=new/'code-transition-plan.json'
+    if carrier.exists():
+        import json
+        previous=json.loads(carrier.read_text(encoding='utf8'))
+        if not isinstance(previous,dict) or previous.get('format')!='helene-code-plan.v1':raise ValueError('Existing update protocol is unreadable or incompatible')
+    else:previous={}
     found = discover(old)
     sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
                                 if row['value'].get('mode') != 'remote'))
@@ -133,42 +139,38 @@ def preflight(old, new, *, notify=True):
             if shared_repair and not plan.get('shared_app_required'):
                 plan['shared_app_required'] = True
             write(directory / 'plan.json', plan)
-            if source_update.requires_gate(plan, directory):
-                from . import update_source
-                choice=update_source.selected(old,new)
-                if (choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming'):
-                    from .agent_source_update import request as agent_request, require_patch_tool
-                    require_patch_tool(choice.get('resolution_runtime') or old)
-                    agent_request(agent['tree'],old,source,directory,read(new/'python-app.json').get('version',''))
-                elif notify:
-                    source_update.ensure(agent['tree'], old, source, directory,
-                                         read(new / 'python-app.json').get('version', ''))
-                try:
-                    source_update.validate_ready(directory)
-                    state = 'ready'
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    detail = read(directory / 'pipeline.json')
-                    state = detail.get('state', 'queued')
-                    if state == 'ready_to_apply':
-                        state = 'needs_attention'
-                        detail = {**detail, 'error': str(exc)}
-            plans.append({'source': source, 'directory': str(directory), 'state': state,
+            plans.append({'source': source, 'tree':str(Path(agent['tree']).resolve()), 'directory': str(directory), 'state': state,
                           'error': str(detail.get('error') or detail.get('reason') or '')})
-    write(new / 'code-transition-plan.json', {'format': 'helene-code-plan.v1', 'old': str(old),
-          'require_review':bool((source_choice or {}).get('require_review')),'choice':source_choice,
-          'sources': sources, 'incoming': incoming, 'plans': plans})
-    shared = update_composition.shared(new, plans)
-    if not shared['consistent']:
+    from . import direct_update
+    protocol=direct_update.protocol(plans,previous)
+    direct=protocol==direct_update.FORMAT
+    if direct:
+        direct_update.bind(new,plans,profiles=[{'tree':str(Path(r['tree']).resolve()),'source':str(Path(r['code']).resolve())}
+            for r in found['agents'] if r['value'].get('mode')!='remote'])
+    if direct and plans:
+        first=plans[0]
+        if source_update.requires_gate(merge.validate_inputs(first['directory']),first['directory']):
+            _admit(old,new,first,notify)
+        for row in plans:row.update(state=first['state'],error=first.get('error',''))
+    else:
         for row in plans:
-            row.update(state='needs_attention', error='Final shared application differs; reconcile peer app candidates: '
-                       + ', '.join(shared['different_paths']))
-            operation = read(Path(row['directory']) / 'pipeline.json')
-            if operation.get('resolution_owner') == 'agent' and operation.get('state') == 'ready_to_apply':
-                request_path = source_update.path(operation['tree'])
-                request = read(request_path)
-                if request.get('id') == operation['id'] and request.get('state') == 'ready':
-                    request.update(state='pending', tries=0, retry_at=0)
-                    write(request_path, request)
+            if source_update.requires_gate(merge.validate_inputs(row['directory']),row['directory']):_admit(old,new,row,notify)
+    record={'format':'helene-code-plan.v1','old':str(old),
+        'require_review':bool((source_choice or {}).get('require_review')),'choice':source_choice,
+        'sources':sources,'incoming':incoming,'plans':plans}
+    if direct:record['direct_update']=direct_update.FORMAT
+    write(new/'code-transition-plan.json',record)
+    if not direct:
+        shared=update_composition.shared(new,plans)
+        if not shared['consistent']:
+            for row in plans:
+                row.update(state='needs_attention',error='Final shared application differs; reconcile peer app candidates: '+', '.join(shared['different_paths']))
+                operation=read(Path(row['directory'])/'pipeline.json')
+                if operation.get('resolution_owner')=='agent' and operation.get('state')=='ready_to_apply':
+                    request_path=source_update.path(operation['tree']);request=read(request_path)
+                    if request.get('id')==operation['id'] and request.get('state')=='ready':
+                        request.update(state='pending',tries=0,retry_at=0);write(request_path,request)
+            write(new/'code-transition-plan.json',record)
     pending = [row for row in plans if row['state'] != 'ready']
     blocked = [row for row in pending if row['state'] in {'needs_attention', 'cancelled'}]
     message = ('Панель обновления требует внимания; старая версия сохранена. ' +
@@ -177,6 +179,22 @@ def preflight(old, new, *, notify=True):
                'Старая версия остаётся открытой. После проверки обновление продолжится автоматически.')
     return {'state': 'needs_resolution' if pending else 'ready', 'plans': plans,
             'message': message if pending else ''}
+
+
+def _admit(old,new,row,notify):
+    """Existing gate once per retained legacy row or once for a new leader."""
+    from . import source_update,update_source
+    directory=Path(row['directory']);choice=update_source.selected(old,new)
+    if choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming':
+        from .agent_source_update import request,require_patch_tool
+        require_patch_tool(choice.get('resolution_runtime') or old)
+        request(row['tree'],old,row['source'],directory,read(new/'python-app.json').get('version',''))
+    elif notify:source_update.ensure(row['tree'],old,row['source'],directory,read(new/'python-app.json').get('version',''))
+    try:source_update.validate_ready(directory);row.update(state='ready',error='')
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        detail=read(directory/'pipeline.json');state=detail.get('state','queued')
+        if state=='ready_to_apply':state='needs_attention';detail={**detail,'error':str(exc)}
+        row.update(state=state,error=str(detail.get('error') or detail.get('reason') or ''))
 
 
 def validate(new):
