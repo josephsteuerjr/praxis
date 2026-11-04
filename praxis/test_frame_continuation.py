@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 import agent
+import context_policy
 import dialogue_projection as projection
 import frame_continuation as continuation
 import frame_epoch
@@ -28,6 +29,9 @@ class ContinuationTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         patcher = mock.patch.object(frame_epoch, 'STORE', Path(self.tmp.name) / 'epoch')
+        patcher.start(); self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(context_policy, 'read', return_value=dict(
+            context_policy.LEGACY, continuation_mode='canonical'))
         patcher.start(); self.addCleanup(patcher.stop)
         patcher = mock.patch.dict(os.environ, {
             'PRAXIS_FRAME_CONTINUATION': 'on', 'PRAXIS_FRAME_EPOCH': '1',
@@ -70,27 +74,29 @@ class ContinuationTests(unittest.TestCase):
         selected['rows'] += [row(5, True, 'actually delivered'), row(6, False, 'next question')]
         return selected
 
-    def test_next_turn_extends_exact_sent_input_not_reconstructed_history(self):
+    def test_next_turn_keeps_canonical_prefix_and_replaces_stale_packet(self):
         first = self.prepare(evidence='old changing evidence')
         original = copy.deepcopy(first.messages)
         self.commit(first)
         second = self.prepare(self.next_selection(), evidence='new changing evidence')
         self.assertGreater(second.reused, 0)
-        self.assertEqual(second.messages[:len(original)], original)
+        self.assertEqual(second.messages[:len(original)-1], original[:-1])
+        self.assertNotIn('old changing evidence', str(second.messages))
         self.assertIn('new changing evidence', second.messages[-1]['content'])
         # The ingress renderer changes two pending lines from LF to LF+LF in
         # historical roles. Source coordinates still prove the original input.
         self.assertIn('first question\nsecond line', original[-1]['content'])
-        self.assertNotIn('first question\n\nsecond line', str(second.messages))
+        self.assertIn('first question', str(second.messages))
+        self.assertIn('second line', str(second.messages))
         wire1, wire2 = llm.messages_to_openai(original), llm.messages_to_openai(second.messages)
-        self.assertEqual(wire2[:len(wire1)], wire1)
+        self.assertEqual(wire2[:len(wire1)-1], wire1[:-1])
 
     def test_extra_messages_before_delivered_reply_are_appended(self):
         first = self.prepare(); self.commit(first)
         selected = self.next_selection()
         selected['rows'].insert(4, row(45, False, 'arrived while she was working'))
         second = self.prepare(selected)
-        self.assertEqual(second.messages[:len(first.messages)], first.messages)
+        self.assertEqual(second.messages[:len(first.messages)-1], first.messages[:-1])
         self.assertIn('arrived while she was working', str(second.messages[first.reused:]))
         self.assertIn('actually delivered', str(second.messages))
 
@@ -99,7 +105,8 @@ class ContinuationTests(unittest.TestCase):
         selected = copy.deepcopy(self.selection)
         selected['rows'].append(row(5, False, 'more pending input'))
         second = self.prepare(selected)
-        self.assertEqual(second.reused, 0)
+        self.assertGreater(second.reused, 0)
+        self.assertNotIn('actually delivered', str(second.messages))
         self.assertIn('more pending input', str(second.messages))
 
     def test_source_edit_delete_reorder_and_same_text_new_identity_reset(self):
@@ -194,7 +201,7 @@ class ContinuationTests(unittest.TestCase):
     def test_restart_reopens_projection_and_private_file_mode(self):
         first = self.prepare(); self.commit(first)
         saved = json.loads(first.path.read_text())
-        self.assertEqual(saved['messages'], first.messages)
+        self.assertEqual(saved['messages'], first.messages[:-1])
         self.assertGreater(self.prepare(self.next_selection()).reused, 0)
         self.assertEqual(first.path.stat().st_mode & 0o777, 0o600)
 
@@ -236,7 +243,7 @@ class ContinuationTests(unittest.TestCase):
         self.assertEqual(chat.call_count, 2)
         self.assertIn('private tool trace', str(plan.messages))
         saved = json.loads(plan.path.read_text())
-        self.assertEqual(saved['messages'], first_input)
+        self.assertEqual(saved['messages'], first_input[:-1])
         next_plan = self.prepare(self.next_selection())
         self.assertNotIn('private tool trace', str(next_plan.messages))
         self.assertNotIn('unaccepted draft', str(next_plan.messages))
@@ -272,7 +279,30 @@ class ContinuationTests(unittest.TestCase):
             with frame_epoch.bind('room', 1, tape=selected):
                 agent._voice_impl(current, history, 'speaker', ctx=self.ctx)
         self.assertEqual(len(observed), 2)
-        self.assertEqual(observed[1][:len(observed[0])], observed[0])
+        self.assertEqual(observed[1][:len(observed[0])-1], observed[0][:-1])
+        self.assertEqual(str(observed[1]).count('live evidence'), 1)
+
+    def test_legacy_policy_rollback_retains_original_projection(self):
+        with mock.patch.object(context_policy, 'read', return_value=context_policy.LEGACY):
+            first = self.prepare(evidence='legacy packet'); self.commit(first)
+            second = self.prepare(self.next_selection())
+        self.assertEqual(second.messages[:len(first.messages)], first.messages)
+        # Switching policy never imports a stale v1 packet into v2.
+        clean = self.prepare(self.next_selection())
+        self.assertNotIn('legacy packet', str(clean.messages))
+        self.assertEqual(clean.reused, 0)
+
+    def test_many_turns_never_accumulate_current_state_or_duplicate_pending(self):
+        selected = copy.deepcopy(self.selection)
+        for index in range(8):
+            plan = self.prepare(selected, evidence=f'unique-state-{index}')
+            self.commit(plan, selected)
+            history, current = projection.epoch_dialogue(selected['rows'])
+            self.assertEqual(plan.messages[1:-1], frame_layout.tape(history))
+            self.assertEqual(str(plan.messages).count('unique-state-'), 1)
+            self.assertNotIn('unique-state-', plan.path.read_text())
+            selected['rows'] += [row(100+index*2, True, f'delivered-{index}'),
+                                 row(101+index*2, False, f'question-{index}')]
 
 
 if __name__ == '__main__':

@@ -487,6 +487,8 @@ async def serve_px_static(request: web.Request):
     content_types = {
         "app.css": "text/css",
         "app.js": "text/javascript",
+        "forge_ui.js": "text/javascript",
+        "forge_ui.css": "text/css",
         "ambient.js": "text/javascript",
         "memory_views.js": "text/javascript",
         "space3d.js": "text/javascript",

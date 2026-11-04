@@ -85,6 +85,10 @@ def tape_store_guard(chat_id):
 class EpochUnavailable(RuntimeError):
     """Full source is retained, but cannot honestly be served as an ordinary pass."""
 
+    def __init__(self, message, *, selection=None):
+        super().__init__(message)
+        self.selection = selection
+
 
 def require_servable(selection):
     capacity = selection["capacity"]
@@ -93,7 +97,9 @@ def require_servable(selection):
             f"epoch_source_unavailable: chat={selection['chat']} n={selection['n']} "
             f"chars={capacity['chars']} cap={capacity['cap']} gaps={len(selection['gaps'])}; "
             "full tape retained in epoch JSON; no sliding fallback. "
-            "Inspect residual sources/coverage or explicitly revise the source capacity setting.")
+            "Inspect residual sources/coverage or explicitly revise the source capacity setting.",
+            selection={key: copy.deepcopy(selection.get(key)) for key in
+                       ("chat", "scope", "capacity", "complete", "n", "summary_policy")})
 
 
 def _hot_key(row):
@@ -140,6 +146,11 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
             # write before bootstrap. Legacy/backfill is not inferred live.
             initial = group_context.archive_occurrences(peer_id)
         snapshot = memory_life.epoch_snapshot(chat_id, summary_max_chars=summary_max_chars)
+        import archive_repair
+        archive_compacts = archive_repair.receipts(peer_id)
+        if archive_compacts:
+            snapshot["boundary"] = archive_repair.digest([
+                snapshot["boundary"], [[r["selection"], r["body_sha256"]] for r in archive_compacts]])
         summary_policy = dict(max_chars=summary_max_chars, sha256=hashlib.sha256(
             snapshot["summary"].encode("utf-8")).hexdigest())
         same = (old.get("v") == 4 and old.get("boundary") == snapshot["boundary"]
@@ -243,6 +254,7 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
             emit(row)
         tape["cursor"], tape["seen_hot"] = batch["cursor"], sorted(seen)
         tape["incomplete_tail_bytes"] = batch.get("incomplete_tail_bytes", 0)
+        archive_repair.project(tape, archive_compacts)
         record["tape"] = tape
         _write_atomic(path_for(chat_id), json.dumps(record, ensure_ascii=False, indent=1))
         chars = max(sum(len(row[k]) + 1 for row in tape["rows"])
@@ -254,6 +266,7 @@ def prepare_tape(chat_id, *, peer_id, topic_id=None, whole_room=False,
         if record.get("envelope_key") == [tape["n"], tape["boundary"]]:
             selected["envelope"] = {k: record[k] for k in
                                     ("blocks", "n", "anchor", "frozen_at", "reason", "chars")}
+        selected["dossier_accumulator"] = copy.deepcopy(record.get("dossier_accumulator") or {})
         return copy.deepcopy(selected)
 
 

@@ -226,9 +226,13 @@ class LogicalSendRegressionTests(Base):
         # The remainder of this if only logs/raises/marks delivery; stop after
         # the production persistence call, preserving the actual send loop.
         last = statements[-1]
-        stop = next(i for i, n in enumerate(last.body) if isinstance(n, ast.Expr)
-                    and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name)
-                    and n.value.func.id == '_persist_sent_reply')
+        def persistence_call(node):
+            if not isinstance(node, ast.Expr):
+                return False
+            value = node.value.value if isinstance(node.value, ast.Await) else node.value
+            return (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                    and value.func.id == '_persist_sent_reply_admitted')
+        stop = next(i for i, node in enumerate(last.body) if persistence_call(node))
         last.body = last.body[:stop + 1]
         wrapper = ast.AsyncFunctionDef(name='send_block', args=ast.arguments(
             posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),

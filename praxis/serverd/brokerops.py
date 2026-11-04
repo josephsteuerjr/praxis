@@ -378,6 +378,16 @@ def _budgeted(result: dict, budget) -> dict:
     return result
 
 
+def root_binding(root):
+    """Authenticated host namespace and canonical filesystem identity, no client paths."""
+    root=Path(root).resolve(strict=True)
+    machine=Path('/etc/machine-id').read_text().strip()
+    if not machine:raise RuntimeError('host identity unavailable')
+    ancestors=[*reversed(root.parents),root]
+    ids=[f'{p.stat().st_dev}:{p.stat().st_ino}' for p in ancestors]
+    return {'schema':1,'namespace':'host:'+hashlib.sha256(machine.encode()).hexdigest(),
+            'canonical':str(root),'root_id':ids[-1],'ancestors':ids,'verified':True}
+
 def inspect(root_value: str, action: str = "status", path: str = "", query: str = "",
             glob: str = "**/*", start: int = 1, end: int = 0, base: str = "",
             deadline: float | None = None, budget_seconds: float | None = None) -> dict:
@@ -396,7 +406,8 @@ def inspect(root_value: str, action: str = "status", path: str = "", query: str 
         git = _git_root(root)
         head = _git(git, "rev-parse", "HEAD").strip() if git else ""
         return _budgeted({"ok": True, "text": _orientation(root, budget), "root": str(root),
-                          "git_root": str(git) if git else "", "head": head}, budget)
+                          "git_root": str(git) if git else "", "head": head,
+                          "root_binding":root_binding(root)}, budget)
     if action == "model":
         if advisor.contains_protected(str(root)):
             return {"ok": False, "error": "choose a narrower root outside PRAXIS_PROTECTED_ROOTS"}

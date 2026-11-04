@@ -1,0 +1,6 @@
+# Isolated optional service. Install CPU torch/torchaudio from the CPU index
+# first; never install these into the Telegram runner environment.
+coqui-tts==0.28.0
+torch==2.8.0+cpu
+torchaudio==2.8.0+cpu
+imageio-ffmpeg==0.6.0

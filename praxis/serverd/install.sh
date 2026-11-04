@@ -24,7 +24,9 @@ chmod 0755 "$HOME_DIR"
 for f in advisor.py auditlog.py brokerops.py hostproc.py hostrecovery.py hostverbs.py broker.py migrate_v1_tasks.py; do
   install -m 0644 "$SRC/$f" "$LIB/$f"
 done
-install -m 0644 "$SRC/../forge_intelligence.py" "$LIB/forge_intelligence.py"
+for f in forge_intelligence.py command_process.py command_child.py; do
+  install -m 0644 "$SRC/../$f" "$LIB/$f"
+done
 rm -f "$LIB/hostforge.py" "$LIB/hostworker.py" "$LIB/serverd_llm.py" "$LIB/serverd.py"
 # v1 duplicated the model configuration into the root daemon. V2 has no model and keeps no copy.
 rm -f "$HOME_DIR/secret/llm.json"

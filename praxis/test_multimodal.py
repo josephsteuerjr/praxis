@@ -16,6 +16,21 @@ import media_audio
 import mtproto_runner as runner
 
 
+
+def _stage_voice_for_guard(text, caption=""):
+    """Real intent staging with a lightweight neural client; never synthesize here."""
+    import run_context
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    health={"ready":True,"model_id":"a"*64,"profile_id":"b"*64}
+    backend=SimpleNamespace(config=SimpleNamespace(tts_backend="xtts"),tts=Mock())
+    backend.tts.health.return_value=health
+    context=run_context.RunContext.create(kind="chat",goal="speech guard fixture",principal_id="owner",scope="owner",origin_chat_id="777",delivery_chat_id="777")
+    with run_context.bind_run(context), patch.object(media_audio,"get_default_backend",return_value=backend), patch("xtts_tts_client.selected",return_value=health):
+        result=agent.tool_voice_message(text,caption)
+    backend.tts.synthesize.assert_not_called()
+    return result
+
 JPEG = b"\xff\xd8\xff\xe0" + b"fixture-jpeg"
 OGG = b"OggS" + b"fixture-audio"
 
@@ -27,9 +42,7 @@ class FakeAudio:
     def transcribe(self, path):
         return "Проверочная расшифровка"
 
-    def synthesize(self, text, *, stopped=None):
-        if stopped is not None and stopped():
-            raise InterruptedError("synthetic speech cancelled")
+    def synthesize(self, text):
         p = self.root / "spoken.wav"
         with wave.open(str(p), "wb") as out:
             out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)
@@ -73,7 +86,7 @@ class TestAgentMultimodal(unittest.TestCase):
         agent.llm.configured = lambda *a, **k: True
 
         def fake_voice(content, history, speaker, **kw):
-            calls.append(agent.tool_speak("Привет голосом", "проверка"))
+            calls.append(_stage_voice_for_guard("Привет голосом", "проверка"))
             return "Готово."
 
         agent._voice = fake_voice
@@ -86,7 +99,9 @@ class TestAgentMultimodal(unittest.TestCase):
         self.assertEqual(len(turn.outbound), 1)
         self.assertEqual(turn.outbound[0].kind, "audio")
         self.assertTrue(turn.outbound[0].path.is_file())
-        self.assertIn("после проверки", calls[0])
+        self.assertIn("в фоне", calls[0])
+        import xtts_intent
+        self.assertTrue(xtts_intent.is_intent(turn.outbound[0]))
 
     def test_guard_silence_discards_staged_audio(self):
         old_configured, old_voice, old_guard = agent.llm.configured, agent._voice, agent.guard_outbound_reply
@@ -94,7 +109,7 @@ class TestAgentMultimodal(unittest.TestCase):
         agent.llm.configured = lambda *a, **k: True
 
         def fake_voice(content, history, speaker, **kw):
-            agent.tool_speak("Не должно уйти")
+            _stage_voice_for_guard("Не должно уйти")
             staged.extend(agent._TURN_OUTBOUND.get() or [])
             return "черновик"
 

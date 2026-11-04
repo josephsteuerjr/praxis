@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio, concurrent.futures, contextvars, datetime, functools, hashlib, inspect, json, logging, mimetypes, os, re, tempfile, threading, time, types
 from collections import defaultdict, deque
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from telethon import TelegramClient, events
@@ -30,6 +30,8 @@ import bufstore
 import context_envelope
 import formation
 import frame_epoch
+import epoch_repair
+import addressed_replies
 import group_context
 import llm
 import memory_life
@@ -299,6 +301,8 @@ class GroupWake:
     media_snapshot: tuple[media_core.MediaRef, ...]
     addressed: bool = True
     query: str = ""
+    inbound_text: str = ""
+    unread_during_turn: bool = False
     # Та же лента, но с авторством: ((её ли это строка, строка для роли), …).
     # Замораживается ВМЕСТЕ с текстом, одним чтением архива. Пустой кортеж —
     # честное «авторства не знаю» (запасной путь по строковому буферу).
@@ -307,9 +311,96 @@ class GroupWake:
     occurrence_sidecar: dict | None = None
     # Tape, coverage boundary, summary and E belong to this wake, not a room map.
     epoch_snapshot: dict | None = None
+    # Durable admission failures stay owned by their outbox until a real run exists.
+    epoch_repair_ids: tuple[str, ...] = ()
+
+
+class _ActiveAddressedInbox:
+    """One exact-topic turn's FIFO, shared by ingress and the model worker thread.
+
+    A selected wake is already in the initial frame. Later addresses are appended
+    one per model call, never an ambient room snapshot (which could skip the FIFO).
+    """
+
+    def __init__(self, chat_id: str, wake: GroupWake):
+        self.chat_id = chat_id
+        self.frontier = wake.message_id if wake.addressed else None
+        self.observed = None
+        self._coverage_blocked = False
+        self._read_ids = set()
+        self._presenting = {wake.message_id}
+        self._pending = deque()
+        self._seen = {wake.message_id}
+        self._lock = threading.Lock()
+
+    def put(self, wake: GroupWake) -> None:
+        if not wake.addressed or wake.message_id is None:
+            return
+        with self._lock:
+            if wake.message_id not in self._seen:
+                self._seen.add(wake.message_id)
+                self._pending.append(wake)
+
+    def revise(self, message_id, *, query=None, author=None, deleted=False):
+        with self._lock:
+            revised = deque()
+            for wake in self._pending:
+                if wake.message_id == message_id:
+                    if deleted:
+                        continue
+                    wake = replace(wake,
+                                   query=wake.query if query is None else str(query)[:4000],
+                                   inbound_text=wake.inbound_text if query is None else str(query),
+                                   speaker=wake.speaker if author is None else str(author))
+                revised.append(wake)
+            self._pending = revised
+
+    def take(self):
+        with self._lock:
+            if not self._pending:
+                return None
+            wake = self._pending.popleft()
+            self._presenting.add(wake.message_id)
+            # Late attachments remain queued for a normal media-aware pass. A
+            # text-only injection must not let this or subsequent IDs cover them.
+            if any(ref.message_id == wake.message_id for ref in wake.media_snapshot):
+                self._coverage_blocked = True
+            if not self._coverage_blocked:
+                self.frontier = max(self.frontier or 0, wake.message_id)
+        # This is untrusted incoming speech, not a system instruction or authority
+        # change: the original turn's audience/permissions remain unchanged.
+        return (f"[Incoming addressed message; topic={self.chat_id}; "
+                f"message_id={wake.message_id}; sender={wake.speaker}]\n"
+                + (wake.inbound_text or wake.query))
+
+    def has_pending(self):
+        with self._lock:
+            return bool(self._pending)
+
+    def read_ids(self):
+        with self._lock:
+            return sorted(mid for mid in self._read_ids if mid is not None)
+
+    def was_read(self, message_id):
+        with self._lock:
+            return message_id in self._read_ids
+
+    def presented(self, run_id: str = "") -> None:
+        with self._lock:
+            if not self._coverage_blocked:
+                self._read_ids.update(self._presenting)
+            self._presenting.clear()
+            # Never acknowledge an already-admitted lower ID still in the FIFO.
+            pending = [wake.message_id for wake in self._pending]
+            self.observed = (min(self.frontier or 0, min(pending) - 1)
+                             if pending else self.frontier)
+
+
+_active_addressed_inboxes: dict[str, _ActiveAddressedInbox] = {}
 
 
 _group_wakes: dict[str, GroupWake] = {}
+_EPOCH_REPAIR_TASK = None
 _seen_ids: dict[str, deque] = defaultdict(lambda: deque(maxlen=SEEN_IDS_KEEP))  # 9.0: дедуп catch_up
 _recent_msgs: dict[str, deque] = defaultdict(lambda: deque(maxlen=12))  # 15: (msg_id, автор, гист) для ОТВЕТ->#id
 # PASS 16.2: недавние отправители на чат — (ts, имя, id). Честный источник для get_id
@@ -339,6 +430,10 @@ _compacting: set[str] = set()             # §6: чтобы не свернут�
 _COMPACT_SLOTS = asyncio.Semaphore(max(1, int(os.getenv("PRAXIS_COMPACT_PARALLEL", "2") or 2)))
 _MEDIA_SPOOL: media_core.MediaSpool | None = None
 _MEDIA_SENDING: set[str] = set()
+_SPEECH_PREPARING: dict[str, asyncio.Task] = {}
+_VOICE_GENERATING: dict[str, asyncio.Task] = {}
+_VOICE_RESULT_TASK: asyncio.Task | None = None
+_PREUPLOADED_SPEECH: dict[str, tuple[str, object]] = {}
 _MEDIA_ACCEPTED: dict[str, dict] = {}
 _TEXT_SENDING: set[str] = set()
 _MEMBERSHIP_LEDGER: telegram_membership.MembershipLedger | None = None
@@ -559,28 +654,34 @@ _LIFE_RECORD_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 async def _record_life_message_offloop(chat_id: str, line: str, **kwargs) -> bool:
-    """`_record_life_message` в потоке, а не в главном цикле (25.09, поток I).
+    """Await durable life persistence without lending the event loop to a sync lock.
 
-    `memory_life.record_message` пересобирает состояние места под замком
-    (`_load_state(rebuild=True)`); для правки или удаления сообщения в большой комнате это
-    минуты, в течение которых главный цикл стоял — не приходили сообщения, не шли часы,
-    не работал «прервать». Здесь пересборка уходит в поток; порядок записей ОДНОГО чата
-    держит asyncio-замок на чат, между чатами порядок и раньше не обещался.
-
-    ⚠ Честно о границе (ревью 25.09, A11 F1): `memory_life._WRITE_LOCK` — один на процесс и
-    берётся на всю пересборку. Пока поток пересобирает большую комнату, ЛЮБАЯ новая запись
-    памяти из главного цикла (`_buf_push` → `_record_life_message` на входящее сообщение
-    или свой ответ, синхронно) встанет за этим замком — и цикл снова стоит до конца
-    пересборки. Правки/удаления сюда уведены, но стена возвращается первым же сообщением
-    в окно пересборки. Настоящее лечение — в memory_life: не пересобирать место целиком
-    из-за одной правки (править запись на месте, пока сообщение в горячем кольце) и держать
-    `_WRITE_LOCK` только на append/save, а пересборку — под доменным `_state_write_guard`.
+    Cancellation drains the submitted write BEFORE releasing FIFO ownership. A
+    cancelled waiter cannot let a successor overtake its still-running executor.
+    The executor mutates canonical memory only, never the runner's loop buffers.
     """
-    lock = _LIFE_RECORD_LOCKS.get(str(chat_id))
-    if lock is None:
-        lock = _LIFE_RECORD_LOCKS.setdefault(str(chat_id), asyncio.Lock())
+    lock = _LIFE_RECORD_LOCKS.setdefault(str(chat_id), asyncio.Lock())
+    queued = time.perf_counter()
     async with lock:
-        return await asyncio.to_thread(_record_life_message, chat_id, line, **kwargs)
+        started = time.perf_counter()
+        work = asyncio.create_task(asyncio.to_thread(
+            _record_life_message, chat_id, line, **kwargs))
+        cancelled = False
+        while True:
+            try:
+                result = await asyncio.shield(work)
+                break
+            except asyncio.CancelledError:
+                cancelled = True
+                if work.done():
+                    result = work.result()
+                    break
+        log.info("telegram_life_timing chat_id=%s queue_ms=%.3f persistence_ms=%.3f ok=%s",
+                 chat_id, (started - queued) * 1000,
+                 (time.perf_counter() - started) * 1000, bool(result))
+        if cancelled:
+            raise asyncio.CancelledError
+        return result
 
 
 def _record_life_message(chat_id: str, line: str, *, actor: str, direction: str,
@@ -626,7 +727,7 @@ def _record_life_message(chat_id: str, line: str, *, actor: str, direction: str,
 def _buf_push(chat_id: str, line: str, *, author: str = "",
               is_dm: bool | None = None, name: str | None = None,
               source_id: str | int | None = None, ts: float | None = None,
-              record_life: bool = True, capture_live: bool = False,
+              record_life: bool = True, capture_live: bool = False, update_meta: bool = True,
               root_chat_id=None, principal_id=None, ordinary_root: bool = False) -> None:
     """Добавить строку в буфер и пометить чат к персисту (§1).
 
@@ -654,11 +755,176 @@ def _buf_push(chat_id: str, line: str, *, author: str = "",
             capture_live=capture_live, root_chat_id=root_chat_id,
             principal_id=principal_id, ordinary_root=ordinary_root,
         )
+    if not update_meta:
+        return
     try:
         bufstore.meta_update(chat_id, author=author or line.split(":", 1)[0],
                              is_dm=is_dm, name=name)
     except Exception:
         log.debug("buf_meta не записалась [%s]", chat_id, exc_info=True)
+
+
+_INFLIGHT_NEW_MESSAGES = {}
+
+
+def _incoming_message_key(event):
+    msg = getattr(event, "message", None)
+    mid = getattr(msg, "id", None)
+    return (str(event.chat_id), int(mid)) if mid is not None else None
+
+
+def _with_inflight_new_message(handler):
+    # This is only NewMessage's existing admission obligation, not a second
+    # wake source. A standalone edit never creates one; cleanup follows its owner.
+    from functools import wraps
+    @wraps(handler)
+    async def admitted(event):
+        key = _incoming_message_key(event)
+        if key is None:
+            return await handler(event)
+        state = _INFLIGHT_NEW_MESSAGES.get(key)
+        if state is not None and state.get("active") is not None:
+            return await handler(event)  # ordinary arrival dedupe owns duplicates
+        if state is None:
+            state = {"chat_id": None, "revision": None}
+            _INFLIGHT_NEW_MESSAGES[key] = state
+        state["active"] = asyncio.current_task()
+        completed = False
+        try:
+            result = await handler(event)
+            completed = True
+            return result
+        except (asyncio.CancelledError, Exception):
+            _forget_unadmitted_source(state.get("dedupe_chat_id") or str(event.chat_id), key[1])
+            raise
+        finally:
+            if completed or state["revision"] is None:
+                if _INFLIGHT_NEW_MESSAGES.get(key) is state:
+                    _INFLIGHT_NEW_MESSAGES.pop(key, None)
+            else:
+                # Failed original + overtaking edit retains its exact retry payload.
+                # No timer/run is started; a real redelivery must resume admission.
+                state["active"] = None
+    return admitted
+
+
+def _with_edit_completion(handler):
+    # Invocation lifetime, not asyncio Task lifetime: callers may await several
+    # handlers sequentially inside one task. Joining that caller would self-wait.
+    from functools import wraps
+    @wraps(handler)
+    async def revised(event):
+        completion = asyncio.get_running_loop().create_future()
+        succeeded = False
+        try:
+            result = await handler(event, _admission_completion=completion)
+            succeeded = True
+            return result
+        finally:
+            completion.set_result(succeeded)
+    return revised
+
+
+def _note_inflight_edit(event, chat_id, source_id, *, text, body, media, completion):
+    state = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+    if state is not None and state["chat_id"] == chat_id:
+        prior = state.get("revision")
+        if prior is not None and _revision_is_stale(prior["source_id"], source_id, chat_id=chat_id):
+            return None
+        revision = dict(source_id=source_id, text=text, body=body, media=media,
+                        completion=completion, persisted=False)
+        state["revision"] = revision
+        return revision
+
+
+async def _admitted_revision(event, chat_id, mid, source_id):
+    # An edit can overtake an awaited write. Keep the original admission, wait
+    # for that exact revision writer, then use its current payload on the loop.
+    # The original event stays immutable audit evidence. Deletion never speaks.
+    state = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+    while True:
+        revision = state.get("revision") if state is not None else None
+        if revision is None:
+            return {} if _original_still_current(chat_id, mid) else None
+        try:
+            completed = await asyncio.shield(revision["completion"])
+        except (asyncio.CancelledError, Exception):
+            _forget_unadmitted_source(chat_id, mid)
+            raise
+        if state.get("revision") is not revision:
+            continue
+        if not completed or not revision["persisted"]:
+            _forget_unadmitted_source(chat_id, mid)
+            raise OSError("Overtaking Telegram edit persistence failed; admission retained for retry")
+        existing = _buffer_revision_source(chat_id, int(mid))
+        if _revision_is_stale(existing, revision["source_id"], chat_id=chat_id):
+            return None
+        return revision
+
+
+def _original_still_current(chat_id, source_id):
+    if source_id is None or not str(source_id).isdecimal():
+        return True
+    existing = _buffer_revision_source(str(chat_id), int(source_id))
+    return not _revision_is_stale(existing, str(source_id), chat_id=str(chat_id))
+
+
+def _forget_unadmitted_source(chat_id, source_id):
+    """The arrival deduper is not an ACK of a failed/cancelled life write."""
+    if source_id is not None and str(source_id).isdecimal():
+        seen = _seen_ids[str(chat_id)]
+        try:
+            seen.remove(int(source_id))
+        except ValueError:
+            pass
+
+
+async def _buf_push_admitted(chat_id: str, line: str, *, record_life=True, **kwargs):
+    """Persist before exposing a line to a loop-owned conversation buffer/arm.
+
+    Failed writes are not silently admitted. JSONL is replay/dedupe authority
+    after cancellation/restart, not the lifetime of an executor Future.
+    """
+    if record_life and not _under_tests():
+        actor = kwargs.get("author") or line.split(":", 1)[0]
+        direction = "out" if actor.strip().casefold() == "praxis" else "in"
+        source_id = kwargs.get("source_id")
+        try:
+            ok = await _record_life_message_offloop(
+                chat_id, line, actor=actor, direction=direction, source_id=source_id,
+                is_dm=kwargs.get("is_dm"), ts=kwargs.get("ts"),
+                dedupe_key=(f"telegram:{chat_id}:{source_id}:{direction}"
+                            if source_id is not None else ""),
+                capture_live=kwargs.get("capture_live", False),
+                root_chat_id=kwargs.get("root_chat_id"), principal_id=kwargs.get("principal_id"),
+                ordinary_root=kwargs.get("ordinary_root", False))
+        except asyncio.CancelledError:
+            _forget_unadmitted_source(chat_id, source_id)
+            raise
+        if not ok:
+            if direction != "out":
+                _forget_unadmitted_source(chat_id, source_id)
+                raise OSError("Telegram life persistence failed; event not admitted")
+            # Already accepted outbound speech has its transport/run/archive
+            # receipt. Keep that exact residual; never re-author or forget it
+            # merely because the secondary life projection failed.
+            log.error("Accepted outbound life projection unavailable [%s]", chat_id)
+    if not _original_still_current(chat_id, kwargs.get("source_id")):
+        return False
+    # A pre-arm cancellation can replay a durably recorded original. Its exact
+    # buffer source is already published; retries must not append it a second time.
+    source_id = kwargs.get("source_id")
+    published = (source_id is not None and str(source_id).isdecimal()
+                 and _buffer_revision_source(chat_id, int(source_id)) == str(source_id))
+    if not published:
+        _buf_push(chat_id, line, record_life=False, update_meta=False, **kwargs)
+    try:
+        await asyncio.to_thread(bufstore.meta_update, chat_id,
+                                author=kwargs.get("author") or line.split(":", 1)[0],
+                                is_dm=kwargs.get("is_dm"), name=kwargs.get("name"), ts=time.time())
+    except Exception:
+        log.debug("buf_meta unavailable after durable life admission [%s]", chat_id, exc_info=True)
+    return _original_still_current(chat_id, kwargs.get("source_id"))
 
 
 def _group_native_persistence_enabled(chat_id: str) -> bool:
@@ -716,6 +982,32 @@ def _persist_sent_reply(chat_id, chunks, message_ids, *, is_dm):
                 root_chat_id=(chat_id if not is_dm else None),
                 principal_id=(_self_id if not is_dm else None),
                 ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
+
+
+async def _persist_sent_reply_admitted(chat_id, chunks, message_ids, *, is_dm):
+    sent_reply = "".join(chunks)
+    meta = ({"source_id": ",".join(message_ids), "ts": time.time()} if message_ids else {})
+    native = (len(message_ids) == len(chunks) and
+              (is_dm or _group_native_persistence_enabled(str(chat_id))))
+    split_life = (native or (not is_dm and frame_epoch.room_enabled(chat_id)
+                            and len(message_ids) == len(chunks)))
+    if split_life and not _under_tests():
+        import uuid
+        batch_id = uuid.uuid4().hex
+        for index, (chunk, mid) in enumerate(zip(chunks, message_ids)):
+            ok = await _record_life_message_offloop(
+                chat_id, f"Praxis: {chunk}", actor="Praxis", direction="out",
+                source_id=mid, is_dm=is_dm, ts=time.time(),
+                dedupe_key=f"telegram:{chat_id}:{mid}:out", capture_live=native,
+                logical_send=dict(id=batch_id, index=index, count=len(chunks)),
+                root_chat_id=(chat_id if not is_dm else None),
+                principal_id=(_self_id if not is_dm else None),
+                ordinary_root=(not is_dm and str(chat_id) == '-1001240718803'))
+            if not ok:
+                log.error("Accepted outbound chunk remains an archive/run residual [%s] #%s",
+                          chat_id, mid)
+    await _buf_push_admitted(chat_id, f"Praxis: {sent_reply}", author="Praxis", is_dm=is_dm,
+                             record_life=not split_life, **meta)
 
 
 def _telegram_handle(entity) -> str | None:
@@ -1379,7 +1671,7 @@ async def _initialize_joined_room(chat_id: str, entity, *, title: str | None = N
         try:
             await client.send_message(entity, greeting)
             rooms.profile_update(chat_id, greeted="yes")
-            _buf_push(chat_id, f"Praxis: {greeting}", author="Praxis", is_dm=False)
+            await _buf_push_admitted(chat_id, f"Praxis: {greeting}", author="Praxis", is_dm=False)
             log.info("новичок-протокол [%s]: поздоровалась (один раз)", chat_id)
         except Exception:
             log.exception("приветствие не ушло [%s]", chat_id)
@@ -1814,8 +2106,11 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
     policy = _room_policy_for_state(chat_id)
     # Авторство замораживается ВМЕСТЕ с лентой, одним чтением архива: пробуждение может
     # ждать в кулдауне минуты, и второй проход показал бы модели уже другой разговор.
+    freeze_started = time.perf_counter()
     selected = {}
     frozen_text, frozen_turns = _group_context_frozen(chat_id, policy, epoch_sink=selected)
+    tape_at = time.perf_counter()
+    envelope_reused = bool(selected and "envelope" in selected)
     # KEAT's legacy hot-window sidecar is not the selected epoch projection.
     native_history, native_current, native_sidecar = (
         ([], "", {}) if selected else _group_native_projection(chat_id, mid))
@@ -1825,6 +2120,7 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
         kind=str(kind),
         addressed=bool(addressed),
         query=str(query or "")[:4000],
+        inbound_text=str(query or ""),
         speaker=name,
         sender_id=int(sender_id) if sender_id is not None else None,
         owner=bool(is_owner) if addressed else False,
@@ -1839,7 +2135,11 @@ def _group_trigger_snapshot(chat_id: str, *, mid, message_ts: float,
         media_snapshot=tuple(_pending_media.get(chat_id, ())),
         reply_targets_snapshot=tuple(_recent_msgs[chat_id]),
     )
-    return _freeze_group_wake_epoch(chat_id, wake)
+    wake = _freeze_group_wake_epoch(chat_id, wake)
+    log.info("group freeze [%s]: tape_ms=%.3f envelope_ms=%.3f envelope_reused=%s",
+             chat_id, (tape_at-freeze_started)*1000,
+             (time.perf_counter()-tape_at)*1000, envelope_reused)
+    return wake
 
 
 def _freeze_group_wake_epoch(chat_id: str, wake: GroupWake) -> GroupWake:
@@ -1903,16 +2203,38 @@ def _note_address_overwritten(chat_id: str, old: GroupWake, new: GroupWake) -> N
         log.debug("канарейка вытесненного обращения не записалась", exc_info=True)
 
 
+def _wake_covered(chat_id, wake):
+    if wake.unread_during_turn:
+        inbox = _active_addressed_inboxes.get(chat_id)
+        if inbox is None or not inbox.was_read(wake.message_id):
+            return False
+    return addressed_replies.covered(chat_id, wake.message_id)
+
+
 def _install_group_wake(chat_id: str, wake: GroupWake) -> bool:
     """Install a generation without letting ambient traffic replace an address."""
 
+    inbox = _active_addressed_inboxes.get(chat_id)
+    if inbox is not None and wake.addressed and not inbox.was_read(wake.message_id):
+        wake = replace(wake, unread_during_turn=True)
+    if _wake_covered(chat_id, wake):
+        return False
     current = _group_wakes.get(chat_id)
     if current is not None and current.addressed and not wake.addressed:
         return False
+    if current is not None and current.epoch_repair_ids:
+        retained_media = {(str(ref.path), ref.sha256, ref.message_id): ref
+                          for ref in current.media_snapshot + wake.media_snapshot}
+        wake = replace(wake, epoch_repair_ids=tuple(dict.fromkeys(
+            current.epoch_repair_ids + wake.epoch_repair_ids)),
+            media_snapshot=tuple(retained_media.values()))
     if (current is not None and current.addressed and wake.addressed
             and current.message_id != wake.message_id):
         _note_address_overwritten(chat_id, current, wake)
     _group_wakes[chat_id] = wake
+    inbox = _active_addressed_inboxes.get(chat_id)
+    if inbox is not None:
+        inbox.put(wake)
     return True
 
 
@@ -2139,9 +2461,23 @@ def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
     attribution still carried the old one.
     """
 
+    inbox = _active_addressed_inboxes.get(chat_id)
+    if inbox is not None and message_id is not None:
+        inbox.revise(message_id, query=query, author=author, deleted=deleted)
     wake = _group_wakes.get(chat_id)
     if wake is None:
         return False
+    refreshed = _build_refreshed_group_wake(
+        chat_id, wake, message_id=message_id, query=query, author=author,
+        deleted=deleted, media_snapshot=media_snapshot)
+    if refreshed is None or _group_wakes.get(chat_id) is not wake:
+        return False
+    _group_wakes[chat_id] = refreshed
+    return True
+
+
+def _build_refreshed_group_wake(chat_id, wake, *, message_id=None, query=None,
+                                author=None, deleted=False, media_snapshot=None):
     try:
         selected = {}
         frozen_text, frozen_turns = _group_context_frozen(
@@ -2149,9 +2485,7 @@ def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
         )
     except Exception:
         log.exception("group wake revision refresh failed [%s]", chat_id)
-        return False
-    if _group_wakes.get(chat_id) is not wake:
-        return False
+        return None
     targets = tuple(wake.reply_targets_snapshot)
     if message_id is not None:
         targets = tuple(
@@ -2171,17 +2505,46 @@ def _refresh_group_wake_context(chat_id: str, *, message_id: int | None = None,
     if message_id is not None and wake.message_id == int(message_id):
         if query is not None:
             changes["query"] = str(query)[:4000]
+            changes["inbound_text"] = str(query)
         if author is not None:
             changes["speaker"] = str(author)
     try:
         refreshed = _freeze_group_wake_epoch(chat_id, replace(wake, **changes))
     except Exception:
         log.exception("group wake epoch refresh failed [%s]", chat_id)
+        return None
+    return refreshed
+
+
+_WAKE_REFRESH_LOCKS = {}
+
+
+async def _refresh_group_wake_context_offloop(chat_id, *, message_id=None, query=None,
+                                             author=None, deleted=False, media_snapshot=None, source_id=None):
+    def current():
+        return source_id is None or not _revision_is_stale(
+            _buffer_revision_source(chat_id, int(message_id)), source_id, chat_id=chat_id)
+    if not current():
         return False
-    if _group_wakes.get(chat_id) is not wake:
-        return False
-    _group_wakes[chat_id] = refreshed
-    return True
+    inbox = _active_addressed_inboxes.get(chat_id)
+    if inbox is not None and message_id is not None:
+        inbox.revise(message_id, query=query, author=author, deleted=deleted)
+    # Refreshes contain message-specific patches: serialize rather than dropping
+    # A's patch when a different B edit finishes first. Capture AFTER acquisition.
+    lock = _WAKE_REFRESH_LOCKS.setdefault(chat_id, asyncio.Lock())
+    async with lock:
+        if not current():
+            return False
+        wake = _group_wakes.get(chat_id)
+        if wake is None:
+            return False
+        refreshed = await asyncio.to_thread(
+            _build_refreshed_group_wake, chat_id, wake, message_id=message_id,
+            query=query, author=author, deleted=deleted, media_snapshot=media_snapshot)
+        if refreshed is None or _group_wakes.get(chat_id) is not wake or not current():
+            return False
+        _group_wakes[chat_id] = refreshed
+        return True
 
 
 def _edit_revision_source_id(message_id: int, edited_at, *, text: str = "",
@@ -2223,7 +2586,8 @@ def _revision_reception_order(peer_id: str, message_id: int, source_id: str) -> 
 
 
 @client.on(getattr(events, "MessageEdited", events.NewMessage)())
-async def on_edited(event) -> None:
+@_with_edit_completion
+async def on_edited(event, *, _admission_completion=None) -> None:
     """Archive an admitted group edit without turning it into a new voice turn.
 
     Telegram edits retain their original message id.  ``edit_date`` plus a visible
@@ -2381,7 +2745,11 @@ async def on_edited(event) -> None:
                     str(revised_followup.get("id") or ""), reason="response_edited")
         except Exception:
             log.exception("follow-up response edit projection failed [%s] #%s", chat_id, mid)
-        if durable_seen and volatile_seen:
+        stale_revision = _revision_is_stale(
+            _buffer_revision_source(chat_id, int(mid)), source_id, chat_id=chat_id)
+        pending_new = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+        if (durable_seen and volatile_seen
+                and not (pending_new is not None and pending_new.get("chat_id") == chat_id)):
             return
         buffer_line = f"{name} {marker}: {body}"
         if stale_revision:
@@ -2397,6 +2765,7 @@ async def on_edited(event) -> None:
                     chat_id, int(mid), f"{name}: {body}", actor=name, ts=message_ts,
                 )
             return
+        inflight_edit = _note_inflight_edit(event, chat_id, source_id, text=text, body=body, media=media, completion=_admission_completion)
         _replace_buffer_message(chat_id, int(mid), buffer_line, source_id=source_id)
         persisted = await _record_life_message_offloop(
             chat_id, buffer_line, actor=name, direction="in",
@@ -2404,6 +2773,10 @@ async def on_edited(event) -> None:
             dedupe_key=f"telegram:{chat_id}:{source_id}:in",
             revision_order=reception_order,
         )
+        if inflight_edit is not None:
+            inflight_edit["persisted"] = bool(persisted)
+        if _revision_is_stale(_buffer_revision_source(chat_id, int(mid)), source_id, chat_id=chat_id):
+            return
         if persisted:
             try:
                 await asyncio.to_thread(
@@ -2413,6 +2786,8 @@ async def on_edited(event) -> None:
                 _sync_buffer_from_hot(chat_id)
             except Exception:
                 log.exception("DM edit hot projection failed [%s] #%s", chat_id, mid)
+        if _revision_is_stale(_buffer_revision_source(chat_id, int(mid)), source_id, chat_id=chat_id):
+            return
         _revise_recent_message(chat_id, int(mid), author=name, gist=body)
         live_meta = _meta.get(chat_id)
         if isinstance(live_meta, dict) and live_meta.get("origin_message_id") == int(mid):
@@ -2422,7 +2797,7 @@ async def on_edited(event) -> None:
             })
             _arm(chat_id)
         try:
-            bufstore.meta_update(chat_id, author=name, is_dm=True, name=name)
+            await asyncio.to_thread(bufstore.meta_update, chat_id, author=name, is_dm=True, name=name)
         except Exception:
             log.debug("buf_meta не записалась [%s]", chat_id, exc_info=True)
         log.info("EDIT [DM %s] %s (id=%s): #%s", chat_id, name, sender_id, mid)
@@ -2502,7 +2877,11 @@ async def on_edited(event) -> None:
                     str(revised_followup.get("id") or ""), reason="response_edited")
         except Exception:
             log.exception("follow-up response edit projection failed [%s] #%s", chat_id, mid)
-    if durable_seen and volatile_seen:
+    stale_revision = _revision_is_stale(
+        _buffer_revision_source(chat_id, int(mid)), source_id, chat_id=chat_id)
+    pending_new = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+    if (durable_seen and volatile_seen
+            and not (pending_new is not None and pending_new.get("chat_id") == chat_id)):
         return
     if stale_revision:
         persisted = await _record_life_message_offloop(
@@ -2522,6 +2901,7 @@ async def on_edited(event) -> None:
             except Exception:
                 log.exception("stale edit hot projection failed [%s] #%s", chat_id, mid)
         return
+    inflight_edit = _note_inflight_edit(event, chat_id, source_id, text=text, body=body, media=media, completion=_admission_completion)
     _replace_buffer_message(chat_id, int(mid), buffer_line, source_id=source_id)
     persisted = await _record_life_message_offloop(
         chat_id, buffer_line, actor=name, direction="in",
@@ -2529,8 +2909,12 @@ async def on_edited(event) -> None:
         dedupe_key=f"telegram:{chat_id}:{source_id}:in",
         revision_order=reception_order,
     )
+    if inflight_edit is not None:
+        inflight_edit["persisted"] = bool(persisted)
+    if _revision_is_stale(_buffer_revision_source(chat_id, int(mid)), source_id, chat_id=chat_id):
+        return
     try:
-        bufstore.meta_update(
+        await asyncio.to_thread(bufstore.meta_update,
             chat_id, author=name, is_dm=False,
             name=str(live_meta.get("title") or raw_topic_title or name),
         )
@@ -2545,9 +2929,11 @@ async def on_edited(event) -> None:
             _sync_buffer_from_hot(chat_id)
         except Exception:
             log.exception("edit hot projection failed [%s] #%s", chat_id, mid)
+    if _revision_is_stale(_buffer_revision_source(chat_id, int(mid)), source_id, chat_id=chat_id):
+        return
     _revise_recent_message(chat_id, int(mid), author=name, gist=body)
-    if _refresh_group_wake_context(
-            chat_id, message_id=int(mid), query=body, author=name,
+    if await _refresh_group_wake_context_offloop(
+            chat_id, message_id=int(mid), query=body, author=name, source_id=source_id,
             media_snapshot=tuple(_pending_media.get(chat_id, ()))):
         # If a pass is already waiting/authoring, its local wake may have been read
         # before this revision.  A successor generation cancels that stale pass and
@@ -2658,7 +3044,7 @@ async def on_deleted(event) -> None:
                 dedupe_key=f"telegram:{chat_id}:{mid}:delete:in",
             )
             try:
-                bufstore.meta_update(
+                await asyncio.to_thread(bufstore.meta_update,
                     chat_id, author="Telegram", is_dm=False,
                     name=str(live_meta.get("title") or topic_title or peer_id),
                 )
@@ -2674,6 +3060,9 @@ async def on_deleted(event) -> None:
                     _sync_buffer_from_hot(chat_id)
                 except Exception:
                     log.exception("deletion hot projection failed [%s] #%s", chat_id, mid)
+            inbox = _active_addressed_inboxes.get(chat_id)
+            if inbox is not None:
+                inbox.revise(mid, deleted=True)
             _revise_recent_message(chat_id, mid, deleted=True)
             _drop_pending_message_media(chat_id, mid)
             if wake := _group_wakes.get(chat_id):
@@ -2689,7 +3078,7 @@ async def on_deleted(event) -> None:
                         detail=f"обращение #{mid} удалено до ответа",
                     )
                 else:
-                    if _refresh_group_wake_context(
+                    if await _refresh_group_wake_context_offloop(
                             chat_id, message_id=mid, deleted=True,
                             media_snapshot=tuple(_pending_media.get(chat_id, ()))):
                         _arm(chat_id)
@@ -3144,7 +3533,9 @@ def _note_room_mode_skip(peer_id, chat_id, mode: str, *, stage: str,
 
 
 @client.on(events.NewMessage(incoming=True))
+@_with_inflight_new_message
 async def on_new(event) -> None:
+    intake_arrived = time.perf_counter()
     msg = event.message
     text = msg.message or ""
     media = _media_tag(msg)
@@ -3303,6 +3694,9 @@ async def on_new(event) -> None:
     # All conversational state is topic-local.  Access/room policy above deliberately
     # used peer_id: a topic is not a second Telegram room or authority.
     chat_id = route.conversation_id
+    pending_new = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+    if pending_new is not None:
+        pending_new["dedupe_chat_id"] = chat_id
 
     # PASS 9.0: catch_up может доиграть уже виденный апдейт — msg_id-сторож против
     # дублей буфера. Считается по ФИНАЛЬНОМУ ключу и смотрит ещё в комнатное кольцо:
@@ -3433,8 +3827,12 @@ async def on_new(event) -> None:
                     )
             except Exception:
                 log.exception("late original current-state check failed [%s] #%s", chat_id, mid)
-    if current_revision is not None:
-        _record_life_message(
+    retained_admission = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+    retrying_admission = (retained_admission is not None
+                          and retained_admission.get("chat_id") == chat_id
+                          and retained_admission.get("revision") is not None)
+    if current_revision is not None and not retrying_admission:
+        await _record_life_message_offloop(
             chat_id, f"{name}{reply_mark}: {body}", actor=name, direction="in",
             source_id=mid, is_dm=is_private, ts=message_ts,
             dedupe_key=f"telegram:{chat_id}:{mid}:in",
@@ -3475,7 +3873,7 @@ async def on_new(event) -> None:
                     deleted=current_revision.get("kind") == "deletion",
                     source_id=current_source,
                 )
-                _record_life_message(
+                await _record_life_message_offloop(
                     projection_chat, current_line,
                     actor=("Telegram" if current_revision.get("kind") == "deletion"
                            else str(current_revision.get("sender_name") or name)),
@@ -3503,7 +3901,26 @@ async def on_new(event) -> None:
             log.exception("follow-up ledger не принял delayed original [%s] #%s", chat_id, mid)
         return
 
-    _buf_push(chat_id, f"{name}{reply_mark}: {body}", author=name, is_dm=is_private,
+    pending_admission = _INFLIGHT_NEW_MESSAGES.get(_incoming_message_key(event))
+    if pending_admission is not None:
+        pending_admission["chat_id"] = chat_id
+    current_source = str(mid)
+
+    async def reconcile_current_input():
+        nonlocal text, body, media, current_source
+        revision = await _admitted_revision(event, chat_id, mid, current_source)
+        if revision is None:
+            return False
+        if revision:
+            text, body, media = revision["text"], revision["body"], revision["media"]
+            current_source = revision["source_id"]
+            meta = _meta.get(chat_id)
+            if meta is not None and meta.get("origin_message_id") == mid:
+                meta["origin_text"] = text
+        return True
+
+    life_started = time.perf_counter()
+    await _buf_push_admitted(chat_id, f"{name}{reply_mark}: {body}", author=name, is_dm=is_private,
               name=buffer_name,
               source_id=mid, ts=message_ts,
               capture_live=(not bool(media or ref) and
@@ -3513,6 +3930,9 @@ async def on_new(event) -> None:
               root_chat_id=(peer_id if not is_private else None),
               principal_id=(keat_group_principal if not is_private else None),
               ordinary_root=(not is_private and room_nature is False and chat_id == peer_id))
+    if not await reconcile_current_input():
+        return  # deletion or failed revision has no speaking admission
+    intake_recorded = time.perf_counter()
     # ⚠ ГЕЙТ ЛИЧЕК СТОИТ ЗДЕСЬ, А НЕ ВЫШЕ — И ЭТО СУТЬ, А НЕ ОФОРМЛЕНИЕ.
     # Сообщение записано строкой выше: горячий слой и `memory/life` его держат.
     # Гейт, поставленный рядом с `social.category`, возвращался бы раньше записи —
@@ -3531,7 +3951,8 @@ async def on_new(event) -> None:
     # The archive sees every admitted group update, not only messages that wake the
     # model.  It is exact-topic and append-only; projection/search failures are loud
     # but must never make the live Telegram update disappear.
-    if not is_private and mid is not None and _group_archive_enabled():
+    if (not is_private and mid is not None and current_source == str(mid)
+            and _group_archive_enabled()):
         try:
             if opener_title and route.topic_id is not None:
                 await asyncio.to_thread(
@@ -3571,6 +3992,8 @@ async def on_new(event) -> None:
         except Exception:
             # Follow-up bookkeeping must never make a live incoming update disappear.
             log.exception("follow-up ledger не записал входящее [%s] #%s", chat_id, mid)
+    if not await reconcile_current_input():
+        return
     # Passive group traffic also ages into memory; compaction cannot depend on
     # Praxis being addressed and producing an outgoing turn.
     if not _under_tests():
@@ -3611,6 +4034,7 @@ async def on_new(event) -> None:
     notice_kind = ("dm" if is_private else
                    "mention" if mentioned else "reply" if replied else
                    "name" if named else "")
+    notices_started = time.perf_counter()
     if notice_kind:
         try:
             from core import notices as core_notices
@@ -3623,6 +4047,7 @@ async def on_new(event) -> None:
         except Exception:
             log.debug("накопитель уведомлений: запись [%s] #%s не легла", chat_id, mid,
                       exc_info=True)
+    notices_finished = time.perf_counter()
 
     # Незнакомец остаётся самостоятельным разговором Praxis: адрес уже сохранён в книге.
     if is_private and not is_owner and cat == "unknown":
@@ -3650,6 +4075,7 @@ async def on_new(event) -> None:
         else:
             perception.note_ambient(chat_id)
         return
+    freeze_ms = 0.0
     if not is_private:
         msg_date = getattr(msg, "date", None)
         try:
@@ -3659,12 +4085,29 @@ async def on_new(event) -> None:
         kind = ("mention+reply" if mentioned and replied else
                 "mention" if mentioned else "reply" if replied else
                 "name" if named else "ambient")
-        wake = await asyncio.to_thread(
-            _group_trigger_snapshot,
-            chat_id, mid=mid, message_ts=message_ts, kind=kind,
-            addressed=bool(addressed), query=body, name=name,
-            sender_id=sender_id, is_owner=is_owner, known=known, family=fam,
-        )
+        trigger = dict(mid=mid, message_ts=message_ts, kind=kind,
+                       addressed=bool(addressed), query=body, name=name,
+                       sender_id=sender_id, is_owner=is_owner, known=known, family=fam)
+        while True:
+            selected_source = current_source
+            trigger["query"] = body
+            try:
+                freeze_started = time.perf_counter()
+                wake = await asyncio.to_thread(_group_trigger_snapshot, chat_id, **trigger)
+                freeze_ms = (time.perf_counter() - freeze_started) * 1000
+            except frame_epoch.EpochUnavailable as exc:
+                await asyncio.to_thread(
+                    epoch_repair.park, chat_id, trigger, exc.selection, str(exc),
+                    media=[dict(asdict(ref), path=str(ref.path))
+                           for ref in _pending_media.get(chat_id, ())],
+                    reply_targets=list(_recent_msgs[chat_id]))
+                log.warning("epoch admission deferred [%s] #%s; retained for maintenance repair: %s",
+                            chat_id, mid, exc)
+                return
+            if not await reconcile_current_input():
+                return
+            if selected_source == current_source:
+                break
         if not _install_group_wake(chat_id, wake):
             perception.note_ambient(chat_id)
             return
@@ -3677,11 +4120,26 @@ async def on_new(event) -> None:
                 chat_id, name, automated=bool(getattr(sender, "bot", False)))
         except Exception:
             log.debug("unanswered.note_incoming упал [%s]", chat_id, exc_info=True)
+    if not await reconcile_current_input():
+        return
+    log.info("telegram_intake_timing chat_id=%s message_id=%s arrival_to_record_ms=%.3f "
+             "record_to_arm_ms=%.3f notices_ms=%.3f", chat_id, mid,
+             (intake_recorded - intake_arrived) * 1000,
+             (time.perf_counter() - intake_recorded) * 1000,
+             (notices_finished - notices_started) * 1000)
+    log.info("telegram_admission_phases chat_id=%s message_id=%s capture_ms=%.3f "
+             "life_ms=%.3f freeze_ms=%.3f dispatch_to_arm_ms=%.3f", chat_id, mid,
+             (life_started-intake_arrived)*1000, (intake_recorded-life_started)*1000,
+             freeze_ms, (time.perf_counter()-intake_arrived)*1000)
     _arm(chat_id)
 
 
 def _arm(chat_id: str) -> None:
     """Взвести/перевзвести дебаунс — всплеск склеивается в одну ситуацию."""
+    # A live group turn owns this FIFO; do not cancel it on every arrival.
+    # Its finally block re-arms any unobserved wake after the mailbox closes.
+    if chat_id in _active_addressed_inboxes:
+        return
     # PASS 29: инкремент поколения == запланирован новый пасс-преемник. Бамп и отмена
     # текущего пасса синхронны (без await между ними), поэтому «gen изменился» строго
     # эквивалентно «преемник существует» и не может разойтись с реальностью. Это
@@ -3938,6 +4396,9 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
     Uploading bytes may repeat after a crash; the visible SendMediaRequest does
     not.  Small hermetic test clients fall back to their public send_file stub.
     """
+    import xtts_intent
+    if xtts_intent.is_intent(item):
+        raise media_core.MediaValidationError("speech intent is not an uploadable artifact")
     random_id = (_telegram_media_random_id(item.queue_id)
                  if random_id is None else int(random_id))
     if random_id == 0:
@@ -3968,18 +4429,24 @@ async def _send_file_idempotent(entity, item: media_core.OutboundMedia, *, reply
         # from extensions unless the recorded photo intent is explicit.
         "as_image": item.kind == "photo",
     }
-    if force_document:
+    if force_document or item.kind == "audio":
         # The spool's collision-proof msg-<hash>-<nonce> prefix is private
         # implementation state.  Set Telegram's visible filename explicitly
-        # so the recipient sees the requested artifact name only.
+        # so the recipient sees the requested artifact name only. Audio also
+        # needs its recorded MIME: .blob becomes application/octet-stream and
+        # Telegram strips the voice attribute despite voice_note=True.
         conversion_kwargs["attributes"] = [types.DocumentAttributeFilename(
             file_name=(str(visible_filename).strip() if visible_filename
                        else media_core.delivery_basename(item.path)),
         )]
         conversion_kwargs["mime_type"] = item.mime
-    _handle, input_media, _image = await client._file_to_media(
-        str(item.path), **conversion_kwargs,
-    )
+    uploaded = _PREUPLOADED_SPEECH.pop(item.queue_id, None)
+    if uploaded is not None and uploaded[0] == item.sha256:
+        input_media = uploaded[1]
+    else:
+        _handle, input_media, _image = await client._file_to_media(
+            str(item.path), **conversion_kwargs,
+        )
     if not input_media:
         raise TypeError(f"cannot convert outbound media {item.path}")
     caption, formatting_entities = await client._parse_message_text(
@@ -4057,16 +4524,18 @@ def _direct_outbox_result(entry: dict, *, label: str = "") -> str:
     if entry.get("kind") == "file":
         payload = dict(entry.get("payload") or {})
         filename = str(payload.get("visible_filename") or "file")
-        # Расписка называет ВИД вложения, а не «файл» вообще. 13.08 именно неразличимость
-        # видов дала ход, в котором отправленный текст был прочитан как ушедшая картинка.
+        # These fields prove the durable intent, not Telegram's returned media
+        # attributes. Keep the requested format visible without claiming an
+        # observed voice/photo presentation from an intent-only receipt.
         kind = str(receipt.get("media_kind")
                    or payload.get("media_kind")
                    or telegram_outbox.LEGACY_MEDIA_KIND)
         noun = {"photo": "фото", "audio": "голосовое" if receipt.get("voice_note")
                 or payload.get("voice_note") else "аудио"}.get(kind, "документ")
         return (
-            f"Отправила {noun} → {destination} "
-            f"(chat_id={selector}, message_id={message_id}): {filename}"
+            f"Отправила вложение → {destination} "
+            f"(chat_id={selector}, message_id={message_id}): {filename} "
+            f"(запрошенный формат: {noun}; отображение Telegram не проверено)"
         )
     text = str((entry.get("payload") or {}).get("text") or "")
     return (
@@ -4079,6 +4548,7 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
     """Send one already-durable intent and persist acceptance before returning."""
 
     if entry.get("state") == "accepted":
+        await asyncio.to_thread(addressed_replies.record_outbox, entry)
         return entry
     # ⚠ 21.09, «почему архивы уходили» (20.09): dead_letter — приговор, а не отсрочка.
     # Повтор прогона (replay_outstanding_tool → _sync_send_file → сюда) приносил ту же
@@ -4184,12 +4654,14 @@ async def _send_direct_outbox_entry(entry: dict, *, entity=None) -> dict:
     else:
         raise RuntimeError(f"unsupported Telegram outbox kind: {entry.get('kind')}")
     message_id = _one_sent_message_id(sent)
-    return await asyncio.to_thread(
+    accepted = await asyncio.to_thread(
         _direct_outbox().mark_accepted,
         str(entry["key"]),
         message_id=message_id,
         random_id=random_id,
     )
+    await asyncio.to_thread(addressed_replies.record_outbox, accepted)
+    return accepted
 
 
 class DirectOutboxUnsendable(RuntimeError):
@@ -4604,6 +5076,9 @@ async def _send_turn_media(entity, item: media_core.OutboundMedia, *,
                            ctx: agent.ChannelContext, reply_to=None,
                            state_chat_id: str | None = None) -> dict | None:
     """Return a Telegram acceptance receipt; persistence failures never cause a resend."""
+    import xtts_intent
+    if xtts_intent.is_intent(item):
+        raise media_core.MediaValidationError("speech must be prepared before upload")
     if item.run_id:
         try:
             started = await asyncio.to_thread(
@@ -4663,7 +5138,7 @@ async def _send_turn_media(entity, item: media_core.OutboundMedia, *,
             "audio": "[Аудио]",
             "document": "[Файл]",
         }.get(item.kind, "[Медиа]")
-        _buf_push(str(state_chat_id or ctx.chat_id),
+        await _buf_push_admitted(str(state_chat_id or ctx.chat_id),
                   f"Praxis: {tag}" + (f" {item.caption}" if item.caption else ""),
                   author="Praxis", is_dm=ctx.is_dm,
                   source_id=str(receipt["message_id"] or ""), ts=receipt["accepted_at"])
@@ -4674,11 +5149,83 @@ async def _send_turn_media(entity, item: media_core.OutboundMedia, *,
     return receipt
 
 
+async def _prepare_speech_in_background(entity, item, *, ctx, reply_to, state_chat_id):
+    """Prepare admitted speech outside ONE_MIND; reuse canonical media delivery."""
+    import threading
+    import xtts_intent
+    from xtts_tts_client import XttsTTSClient
+    from xtts_protocol import XttsError
+    abort = threading.Event()
+    spool = _media_spool()
+
+    def stopped():
+        return abort.is_set() or not agent.run_speech_preparation_allowed(item.run_id, item.queue_id)
+
+    try:
+        if stopped():
+            return
+        request = await asyncio.to_thread(xtts_intent.read_intent, item.path)
+        preuploaded = None
+        if request.get('generation_id'):
+            from xtts_generations import Generations
+            from xtts_stream_upload import upload
+            store = Generations()
+            preuploaded = await upload(client, store, request, stopped=stopped)
+            await asyncio.to_thread(xtts_intent.prepare_generation, spool, item, store, stopped=stopped)
+        else:
+            speech_client = XttsTTSClient(agent.media_audio.get_default_backend().config.output_dir)
+            await asyncio.to_thread(xtts_intent.prepare, spool, item, speech_client, stopped=stopped)
+        actual = await asyncio.to_thread(xtts_intent.prepared, spool, item)
+        if actual is None or stopped():
+            return
+        await asyncio.to_thread(agent.run_speech_prepared, item, actual)
+        if preuploaded is not None:
+            _PREUPLOADED_SPEECH[item.queue_id] = (actual.sha256, preuploaded)
+        # Preparation overlaps the existing durable attachment pause. No
+        # cognitive lock is held while either model work or this timer runs.
+        while not await asyncio.to_thread(spool.ready, item.queue_id):
+            if stopped():
+                return
+            await asyncio.sleep(0.5)
+        if not stopped():
+            await _attempt_queued_media(entity, item, ctx=ctx, reply_to=reply_to,
+                                        state_chat_id=state_chat_id)
+    except XttsError as exc:
+        if exc.code in {"busy", "unavailable", "timeout", "cancelled", "warming", "awaiting_voice", "voice_disabled", 'stream_restart'}:
+            await asyncio.to_thread(xtts_intent.defer, spool, item, exc.code)
+        else:
+            await asyncio.to_thread(spool.fail, item.queue_id, reason="XTTS preparation: " + exc.code)
+    except asyncio.CancelledError:
+        abort.set()
+        raise
+    except Exception:
+        log.warning("speech preparation unavailable queue_id=%s", item.queue_id)
+        await asyncio.to_thread(xtts_intent.defer, spool, item, "unavailable")
+    finally:
+        abort.set()
+        _SPEECH_PREPARING.pop(item.queue_id, None)
+        _PREUPLOADED_SPEECH.pop(item.queue_id, None)
+
+
 async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
                                 ctx: agent.ChannelContext, reply_to=None,
                                 finalize_recovered: bool = True,
                                 state_chat_id: str | None = None) -> bool:
     """One in-flight upload per queue id; acknowledge the queue only after success."""
+    import xtts_intent
+    upload_item = item
+    if xtts_intent.is_intent(item):
+        if not await asyncio.to_thread(agent.run_speech_preparation_allowed, item.run_id, item.queue_id):
+            return False
+        upload_item = await asyncio.to_thread(xtts_intent.prepared, _media_spool(), item)
+        if upload_item is None:
+            if item.queue_id not in _SPEECH_PREPARING:
+                can_retry = await asyncio.to_thread(xtts_intent.retry_ready, _media_spool(), item)
+                if can_retry and item.queue_id not in _SPEECH_PREPARING:
+                    _SPEECH_PREPARING[item.queue_id] = asyncio.create_task(
+                        _prepare_speech_in_background(entity, item, ctx=ctx, reply_to=reply_to,
+                                                       state_chat_id=state_chat_id))
+            return False
     if item.queue_id in _MEDIA_SENDING:
         return False
     _MEDIA_SENDING.add(item.queue_id)
@@ -4688,8 +5235,16 @@ async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
         if receipt is None:
             if not await asyncio.to_thread(spool.ready, item.queue_id):
                 return False
+            if xtts_intent.is_intent(item):
+                try:
+                    await asyncio.to_thread(agent.run_speech_prepared, item, upload_item)
+                except Exception:
+                    log.warning("speech artifact receipt unavailable queue_id=%s", item.queue_id)
+                    return False
+                if not await asyncio.to_thread(agent.run_speech_preparation_allowed, item.run_id, item.queue_id):
+                    return False
             receipt = await _send_turn_media(
-                entity, item, ctx=ctx, reply_to=reply_to,
+                entity, upload_item, ctx=ctx, reply_to=reply_to,
                 state_chat_id=state_chat_id,
             )
         if receipt is None:
@@ -4736,6 +5291,7 @@ async def _attempt_queued_media(entity, item: media_core.OutboundMedia, *,
                               item.queue_id)
         if acknowledged and run_receipt:
             try:
+                upload_item.path.unlink(missing_ok=True)
                 item.path.unlink(missing_ok=True)
             except OSError:
                 pass
@@ -4867,19 +5423,20 @@ def _release_answered_wake(chat_id: str, wake: "GroupWake") -> bool:
     (`replace(wake, …)`), тот же адрес, новый объект. Прежняя сверка «is wake» его не
     узнавала: wake переживал свой же отвеченный ход, `_arm` взводил его снова, и тот же
     #id получил второй ответ (109499) — «Пракс раздуплилась надвое». Отвеченный адрес —
-    это message_id, а не идентичность объекта. Новый адрес (другой message_id) остаётся:
-    им владеет свой проход.
+    это message_id, а не идентичность объекта. При включённой addressed-replies
+    политике доставленный ответ также снимает прочитанные пинги этой темы.
+    Непрочитанные активным ходом пинги и пинги без доставки сохраняются.
     """
     live = _group_wakes.get(chat_id)
     if live is None:
         return False
     same_object = live is wake
     same_address = (wake.message_id is not None and live.message_id == wake.message_id)
-    if same_object or same_address:
+    if same_object or same_address or _wake_covered(chat_id, live):
         _group_wakes.pop(chat_id, None)
         if not same_object:
-            log.info("wake [%s] #%s: снят по адресу (объект подменила правка сообщения)",
-                     chat_id, wake.message_id)
+            log.info("wake [%s] #%s: снят после завершения адреса #%s или доставленного ответа",
+                     chat_id, live.message_id, wake.message_id)
         return True
     return False
 
@@ -4903,6 +5460,9 @@ async def _run_pass(chat_id: str) -> None:
     topic_id = meta.get("topic_id", persisted_route.topic_id)
     route = telegram_topics.TopicRoute(peer_id, topic_id)
     wake = None if is_dm else _group_wakes.get(chat_id)
+    if wake is not None and _wake_covered(chat_id, wake):
+        _group_wakes.pop(chat_id, None)
+        return
     # Отложенный таймер несёт только chat_id и может пережить уже завершённый/заменённый
     # ход. Без живого immutable wake он не имеет права брать свежий хвост Telegram.
     if not is_dm and wake is None:
@@ -4967,11 +5527,13 @@ async def _run_pass(chat_id: str) -> None:
     # рвать связь, и ждать замка стало можно минутами ПОД живым входящим потоком: второе
     # сообщение в тот же чат отменяет таск ровно на этом await. Держим свою уборку сами.
     try:
+        mind_requested = time.perf_counter()
         await _ONE_MIND.acquire()
     except BaseException:
         _passing.discard(chat_id)
         raise
     try:
+        mind_acquired = time.perf_counter()
         if not is_dm:
             # Edits can revise the immutable wake while this pass waits for the global
             # lock; deletion can withdraw it entirely.  Rebind at the last safe point so
@@ -4980,6 +5542,9 @@ async def _run_pass(chat_id: str) -> None:
             # finally; this old one becomes a no-op.
             live_wake = _group_wakes.get(chat_id)
             if live_wake is None:
+                return
+            if _wake_covered(chat_id, live_wake):
+                _group_wakes.pop(chat_id, None)
                 return
             if live_wake is not wake:
                 if live_wake.message_id != wake.message_id:
@@ -4996,6 +5561,9 @@ async def _run_pass(chat_id: str) -> None:
                 group_retry_scheduled = room_outcome == "retry"
                 return
             meta["room_mode"] = room_mode
+        inbox = None if is_dm else _ActiveAddressedInbox(chat_id, wake)
+        if inbox is not None:
+            _active_addressed_inboxes[chat_id] = inbox
         _last_pass[chat_id] = time.time()
         # 25.09 (G §3): ход в этом чате начался — его уведомления из накопителя сняты. Она
         # зашла в комнату как обычно и видит весь контекст сама; слова владельца для окон
@@ -5165,6 +5733,12 @@ async def _run_pass(chat_id: str) -> None:
                 log.exception("cross-topic orientation не собрался [%s]", chat_id)
             if cross:
                 topic_orient += "\n\n" + cross
+        inbound_token = agent._TURN_ADDRESSED_INBOUND.set(inbox)
+        log.info("telegram_pass_timing chat_id=%s message_id=%s one_mind_wait_ms=%.3f "
+                 "pre_voice_ms=%.3f", chat_id,
+                 meta.get("origin_message_id") if is_dm else getattr(wake, "message_id", None),
+                 (mind_acquired - mind_requested) * 1000,
+                 (time.perf_counter() - mind_acquired) * 1000)
         topic_token = _TURN_TOPIC_ROUTE.set(route)
         try:
             if is_dm:
@@ -5195,16 +5769,20 @@ async def _run_pass(chat_id: str) -> None:
                 selected_epoch = wake.epoch_snapshot
                 with frame_epoch.bind(chat_id, (selected_epoch or {}).get("anchor"),
                                       tape=selected_epoch, refused=selected_epoch is None):
+                    recovery_handoff = ({"on_run": lambda run_id: epoch_repair.adopted(
+                        wake.epoch_repair_ids, run_id)} if wake.epoch_repair_ids else {})
                     envelope, cancellation_seen = await _await_despite_cancellation(
                         _voice_turn_offloaded(
                             chat_id, last_n, speaker,
                             ctx=ctx, orient=topic_orient, media_refs=turn_media,
                             history=turn_history, current_text=turn_current,
                             occurrence_sidecar=turn_occurrences or None,
+                            **recovery_handoff,
                         )
                     )
         finally:
             _TURN_TOPIC_ROUTE.reset(topic_token)
+            agent._TURN_ADDRESSED_INBOUND.reset(inbound_token)
         if envelope.deferred:
             delivery_run_id = str(envelope.run_id or "")
             terminal = True
@@ -5273,6 +5851,8 @@ async def _run_pass(chat_id: str) -> None:
                     "conversation_id": str(chat_id),
                     "peer_id": str(route.peer_id),
                     "topic_id": route.topic_id,
+                    "addressed_observed_message_id": inbox.observed if inbox else None,
+                    "addressed_observed_message_ids": inbox.read_ids() if inbox else [],
                     "chunks": [{
                         "index": index,
                         "text": chunk,
@@ -5396,6 +5976,11 @@ async def _run_pass(chat_id: str) -> None:
                 if sent_id is not None:
                     _boundary_replies[chat_id].append(
                         (int(sent_id), int(provocateur_id), time.time()))
+            if not is_dm:
+                await asyncio.to_thread(addressed_replies.record, chat_id,
+                                        getattr(sent, "id", None), delivery_key=text_delivery_key,
+                                        observed_message_id=inbox.observed if inbox else None,
+                                        observed_message_ids=inbox.read_ids() if inbox else [])
             if (not is_dm and getattr(sent, "id", None) is not None
                     and _group_archive_enabled()):
                 try:
@@ -5430,7 +6015,7 @@ async def _run_pass(chat_id: str) -> None:
             # comma-delimited pseudo-ID, because an edit of either real message
             # must revoke the whole rendered reply's projection.
             terminal = True
-            _persist_sent_reply(chat_id, sent_chunks, sent_ids, is_dm=is_dm)
+            await _persist_sent_reply_admitted(chat_id, sent_chunks, sent_ids, is_dm=is_dm)
             log.info("ГОЛОС(%s) [%s]%s chunks=%d/%d -> %r",
                      "DM" if is_dm else "GRP", chat_id,
                      f" reply_to=#{reply_to}" if reply_to else "",
@@ -5502,6 +6087,11 @@ async def _run_pass(chat_id: str) -> None:
             )
         log.exception("ход упал [%s]", chat_id)
     finally:
+        finished_inbox = _active_addressed_inboxes.pop(chat_id, None)
+        remaining_wake = _group_wakes.get(chat_id)
+        if (finished_inbox is not None and remaining_wake is not None
+                and finished_inbox.was_read(remaining_wake.message_id)):
+            _group_wakes[chat_id] = replace(remaining_wake, unread_during_turn=False)
         _ONE_MIND.release()
         if delivery_run_id:
             _TEXT_SENDING.discard(delivery_run_id)
@@ -7652,6 +8242,7 @@ def _sync_fetch_context(chat_id, limit: int = LAST_N) -> str:
 def _project_direct_outbox_acceptance(proof: dict, entry: dict) -> str:
     """Apply accepted-send bookkeeping exactly once per durable outbox key."""
 
+    addressed_replies.record_outbox(entry)
     identity = dict(proof.get("entry") or {})
     projection = dict(proof.get("projection") or {})
     receipt = dict(entry.get("receipt") or {})
@@ -8239,6 +8830,11 @@ def _sync_reply(chat_id, text, reply_to="") -> str:
         run_id=str(execution["run_id"]),
         call_id=str(execution["call_id"]),
         purpose="tool:reply",
+        addressed_observed_message_id=(
+            inbox.observed if (inbox := agent._TURN_ADDRESSED_INBOUND.get()) is not None
+            and inbox.chat_id == target_route.conversation_id else None),
+        addressed_observed_message_ids=(inbox.read_ids() if inbox is not None
+            and inbox.chat_id == target_route.conversation_id else None),
     )
     _bind_direct_outbox_proof(entry, _durable_outbox_projection(execution, {
         "target_label": who,
@@ -8316,7 +8912,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
     исполнителя вовсе — и выбиралась рука, которая умела адрес, но не умела картинку.
     """
 
-    execution = _direct_tool_execution("send_file")
+    execution = _direct_tool_execution(("send_file", "send_media"))
     key = _direct_tool_key(execution)
     current_chat = agent._active_chat()
 
@@ -8397,7 +8993,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
         expected = {
             "run_id": str(execution["run_id"]),
             "call_id": str(execution["call_id"]),
-            "purpose": "tool:send_file",
+            "purpose": f"tool:{execution['tool']}",
             "peer_id": peer_id,
             "topic_id": route.topic_id,
             "reply_to": route.topic_id,
@@ -8427,7 +9023,7 @@ def _sync_send_file(path, caption="", to="", media_kind="document",
             caption=str(caption or "")[:900],
             run_id=str(execution["run_id"]),
             call_id=str(execution["call_id"]),
-            purpose="tool:send_file",
+            purpose=f"tool:{execution['tool']}",
         )
     label = (_ent_label(target) if hasattr(target, "id")
              else str(current_chat or to or OWNER_ID))
@@ -8932,7 +9528,7 @@ async def _absence_once() -> None:
                 continue
             n = await asyncio.to_thread(_absence.note_sent, chat_id, w)
             await asyncio.to_thread(unanswered.resolve, str(chat_id))
-            _buf_push(str(chat_id), f"Praxis: {reply}", author="Praxis", is_dm=True)
+            await _buf_push_admitted(str(chat_id), f"Praxis: {reply}", author="Praxis", is_dm=True)
             try:
                 agent.tool_journal(f"[отсутствие] ответила {name} (#{n} за окно): «{reply[:120]}»", salience=2)
             except Exception:
@@ -9213,6 +9809,10 @@ async def _text_outbox_once() -> None:
                     delivery_key=str(chunk.get("delivery_key") or ""),
                     message_id=message_id,
                 )
+                await asyncio.to_thread(addressed_replies.record, conversation_id,
+                                        message_id, delivery_key=str(chunk.get("delivery_key") or ""),
+                                        observed_message_id=plan.get("addressed_observed_message_id"),
+                                        observed_message_ids=plan.get("addressed_observed_message_ids"))
                 recovered_text.append(str(chunk.get("text") or ""))
                 if message_id is not None:
                     recovered_ids.append(str(message_id))
@@ -9220,7 +9820,7 @@ async def _text_outbox_once() -> None:
             reconciled = await asyncio.to_thread(agent.run_delivery_text_reconcile, run_id)
             if recovered_text:
                 is_dm = bool(meta.get("is_dm", not peer_id.startswith("-")))
-                _buf_push(
+                await _buf_push_admitted(
                     conversation_id, f"Praxis: {''.join(recovered_text)}",
                     author="Praxis", is_dm=is_dm,
                     **({"source_id": ",".join(recovered_ids), "ts": time.time()}
@@ -9347,6 +9947,8 @@ async def _media_cleanup_once() -> None:
             entity, item, ctx=ctx, reply_to=meta_route.topic_id,
             state_chat_id=state_chat_id,
         )
+    import xtts_intent
+    await asyncio.to_thread(xtts_intent.cleanup_terminal, spool)
     removed = await asyncio.to_thread(spool.cleanup)
     if removed:
         log.info("media spool: убрано просроченных файлов: %d", len(removed))
@@ -10076,6 +10678,119 @@ async def _forge_wake_once() -> None:
         log.debug("forge urgent wake add failed", exc_info=True)
 
 
+async def _run_voice_generation(identity):
+    from xtts_generations import Generations, process_owner
+    from xtts_tts_client import XttsTTSClient
+    store = Generations()
+    try:
+        from speech_backend import client_for
+        request = (await asyncio.to_thread(store.read, identity))['request']
+        speech = client_for(request, store.directory(identity), timeout=None)
+        await asyncio.to_thread(store.execute, identity, speech, owner=process_owner())
+        await asyncio.to_thread(store.emit_result, identity)
+    except Exception:
+        log.warning('background speech producer failed id=%s', identity, exc_info=True)
+    finally:
+        _VOICE_GENERATING.pop(identity, None)
+
+
+async def _run_voice_result_pass():
+    from core import events
+    if _ONE_MIND.locked():
+        return
+    async with _ONE_MIND:
+        if not await asyncio.to_thread(agent.llm.configured):
+            return
+        pending = await asyncio.to_thread(events.undelivered, {'voice_generation_result'}, 1)
+        if not pending:
+            return
+        event = pending[0]
+        from xtts_generations import Generations
+        origin = (await asyncio.to_thread(Generations().read, event['payload']['generation_id']))['channel']
+        epoch_tape = None
+        if not origin['is_dm'] and frame_epoch.room_enabled(origin['chat_id']):
+            # Use the same canonical selection as an ordinary group wake.
+            # Bind its complete detached tape, including its dossier accumulator,
+            # rather than guessing an anchor or reconstructing a separate frame.
+            selected = {}
+            try:
+                await asyncio.to_thread(_group_context_frozen, origin['chat_id'], {},
+                                        epoch_sink=selected)
+            except frame_epoch.EpochUnavailable:
+                return  # Keep the event pending without consuming a delivery attempt.
+            if not selected:
+                return
+            epoch_tape = selected
+        key = str(event.get('dedup_key') or event['id'])
+        counts = await asyncio.to_thread(events.bump_attempts, [key])
+        if counts.get(key, 1) > events.MAX_DELIVERY_ATTEMPTS:
+            log.warning('speech result event could not be delivered key=%s', key)
+            await asyncio.to_thread(events.mark_delivered, [key])
+            return
+        try:
+            envelope, ctx = await asyncio.to_thread(agent.voice_generation_event_turn, event,
+                                                    epoch_tape=epoch_tape)
+            if envelope.failed or envelope.deferred or envelope.retry_media:
+                return
+            # Plain final model text is not a second implicit chat sender here.
+            # reply is available during this event turn for an explicit text message.
+            if envelope.outbound:
+                route = _route_from_reference(ctx.chat_id)
+                _stage_authorized_media(envelope.outbound, reply_to=route.topic_id)
+                await asyncio.to_thread(agent.run_delivery_started, envelope.run_id,
+                    chat_id=ctx.chat_id, text_chars=0, media_count=len(envelope.outbound),
+                    media_queue_ids=[item.queue_id for item in envelope.outbound])
+                for item in envelope.outbound:
+                    await _queue_and_send_media(int(route.peer_id), item, ctx=ctx,
+                                                reply_to=route.topic_id, state_chat_id=str(ctx.chat_id))
+                await asyncio.to_thread(agent.run_delivery_blocked, envelope.run_id,
+                                         reason='explicit voice delivery queued independently of the result event')
+            else:
+                await asyncio.to_thread(agent.run_delivery_completed, envelope.run_id, silent=True)
+            await asyncio.to_thread(events.mark_delivered, [key])
+        except Exception:
+            log.warning('late speech result turn failed key=%s', key, exc_info=True)
+
+
+async def _voice_jobs_once():
+    """Producer work never holds ONE_MIND; a late event gets its own optional turn."""
+    global _VOICE_RESULT_TASK
+    from xtts_generations import Generations, TERMINAL
+    from speech_backend import selected
+    from core import events
+    store = Generations()
+    await asyncio.to_thread(store.recover_lost)
+    rows = await asyncio.to_thread(store.list)
+    enabled = await asyncio.to_thread(selected)
+    for value in rows:
+        identity = value['generation_id']
+        if value['state'] in TERMINAL:
+            await asyncio.to_thread(store.emit_result, identity)
+        elif value['state'] == 'cancel_requested' and identity not in _VOICE_GENERATING:
+            from xtts_tts_client import XttsTTSClient
+            from speech_backend import client_for
+            speech = client_for(value['request'], store.directory(identity), timeout=2)
+            try:
+                await asyncio.to_thread(speech.cancel, value['attempt_id'])
+                status = await asyncio.to_thread(speech.synthesis_status, value['attempt_id'])
+                if status.get('active') is False and status.get('cancel_requested') is True:
+                    await asyncio.to_thread(store.update, identity, 'cancelled', expected={'cancel_requested'})
+            except Exception:
+                log.debug('speech cancellation is not yet confirmed id=%s', identity)
+        elif value['state'] in {'queued', 'paused'}:
+            if enabled is None:
+                if value['state'] == 'queued':
+                    await asyncio.to_thread(store.update, identity, 'paused', expected={'queued'})
+            elif not _VOICE_GENERATING and time.time() >= value.get('retry_at', 0):
+                _VOICE_GENERATING[identity] = asyncio.create_task(_run_voice_generation(identity))
+    if _passing or any(not task.done() for task in _debounce.values()):
+        return
+    if _VOICE_RESULT_TASK is not None and not _VOICE_RESULT_TASK.done():
+        return
+    if await asyncio.to_thread(events.undelivered, {'voice_generation_result'}, 1):
+        _VOICE_RESULT_TASK = asyncio.create_task(_run_voice_result_pass())
+
+
 async def _run_forge_event_pass() -> None:
     """Доставка forge-событий ОДНИМ её ходом (коалесцированно), под _ONE_MIND.
 
@@ -10092,7 +10807,7 @@ async def _run_forge_event_pass() -> None:
         try:
             if not await asyncio.to_thread(agent.llm.configured):
                 return  # мозг недоступен: не потреблять, вернёмся когда оживёт
-            events = await asyncio.to_thread(core_events.undelivered, {"subagent_result"})
+            events = await asyncio.to_thread(core_events.undelivered, {"subagent_result","forge_review_result"})
             if not events:
                 return
             _FORGE_EVENT_LAST["ts"] = time.time()
@@ -10176,10 +10891,17 @@ async def _forge_events_once() -> None:
     ход — в create_task (часы не блокируются), single-flight, зазор — её рычаг."""
     global _FORGE_EVENTS_TASK
     try:
+        import forge
+        import forge_control
+        # Deterministic execution/control only. These ticks never call the main
+        # model or manufacture a coordinator decision/notification.
+        import forge_review
+        for tick,args in ((forge_control.consume_pending,(forge.BASE,forge.control)),(forge.tick_queued,()),(forge_review.tick,())):
+            try:await asyncio.to_thread(tick,*args)
+            except Exception:log.exception('Forge deterministic tick failed: %s',getattr(tick,'__name__',type(tick).__name__))
         from core import events as core_events
         if not core_events.enabled():
             return
-        import forge
         await asyncio.to_thread(forge.reconcile_subagent_events)
         try:
             stat = core_events.JOURNAL.stat()
@@ -10195,7 +10917,7 @@ async def _forge_events_once() -> None:
         stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
         if stamp == _FORGE_EVENT_LAST.get("empty_stamp"):
             return  # с прошлого «пусто» журнал не менялся — не парсим зря
-        pending = await asyncio.to_thread(core_events.undelivered, {"subagent_result"}, 1)
+        pending = await asyncio.to_thread(core_events.undelivered, {"subagent_result","forge_review_result"}, 1)
         if not pending:
             _FORGE_EVENT_LAST["empty_stamp"] = stamp
             return
@@ -10457,10 +11179,83 @@ async def _work_engine_once() -> None:
         log.warning("движок работ: подъём не удался [%s]", verdict.work.id, exc_info=True)
 
 
+async def _epoch_repair_once() -> None:
+    """A bounded tool-free helper batch; ordinary voice remains under ONE_MIND."""
+    global _EPOCH_REPAIR_TASK
+    if not epoch_repair.enabled():
+        return
+    if _EPOCH_REPAIR_TASK is not None and not _EPOCH_REPAIR_TASK.done():
+        return
+    if _EPOCH_REPAIR_TASK is not None:
+        # Consume a completed task before launching another; failures are journaled below.
+        try:
+            _EPOCH_REPAIR_TASK.result()
+        except Exception:
+            log.exception("epoch maintenance task failed")
+        _EPOCH_REPAIR_TASK = None
+    requests = await asyncio.to_thread(epoch_repair.pending)
+    if not requests:
+        return
+    request = requests[0]
+
+    async def work():
+        try:
+            result = await asyncio.to_thread(epoch_repair.repair_step, request)
+            if result["state"] == "ready":
+                chat = request["chat"]
+                if chat in _passing:
+                    return
+                batch = [r for r in await asyncio.to_thread(epoch_repair.pending) if r["chat"] == chat]
+                if not batch:
+                    return
+                current = _group_wakes.get(chat)
+                ids = tuple(r["id"] for r in batch)
+                if current is not None and set(ids) <= set(current.epoch_repair_ids):
+                    return
+                latest = max(batch, key=lambda r: (bool(r["wake"]["addressed"]),
+                                                   float(r["wake"]["message_ts"])))
+                if current is None or current.message_ts < float(latest["wake"]["message_ts"]):
+                    trigger = dict(latest["wake"])
+                    trigger["is_owner"] = str(trigger["sender_id"]) == str(OWNER_ID)
+                    wake = await asyncio.to_thread(_group_trigger_snapshot, chat, **trigger)
+                    wake = replace(wake, reply_targets_snapshot=tuple(
+                        tuple(row) for row in latest.get("reply_targets", ())))
+                else:
+                    wake = current
+                media = {(str(ref.path), ref.sha256, ref.message_id): ref for ref in wake.media_snapshot}
+                for row in batch:
+                    for saved in row.get("media", ()):
+                        ref = media_core.MediaRef(**dict(saved, path=Path(saved["path"])))
+                        media.setdefault((str(ref.path), ref.sha256, ref.message_id), ref)
+                wake = replace(wake, epoch_repair_ids=tuple(dict.fromkeys(wake.epoch_repair_ids + ids)),
+                               media_snapshot=tuple(media.values()))
+                if _install_group_wake(chat, wake):
+                    meta = _meta.setdefault(chat, {})
+                    meta.setdefault("is_dm", False)
+                    meta.setdefault("peer_id", _route_from_state(chat).peer_id)
+                    meta.setdefault("name", wake.speaker)
+                    meta.setdefault("room_policy", _room_policy_for_state(chat))
+                    _arm(chat)
+                    log.info("epoch maintenance ready [%s]: %d retained triggers rearmed", chat, len(ids))
+            elif result["state"] == "blocked":
+                await asyncio.to_thread(epoch_repair.note, "blocked", request=request,
+                                        reason=result.get("reason"), capacity=result.get("capacity"))
+                log.error("epoch maintenance blocked [%s]: %s", request["chat"], result.get("reason"))
+        except frame_epoch.EpochUnavailable:
+            # New source arrived between the completed check and rebuilding the wake.
+            return
+        except Exception as exc:
+            await asyncio.to_thread(epoch_repair.defer_error, request, type(exc).__name__)
+            log.exception("epoch maintenance retry [%s]", request["chat"])
+
+    _EPOCH_REPAIR_TASK = asyncio.create_task(work())
+
+
 def _clock_jobs() -> dict:
     """Таблица забот часов: имя -> (период в секундах, корутина). Период <= 0 — выключена."""
     return {
         "control": (max(CLOCK_TICK, 5.0), _control_once),
+        "epoch_repair": (5.0 if epoch_repair.enabled() else 0.0, _epoch_repair_once),
         "buffers": (CLOCK_TICK, _flush_buffers),
         "schedule": (SCHED_TICK, _fire_due_tasks),
         "sleep": (SLEEP_CHECK_SEC if CONSOLIDATE_HOURS > 0 else 0.0, _consolidate_once),
@@ -10486,6 +11281,7 @@ def _clock_jobs() -> dict:
         "forge_wake": (max(CLOCK_TICK, 30.0), _forge_wake_once),  # urgent Forge-завершения -> немедленное окно
         # PASS 30 Этап 1: завершения субагентов будят её ходом (события, не поллинг)
         "forge_events": (max(CLOCK_TICK, 5.0), _forge_events_once),
+        "voice_jobs": (max(CLOCK_TICK, 2.0), _voice_jobs_once),
         "moderation_events": (max(CLOCK_TICK, 5.0), _moderation_events_once),
         # Оборот 3: движок работ. Часы только спрашивают «созрело ли»; что именно —
         # решает её леджер желаний. Рычаг опущен по умолчанию (PRAXIS_WORK_ENGINE).
@@ -10526,7 +11322,7 @@ def _clock_initial_deadlines(now: float, jobs: dict) -> dict[str, float]:
 # ход отвечал человеку второй раз. Тик ящика дёшев (замер 13.09: `pending()` 0,9 с,
 # `accepted()` 0,9 с при 2 701 записи), модель не зовёт и держит свой межпроцессный замок —
 # ему нечего ждать в общей очереди. Таблица `_clock_jobs()` не меняется: разрез делает `_clock`.
-_CLOCK_SIDE_CARES = frozenset({"direct_outbox"})
+_CLOCK_SIDE_CARES = frozenset({"direct_outbox", "voice_jobs"})
 
 
 def _split_clock_jobs(jobs: dict) -> tuple[dict, dict]:

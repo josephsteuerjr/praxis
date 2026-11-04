@@ -58,6 +58,21 @@ else:
     import mtproto_runner as runner
 
 
+
+def _stage_voice_for_guard(text, caption=""):
+    """Real intent staging with a lightweight neural client; never synthesize here."""
+    import run_context
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    health={"ready":True,"model_id":"a"*64,"profile_id":"b"*64}
+    backend=SimpleNamespace(config=SimpleNamespace(tts_backend="xtts"),tts=Mock())
+    backend.tts.health.return_value=health
+    context=run_context.RunContext.create(kind="chat",goal="speech guard fixture",principal_id="owner",scope="owner",origin_chat_id="777",delivery_chat_id="777")
+    with run_context.bind_run(context), patch.object(media_audio,"get_default_backend",return_value=backend), patch("xtts_tts_client.selected",return_value=health):
+        result=agent.tool_voice_message(text,caption)
+    backend.tts.synthesize.assert_not_called()
+    return result
+
 JPEG = b"\xff\xd8\xff\xe0" + b"regression-jpeg"
 OGG = b"OggS" + b"regression-audio"
 
@@ -374,7 +389,7 @@ class TestAgentGuardRegressions(RegressionBase):
         seen: dict = {}
 
         def fake_voice(*args, **kwargs):
-            agent.tool_speak(spoken, caption="voice")
+            _stage_voice_for_guard(spoken, caption="voice")
             return "Готово."
 
         def fake_guard(reply, *args, **kwargs):

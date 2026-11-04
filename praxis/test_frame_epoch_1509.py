@@ -406,6 +406,32 @@ class EpochDossiers(unittest.TestCase):
             _p, _d, third = frame_for(room_ctx(owner=False, principal="42"))
             self.assertNotIn("ДОСЬЕ ГОВОРЯЩЕГО", third)
 
+    def test_new_present_non_speaker_is_visible_without_changing_epoch(self):
+        with mock.patch.dict(os.environ, LEVER):
+            frame_for(room_ctx(owner=False, principal="42"))
+            frozen = frame_epoch.taken()[0]
+            with mock.patch.object(agent, "_present_by_transport", return_value={"42", "43"}):
+                _p, _d, evidence = frame_for(room_ctx(owner=True, principal="42"))
+            self.assertEqual(frame_epoch.taken()[0], frozen)
+            self.assertIn("ДОСЬЕ ПРИСУТСТВУЮЩЕГО", evidence)
+            self.assertEqual(evidence.count("memory/people/newcomer.md —"), 1)
+            self.assertIn("пришёл позже", evidence)
+            self.assertNotIn("memory/people/guest.md —", evidence)
+            # Someone who is no longer selected is not retained as a stale packet.
+            _p, _d, later = frame_for(room_ctx(owner=False, principal="42"))
+            self.assertNotIn("пришёл позже", later)
+
+    def test_new_present_non_speaker_obeys_existing_privacy_policy(self):
+        import people
+        path=people.PEOPLE_DIR / "newcomer.md"
+        path.write_text(path.read_text()+"- [private] hidden-newcomer-fact\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {**LEVER, "PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "off"}):
+            frame_for(room_ctx(owner=False, principal="42"))
+            with mock.patch.object(agent, "_present_by_transport", return_value={"42", "43"}):
+                _p, _d, evidence = frame_for(room_ctx(owner=True, principal="42"))
+            self.assertIn("пришёл позже", evidence)
+            self.assertNotIn("hidden-newcomer-fact", evidence)
+
     def test_epoch_body_does_not_depend_on_who_speaks_first(self):
         # Первым заговорил тот, кого транспорт присутствующим не называл: в эпоху он не
         # попадает (иначе состав документа зависел бы от первого говорящего), едет живым.

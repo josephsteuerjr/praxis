@@ -170,6 +170,10 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
         self._patch = mock.patch.object(forge, "_task_dir", lambda t: self.tmp)
         self._patch.start()
         self.addCleanup(self._patch.stop)
+        # Lease tests model a valid remote task; physical local-root ownership
+        # is independently exercised by real-process wave2 tests.
+        task=mock.patch.object(forge,'get',return_value={'id':'t1','status':'active','scope':'host','root':str(self.tmp)})
+        task.start();self.addCleanup(task.stop)
 
     def _hold(self, age_sec, suffix="держу"):
         """Замок от ЖИВОГО процесса (нас самих), молчащий age_sec секунд."""
@@ -251,6 +255,8 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
         внутри него нет; serverd отвечал 14.5 минуты при норме в секунды. Пробой до
         правки: держатель работал, второй вошёл (ПЕРЕКРЫТИЕ=True) и начал вторую
         транзакцию по той же задаче."""
+        # Probe the inner lease protocol. The outer physical-root OS lock
+        # independently prevents mutation overlap even after an inner lease expires.
         holder_done = threading.Event()
 
         def slow(task_id, message=""):
@@ -265,7 +271,7 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
             th.start()
             time.sleep(1.6)                  # молчит уже дольше порога, но лизинг объявлен
             with self.assertRaises(TimeoutError) as ctx:
-                with forge._mutation_lock("t1", timeout=0.4):
+                with forge._task_mutation_lock("t1", timeout=0.4):
                     self.fail("вошли под работающим держателем — это last-writer-wins")
             th.join()
         # Правило 3: работающая рука не выдаётся за замолчавшую («молчит -28с»).
@@ -283,7 +289,7 @@ class TestMutationLockMeasuresIdlenessNotWork(unittest.TestCase):
             th = threading.Thread(target=lambda: forge.checkpoint("t1", "лизинг истёк"))
             th.start()
             time.sleep(1.6)                  # метка была на t+0.5, молчит уже 1.1с > 0.5
-            with forge._mutation_lock("t1", timeout=1.0):
+            with forge._task_mutation_lock("t1", timeout=1.0):
                 pass                         # замок отдан — работы за держателем не видно
             th.join()
 
@@ -670,8 +676,9 @@ class TestKillTreeProvesItIsKillingItsOwnProcess(unittest.TestCase):
                     forge.agent("code-k", "stop", agent_id="agent-1")]
         killpg.assert_not_called()
         run.assert_not_called()
-        for text in said:
-            self.assertIn("не трогаю", text, f"убийство вслепую осталось здесь: {text}")
+        for index,text in enumerate(said):
+            self.assertIn('терминальный статус НЕ записан' if index==1 else 'не трогаю',text)
+        self.assertTrue((forge._unit_dir('code-k','verifications','verify-1')/'stop-request.json').exists())
 
 
 class TestFinishTellsTheTruthAndDoesNotHoldTheLock(unittest.TestCase):

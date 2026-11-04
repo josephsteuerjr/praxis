@@ -630,10 +630,14 @@ class TestDetachedMatrix(unittest.TestCase):
         import forge_verify
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            fake = types.SimpleNamespace(
-                call=lambda verb, args, **kw: (calls.append((verb, args, kw)),
-                                               {"ok": True, "body": "готово", "exit": 0})[1])
-            with mock.patch.dict("sys.modules", {"serverd_client": fake}):
+            from test_forge_remote_admission_2710 import tree_proof
+            import hashlib
+            def call(verb,args,**kw):
+                calls.append((verb,args,kw))
+                if verb=='op.start':return {'ok':True,'id':'op-'+hashlib.sha256(kw['request_id'].encode()).hexdigest()[:16]}
+                operation=args['operation_id']
+                return {'ok':True,'id':operation,'status':'done','exit':0,'body':'готово','tree_exit':tree_proof(operation)}
+            with mock.patch.object(serverd_client,'call',side_effect=call):
                 row = forge_verify._run_one(0, check, root, root / "m", 0, {"checks": {}},
                                             threading.Lock(), "host", "m1", None)
             # Лог читаем ДО того, как временный каталог исчезнет вместе с ним.
@@ -643,10 +647,10 @@ class TestDetachedMatrix(unittest.TestCase):
         calls = []
         row, log = self._run_one({"id": "lint", "command": "ruff ."}, calls)
         verb, args, kwargs = calls[0]
-        self.assertEqual(verb, "op.run")
+        self.assertEqual(verb, "op.start")
         self.assertEqual(args["timeout"], forge_verify_deadline(),
                          "демон обязан знать предел, иначе он догорит после смерти клиента")
-        self.assertGreater(kwargs["timeout"], args["timeout"], "клиент переживает бюджет демона")
+        self.assertTrue(kwargs['request_id']);self.assertEqual(calls[1][0],'op.poll')
         self.assertEqual(row["deadline_s"], forge_verify_deadline())
         self.assertIn("[срок]", log, "закон 2: подставленный предел обязан быть назван")
 
@@ -654,7 +658,7 @@ class TestDetachedMatrix(unittest.TestCase):
         calls = []
         row, log = self._run_one({"id": "tests", "command": "pytest", "timeout": 1800}, calls)
         self.assertEqual(calls[0][1]["timeout"], 1800, "чужой осознанный срок не переписываем")
-        self.assertEqual(calls[0][2]["timeout"], 1860)
+        self.assertNotIn('timeout',calls[0][2], 'op.start admits quickly; the durable backend owns the long deadline')
         self.assertEqual(row["deadline_s"], 1800)
         self.assertNotIn("[срок]", log)
 

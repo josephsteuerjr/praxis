@@ -1,0 +1,28 @@
+[Unit]
+Description=Praxis optional resident XTTS capability
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/praxis-xtts/code
+ExecStart=/opt/praxis-xtts/runtime/bin/python -B -u /opt/praxis-xtts/code/xtts_service.py --socket /opt/praxis/memory/.state/xtts/xtts.sock --token-file /opt/praxis/memory/.secrets/xtts-client.token --model /opt/praxis-xtts/model --profile /opt/praxis-xtts/profile.json --threads 2
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+KillMode=control-group
+CPUQuota=200%
+MemoryHigh=4400M
+MemoryMax=4600M
+MemorySwapMax=512M
+TasksMax=128
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1 TOKENIZERS_PARALLELISM=false OMP_NUM_THREADS=2 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/praxis-xtts /opt/praxis/memory/.state/xtts
+ReadOnlyPaths=/opt/praxis-xtts/model
+
+[Install]
+WantedBy=multi-user.target

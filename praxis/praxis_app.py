@@ -1878,6 +1878,25 @@ class PraxisAppService:
     def command(self, viewer: Viewer, body: dict) -> dict:
         domain = str(body.get("domain") or "praxis").strip().lower()
         action = str(body.get("action") or "run").strip().lower()
+        if domain == 'forge':
+            if not viewer.owner:
+                raise PermissionError('Full Forge transcripts/control are owner-only')
+            import forge_reader as reader
+            import forge_control as control
+            task_id=str(body.get('task_id') or '')
+            unit_id=str(body.get('agent_id') or '')
+            if action=='list':value=reader.activity(self.base,limit=int(body.get('limit',20)),cursor=str(body.get('cursor','')))
+            elif action=='detail':value=reader.task_detail(self.base,task_id)
+            elif action=='events':value=reader.events(self.base,task_id,unit_id,offset=int(body.get('offset',0)),limit=int(body.get('limit',50)),after_seq=int(body.get('after_seq',0)),generation=str(body.get('generation','')))
+            elif action=='payload':value=reader.payload(self.base,task_id,unit_id,str(body.get('sha256','')),kind=str(body.get('kind','payload')),offset=int(body.get('offset',0)),limit=int(body.get('limit',8000)))
+            elif action in {'stop','pause','resume'}:
+                value=control.enqueue(self.base,task_id,action,unit_id,
+                    expected_generation=str(body.get('expected_generation','')),
+                    command_id=str(body.get('command_id','')))
+            elif action=='receipt':value=control.receipt(self.base,str(body.get('command_id','')))
+            elif action=='control_history':value=control.recent(self.base,task_id)
+            else:raise ValueError('Unsupported Forge action')
+            return {'ok':True,'forge':value}
         if domain == "praxis" and action == "run":
             if not viewer.may("praxis.work"):
                 raise PermissionError("praxis.work is required")

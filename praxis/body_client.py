@@ -678,7 +678,7 @@ def process_start(*, program: str = "", args: list[str] | None = None,
                   command: str = "", shell: str = "direct", cwd: str = "",
                   env: dict[str, str] | None = None, timeout: int = 0,
                   name: str = "", execution: str = "interactive",
-                  request_id: str = "") -> dict:
+                  request_id: str = "", operation_id: str = "") -> dict:
     payload: dict[str, Any] = {
         "shell": shell, "args": args or [], "env": env or {}, "timeout_s": int(timeout or 0),
     }
@@ -691,7 +691,7 @@ def process_start(*, program: str = "", args: list[str] | None = None,
     if name:
         payload["name"] = name
     return call("process.start", payload, execution=execution,
-                request_id=request_id, timeout=60)
+                request_id=request_id, operation_id=operation_id, timeout=60)
 
 
 def process_status(operation_id: str, tail: int = 16000,

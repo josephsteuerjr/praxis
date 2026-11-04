@@ -1,8 +1,9 @@
 """Opt-in derived first-input continuation for source-complete group chat epochs.
 
-Canonical messages stay raw. This private, disposable projection retains the
-exact first model input of a chat turn, never its intermediate tool transcript.
-Only a source-proved append can reuse it. Fresh system and tools are mandatory;
+Canonical messages stay raw. The explicit canonical policy rebuilds history and
+keeps exactly one current packet; its private checkpoint only measures unchanged
+prefix messages, never imports old state or intermediate tools. The legacy full
+first-input projection remains available for rollback. Fresh system/tools are mandatory;
 KEAT/frame-v6 adapters retain their existing path until separately integrated.
 """
 from __future__ import annotations
@@ -18,12 +19,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import dialogue_projection
+import context_policy
 import frame_epoch
+import frame_dossiers
 import frame_layout
 import frame_serve
 
 _BOUND = ContextVar('frame_continuation', default=None)
 SCHEMA = 'praxis.frame-continuation.v1'
+CANONICAL_SCHEMA = 'praxis.frame-continuation.v2'
 
 
 def _json(value):
@@ -44,10 +48,10 @@ def _row_hashes(rows):
     return [_sha(row) for row in rows]
 
 
-def _load(path):
+def _load(path, schema=SCHEMA):
     try:
         value = json.loads(path.read_text(encoding='utf-8'))
-        if (value['schema'] == SCHEMA and
+        if (value['schema'] == schema and
                 value['checksum'] == _sha({k: v for k, v in value.items() if k != 'checksum'})):
             return value
     except (OSError, ValueError, KeyError, TypeError):
@@ -70,6 +74,7 @@ class Plan:
     message_hash: str
     request_hash: str
     reused: int
+    schema: str = SCHEMA
     observed: bool = False
 
 
@@ -109,25 +114,37 @@ def prepare(*, ctx, selection, history, user_msg, messages, system, tools,
         hashes = _row_hashes(rows)
         projected = copy.deepcopy(messages)
         reused = 0
+        canonical = context_policy.read()['continuation_mode'] == 'canonical'
+        schema = CANONICAL_SCHEMA if canonical else SCHEMA
         path = _path(ctx.chat_id)
         with frame_epoch.tape_store_guard(ctx.chat_id):
-            saved = _load(path)
+            saved = _load(path, schema)
         if (saved and saved['generation'] == generation and saved['binding'] == binding
                 and type(saved['rows']) is list and saved['rows']
                 and len(saved['rows']) < len(hashes)
                 and hashes[:len(saved['rows'])] == saved['rows']):
+            # The canonical mode uses the authoritative fresh builder. The old
+            # pending input must become canonical history, while its mutable
+            # evidence packet must disappear. Never append an entire old input.
+            if canonical:
+                for old, fresh in zip(saved['messages'], projected[:-1]):
+                    if old != fresh:
+                        break
+                    reused += 1
+            # Legacy mode is retained for an explicit policy rollback.
             # Re-render ONLY newly admitted source rows. Requiring an accepted
             # assistant occurrence avoids promoting an undelivered draft or
             # duplicating the old pending input after a silent/failed turn.
             suffix = rows[len(saved['rows']):]
             appended_history, current = dialogue_projection.epoch_dialogue(suffix)
-            if appended_history and current == expected_current:
+            if not canonical and appended_history and current == expected_current:
                 projected = (copy.deepcopy(saved['messages'])
                              + frame_layout.tape(appended_history)
+                             + frame_dossiers.newly_admitted_messages(saved['messages'], messages)
                              + copy.deepcopy(messages[-1:]))
                 reused = len(saved['messages'])
         return Plan(str(ctx.chat_id), path, generation, binding, hashes, projected,
-                    _sha(projected), _sha([system, projected, tools]), reused)
+                    _sha(projected), _sha([system, projected, tools]), reused, schema)
     except Exception:
         return None
 
@@ -145,8 +162,9 @@ def receipt():
     plan = _BOUND.get()
     if plan is None:
         return None
-    return dict(schema=SCHEMA, status='continued' if plan.reused else 'seed',
+    return dict(schema=plan.schema, status='continued' if plan.reused else 'seed',
                 reused_messages=plan.reused, source_rows=len(plan.rows),
+                reuse_basis='exact common canonical prefix' if plan.schema == CANONICAL_SCHEMA else 'saved first input',
                 input_utf8_bytes=len(_json(plan.messages).encode('utf-8')))
 
 
@@ -171,12 +189,15 @@ def observe(*, system, messages, tools, critical=False):
             if (not current or _generation(dict(current, chat=plan.chat)) != plan.generation
                     or _row_hashes(current['rows'][:len(plan.rows)]) != plan.rows):
                 return
-            previous = _load(plan.path)
+            previous = _load(plan.path, plan.schema)
             if (previous and previous['generation'] == plan.generation
                     and len(previous['rows']) >= len(plan.rows)):
                 return
-            value = dict(schema=SCHEMA, generation=plan.generation,
-                         binding=plan.binding, rows=plan.rows, messages=messages)
+            # No current state or pending envelope in a canonical checkpoint.
+            # This is a cache observation, never a source of conversation truth.
+            kept = messages[:-1] if plan.schema == CANONICAL_SCHEMA else messages
+            value = dict(schema=plan.schema, generation=plan.generation,
+                         binding=plan.binding, rows=plan.rows, messages=kept)
             value['checksum'] = _sha(value)
             plan.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             tmp = plan.path.with_name(plan.path.name + '.' + uuid.uuid4().hex + '.tmp')

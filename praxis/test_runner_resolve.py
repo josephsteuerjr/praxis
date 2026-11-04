@@ -175,6 +175,7 @@ class Base(unittest.TestCase):
         self._tool_call_seq = 0
 
         def _execution(tool):
+            tool = tool[0] if isinstance(tool, tuple) else tool
             self._tool_call_seq += 1
             call_id = f"call-{self._tool_call_seq}"
             return {

@@ -151,9 +151,12 @@ class CompleteForgeCase(unittest.TestCase):
             {"id": "build", "role": "worker", "brief": "implement", "deps": ["map"]},
         ]})
         self.assertIn("map [pending]", forge.swarm(task_id, "plan", plan=plan, max_parallel=2))
-        with mock.patch.object(forge, "agent", return_value="Порождён agent-a1b2c3d4 (scout, pid 1)."):
+        with mock.patch.object(forge, "_spawn_runner", return_value=424242):
             started = forge.swarm(task_id, "start")
-        self.assertIn("map [running]", started)
+        saved=forge_swarm.load(forge._task_dir(task_id))
+        unit=saved['nodes'][0]['agent_id']
+        self.assertTrue((forge._unit_dir(task_id,'agents',unit)/'request.json').exists())
+        self.assertIn('build [pending]',started)
         first = forge.swarm(task_id, "signal", node_id="map", kind="claim", files=["app.py"])
         second = forge.swarm(task_id, "signal", node_id="build", kind="claim", files=["app.py"])
         self.assertIn('"conflicts": []', first)

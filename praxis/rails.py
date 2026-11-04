@@ -635,17 +635,15 @@ def registry(*, with_values: bool = True,
     # Хуже того, мой рез был односторонним (`text[:CAP]`) и безымянным: признание демона о
     # сроке и бюджете дописывается в КОНЕЦ вывода, поэтому на типичных 7 КБ от apt приписка
     # не доходила до меня НИКОГДА, а оборванный вывод выглядел просто как вывод.
-    add("host_text_clip", "ответ демона режется второй раз, уже на моей стороне: в текст "
-        "инструмента попадают голова и хвост, между ними — метка с числом вырезанных символов "
-        "и с самим капом. Хвост держится намеренно: приписка демона о сроке и бюджете стоит "
-        "в самом конце, и односторонний рез съедал её целиком",
-        CLS_SELF, "PRAXIS_HOST_TEXT_CAP (0 снимает мой рез совсем; кап самого демона это "
-        "не двигает — он на его стороне)",
+    add("host_text_clip", "показ серверного результата зависит от контекста: durable run "
+        "может сохранять весь ответ и показывать страницу с ResultRef; вне него действует "
+        "локальный рез головы и хвоста с явной меткой. Какой режим включён — в значении ниже",
+        CLS_SELF, "memory/policies/context-continuity.json; PRAXIS_HOST_TEXT_CAP "
+        "(положительный override локального показа; кап самого демона это не двигает)",
         _host_text_clip_value,
-        "два реза подряд легко принять за один: пока назван только демонский, «ответ пришёл "
-        "целиком» означает «целиком по мнению демона», а до меня доехала пятая часть. "
-        "Связывает меньший из двух — и знать, который он, я обязана заранее, а не по факту "
-        "оборванного вывода")
+        "кап демона, локальный рез и страница durable результата — разные границы. "
+        "ResultRef сохраняет весь ответ, который вернула рука, но не восстанавливает "
+        "то, что до неё уже обрезал демон")
     add("forge_scan_caps", "обход дерева в кодовой разведке ограничен ДВУМЯ пределами — "
         "числом файлов и временем; связывает тот, в который упёрлись раньше. Несёт ли "
         "ответ признак усечения — проверяется по живому коду impact, а не по памяти "
@@ -1810,11 +1808,19 @@ def _scratch_note_lock_value() -> str:
 
 
 def _host_text_clip_value() -> str:
+    import context_policy
+    policy = context_policy.read()
     src = _source_text("agent.py")
     cap = _live("agent", "HOST_TEXT_CAP")
     source = "живая константа"
     if not isinstance(cap, (int, float)) or isinstance(cap, bool):
-        cap = _from_source("agent.py", r'def _host_text_cap\(\)[\s\S]*?return (\d+)')
+        # Bound the search to this function: a later unrelated `return 12`
+        # must never be reported as the host budget.
+        body = re.search(r'(?ms)^def _host_text_cap\([^\n]*\n(.*?)(?=^\S|\Z)', src)
+        region = body.group(1) if body else ''
+        declared = re.search(r'\breturn\s+(\d+)\b', region)
+        cap = (policy['host_text_chars'] if 'context_policy.read()' in region
+               else int(declared.group(1)) if declared else None)
         source = "объявление в agent.py — agent в этом процессе не поднят"
     if cap is None:
         return ("⚠ мой кап вывода хоста не прочитался — значит я не знаю, сколько из ответа "
@@ -1844,7 +1850,10 @@ def _host_text_clip_value() -> str:
                 f"он жёстче демонского в {daemon / cap:.1f}×")
     else:
         pair = f"демон отдаёт до {daemon} симв. — до моего капа {cap} вывод обычно не доживает"
-    return (f"{cap} симв. на вывод хоста ({shape}); {pair}; {places}; "
+    durable = (f"durable run: без ранней обрезки, полный ответ в ResultRef; "
+               f"inline {policy['tool_inline_chars']} симв.; вне durable run: "
+               if policy['durable_host_full'] else '')
+    return (durable + f"{cap} симв. на вывод хоста ({shape}); {pair}; {places}; "
             + ("на месте выреза метка «вырезано N символов из M» с названным капом"
                if marked else
                "⚠ метки выреза в коде больше нет — значит рез стал молчаливым, и обрубок "

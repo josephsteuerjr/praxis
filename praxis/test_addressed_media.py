@@ -197,7 +197,7 @@ class TheIntentRemembersWhatKindItWas(unittest.IsolatedAsyncioTestCase):
         )
         accepted = runner._direct_outbox().mark_accepted(entry["key"], message_id=2049)
         words = runner._direct_outbox_result(accepted, label="Настя")
-        self.assertIn("Отправила фото", words)
+        self.assertIn("запрошенный формат: фото", words)
         self.assertIn("Настя", words)
 
     async def test_the_same_key_may_not_change_the_kind_underneath(self):

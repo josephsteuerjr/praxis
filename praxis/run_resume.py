@@ -123,7 +123,7 @@ _DIRECT_OUTBOX_PAUSE = re.compile(
     # лежат только call_id/idempotency_key, машинного `pause_kind` там нет), ход проваливался
     # в ветку ЧЕЛОВЕЧЕСКОЙ паузы и ждал durable-авторизации владельца — при сообщении,
     # которое очередь вот-вот дошлёт сама.
-    r"^durable (?:send_message|send_file|narrate|reply) intent awaits Telegram acceptance$"
+    r"^durable (?:send_message|send_file|send_media|narrate|reply) intent awaits Telegram acceptance$"
 )
 _ALLOWED_OUTBOUND_KINDS = frozenset({"photo", "audio", "document"})
 _ALLOWED_OUTBOUND_SCOPES = frozenset({
@@ -587,7 +587,9 @@ def restore_outbound_descriptors(
             raise ResumeEvidenceError(f"outbound[{index}] has an invalid MIME type")
         if kind == "photo" and not mime.lower().startswith("image/"):
             raise ResumeEvidenceError("photo descriptor is not image MIME")
-        if kind == "audio" and not mime.lower().startswith("audio/"):
+        from xtts_protocol import INTENT_MIME
+        if (kind == "audio" and not mime.lower().startswith("audio/")
+                and mime != INTENT_MIME):
             raise ResumeEvidenceError("audio descriptor is not audio MIME")
         size = _integer(item.get("size"), f"outbound[{index}].size")
         digest = str(item.get("sha256") or "")

@@ -31,9 +31,7 @@ services:
       - PRAXIS_STT_RPC_BURST=2
       - PRAXIS_STT_RPC_UPLOAD_TIMEOUT=30
       - PRAXIS_STT_RPC_TEMP_DIR=/run/praxis-stt-tmp
-      - PRAXIS_TTS_BACKEND=piper
-      - PRAXIS_EDGE_VOICE=ru-RU-SvetlanaNeural
-      - PRAXIS_PIPER_MODEL=/models/audio/piper/ru_RU-irina-medium.onnx
+      - PRAXIS_TTS_BACKEND=xtts
       - PRAXIS_CONTEXT_BUDGET=80000
       - PRAXIS_LAST_N=80
       # This deployment's OpenAI-compatible endpoint is our Codex relay, which

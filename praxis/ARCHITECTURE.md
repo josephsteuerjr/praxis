@@ -4,10 +4,12 @@
 Соответствие live конкретному commit и результаты проверок находятся только в
 [`STATUS.md`](STATUS.md).
 
-## Точное продолжение входа чата (кандидат, default off)
+## Точное продолжение входа чата (legacy; включается явно)
 
 `PRAXIS_FRAME_CONTINUATION=on` включает производную приватную проекцию для `chat_turn`
-группы с полной выбранной эпохой. Первый успешно отправленный вход сохраняется в
+группы с полной выбранной эпохой. Следующее описание относится к legacy-политике;
+canonical-политика и её обратимая миграция описаны в разделе Context continuity policy.
+В legacy первый успешно отправленный вход сохраняется в
 `memory/.state/frame_continuation/`; на следующем ходе он остаётся дословным префиксом.
 Далее добавляются только новые записи исходной ленты, включая доставленный ответ,
 и свежий конверт текущего входа. Полная цепочка промежуточных tool calls/results
@@ -52,9 +54,35 @@ Praxis. LocalSystem service владеет единственным исходя
 `memory_life.prepare_authored_fold` сохраняет точный выбранный срез; агент читает его
 через `memory_compact(prepare)` и передаёт собственный пересказ в `fold`. Применение
 проверяет те же источники, сохраняет полный текст и только затем меняет покрытие.
-Ночь и runner публикуют напоминания, но не запускают другого автора; пороги и
+Ночь и runner публикуют напоминания, но обычная свёртка не запускает другого автора; пороги и
 семантика — [M2](CONTRACTS.md#m2--свёртка-не-заявляет-непрочитанное-).
 Soul и текущая история tool-loop этим инструментом не редактируются.
+
+Исключение для доступности, разрешённое владельцем 27.10.2026: `epoch_repair`
+использует также `archive_repair` для выбранных сиротских archive-occurrences,
+которые нельзя честно объявить покрытыми conversation-event свёрткой. Отдельные
+приватные MD recaps и JSON receipts содержат модель, digest запроса и точные
+offset/end/SHA исходных байтов. Они не создают фиктивных conversation events.
+Проекция заменяет только полностью выбранный в текущем scope набор источников;
+при смене байтов, recap или scope остаются полные raw-строки. Источник и последняя
+архивная запись сохраняются; изменение receipts меняет epoch boundary.
+`epoch_repair`
+обслуживает отказ `EpochUnavailable` через вспомогательную модель без инструментов.
+Включение явно записывается в `memory/policies/epoch-repair.json` с причиной,
+автором и квитанцией владельца; `PRAXIS_EPOCH_REPAIR=0` отключает обработчик.
+До ремонта исходный Telegram-trigger, авторство, медиа и reply targets сохраняются
+в append-only outbox. Один технический пакет читает целиком точный prepare-срез,
+записывает модель/хеш запроса/результат и применяет свёртку с теми же проверками
+изменившихся источников. В recap и его происхождении явно указан ремонтный автор;
+Технический prepare выбирает максимальный полный префикс в существующем бюджете
+источников, сохраняя последнее живое сообщение; добровольные пороги и границы
+эпизодов не ограничивают ремонт. Для механического пересказа используется low
+reasoning на настроенной вспомогательной роли, без изменения её глобального конфига.
+это не самоавторский текст Praxis, policy или soul. Исходные журналы остаются.
+Неполный источник, оборванная генерация и конфликт никогда не заменяются обрезкой
+или скользящим окном. После проверки полной эпохи trigger возвращается в обычный
+room/authority/cooldown/ONE_MIND-путь; outbox передаёт владение только после
+создания durable run. Квитанция блокера сохраняется вместо бесконечной генерации.
 `coding_inspect` основного агента проводит `start_char` и `expected_sha256` в тот же
 Forge reader, что и worker: длинный файл можно дочитать, проверяя ревизию.
 Старый backend без paging продолжает обслуживать обычные вызовы, но запрос
@@ -77,17 +105,9 @@ prepare и unrelated fold не считают их покрытыми и не с
 изображение через штатную media/outbox очередь. Resume читает проверенный artifact, не запускает
 новую генерацию и не помещает base64 в текстовые результаты инструментов.
 
-### Изолированный TTS
+### Резидентный TTS
 
-`media_audio.py` сохраняет прежние `edge`/`piper` backends и добавляет только opt-in
-`PRAXIS_TTS_BACKEND=silero`. В этом режиме основной `mtproto_runner` не импортирует PyTorch и не
-держит Silero-модель: `silero_tts_client.py` лениво запускает отдельный interpreter с
-`silero_tts_worker.py`, передаёт ему serial JSONL-запросы и перед первым load требует точный
-SHA-256 локального `v5_ru.pt`. Worker не обращается к registry/сети, пишет только зарезервированный
-private WAV и умирает по idle timeout, request recycle, parent-death signal, ошибке, timeout или
-RSS guard. Перед Piper fallback клиент синхронно снимает и reap-ит worker; boot warmup этот backend
-пропускает. `scripts/silero_soak.py` — отдельный 30–60-минутный gate по трудному корпусу,
-worker/cgroup RSS, swap, PSI и возврату памяти после idle; сам по себе он live backend не переключает.
+Рабочий facade принимает только XTTS. Piper/Silero/Edge не являются ни выбором, ни fallback. Изолированный host service владеет весами и conditioning cache; lightweight client в основном Telegram runtime не импортирует модель. Исторические адаптеры и их hermetic fixtures сохранены для чтения прежней реализации, но активный facade их отвергает.
 
 ### Локальный shared STT
 
@@ -574,3 +594,117 @@ Lock защищает только конкурирующие snapshots; stale l
 и manifest должны быть недоступны другим пользователям. Root может обойти любые эти guards.
 Нет автоматического recovery/retention/restore. Тесты `test_memory_history.py` используют только
 временные синтетические деревья, не live memory.
+
+## Context continuity policy (27.10.2026)
+
+`memory/policies/context-continuity.json` is an explicit reversible runtime migration
+(`schema: praxis.context-continuity.v1`). Without a valid complete policy the previous
+behavior is retained. Canonical settings: `continuation_mode: canonical`,
+`tool_inline_chars: 16000`, `host_text_chars: 16000`, `durable_host_full: true`,
+`recent_work_chars: 1200`. Explicit host environment overrides remain effective for
+non-durable observations. Rollback values are `legacy`, `4000`, `4000`, `false`, `0`.
+
+Canonical continuation v2 always uses the current authoritative history renderer,
+followed by one current state/input packet. Yesterday's pending input becomes
+canonical history only when admitted there; delivered reply tool pairs retain their
+provenance. Old state packets and private intermediate tool transcripts never become
+cross-turn history. Its disposable checkpoint stores only the stable prefix. A reuse
+receipt measures exact shared message prefixes, not provider cache-hit tokens. A fold,
+edit, model/tool/system/scope change invalidates the checkpoint; v1 and v2 cannot mix.
+
+One latest authored turn note is presented at the mutable tail, only for the exact same
+chat/topic and disclosure scope. It carries timestamp, run ID, actual delivery state,
+source and explicit truncation. A new empty note supersedes an older note. Its claims
+remain authored claims, not inferred tool success. Full turns and durable results remain
+readable; no model call, input recap, persona promotion or raw-history rewrite is added.
+`end_turn.note` can briefly name actions, checks, pending work and exact artifact/ResultRef.
+
+Normal and resumed tools share the configured inline budget. Larger results retain full
+durable bytes and cursor references. Durable host observations bypass premature clipping;
+memory_compact read pages fit the same inline budget including metadata, so advancing a
+cursor cannot skip hidden content. This changes presentation, not completion or authority.
+
+
+### Addressed reply coverage (owner-enabled)
+
+During an active group/topic turn, newly admitted addressed wakes enter an
+exact-conversation FIFO, one user-role message per model request. This is not
+`core.notices`: notices exclude the current chat and summarize other-room events;
+they are not delivery/read receipts. Ambient traffic does not enter this FIFO,
+and incoming speech cannot change the turn's frozen actor permissions. A pending
+FIFO extends an otherwise terminal text response to another model iteration.
+Explicit `end_turn`/task control, cancellation and arrivals after the final model
+boundary retain the ordinary wake path. Late attachments remain due for a normal
+media-aware turn; text injection does not acknowledge unseen pixels. DM scheduling
+and cross-conversation notices retain their existing separate paths.
+
+`memory/policies/addressed-replies.json` explicitly enables scheduling coverage. A
+Telegram-accepted `reply` or ordinary voice reply records its exact conversation,
+Telegram reply ID and exact model-observed incoming message IDs in the append-only
+`memory/.state/addressed-replies/*.jsonl` receipt journal. Only pings in
+that observed set coalesce; the outgoing Telegram ID alone is not evidence
+of reading a late arrival. No send intent, narration, silence or failed send
+counts as an answer. The read set is frozen in the delivery intent so replay
+cannot upgrade it using a newer turn's state. Legacy v1/v2 receipts remain readable
+but cannot supply exact read membership. A legacy intent with a single observed
+ID can prove that ID only, never every lower Telegram ID. This deliberately
+conservative rule prevents delayed lower-ID ingress from being suppressed after
+acceptance or restart. The initial selected wake and FIFO items actually sent to
+the provider supply read IDs; merely appearing in a truncated room snapshot does
+not. Already-read FIFO items still coalesce into one accepted reply.
+
+The receipt index is auxiliary: invalid policy, corrupt journal and index I/O
+errors disable coverage conservatively without failing delivery or suppressing
+wakes. `addressed_replies.diagnostics(conversation_id)` reports integrity without
+returning raw damaged contents. Explicit `recover(conversation_id)` locks the
+journal, backs up its exact bytes under a content-addressed name, then atomically
+retains all valid records (including records after a damaged line). Recovery is
+idempotent; it neither invents accepted receipts nor runs automatically against
+live data. A complete final JSON row missing its newline can still be read, but
+appending requires explicit recovery first to prevent concatenation.
+
+Raw history/media are preserved; scheduling coverage does not claim every question
+was answered. The receipt cache is disposable. Set enabled false to disable
+coverage; native perception cooldown_addressed is an independent hot setting
+(owner requests zero; ambient pacing remains unchanged).
+
+## Резидентный XTTS: генерация, поздний результат и отдельная отправка
+
+`xtts_service` — изолированная вычислительная capability под systemd: одни загруженные веса, один inference и bounded conditioning cache по model/reference/config digest. Личности, LLM, Telegram credentials и durable task store в ней нет. Лёгкие authenticated UDS health/cancel/request_status работают независимо от inference. PCM кодируется в OGG/Opus и передаётся клиенту кадрами по мере готовности; final size/SHA/profile проверяются до объявления результата готовым. Обычный preview сохраняет совместимость с полной выдачей файла. Исходные веса не переписываются.
+
+`generate_voice(text)` сохраняет отдельное задание в `xtts_generations`: точные слова, model/profile IDs, исходные run/call, чат и область. Немедленное подтверждение означает постановку в работу. Эта операция не создаёт Telegram send intent, не загружает байты в Telegram и не публикует сообщение. Producer живёт вне ONE_MIND и не привязан к завершению исходного когнитивного хода. Можно продолжать разговор, отдельно вызвать `reply` или закончить ход. Общего срока жизни и автоматического удаления результата нет.
+
+`voice_generation(status|result|cancel, generation_id)` возвращает известное состояние без ожидания. Cancel requested отличается от подтверждённого отсутствия активного запроса в capability. После потери исполнителя исход неизвестен; он не объявляется успехом или отменой и не повторяется автоматически. Сохранённое аудио доступно по ID в исходной области. Поколение inference-попытки фиксируется отдельно от постоянного ID задания.
+
+Поздний `voice_generation_result` — best-effort типизированное событие `core.events`, связанное с исходными run/call/generation. Оно может прийти после закрытия хода или не дойти. Событие открывает отдельный ход в исходной аудитории с actor `praxis:self`; кадр прямо называет его результатом инструмента. Новый человек/Telegram update не фабрикуется. Для группы используется уже допущенный epoch anchor; отсутствие anchor не разрешает пересборку контекста. Обязательного текстового ответа, ожидания и непрерывного опроса нет. Генерация и delivery receipt — независимые факты: отдельная отправка могла быть запрошена ранее.
+
+`send_voice(generation_id, caption)` — самостоятельное разрешение отправить в исходный чат именно voice note. Оно stages immutable media intent с точным текстом/profile/audience; guard видит исходные слова. Только после canonical delivery admission начинается внешний upload. Можно запросить отправку ещё во время генерации: encoder → private growing OGG → `upload.saveBigFilePart` с неизвестным полным размером. Смена попытки прерывает частичную загрузку; байты разных попыток не смешиваются. Final audio integrity, подготовленный attachment и RunManager archive подтверждаются до `sendMedia`. Штатный MediaSpool остаётся единственной Telegram-очередью, стабильный random_id и canonical record обеспечивают повтор доставки без второго сообщения. Повтор позднего события находит уже созданное send intent по generation/caption/адресату. При рестарте готовые байты сохраняются и используются повторно.
+
+Генерация, локальное воспроизведение, загрузка частей и Telegram acceptance различаются. Только acceptance подтверждает публикацию. Telegram voice note появляется после финализации сообщения; это не обещание live playback до финала. Для намеренной отправки готового результата в другой чат существует обычный `send_media(..., kind="audio", voice_note=True, to=...)`. Старые совмещённые `voice_message`/`speak` доступны только для replay прежних checkpoint; новый каталог содержит три раздельных инструмента с нейтральными английскими описаниями. Изменение tools binding явно фиксируется; последующие совместимые ходы сохраняют exact append/legacy.
+
+Выбор голоса — явный атомарный `selection.json` с model/profile identity и append-only config receipts. Имеющийся выбор владельца сохраняется при обновлении кода. CAS revision и operation ID закрывают гонку позднего выбора с выключением; другой TTS не подставляется. Готовые generation results не удаляются по TTL транспортной очереди. Повторно отключённая capability не считается успешно завершившей запрос только из-за закрытия клиентского сокета.
+
+MiniApp отправляет owner/device-authenticated временные jobs через ту же таблицу HTTP/WS routes. Два ограниченных UI worker готовят пробы и owner-операции; личности, LLM и Telegram outbox в UI нет. Audio response — private/no-store JSON с MIME, размером, SHA и base64 для Blob playback; URL не несёт credential. Загрузка до 8 МиБ декодируется host-side в проверенный mono PCM WAV 24kHz/3–60s, без сетевых decoder protocols. Профиль хранит digest reference; удаление стирает WAV и оставляет минимальный tombstone от позднего idempotent повтора. Пробы используют request-specific profile и не переключают активный голос.
+# Forge team candidate contracts
+
+Exact worker `payload`/`events` reads are read-only recovery actions; an input/read error returns to the model and never creates an uncertain mutation. Result pages use `payload_sha256`, with `result_sha256` accepted for `kind=result`; the hash remains mandatory and conflicting hashes are refused. Coordinator checkpoint JSON belongs in `plan`; the same object in `message` is accepted for compatibility. Active-run orientation uses manifest summaries and bounded live-manifest observations, without reducing historical tool ledgers; unavailable observations remain visible as unknown, and coding tasks are included even when no durable run is active.
+
+Legacy custody can be reconciled explicitly through `forge_recovery.reconcile_unit` on the verified local execution host. A receipt binds original request/result/state hashes, the exact canonical launch event, task root, physical host identity and a witnessed subsequent kernel reboot. Device/foreign-host execution, post-boundary launches, current bound supervisors, changed subjects and unbound histories remain fenced. Original outcomes and Stop records are retained; extinction releases custody but does not invent success or a clean Stop. Recovery is an audited operator migration, never an age/PID-based background expiry.
+
+Task/worker result JSON and append-only journals remain canonical. A finished execution is distinct from coordinator acceptance: dependencies bind exact accepted result.json SHA-256, and upstream revision changes invalidate downstream eligibility transitively. Rework and continuation retain old identities/results; continuation requires proven old-writer exit, a settled checkpoint and compatible authority/tools/provider route. Unknown side effects are reconciled, never blindly replayed.
+
+Only one writer owns a physical shared root, across aliases/overlapping paths and different task IDs. Independent roots and read-only roles can progress concurrently. Parent→editing-child transfer is explicit and blocks the parent until that branch releases custody. Detached/local/remote/check jobs retain ownership through confirmed descendant exit. Status readers project receipts without admission/migration writes.
+
+New task policy is explicit; legacy missing active cap migrates with exact preimage/receipt to null (uncapped), not a new fallback limit. Unit iterations survive resume. The tree usage ledger distinguishes observed tokens and unknown spend; null optional tree caps and unknown cost are not zero budgets.
+
+Independent reviewers read a frozen subject using exclusive read tools. A/L/B/M merging has its own isolated typed adapter, followed by separate critics and review of corrections. Critic verdict, actual coverage, tested candidate identity and author decision remain separate. Ordinary findings never create a new merge veto; author override does not rename findings to clear.
+
+Owner UI reads canonical task/unit identities and exact payload hashes. Control is intent→single runner claim→actual receipt; a claimed crash stays unknown. Bound review/merge tasks inherit coordinator Stop/Pause fences. Real review outcomes enter canonical Forge wake as their own schema, not fabricated worker completions.
+
+The main context accumulation implementation is retained: continuation_mode=legacy preserves the complete previous first provider input and appends newly admitted material only. Audience/privacy/authority/history/compaction/epoch/system/tools/model/render fences remain explicit. Worker system input is frozen for its execution, all transcript/tool outputs and available native sidecars are durable; incompatible route changes refuse continuation. Source tests do not establish real provider cache hits.
+
+Frozen review qualification: verification_plan exports immutable source identity to a separate task; the coordinator chooses an isolated executor. bind_verification requires the entire canonical plan, actual passing non-deduplicated checks and complete exact logs. A subsequent fresh review includes those logs only for the same composition. Passing commands do not prove container isolation. Linux commands use a per-command subreaper; detached descendants keep ownership until ECHILD settlement, and a lost helper leaves custody unknown.
+
+Independent-review corrections: Finish uses the same unresolved-root/job predicate as admission. Direct selected-agent Stop includes all branch-owned command/check units and retains unknown exit. Foreground commands publish a starting intent first, create a suspended/gated private custodian, persist its exact identity, then explicitly admit the executable; a dead custodian before admission cannot start the command. Linux helper settlement evidence is retained in the unit directory.
+Forge worker provider calls explicitly opt into llm.single_provider_attempt: SDK retries, adapter empty retries and automatic fallback are disabled only in that context. A transport response or uncertain admission is retained, never replayed; only a typed proof of non-admission can use the existing outer retry allowance. Main voice/evaluator callers retain their prior policy. This is an explicit worker custody contract, not a new API cache field or main context policy.
+Review/merger starts reserve once under the coordinator lock using a fresh record, and admission updates cannot overwrite another record revision. Battery status rechecks producer digests and archived report/log bytes; fresh critic subjects lose qualification when that evidence changes. Owner projections include agents, processes and verifications, with unknown exit and pending root release visible; records and log references remain private. Control parsing errors retain original bytes with an unknown receipt and do not suppress unrelated durable wake delivery.

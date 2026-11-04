@@ -15,6 +15,8 @@ import os
 import json
 import re
 import time
+import threading
+from self_model import FileLock
 from pathlib import Path
 
 BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
@@ -97,16 +99,28 @@ def meta_load() -> dict:
         return {}
 
 
+_META_LOCK = threading.RLock()
+
+
 def meta_update(chat_id, author: str = "", is_dm: bool | None = None,
                 name: str | None = None, ts: float | None = None) -> None:
-    """Отметить последнюю строку буфера чата (атомарно, дёшево — файл маленький)."""
+    """Serialize the shared file across callers, not just each caller's chat."""
+    observed_ts = float(ts if ts is not None else time.time())
+    with _META_LOCK, FileLock(META_PATH.with_suffix('.lock'), timeout=30.0,
+                              stale_after=300.0, heartbeat=5.0):
+        _meta_update_locked(chat_id, author, is_dm, name, observed_ts)
+
+
+def _meta_update_locked(chat_id, author, is_dm, name, observed_ts):
     meta = meta_load()
     key = _safe(chat_id)
     cur = meta.get(key) if isinstance(meta.get(key), dict) else {}
-    entry = {"last_ts": float(ts if ts is not None else time.time()),
+    entry = {"last_ts": observed_ts,
              "last_author": str(author or "")}
     entry["is_dm"] = bool(is_dm) if is_dm is not None else bool(cur.get("is_dm", not key.startswith("-")))
     entry["name"] = str(name) if name is not None else str(cur.get("name") or "")
+    if float(cur.get("last_ts") or 0) > observed_ts:
+        return  # an older executor completion cannot undo a later accepted author
     meta[key] = entry
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     tmp = META_PATH.with_suffix(".json.tmp")

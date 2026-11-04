@@ -1,3 +1,7 @@
+# Explicit security dependencies; minimum versions are checked during the image build.
+ca-certificates
+libbrotli1
+
 # Runtime utilities already used by Praxis.
 git
 libcairo2

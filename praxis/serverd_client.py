@@ -8,6 +8,8 @@ daemon state as an honest result instead of an exception.
 from __future__ import annotations
 
 import hashlib
+import contextvars
+from contextlib import contextmanager
 import json
 import os
 import socket
@@ -22,6 +24,14 @@ RUN_DIR = Path(os.environ.get("PRAXIS_SERVERD_RUN") or "/run/praxis-serverd")
 SOCK = RUN_DIR / "serverd.sock"
 TOKEN_FILE = RUN_DIR / "token"
 
+
+_root_binding=contextvars.ContextVar('serverd_root_binding',default=None)
+
+@contextmanager
+def root_context(binding):
+    token=_root_binding.set(dict(binding) if binding.get('verified') else None)
+    try:yield
+    finally:_root_binding.reset(token)
 
 def available() -> bool:
     try:
@@ -436,6 +446,9 @@ def call(verb: str, args: dict | None = None, *, stream: bool = False, on_chunk=
                          "не запускалось"}
     verb = str(verb)
     args = dict(args or {})
+    binding=_root_binding.get()
+    if binding and verb in {'workspace.edit','workspace.checkpoint','op.start','op.run'}:
+        args['expected_root_binding']=binding
     if timeout and float(timeout) > 0:
         deadline, tier = float(timeout), "заданный"
     else:
@@ -458,7 +471,8 @@ def call(verb: str, args: dict | None = None, *, stream: bool = False, on_chunk=
         # Не ретраим: ждать второй раз столько же — это удвоенное молчание, о котором ей никто
         # не сказал. Вместо ретрая запоминаем заявку, чтобы её собственный повтор не превратился
         # во вторую root-мутацию.
-        _remember_in_doubt(key, rid)
+        if not request_id:
+            _remember_in_doubt(key, rid)
         result["deadline_tier"] = tier
     elif resumed:
         result["resumed_request_id"] = rid

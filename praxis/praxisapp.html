@@ -129,6 +129,7 @@
       </section>
 
       <section id="view-runs" class="view" data-view="runs" aria-labelledby="title-runs">
+        <section id="forgePanel" class="forge-panel glass" aria-label="Команда Праксис" hidden></section>
         <div class="view-heading"><div><span class="eyebrow">Durable execution</span><h1 id="title-runs">Runs</h1><p>Контекст, инструменты, результаты и recap в одной проверяемой линии.</p></div><button class="icon-button glass" type="button" data-action="refresh" aria-label="Обновить runs"><svg class="icon"><use href="#i-refresh"></use></svg></button></div>
         <div id="runFilters" class="segmented" role="group" aria-label="Фильтр runs">
           <button class="segmented__button is-active" type="button" data-run-filter="all">Все</button>
@@ -238,6 +239,7 @@
     <small>Получаю snapshot и проверяю provenance</small>
   </div>
 
-  <script type="module" src="/app/static/app.js?v=31"></script>
+  <link rel="stylesheet" href="/app/static/forge_ui.css?v=1">
+  <script type="module" src="/app/static/app.js?v=32"></script>
 </body>
 </html>

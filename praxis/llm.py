@@ -31,12 +31,32 @@ import os
 import re
 import tempfile
 import contextvars as _cv
+import contextlib
 import time as _time
 import tool_offerings
 from dataclasses import dataclass, field
 import provider_observation
 from pathlib import Path
 from urllib.parse import urlparse
+
+_SINGLE_PROVIDER_ATTEMPT = _cv.ContextVar('single_provider_attempt',default=False)
+
+
+@contextlib.contextmanager
+def single_provider_attempt():
+    """Durable executors own retries; SDK/fallback cannot replay an unknown call.
+
+    Ordinary voice/evaluator callers keep their existing routing policy.
+    No provider-facing fields or configuration defaults are changed.
+    """
+    token=_SINGLE_PROVIDER_ATTEMPT.set(True)
+    try:yield
+    finally:_SINGLE_PROVIDER_ATTEMPT.reset(token)
+
+
+def _custody_client(client):
+    options=getattr(client,'with_options',None)
+    return options(max_retries=0) if _SINGLE_PROVIDER_ATTEMPT.get() and callable(options) else client
 
 log = logging.getLogger("praxis-llm")
 
@@ -697,7 +717,7 @@ def swap_fallback(role: str) -> dict:
 def _client_for(framework: str):
     """SDK-клиент фреймворка (или тестовый фейк). None — не настроен."""
     if framework in _TEST_CLIENTS:
-        return _TEST_CLIENTS[framework]
+        return _custody_client(_TEST_CLIENTS[framework])
     if os.environ.get("PRAXIS_TEST"):
         return None  # герметичность: в тестах сеть только через фейки (use_test_client)
     fw = (_config().get("frameworks") or {}).get(framework) or {}
@@ -707,7 +727,7 @@ def _client_for(framework: str):
     fp = (base_url, key)
     cached = _CLIENTS.get(framework)
     if cached and cached[0] == fp:
-        return cached[1]
+        return _custody_client(cached[1])
     if framework == "anthropic":
         from anthropic import Anthropic
         cli = Anthropic(api_key=key, base_url=base_url)
@@ -715,7 +735,7 @@ def _client_for(framework: str):
         from openai import OpenAI
         cli = OpenAI(api_key=key, base_url=base_url)
     _CLIENTS[framework] = (fp, cli)
-    return cli
+    return _custody_client(cli)
 
 
 def configured(role: str = "voice") -> bool:
@@ -2468,6 +2488,7 @@ def _call_retrying_empty(fw: str, model: str, retries: int | None = None,
     """
     last = None
     retries = EMPTY_RETRIES if retries is None else max(0, int(retries))
+    if _SINGLE_PROVIDER_ATTEMPT.get():retries=0
     for attempt in range(retries + 1):
         try:
             return _call(fw, model, _resolved=_resolved, **kw), attempt
@@ -2694,7 +2715,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _journal("%s: канал оборвал стрим ошибкой уже после %d знаков — начатый ответ "
                      "потерян; по тому же каналу не переспрашиваю, это была бы не транспортная "
                      "попытка, а повтор поверх сказанного" % (_ROLE_RU[role], _lost))
-        if not _fallbackable(e):
+        if _SINGLE_PROVIDER_ATTEMPT.get() or not _fallbackable(e):
             raise
         # 17.08.2026: фреймворк фолбэка стал настраиваемым. По умолчанию — противоположный
         # (прежнее поведение байт-в-байт); `fallback_framework: "openai"` при framework=openai

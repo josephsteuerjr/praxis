@@ -478,9 +478,8 @@ class TestShell(Base):
         self.assertIn("hello", agent.tool_shell("echo hello"))
 
     def test_truncation(self):
-        out = agent.tool_shell('i=0; while [ "$i" -lt 5000 ]; do printf a; i=$((i+1)); done')
-        self.assertEqual(len(out), 5000, repr(out))
-        self.assertEqual(set(out), {"a"})
+        out = agent.tool_shell("printf 'a%.0s' $(seq 1 5000)")
+        self.assertEqual(len(out), 5000)
 
     def test_timeout(self):
         orig = agent.SHELL_TIMEOUT

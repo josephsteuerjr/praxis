@@ -585,6 +585,15 @@ def _legacy_root(task_id: str) -> tuple[str, str]:
 def dispatch(verb: str, args: dict, send_chunk=lambda _text: None, request_id: str = "",
              deadline: float | None = None) -> dict:
     values = {key: value for key, value in (args or {}).items() if value is not None}
+    expected=values.pop('expected_root_binding',None)
+    if expected is not None and verb in {'workspace.edit','workspace.checkpoint','op.start','op.run'}:
+        key='root_value' if verb.startswith('op.') else 'root'
+        try:actual=brokerops.root_binding(values.get(key,''))
+        except (OSError,ValueError,RuntimeError) as exc:
+            return {'ok':False,'code':'root_binding_changed','error':str(exc)}
+        if actual!=expected:
+            return {'ok':False,'code':'root_binding_changed','error':'backend physical root binding changed; mutation not admitted'}
+        values[key]=actual['canonical']
     if verb == "admin.status":
         assert AUDIT is not None
         # `limit=40` резал список молча: блок состояния показывал «вот все операции» на

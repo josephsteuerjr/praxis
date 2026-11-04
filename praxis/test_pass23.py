@@ -239,7 +239,7 @@ new file mode 100644
         self.assertEqual(result["model"], "gpt-5.6-terra")
         self.assertEqual(result["status"], "done")
 
-    def test_worker_retries_torn_iteration_before_dispatching_any_tool(self):
+    def test_worker_retains_received_torn_iteration_without_replaying_or_dispatch(self):
         import forge_worker
         import llm
 
@@ -270,22 +270,18 @@ new file mode 100644
                 mock.patch.object(forge_worker.llm, "chat",
                                   side_effect=[torn, tool_call, final]) as chat:
             code = forge_worker.run(request_path)
-        self.assertEqual(code, 0)
-        self.assertEqual(chat.call_count, 3)
+        self.assertEqual(code, 2)
+        self.assertEqual(chat.call_count, 1)
         file_text = (self.project / "app.py").read_text(encoding="utf-8")
-        self.assertIn("return 42", file_text)
+        self.assertIn("return 41", file_text)
         self.assertNotIn("return 99", file_text,
                          "tool-looking partial from TornStreamError must never be dispatched")
         result = forge._read_json(request_path.parent / "result.json")
-        self.assertEqual(result["status"], "done")
-        self.assertEqual(result["tool_calls"], 1,
-                         "retry before response must not dispatch either partial or final tool twice")
-        first_system = chat.call_args_list[0].kwargs["system"]
-        retry_system = chat.call_args_list[1].kwargs["system"]
-        self.assertEqual(first_system, retry_system,
-                         "transport retry must reuse the exact logical-turn frame")
+        self.assertEqual(result['status'],'error')
+        self.assertEqual(result['trace'],[])
+        self.assertTrue(list((request_path.parent/'payloads').glob('*.txt')))
 
-    def test_worker_retries_the_no_tools_final_summary(self):
+    def test_worker_retries_proven_pre_admission_refusal_of_final_summary(self):
         import forge_worker
         import llm
 
@@ -303,11 +299,13 @@ new file mode 100644
             stop_reason="tool_use", model="fake-coder")
         recovered = llm.LLMResponse(text="Summary recovered after the transport break.",
                                     stop_reason="end_turn", model="fake-coder")
+        refused=llm.BrokenChannelError('summary request was not admitted')
+        refused.request_not_admitted=True
         with mock.patch.dict(os.environ, {
                 "PRAXIS_FORGE_TRANSPORT_RETRIES": "1",
                 "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
                 mock.patch.object(forge_worker.llm, "chat", side_effect=[
-                    tool_call, llm.BrokenChannelError("summary EOF"), recovered,
+                    tool_call, refused, recovered,
                 ]) as chat:
             code = forge_worker.run(request_path)
         self.assertEqual(code, 0)
@@ -331,7 +329,7 @@ new file mode 100644
                 "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC", 2.0,
                 low=0.0, high=60.0), 2.0)
 
-    def test_worker_records_final_transport_error_after_retry_budget(self):
+    def test_worker_records_unknown_transport_error_without_retry(self):
         import forge_worker
         import llm
 
@@ -349,7 +347,7 @@ new file mode 100644
                                   side_effect=llm.BrokenChannelError("upstream EOF")) as chat:
             code = forge_worker.run(request_path)
         self.assertEqual(code, 2)
-        self.assertEqual(chat.call_count, 3)
+        self.assertEqual(chat.call_count, 1)
         result = forge._read_json(request_path.parent / "result.json")
         self.assertEqual(result["status"], "error")
         self.assertIn("BrokenChannelError: upstream EOF", result["error"])

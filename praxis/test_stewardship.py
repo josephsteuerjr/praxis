@@ -388,7 +388,9 @@ class TestHisDataNeverLeaves(Base):
         """А состояние — ровно то, ради чего рука и нужна."""
         self._enter(STRANGER)
         with mock.patch.object(st, "log"),                 mock.patch("subprocess.run") as run,                 mock.patch.object(agent, "_autocommit_self_edit"),                 mock.patch.object(agent, "selfgit"):
-            run.return_value = mock.Mock(stdout="hardbot2-bot-1  Up 44 hours")
+            import subprocess
+            run.side_effect = lambda args, **kwargs: subprocess.CompletedProcess(
+                args=args, returncode=0, stdout="hardbot2-bot-1  Up 44 hours")
             out = agent.tool_shell("docker ps --filter name=hardbot2")
         run.assert_called_once()
         self.assertIn("Up 44 hours", out)

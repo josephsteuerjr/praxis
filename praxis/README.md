@@ -76,6 +76,19 @@ docker compose logs -f praxis
 `docker-compose.deploy.yml`. `praxis-serverd` и `praxis-body-bridge` устанавливаются как отдельные
 systemd units, а не как второй агент внутри Compose.
 
+Образ Python использует Debian trixie. При сборке явно устанавливаются
+`ca-certificates` и `libbrotli1`, затем `dpkg --compare-versions` проверяет минимумы
+`20250419+deb13u1` и `1.1.0-2+deb13u1`; более новые версии разрешены. Python-зависимости
+требуют `brotli>=1.2.1` и `certifi>=2026.10.19`. Если репозиторий не предлагает эти
+версии, сборка должна завершиться ошибкой, а не принять старые пакеты.
+
+Для получения обновлений безопасности нужен свежий build без старого apt/pip-слоя:
+`docker compose build --pull --no-cache praxis` (или `docker build --pull --no-cache .`).
+Обычный `up --build` может использовать кэш; изменение manifest не обновляет уже
+запущенный контейнер. Офлайн-регрессии: `python -m unittest -v test_container_security`.
+Они проверяют manifests и исполняют version guard с подставными пакетами, но не
+заменяют реальную сборку образа и проверку доступности пакетов в apt/PyPI.
+
 ### Конфигурация Codex relay
 
 Codex здесь не отдельный «авторизационный файл Praxis», а OpenAI-compatible relay для
@@ -160,3 +173,30 @@ git show <commit>:<path>
 
 Новая реализация сначала получает код, тесты и evidence, затем обновляет `ARCHITECTURE.md`,
 `CODEMAP.md` и `STATUS.md` в соответствии с их ролями.
+
+## Голос Праксис и MiniApp — XTTS
+
+XTTS — единственный активный TTS backend (`PRAXIS_TTS_BACKEND=xtts`), без скрытого перехода на Piper, Silero или Edge. Распознавание Whisper остаётся отдельной функцией. Модель и PyTorch живут в отдельном серверном runtime `/opt/praxis-xtts`; основной агент обращается к нему через приватный UDS.
+
+В существующем MiniApp → Система группа «Голос» идёт после контейнеров и мозга: состояние модели, пауза/включение озвучки, каталог с поиском, «Послушать» и отдельное «Выбрать и включить». Проба не меняет выбранный голос. «Свой голос» принимает файл или запись микрофона: чистая речь одного человека 3–60 секунд, до 8 МБ. Добавление создаёт профиль через conditioning XTTS, без отдельного обучения модели. Имя, профиль и исходный нормализованный WAV приватны; удаление убирает образец. Загрузка файла доступна и без разрешения на микрофон.
+
+`voice_message(text, caption="")` сохраняет точные слова в каноническом media intent. Праксис сама решает, какую реплику озвучить. После допуска синтез идёт в фоне вне ONE_MIND, а готовый OGG/Opus отправляется штатным sender как голосовое. Постановка в работу, готовность файла и Telegram acceptance — разные состояния. Историческое имя `speak` доступно только для восстановления прежних checkpoint.
+
+Модель остаётся резидентной при паузе озвучки. Пауза останавливает текущий синтез и откладывает ещё не отправленные намерения; пробы остаются доступны. Изменение выбранного голоса не переписывает профиль уже допущенной реплики. Ревизия настроек не даёт запоздавшему запросу выбора снова включить озвучку после паузы.
+
+```bash
+sudo python3 /opt/praxis/xtts_install.py
+sudo systemctl enable --now praxis-xtts.service
+sudo python3 /opt/praxis/xtts_control.py status
+```
+
+Постоянный тембр выбирает владелец через MiniApp. Начальный профиль пуст; тестовый голос не назначается автоматически. CLI `catalog`, `configure --speaker "<имя>"` / `configure --reference /absolute/reference.wav` и `enable` сохраняют возможность явного серверного выбора. CLI `disable` дополнительно останавливает service; кнопка паузы в MiniApp оставляет модель горячей.
+
+`miniapp_voice.ts` и scoped CSS — отдельный компонент. Для установленного старого MiniApp `xtts_miniapp_patch.py` готовит проверяемый узкий backend patch и новые assets, сохраняя байты прежних JS/CSS. Его таблица HTTP/WS-маршрутов и owner/device auth остаются общими. Профили меняет host service; UI хранит только временные запросы и приватные пробы. Перед заменой установленного UI обязательны фактические hash guards, backup и отдельная проверка браузером.
+
+Runtime закреплён в `requirements-xtts.lock`, веса — revision и SHA-256 manifest; notice модели сохраняется рядом. Секреты не передают через argv или audio URL. Изменения конфигурации имеют JSONL receipts. При смене tools binding действует явная несовместимая граница; точное дописывание следующих совместимых ходов остаётся `legacy`.
+# Forge team candidate
+
+This candidate adds durable team coordination to the existing Praxis Forge. `coding_agent` supports exact-result disposition and complete paged records; `coding_swarm` carries accepted dependencies, linked rework and coordinator checkpoints. `coding_control` exposes Pause/Stop/Resume with actual receipts. `coding_review` prepares independent frozen review or an isolated A/L/B/M merge candidate, retains findings and records the author's separate decision. These tools do not apply live updates.
+
+The Runs screen contains an owner-only team panel with actual agents, stages, outputs/files, limits and control history. Read-oriented scouts/reviewers cannot execute shell/edit tools or elevate through a child worker. Editing workers serialize on a shared physical root; independent roots can run concurrently. Existing uncapped tasks retain that policy; new task defaults are explicit. Provider-context append and privacy boundaries remain unchanged.

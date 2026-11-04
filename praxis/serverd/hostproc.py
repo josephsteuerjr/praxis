@@ -15,6 +15,7 @@ Linux-only (setsid, killpg, /proc). Каждый юнит — директори
 from __future__ import annotations
 
 import argparse
+import hashlib
 import datetime as _dt
 import json
 import os
@@ -26,6 +27,25 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable
+
+# Same source primitive as local Forge. install.sh ships these exact two files.
+try:
+    from command_process import CommandProcess
+except ModuleNotFoundError:
+    sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
+    from command_process import CommandProcess
+
+TREE_CONTRACT='command-tree-v1'
+
+def tree_receipt(unit_dir):
+    state=_read(unit_dir/'state.json');identity=state.get('command_identity') or {}
+    custody=unit_dir/'command-custody';path=custody/'settled.json'
+    try:raw=path.read_bytes();receipt=json.loads(raw)
+    except (OSError,ValueError):return {}
+    if not identity.get('nonce') or receipt.get('nonce')!=identity['nonce'] or receipt.get('settled') is not True:return {}
+    return {'contract':TREE_CONTRACT,'operation_id':unit_dir.name,'settled':True,'receipt':receipt,
+            'receipt_file_sha256':hashlib.sha256(raw).hexdigest(),
+            'receipt_sha256':hashlib.sha256(json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()).hexdigest()}
 
 _SUPERVISORS: dict[int, subprocess.Popen] = {}
 _SUPERVISOR_LOCK = threading.Lock()
@@ -111,7 +131,7 @@ def spawn(unit_dir: Path, command: str, cwd: str, timeout: int = 0,
     _write(unit_dir / "request.json", {"command": command, "cwd": cwd,
                                        "timeout": int(timeout or 0),
                                        "log": str(unit_dir / "command.log"),
-                                       "env": env or {}, "limits": limits or {}, "created": _now()})
+                                       "env": env or {}, "limits": limits or {}, "created": _now(), "tree_contract":TREE_CONTRACT})
     sup_log = open(unit_dir / "supervisor.log", "ab")
     try:
         proc = subprocess.Popen(
@@ -125,10 +145,9 @@ def spawn(unit_dir: Path, command: str, cwd: str, timeout: int = 0,
     with _SUPERVISOR_LOCK:
         _SUPERVISORS[int(proc.pid)] = proc
     threading.Thread(target=_reap_supervisor, args=(proc,), daemon=True).start()
-    # супервизор сам пропишет state.json с child_pid; тут фиксируем факт запуска
-    _write(unit_dir / "state.json", {"status": "starting", "supervisor_pid": proc.pid,
-                                     "supervisor_starttime": _starttime(proc.pid),
-                                     "boot_id": boot_id(), "started": time.time()})
+    # Supervisor owns state.json; parent must never overwrite its newer identity.
+    _write(unit_dir/'spawn.json',{'supervisor_pid':proc.pid,
+           'supervisor_starttime':_starttime(proc.pid),'boot_id':boot_id()})
     return {"status": "starting", "supervisor_pid": proc.pid}
 
 
@@ -137,7 +156,15 @@ def poll(unit_dir: Path) -> dict:
     result = _read(unit_dir / "result.json")
     if result:
         return result
-    state = _read(unit_dir / "state.json")
+    proof=tree_receipt(unit_dir)
+    owner=_read(unit_dir/'state.json')
+    if proof and not same_process(int(owner.get('supervisor_pid') or 0),
+                                  str(owner.get('supervisor_starttime') or ''),str(owner.get('boot_id') or '')):
+        receipt=proof['receipt'];code=receipt['exit_code']
+        status=('timed_out' if (unit_dir/'timeout-request.json').exists() else 'stopped') if receipt.get('stopped') else ('done' if code==0 else 'failed')
+        return {'status':status,
+                'exit':code,'tree_exit':proof,'recovered_from_custodian':True}
+    state = _read(unit_dir / "state.json") or _read(unit_dir/'spawn.json')
     if not state:
         return {"status": "unknown"}
     child = int(state.get("child_pid") or 0)
@@ -255,6 +282,22 @@ def _kill_doubt(pgid: int, state: dict, unit_dir: Path) -> str:
 
 
 def stop(unit_dir: Path) -> str:
+    result=_read(unit_dir/'result.json')
+    if result.get('status') in TERMINAL_STATUSES:return _outcome_text(result)
+    state=_read(unit_dir/'state.json')
+    if (unit_dir/'request.json').exists() and (_read(unit_dir/'request.json').get('tree_contract')==TREE_CONTRACT):
+        _write(unit_dir/'stop-request.json',{'at':_now()})
+        identity=state.get('command_identity') or {}
+        if identity.get('nonce'):
+            path=unit_dir/'command-custody'/'stop.tmp'
+            path.write_text(identity['nonce']);path.replace(path.with_name('stop'))
+        deadline=time.monotonic()+START_GRACE_SEC+TERM_GRACE_SEC+3
+        while time.monotonic()<deadline:
+            row=poll(unit_dir)
+            if row.get('tree_exit',{}).get('settled'):
+                return ('остановлен: всё дерево подтверждённо завершено; ' if row.get('status')=='stopped' else '')+_outcome_text(row,after_signal=True)
+            time.sleep(.05)
+        return 'stop requested; command tree settlement unknown, custody retained'
     result = _read(unit_dir / "result.json")
     if result.get("status") in TERMINAL_STATUSES:
         return _outcome_text(result)
@@ -357,7 +400,6 @@ def _kill_tree(pgid: int, state: dict, unit_dir: Path, *, proven: str = "",
 
 def _preexec(limits: dict | None = None):
     limits = limits or {}
-    os.setsid()
     for res, lim in ((resource.RLIMIT_CORE, (0, 0)),):
         try:
             resource.setrlimit(res, lim)
@@ -388,41 +430,47 @@ def _preexec(limits: dict | None = None):
 
 
 def _supervise(unit_dir: Path) -> int:
-    """Тело супервизора: запустить команду, дождаться, записать result с реальным exit."""
-    req = _read(unit_dir / "request.json")
-    log_path = Path(req.get("log") or (unit_dir / "command.log"))
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    t0 = time.monotonic()
+    """Publish only ECHILD settlement from the private per-command subreaper."""
+    req=_read(unit_dir/'request.json');log_path=Path(req.get('log') or unit_dir/'command.log')
+    t0=time.monotonic();proc=None
+    state={'status':'starting','supervisor_pid':os.getpid(),'boot_id':boot_id(),
+           'supervisor_starttime':_starttime(os.getpid()),'started':time.time()}
+    _write(unit_dir/'state.json',state)  # intent precedes even the gated custodian
     try:
-        with open(log_path, "ab") as log:
-            proc = subprocess.Popen(
-                ["/bin/sh", "-c", str(req.get("command") or "true")],
-                cwd=str(req.get("cwd") or "/"), stdout=log, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, preexec_fn=lambda: _preexec(req.get("limits") or {}), close_fds=True,
-                env={**os.environ, **(req.get("env") or {})},
-            )
-            _write(unit_dir / "state.json", {
-                "status": "running", "child_pid": proc.pid, "pgid": proc.pid,
-                "supervisor_pid": os.getpid(), "boot_id": boot_id(),
-                "supervisor_starttime": _starttime(os.getpid()),
-                "child_starttime": _starttime(proc.pid), "started": time.time()})
-            timeout = int(req.get("timeout") or 0)
-            try:
-                code = proc.wait(timeout=(timeout or None))
-                status = "done" if code == 0 else "failed"
-            except subprocess.TimeoutExpired:
-                # Здесь тождество доказывать не нужно и нечем: живой Popen — само доказательство,
-                # ядро держит номер ребёнка за нами, пока мы его не пожали.
-                _kill_tree(proc.pid, {}, unit_dir, proven="живой Popen в супервизоре")
-                code, status = -1, "timed_out"
-        _write(unit_dir / "result.json", {"status": status, "exit": code, "finished": _now(),
-                                          "duration_s": round(time.monotonic() - t0, 3),
-                                          "log": str(log_path)})
-        return 0 if status == "done" else 1
-    except Exception as exc:  # noqa: BLE001
-        _write(unit_dir / "result.json", {"status": "error", "error": f"{type(exc).__name__}: {exc}",
-                                          "finished": _now(),
-                                          "duration_s": round(time.monotonic() - t0, 3)})
+        with log_path.open('ab') as log:
+            proc=CommandProcess(['/bin/sh','-c',str(req.get('command') or 'true')],
+                cwd=str(req.get('cwd') or '/'),stdout=log,stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,preexec_fn=lambda:_preexec(req.get('limits') or {}),
+                close_fds=True,env={**os.environ,**(req.get('env') or {})},
+                defer_start=True,custody_directory=unit_dir/'command-custody')
+            state.update(status='running',child_pid=proc.pid,pgid=proc.pid,
+                         child_starttime=_starttime(proc.pid),command_identity=proc.custody_identity())
+            _write(unit_dir/'state.json',state)
+            if not (unit_dir/'stop-request.json').exists():proc.admit()
+            timeout=int(req.get('timeout') or 0);timed_out=False;stopped=False
+            while proc.poll() is None:
+                if (unit_dir/'stop-request.json').exists():
+                    stopped=True;ok,note=proc.stop_tree()
+                    if not ok:raise RuntimeError(note)
+                elif timeout and time.monotonic()-t0>=timeout:
+                    timed_out=True
+                    _write(unit_dir/'timeout-request.json',{'at':_now(),'timeout':timeout})
+                    ok,note=proc.stop_tree()
+                    if not ok:raise RuntimeError(note)
+                time.sleep(.03)
+            code=proc.wait();proof=tree_receipt(unit_dir)
+            if not proof:raise RuntimeError('custodian settlement receipt unavailable')
+        # A concurrent nonce Stop can settle the helper between loop polls. Its
+        # receipt is authoritative; a local flag may never have been set. A Stop
+        # that arrived after natural settlement must preserve that natural exit.
+        canceled=proof['receipt'].get('stopped') is True
+        status=('timed_out' if (unit_dir/'timeout-request.json').exists() else 'stopped') if canceled else ('done' if code==0 else 'failed')
+        _write(unit_dir/'result.json',{'status':status,'exit':code,'finished':_now(),
+               'duration_s':round(time.monotonic()-t0,3),'log':str(log_path),'tree_exit':proof})
+        return 0 if status=='done' else 1
+    except Exception as exc:
+        # Error is an observation, never proof that an admitted tree has exited.
+        _write(unit_dir/'state.json',{**state,'status':'unknown','error':f'{type(exc).__name__}: {exc}'})
         return 2
 
 

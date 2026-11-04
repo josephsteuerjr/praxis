@@ -1551,6 +1551,15 @@ class MediaSpool:
     ) -> MediaRef:
         if not isinstance(ref, MediaRef):
             raise MediaValidationError("expected MediaRef")
+        from xtts_protocol import INTENT_MIME, XttsError
+        if ref.kind == "audio" and ref.mime == INTENT_MIME:
+            import xtts_intent
+            try:
+                return xtts_intent.validate_ref(
+                    self, ref, expected_scope=expected_scope,
+                    expected_chat_id=expected_chat_id)
+            except XttsError as exc:
+                raise MediaValidationError(exc.code) from exc
         kind, declared_mime = self._check_kind_mime(ref.kind, ref.mime)
         scope = normalize_scope(ref.scope)
         if scope != ref.scope:
@@ -1628,6 +1637,16 @@ class MediaSpool:
             raise MediaValidationError("voice_note must be boolean")
         if item.voice_note and item.kind != "audio":
             raise MediaValidationError("voice_note is valid only for audio")
+        import xtts_intent
+        if xtts_intent.is_intent(item):
+            from xtts_protocol import XttsError, read_intent
+            try:
+                request = read_intent(item.path)
+            except XttsError as exc:
+                raise MediaValidationError(exc.code) from exc
+            if (request["request_id"] != item.queue_id or request["run_id"] != item.run_id
+                    or not item.voice_note):
+                raise MediaValidationError("speech intent identity mismatch")
         self._validate_ref_locked(
             item.as_ref(),
             expected_scope=expected_scope,

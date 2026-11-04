@@ -617,7 +617,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         wake = _wake(mid=50, ts=990.0, context="Алиса: длинно")
         wakes = {chat_id: wake}
         client = _Client()
-        buf_push = Mock()
+        buf_push = AsyncMock()
         arm = Mock()
 
         with (
@@ -633,7 +633,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_recent_msgs", defaultdict(lambda: deque(maxlen=12))),
             patch.object(runner, "_missed", {}),
             patch.object(runner, "_cooldown", return_value=0.0),
-            patch.object(runner, "_buf_push", buf_push),
+            patch.object(runner, "_buf_push_admitted", buf_push),
             patch.object(runner, "_maybe_compact", side_effect=_no_compact),
             patch.object(runner, "_arm", arm),
             patch.object(agent, "voice_turn_envelope",
@@ -645,7 +645,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([text for _entity, text, _kw in client.sent], list(chunks))
         self.assertEqual(client.sent[0][2], {"reply_to": 50})
         self.assertTrue(all(not kw for _entity, _text, kw in client.sent[1:]))
-        buf_push.assert_called_once_with(
+        buf_push.assert_awaited_once_with(
             chat_id, f"Praxis: {reply}", author="Praxis", is_dm=False,
             record_life=True, source_id="1001,1002", ts=ANY)
         self.assertNotIn(chat_id, wakes)
@@ -712,7 +712,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         wakes = {chat_id: wake}
         pending = defaultdict(lambda: deque(maxlen=16))
         pending[chat_id].append(inbound_ref)
-        buf_push = Mock()
+        buf_push = AsyncMock()
         arm = Mock()
         voice = Mock(return_value=media.TurnEnvelope(text=reply))
 
@@ -741,7 +741,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
             patch.object(runner, "_recent_msgs", defaultdict(lambda: deque(maxlen=12))),
             patch.object(runner, "_missed", {}),
             patch.object(runner, "_cooldown", return_value=0.0),
-            patch.object(runner, "_buf_push", buf_push),
+            patch.object(runner, "_buf_push_admitted", buf_push),
             patch.object(runner, "_maybe_compact", side_effect=_no_compact),
             patch.object(runner, "_arm", arm),
             patch.object(agent, "voice_turn_envelope", side_effect=voice),
@@ -754,7 +754,7 @@ class TestFrozenGroupPass(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client.attempts[0][2], {"reply_to": 70})
         self.assertEqual(client.attempts[1][2], {})
         self.assertEqual(client.sent, [(-707, chunks[0], {"reply_to": 70})])
-        buf_push.assert_called_once_with(
+        buf_push.assert_awaited_once_with(
             chat_id, f"Praxis: {chunks[0]}", author="Praxis", is_dm=False,
             record_life=True)
         self.assertNotIn(chat_id, wakes)

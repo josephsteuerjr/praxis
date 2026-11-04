@@ -191,8 +191,8 @@ NUMBERS: tuple[tuple[str, str, str, str], ...] = (
     ("own_report_clips", "core/subagents.py", r"(?m)^LOST_RECAP_CHARS = (\d+)", "{:g} симв"),
     ("own_report_clips", "mailer.py", r"(?m)^_REASON_CHARS = (\d+)", "{:g} симв"),
     # Второй рез вывода хоста — мой собственный, и он МЕНЬШЕ демонского, то есть связывает он.
-    ("host_text_clip", "agent.py",
-     r'def _host_text_cap\(\)[\s\S]*?return (\d+)', "{:g} симв"),
+    ("host_text_clip", "context_policy.py",
+     r'(?m)^HOST_TEXT_DEFAULT = (\d+)', "{:g} симв"),
     # Записка комнаты: сколько ждём межпроцессный замок. Число едет за notes.py, а не копией.
     ("scratch_note_lock", "notes.py", r"(?m)^_LOCK_WAIT_SEC = ([\d.]+)", "{:g}с"),
     # Пределы follow-up: что влезает в ленту пульса, сколько писем за тик, сколько истории

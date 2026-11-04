@@ -512,6 +512,10 @@ class RunManager:
         self._settled_signatures: dict[
             str, tuple[tuple[int, int, int], tuple[int, int, int]]
         ] = {}
+        # Reuse immutable Path objects, never directory membership or authority.
+        # Each lookup enumerates current names and checks manifest existence.
+        self._discovery_rows: dict[str, tuple[str, Path, Path]] = {}
+        self._settled_wal_paths: dict[Path, Path] = {}
 
     @staticmethod
     def _file_signature(path: Path) -> tuple[int, int, int]:
@@ -523,8 +527,11 @@ class RunManager:
         # Manifest publication is atomic, but a crashed reversible reopen can exist
         # only in the append-only event stream. Both files are therefore part of
         # the cache-coherence boundary.
-        return (self._file_signature(manifest_path),
-                self._file_signature(manifest_path.parent / "events.jsonl"))
+        wal_path = self._settled_wal_paths.get(manifest_path)
+        if wal_path is None:
+            wal_path = manifest_path.with_name("events.jsonl")
+            self._settled_wal_paths[manifest_path] = wal_path
+        return (self._file_signature(manifest_path), self._file_signature(wal_path))
 
     def _cache_settled(
             self, run_id: str, manifest_path: Path, *,
@@ -749,18 +756,74 @@ class RunManager:
     def path(self, run_id: str) -> Path:
         return self._find(run_id)
 
+    def _manifest_rows(self) -> list[tuple[str, Path, Path]]:
+        """Read current membership without recursive per-run directory walks.
+
+        Only immutable logical paths are cached. Late targets, renamed directories
+        and alias changes are rediscovered on every call; a raced listing cannot
+        become a persistent membership verdict. WAL/status validation stays below.
+        """
+        def names_at(path, *, directories_only):
+            found = []
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    try:
+                        if not directories_only or entry.is_dir():
+                            found.append(entry.name)
+                    except OSError:
+                        continue
+            return sorted(found, key=os.path.normcase)
+        try:
+            months = names_at(self.root, directories_only=True)
+        except OSError:
+            return []
+        result = []
+        for month in months:
+            path = os.path.join(os.fspath(self.root), month)
+            try:
+                names = names_at(path, directories_only=False)
+            except OSError:
+                continue
+            for name in names:
+                directory = os.path.join(path, name)
+                row = self._discovery_rows.get(directory)
+                if row is None:
+                    run_dir = Path(directory)
+                    row = (name, run_dir, run_dir / "manifest.json")
+                    self._discovery_rows[directory] = row
+                try:
+                    # glob admits a literal directory entry even when its final
+                    # symlink is broken. Its contents must remain unproven below.
+                    row[2].lstat()
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                except OSError:
+                    # A readable run directory need not be searchable (r--/no x).
+                    # glob can still see its names; preserve that fail-open case.
+                    # Only this exceptional branch walks an individual run dir.
+                    try:
+                        with os.scandir(row[1]) as entries:
+                            present = any(os.path.normcase(e.name)
+                                          == os.path.normcase("manifest.json")
+                                          for e in entries)
+                    except OSError:
+                        continue
+                    if not present:
+                        continue
+                result.append(row)
+        return result
+
     def run_ids(self) -> list[str]:
         """Return all durable run ids in stable creation-directory order."""
         if not self.root.exists():
             return []
         result: list[str] = []
-        for manifest_path in sorted(self.root.glob("*/*/manifest.json")):
-            run_id = manifest_path.parent.name
+        for run_id, run_dir, manifest_path in self._manifest_rows():
             try:
                 self._validate_id(run_id)
             except ValueError:
                 continue
-            self._paths[run_id] = manifest_path.parent
+            self._paths[run_id] = run_dir
             result.append(run_id)
         return result
 
@@ -801,13 +864,12 @@ class RunManager:
         if not self.root.exists():
             return result
         settled = self._settled
-        for manifest_path in sorted(self.root.glob("*/*/manifest.json")):
-            run_id = manifest_path.parent.name
+        for run_id, run_dir, manifest_path in self._manifest_rows():
             try:
                 self._validate_id(run_id)
             except ValueError:
                 continue
-            self._paths[run_id] = manifest_path.parent
+            self._paths[run_id] = run_dir
             if run_id in settled:
                 try:
                     unchanged = (self._settled_signatures.get(run_id)
@@ -872,6 +934,33 @@ class RunManager:
                 deadline_monotonic=deadline_monotonic,
             )
             return self._status_locked(manifest, ledger)
+
+    def live_run_summaries(self) -> list[dict]:
+        """Orientation without historical locks or full tool-ledger reconstruction.
+
+        Discovery retains every unproven run, including WAL-only reopen. Busy or
+        unreadable live manifests stay visible as unknown rather than blocking
+        the entire instrument. Detailed control still uses status().
+        """
+        rows = []
+        identifiers = self.live_run_ids()
+        deadline = time.monotonic() + 2.0
+        for run_id in identifiers:
+            try:
+                run_dir = self._find(run_id)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("live manifest observation budget exhausted")
+                with self._locked(run_dir, timeout=min(.2, remaining)):
+                    manifest = self._manifest_locked(run_dir)
+                row = self._manifest_listing_row(run_id, manifest)
+                if row['status'] in TERMINAL_STATUSES:
+                    continue
+            except (OSError, RunError, ValueError, TypeError, TimeoutError) as exc:
+                row = {'run_id':run_id, 'status':'unknown', 'kind':'',
+                       'created_at':'', 'observation_error':str(exc)}
+            rows.append(row)
+        return sorted(rows, key=lambda r:(r.get('created_at',''),r['run_id']), reverse=True)
 
     def list_runs(self, *, statuses: set[str] | tuple[str, ...] | list[str] | None = None,
                   kind: str = "", limit: int | None = None) -> list[dict]:

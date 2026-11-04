@@ -217,7 +217,7 @@ def places_index(memory_dir: str | Path) -> dict[str, str]:
     with _PLACES_LOCK:
         cached = _PLACES_CACHE.get(path.as_posix())
         if cached and cached[0] == stamp:
-            return cached[1]
+            return dict(cached[1])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -228,7 +228,7 @@ def places_index(memory_dir: str | Path) -> dict[str, str]:
               if isinstance(key, str) and isinstance(value, str)}
     with _PLACES_LOCK:
         _PLACES_CACHE[path.as_posix()] = (stamp, result)
-    return result
+    return dict(result)
 
 
 def same_conversation(a: Any, b: Any, places: dict[str, str] | None = None) -> bool:

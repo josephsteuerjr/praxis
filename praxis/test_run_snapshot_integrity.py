@@ -1324,11 +1324,43 @@ class FrameDidNotMove(unittest.TestCase):
             else:
                 rails.RAILS_MD.write_bytes(original)
 
+    @contextlib.contextmanager
+    def _before_approved_voice_split(self):
+        # 30.10 owner-authorized replacement of one combined voice hand by three
+        # separate hands. Keep every historical non-voice frame byte pinned.
+        # The actual new tools and their behavior are tested in test_xtts_async.
+        from xtts_tool_contracts import TOOLS as voice_tools
+        approved = {tool["name"] for tool in voice_tools}
+        # The owner-approved speech contract is the incoming artifact. Every
+        # declared hand must have one actual implementation; the historical
+        # non-speech frame below remains byte-identical.
+        self.assertEqual(len(approved), len(voice_tools))
+        self.assertTrue(all(callable(agent.TOOL_IMPL.get(name)) for name in approved))
+        names = [tool.get("name") for tool in agent.BASE_TOOLS]
+        self.assertNotIn("voice_message", names)
+        self.assertNotIn("speak", names)
+        for name in approved:
+            self.assertEqual(names.count(name), 1)
+        historical = [tool for tool in agent.BASE_TOOLS if tool.get("name") not in approved]
+        # The original combined hand was last in BASE_TOOLS, before the shared tools.
+        historical.append({"name": "speak"})
+        # 02.11 explicit Forge API additions. Project only these names out of
+        # this historical-byte fixture; actual schemas/consumers test them live.
+        additions={'coding_control','coding_review'}
+        for name in additions:
+            self.assertEqual(sum(t['name']==name for t in agent.PRAXIS_SELF_TOOLS),1)
+        with mock.patch.object(agent, "BASE_TOOLS", historical), \
+                mock.patch.object(agent,'PRAXIS_SELF_TOOLS',[t for t in agent.PRAXIS_SELF_TOOLS if t['name'] not in additions]), \
+                mock.patch.object(agent,'OWNER_TOOLS',[t for t in agent.OWNER_TOOLS if t['name'] not in additions]), \
+                mock.patch.dict(capabilities._CACHE, {"fp": None, "snap": None}):
+            yield
+
     def test_the_state_line_of_every_turn_is_unchanged(self):
         """`capabilities.state_line()` едет в STATE каждого хода (agent.py:969)."""
         with contextlib.ExitStack() as stack:
             for patch in self._без_живых_рычагов():
                 stack.enter_context(patch)
+            stack.enter_context(self._before_approved_voice_split())
             stack.enter_context(self._свежий_манифест())
             line = capabilities.state_line()
         self.assertIn("рельсы 54: манифест свеж", line,
@@ -1498,6 +1530,7 @@ class FrameDidNotMove(unittest.TestCase):
             # аудитории вырос на `reply`/`end_turn`, и это заказано (Егор + её слово
             # 17.08). Рычаг входит в норму замера положением из манифеста, поэтому
             # его опускание с синком снова законно перемерит эти два числа.
+            stack.enter_context(self._before_approved_voice_split())
             probes = (
                 ("_DM_VOICE_FRAME", agent._DM_VOICE_FRAME, "bf4cf1643a3b2f9c"),
                 ("_GROUP_PRESENCE_FRAME", agent._GROUP_PRESENCE_FRAME, "37575d70dca033c4"),

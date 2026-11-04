@@ -42,64 +42,6 @@ class RetentionFixture(unittest.TestCase):
         return rr.inventory(self.base, min_age=dt.timedelta(days=30), now=NOW, **kwargs)
 
 
-class TestCompatibility(RetentionFixture):
-    def test_evidence_read_budget(self):
-        path = self.base / "bounded"
-        path.write_bytes(b"12345")
-        with self.assertRaisesRegex(rr.ContractError, "byte budget"):
-            rr.read_evidence_bytes(path, max_bytes=4)
-
-
-    def test_missing_safe_openat_features_fail_with_contract_error(self):
-        self.create_run("run-old")
-        with mock.patch.object(rr, "_SAFE_OPENAT_SUPPORTED", False):
-            with self.assertRaisesRegex(rr.ContractError, "POSIX openat"):
-                self.inventory(discover_open_evidence=False)
-            locator = rr.ArchiveLocator(
-                "run-old", "result", "result-0001", "results/0001-tool.log",
-                "objects/body", "0" * 64, 0, "0" * 64, 0, OLD)
-            with self.assertRaisesRegex(rr.ContractError, "POSIX openat"):
-                locator.verify(self.base)
-            runs, errors = rr.discover_open_evidence_runs(self.base)
-            self.assertEqual(runs, set())
-            self.assertTrue(errors and errors[0].startswith("compatibility:"))
-
-
-    def test_bad_open_evidence_state_fails_closed_for_all_candidates(self):
-        if not rr._SAFE_OPENAT_SUPPORTED:
-            with self.assertRaisesRegex(rr.ContractError, "POSIX openat/no-follow support"):
-                self.inventory()
-            return
-        self.create_run("run-old")
-        desires = self.base / "memory/desires"
-        desires.mkdir(parents=True)
-        (desires / "events.jsonl").write_text("{broken\n", encoding="utf-8")
-        report = self.inventory()
-        self.assertEqual(report["runs"][0]["excluded_reason"],
-                         "open_evidence_state_unreadable")
-        self.assertTrue(report["open_evidence_scan_errors"])
-
-
-    def test_unsupported_inventory_refuses_before_opening_any_path(self):
-        with mock.patch.object(rr, "_SAFE_OPENAT_SUPPORTED", False), mock.patch.object(rr.os, "open") as opened:
-            with self.assertRaisesRegex(rr.ContractError, "POSIX openat"):
-                self.inventory(discover_open_evidence=False)
-            opened.assert_not_called()
-
-    def test_locator_schema_validation_does_not_require_openat(self):
-        good = dict(schema=rr.ARCHIVE_LOCATOR_SCHEMA, run_id="run-old",
-            evidence_kind="result", evidence_id="result-0001", source_path="results/0001-tool.log",
-            object_key="objects/run-old.tar", body_sha256="0"*64, body_size=1,
-            object_sha256="0"*64, object_size=1, archived_at=OLD, format=rr.ARCHIVE_FORMAT)
-        self.assertEqual(rr.ArchiveLocator.from_dict(good).to_dict(), good)
-        for patch in ({"evidence_id":"result-1"}, {"source_path":"results/0002-tool.log"},
-                      {"object_key":"../escape"}, {"body_sha256":"ABC"},
-                      {"archived_at":"2026-09-12"}, {"provider":"surprise"}):
-            with self.subTest(patch=patch), self.assertRaises(rr.ContractError):
-                rr.ArchiveLocator.from_dict({**good, **patch})
-
-
-@unittest.skipUnless(rr._SAFE_OPENAT_SUPPORTED, "requires POSIX openat/no-follow support")
 class TestInventory(RetentionFixture):
     def test_classifies_only_old_closed_terminal_bytes(self):
         old = self.create_run("run-old", files={
@@ -177,6 +119,11 @@ class TestInventory(RetentionFixture):
             self.assertEqual(row["excluded_reason"], "inconsistent_terminal_state")
             self.assertEqual(row["reclaimable_bytes_by_class"], {})
 
+    def test_evidence_read_budget(self):
+        path = self.base / "bounded"
+        path.write_bytes(b"12345")
+        with self.assertRaisesRegex(rr.ContractError, "byte budget"):
+            rr.read_evidence_bytes(path, max_bytes=4)
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX FIFOs/no-follow")
     def test_authoritative_reads_reject_fifo_and_open_replacement_without_hanging(self):
@@ -350,6 +297,19 @@ class TestInventory(RetentionFixture):
         self.assertEqual(row["excluded_reason"], "inconsistent_terminal_state")
         self.assertEqual(row["reclaimable_bytes_by_class"], {})
 
+    def test_missing_safe_openat_features_fail_with_contract_error(self):
+        self.create_run("run-old")
+        with mock.patch.object(rr, "_SAFE_OPENAT_SUPPORTED", False):
+            with self.assertRaisesRegex(rr.ContractError, "POSIX openat"):
+                self.inventory(discover_open_evidence=False)
+            locator = rr.ArchiveLocator(
+                "run-old", "result", "result-0001", "results/0001-tool.log",
+                "objects/body", "0" * 64, 0, "0" * 64, 0, OLD)
+            with self.assertRaisesRegex(rr.ContractError, "POSIX openat"):
+                locator.verify(self.base)
+            runs, errors = rr.discover_open_evidence_runs(self.base)
+            self.assertEqual(runs, set())
+            self.assertTrue(errors and errors[0].startswith("compatibility:"))
 
     def test_runtime_unsupported_openat_fails_closed(self):
         import os
@@ -740,6 +700,15 @@ class TestInventory(RetentionFixture):
         self.assertEqual(report["runs"][0]["excluded_reason"],
                          "open_evidence_state_unreadable")
 
+    def test_bad_open_evidence_state_fails_closed_for_all_candidates(self):
+        self.create_run("run-old")
+        desires = self.base / "memory/desires"
+        desires.mkdir(parents=True)
+        (desires / "events.jsonl").write_text("{broken\n", encoding="utf-8")
+        report = self.inventory()
+        self.assertEqual(report["runs"][0]["excluded_reason"],
+                         "open_evidence_state_unreadable")
+        self.assertTrue(report["open_evidence_scan_errors"])
 
     def test_unknown_terminal_time_corrupt_manifest_and_symlink_are_excluded(self):
         self.create_run("run-time", terminal_at="")
@@ -754,7 +723,6 @@ class TestInventory(RetentionFixture):
         self.assertEqual(rows["run-link"]["excluded_reason"], "unsafe_symlink")
 
 
-@unittest.skipUnless(rr._SAFE_OPENAT_SUPPORTED, "requires POSIX openat/no-follow support")
 class TestArchiveLocator(unittest.TestCase):
     def test_roundtrip_and_verifies_one_copied_old_run_object(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -23,6 +23,7 @@ from pathlib import Path
 import forge
 import llm
 import run_context
+import forge_runtime
 
 
 def _now() -> str:
@@ -47,24 +48,46 @@ def _bounded_env_float(name: str, default: float, *, low: float, high: float) ->
     return max(low, min(high, value))
 
 
-def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dict],
-                               tools: list[dict] | None, logical_iteration: int):
+def _chat_with_transport_retry(request: dict, *, request_path: Path, system: str, messages: list[dict],
+                               tools: list[dict] | None, logical_iteration: int,
+                               call_options: dict | None = None, journal=None):
     """Retry an LLM iteration only while no response/tool call has reached the worker.
 
-    ``llm.chat`` either returns a complete response object or raises.  Tool dispatch starts
-    only after this helper returns, so repeating a ``BrokenChannelError`` cannot execute a
-    tool twice.  The retry budget is deliberately separate from ``max_iters``: a torn HTTP
-    body is not a model turn and must not consume the agent's reasoning budget.
+    Tool dispatch starts only after this helper returns. Received provider output
+    carried by TornStreamError is retained without replay: it may include opaque
+    reasoning or server-side work. Empty transport retries have a separate budget.
     """
     retries = _bounded_env_int("PRAXIS_FORGE_TRANSPORT_RETRIES", 2, low=0, high=8)
     pause = _bounded_env_float("PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC", 2.0,
                                low=0.0, high=60.0)
     for attempt in range(retries + 1):
+        _control(request_path)  # Pause/Stop may arrive during a failed call or retry delay.
         try:
-            return llm.chat("voice", system=system, messages=messages, tools=tools,
-                            model=str(request.get("model") or "").strip() or None)
+            with llm.single_provider_attempt():
+                return llm.chat("voice", system=system, messages=messages, tools=tools,
+                                model=str(request.get("model") or "").strip() or None,
+                                **(call_options or {}))
         except llm.BrokenChannelError as exc:
-            if attempt >= retries:
+            retry = (attempt < retries and not isinstance(exc,llm.TornStreamError) and getattr(exc,'partial',None) is None
+                     and getattr(exc,'request_not_admitted',False) is True)
+            if journal is not None:
+                partial = getattr(exc, "partial", None)
+                reference = None
+                if partial is not None:
+                    reference = journal.payload(json.dumps({"text": partial.text, "blocks": partial.blocks,
+                        "stop_reason": partial.stop_reason, "model": partial.model,
+                        'usage':getattr(partial,'usage',{}),'framework':getattr(partial,'framework',''),
+                        'provider_observation':getattr(partial,'provider_observation',{}),
+                        "assistant": _assistant(partial)}, ensure_ascii=False))
+                journal.event("model_transport_error", error=f"{type(exc).__name__}: {exc}",
+                              output_ref=reference, attempt=attempt, retry=retry,
+                              partial_not_dispatched=partial is not None)
+                import forge_usage
+                forge_usage.record(request_path.parent.parent.parent,unit_id=request['id'],
+                    generation=journal.state['generation'],call_id=f'{logical_iteration}:attempt:{attempt}',
+                    kind='transport_refused' if getattr(exc,'request_not_admitted',False) is True and partial is None else 'transport_unknown',
+                    output_ref=reference,usage=getattr(partial,'usage',None))
+            if not retry:
                 raise
             retry_number = attempt + 1
             print(
@@ -87,9 +110,24 @@ def _chat_with_transport_retry(request: dict, *, system: str, messages: list[dic
 
 
 def _write(path: Path, data: dict) -> None:
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    forge_runtime.atomic_json(path, data)
+
+
+def _publish_result(request_path: Path, task_id: str, data: dict) -> bool:
+    """Stop and worker finalization share one CAS boundary; never replace a settled result."""
+    with forge._mutation_lock(task_id):
+        result = request_path.parent / "result.json"
+        if result.exists():
+            prior = forge._read_json(result)
+            if not isinstance(prior, dict) or str(prior.get("status") or "") not in forge._LIVE_UNIT_STATES:
+                return False
+            data = {**prior, **data}  # preserve any earlier partial observations
+        if data.get("status") in {"done", "stalled"}:
+            reason = forge._admission_reason(task_id, str(request_path))
+            if reason:
+                raise WorkerControlStopped(reason)
+        _write(result, data)
+        return True
 
 
 def _obj(properties: dict, required: list[str]) -> dict:
@@ -148,7 +186,9 @@ EDIT_TOOL = {
     "description": (
         "Edit inside this task root. replace is an exact unique replacement; write creates or "
         "rewrites a file; patch applies a unified diff only after git apply --check. Pass the "
-        "sha256 returned by inspect(read) as expected_sha256 when another worker may race you."
+        "full sha256 from inspect(read) as expected_sha256 for write/replace when another "
+        "worker may race you (legacy 16-hex digests remain accepted). A multi-file patch "
+        "refuses expected_sha256 rather than pretending it checked one file's hash."
     ),
     "input_schema": _obj({
         "action": {"type": "string", "enum": ["replace", "write", "patch"]},
@@ -185,16 +225,22 @@ PROCESS_TOOL = {
 DELEGATE_TOOL = {
     "name": "delegate",
     "description": (
-        "Spawn another independent fresh-context coding agent on this same task. Use several scouts "
-        "for parallel reconnaissance, a worker for a separable implementation, or a reviewer for a "
-        "hostile second look. Returns immediately; poll it through inspect(status) or ask the parent."
+        "Spawn a child fresh-context worker, poll/stop agent descendants, or disposition their "
+        "exact terminal result. The parent identity comes from your worker request, never from "
+        "model arguments. Stop includes jobs owned by the selected agent subtree; unrelated task jobs are preserved. "
+        "disposition requires the full result_sha256 returned by poll. To execute a queued editing "
+        "child, wait explicitly yields your shared-root writer slot, blocks all your other work, "
+        "and returns its full terminal result before you regain ownership. First settle detached jobs."
     ),
     "input_schema": _obj({
+        "action": {"type": "string", "enum": ["spawn", "list", "poll", "stop", "disposition", "wait"]},
+        "agent_id": {"type": "string"}, "result_sha256": {"type": "string"},
+        "disposition": {"type": "string", "enum": ["integrated", "irrelevant", "deferred"]},
         "brief": {"type": "string"},
         "role": {"type": "string", "enum": ["scout", "worker", "reviewer"]},
         "model": {"type": "string", "description": "Optional per-agent model; omitted keeps the voice-role default."},
         "max_iters": {"type": "integer"},
-    }, ["brief", "role"]),
+    }, ["action"]),
 }
 
 CHECKPOINT_TOOL = {
@@ -211,8 +257,8 @@ def _system(request: dict) -> str:
     identity = f"{request.get('task_id') or ''}:{request.get('id') or ''}"
     cache_scope = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
     stance = {
-        "scout": "You are a reconnaissance agent. Inspect broadly, run non-mutating probes when useful, and return concrete evidence and file/line references.",
-        "reviewer": "You are an adversarial code reviewer. Read the actual diff and relevant code, run focused checks, and identify real defects or explicitly clear it.",
+        "scout": "You are a reconnaissance agent. Inspect broadly and return concrete evidence and file/line references; ask a worker for process probes.",
+        "reviewer": "You are an adversarial code reviewer. Read the actual diff and relevant code, identify real defects or explicitly clear it; ask a worker for executable checks.",
         "worker": "You are an implementation agent. Orient, edit the real isolated working tree, run checks, and leave it materially closer to done. Do not stop at recommendations when you can act.",
     }[role]
     orientation = forge.inspect(request["task_id"], "orientation")
@@ -232,9 +278,11 @@ Operating contract:
 - The task root is your exact address. Inspect current files and git state; never invent project facts.
 - Work autonomously and use as many tool turns as the job needs. The parent can run other agents concurrently.
 - For concurrency-sensitive edits, read the file hash and pass expected_sha256; a mismatch is a signal to rebase your reasoning, not to overwrite blindly.
-- `run` is arbitrary shell for build/test/probes. `process` is for servers, watchers and other long-lived commands. `delegate` can create further fresh-context specialists.
-- Use semantic `inspect` actions before broad text guessing. Use `verify` for a persisted test matrix, and `signal` to leave findings/contracts/blockers in the shared DAG mailbox.
+- A worker may use `run` for arbitrary build/test/probes, `process` for long-lived commands, and `verify` for a persisted matrix. A scout or reviewer cannot launch them; share needed checks with a worker using `signal`. Stop of an agent branch also requests Stop for its descendant-owned process/verification jobs. A job keeps custody until its whole command tree is proven settled; an unknown outcome is never a clean Stop. Legacy task-scoped jobs without a parent require explicit job or whole-task control.
+- Use semantic `inspect` actions before broad text guessing. `delegate` can create further specialists within your role; `signal` leaves findings/contracts/blockers in the shared DAG mailbox.
+- Editing children queue behind your single shared-root writer slot. `delegate(action="wait", agent_id=...)` explicitly yields that slot to ONE immediate worker child and returns its full result. You cannot work meanwhile; settle detached processes/checks first. Parent Stop/Pause still fences the child.
 - Never put credentials or secret contents in your prose. Code facts, commands, diffs and test output are welcome.
+- Independent reviewers are voluntary help for ordinary tasks, not permission to finish. Retain their exact findings; an author's decision does not rename BLOCKED/findings to clear. Conflicting source updates have a separate mandatory battery/panel protocol.
 - End with a compact but complete result: what you learned/changed, exact verification, remaining risks, and the next useful integration step. Do not merely narrate intentions.
 """
 
@@ -242,26 +290,49 @@ Operating contract:
 def _dispatch(request: dict, name: str, args: dict) -> str:
     task_id = request["task_id"]
     clean = {k: v for k, v in (args or {}).items() if v is not None}
+    if any(k.startswith('_') or k in {'task_id','root','parent_unit_id','run_context','spawned_by'} for k in clean):
+        return 'Worker authority fields are runtime-owned; tool request refused.'
+    role = str(request.get("role") or "worker")
+    # The provider may return a tool name absent from the offered schema. Keep
+    # read-oriented roles read-only at the actual dispatch boundary, not only in
+    # the prompt or tool list. Arbitrary shell/verification commands can mutate.
+    if role != "worker" and name not in {"inspect", "signal", "delegate",'transcript'}:
+        return f"{role}: tool {name} refused (read-oriented role)."
+    if role != "worker" and name == "inspect" and clean.get("action") not in {
+        "status", "orientation", "overview", "review", "model", "symbols",
+        "references", "diagnostics", "impact", "checks", "lessons", "mailbox",
+        "read", "list", "search", "diff", "history",
+    }:
+        return f"{role}: inspect action refused (read-oriented role)."
+    if name == 'transcript':
+        if set(clean)-{'sha256','offset','limit'}:return 'Unsupported transcript parameters.'
+        address=request.get('_verified_request_path')
+        if not address:raise ValueError('verified worker identity required')
+        forge._worker_parent(task_id,address)
+        return json.dumps(forge_runtime.read_payload(Path(address).parent,clean['sha256'],
+                          int(clean.get('offset',0)),int(clean.get('limit',8000))),ensure_ascii=False)
     if name == "inspect":
         return forge.inspect(task_id, **clean)
     if name == "edit":
-        return forge.edit(task_id, **clean)
+        return forge.edit(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "run":
-        return forge.run(task_id, **clean)
+        return forge.run(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "process":
-        return forge.process(task_id, **clean)
+        return forge.process(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "verify":
-        return forge.verify(task_id, **clean)
+        return forge.verify(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     if name == "signal":
         return forge.swarm(task_id, "signal", node_id=str(request.get("node_id") or request.get("id") or ""),
                            kind=str(clean.get("kind") or "finding"),
                            message=str(clean.get("message") or ""), files=clean.get("files") or [])
     if name == "delegate":
-        # расписка манометра: бриф сочинил ЭТОТ воркер, не она напрямую
-        clean.setdefault("spawned_by", str(request.get("id") or ""))
-        return forge.agent(task_id, "spawn", **clean)
+        action = str(clean.pop("action", "spawn"))
+        if action == "spawn":
+            clean.pop("agent_id", None)  # only Forge mints a child identity
+        return forge.agent(task_id, action, _parent_request_path=request.get("_verified_request_path", ""),
+                           **clean)
     if name == "checkpoint":
-        return forge.checkpoint(task_id, **clean)
+        return forge.checkpoint(task_id, _parent_request_path=request.get("_verified_request_path", ""), **clean)
     return f"Unknown tool {name}"
 
 
@@ -287,15 +358,164 @@ def run(request_path: Path) -> int:
     return _run_request(request_path, request)
 
 
-def _run_request(request_path: Path, request: dict) -> int:
-    result_path = request_path.parent / "result.json"
-    trace: list[dict] = []
+TRANSCRIPT_TOOL={'name':'transcript','description':'Read an immutable full output from this execution by exact SHA; offset and limit page Unicode characters. Other task/private directories are inaccessible.',
+    'input_schema':_obj({'sha256':{'type':'string'},'offset':{'type':'integer'},'limit':{'type':'integer'}},['sha256'])}
+
+
+def _route_identity(request):
+    config=getattr(llm,'_config',None)
+    if not callable(config):return None
+    value=config()
+    binding={'voice':value.get('roles',{}).get('voice',{}),'frameworks':value.get('frameworks',{}),
+             'requested_model':request.get('model','')}
+    # Credentials/endpoints are never serialized; only this private digest is
+    # retained to detect an incompatible route/authority change before reuse.
+    return hashlib.sha256(json.dumps(binding,sort_keys=True).encode()).hexdigest()
+
+
+class WorkerControlStopped(RuntimeError):
+    pass
+
+
+def _control(request_path: Path) -> None:
+    decision = forge.worker_control(str(request_path))
+    if not decision.get("allowed"):
+        raise WorkerControlStopped(str(decision.get("reason") or "worker control denied"))
+
+
+def _assistant(response, blocks=None):
+    helper = getattr(llm, "assistant_message", None)
+    selected = ((response.blocks or ([{"type": "text", "text": response.text}] if response.text else []))
+                if blocks is None else blocks)
+    return helper(response, selected) if callable(helper) else {"role": "assistant", "content": selected}
+
+
+def _loop(journal, request_path, request, adapter):
+    """Persist each intent before effects; move the cursor only after durable result."""
+    state = journal.state
+    while state["next_boundary"] != "finalize":
+        _control(request_path)
+        boundary = state["next_boundary"]
+        if boundary == "tools_ready":
+            pending = state["pending"]
+            if pending["next_call"] == len(pending["calls"]):
+                state["messages"].append(pending["assistant"])
+                state["messages"].append({"role": "user", "content": pending["results"]})
+                journal.save("model_ready", "ready", pending={})
+                continue
+            call = pending["calls"][pending["next_call"]]
+            args = {k: v for k, v in (call.get("input") or {}).items() if v is not None}
+            input_ref = journal.payload(json.dumps(args, ensure_ascii=False, sort_keys=True))
+            # Checkpoint in-flight FIRST. A crash before the event or after the
+            # external effect both leave an unknown, never a duplicate dispatch.
+            _control(request_path)
+            journal.save("tool_in_flight", "tool")
+            journal.event("tool_start", call_id=call["id"], tool=call["name"], input_ref=input_ref)
+            journal.event("tool_dispatch", call_id=call["id"], tool=call["name"],
+                          receipt={"kind": "python", "handler": (f"{type(adapter).__module__}.{type(adapter).__qualname__}.dispatch"
+                                      if adapter is not None else "forge_worker._dispatch"),
+                                   "status": "entered"})
+            try:
+                output = (adapter.dispatch(request, call["name"], args) if adapter is not None
+                          else _dispatch(request, call["name"], args))
+            except Exception as exc:
+                output = f"Tool error {type(exc).__name__}: {exc}"
+            output = str(output)
+            output_ref = journal.payload(output)
+            event = journal.event("tool_result", call_id=call["id"], tool=call["name"],
+                                  input_ref=input_ref, output_ref=output_ref)
+            state["trace"].append({"tool": call["name"], "input_ref": input_ref,
+                                    "output_ref": output_ref, "call_id": call["id"],
+                                    "iteration": state["iteration"], "at": event["at"]})
+            # Complete result also goes to the model transcript; no invisible tail
+            # and no second lossy '30 calls / 2000 chars' terminal history.
+            pending["results"].append({"type": "tool_result", "tool_use_id": call["id"], "content": output})
+            pending["next_call"] += 1
+            journal.save("tools_ready", "ready")
+            continue
+        if boundary == "model_ready" and state["iteration"] >= state["max_iters"]:
+            journal.save("summary_ready", "finishing")
+            continue
+        if boundary not in {"model_ready", "summary_ready"}:
+            raise forge_runtime.ContinuationRefused("unexpected/unknown execution boundary")
+        summarizing = boundary == "summary_ready"
+        if not summarizing:
+            state["iteration"] += 1
+        # Freeze this execution's first system frame. New observations arrive as
+        # tool results/messages; refreshing orientation would replace old input.
+        system = state.get('system') or (adapter.system(request) if adapter is not None else _system(request))
+        if state.get('route_identity') != _route_identity(request):
+            raise forge_runtime.ContinuationRefused('provider route changed; explicit new epoch/rework required')
+        journal.save("summary_in_flight" if summarizing else "model_in_flight", "model",
+                     system=system)
+        journal.event("model_start", summary=summarizing, model_requested=request.get("model", ""))
+        import forge_usage
+        usage_call=f'{state["iteration"]}:{"summary" if summarizing else "model"}'
+        usage_directory=request_path.parent.parent.parent
+        forge_usage.record(usage_directory,unit_id=request['id'],generation=state['generation'],
+                           call_id=usage_call,kind='model_start')
+        response = _chat_with_transport_retry(
+            request, request_path=request_path, system=system, messages=state["messages"],
+            tools=None if summarizing else state["tools"],
+            logical_iteration=state["iteration"] + int(summarizing),
+            call_options=state["call_options"], journal=journal,
+        )
+        state["model"] = response.model
+        state["model_stop_reason"] = str(response.stop_reason or "")
+        response_ref = journal.payload(json.dumps({"text": response.text, "blocks": response.blocks,
+            "stop_reason": response.stop_reason, "model": response.model,
+            'framework':getattr(response,'framework',''),'provider_observation':getattr(response,'provider_observation',{}),
+            "usage": getattr(response, "usage", {}), "assistant": _assistant(response)}, ensure_ascii=False))
+        journal.event("model_result", output_ref=response_ref, summary=summarizing, model=response.model)
+        forge_usage.record(usage_directory,unit_id=request['id'],generation=state['generation'],
+                           call_id=usage_call,kind='model_result',usage=getattr(response,'usage',None),
+                           response_ref=response_ref,model=response.model,framework=getattr(response,'framework',''))
+        if summarizing or response.stop_reason != "tool_use":
+            # A textual answer is not completion of an adapter-owned transaction.
+            # Keep the same journal and budget; never replay tools or reset turns.
+            continuation = getattr(adapter, "completion_feedback", None)
+            if not summarizing and response.stop_reason == "end_turn" and callable(continuation):
+                feedback = continuation(request)
+                if feedback:
+                    state["messages"].append(_assistant(response))
+                    state["messages"].append({"role": "user", "content": feedback})
+                    journal.event("completion_deferred", reason=feedback)
+                    journal.save("model_ready", "ready", reply="", stopped_himself=False)
+                    continue
+            state["reply"] = response.text.strip()
+            if not summarizing:
+                state["stopped_himself"] = response.stop_reason == "end_turn"
+            state["messages"].append(_assistant(response))
+            # Explicit incomplete output (including hidden-only max_tokens) is
+            # retained, not an empty response to replay or summarize as success.
+            journal.save("finalize" if state["reply"] or summarizing or response.stop_reason != "end_turn"
+                         else "summary_ready", "finishing")
+            continue
+        blocks = [block for block in response.blocks if block.get("type") in {"text", "tool_use"}]
+        calls = [block for block in blocks if block.get("type") == "tool_use"]
+        if any(not call.get("id") or not call.get("name") for call in calls):
+            raise ValueError("model tool call missing identity")
+        journal.save("tools_ready", "ready", pending={"assistant": _assistant(response, blocks),
+                     "calls": calls, "next_call": 0, "results": []})
+
+
+def _run_request(request_path: Path, request: dict, *, reviewer=None, adapter=None) -> int:
+    # Historical keyword remains accepted; trusted adapters never inherit worker tools.
+    if reviewer is not None and adapter is not None:
+        raise ValueError("choose one trusted adapter")
+    adapter = adapter if adapter is not None else reviewer
+    request = {**request, "_verified_request_path": str(request_path.resolve())}
+    journal = None
     bindings = contextlib.ExitStack()
     try:
-        # Clear ambient authority even for legacy requests; always restore it.
+        # Journal/control admission can fail before captured context is parsed.
+        # None of those failures may borrow the caller's ambient identity.
         bindings.enter_context(run_context.bind_run(None))
+        journal = forge_runtime.Journal(request_path.parent)
+        prior = forge._read_json(request_path.parent / "result.json")
+        if isinstance(prior, dict) and prior.get("status") not in forge._LIVE_UNIT_STATES:
+            return 0  # terminal redelivery cannot start another model/tool turn
         captured = request.get("run_context")
-        # Empty dict is the historical serialized no-context marker.
         if captured is not None and captured != {}:
             if not isinstance(captured, dict):
                 raise TypeError("run_context must be an object or null")
@@ -303,109 +523,96 @@ def _run_request(request_path: Path, request: dict) -> int:
             from dataclasses import replace
             context = replace(context, forge_task_id=str(request["task_id"]))
             bindings.enter_context(run_context.bind_run(context))
+        _control(request_path)
         role = request.get("role") or "worker"
-        tools = [INSPECT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, SIGNAL_TOOL, DELEGATE_TOOL]
-        if role == "worker":
-            tools += [EDIT_TOOL, CHECKPOINT_TOOL]
-        messages: list[dict] = [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}]
-        max_iters = int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2)
-        reply = ""
-        final_model = ""
-        # ⚠ 10.08.2026. Цикл мог кончиться ДВУМЯ разными способами, а запись знала только
-        # один. Если модель остановилась сама — это «сделано». Если кончились ходы —
-        # это «упёрся в потолок», и воркеру при этом сказано «use as many tool turns as
-        # the job needs». Дальше forge.py:826 читал `status == "done"` и говорил ей
-        # «воркер закончил». Она узнавала о завершении там, где было исчерпание.
-        stopped_himself = False
-        used = 0
-        for _ in range(max_iters):
-            used += 1
-            # Re-orient for each logical model turn, but freeze that exact frame across
-            # transport retries of this turn. A retry must not observe a half-new system
-            # prompt; the next successful tool iteration may legitimately see new state.
-            system = _system(request)
-            response = _chat_with_transport_retry(
-                request, system=system, messages=messages, tools=tools,
-                logical_iteration=used,
-            )
-            final_model = response.model
-            if response.stop_reason != "tool_use":
-                reply = response.text.strip()
-                stopped_himself = True
-                break
-            assistant_blocks, tool_results = [], []
-            for block in response.blocks:
-                if block.get("type") == "text":
-                    assistant_blocks.append(block)
-                elif block.get("type") == "tool_use":
-                    assistant_blocks.append(block)
-                    args = {k: v for k, v in (block.get("input") or {}).items() if v is not None}
-                    try:
-                        output = _dispatch(request, block.get("name", ""), args)
-                    except Exception as exc:
-                        output = f"Tool error {type(exc).__name__}: {exc}"
-                    trace.append({"tool": block.get("name"), "input": args,
-                                  "output": str(output)[:2000], "at": _now()})
-                    tool_results.append({"type": "tool_result", "tool_use_id": block.get("id", ""),
-                                         "content": _model_tool_result(output)})
-            messages.append({"role": "assistant", "content": assistant_blocks})
-            messages.append({"role": "user", "content": tool_results})
-        if not reply:
-            system = _system(request)
-            summary_response = _chat_with_transport_retry(
-                request, system=system, messages=messages, tools=None,
-                logical_iteration=used + 1,
-            )
-            final_model = summary_response.model
-            reply = summary_response.text.strip()
-        diff = forge.inspect(request["task_id"], "diff")
+        call_options = adapter.prepare(llm, request) if adapter is not None else None
+        if adapter is not None:
+            tools = list(adapter.tools)
+        else:
+            tools = [INSPECT_TOOL, SIGNAL_TOOL, DELEGATE_TOOL,TRANSCRIPT_TOOL]
+            if role == "worker":
+                tools += [EDIT_TOOL, RUN_TOOL, PROCESS_TOOL, VERIFY_TOOL, CHECKPOINT_TOOL]
+        adapter_id = (type(adapter).__module__ + "." + type(adapter).__qualname__) if adapter is not None else ""
+        state = journal.start(request, {
+            "next_boundary": "model_ready", "iteration": 0,
+            "max_iters": int(request.get("max_iters") or 0) or max(20, llm.limits().max_tool_iters * 2),
+            "messages": [{"role": "user", "content": str(request.get("brief") or "Execute the brief.")}],
+            "tools": tools, "call_options": call_options, "adapter_id": adapter_id,
+            'route_identity':_route_identity(request),
+            "trace": [], "pending": {}, "reply": "", "model": "", "stopped_himself": False,
+        })
+        _loop(journal, request_path, request, adapter)
+        _control(request_path)
+        trace = journal.trace()
+        diff = str(adapter.diff() if adapter is not None else forge.inspect(request["task_id"], "diff"))
+        diff_ref = journal.payload(diff)
+        stopped = state["stopped_himself"]
+        model_stop = str(state.get("model_stop_reason") or "")
         data = {
-            "status": "done" if stopped_himself else "stalled",
-            "complete": bool(stopped_himself),
-            "stop": ("модель остановилась сама" if stopped_himself else
-                     "кончились ходы: %d из %d" % (used, max_iters)),
-            "iters_used": used, "iters_max": max_iters,
-            # Упавшие руки не делают прогон ошибкой — падение руки это сведение, а не
-            # провал. Но «done при десяти подряд упавших руках» — тоже неправда, поэтому
-            # число едет в запись и видно рядом со статусом.
-            "tool_errors": sum(1 for t in trace
-                               if str(t.get("output") or "").startswith("Tool error")),
-            "finished": _now(), "role": role,
-            "model_requested": str(request.get("model") or ""),
-            "model": final_model,
-            "result": reply, "tool_calls": len(trace), "trace": trace[-30:],
-            "diff_tail": diff[-8000:],
+            "status": "done" if stopped else "stalled", "complete": bool(stopped),
+            "stop": ("модель остановилась сама" if stopped else
+                     (f"ответ не завершён: stop_reason={model_stop}" if model_stop != "end_turn" else
+                      "кончились ходы: %d из %d" % (state["iteration"], state["max_iters"]))),
+            "stop_reason": model_stop,
+            "iters_used": state["iteration"], "iters_max": state["max_iters"],
+            "tool_errors": sum(str(row["output"]).startswith("Tool error") for row in trace),
+            "finished": _now(), "role": role, "model_requested": str(request.get("model") or ""),
+            "model": state["model"], "result": state["reply"], "tool_calls": len(trace),
+            "trace": trace, "diff_tail": diff[-8000:], "diff_ref": diff_ref,
+            "generation": state["generation"], "events_ref": {"file": "events.jsonl", "last_seq": journal.seq},
         }
-        _write(result_path, data)
+        if adapter is not None:
+            data.update(adapter.result_stamp())
+        if not _publish_result(request_path, request["task_id"], data):
+            journal.progress("settled_elsewhere")
+            return 0
+        journal.event("result_published", status=data["status"], diff_ref=diff_ref)
+        journal.save("settled", "finished", result_sha256=hashlib.sha256(
+            (request_path.parent / "result.json").read_bytes()).hexdigest())
         forge._event(request["task_id"], "agent_finished", agent_id=request["id"], role=role,
-                     summary=(f"{request['id']} done; tools={len(trace)}" if stopped_himself
-                              else f"{request['id']} исчерпал ходы {used}/{max_iters}; "
-                                   f"tools={len(trace)}"))
-        # PASS 30 Этап 1: завершение — входящее событие родительской петли, не повод
-        # ждать таймера. Пишем из СВОЕГО процесса, durable; best-effort (не роняет выход).
+                     summary=f"{request['id']} {data['status']}; tools={len(trace)}")
         forge.emit_unit_event(request["task_id"], request["id"], data, request=request)
-        print(f"{request['id']} " + ("done" if stopped_himself
-                                          else f"исчерпал ходы {used}/{max_iters}")
-              + f"; tools={len(trace)}", flush=True)
+        print(f"{request['id']} {data['status']}; tools={len(trace)}", flush=True)
         return 0
+    except forge_runtime.ContinuationRefused as exc:
+        # Do not overwrite a previous checkpoint or settle a still-live writer.
+        print(f"Continuation refused: {exc}", flush=True)
+        return 2
     except Exception as exc:
-        data = {"status": "error", "finished": _now(),
+        controlled = isinstance(exc, WorkerControlStopped)
+        data = {"status": "stopped" if controlled else "error", "finished": _now(),
                 "model_requested": str(request.get("model") or ""),
-                "model": str(locals().get("final_model") or ""),
-                "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()[-8000:],
-                "trace": trace[-20:]}
-        _write(result_path, data)
+                "model": (journal.state.get("model", "") if journal else ""),
+                "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc(),
+                "trace": journal.trace() if journal and journal.state else []}
         try:
-            forge._event(request["task_id"], "agent_error", agent_id=request.get("id"),
-                         summary=data["error"])
+            if journal and journal.state:
+                journal.event("control_stopped" if controlled else "worker_error", error=data["error"])
+                journal.progress("stopped" if controlled else "error")
+            if not _publish_result(request_path, request["task_id"], data):
+                return 2
+        except Exception:
+            print(data["traceback"], flush=True)
+            return 2
+        try:
+            forge._event(request["task_id"], "agent_error", agent_id=request.get("id"), summary=data["error"])
         except Exception:
             pass
-        forge.emit_unit_event(request.get("task_id") or "", request.get("id") or "",
-                              data, request=request)
+        forge.emit_unit_event(request.get("task_id") or "", request.get("id") or "", data, request=request)
         print(data["traceback"], flush=True)
         return 2
     finally:
-        bindings.close()
+        try:
+            if journal is not None and journal.state:
+                # The model/tool loop is now over. Relinquish only task-root
+                # mutation; the immutable result/private journal stay intact.
+                release = getattr(forge, "release_worker_root", None)
+                if callable(release):
+                    release(request_path)
+        finally:
+            if journal is not None:
+                journal.close()
+            bindings.close()
 
 
 if __name__ == "__main__":

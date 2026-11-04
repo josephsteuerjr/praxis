@@ -1,11 +1,27 @@
-# Hélène source and package bindings
+# Source and package bindings
 
-The 2.3.0 delivery uses one frozen source composition: current `praxis/`, the
-explicit `helene/core/` overlay and current `desk/`. Its source ZIP binds the raw
-Git files and executable modes. Each platform archive carries its actual
-application/core inventories and version-bound verification material. Match
-those inventories and the release evidence; a common version label alone does
-not prove equal source or native inputs.
+## Stable desktop 2.3.0
+
+The immutable `v2.3.0` tag at
+`3194d41ece4de021f913c31f240d17b2faf91786` binds the released desktop source,
+all four platform archives and their verification inventories. Build or inspect
+that tag to reproduce the released composition. `desk/` and `helene/core/`
+on main retain that desktop code, with the subsequent release documentation.
+
+## Current cloud Praxis mirror
+
+`praxis/` on main mirrors qualified live cloud source
+`3b46b63aa4ce499e3da176f6bc4859e94dc71916` (Fish implementation
+`c18b538bdb2098b55b3dd1fd97a458967a488cdf` plus a private status-only commit).
+`CORE-SOURCE.json` records every selected source digest and executable mode.
+Private memory, soul, workspace, credentials and private Git history are excluded.
+Two existing public documentation sanitizations preserve the executable AST.
+The deployed code and source Git agree after line-ending normalization.
+
+Updating this cloud mirror is a source synchronization, not a new desktop build
+or cloud deployment. Since `praxis/` is also the shared base for development,
+the composition of main can advance beyond the frozen desktop release. The
+release tag and shipped per-platform inventories remain its authority.
 
 The records below describe historical 2.2.9 deliveries. Their immutable tags,
 digests and older voice references are provenance, not the current 2.3.0 source

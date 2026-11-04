@@ -547,7 +547,7 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
         life = Mock(return_value={"id": "life-edit-41"})
         hot_revision = Mock(return_value={"matched": True})
         meta_update = Mock()
-        refresh = Mock(return_value=False)
+        refresh = AsyncMock(return_value=False)
         wakes = {}
 
         with (
@@ -568,7 +568,7 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
             patch.object(runner.memory_life, "record_message", life),
             patch.object(runner.memory_life, "note_message_revision", hot_revision),
             patch.object(runner.bufstore, "meta_update", meta_update),
-            patch.object(runner, "_refresh_group_wake_context", refresh),
+            patch.object(runner, "_refresh_group_wake_context_offloop", refresh),
             patch.object(runner, "_group_wakes", wakes),
         ):
             await runner.on_edited(event)
@@ -613,11 +613,11 @@ class TestEditedIncoming(TempGroupMemory, unittest.IsolatedAsyncioTestCase):
             "Alice, reply to #77: [Изображение] corrected caption",
             actor="Alice", ts=1784030400.0,
         )
-        self.assertEqual(refresh.call_count, 1)
-        refresh.assert_called_with(
+        self.assertEqual(refresh.await_count, 1)
+        refresh.assert_awaited_with(
             "-1001__topic__77", message_id=41,
             query="[Изображение] corrected caption", author="Alice",
-            media_snapshot=(),
+            source_id=source_id, media_snapshot=(),
         )
         self.assertEqual(wakes, {})
 

@@ -442,7 +442,7 @@ def _wt_root(proposal_id: str) -> str:
     return str(selfdev.worktree_path(str(proposal_id).strip())) if proposal_id else ""
 
 
-def fs_write(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
+def _fs_write_unlocked(path: str, content: str, proposal_id: str = "", overwrite: bool = False,
              force: bool = False) -> str:
     """Создать файл; overwrite=True — осознанно переписать существующий.
 
@@ -479,7 +479,7 @@ def fs_write(path: str, content: str, proposal_id: str = "", overwrite: bool = F
     return f"Записала {path} ({len(content)} симв.)."
 
 
-def fs_edit(path: str, old: str, new: str, proposal_id: str = "") -> str:
+def _fs_edit_unlocked(path: str, old: str, new: str, proposal_id: str = "") -> str:
     """Точная правка: `old` должен встречаться РОВНО один раз. 0 или >1 — отказ с подсказкой.
 
     PASS 16.5: при >1 совпадении называем номера строк первых вхождений — меньше слепых
@@ -934,3 +934,41 @@ def code_map(scope: str = "self") -> str:
     text = "\n".join(out)[:MAP_CAP] or "(нет .py файлов)"
     _MAP_CACHE.update(key=fp, text=text)
     return text
+
+
+def mutation_lock():
+    """One short shared transaction for workshop writes and local Forge edits.
+
+    A Forge patch can touch multiple files: a target-specific lock would let it
+    race an fs_edit of one hunk. Keep the lock outside project worktrees so its
+    own bytes cannot enter a proposal/commit.
+    """
+    from self_model import FileLock
+    return FileLock(BASE / "memory" / ".state" / "workshop-mutations.lock",
+                    timeout=10.0)
+
+
+def _serialized_write(path,proposal_id,operation):
+    import forge
+    import forge_roots
+    target,error=_resolve_write(path,proposal_id)
+    if target is None:return 'Не пишу: '+str(error)
+    try:
+        # Same order as Forge: physical root -> short workshop transaction.
+        with forge_roots.transaction(target.parent,forge.STATE_DIR,10):
+            reason=forge_roots.foreign_writer_reason(forge,'',root=target.parent)
+            if reason:return 'Write not admitted while Forge owns this root: '+reason
+            with mutation_lock() as lock:
+                result=operation()
+            if lock.lost_to_takeover:return 'Write outcome unknown: transaction ownership changed; inspect before retry.'
+            return result
+    except (TimeoutError,OSError) as exc:
+        return f'Write not admitted: {type(exc).__name__}: {exc}'
+
+
+def fs_write(path: str,content: str,proposal_id: str='',overwrite: bool=False,force: bool=False) -> str:
+    return _serialized_write(path,proposal_id,lambda:_fs_write_unlocked(path,content,proposal_id,overwrite,force))
+
+
+def fs_edit(path: str,old: str,new: str,proposal_id: str='') -> str:
+    return _serialized_write(path,proposal_id,lambda:_fs_edit_unlocked(path,old,new,proposal_id))

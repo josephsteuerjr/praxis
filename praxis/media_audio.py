@@ -99,7 +99,7 @@ class AudioConfig:
     stt_local_files_only: bool = True
     stt_keep_loaded: bool = True
     stt_max_bytes: int = 200 * 1024 * 1024
-    tts_backend: str = "edge"
+    tts_backend: str = "xtts"
     edge_voice: str = DEFAULT_EDGE_VOICE
     edge_rate: str = "+0%"
     edge_volume: str = "+0%"
@@ -163,7 +163,7 @@ class AudioConfig:
                 200 * 1024 * 1024,
                 name="PRAXIS_STT_MAX_BYTES",
             ),
-            tts_backend=env.get("PRAXIS_TTS_BACKEND", "edge").strip().lower() or "edge",
+            tts_backend=env.get("PRAXIS_TTS_BACKEND", "xtts").strip().lower() or "xtts",
             edge_voice=env.get("PRAXIS_EDGE_VOICE", DEFAULT_EDGE_VOICE).strip()
             or DEFAULT_EDGE_VOICE,
             edge_rate=env.get("PRAXIS_EDGE_RATE", "+0%").strip() or "+0%",
@@ -578,26 +578,12 @@ class MediaAudio:
         self.stt = stt or FasterWhisperSTT(self.config)
         if tts is not None:
             self.tts = tts
-        elif self.config.tts_backend == "piper":
-            self.tts = PiperTTS(self.config)
-        elif self.config.tts_backend == "silero":
-            try:
-                from silero_tts_client import SileroTTSConfig, SileroTTSClient
-            except ImportError as exc:
-                raise AudioDependencyError(
-                    "isolated Silero TTS support is unavailable"
-                ) from exc
-            self.tts = FallbackTTS(
-                SileroTTSClient(
-                    SileroTTSConfig.from_env(output_dir=self.config.output_dir)
-                ),
-                PiperTTS(self.config),
-            )
-        elif self.config.tts_backend == "edge":
-            self.tts = FallbackTTS(EdgeTTS(self.config), PiperTTS(self.config))
+        elif self.config.tts_backend == "xtts":
+            from xtts_tts_client import XttsTTSClient
+            self.tts = XttsTTSClient(self.config.output_dir)
         else:
             raise AudioConfigurationError(
-                "PRAXIS_TTS_BACKEND must be edge, piper, or silero, "
+                "PRAXIS_TTS_BACKEND must be xtts; retired engines have no fallback, "
                 f"got {self.config.tts_backend!r}"
             )
 

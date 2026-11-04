@@ -218,6 +218,12 @@ def _mark(payload: dict) -> str:
 
 
 def _unit_line(payload: dict) -> str:
+    if payload.get('schema')=='praxis.forge-review-result.v1':
+        return (f"{_mark(payload)} Независимое ревью {payload.get('review_id')} задачи {payload.get('task_id')}: "
+                f"{payload.get('verdict')}; exact subject {payload.get('subject_sha256')}. "
+                "Полные отдельные отчёты: coding_review(action='status', task_id='"
+                +str(payload.get('task_id'))+"', review_id='"+str(payload.get('review_id'))+
+                "'). Это наблюдаемый результат критиков, не авторское принятие и не разрешение на деплой.")
     status = str(payload.get("status") or "")
     role = str(payload.get("role") or "")
     # `lost` у юнита — супервизор умер, не оставив result.json. Контракт кладёт это в

@@ -5,6 +5,7 @@ Run: python praxis_test.py test_forge_focus_read_1410 -v
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import re
 import tempfile
@@ -22,6 +23,10 @@ class PagedRead(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
+        for name,value in [('BASE',self.root/'runtime'),('STATE_DIR',self.root/'runtime/memory/.forge'),
+                           ('TASKS_DIR',self.root/'runtime/memory/.forge/tasks')]:
+            field=mock.patch.object(forge,name,value);field.start();self.addCleanup(field.stop)
+        forge._save_task({'id':'code-read','status':'active','root':str(self.root),'scope':'self','goal':'read'})
         self.task = mock.patch.object(forge, "_task_root", return_value=(
             {"id": "code-read", "root": str(self.root), "scope": "self"}, self.root, ""))
         self.task.start()
@@ -136,7 +141,7 @@ class PagedRead(unittest.TestCase):
         captured = []
 
         def chat(_request, *, messages, **_kwargs):
-            captured.append(json.loads(json.dumps(messages)))  # snapshot at actual provider boundary
+            captured.append(copy.deepcopy(messages))
             if len(captured) == 1:
                 return SimpleNamespace(model="fake", stop_reason="tool_use", text="",
                                        blocks=[{"type": "tool_use", "id": "read-1", "name": "inspect",
@@ -144,16 +149,10 @@ class PagedRead(unittest.TestCase):
             return SimpleNamespace(model="fake", stop_reason="end_turn", text="done", blocks=[])
 
         req = {"task_id": "code-read", "role": "scout", "id": "agent-test", "brief": "read", "max_iters": 2}
-        tasks = self.root / 'tasks'
-        directory = tasks / req['task_id']
-        request_path = directory / 'agents' / req['id'] / 'request.json'
-        request_path.parent.mkdir(parents=True)
-        (directory / 'task.json').write_text(json.dumps({
-            'id': req['task_id'], 'status': 'active', 'root': str(self.root)}), encoding='utf-8')
-        request_path.write_text(json.dumps(req), encoding='utf-8')
+        request_path=forge._unit_dir('code-read','agents','agent-test')/'request.json'
+        forge._atomic_json(request_path,req)
         with mock.patch.object(forge_worker, "_system", return_value="system"), \
              mock.patch.object(forge_worker, "_chat_with_transport_retry", side_effect=chat), \
-             mock.patch.object(forge, 'TASKS_DIR', tasks), \
              mock.patch.object(forge_worker.forge, "_event"), \
              mock.patch.object(forge_worker.forge, "emit_unit_event"):
             self.assertEqual(forge_worker._run_request(request_path, req), 0)

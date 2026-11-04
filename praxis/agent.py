@@ -50,6 +50,7 @@ from dotenv import load_dotenv
 
 import appetite
 import authored_notes
+import context_policy
 import cjk_vkladki
 from cjk_vkladki import TABLE as TABLE_SHORT
 import capabilities
@@ -57,7 +58,9 @@ import computer_memory
 import context_envelope
 import desires
 import frame_continuation
+import frame_dossiers
 import frame_epoch
+import epoch_repair
 import frame_layout
 import frame_shadow
 import frame_measure
@@ -324,6 +327,8 @@ _TELETHON: dict = {}
 # Медиа-выход живого хода собирается локально и уходит в Telegram только ПОСЛЕ общего
 # read-before-write guard. ContextVar не смешивает параллельные asyncio.to_thread ходы.
 _TURN_CHANNEL: ContextVar["ChannelContext | None"] = ContextVar("praxis_turn_channel", default=None)
+# Runner-owned exact-topic FIFO; ContextVar crosses asyncio.to_thread safely.
+_TURN_ADDRESSED_INBOUND: ContextVar = ContextVar("praxis_addressed_inbound", default=None)
 # 25.09 (ревью V1-1): тексты записей `[private]`, которые ехали в кадр ЭТОГО хода в комнате —
 # для механического пола на исходящей границе (см. private_record_floor).
 _PRIVATE_IN_FRAME: ContextVar[tuple[str, ...]] = ContextVar("praxis_private_in_frame", default=())
@@ -1583,6 +1588,7 @@ def build_state_evidence_block(*, hide_identity_load: bool = False,
         pass
     try:
         add("restart_reason", _read(STATE_DIR / "restart_reason.txt"))
+        add("epoch_repair_now", epoch_repair.state_line())
     except Exception:
         pass
     try:
@@ -1964,10 +1970,10 @@ def tool_journal(entry: str, salience: int = 2, decision: bool = False) -> str:
     return "Записала в дневник."
 
 
-# Normal and resumed tool execution both persist a 4000-character inline view.
+# Normal and resumed tool execution share an explicitly migrated inline budget.
 # Keep the complete read response (metadata included) inside that view so the
 # continuation never skips bytes that were externalized out of the model's sight.
-_MEMORY_COMPACT_READ_INLINE_CHARS = 4000
+_MEMORY_COMPACT_READ_INLINE_CHARS = 4000  # historical default, before migration
 
 
 def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text: str = "",
@@ -2022,13 +2028,14 @@ def tool_memory_compact(action: str, place: str = "", compact_id: str = "", text
             return json.dumps({"ok": False, "reason": "start_char_out_of_range",
                                "total_chars": total})
         header = (f"{m['id']} · tier {m['tier']} · {m['first_ts']} → {m['last_ts']} · {m['events']} соб.\n")
-        end = min(total, start_char + _MEMORY_COMPACT_READ_INLINE_CHARS)
+        inline_budget = context_policy.inline_chars()
+        end = min(total, start_char + inline_budget)
         while True:
             page = {"ok": True, "compact_id": m["id"], "sha256": digest,
                     "start_char": start_char, "end_char": end, "total_chars": total,
                     "next_start_char": end if end < total else None, "eof": end == total}
             prefix = header + json.dumps(page, ensure_ascii=False) + "\n\n"
-            overflow = len(prefix) + end - start_char - _MEMORY_COMPACT_READ_INLINE_CHARS
+            overflow = len(prefix) + end - start_char - inline_budget
             if overflow <= 0:
                 return prefix + body[start_char:end]
             end -= overflow
@@ -2590,22 +2597,32 @@ def tool_shell(command: str) -> str:
         shell_command, background = core_processes.wrap_background_launch(command)
     except Exception:
         shell_command, background = command, False
+    workdir = _shell_workdir()
     try:
         proc = subprocess.run(
             ["bash", "-lc", shell_command],
-            cwd=_shell_workdir(),
+            cwd=workdir,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             timeout=SHELL_TIMEOUT,
         )
+        _tool_trace_event("tool_execution", receipt={"kind": "process",
+            "argv": list(proc.args), "cwd": str(workdir),
+            "status": "returned", "exit_code": proc.returncode})
         out = proc.stdout or ""
     except subprocess.TimeoutExpired as exc:
+        _tool_trace_event("tool_execution", receipt={"kind": "process",
+            "argv": list(exc.cmd), "cwd": str(workdir), "status": "timed_out"})
         partial = exc.stdout or ""
         if isinstance(partial, bytes):
             partial = partial.decode("utf-8", "replace")
         out = str(partial) + f"\n[прервано по таймауту {SHELL_TIMEOUT}s]\n"
     except Exception as e:
+        _tool_trace_event("tool_execution", receipt={"kind": "process",
+            "requested_argv": ["bash", "-lc", shell_command], "cwd": str(workdir),
+            "status": "launch_failed" if isinstance(e, FileNotFoundError) else "outcome_unknown",
+            "error": type(e).__name__})
         out = f"[ошибка shell] {e}"
     # PASS 24: never destroy command output here.  The run spine stores the exact result and
     # gives the model an honest head/tail ResultRef with cursor reads for arbitrarily large logs.
@@ -4484,7 +4501,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
                         title: str = "", review: str = "", checked: str = "",
                         submit: bool = True, reviewer: str = "",
                         success_criteria: list[str] | None = None,
-                        verify_commands: list[str] | None = None) -> str:
+                        verify_commands: list[str] | None = None,
+                        max_active_workers: int = 8) -> str:
     """Жизненный цикл coding-задачи: открыть, увидеть, закончить или перечислить.
     scope='host' открывает задачу НА ХОСТЕ от рута; scope='windows' — deprecated прокси
     (PASS 30 Этап 3: прямой путь на Windows — глаголы computer.*)."""
@@ -4495,12 +4513,12 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
         # хинты копятся в её истории и подталкивают. Тул в её руках, рамки
         # окна/события приглашают — а делает пусть так, как хочет.
         if str(scope or "").strip().lower() == "host":
-            out = forge.start_host(goal, target, priority=priority, origin_chat=origin)
+            out = forge.start_host(goal, target, priority=priority, origin_chat=origin,max_active_workers=max_active_workers)
             if out.startswith("coding-задача hcode-"):
                 tool_journal(f"[serverd] host-задача (root): {goal[:180]}", salience=2)
             return out
         if str(scope or "").strip().lower() == "windows":
-            out = forge.start_windows(goal, target, priority=priority, origin_chat=origin)
+            out = forge.start_windows(goal, target, priority=priority, origin_chat=origin,max_active_workers=max_active_workers)
             if out.startswith("coding-задача wcode-"):
                 tool_journal(f"[windows-body] Windows-задача: {goal[:180]}", salience=2)
                 # PASS 30 Этап 3: мягкая депрекация — предупреждение ПОСЛЕ канонической
@@ -4516,7 +4534,8 @@ def tool_coding_session(action: str, task_id: str = "", goal: str = "",
             return out
         out = forge.start(goal, target=target, isolation=isolation, priority=priority,
                           origin_chat=origin,
-                          success_criteria=success_criteria, verify_commands=verify_commands)
+                          success_criteria=success_criteria, verify_commands=verify_commands,
+                          max_active_workers=max_active_workers)
         if out.startswith("coding-задача "):
             tool_journal(f"[forge] открыла coding-задачу: {goal[:180]}", salience=2)
         return out
@@ -5221,9 +5240,14 @@ def tool_coding_process(task_id: str, action: str, process_id: str = "",
 
 def tool_coding_agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                       role: str = "worker", max_iters: int = 0, tail: int = 10000,
-                      model: str = "") -> str:
+                      model: str = "", result_sha256: str = "", disposition: str = "",
+                      phase: str = "",success_criteria: list[str] | None = None,
+                      payload_sha256: str = '',kind: str = 'payload',offset: int = 0,
+                      limit: int = 8000,after_seq: int = 0) -> str:
     return forge.agent(task_id, action=action, agent_id=agent_id, brief=brief, role=role,
-                       model=model, max_iters=max_iters, tail=tail)
+                       model=model, max_iters=max_iters, tail=tail,result_sha256=result_sha256,
+                       disposition=disposition,phase=phase,success_criteria=success_criteria,
+                       payload_sha256=payload_sha256,kind=kind,offset=offset,limit=limit,after_seq=after_seq)
 
 
 def tool_coding_checkpoint(task_id: str, message: str = "forge checkpoint") -> str:
@@ -5240,9 +5264,19 @@ def tool_coding_verify(task_id: str, action: str = "plan", verification_id: str 
 
 def tool_coding_swarm(task_id: str, action: str = "status", plan: str = "",
                       node_id: str = "", kind: str = "finding", message: str = "",
-                      files: list[str] | None = None, max_parallel: int = 3) -> str:
+                      files: list[str] | None = None, max_parallel: int = 3,
+                      result_sha256: str = "") -> str:
     return forge.swarm(task_id, action=action, plan=plan, node_id=node_id, kind=kind,
-                       message=message, files=files or [], max_parallel=max_parallel)
+                       message=message, files=files or [], max_parallel=max_parallel,result_sha256=result_sha256)
+
+
+def tool_coding_control(task_id: str,action: str,agent_id: str = '',expected_generation: str = '') -> str:
+    return json.dumps(forge.control(task_id,action,agent_id,expected_generation),ensure_ascii=False)
+
+
+def tool_coding_review(task_id: str,action: str = 'status',**kwargs) -> str:
+    import forge_review
+    return forge_review.command(task_id,action,**kwargs)
 
 
 def tool_coding_learn(task_id: str, action: str = "recall", query: str = "",
@@ -5256,8 +5290,8 @@ def _host_text_cap() -> int:
     try:
         value = int(str(os.getenv("PRAXIS_HOST_TEXT_CAP") or "").strip())
     except (TypeError, ValueError):
-        return 4000
-    return value if value > 0 else 4000
+        return context_policy.read()['host_text_chars']
+    return value if value > 0 else context_policy.read()['host_text_chars']
 
 
 HOST_TEXT_CAP = _host_text_cap()
@@ -5274,6 +5308,11 @@ def _clip_host_text(text: str, limit: int = 0) -> str:
     """
     cap = int(limit or HOST_TEXT_CAP)
     value = str(text or "")
+    if (not limit and run_context.current_run() is not None
+            and context_policy.read()['durable_host_full']):
+        # The durable boundary stores the complete host observation and applies
+        # its own inline budget. Clipping here would destroy the pageable middle.
+        return value
     if cap <= 0 or len(value) <= cap:
         return value
     # При крошечном капе голова+хвост не помещаются вовсе; отдать весь текст и при этом
@@ -5986,20 +6025,196 @@ def tool_send_media(path: str, kind: str, caption: str = "", voice_note: bool = 
     return _stage_turn_media(p, kind=kind, caption=caption, voice_note=voice)
 
 
-def tool_speak(text: str, caption: str = "") -> str:
-    """Озвучить короткий текст женским голосом и отложить аудио до общего guard."""
+def tool_voice_message(text: str, caption: str = "") -> str:
+    """Stage exact speech now; infer after admission outside the cognitive lock."""
     if _TURN_CHANNEL.get() is None or _TURN_OUTBOUND.get() is None:
         return "Голосовое можно подготовить только из живого хода Telegram."
     try:
-        path = media_audio.synthesize(text)
-    except media_audio.AudioBackendError as e:
-        return f"Озвучка недоступна: {str(e)[:180]}"
-    except Exception as e:
-        log.warning("локальная озвучка упала", exc_info=True)
-        return f"Озвучка не получилась: {type(e).__name__}"
-    return _stage_turn_media(path, kind="audio", caption=caption, voice_note=False,
-                             guard_text=f"Точный текст синтезированной речи: {text}",
-                             move=True)
+        backend = media_audio.get_default_backend()
+    except media_audio.AudioBackendError as exc:
+        return f"Озвучка недоступна: {str(exc)[:180]}"
+    except Exception as exc:
+        return f"Озвучка не получилась: {type(exc).__name__}"
+    backend_name = getattr(getattr(backend, "config", None), "tts_backend", "")
+    from xtts_tts_client import XttsTTSClient, selected
+    from xtts_protocol import XttsError
+    try:
+        chosen = selected()
+    except XttsError as exc:
+        return f"Озвучка XTTS недоступна: {exc.code}"
+    if chosen is None:
+        return "Озвучка приостановлена. Выбрать голос и включить её можно в MiniApp → Система → Голос."
+    if backend_name == "xtts":
+        current = run_context.current_run()
+        if current is None:
+            return "Для фоновой озвучки нужен сохранённый запуск."
+        try:
+            import xtts_intent
+            from xtts_protocol import XttsError
+            ctx = _TURN_CHANNEL.get()
+            client = (backend.tts if backend_name == "xtts"
+                      else XttsTTSClient(backend.config.output_dir))
+            health = client.health()
+            if chosen is not None and any(chosen[key] != health.get(key) for key in ("model_id", "profile_id")):
+                raise XttsError("profile_changed")
+            item = xtts_intent.stage(
+                _media_spool(), text, target_chat_id=ctx.chat_id, scope=ctx.scope,
+                caption=caption, run_id=current.run_id, health=health)
+            _TURN_OUTBOUND.get().append(item)
+            notes = _TURN_MEDIA_GUARD.get()
+            if notes is not None:
+                notes[item.queue_id] = f"Точный текст синтезированной речи: {text}"
+            return ("Подготовила намерение озвучить точный текст; после допуска голос "
+                    "будет создан в фоне и отправлен штатной доставкой. Пока не отправлено.")
+        except XttsError as exc:
+            return f"Озвучка XTTS недоступна: {exc.code}"
+        except Exception:
+            return "Не удалось сохранить намерение озвучки XTTS."
+    return "Озвучка XTTS пока не подключена."
+
+
+def _voice_generations():
+    from xtts_generations import Generations
+    return Generations()
+
+
+def _voice_generation_for_turn(generation_id):
+    from xtts_protocol import XttsError
+    value = _voice_generations().read(generation_id)
+    ctx = _TURN_CHANNEL.get()
+    origin = value['channel']
+    same_audience = (ctx is not None and str(ctx.chat_id) == str(origin['chat_id'])
+                     and ctx.scope == origin['scope'])
+    private_owner = ctx is not None and ctx.is_dm and ctx.owner and _is_human_owner()
+    internal_self = (ctx is not None and ctx.chat_id is None
+                     and ctx.principal_id == PRAXIS_SELF_PRINCIPAL)
+    if not (same_audience or private_owner or internal_self):
+        raise XttsError('generation_audience_mismatch')
+    return value
+
+
+def tool_generate_voice(text: str, delivery: str = "") -> str:
+    """Persist a producer request only. Closing this turn never cancels it."""
+    from speech_backend import selected
+    from xtts_protocol import XttsError
+    try:
+        ctx = _TURN_CHANNEL.get()
+        current = run_context.current_run()
+        execution = current_tool_execution() or {}
+        if ctx is None or ctx.chat_id is None or current is None:
+            raise XttsError('missing_generation_origin')
+        selection = selected()
+        if selection is None:
+            return json.dumps({'ok': False, 'state': 'paused', 'error': 'voice_disabled',
+                               'note': 'Choose a voice and enable it in MiniApp → System → Voice. Nothing was sent.'})
+        if not isinstance(delivery, str):
+            raise XttsError('fish_invalid_delivery')
+        if delivery and selection.get('provider') != 'fish':
+            raise XttsError('expressive_speech_requires_fish')
+        channel = {'chat_id': str(ctx.chat_id), 'scope': ctx.scope,
+                   'room_id': str(ctx.room_id) if ctx.room_id is not None else None,
+                   'is_dm': bool(ctx.is_dm), 'known': bool(ctx.known), 'family': bool(ctx.family)}
+        store = _voice_generations()
+        value = store.submit(text, run_id=current.run_id,
+                             call_id=str(execution.get('call_id') or ''),
+                             channel=channel, selection=selection, delivery=delivery)
+        return json.dumps({'ok': True, **store.observation(value)}, ensure_ascii=False)
+    except XttsError as exc:
+        return json.dumps({'ok': False, 'error': exc.code})
+    except Exception:
+        log.warning('speech generation could not be recorded', exc_info=True)
+        return json.dumps({'ok': False, 'error': 'generation_store_unavailable'})
+
+
+
+def tool_voice_backend(action: str = "status", voice_id: str = "", model: str = "drama-3",
+                       enabled: bool = True, page: int = 1, language: str = "ru") -> str:
+    """Inspect Fish or explicitly select its voice/model; never synthesize or send."""
+    from speech_backend import SpeechStore, describe
+    from fish_tts_client import FishProfile
+    from xtts_protocol import XttsError, digest
+    try:
+        if action in {'status', 'voices'}:
+            return json.dumps({'ok':True, **describe(with_catalog=action=='voices', page=page, language=language)}, ensure_ascii=False)
+        if action not in {'select', 'enable'}:
+            raise XttsError('invalid_request')
+        ctx = _TURN_CHANNEL.get()
+        current = run_context.current_run()
+        execution = current_tool_execution() or {}
+        if ctx is None or current is None or not execution.get('call_id'):
+            raise XttsError('missing_generation_provenance')
+        # Same owner/self authority as the existing writable voice capability.
+        if not (_is_human_owner() or ctx.principal_id == PRAXIS_SELF_PRINCIPAL):
+            raise XttsError('unauthorized')
+        key = digest({'run':current.run_id, 'call':execution['call_id']})[:32]
+        store=SpeechStore()
+        profile=FishProfile(voice_id, model=model) if action=='select' else None
+        result=store.mutate(provider='fish' if action=='select' else None, profile=profile,
+            enabled=enabled, request_id=key, actor='praxis:self' if ctx.principal_id==PRAXIS_SELF_PRINCIPAL else 'owner:tool')
+        return json.dumps(result, ensure_ascii=False)
+    except XttsError as exc:
+        return json.dumps({'ok':False,'error':exc.code})
+
+
+def tool_voice_generation(action: str, generation_id: str) -> str:
+    from xtts_protocol import XttsError
+    try:
+        if action not in {'status', 'result', 'cancel'}:
+            raise XttsError('invalid_generation_action')
+        value = _voice_generation_for_turn(generation_id)
+        store = _voice_generations()
+        if action == 'cancel':
+            value = store.cancel(generation_id)
+        return json.dumps({'ok': True, **store.observation(value)}, ensure_ascii=False)
+    except XttsError as exc:
+        return json.dumps({'ok': False, 'error': exc.code})
+
+
+def tool_send_voice(generation_id: str, caption: str = "") -> str:
+    """Explicit publication request, independent of generation and its result event."""
+    import hashlib
+    import xtts_intent
+    from xtts_protocol import XttsError
+    try:
+        caption = media._caption(caption, truncate=True)
+        value = _voice_generation_for_turn(generation_id)
+        ctx, outbound = _TURN_CHANNEL.get(), _TURN_OUTBOUND.get()
+        current = run_context.current_run()
+        if ctx is None or ctx.chat_id is None or outbound is None or current is None:
+            raise XttsError('send_voice_requires_origin_turn')
+        if str(ctx.chat_id) != value['request']['target_chat_id'] or ctx.scope != value['request']['scope']:
+            raise XttsError('generation_audience_mismatch')
+        if value['state'] in {'failed', 'cancel_requested', 'cancelled', 'unknown'}:
+            raise XttsError('generation_' + value['state'])
+        # Event redelivery may create another cognitive run. It must still find
+        # the first canonical send intent instead of publishing another message.
+        key = hashlib.sha256(json.dumps([generation_id, value['request']['target_chat_id'], caption], ensure_ascii=False).encode()).hexdigest()[:32]
+        previous = xtts_intent.existing_generation_delivery(_media_spool(), value, caption, key)
+        if previous is not None:
+            return json.dumps({'ok': True, 'generation_id': generation_id, 'delivery': previous})
+        if any(item.queue_id == key for item in outbound):
+            return json.dumps({'ok': True, 'delivery': 'staged', 'queue_id': key,
+                               'generation_id': generation_id})
+        request = value['request']
+        item = xtts_intent.stage(_media_spool(), request['text'],
+            target_chat_id=ctx.chat_id, scope=ctx.scope, caption=caption,
+            run_id=current.run_id,
+            health={'ready': True, 'model_id': request['model_id'], 'profile_id': request['profile_id']},
+            generation_id=generation_id, queue_id=key,
+            voice_options={k:request[k] for k in ('provider','delivery') if k in request})
+        outbound.append(item)
+        notes = _TURN_MEDIA_GUARD.get()
+        if notes is not None:
+            notes[item.queue_id] = f"Точный текст синтезированной речи: {request['text']}"
+        return json.dumps({'ok': True, 'delivery': 'staged', 'queue_id': key,
+                           'generation_id': generation_id,
+                           'note': 'Separate voice-note delivery requested; Telegram acceptance is not yet confirmed.'})
+    except XttsError as exc:
+        return json.dumps({'ok': False, 'error': exc.code})
+
+
+# Historical combined calls remain available only for checkpoint replay.
+tool_speak = tool_voice_message
 
 
 def tool_read_run_result(result: str, run_id: str = "", byte_offset: int = 0,
@@ -6029,12 +6244,13 @@ def tool_list_active_runs(limit: int = 20) -> str:
     «что сейчас во мне бежит», чтобы «всё тихо» не расходилось с реальностью и «останови всё»
     видело настоящую картину, а не пустой планировщик."""
     try:
-        rows = _runs().list_runs(statuses=tuple(run_manager.NONTERMINAL_STATUSES),
-                                 limit=max(1, min(int(limit or 20), 100)))
+        # This instrument needs manifests, not historical tool ledgers. The
+        # limit is advisory: every live/unproven execution must stay visible.
+        rows = _runs().live_run_summaries()
     except Exception as exc:
         return f"list_active_runs: {type(exc).__name__}: {exc}"
     if not rows:
-        return "Живых durable-прогонов нет — планировщик и run-слой оба чисты."
+        return "Живых durable-прогонов нет." + _coding_tasks_line()
     now = time.time()
     out = []
     for r in rows:
@@ -6062,8 +6278,10 @@ def tool_list_active_runs(limit: int = 20) -> str:
                              if wait >= 60 else " · следующая попытка вот-вот")
         except Exception:
             pass
+        observation = (f" · наблюдение недоступно: {r['observation_error']}"
+                       if r.get('observation_error') else '')
         out.append(f"{run_id[:28]} [{r.get('status') or '?'}] "
-                   f"{r.get('kind') or '—'}{age}{pause}")
+                   f"{r.get('kind') or '—'}{age}{pause}{observation}")
     head = f"Живых прогонов: {len(rows)} (не терминальных)."
     return head + "\n" + "\n".join(out) + _coding_tasks_line()
 
@@ -6362,7 +6580,7 @@ def _receipt_for_outstanding(started: dict) -> tuple[str, dict] | None:
             return "completed", {"forge_task_id": task_id, "task_status": status,
                                  "task_finished_at": finished}
         return None
-    if tool in {"send_message", "narrate", "send_file", "reply"}:
+    if tool in {"send_message", "narrate", "send_file", "send_media", "reply"}:
         entry = _direct_outbox_state(str(started.get("idempotency_key") or ""))
         state = str((entry or {}).get("state") or "")
         if state == "accepted":
@@ -6500,7 +6718,12 @@ TOOL_IMPL = {
     "manage_appetite": tool_manage_appetite,  # PASS 18.3: договор об аппетитах
     "web_read": tool_web_read,   # PASS 15: веб-руки — на любом фреймворке
     "web_find": tool_web_find,
-    "speak": tool_speak,
+    "speak": tool_voice_message,  # replay compatibility only
+    "voice_message": tool_voice_message,
+    "generate_voice": tool_generate_voice,
+    "voice_backend": tool_voice_backend,
+    "voice_generation": tool_voice_generation,
+    "send_voice": tool_send_voice,
     "read_run_result": tool_read_run_result,
     "list_active_runs": tool_list_active_runs,
     "reconcile_run": tool_reconcile_run,  # её рука на in_doubt: он перестал быть надгробием
@@ -6557,13 +6780,17 @@ TOOL_IMPL = {
     "coding_checkpoint": tool_coding_checkpoint,
     "coding_verify": tool_coding_verify,
     "coding_swarm": tool_coding_swarm,
+    "coding_control": tool_coding_control,
+    "coding_review": tool_coding_review,
     "coding_learn": tool_coding_learn,
     "host_ctl": tool_host_ctl,   # PASS 23.2: структурные глаголы хоста через демон
     "computer": tool_computer,
     "computer_access": tool_computer_access,
 }
 
-BASE_TOOLS = [
+from xtts_tool_contracts import TOOLS as VOICE_TOOLS
+
+BASE_TOOLS = [*VOICE_TOOLS,
     {"name": "generate_image",
      "description": "Generate an image from a prompt or edit 1-5 local reference images with the independent Codex image model. Available while your voice is GLM or a relay model. The result contains the saved path, actual dimensions and hash; send=true queues the visible image to the current Telegram chat through the normal media outbox. Use send_media for another recipient. Never claim delivery from generation alone.",
      "input_schema": {"type": "object", "properties": {
@@ -6725,7 +6952,11 @@ BASE_TOOLS = [
                             "description": "исход хода"},
                 "note": {"type": "string",
                          "description": ("done: что сделано (кратко, необязательно); "
-                                         "wait: условие возврата; blocked: препятствие")},
+                                         "wait: условие возврата; blocked: препятствие. "
+                                         "Это заметка для следующего хода: 2–4 короткие строки — "
+                                         "что сделала, что проверила, что осталось и точный путь "
+                                         "или ResultRef. Не копируй журнал вызовов; неизвестный "
+                                         "результат так и назови.")},
             },
             "required": ["outcome"],
         },
@@ -6969,22 +7200,6 @@ BASE_TOOLS = [
                                          "this carries the exact message id instead"},
             },
             "required": ["action"],
-        },
-    },
-    {
-        "name": "speak",
-        "description": (
-            "Озвучить короткий ответ качественным русским женским голосом и приложить аудио в "
-            "ТЕКУЩИЙ Telegram-чат. Основной neural-голос имеет локальный женский fallback; файл "
-            "уйдёт только после общей проверки исходящей реплики. Используй по запросу."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string", "description": "текст для озвучки"},
-                "caption": {"type": "string", "description": "необязательная подпись"},
-            },
-            "required": ["text"],
         },
     },
 ]
@@ -7848,6 +8063,9 @@ FORGE_TOOLS = [
          "verify_command": {"type": "string"},
      }, ["verb", "action"])} ,
 ]
+
+import forge_tools
+forge_tools.extend(FORGE_TOOLS,_obj)
 
 COMPUTER_TOOL = {
     "name": "computer",
@@ -8780,7 +8998,7 @@ CALL_TOOL = {
 # Группы указателя — порядок чтения; имя, которого нет в группах, уходит в «прочее».
 HAND_GROUPS = (
     ("разговор и жесты", ("reply", "end_turn", "stay_silent", "say", "task_control", "react",
-                          "narrate", "speak", "send_message", "send_file", "send_media", "generate_image",
+                          "narrate", "voice_backend", "generate_voice", "voice_generation", "send_voice", "send_message", "send_file", "send_media", "generate_image",
                           "set_avatar", "update_profile")),
     ("память и я", ("recall", "remember", "journal", "update_self", "manage_identity",
                     "manage_notes", "manage_loop", "connections", "add_alias",
@@ -8819,7 +9037,10 @@ HAND_PURPOSE = {
     "task_control": "закрыть рабочий ход своим словом",
     "react": "поставить эмодзи-реакцию на сообщение",
     "narrate": "короткая строка о ходе работы в тред, между командами",
-    "speak": "озвучить ответ голосом и приложить аудио в чат",
+    "voice_backend": "узнать или выбрать движок озвучки, голос и модель исполнения",
+    "generate_voice": "запустить фоновую генерацию речи без отправки",
+    "voice_generation": "проверить результат генерации или запросить отмену",
+    "send_voice": "отдельно отправить результат генерации голосовым сообщением",
     "send_message": "написать в Telegram по своей инициативе: id / @username / имя",
     "send_file": "отправить файл в текущий чат или адресату",
     "send_media": "отправить фото, аудио или документ из дома",
@@ -8890,6 +9111,8 @@ HAND_PURPOSE = {
     "coding_checkpoint": "коммит-чекпоинт рабочего дерева задачи",
     "coding_verify": "план и матрица проверок задачи",
     "coding_swarm": "координация субагентов: план, запуск, почта",
+    "coding_control": "пауза, остановка и явное безопасное продолжение задачи или ветки команды",
+    "coding_review": "независимое ревью точного кандидата, исправления и A/L/B/M с квитанциями проверок",
     "coding_learn": "уроки инженерии по задаче: recall / record",
     "server_status": "сервер, где я живу: здоровье и сервисы (только чтение)",
     "server_logs": "журнал одного из моих сервисов",
@@ -9585,7 +9808,24 @@ def _room_window(room) -> list[dict]:
         path = group_context.archive_path(room)
         if not path.exists():
             return []
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        # The archive is append-only and can span months. Preserve exactly the
+        # same final record window without decoding the entire historical file.
+        with path.open("rb") as stream:
+            stream.seek(0, 2)
+            cursor = stream.tell()
+            chunks = []
+            newlines = 0
+            while cursor and newlines <= MENTION_WINDOW_MESSAGES:
+                size = min(cursor, 65536)
+                cursor -= size
+                stream.seek(cursor)
+                chunk = stream.read(size)
+                chunks.append(chunk)
+                newlines += chunk.count(b"\n")
+            raw = b"".join(reversed(chunks))
+            if cursor:
+                raw = raw.split(b"\n", 1)[1]
+            lines = raw.decode("utf-8", errors="replace").splitlines()
     except Exception:
         return []
     out: list[dict] = []
@@ -10363,16 +10603,34 @@ def _epoch_serve(chat_id, anchor, blocks, chosen) -> None:
                                        provenance_chars=who_sign))
     cards = snap.get("epoch_dossier_cards") or {}
     stem = str(snap.get("epoch_dossier_speaker") or "")
-    card = cards.get(stem) if isinstance(cards, dict) and stem else None
-    if card:
-        frozen_dossier = "".join(block for title, _kind, block in frozen
-                                 if title.startswith("Мои досье на людей"))
-        if f"memory/people/{stem}.md —" not in frozen_dossier:
-            card_block, card_cause, card_sign = frame_layout.section(
-                _EPOCH_SPEAKER_TIER, card, kind="json")
-            chosen.append(frame_trace.mark("evidence.tier", "evidence", "json", card_block,
-                                           label=_EPOCH_SPEAKER_TIER, cause=card_cause,
-                                           provenance_chars=card_sign))
+    # Cards already passed the current transport-presence and visibility policy.
+    # A frozen roster must not hide a newly present person's dossier merely
+    # because somebody else is speaking. Keep the frozen prefix unchanged.
+    frozen_dossier = "".join(block for title, _kind, block in frozen
+                             if title.startswith("Мои досье на людей"))
+    for selected_stem, card in sorted(cards.items() if isinstance(cards, dict) else ()):
+        if not card or f"memory/people/{selected_stem}.md —" in frozen_dossier:
+            continue
+        label = (_EPOCH_SPEAKER_TIER if selected_stem == stem else
+                 "Досье присутствующего — не в эпохе (выбран по текущему составу чата)")
+        if (frame_epoch.bound_tape(chat_id) is not None
+                and os.getenv("PRAXIS_KEAT_CAPTURE") != "on"):
+            label = "Досье — снимок в накопителе (знание о человеке, не утверждение его текущего присутствия)"
+        card_block, card_cause, card_sign = frame_layout.section(label, card, kind="json")
+        marked = frame_trace.mark("evidence.tier", "evidence", "json", card_block,
+                                  label=label, cause=card_cause,
+                                  provenance_chars=card_sign)
+        if (frame_epoch.bound_tape(chat_id) is not None
+                and os.getenv("PRAXIS_KEAT_CAPTURE") != "on"):
+            additions = list(frame_layout.snapshot().get("epoch_dossier_additions") or [])
+            additions.append(dict(source=f"memory/people/{selected_stem}.md",
+                                  body_sha256=hashlib.sha256(card.encode()).hexdigest(),
+                                  message={"role": "user", "content":
+                                           frame_dossiers.OPEN + marked +
+                                           "\n</praxis_context_evidence>"}))
+            frame_layout.stash(epoch_dossier_additions=additions)
+        else:
+            chosen.append(marked)
 
 
 def _build_prompt_parts(
@@ -11876,6 +12134,10 @@ def _presence_evidence(ctx: "ChannelContext") -> str:
     note = notes.read(ctx.chat_id) if ctx.chat_id is not None else ""
     if note:
         records.append({"label": "running_chat_note", "content": note})
+    recent = turns.recent_work_note(
+        ctx.chat_id, ctx.scope, context_policy.read()['recent_work_chars'])
+    if recent:
+        records.append({"label": "recent_work_note", "content": recent})
     return "".join(
         json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
         for record in records
@@ -12007,6 +12269,12 @@ _READ_ONLY_TOOLS = frozenset({
 
 def _tool_has_side_effect(name: str, call_input: dict) -> bool:
     """Conservative recovery classification; reads never become uncertain mutations."""
+    if name == "coding_agent" and call_input.get("action") in {"payload", "events"}:
+        # Exact record/event reads cannot start, stop, or reconcile a worker.
+        # Keep poll/list conservative: those adapters may recover durable state.
+        return False
+    if name == 'voice_generation':
+        return call_input.get('action') == 'cancel'
     if name == "computer":
         # PASS 30 Этап 3: read/hash — чтения; write/replace НАМЕРЕННО отсутствуют
         # (side effect без idempotency-ключа = консервативный recovery-маршрут).
@@ -12359,6 +12627,12 @@ def _model_call(system: str, messages: list[dict], tools: list | None = None):
     #     "system": _scrub_critical_value(...)
     #     metadata=frame_meta
     try:
+        inbound = _TURN_ADDRESSED_INBOUND.get()
+        if inbound is not None:
+            item = inbound.take()
+            if item is not None:
+                _append_captured_messages(messages, [{"role": "user", "content": item}])
+                _arm_private_floor(system, messages, 0)
         return _model_call_impl(system, messages, tools)
     finally:
         keat_live.discard_provider()
@@ -12542,6 +12816,9 @@ def _model_call_impl(system: str, messages: list[dict], tools: list | None = Non
         # канала: без этого пустота уходила в ретраи и фолбэк, и свежая модель слала
         # ту же реплику заново — четыре копии за две минуты. Под опущенным рычагом
         # spoken() пуст всегда, и поведение байт-в-байт прежнее.
+        inbound = _TURN_ADDRESSED_INBOUND.get()
+        if inbound is not None:
+            inbound.presented(current.run_id if current is not None else "")
         response = llm.chat("voice", end_after_spoken=bool(work_loop.spoken()), **kwargs)
         frame_continuation.observe(system=system, messages=provider_messages,
                                    tools=tools, critical=bool(prior_secrets))
@@ -13080,7 +13357,18 @@ def _normalize_delivery_text_plan(run_id: str, plan: dict | None, *,
         raise ValueError("Telegram text plan does not match text_chars intent")
     if int(text_chars) > 0 and not normalized_chunks:
         raise ValueError("non-empty Telegram text intent requires chunks")
+    observed_ids = plan.get("addressed_observed_message_ids")
+    if observed_ids is not None and (not isinstance(observed_ids, list) or any(
+            isinstance(mid, bool) or not isinstance(mid, int) or mid <= 0 for mid in observed_ids)):
+        raise ValueError("invalid addressed observed message IDs")
+    observed = plan.get("addressed_observed_message_id")
+    if observed is not None and (isinstance(observed, bool) or not isinstance(observed, int)
+                                 or observed <= 0):
+        raise ValueError("invalid addressed observed message ID")
     return {
+        **({"addressed_observed_message_id": observed} if observed is not None else {}),
+        **({"addressed_observed_message_ids": sorted(set(observed_ids))}
+           if observed_ids is not None else {}),
         "schema": _TELEGRAM_TEXT_PLAN_SCHEMA,
         "conversation_id": conversation_id,
         "peer_id": peer_id,
@@ -13401,6 +13689,45 @@ def run_delivery_media_result(run_id: str, queue_id: str, *, ok: bool,
     )
 
 
+def run_speech_prepared(item, actual) -> None:
+    """Retain the exact sent bytes in the canonical run, independently of spool TTL."""
+    from xtts_intent import read_intent
+    artifact = _runs().store_artifact(
+        item.run_id, actual.path, name=f"speech-prepared-{item.queue_id}.ogg",
+        media_type="audio/ogg", idempotency_key=f"speech-prepared:{item.queue_id}",
+        expected_sha256=actual.sha256, expected_size=actual.size)
+    for row in _runs().iter_events(item.run_id, reverse=True):
+        if row.get("kind") == "speech_prepared" and row.get("queue_id") == item.queue_id:
+            if row.get("audio_sha256") != actual.sha256 or row.get("intent_sha256") != item.sha256:
+                raise DurableExecutionError("speech artifact identity conflict")
+            return
+    _runs().append_event(item.run_id, "speech_prepared", queue_id=item.queue_id,
+                         intent_sha256=item.sha256, audio_sha256=actual.sha256,
+                         artifact=artifact, engine=read_intent(item.path).get("provider", "xtts"))
+
+
+def run_speech_preparation_allowed(run_id: str, queue_id: str) -> bool:
+    """Only canonical admitted delivery owns a deferred synthesis request."""
+    if not run_id:
+        return False
+    try:
+        from speech_backend import selected
+        if selected() is None:
+            return False
+        manifest = _runs().manifest(run_id)
+        status = str(manifest.get("status") or "")
+        control = dict(manifest.get("control") or {})
+        if status in run_manager.TERMINAL_STATUSES or status == "paused":
+            return False
+        if control.get("action") in {"cancel", "pause"}:
+            return False
+        evidence = _delivery_evidence(run_id)
+        return (queue_id in (evidence.get("expected_media_queue_ids") or ())
+                and run_delivery_media_retry_policy(run_id, queue_id) == "retry")
+    except Exception:
+        return False
+
+
 def run_delivery_media_retry_policy(run_id: str, queue_id: str) -> str:
     """Return retry|ack|drop from durable run evidence, never from RAM state."""
     if not run_id:
@@ -13641,6 +13968,8 @@ def run_pending_text_deliveries(*, limit: int = 20) -> list[dict]:
                 "peer_id": str(plan.get("peer_id") or ""),
                 "topic_id": plan.get("topic_id"),
                 "chunks": [dict(item) for item in plan.get("chunks") or ()],
+                "addressed_observed_message_id": plan.get("addressed_observed_message_id"),
+                "addressed_observed_message_ids": plan.get("addressed_observed_message_ids"),
                 "accepted_indices": list(evidence.get("accepted_text_indices") or ()),
                 "pending_chunks": [dict(item)
                                    for item in evidence.get("pending_text_chunks") or ()],
@@ -14793,7 +15122,7 @@ class _AgentResumeRuntime:
             if (tool_error is not None or expired) and side_effect and not idempotency_key:
                 self.manager.store_result(
                     current.run_id, output_text, call_id=call_id,
-                    name=f"{name}-uncertain-error", inline_chars=4000,
+                    name=f"{name}-uncertain-error", inline_chars=context_policy.inline_chars(),
                     event_kind="tool_uncertain_error", idempotent=True,
                 )
                 before = str(self.manager.manifest(current.run_id).get("status") or "")
@@ -14818,15 +15147,18 @@ class _AgentResumeRuntime:
                 ) from tool_error
             result_ref = self.manager.store_result(
                 current.run_id, output_text, call_id=call_id, name=name,
-                inline_chars=4000, idempotent=True,
+                inline_chars=context_policy.inline_chars(), idempotent=True,
                 metadata=_tool_result_metadata(outbound_before),
             )
             images = (tuple(dict(image) for image in output.images)
                       if isinstance(output, ToolObservation) else ())
             self.tool_trace.append(_tool_trace_line(name, call_input, output))
+            model_text = _result_for_model(result_ref)
+            _tool_trace_event("tool_model_response", context=execution, manager=self.manager,
+                              text=model_text, image_count=len(images))
             return {
                 "result_ref": result_ref,
-                "content": _result_for_model(result_ref),
+                "content": model_text,
                 "images": images,
             }
 
@@ -15453,10 +15785,10 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
     tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
     key = str(entry.get("key") or "")
     kind = str(entry.get("kind") or "")
-    if (not run_id or not call_id or tool not in {"send_message", "send_file", "narrate", "reply"}
+    if (not run_id or not call_id or tool not in {"send_message", "send_file", "send_media", "narrate", "reply"}
             or key != f"telegram-outbox:{run_id}:tool:{call_id}"):
         raise DurableExecutionError("direct Telegram intent identity is malformed")
-    if kind != ("file" if tool == "send_file" else "text"):
+    if kind != ("file" if tool in ("send_file", "send_media") else "text"):
         raise DurableExecutionError("direct Telegram intent kind/purpose mismatch")
     random_id = entry.get("random_id")
     peer_id = entry.get("peer_id")
@@ -15501,12 +15833,29 @@ def _direct_outbox_identity(entry: dict, *, verify_file: bool) -> dict:
             "visible_filename": str(payload.get("visible_filename") or ""),
             "caption": str(payload.get("caption") or ""),
         }
+    if tool == "send_media":
+        if (payload.get("media_kind") not in telegram_outbox.MEDIA_KINDS
+                or type(payload.get("voice_note")) is not bool):
+            raise DurableExecutionError("direct Telegram media type is malformed")
+        payload_proof.update(media_kind=payload["media_kind"],
+                             voice_note=payload["voice_note"])
     return {
         "key": key, "run_id": run_id, "call_id": call_id, "tool": tool,
         "kind": kind, "purpose": purpose,
         "peer_id": peer_id, "topic_id": topic_id, "reply_to": reply_to,
         "random_id": random_id, "payload": payload_proof,
     }
+
+
+def _validate_direct_media_arguments(payload: dict, args: dict) -> None:
+    """Keep the typed media intent bound to the actual send_media call."""
+    kind = str(args.get("kind") or "").strip().lower()
+    voice = bool(args.get("voice_note")) and kind == "audio"
+    if (kind not in ("photo", "audio", "document")
+            or payload.get("media_kind") != kind
+            or type(payload.get("voice_note")) is not bool
+            or payload["voice_note"] != voice):
+        raise DurableExecutionError("direct Telegram media differs from tool arguments")
 
 
 def _direct_outbox_intent(run_id: str, call_id: str) -> dict | None:
@@ -15584,6 +15933,8 @@ def run_direct_outbox_prepared(
                     _strip_generation_artifacts(str(started_args.get("caption") or ""),
                                                 proof_convo)[0][:900])):
             raise DurableExecutionError("direct Telegram file differs from tool arguments")
+    if identity["tool"] == "send_media":
+        _validate_direct_media_arguments(identity["payload"], started_args)
     context = manager.context(run_id)
     channel, _snapshot = _load_exact_run_channel(manager, context)
     if identity["tool"] == "narrate":
@@ -15849,12 +16200,12 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
     call_id = str(entry.get("call_id") or "").strip()
     purpose = str(entry.get("purpose") or "").strip()
     tool = purpose.removeprefix("tool:") if purpose.startswith("tool:") else ""
-    if not run_id or not call_id or tool not in {"send_message", "send_file", "narrate", "reply"}:
+    if not run_id or not call_id or tool not in {"send_message", "send_file", "send_media", "narrate", "reply"}:
         return False
     key = str(entry.get("key") or "")
     if key != f"telegram-outbox:{run_id}:tool:{call_id}":
         raise DurableExecutionError("accepted Telegram outbox key/run/call mismatch")
-    expected_kind = "file" if tool == "send_file" else "text"
+    expected_kind = "file" if tool in ("send_file", "send_media") else "text"
     if entry.get("kind") != expected_kind:
         raise DurableExecutionError("accepted Telegram outbox kind/purpose mismatch")
     receipt = entry.get("receipt")
@@ -15896,10 +16247,12 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
         raise DurableExecutionError("accepted Telegram outbox differs from tool intent")
     payload = dict(entry.get("payload") or {})
     started_args = dict(started.get("args") or {})
+    if tool == "send_media":
+        _validate_direct_media_arguments(payload, started_args)
     peer_id = entry.get("peer_id")
     topic_id = entry.get("topic_id")
     selector = f"{peer_id}:{topic_id}" if topic_id is not None else str(peer_id)
-    if tool == "send_file":
+    if tool in ("send_file", "send_media"):
         filename = str(payload.get("visible_filename") or "")
         if not filename:
             raise DurableExecutionError("accepted Telegram file has no visible filename")
@@ -15954,7 +16307,7 @@ def run_direct_outbox_accepted(entry: dict) -> bool:
         raise DurableExecutionError("accepted Telegram send was not socially projected")
     manager.store_result(
         run_id, result, call_id=call_id, name=tool,
-        inline_chars=4000, idempotent=True,
+        inline_chars=context_policy.inline_chars(), idempotent=True,
     )
     control = dict(manager.manifest(run_id).get("control") or {})
     if control.get("action") == "cancel":
@@ -16683,6 +17036,46 @@ MALFORMED_JSON_REPAIR = (
 )
 
 
+def _tool_trace_event(kind: str, *, context=None, manager=None, **data) -> None:
+    """Display evidence only: a missing trace never changes execution authority."""
+    execution = context if context is not None else _TOOL_EXECUTION.get()
+    if not execution or not execution.get('run_id') or not execution.get('call_id'):
+        return
+    try:
+        (manager or _runs()).append_event(execution['run_id'], kind,
+            call_id=execution['call_id'], tool=execution['tool'], **data)
+    except Exception:
+        # Never log payloads or credentials when a display receipt fails.
+        log.warning('tool trace receipt unavailable: %s', kind)
+
+
+def _observed_tool_call(name: str, impl, call_input: dict):
+    """Record entry at the actual invocation, including the ceiling worker thread."""
+    execution = _TOOL_EXECUTION.get() or {}
+    handler = '.'.join(str(value) for value in
+        (getattr(impl, '__module__', ''), getattr(impl, '__qualname__', type(impl).__name__)) if value)
+    _tool_trace_event('tool_dispatch', receipt={'kind': 'python', 'handler': handler, 'status': 'entered'},
+                      **{key: execution[key] for key in ('model_request', 'definition') if key in execution})
+    return impl(**call_input)
+
+
+def _tool_request_projection(block: dict, tools: list, name: str, call_input: dict) -> dict:
+    """The offered schema and original call, using the existing durable redaction boundary."""
+    raw_name = str(block.get('name') or '')
+    safe_args = _durable_tool_input(name, call_input)
+    if name == 'telegram_account' and _critical_telegram_tool_input(call_input):
+        # A generic call wrapper contains serialized critical arguments too.
+        original = ({'name': name, 'args_json': json.dumps(safe_args, ensure_ascii=False)}
+                    if raw_name == 'call' else safe_args)
+    else:
+        original = copy.deepcopy(block.get('input') or {})
+    value = {'model_request': {'tool': raw_name, 'args': original}}
+    definition = next((row for row in tools if row.get('name') == raw_name), None)
+    if definition is not None:
+        value['definition'] = copy.deepcopy(definition)
+    return value
+
+
 def _call_tool_with_ceiling(name: str, impl, call_input: dict):
     """Выполнить тул с пределом времени. -> результат или ToolCeilingExpired об истечении."""
     # Единственная воронка исполнения рук: сюда же приходит ВОЗОБНОВЛЁННЫЙ вызов из
@@ -16704,13 +17097,13 @@ def _call_tool_with_ceiling(name: str, impl, call_input: dict):
                 f"{exc}. Снаружи ничего не изменилось. Повтори вызов с полным набором "
                 f"обязательных аргументов.")
     if TOOL_CEILING_SEC <= 0:
-        return impl(**call_input)
+        return _observed_tool_call(name, impl, call_input)
     # Копия контекста обязательна: тулы читают текущий ран, канал хода и запись
     # исполнения из contextvars, а новый поток их сам по себе не наследует.
     ctx = contextvars.copy_context()
     pool = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"tool-{name}")
     try:
-        future = pool.submit(ctx.run, functools.partial(impl, **call_input))
+        future = pool.submit(ctx.run, functools.partial(_observed_tool_call, name, impl, call_input))
         try:
             return future.result(timeout=TOOL_CEILING_SEC)
         except _futures.TimeoutError:
@@ -16831,8 +17224,19 @@ def _tool_idempotency_key(current: run_context.RunContext | None, call_id: str,
                           name: str, call_input: dict) -> str:
     """Return only keys whose implementation already owns exact replay semantics."""
 
+    if current is not None and name == 'voice_backend' and call_input.get('action') in {'select', 'enable'}:
+        return f'voice-backend:{current.run_id}:{call_id}'
+    if current is not None and name == 'generate_voice':
+        return f'voice-generation:{current.run_id}:{call_id}'
+    if current is not None and name == 'send_voice':
+        return f'voice-send:{current.run_id}:{call_id}'
+    if current is not None and name == 'voice_generation' and call_input.get('action') == 'cancel':
+        return f'voice-cancel:{call_input.get("generation_id", "")}'
     if current is not None and name in ("send_message", "narrate", "reply"):
         # narrate — тот же exact-once леджер direct outbox (PASS 30 Этап 2)
+        return f"telegram-outbox:{current.run_id}:tool:{call_id}"
+    if (current is not None and name == "send_media"
+            and str(call_input.get("to") or "").strip()):
         return f"telegram-outbox:{current.run_id}:tool:{call_id}"
     if current is not None and name == "send_file":
         explicit_to = bool(str(call_input.get("to") or "").strip())
@@ -17182,6 +17586,10 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             # Поэтому помним последнее НЕПУСТОЕ и отдаём его, если конец пришёл на пустоте.
             if reply.strip():
                 spoken = reply
+            inbound = _TURN_ADDRESSED_INBOUND.get()
+            if inbound is not None and inbound.has_pending():
+                _append_captured_messages(messages, [{"role": "assistant", "content": reply}])
+                continue
             if not _work_loop_continue(reply, resp, messages, tool_trace, hands=hands):
                 return reply if reply.strip() else spoken
             continue
@@ -17197,6 +17605,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             assistant_blocks.append(b)
             # 12.09: `call(name, args_json)` переписывается во внутреннюю руку ЗДЕСЬ —
             # до durable-записи, побочных эффектов и потолка: воронка одна на всех.
+            original_call = copy.deepcopy(b)
             b, dispatched, dispatch_note = _unwrap_dispatch(b)
             if dispatch_note is not None:
                 tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
@@ -17262,6 +17671,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 "args": dict(call_input),
                 "side_effect": bool(side_effect),
                 "idempotency_key": idempotency_key,
+                **_tool_request_projection(original_call, tools or [], b["name"], call_input),
             }
             outbound_before = _tool_outbound_snapshot()
             execution_token = _TOOL_EXECUTION.set(execution)
@@ -17317,7 +17727,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 try:
                     _runs().store_result(
                         current.run_id, out_text, call_id=call_id,
-                        name=f"{b['name']}-uncertain-error", inline_chars=4000,
+                        name=f"{b['name']}-uncertain-error", inline_chars=context_policy.inline_chars(),
                         event_kind="tool_uncertain_error", idempotent=True,
                     )
                 except Exception as exc:
@@ -17347,7 +17757,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                 try:
                     ref = _runs().store_result(
                         current.run_id, out_text, call_id=call_id, name=b["name"],
-                        inline_chars=4000, idempotent=True,
+                        inline_chars=context_policy.inline_chars(), idempotent=True,
                         metadata=_tool_result_metadata(outbound_before),
                     )
                     model_text = _result_for_model(ref)
@@ -17359,6 +17769,8 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
                     )
             tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
                                  "content": model_text})
+            _tool_trace_event("tool_model_response", context=execution, text=model_text,
+                              image_count=len(out.images) if isinstance(out, ToolObservation) else 0)
             if isinstance(out, ToolObservation):
                 tool_results.extend(dict(image) for image in out.images)
             if tool_trace is not None:
@@ -17676,6 +18088,12 @@ def _voice_impl(
                 getattr(capture_state, 'provider_current', user_msg),
                 "\n\n".join(evidence_parts), situation),
         }]
+    if (epoch_history and epoch_taken and capture_state is None
+            and os.getenv("PRAXIS_KEAT_CAPTURE") != "on"):
+        messages = frame_dossiers.project(
+            ctx=ctx, messages=messages,
+            additions=frame_layout.snapshot().get("epoch_dossier_additions") or [],
+            private_in_rooms=dossier_private_in_rooms())
     continuation = None
     if os.getenv("PRAXIS_FRAME_CONTINUATION") == "on":
         continuation = frame_continuation.prepare(
@@ -18789,6 +19207,10 @@ def _prepare_outbound_guard(
                     + (f"; caption: {caption}" if caption else ""))
             elif item.kind == "audio":
                 transcript = guard_notes.get(item.queue_id, "").strip()
+                import xtts_intent
+                if xtts_intent.is_intent(item):
+                    from xtts_protocol import read_intent
+                    transcript = "Точный текст синтезированной речи: " + read_intent(item.path)["text"]
                 if not transcript:
                     rejection_reason = "audio_transcription_failed"
                     transcript = media_audio.transcribe(item.path).strip()
@@ -18938,7 +19360,8 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                         media_refs: tuple[media.MediaRef, ...] = (),
                         history: list[dict] | None = None,
                         current_text: str = "",
-                        occurrence_sidecar: dict | None = None) -> media.TurnEnvelope:
+                        occurrence_sidecar: dict | None = None, *,
+                        on_run=None) -> media.TurnEnvelope:
     """Живой ход: текст/фото/расшифрованное аудио -> guard -> текст + разрешённое медиа.
 
     `history` — разговор НАСТОЯЩИМИ ролями: её реплики приезжают как `assistant`, чужие
@@ -18963,10 +19386,12 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
     if dialogue and not str(current_text or "").strip():
         dialogue = []           # без «сейчас» роли собрать нечестно — идём старым путём
     unavailable_inbound: list[media.MediaRef] = []
+    media_prepare_started = time.perf_counter()
     grounded_text, user_content = _media_prompt(
         convo_text, tuple(media_refs or ()), ctx,
         model_text=(current_text if dialogue else None),
         unavailable_refs=unavailable_inbound)
+    media_prepare_finished = time.perf_counter()
     grounding_images = tuple(
         block for block in user_content
         if isinstance(user_content, list) and isinstance(block, dict)
@@ -18995,6 +19420,17 @@ def voice_turn_envelope(chat_id: str | int | None, convo_text: str, speaker: str
                         if context_evidence else "")),
     )
     durable_id = durable.run_id if durable is not None else ""
+    log.info("telegram_voice_preparation run_id=%s media_ms=%.3f pre_run_total_ms=%.3f",
+             durable_id, (media_prepare_finished - media_prepare_started) * 1000,
+             (time.perf_counter() - media_prepare_started) * 1000)
+    if on_run is not None and durable is None:
+        raise RuntimeError("deferred epoch trigger requires a durable run owner")
+    if durable is not None and on_run is not None:
+        try:
+            on_run(durable_id)
+        except Exception as exc:
+            _stop_for_durability(durable_id, phase="deferred epoch trigger handoff",
+                                uncertain_effect=False, error=exc)
     # Контракт C3: единственный ключ, которым прожитый ход сводится с расписками
     # доставки. Он был здесь, в области видимости, всё это время — и просто не
     # проставлялся, поэтому связать намерение с транспортом было нечем.
@@ -19635,6 +20071,31 @@ def _forge_event_frame(status: str) -> str:
 _FORGE_EVENT_FRAME = _forge_event_frame("connected")
 
 
+def voice_generation_event_turn(event: dict, *, epoch_tape=None):
+    """A late tool result in its original audience, without fabricating a human update."""
+    from xtts_tool_contracts import RESULT_INTRO
+    store = _voice_generations()
+    identity = str((event.get('payload') or {}).get('generation_id') or '')
+    value = store.read(identity)
+    origin = value['channel']
+    ctx = ChannelContext(
+        chat_id=origin['chat_id'], room_id=origin.get('room_id'),
+        principal_id=PRAXIS_SELF_PRINCIPAL, owner=False,
+        is_dm=origin['is_dm'], known=origin['known'], family=origin.get('family', False),
+        _scope_override=origin['scope'])
+    seed = RESULT_INTRO + json.dumps(store.observation(value), ensure_ascii=False)
+    epoch = (contextlib.nullcontext() if ctx.is_dm else
+             frame_epoch.bind(ctx.chat_id, (epoch_tape or {}).get('anchor'),
+                              tape=epoch_tape, refused=epoch_tape is None))
+    with epoch:
+        envelope = voice_turn_envelope(ctx.chat_id, seed, ctx=ctx)
+    if envelope.run_id and not envelope.failed and not envelope.deferred:
+        _runs().append_event(envelope.run_id, 'voice_generation_result_observed',
+                             generation_id=identity, source_run_id=value['request']['run_id'],
+                             source_call_id=value['call_id'], event_id=event.get('id'))
+    return envelope, ctx
+
+
 def forge_event_turn(events: list[dict]) -> str:
     """PASS 30 Этап 1: события субагентов будят ОДИН её ход (коалесцированно).
 
@@ -19652,13 +20113,14 @@ def forge_event_turn(events: list[dict]) -> str:
     # «receipt с machine ids» — при переполнении худеем поля, не режем байты.
     receipts = json.dumps(payloads, ensure_ascii=False, separators=(",", ":"))
     if len(receipts) > 8000:
-        slim = [{k: p.get(k) for k in ("task_id", "agent_id", "role", "status",
+        slim = [{k: p.get(k) for k in ("schema","task_id", "agent_id", "role", "status",
+                                       'review_id','subject_sha256','outcome_sha256','verdict',
                                        "goal", "origin_chat", "error")}
                 | {"recap": str(p.get("recap") or "")[:200]} for p in payloads]
-        receipts = json.dumps(slim, ensure_ascii=False, separators=(",", ":"))[:12000]
+        receipts = json.dumps(slim, ensure_ascii=False, separators=(",", ":"))
     seed = (core_subagents.invitation(payloads)
-            + "\n\n[receipts praxis.subagent-result.v1]\n" + receipts)
-    gist = "; ".join(f"{p.get('task_id')}/{p.get('agent_id')}:{p.get('status')}"
+            + "\n\n[receipts Forge events: schema in each record]\n" + receipts)
+    gist = "; ".join(f"{p.get('task_id')}/{p.get('agent_id') or p.get('review_id')}:{p.get('status')}"
                      for p in payloads)[:180]
     # Связь спрашиваем и КЛАДЁМ В ЗАПИСЬ — как у пробуждения и у окна. Журнал читается
     # спустя часы, когда сенсор уже не спросишь, и «Telegram жив» задним числом было бы

@@ -231,7 +231,7 @@ TIER_HI = max(TIER_LO + 1, int(os.getenv("PRAXIS_COMPACT_TIER_HI", "8") or 8))
 
 _WRITE_LOCK = threading.RLock()
 # 25.09: разобранные события по файлу дня, ключ — (размер, mtime_ns, inode). См. `events_cache_enabled`.
-_EVENTS_CACHE: dict[str, tuple[tuple[int, int, int], list[dict]]] = {}
+_EVENTS_CACHE: dict[str, tuple[tuple[int, ...], list[dict]]] = {}
 _EVENTS_CACHE_GUARD = threading.Lock()
 # ⚠ Потолок считает БАЙТЫ ФАЙЛОВ, а в памяти разобранные записи весят в 2,5–3 раза больше
 # (ревью W1 S5, 26.09: 8 МБ ленты держат 22,9 МБ). Умолчание 128 МБ файлов — это ~350 МБ
@@ -485,7 +485,7 @@ def adopt_place(chat_id: str | int) -> str:
     заводил ПУСТОЕ кольцо, и накопленное не сворачивалось никогда.
     """
     key = str(chat_id)
-    with _state_write_guard(key), _WRITE_LOCK:
+    with _state_write_guard(key):
         place = _place_key_live(key)
         if place == key:
             return place
@@ -559,6 +559,9 @@ def _load_state(chat_id: str | int, *, rebuild: bool = False) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict) and isinstance(data.get("hot"), list):
+            if rebuild and (data.get("offer_cursor_v") != 1
+                            or _state_path(chat_id).with_suffix(".dirty").exists()):
+                return rebuild_state(chat_id)
             data.setdefault("frontier", [])
             data.setdefault("dedupe", [])
             return data
@@ -569,7 +572,12 @@ def _load_state(chat_id: str | int, *, rebuild: bool = False) -> dict:
 
 def _save_state(state: dict) -> None:
     state["updated_at"] = _utc_iso()
-    _atomic_json(_state_path(state.get("chat_id", "chat")), state)
+    state["offer_cursor_v"] = 1
+    path = _state_path(state.get("chat_id", "chat"))
+    _atomic_json(path, state)
+    # Conversation appends and projection saves serialize through the same root
+    # guard. Clear only AFTER replacement; failure/crash keeps canonical recovery owed.
+    path.with_suffix(".dirty").unlink(missing_ok=True)
 
 
 def _event_file(ts: float | None = None) -> Path:
@@ -619,11 +627,55 @@ def _append_record(record: dict) -> None:
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
     with _WRITE_LOCK:
+        try:
+            before = path.stat()
+        except FileNotFoundError:
+            before = None
         fd = os.open(str(path), flags, 0o600)
         try:
-            os.write(fd, payload)
+            written = os.write(fd, payload)
         finally:
             os.close(fd)
+        after = path.stat()
+    if written == len(payload):
+        _note_indexed_append(path, json.loads(payload), before, after, written)
+
+
+def _note_indexed_append(path, record, before, after, written):
+    # Only an observed exact append over the same cached source can advance the
+    # accelerator. Concurrent append/replacement/truncation falls back to parsing.
+    if before is None or (before.st_dev, before.st_ino, before.st_size + written) != (
+            after.st_dev, after.st_ino, after.st_size):
+        return
+    key = str(path)
+    old = (before.st_size, before.st_mtime_ns, before.st_ino, before.st_ctime_ns, before.st_dev)
+    new = (after.st_size, after.st_mtime_ns, after.st_ino, after.st_ctime_ns, after.st_dev)
+    with _EVENTS_CACHE_GUARD:
+        parsed = _EVENTS_CACHE.get(key)
+        if parsed is not None and parsed[0] == old:
+            held = sum(v[0][0] for k, v in _EVENTS_CACHE.items() if k != key)
+            if events_cache_enabled() and held + after.st_size <= _EVENTS_CACHE_LIMIT:
+                _EVENTS_CACHE[key] = (new, parsed[1] + [_event_copy(record)])
+            else:
+                _EVENTS_CACHE.pop(key, None)
+    old_lookup = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    new_lookup = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    with _EVENT_LOOKUPS_LOCK:
+        hit = _EVENT_LOOKUPS.get(key)
+        if hit is not None and hit[0] == old_lookup:
+            held = sum(v[0][2] for k, v in _EVENT_LOOKUPS.items() if k != key)
+            if not events_cache_enabled() or held + after.st_size > _EVENTS_CACHE_LIMIT:
+                _EVENT_LOOKUPS.pop(key, None)
+                return
+            ids, dedupe, native = hit[1:]
+            ids.setdefault(str(record.get("id")), []).append(record)
+            if record.get("kind") == "conversation_message":
+                if record.get("dedupe_key"):
+                    dedupe.setdefault(str(record["dedupe_key"]), []).append(record)
+                tg = memory_provenance.telegram_message_key(record)
+                if tg is not None:
+                    native.setdefault(tg[1], []).append(record)
+            _EVENT_LOOKUPS[key] = (new_lookup, ids, dedupe, native)
 
 
 def canonical_event_text(text: str, direction: str = "internal") -> str:
@@ -668,7 +720,17 @@ def append_event(kind: str, *, chat_id: str | int | None = None, actor: str = "P
     }
     if dedupe_key:
         rec["dedupe_key"] = str(dedupe_key)
-    _append_record(rec)
+    if str(kind) == "conversation_message" and chat_id is not None:
+        place = str(place_key(chat_id))
+        with _state_write_guard(place):
+            dirty = _state_path(place).with_suffix(".dirty")
+            dirty.parent.mkdir(parents=True, exist_ok=True)
+            # Write ahead of the canonical append, including bare append_event users.
+            # A direct append has no cursor save: the next consumer repairs it once.
+            dirty.touch()
+            _append_record(rec)
+    else:
+        _append_record(rec)
     return rec
 
 
@@ -698,7 +760,7 @@ def _event_file_records(path: Path) -> list[dict]:
         stat = path.stat()
     except OSError:
         return []
-    signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino, stat.st_ctime_ns, stat.st_dev)
     key = str(path)
     enabled = events_cache_enabled()
     if enabled:
@@ -708,7 +770,8 @@ def _event_file_records(path: Path) -> list[dict]:
             return hit[1]
     try:
         # 26.09 (ревью W3 S6): только "\n" — U+2028 внутри текста реплики не режет запись.
-        lines = path.read_text(encoding="utf-8", errors="ignore").split("\n")
+        with path.open("rb") as source:
+            lines = source.read(stat.st_size).decode("utf-8", errors="ignore").split("\n")
     except OSError:
         return []
     records: list[dict] = []
@@ -721,7 +784,10 @@ def _event_file_records(path: Path) -> list[dict]:
             continue
         if isinstance(rec, dict):
             records.append(rec)
-    if enabled:
+    current = path.stat()
+    stable = signature == (current.st_size, current.st_mtime_ns, current.st_ino,
+                           current.st_ctime_ns, current.st_dev)
+    if enabled and stable:
         with _EVENTS_CACHE_GUARD:
             held = sum(sig[0] for name, (sig, _rows) in _EVENTS_CACHE.items() if name != key)
             if held + stat.st_size <= _EVENTS_CACHE_LIMIT:
@@ -757,6 +823,7 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
     """
     out: list[dict] = []
     belongs: dict[str, bool] = {}
+    bound, resolve = _place_read_resolver() if chat_id is not None else ({}, None)
     for path in sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []:
         for rec in _event_file_records(path):
             if kinds and rec.get("kind") not in kinds:
@@ -767,7 +834,8 @@ def iter_events(*, chat_id: str | int | None = None, kinds: set[str] | None = No
                 key = str(rec.get("chat_id"))
                 hit = belongs.get(key)
                 if hit is None:
-                    hit = _same_place(key, chat_id)
+                    hit = (memory_provenance.same_conversation(key, chat_id, bound)
+                           or resolve(key) == resolve(chat_id))
                     belongs[key] = hit
                 if not hit:
                     continue
@@ -783,19 +851,60 @@ def get_event(event_id: str) -> dict | None:
     return None
 
 
+# Derived exact-key lookups over the existing day-file cache. A changed day is
+# re-indexed; unchanged historical days are never filtered/copied/sorted per ingress.
+# No durable state or new authority: all keys refer to immutable JSONL rows.
+_EVENT_LOOKUPS = {}
+_EVENT_LOOKUPS_LOCK = threading.RLock()
+
+
+def _lookup_events(*, event_id=None, dedupe_key=None, native_id=None) -> list[dict]:
+    found = []
+    paths = sorted(EVENTS_DIR.glob("*.jsonl")) if EVENTS_DIR.exists() else []
+    live = {str(p) for p in paths}
+    with _EVENT_LOOKUPS_LOCK:
+        for stale in set(_EVENT_LOOKUPS) - live:
+            _EVENT_LOOKUPS.pop(stale, None)
+        for path in paths:
+            st = path.stat()  # an unreadable source is not proof of no duplicate
+            stamp = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            key = str(path)
+            cached = _EVENT_LOOKUPS.get(key)
+            if cached is None or cached[0] != stamp:
+                ids, dedupe, native = {}, {}, {}
+                for row in _event_file_records(path):
+                    ids.setdefault(str(row.get("id")), []).append(row)
+                    if row.get("kind") != "conversation_message":
+                        continue
+                    if row.get("dedupe_key"):
+                        dedupe.setdefault(str(row["dedupe_key"]), []).append(row)
+                    tg = memory_provenance.telegram_message_key(row)
+                    if tg is not None:
+                        native.setdefault(tg[1], []).append(row)
+                cached = (stamp, ids, dedupe, native)
+                # Honor the existing cache switch/byte budget. Big days are queried
+                # correctly without retaining a second unbounded history index.
+                held = sum(v[0][2] for k, v in _EVENT_LOOKUPS.items() if k != key)
+                end = path.stat()
+                stable = stamp == (end.st_dev, end.st_ino, end.st_size,
+                                   end.st_mtime_ns, end.st_ctime_ns)
+                if stable and events_cache_enabled() and held + st.st_size <= _EVENTS_CACHE_LIMIT:
+                    _EVENT_LOOKUPS[key] = cached
+                else:
+                    _EVENT_LOOKUPS.pop(key, None)
+            index, value = ((cached[1], str(event_id)) if event_id is not None else
+                            (cached[2], str(dedupe_key)) if dedupe_key is not None else
+                            (cached[3], int(native_id)))
+            found.extend(_event_copy(row) for row in index.get(value, ()))
+    return sorted(found, key=lambda r: (_epoch(r.get("ts")), str(r.get("id", ""))))
+
+
 def _recent_duplicate(chat_id, key: str, state: dict) -> dict | None:
     if not key:
         return None
-    for item in reversed(state.get("dedupe") or []):
-        if item.get("key") == key:
-            return get_event(str(item.get("id") or "")) or {"id": item.get("id"), "duplicate": True}
-    # Covers a crash after JSONL append but before the state cursor was replaced.
-    # 26.09: запись с тем же ключом дедупа ищется по всей ленте места — сначала по ключу
-    # (дёшево), место спрашивается только у совпавших. Ключ дедупа — это сообщение и его
-    # ревизия, совпадение за пределами прежних 400 строк — тот же дубль, не другое.
-    for rec in reversed(iter_events(chat_id=chat_id, kinds={"conversation_message"}, limit=400,
-                                    where=lambda row: row.get("dedupe_key") == key)):
-        if rec.get("dedupe_key") == key:
+    # Query the canonical key even after restart or append-before-state failure.
+    for rec in reversed(_lookup_events(dedupe_key=key)):
+        if _same_place(rec.get("chat_id"), chat_id):
             return rec
     return None
 
@@ -814,14 +923,23 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
         if native.isdecimal() and sep and (revision == "delete" or revision.startswith("edit:")):
             import keat_live
             keat_live.invalidate_native(chat_id, int(native))
+    timing_start = time.perf_counter()
     place = adopt_place(chat_id)
-    with _state_write_guard(place), _WRITE_LOCK:
+    adopted_at = time.perf_counter()
+    with _state_write_guard(place):
         # Место закреплено ДО замка: один и тот же точный ключ используется для всего
         # read/derive/save, даже если изменяемый реестр маршрутов уточнится посередине.
+        locked_at = time.perf_counter()
         state = _load_state(place, rebuild=True)
         dup = _recent_duplicate(chat_id, dedupe_key, state)
         if dup:
+            # JSONL may have committed just before a failed state replacement.
+            # Repair that cursor before promising admission to the runner.
+            if not any(item.get("id") == dup.get("id")
+                       for item in state.get("dedupe") or []):
+                rebuild_state(chat_id)
             return dup
+        looked_up_at = time.perf_counter()
         rec = append_event(
             "conversation_message", chat_id=chat_id, actor=actor or str(line).split(":", 1)[0],
             direction=direction, text=str(line), source=source, source_id=source_id,
@@ -835,6 +953,7 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
                    if revision_order is not None else {}),
             },
         )
+        appended_at = time.perf_counter()
         revision_kind = memory_provenance.telegram_revision_kind(rec)
         lineage = []
         telegram_key = memory_provenance.telegram_message_key(rec)
@@ -842,9 +961,8 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
             # 26.09: только записи того же сообщения — место спрашивается у них одних.
             native = int(telegram_key[1])
             lineage = _telegram_lineage_event_ids(
-                iter_events(chat_id=chat_id, kinds={"conversation_message"},
-                            where=lambda row: (memory_provenance.telegram_message_key(row)
-                                               or ("", -1))[1] == native),
+                [row for row in _lookup_events(native_id=native)
+                 if _same_place(row.get("chat_id"), chat_id)],
                 native,
             )
         if revision_kind in {"edit", "delete"} or len(lineage) > 1:
@@ -860,7 +978,14 @@ def record_message(chat_id: str | int, line: str, *, actor: str = "", direction:
         if dedupe_key:
             state["dedupe"] = (state.get("dedupe") or [])[-399:] + [
                 {"key": dedupe_key, "id": rec["id"]}]
+        derived_at = time.perf_counter()
         _save_state(state)
+        log.info("life_admission_timing adopt_ms=%.3f lock_wait_ms=%.3f lookup_ms=%.3f "
+                 "append_ms=%.3f derive_ms=%.3f state_save_ms=%.3f rebuild=%s",
+                 (adopted_at-timing_start)*1000, (locked_at-adopted_at)*1000,
+                 (looked_up_at-locked_at)*1000, (appended_at-looked_up_at)*1000,
+                 (derived_at-appended_at)*1000, (time.perf_counter()-derived_at)*1000,
+                 revision_kind in {"edit", "delete"} or len(lineage) > 1)
         return rec
 
 
@@ -881,13 +1006,12 @@ def note_message_revision(chat_id: str | int, message_id: int, line: str, *,
     if os.getenv("PRAXIS_KEAT_CAPTURE") == "on":
         keat_live.invalidate_native(chat_id, message_id)
     place = adopt_place(chat_id)
-    with _state_write_guard(place), _WRITE_LOCK:
+    with _state_write_guard(place):
         chat_id = place
         # 26.09: только записи этого сообщения — место спрашивается у них одних.
         wanted = int(message_id)
-        messages = iter_events(chat_id=chat_id, kinds={"conversation_message"},
-                               where=lambda row: (memory_provenance.telegram_message_key(row)
-                                                  or ("", -1))[1] == wanted)
+        messages = [row for row in _lookup_events(native_id=wanted)
+                    if _same_place(row.get("chat_id"), chat_id)]
         lineage_ids = _telegram_lineage_event_ids(messages, message_id)
         state = _load_state(chat_id, rebuild=True)
         if not lineage_ids:
@@ -987,10 +1111,16 @@ def epoch_snapshot(chat_id: str | int, *, summary_max_chars: int = 7000) -> dict
     """
     import copy
 
+    started = time.perf_counter()
     place = str(place_key(chat_id))
     with _state_write_guard(place):
+        locked = time.perf_counter()
+        members = _member_keys(place)
+        members_at = time.perf_counter()
         messages = iter_events(chat_id=place, kinds={"conversation_message"})
-        presentable, coverage, _legacy = _both_graphs(place)
+        events_at = time.perf_counter()
+        presentable, coverage, _legacy = _both_graphs(place, members=members)
+        graphs_at = time.perf_counter()
         covered = {str(eid) for meta, _text in coverage.values()
                    for eid in meta.get("source_event_ids") or ()}
         current = memory_provenance.current_conversation_events(messages)
@@ -1031,7 +1161,7 @@ def epoch_snapshot(chat_id: str | int, *, summary_max_chars: int = 7000) -> dict
                 continue
             if not (exact and str(event.get("id")) in covered):
                 append(item, residual=not exact)
-        material = {"place": place, "members": sorted(map(str, _member_keys(place))),
+        material = {"place": place, "members": sorted(map(str, members)),
                     "coverage": [[cid, meta, hashlib.sha256(text.encode()).hexdigest()]
                                  for cid, (meta, text) in sorted(coverage.items())]}
         boundary = hashlib.sha256(json.dumps(
@@ -1040,6 +1170,11 @@ def epoch_snapshot(chat_id: str | int, *, summary_max_chars: int = 7000) -> dict
         # All uncovered source bytes above remain intact; only the historical
         # recap projection uses the existing widest+recent disclosure policy.
         summary = render_context_summary(presentable, max_chars=summary_max_chars)
+        log.info("life snapshot [%s]: wait_ms=%.3f members_ms=%.3f events_ms=%.3f "
+                 "graphs_ms=%.3f assemble_ms=%.3f members=%d events=%d", place,
+                 (locked-started)*1000, (members_at-locked)*1000,
+                 (events_at-members_at)*1000, (graphs_at-events_at)*1000,
+                 (time.perf_counter()-graphs_at)*1000, len(members), len(messages))
         return copy.deepcopy(dict(place=place, boundary=boundary, hot=hot,
                                   events=messages, covered_event_ids=sorted(covered),
                                   current_event_ids=sorted(current_ids),
@@ -1050,9 +1185,15 @@ def bootstrap_legacy(chat_id: str | int, lines: list[str], *, summary: str = "",
                      last_ts: float | None = None) -> dict:
     """One honest migration: summary has limited provenance; persisted lines become raw events."""
     place = adopt_place(chat_id)
-    with _state_write_guard(place), _WRITE_LOCK:
-        state = _load_state(place)
-        if state.get("bootstrap_v1"):
+    with _state_write_guard(place):
+        completed = bool(_load_state(place).get("bootstrap_v1"))
+        state = _load_state(place, rebuild=True)
+        # Canonical recovery may see a PARTIAL legacy batch. That is not the
+        # previous cursor's completion receipt: finish its remaining imports.
+        if completed:
+            if not state.get("bootstrap_v1"):
+                state["bootstrap_v1"] = True
+                _save_state(state)
             return {"chat_id": str(chat_id), "events": 0, "legacy_compact": False,
                     "already": True, "hot": len(state.get("hot") or [])}
         made_compact = False
@@ -1439,6 +1580,42 @@ def _compact_dir(chat_id) -> Path:
     return COMPACTS_DIR / _safe(chat_id)
 
 
+def _place_read_resolver():
+    """One read operation, not a cross-turn cache or a writer transaction.
+
+    The immutable fold journal wins. Mutable routes are read once per root, so
+    hundreds of topic keys do not repeatedly decode the same document. A later
+    operation observes new routes/bindings. Exact-place lock overrides survive.
+    """
+    bound = bindings()
+    overrides = dict(getattr(_STATE_GUARD_LOCAL, "place_overrides", None) or {})
+    routes, resolved = {}, {}
+
+    def resolve(value):
+        key = str(value)
+        if key in resolved:
+            return resolved[key]
+        result = key
+        if int(overrides.get(key) or 0) <= 0:
+            result = bound.get(key)
+            if not result:
+                try:
+                    import telegram_routes
+                    room = telegram_routes.room_of(key)
+                    if telegram_routes.topic_of(key) is None:
+                        result = room or key
+                    else:
+                        if room not in routes:
+                            routes[room] = telegram_routes.read(room)
+                        result = telegram_routes.place_from_record(key, routes[room]) or key
+                except Exception:
+                    result = key
+        resolved[key] = result
+        return result
+
+    return bound, resolve
+
+
 def _member_keys(chat_id) -> list[str]:
     """Ключи, чьи компакты составляют одно место. Всегда включает сам ключ и место.
 
@@ -1453,8 +1630,8 @@ def _member_keys(chat_id) -> list[str]:
         и дальше реестр на этот набор уже не влияет.
     """
     key = str(chat_id)
-    bound = bindings()
-    keys = {key, place_key(key)}
+    bound, resolve = _place_read_resolver()
+    keys = {key, resolve(key)}
     if bound.get(key):
         keys.add(str(bound[key]))
     keys.update(k for k, place in bound.items() if place in keys)
@@ -1464,7 +1641,7 @@ def _member_keys(chat_id) -> list[str]:
         try:
             for item in directory.iterdir():
                 if item.is_dir() and item.name not in keys \
-                        and place_key(item.name) in keys:
+                        and resolve(item.name) in keys:
                     keys.add(item.name)
         except OSError:
             continue
@@ -2084,15 +2261,23 @@ def reissue_degraded_compact(chat_id: str | int, compact_id: str, *,
 def compact_if_due(chat_id: str | int, *, force: bool = False) -> dict:
     """Publish a current acting-author offer; never generate or advance coverage.
 
-    Hot and higher-tier pressure share the offer. Force/night/hard pressure changes
-    urgency, not authorship. prepare/apply binds the author's text to exact sources.
+    Hot and higher-tier pressure share a saved-cursor HINT, not selectable sources.
+    Force/night/hard pressure changes urgency, not authorship. Exact prepare/apply
+    rebuilds and validates coverage; polling must not rebuild the whole corpus while
+    holding the incoming guard. Missing/corrupt cursors retain canonical recovery.
     """
     chat_id = adopt_place(chat_id)
-    with _state_write_guard(chat_id), _WRITE_LOCK:
-        state = _rebuild_state_locked(chat_id)
+    with _state_write_guard(chat_id):
+        state = _load_state(chat_id, rebuild=True)
         rows = _drop_unprovable_inputs(list(state.get("hot") or []), chat_id)
         plan = plan_hot_fold(rows, force=force, tape_chars=tape_chars_for(chat_id), place=chat_id)
-        tier_due = _tier_fold_candidate(chat_id, state) is not None
+        # Counts may over-offer stale/overlapping children. Only the author's exact
+        # prepare path resolves leaves/bodies; this notification advances no coverage.
+        tiers: dict[int, int] = {}
+        for item in state.get("frontier") or []:
+            tier = int(item.get("tier") or 1)
+            tiers[tier] = tiers.get(tier, 0) + 1
+        tier_due = any(count >= TIER_HI for count in tiers.values())
         lo, hi, hard_hi, _ = hot_bounds(chat_id)
         pressure = len(rows) >= hi
         offered = bool(plan.get("due") or tier_due or force or pressure)
@@ -2151,7 +2336,7 @@ def _copy_compact_parse(item: tuple[dict, str]) -> tuple[dict, str]:
     return fresh, recap
 
 
-def _parse_place_compacts(chat_id: str | int) -> tuple[dict[str, tuple[dict, str]], bool]:
+def _parse_place_compacts(chat_id: str | int, *, members=None) -> tuple[dict[str, tuple[dict, str]], bool]:
     """Прочитать с диска все компакты места. Самая дорогая половина — и общая для
     обоих графов, поэтому она отдельно: разбор один, фильтров два.
 
@@ -2164,7 +2349,7 @@ def _parse_place_compacts(chat_id: str | int) -> tuple[dict[str, tuple[dict, str
     legacy_seen = False
     walked: list[str] = []
     seen: set[str] = set()
-    for member in _member_keys(expected_chat):
+    for member in (_member_keys(expected_chat) if members is None else members):
         cdir = _compact_dir(member)
         if not cdir.exists():
             continue
@@ -2229,14 +2414,15 @@ def _canonical_compact_graph(chat_id: str | int, *, presentable: bool = True,
             parsed_pair[1])
 
 
-def _both_graphs(chat_id: str | int, *, evidence: dict | None = None
+def _both_graphs(chat_id: str | int, *, evidence: dict | None = None, members=None
                  ) -> tuple[dict[str, tuple[dict, str]], dict[str, tuple[dict, str]], bool]:
     """(показ, покрытие, legacy) за ОДИН разбор файлов и ОДИН снимок индекса.
 
     Оба графа обязаны быть из одной эпохи: иначе состояние склеивается из двух
     разных моментов, а между ними успевает прийти сообщение.
     """
-    parsed_pair = _parse_place_compacts(chat_id)
+    parsed_pair = (_parse_place_compacts(chat_id) if members is None else
+                   _parse_place_compacts(chat_id, members=members))
     if evidence is None:
         evidence = memory_provenance.claim_evidence_index(MEM_DIR)
     return (_filter_compact_graph(parsed_pair[0], evidence, presentable=True),
@@ -2287,7 +2473,8 @@ def _filter_compact_graph(parsed: dict[str, tuple[dict, str]], evidence: dict, *
                         or row.get("schema") != "praxis.life.event.v1"
                         or row.get("id") != event_id
                         or (presentable and event_id not in current_event_ids)
-                        or not _same_conversation(row.get("chat_id"), meta["chat_id"])
+                        or not memory_provenance.same_conversation(
+                            row.get("chat_id"), meta["chat_id"], evidence.get("places"))
                         or row.get("kind") != "conversation_message"):
                     ok = False
                     break
@@ -2352,7 +2539,8 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
     # реестре: он вправе уточниться, и блок молча выпал бы из её сводки — при том что
     # сам компакт остаётся каноническим (вторая адверсарка 25.07).
     bind_place(chat_id, _member_keys(chat_id))
-    previous_hot = _load_state(chat_id, rebuild=False).get("hot") or []
+    previous = _load_state(chat_id, rebuild=False)
+    previous_hot = previous.get("hot") or []
     state = _default_state(chat_id)
     messages = iter_events(chat_id=chat_id, kinds={"conversation_message"})
     current_messages = memory_provenance.current_conversation_events(messages)
@@ -2414,8 +2602,9 @@ def _rebuild_state_locked(chat_id: str | int) -> dict:
                          if str(m.get("id")) not in consumed_compacts]
     state["dedupe"] = [{"key": r.get("dedupe_key"), "id": r.get("id")} for r in messages
                        if r.get("dedupe_key")][-400:]
-    state["bootstrap_v1"] = legacy_seen or any(
-        r.get("source") == "legacy_buffer" for r in messages)
+    # A legacy event/compact proves imported content, not completion of its batch.
+    # Reconciliation must not turn an interrupted bootstrap into a completion receipt.
+    state["bootstrap_v1"] = bool(previous.get("bootstrap_v1"))
     _save_state(state)
     return state
 
@@ -3271,7 +3460,7 @@ def rewrite_compact_text(compact_id: str, summary: str, *, chat_id: str | int | 
     path = BASE / str(meta.get("path"))
     stamp = _utc_iso().replace("-", "").replace(":", "")
     history = _history_dir() / _safe(chat) / f"{compact_id}.{stamp}.md"
-    with _state_write_guard(place), _WRITE_LOCK:
+    with _state_write_guard(place):
         # 25.09 (ревью V4 F13): читать ПОД замком — иначе два переписывания одного id
         # (рука и фоновый refold) теряют одно: второе кладёт в историю свой старый текст.
         try:
@@ -3441,7 +3630,7 @@ def _prefix_conflict(inputs: list[dict], provable: list[dict]) -> dict | None:
 def prepare_authored_fold(chat_id: str | int, *, limit: int = 50, compact_id: str = "") -> dict:
     """Expose a complete bounded source selection; retaining it does not fold anything."""
     chat = str(adopt_place(chat_id))
-    with _state_write_guard(chat), _WRITE_LOCK:
+    with _state_write_guard(chat):
         state = _rebuild_state_locked(chat)
         hot = _drop_unprovable_inputs(list(state.get("hot") or []), chat)
         plan = plan_hot_fold(hot, force=False, tape_chars=tape_chars_for(chat), place=chat)
@@ -3514,8 +3703,76 @@ def prepare_authored_fold(chat_id: str | int, *, limit: int = 50, compact_id: st
                 "remaining_unselected": len(rows) - len(selected), "hot": len(hot),
                 "instruction": "Read every selected source; write your own recap in this turn, then fold with this selection and text. Only this selection is covered; surrounding whitespace is normalized."}
 
+def prepare_repair_fold(chat_id: str | int, *, budget_chars: int | None = None) -> dict:
+    """Maximal complete hot prefix for mechanical availability repair.
+
+    Does not inherit voluntary episode/count pressure or historical refresh work.
+    Keeps the latest provable message live and never clips an individual source.
+    The ordinary author planner and its thresholds are unchanged.
+    """
+    chat = str(adopt_place(chat_id))
+    budget = PROMPT_BUDGET_CHARS if budget_chars is None else max(1, int(budget_chars))
+    with _state_write_guard(chat):
+        state = _rebuild_state_locked(chat)
+        hot = _drop_unprovable_inputs(list(state.get("hot") or []), chat)
+        selected, used = [], 0
+        for row in hot[:-1]:
+            size = len(json.dumps(row, ensure_ascii=False))
+            if used + size > budget:
+                if not selected:
+                    return {"ok": False, "reason": "repair_source_exceeds_input_budget",
+                            "sources": [], "hot": len(hot), "source_chars": size,
+                            "budget_chars": budget}
+                break
+            selected.append(row)
+            used += size
+        if not selected:
+            return {"ok": True, "reason": "nothing_to_fold", "sources": [], "hot": len(hot)}
+        payload = {"place": chat, "kind": "hot", "inputs": selected,
+                   "continued": True, "tier": 1, "depth": 1,
+                   "purpose": "owner_authorized_availability_repair"}
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        selection = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        path = STATE_DIR / "authored" / (selection + ".json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(raw, encoding="utf-8")
+            tmp.replace(path)
+        return {"ok": True, "selection": selection, "place": chat, "kind": "hot",
+                "sources": selected, "shown_complete": True, "source_chars": used,
+                "budget_chars": budget, "hot": len(hot),
+                "remaining_unselected": len(hot) - len(selected)}
+
+
 def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
-    """Commit the acting author's text against the source bytes it selected, never a replan."""
+    """Commit the acting author's text against its exact selected source bytes."""
+    return _apply_selected_fold(chat_id, selection, text)
+
+
+def apply_repair_fold(chat_id: str | int, selection: str, text: str, *,
+                      model: str, prompt_sha256: str) -> dict:
+    """Owner-authorized mechanical repair, explicitly attributed to a helper model.
+
+    This is not exposed as the voice's authored-fold tool. Raw sources, conflict
+    checks and readback are identical; neither identity nor behavioral policy is
+    generated here. The attribution lives outside the immutable v1 header schema.
+    """
+    if not str(model or "").strip() or not re.fullmatch(r"[0-9a-f]{64}", str(prompt_sha256)):
+        return {"ok": False, "reason": "repair_provenance_required", "folded": 0}
+    provenance = {"author": "maintenance_model", "model": str(model),
+                  "prompt_sha256": prompt_sha256, "selection": selection}
+    label = str(model).replace("\n", " ").replace("\r", " ")[:200]
+    annotated = (f"[Ремонтная свёртка вспомогательной моделью {label}; "
+                 "не авторский текст Praxis, первичные события сохранены.]\n\n" + str(text or "").strip())
+    if not str(text or "").strip():
+        return {"ok": False, "reason": "repair_recap_required", "folded": 0}
+    return _apply_selected_fold(chat_id, selection, annotated, provenance=provenance)
+
+
+def _apply_selected_fold(chat_id: str | int, selection: str, text: str, *,
+                         provenance: dict | None = None) -> dict:
+    """Validate and commit one exact source selection; never silently replan."""
     chat = str(adopt_place(chat_id))
     summary = str(text or "").strip()
     if re.search(r"^## ", summary, re.M):
@@ -3533,7 +3790,7 @@ def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
         return {"ok": False, "reason": "selection_mismatch", "folded": 0}
     inputs = payload["inputs"]
     ids = [str(row["id"]) for row in inputs]
-    with _state_write_guard(chat), _WRITE_LOCK:
+    with _state_write_guard(chat):
         state = _rebuild_state_locked(chat)
         refresh = group = None
         if payload["kind"] == "refresh":
@@ -3573,7 +3830,10 @@ def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
                               event_count=(len(inputs) if payload["kind"] in {"hot", "refresh"} else
                                            sum(int(row.get("event_count") or 0) for row in sources)),
                               continued=payload["continued"],
-                              first_ts=first_ts, last_ts=last_ts)
+                              first_ts=first_ts, last_ts=last_ts,
+                              source_note=("Mechanical availability repair; not Praxis-authored. "
+                                           + json.dumps(provenance, ensure_ascii=False, sort_keys=True)
+                                           if provenance else ""))
         if _discard_unprovable_compact(meta, "authored fold") or compact_text(meta["id"], chat) != summary:
             candidate = BASE / meta["path"]
             if candidate.exists():
@@ -3605,9 +3865,11 @@ def apply_authored_fold(chat_id: str | int, selection: str, text: str) -> dict:
             if str(row.get("id")) not in set(ids)
             or (payload["kind"] == "hot" and row.get("state_residual"))]
         state["frontier"].append(meta)
-        append_event("memory_compact", chat_id=chat, text=f"Author → {meta['id']}",
-                     source="acting_agent", refs=ids,
-                     meta={"compact_id": meta["id"], "tier": payload["tier"], "selection": selection})
+        append_event("memory_compact", chat_id=chat,
+                     text=f"{'Maintenance model' if provenance else 'Author'} → {meta['id']}",
+                     source="maintenance_model" if provenance else "acting_agent", refs=ids,
+                     meta={"compact_id": meta["id"], "tier": payload["tier"], "selection": selection,
+                           **({"repair_provenance": provenance} if provenance else {})})
         _save_state(state)
         clear_fold_offer(chat)
         return {"ok": True, "folded": len(ids), "compact_id": meta["id"], "path": meta["path"],

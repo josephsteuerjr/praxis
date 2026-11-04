@@ -1,0 +1,11 @@
+.forge-panel { padding: 20px; margin-block: 16px; overflow: hidden; }
+.forge-panel[hidden] { display: none; }
+.forge-panel header,.forge-controls,.forge-teams { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.forge-panel header { justify-content: space-between; }
+.forge-button { color: inherit; font: inherit; cursor: pointer; padding: 8px 12px; border-radius: 12px; border: 1px solid #ffffff30; background: #ffffff0c; overflow-wrap: anywhere; text-align: start; }
+.forge-button:hover,.forge-button:focus-visible { background: #ffffff20; outline: 2px solid #89c4ce; outline-offset: 2px; }
+.forge-unit { border-block-start: 1px solid #ffffff26; padding-block: 14px; overflow-wrap: anywhere; }
+.forge-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; padding: 12px; border-radius: 10px; background: #00000024; font-size: .85rem; }
+.forge-detail > h3 { margin-block-start: 20px; }
+.forge-panel small { overflow-wrap: anywhere; }
+@media(max-width: 480px) { .forge-panel { padding: 12px; } .forge-controls { align-items: stretch; } .forge-button { min-height: 44px; } }

@@ -94,6 +94,12 @@ def _positive_int(value: object, label: str) -> int:
     return value
 
 
+def _positive_int_list(value: object, label: str) -> list[int]:
+    if not isinstance(value, list):
+        raise TelegramOutboxValidationError(f"{label} must be a list")
+    return [_positive_int(mid, label) for mid in value]
+
+
 def _strict_text(value: object, label: str, *, maximum: int) -> str:
     if not isinstance(value, str):
         raise TelegramOutboxValidationError(f"{label} must be text")
@@ -525,7 +531,10 @@ class TelegramOutbox:
         if kind not in {"text", "file"}:
             raise ValueError("invalid payload kind")
         intent = data.get("intent")
-        if not isinstance(intent, dict) or set(intent) != {"run_id", "call_id", "purpose"}:
+        if (not isinstance(intent, dict)
+                or not {"run_id", "call_id", "purpose"} <= set(intent)
+                or set(intent) - {"run_id", "call_id", "purpose",
+                                   "addressed_observed_message_id", "addressed_observed_message_ids"}):
             raise ValueError("invalid intent metadata")
         run_id = _strict_text(intent.get("run_id"), "run_id", maximum=256)
         call_id = _strict_text(intent.get("call_id"), "call_id", maximum=256)
@@ -591,6 +600,12 @@ class TelegramOutbox:
             "run_id": run_id,
             "call_id": call_id,
             "purpose": purpose,
+            **({"addressed_observed_message_id": _positive_int(
+                intent["addressed_observed_message_id"], "addressed_observed_message_id")}
+               if "addressed_observed_message_id" in intent else {}),
+            **({"addressed_observed_message_ids": _positive_int_list(
+                intent["addressed_observed_message_ids"], "addressed_observed_message_ids")}
+               if "addressed_observed_message_ids" in intent else {}),
             "peer_id": peer_id,
             "topic_id": topic_id,
             "reply_to": reply_to,
@@ -853,6 +868,10 @@ class TelegramOutbox:
             "intent": {
                 "run_id": state["run_id"], "call_id": state["call_id"],
                 "purpose": state["purpose"],
+                **({"addressed_observed_message_id": state["addressed_observed_message_id"]}
+                   if "addressed_observed_message_id" in state else {}),
+                **({"addressed_observed_message_ids": list(state["addressed_observed_message_ids"])}
+                   if "addressed_observed_message_ids" in state else {}),
             },
             "delivery": {
                 "peer_id": state["peer_id"], "topic_id": state["topic_id"],
@@ -882,6 +901,8 @@ class TelegramOutbox:
         purpose: str,
         topic_id: int | str | None = None,
         reply_to: int | str | None = None,
+        addressed_observed_message_id: int | None = None,
+        addressed_observed_message_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         key = _key(idempotency_key)
         body = _optional_body_text(text, "text", maximum=self.max_text_bytes)
@@ -892,6 +913,13 @@ class TelegramOutbox:
             reply_to=reply_to, run_id=run_id, call_id=call_id, purpose=purpose,
             payload={"text": body},
         )
+        # Freeze model-visible coverage in the intent, never at acceptance/replay.
+        if addressed_observed_message_id is not None:
+            data["intent"]["addressed_observed_message_id"] = _positive_int(
+                addressed_observed_message_id, "addressed_observed_message_id")
+        if addressed_observed_message_ids is not None:
+            data["intent"]["addressed_observed_message_ids"] = _positive_int_list(
+                addressed_observed_message_ids, "addressed_observed_message_ids")
         turn_key = _turn_duplicate_key(run_id, peer_id, topic_id, body)
         with self._guard():
             state = self._state_for_key_locked(key)

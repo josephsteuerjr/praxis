@@ -68,10 +68,10 @@ class TestClock(unittest.TestCase):
                          {"buffers", "schedule", "sleep", "control", "immune",
                           "absence", "media", "formation", "followups", "social_pulse",
                           "membership", "direct_outbox", "text_outbox",
-                          "owner_delivery",
+                          "owner_delivery", "epoch_repair",
                           "durable_resume", "computer_inventory",
                           "group_context_backfill", "reap_orphans",
-                          "selfdev_reconcile", "forge_wake", "forge_events",
+                          "selfdev_reconcile", "forge_wake", "forge_events", "voice_jobs",
                           # Shadow-модерация поднимает только durable review-факты: никакого
                           # актюатора нет, а приоритет очереди — лишь право на следующий
                           # свободный голосовой ход.

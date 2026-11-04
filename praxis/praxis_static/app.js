@@ -1,5 +1,6 @@
 import { AmbientField } from "/app/static/ambient.js";
 import { initMemoryViews, destroyMemoryViews } from "/app/static/memory_views.js";
+import { mountForge } from "/app/static/forge_ui.js";
 
 const API = "/api/praxis/v1";
 const ACTIVE_STATUSES = new Set(["pending", "running", "blocked", "paused", "in_doubt"]);
@@ -1029,6 +1030,7 @@ function applySnapshot(snapshot, { stale = false, verifiedAt = Date.now() } = {}
   renderHeader(snapshot);
   renderNow(snapshot);
   renderRuns(snapshot);
+  mountForge(document.querySelector('#forgePanel'),{api,owner:isOwner(snapshot),stale:Boolean(stale)});
   renderComputer(snapshot);
   renderMemory(snapshot);
   renderTelegram(snapshot);

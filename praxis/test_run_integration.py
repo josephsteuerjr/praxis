@@ -668,6 +668,8 @@ class RunIntegrationTests(unittest.TestCase):
             "conversation_id": "-10042__topic__101",
             "peer_id": "-10042",
             "topic_id": 101,
+            "addressed_observed_message_id": 77,
+            "addressed_observed_message_ids": [72, 77],
             "chunks": [{
                 "index": index,
                 "text": text,
@@ -691,6 +693,8 @@ class RunIntegrationTests(unittest.TestCase):
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0]["peer_id"], "-10042")
         self.assertEqual(pending[0]["topic_id"], 101)
+        self.assertEqual(pending[0]["addressed_observed_message_id"], 77)
+        self.assertEqual(pending[0]["addressed_observed_message_ids"], [72, 77])
         self.assertEqual([row["index"] for row in pending[0]["pending_chunks"]], [1])
         self.assertEqual(pending[0]["pending_chunks"][0]["reply_to"], 101)
 

@@ -197,8 +197,15 @@ class RunWaitHonestyCase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def no_backend_timeout(self,*args,**kwargs):
+        # Exercise the independent caller watchdog, not the backend's faster
+        # timeout/settlement path. The actual command and Stop remain real.
+        kwargs['timeout']=0
+        return self.original_spawn(*args,**kwargs)
+
     def test_the_wait_that_ran_out_is_named_and_the_stop_text_survives(self):
-        with mock.patch.object(brokerops, "WAIT_GRACE_SEC", 1):
+        self.original_spawn=hostproc.spawn
+        with mock.patch.object(hostproc,'spawn',side_effect=self.no_backend_timeout), mock.patch.object(brokerops, "WAIT_GRACE_SEC", 1):
             answer = brokerops.run_wait(str(self.project), "sleep 30", timeout=1)
         self.assertTrue(answer["timed_out_waiting"])
         self.assertGreaterEqual(answer["waited_s"], 1.5)
@@ -210,7 +217,8 @@ class RunWaitHonestyCase(unittest.TestCase):
         self.assertIn("больше нет", note)
 
     def test_a_stop_that_failed_warns_that_the_command_may_still_burn_the_host(self):
-        with mock.patch.object(brokerops, "WAIT_GRACE_SEC", 1), \
+        self.original_spawn=hostproc.spawn
+        with mock.patch.object(hostproc,'spawn',side_effect=self.no_backend_timeout), mock.patch.object(brokerops, "WAIT_GRACE_SEC", 1), \
                 mock.patch.object(hostproc, "stop", return_value="не остановлен: EPERM"):
             answer = brokerops.run_wait(str(self.project), "sleep 30", timeout=1)
         try:

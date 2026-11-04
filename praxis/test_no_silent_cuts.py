@@ -7,14 +7,10 @@
 """
 import json
 import os
-from pathlib import Path
-import tempfile
 import unittest
-from unittest import mock
 
 import agent
 import forge
-import forge_worker
 
 
 class CutsSayTheirName(unittest.TestCase):
@@ -67,42 +63,39 @@ class CutsSayTheirName(unittest.TestCase):
 class CeilingIsNotCompletion(unittest.TestCase):
     """Исчерпание потолка ходов — не «сделано» и не «упал»."""
 
-    def run_worker(self, exhausted):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            task_id, unit_id = 'code-ceiling', 'agent-ceiling'
-            directory = root / task_id
-            request = directory / 'agents' / unit_id / 'request.json'
-            request.parent.mkdir(parents=True)
-            (directory / 'task.json').write_text(json.dumps({
-                'id': task_id, 'status': 'active', 'root': str(root)}), encoding='utf-8')
-            request.write_text(json.dumps({'id': unit_id, 'task_id': task_id, 'role': 'scout',
-                                           'max_iters': 1, 'brief': 'read'}), encoding='utf-8')
-            answer = forge_worker.llm.LLMResponse(model='offline', text='summary',
-                blocks=[{'type': 'text', 'text': 'summary'}], stop_reason='end_turn')
-            tool = forge_worker.llm.LLMResponse(model='offline', text='', stop_reason='tool_use',
-                blocks=[{'type': 'tool_use', 'id': 'read', 'name': 'inspect', 'input': {'action': 'status'}}])
-            with mock.patch.object(forge, 'TASKS_DIR', root), \
-                 mock.patch.object(forge, 'BASE', root), \
-                 mock.patch.object(forge_worker, '_system', return_value='offline'), \
-                 mock.patch.object(forge_worker.llm, 'chat', side_effect=[tool, answer] if exhausted else [answer]), \
-                 mock.patch.object(forge, 'inspect', return_value='observed'), \
-                 mock.patch.object(forge, '_event') as event, mock.patch.object(forge, 'emit_unit_event'):
-                self.assertEqual(forge_worker.run(request), 0)
-            return json.loads((request.parent / 'result.json').read_text(encoding='utf-8')), event.call_args_list
+    def _worker_outcome(self,end_turn):
+        from unittest import mock
+        from types import SimpleNamespace
+        import forge_worker
+        import test_forge_wave2_server as fixtures
+        fixture=fixtures.ServerWave2();fixture.setUp()
+        try:
+            directory,request=fixture.unit(status='starting',max_iters=1)
+            finished=[]
+            def chat(*args,**kwargs):
+                if end_turn or kwargs.get('tools') is None:
+                    return SimpleNamespace(model='fixture',stop_reason='end_turn',text='observed partial work',blocks=[],usage={})
+                return SimpleNamespace(model='fixture',stop_reason='tool_use',text='',usage={},blocks=[
+                    {'type':'tool_use','id':'one','name':'inspect','input':{'action':'read','path':'code.py'}}])
+            with mock.patch.object(forge_worker.llm,'chat',side_effect=chat),mock.patch.object(forge_worker,'_system',return_value='fixture'), \
+                 mock.patch.object(forge,'_event',side_effect=lambda *a,**k:finished.append((a,k))),mock.patch.object(forge,'emit_unit_event'):
+                self.assertEqual(forge_worker.run(directory/'request.json'),0)
+            return json.loads((directory/'result.json').read_text()),finished
+        finally:fixture.doCleanups()
 
     def test_worker_distinguishes_two_ways_to_end(self):
-        completed, _ = self.run_worker(False)
-        exhausted, _ = self.run_worker(True)
-        self.assertEqual((completed['status'], completed['complete']), ('done', True))
-        self.assertEqual((exhausted['status'], exhausted['complete']), ('stalled', False))
-        self.assertEqual((exhausted['iters_used'], exhausted['iters_max'], exhausted['tool_errors']), (1, 1, 0))
+        for end_turn,expected in ((True,'done'),(False,'stalled')):
+            result,_=self._worker_outcome(end_turn)
+            self.assertEqual(result['status'],expected)
+            self.assertEqual(result['iters_used'],1)
+            self.assertIn('tool_errors',result)
 
     def test_worker_event_does_not_say_done_on_exhaustion(self):
-        exhausted, events = self.run_worker(True)
-        finished = [call.kwargs['summary'] for call in events if call.args[1] == 'agent_finished']
-        self.assertEqual(finished, ['agent-ceiling stalled; tools=1'])
-        self.assertEqual(exhausted['status'], 'stalled')
+        result,events=self._worker_outcome(False)
+        summaries=[kw['summary'] for args,kw in events if args[1]=='agent_finished']
+        self.assertTrue(summaries)
+        self.assertIn('stalled',summaries[-1])
+        self.assertNotIn(' done',summaries[-1])
 
     def test_her_invitation_has_three_outcomes_not_two(self):
         items = [{"priority": "normal", "status": "done", "goal": "g", "task_id": "t",

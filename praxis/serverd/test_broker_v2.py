@@ -61,6 +61,16 @@ class AuditChainCase(unittest.TestCase):
 
 
 class WorkspacePrimitiveCase(unittest.TestCase):
+    def test_physical_binding_refuses_root_replacement_before_mutation(self):
+        binding=brokerops.root_binding(self.project)
+        incoming=self.base/'incoming';incoming.mkdir();(incoming/'marker').write_text('untouched')
+        old=self.base/'old';self.project.rename(old);incoming.rename(self.project)
+        answer=broker.dispatch('op.start',{'root_value':str(self.project),'command':'touch forbidden',
+                                         'expected_root_binding':binding})
+        self.assertFalse(answer['ok']);self.assertEqual(answer['code'],'root_binding_changed')
+        self.assertFalse((self.project/'forbidden').exists())
+        self.assertEqual((self.project/'marker').read_text(),'untouched')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
@@ -1449,7 +1459,14 @@ class StopNeverOverwritesTheTruthCase(_HostProcStand):
         for attempt in range(10):
             unit = self._unit(f"op-fast-{attempt}")
             hostproc.spawn(unit, "exit 7", "/tmp", timeout=30)
+            # This is the LATE-stop oracle. The gated pre-admission Stop is a
+            # distinct valid outcome and must not race this fixture's premise.
+            deadline=time.monotonic()+5
+            while not (unit/'result.json').exists() and time.monotonic()<deadline:time.sleep(.01)
+            self.assertTrue((unit/'result.json').exists())
+            raw=(unit/'result.json').read_bytes()
             message = hostproc.stop(unit)
+            self.assertEqual((unit/'result.json').read_bytes(),raw)
             # Первое, что она увидит следом за op.stop. Надгробие «stopped» здесь — это уже
             # ложь: команда отработала сама и с кодом 7. «Ещё бежит» ложью не является.
             immediately = hostproc.poll(unit)

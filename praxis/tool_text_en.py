@@ -227,7 +227,17 @@ EN: dict[str, dict] = {
               "or delivery with an unknown outcome?"),
         "p": {"outcome": "done | wait | blocked",
               "note": "done: what was done, short and optional; wait: the return "
-                      "condition; blocked: the obstacle"},
+                      "condition; blocked: the obstacle. This note is for the next turn: "
+                      "2-4 short lines with actions, checks, pending work and an exact "
+                      "artifact path or ResultRef. Do not copy the call log; name unknown "
+                      "outcomes as unknown."},
+    },
+    "voice_message": {
+        "d": ("Voice a chosen line in my current voice and send it as a voice message to this chat. "
+              "I decide which lines to voice. Preparation runs in the background; the conversation can continue. "
+              "Pass the exact words to synthesize. Delivery records separately when the audio is ready "
+              "and when Telegram accepts it."),
+        "p": {"text": "Exact words to synthesize.", "caption": "Optional caption for the voice message."},
     },
     "speak": {
         "d": ("Voice a short answer in a good Russian female voice and attach the audio to "
@@ -694,7 +704,7 @@ EN: dict[str, dict] = {
                              "timeout": "seconds; 0 means unbounded",
                              "tail": "how many trailing log lines to return"}},
     "coding_agent": {"p": {"task_id": "the coding task",
-                           "action": "spawn | poll | stop | list",
+                            "action": "spawn | poll | stop | list | disposition | tick | payload | events; payload is a pure exact-hash read",
                            "agent_id": "the subprocess to poll or stop",
                            "brief": "what the subprocess must do",
                            "role": "scout | worker | reviewer",
@@ -711,8 +721,8 @@ EN: dict[str, dict] = {
                             "timeout": "seconds per command",
                             "tail": "trailing output lines to return"}},
     "coding_swarm": {"p": {"task_id": "the coding task",
-                           "action": "plan | start | tick | status | signal | mailbox | compare",
-                           "plan": "JSON nodes [{id, role, brief, deps, owns}]",
+                            "action": "plan | start | tick | status | signal | mailbox | compare | checkpoint | rework",
+                            "plan": "For checkpoint: JSON object with next_action and optional unresolved_reviews. For plan: JSON nodes [{id, role, brief, deps, owns}]",
                            "node_id": "the node to act on",
                            "kind": "finding | question | blocker | contract | result | claim | release",
                            "message": "the signal text",
@@ -881,6 +891,7 @@ BASE_SHA: dict[str, str] = {
     "search_private_messages": "22fcf861",
     "set_avatar": "1f14fac2",
     "shell": "29c62251",
+    "voice_message": "6d240bef",
     "speak": "f9d09b07",
     "stay_silent": "8bd4bde4",
     "switch_brain": "e57f12ca",

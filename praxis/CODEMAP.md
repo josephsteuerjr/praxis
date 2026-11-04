@@ -27,7 +27,7 @@
 | `brain.py`, `appetite.py` | Наблюдаемый выбор model role и учёт/интерпретация вычислительного аппетита без скрытого veto. |
 | `media.py` | Typed inbound/outbound media, guarded spool, durable media receipts и cleanup. |
 | `imagegen.py` | Standalone Codex Images API через OpenAI-канал реле, отдельные настройки images, проверка реального изображения и scoped artifact; общая рука generate_image для GLM и relay voice. |
-| `media_audio.py` | Local STT и TTS facade/backends с атомарными аудио-артефактами; Silero подключается только opt-in. |
+| `media_audio.py` | Local STT и XTTS-only facade; прежние TTS отвергаются без fallback. |
 | `silero_tts_client.py`, `silero_tts_worker.py` | Lazy process-isolated Silero v5_ru: verified local model SHA, JSONL supervisor, timeout/RSS/recycle/parent-death и Piper fallback без импорта PyTorch в runner. |
 | `requirements-silero.txt`, `scripts/provision_silero.py` | Отдельная worker-only Python-среда и verified model provisioning; основной `requirements.txt` остаётся без PyTorch. |
 | `scripts/silero_soak.py` | Bounded 30–60-минутный gate трудного корпуса: latency/RTF, worker+cgroup memory/swap/PSI и idle-unload; не меняет live backend. |
@@ -192,3 +192,37 @@ Win32 process handle/wait и никогда не пробует Windows PID че
 Правила запуска опасных Windows/process suites находятся в [`AGENTS.md`](AGENTS.md). Исторические
 версии этой карты и удалённые проектные заметки извлекаются из Git через
 `git show <commit>:<path>`, а не дублируются в текущем дереве.
+
+## XTTS и MiniApp
+
+- `xtts_protocol.py` — лёгкие wire/intent contracts и проверки идентичности.
+- `xtts_tts_client.py` — UDS-клиент, pinned selection, bounded OGG download/cancel; без model/encoder imports.
+- `xtts_engine.py` — локальные verified weights, conditioning cache и tokenizer-aware splitting.
+- `xtts_service.py`, `xtts.service` — отдельный resident runtime, health/control, Opus encoder и bounded recovery.
+- `xtts_intent.py` — preparation внутри существующего MediaSpool ledger, без второй очереди доставки.
+- `xtts_install.py`, `requirements-xtts.{txt,lock}` — отдельная серверная установка с pinned model/runtime.
+- `xtts_control.py` — status/catalog/configure/enable/disable и durable config receipts.
+- `test_xtts.py` — offline lifecycle/intent/profile/cancel/concurrency и integration с canonical delivery.
+
+Интеграция: `media.py` проверяет scoped preparation payload; `run_resume.py` восстанавливает inert intent; `agent.py` stages exact speech и архивирует prepared bytes; `mtproto_runner.py` готовит аудио вне ONE_MIND и использует существующие media receipts.
+
+- `xtts_profiles.py`, `xtts_voice_rpc.py` — каталог, private reference/clone store, CAS selection, preview/control и cancellation.
+- `praxis_voice_ui.py` — временные bounded UI jobs и private audio responses; без Telegram.
+- `xtts_desk_adapter.py`, `xtts_miniapp_patch.py` — узкая интеграция в существующий private desk runtime с hash guards у deploy caller.
+- `miniapp_voice.ts`, `miniapp_voice.css` — каталог, пробы, выбор, пауза, запись/загрузка и удаление голоса в прежнем MiniApp.
+- `test_xtts_voices.py`, `test_xtts_ui.py`, `test_xtts_miniapp_patch.py` — profile/cache/races, private UI lifecycle и сохранение старых UI bytes.
+# Forge wave2 candidate modules
+
+- `forge_runtime.py`: one worker's OS writer lock, full transcript/events/payloads/checkpoint and safe continuation identity.
+- `forge_roots.py`: physical/overlapping root transaction locks and cross-task writer ownership observations.
+- `forge_recovery.py`: explicit exact-subject recovery of legacy local/host custody from canonical launch evidence and a witnessed kernel reboot; preserves original outcomes.
+- `test_coding_reads_0311.py`, `test_forge_recovery_0311.py`: actual failed read/checkpoint regressions, durable read-vs-mutation behavior, lightweight orientation and positive/negative reboot custody cases.
+- `command_process.py`, `forge_process.py`, `forge_verify.py`, `forge_remote_run.py`: exact local group/job and remote operation custody through lost replies/Stop.
+- `forge_usage.py`: append-only idempotent task-wide observed/unknown usage; no invented price or hidden tree cap.
+- `forge_review.py`, `forge_review_worker.py`: separate frozen independent critics, real read coverage and typed isolated A/L/B/M merger/rework; never live apply.
+- `forge_reader.py`, `forge_control.py`: owner projections and durable control intents/receipts; HTTP handlers do not execute model or control effects.
+- `forge_tools.py`: team schema extension for existing agent wrappers, including `coding_control`/`coding_review`.
+- `praxis_static/forge_ui.js`, `forge_ui.css`: Runs team panel with actual hierarchy/stages/full outputs/control readback.
+- `test_forge_wave2_server.py` and focused donor consumer suites: server adaptation, process ownership, recovery, exact acceptance, independent review and prefix preservation.
+
+`forge_battery.py` exports the exact frozen composition and binds complete executed canonical-matrix logs; `command_child.py` is the Linux per-command subreaper used by `command_process.py`, including detached descendants.

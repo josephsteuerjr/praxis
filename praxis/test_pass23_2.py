@@ -87,10 +87,11 @@ class RoutingCase(unittest.TestCase):
                                return_value="coding-задача hcode-one: g") as start:
             out = agent.tool_coding_session("start", goal="g", target="/etc", scope="host")
         self.assertIn("hcode-one", out)
-        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="")
+        start.assert_called_once_with("g", "/etc", priority="normal", origin_chat="",max_active_workers=8)
 
     def test_host_task_primitives_and_worker_route_through_forge(self):
         import forge
+        import forge_remote_run
         import tempfile
         from pathlib import Path
         old = forge.BASE, forge.STATE_DIR, forge.TASKS_DIR
@@ -110,11 +111,15 @@ class RoutingCase(unittest.TestCase):
                  mock.patch.object(forge.serverd_client, "run", return_value="ran"), \
                  mock.patch.object(forge.serverd_client, "process", return_value="op-1"), \
                  mock.patch.object(forge.serverd_client, "checkpoint", return_value="checkpointed"), \
+                 mock.patch.object(forge_remote_run,'run',return_value='ran') as remote_run, \
+                 mock.patch.object(forge_remote_run,'start_unlocked',return_value={'id':'proc-fixture','status':'done'}) as remote_start, \
                  mock.patch.object(forge, "_spawn_runner", return_value=4242):
                 self.assertEqual(forge.inspect(task_id, "read", path="x"), "root file")
                 self.assertEqual(forge.edit(task_id, "write", path="x", content="y"), "edited")
                 self.assertEqual(forge.run(task_id, "true"), "ran")
-                self.assertEqual(forge.process(task_id, "start", command="sleep 1"), "op-1")
+                self.assertEqual(__import__('json').loads(forge.process(task_id, "start", command="sleep 1"))['id'],'proc-fixture')
+                remote_run.assert_called_once()
+                remote_start.assert_called_once()
                 self.assertEqual(forge.checkpoint(task_id, "cp"), "checkpointed")
                 spawned = forge.agent(task_id, "spawn", brief="inspect root", role="scout")
             self.assertIn("agent-", spawned)

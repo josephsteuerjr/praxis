@@ -372,7 +372,12 @@ def status_at(peer_id, message_id=None) -> tuple[str, int]:
     всё», и наблюдение без диапазона, записанное последним, переклеивало ярлык на всю
     историю — включая стирание настоящей эпохи форума.
     """
-    epochs = read(peer_id)["epochs"]
+    return _status_from_record(read(peer_id), message_id)
+
+
+def _status_from_record(record: dict, message_id=None) -> tuple[str, int]:
+    """Apply the historical range rules to one detached route document."""
+    epochs = record["epochs"]
     if not epochs:
         return UNKNOWN, 0
     mid = _mid(message_id)
@@ -628,17 +633,27 @@ def place_of(conversation_id) -> str:
     key = str(conversation_id or "")
     if not key:
         return ""
+    if topic_of(key) is None:
+        return room_of(key)
+    return place_from_record(key, read(room_of(key)))
+
+
+def place_from_record(conversation_id, record: dict) -> str:
+    """Resolve status and branches from the SAME caller-owned route observation."""
+    key = str(conversation_id or "")
+    if not key:
+        return ""
     room = room_of(key)
     topic = topic_of(key)
     if topic is None:
         return room
     try:
         # Спрашиваем вердикт для эпохи, в которую ключ минтился, а не для «сейчас».
-        status, _epoch = status_at(room, topic)
+        status, _epoch = _status_from_record(record, topic)
         if status == FALSE:
             return room
         if status == TRUE:
-            branches = read(room).get("branches")
+            branches = record.get("branches")
             if isinstance(branches, dict) and str(topic) in branches:
                 container = branches[str(topic)]
                 return room if container is None else f"{room}{_SEP}{int(container)}"

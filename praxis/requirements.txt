@@ -7,10 +7,8 @@ aiogram>=3.4
 # пин, не >=: невинный ребилд образа однажды молча привёз 1.44 со сменой семантики client.loop
 # (динамический get_running_loop -> мёртвый луп из воркер-тредов, все sync-тулы таймаутили)
 telethon==1.44.0
-# Мультимодальный Telegram: локальный STT; neural female TTS + локальный Piper fallback.
+# Local STT. XTTS runs in the separately pinned resident environment.
 faster-whisper==1.2.1
-piper-tts==1.4.2
-edge-tts==7.2.8
 # JPEG-вид скринов для модели (перекодировка observe в agent.py; мягкий фолбэк без него)
 pillow>=10
 # Веб-руки v2 (webtool.py): главный контент без меню/шапок (trafilatura, тянет lxml),
@@ -19,7 +17,9 @@ pillow>=10
 trafilatura>=1.12
 charset-normalizer>=3.3
 pypdf>=4.3
-brotli>=1.1
+brotli>=1.2.1
+# Explicit CA bundle floor, including when pulled transitively by HTTP clients.
+certifi>=2026.10.19
 
 # Таблицы: pandas для анализа, два зрелых OOXML writer/reader и быстрый Rust-backed
 # calamine для чтения больших xls/xlsx/xlsb/ods. Это разные, дополняющие друг друга роли.

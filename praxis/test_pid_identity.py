@@ -764,16 +764,22 @@ class DetachedStateBirthMarkTests(unittest.TestCase):
         directory = self.tmp / "verify-note"
         (directory / "logs").mkdir(parents=True)
         calls: list[dict] = []
-        fake = types.SimpleNamespace(call=lambda verb, args, **kw: (
-            calls.append({"verb": verb, "args": args, "kw": kw}),
-            {"ok": True, "body": "готово", "exit": 0})[1])
+        import serverd_client
+        from test_forge_remote_admission_2710 import tree_proof
+        import hashlib
+        def call(verb,args,**kw):
+            calls.append({'verb':verb,'args':args,'kw':kw})
+            if verb=='op.start':return {'ok':True,'id':'op-'+hashlib.sha256(kw['request_id'].encode()).hexdigest()[:16]}
+            operation=args['operation_id']
+            return {'ok':True,'id':operation,'status':'done','exit':0,'body':'готово','tree_exit':tree_proof(operation)}
         state = {"checks": {}}
-        with mock.patch.dict(sys.modules, {"serverd_client": fake}):
+        with mock.patch.object(serverd_client,'call',side_effect=call):
             row = forge_verify._run_one(0, {"id": "lint", "command": "ruff ."}, self.tmp,
                                         directory, 300, state, threading.Lock(), "host", "m1")
         self.assertEqual(row["deadline_s"], 300)
         self.assertEqual(calls[0]["args"]["timeout"], 300, "демон обязан знать предел")
-        self.assertGreater(calls[0]["kw"]["timeout"], 300, "клиент переживает бюджет демона")
+        self.assertEqual(calls[0]['verb'],'op.start');self.assertEqual(calls[1]['verb'],'op.poll')
+        self.assertTrue(calls[0]['kw']['request_id'])
         log = Path(row["log"]).read_text(encoding="utf-8")
         self.assertIn("300с", log)
         self.assertIn("PRAXIS_VERIFY_TIMEOUT_SEC", log)
@@ -781,14 +787,10 @@ class DetachedStateBirthMarkTests(unittest.TestCase):
     def test_a_check_with_its_own_deadline_is_not_lectured(self) -> None:
         directory = self.tmp / "verify-own"
         (directory / "logs").mkdir(parents=True)
-        fake = types.SimpleNamespace(
-            call=lambda verb, args, **kw: {"ok": True, "body": "готово", "exit": 0})
-        with mock.patch.dict(sys.modules, {"serverd_client": fake}):
-            row = forge_verify._run_one(0, {"id": "t", "command": "pytest", "timeout": 1800},
-                                        self.tmp, directory, 300, {"checks": {}},
-                                        threading.Lock(), "host", "m1")
+        from test_serverd_timeout import TestDetachedMatrix
+        row,log=TestDetachedMatrix()._run_one({'id':'t','command':'pytest','timeout':1800},[])
         self.assertEqual(row["deadline_s"], 1800, "осознанный срок проверки не переписываем")
-        self.assertNotIn("[срок]", Path(row["log"]).read_text(encoding="utf-8"))
+        self.assertNotIn("[срок]",log)
 
 
 if __name__ == "__main__":
