@@ -33,6 +33,10 @@ def activity(tree):
                 'next':'Автопродолжение отменено. Предыдущая версия сохранена; проверки и ревью не выполняются.'}
     producer=read(directory/'coordinator-process.json')
     live=not installed and bool(producer) and process_state(producer)=='alive'
+    launcher=operation.get('test_launcher') or {}
+    test_producer=read(Path(launcher['root'])/'process.json') if launcher.get('root') else {}
+    test_live=bool(test_producer) and process_state(test_producer)=='alive'
+    live=live or (not installed and test_live)
     result={'id':request['id'],'state':state,'version':request.get('version',''),
         'live':live,'review_id':operation.get('review_id'),
         'error':operation.get('verification_error') or operation.get('finish_error') or operation.get('error',''),
@@ -44,7 +48,11 @@ def activity(tree):
     # evidence that a worker/reviewer is executing. Keep the current failure
     # visible even when the selected agent has returned from its turn.
     pending=[];completed=total=0
-    for prefix,target in (('',directory/'plan.json'),('app/',directory/'app-merge/plan.json')):
+    from .direct_update import group
+    selected=group(directory)
+    inputs=([(f'core-{i}/',Path(row['directory'])/'plan.json') for i,row in enumerate(selected['members'])] if selected else [('',directory/'plan.json')])
+    inputs.append(('app/',directory/'app-merge/plan.json'))
+    for prefix,target in inputs:
         plan=read(target)
         conflicts=plan.get('conflicts',[]);resolved=plan.get('resolved',{})
         if not isinstance(conflicts,list) or not isinstance(resolved,dict):continue
@@ -73,7 +81,7 @@ def activity(tree):
             fresh=-5<=time.time()-float(progress.get('updated_at') or 0)<30
             result['tests']={**{k:progress.get(k) for k in ('state','updated_at','slots','completed','total',
                 'completed_lanes','total_lanes','tests_completed','tests_failed','tests_total_known','copied_bytes','copied_files')},
-                'live':live and fresh and state in ('verification_requested','review_requested','queued','merging'),
+                'live':(test_live if launcher else live) and fresh and state in ('verification_requested','review_requested','queued','merging'),
                 'active':[{k:row.get(k) for k in ('slot','phase','lane','kind','file','started_at','current_test',
                     'tests_completed','tests_failed','tests_collected')}
                     for row in progress.get('active',[])[:12] if isinstance(row,dict)]}

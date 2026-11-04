@@ -155,9 +155,6 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
         return validate_prepared(old,new,progress)
     if source_admission.activate(new):
         verified = source_admission.current_proofs(verified, new)
-    from localharness import portable_switch
-    if portable_switch.enabled(old):
-        return portable_switch.prepare(old,new,progress,verified=verified,attached_data=attached_data)
     if active_update(old).is_file():
         # Preparation runs beside a live owner. Never repair a mixed prior
         # generation under its feet; ordinary startup recovery owns that path.
@@ -178,7 +175,7 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
     portable=metadata.get('delivery')=='portable'
     from localharness.update_profile import prepare as prepare_profile
     if progress:progress.phase('backup')
-    note=prepare_profile(old,new,progress,attached_data=attached_data)
+    note=prepare_profile(old,new,progress,attached_data=attached_data,snapshot=False)
     from localharness.code_transition import prepare as prepare_code
     if progress:progress.phase('code')
     prepare_code(old,new,note,progress=progress)

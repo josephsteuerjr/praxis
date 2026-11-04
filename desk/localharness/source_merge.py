@@ -78,6 +78,7 @@ def signature(files):
 def input_signature(value):
     """Bind the immutable sides, source identity and permitted resolution surface."""
     fields={key: value[key] for key in ('local_path','commits','files','conflicts','automatic')}
+    if value.get('direct_update'):fields['direct_update']=value['direct_update']
     if value.get('application'):fields['application']=True
     if value.get('app_source'):fields['app_source']=value['app_source']
     return signature(fields)

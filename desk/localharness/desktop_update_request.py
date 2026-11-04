@@ -91,6 +91,14 @@ def producers_pending(value):
             if producer:
                 observed=process_state(producer);observations[directory.name]=observed
                 if observed not in ('absent','changed'):return True,observations
+            from .source_update_launcher import reference,_observe
+            try:launcher=reference(operation,directory)
+            except (OSError,ValueError,KeyError,RuntimeError):return True,{**observations,'test-launcher':'linkage-unknown'}
+            if launcher:
+                try:terminal=_observe(Path(launcher['root']))[1]
+                except (OSError,ValueError,RuntimeError):terminal=None
+                observations['test-launcher']='settled' if terminal is not None else 'live-or-unknown'
+                if terminal is None:return True,observations
             if operation.get('stop_confirmed'):continue
             if operation.get('task_id'):return True,{**observations,'merger':'settlement-unknown'}
             if operation.get('review_id'):

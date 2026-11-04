@@ -60,8 +60,9 @@ before a fresh job is admitted.
 
 A preserve operation with actual authored source differences `L != A` is semantic
 reconciliation, even if Git reports no textual conflicts. It uses the mandatory
-source-update protocol. Pristine preserve and explicit clean do not acquire a
-forced ordinary task-review gate.
+source-update protocol. New direct preserve operations verify and review the
+whole transition even when an individual core is pristine; explicit clean keeps
+its separate policy and cannot be silently selected after preserve refusal.
 
 The selected agent has these production `source_update` actions:
 
@@ -100,17 +101,33 @@ The next attempt reuses the normal exact-composition validation; it does not
 bless a hybrid inventory. Existing frozen B supplies recovery bytes without an
 extra whole-app backup. A core-unchanged repair creates a new review identity.
 
-All selected code roots share one installed app. Their **complete** app inventories
-must agree before verify/review/apply and again at cutover, including unchanged
-files, modes and deletions. A changed-path union is not authority: a peer that
-tested unchanged incoming app bytes has not tested another agent's repaired app.
-`source_update status.shared_application` exposes peer candidates and differing
-paths. Reconcile each through its existing app repair/finish/full-verify/review
-chain; repairs retain previous evidence but invalidate its battery and review.
-A previously ready peer can reopen only to repair the reported disagreement.
-Pristine code peers affected by shared app repairs enter the same strict gate;
-no peer's review is copied to another. Consistent independently verified common
-apps remain supported, and incoming B stays frozen throughout.
+New preserve transitions have one owner for the complete candidate: all selected
+core M variants, one common app M and the incoming runtime/manifests. Per-core
+Git plans retain their A/L/B/M history but create no peer coordinators, app copies
+or independent approval loops. The selected hand addresses `core-0/path`,
+`core-1/path` and the single `app/path`; status names each frozen core/source.
+Every affected profile's Stop/Pause remains binding, including shared-core users.
+An edit to any member invalidates whole-transition test/review authority.
+
+`source_update_launcher` starts one ordinary independent process using the
+existing command Job/group owner. It returns one report containing every core's
+actual selected/full execution. Equal variants reuse execution only when both
+final bytes AND complete historical A/L/B delta policy match. Distinct import
+contexts still execute separately inside this one launcher; no first-core-only
+coverage claim is made. Existing internal test parallelism is retained. The
+canonical report and each core's detailed observations/logs reach one independent
+whole-candidate review. Failed tests remain failed evidence for that review.
+An unknown launcher admission/exit or missing report never starts a replacement.
+Closing a UI observer or ending an agent turn does not stop this producer.
+Owner Stop cancels its actual descendant groups and keeps uncertain custody owed.
+
+Normal code application reuses the programme preimage overlay and startup
+rollback, not the first-install census/asset migration/retirement flow. Permanent
+data paths remain selected; no data copy or mandatory settings ZIP is made.
+Only programme-local path carriers and changed programme preimages participate
+in the transaction. Manual backups and explicit first installation retain their
+separate behavior. Earlier admitted per-core plans keep their original protocol;
+new transition metadata cannot claim their prior checks as common approval.
 
 `harness/` contains final M app/resources, including factory soul/skill resources
 (not a live private persona); `distribution/` freezes both original source and

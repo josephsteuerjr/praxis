@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / 'desk'))
 sys.path.insert(0, str(ROOT / 'helene/core'))
 sys.path.insert(0, str(Path(__file__).parent))
 from localharness import source_update as pipeline, source_merge as merge, code_transition
-from localharness import self_review, source_update_worker,source_update_battery,update_composition,authored_baseline
+from localharness import self_review, source_update_worker,source_update_battery,source_update_launcher,update_composition,authored_baseline
 from localharness.package_notice import read, write
 from t_self_review_192 import load_forge
 from t_source_merge_211 import BASE, LOCAL, BOTH, put
@@ -82,7 +82,9 @@ class PipelineTests(unittest.TestCase):
         self.verified={};self.battery_order=[]
         for mocker in [mock.patch.object(pipeline,'_verification_dependencies'),
                        mock.patch.object(source_update_battery,'prepare',side_effect=self.prepare_battery),
-                       mock.patch.object(source_update_battery,'validate',side_effect=self.validate_battery)]:
+                       mock.patch.object(source_update_battery,'validate',side_effect=self.validate_battery),
+                       mock.patch.object(source_update_launcher,'tick',side_effect=lambda op,d,stop:source_update_battery.prepare(op,d,{},stop)),
+                       mock.patch.object(source_update_launcher,'collect',side_effect=lambda op,d:source_update_battery.prepare(op,d,{},lambda:False))]:
             mocker.start();self.addCleanup(mocker.stop)
 
     def prepare_battery(self,operation,directory,harness,stopped):
@@ -107,6 +109,12 @@ class PipelineTests(unittest.TestCase):
 
     def tick(self, **kwargs):
         pipeline.tick(self.tree, self.forge, self.service, coordinator=self.coordinator,**kwargs)
+        # The fake executor settles immediately; exercise the same successive
+        # host ticks a separately running launcher now requires. Native producer
+        # custody/execution is tested by direct_update_consumer, not this mock.
+        for _ in range(2):
+            if self.operation().get('resolution_owner')=='agent' or self.operation()['state'] not in ('verification_requested','review_requested'):break
+            pipeline.tick(self.tree,self.forge,self.service,coordinator=self.coordinator,**kwargs)
         return self.operation()
 
     def merge_result(self, content=BOTH, *, complete=True, forged=None):
@@ -129,7 +137,7 @@ class PipelineTests(unittest.TestCase):
         record = self.service.status(self.operation()['review_id'])
         for critic in record['critics']:
             unit = self.forge._unit_dir(record['task_id'], 'agents', critic['unit_id'])
-            finding = [{'path': 'resolved/module.py', 'scenario': 'overlapping edits', 'detail': 'preserve the second function'}]
+            finding = [{'path': 'resolved/core-0/module.py', 'scenario': 'overlapping edits', 'detail': 'preserve the second function'}]
             result = {'subject_sha256': record['subject_sha256'], 'verdict': verdict,
                       'summary': 'source-only fake reviewer', 'findings': finding if verdict == 'findings' else [], 'gaps': []}
             write(unit / 'result.json', {'status': 'done', 'complete': complete, 'snapshot_verified': True,
@@ -199,7 +207,7 @@ class PipelineTests(unittest.TestCase):
         self.tick();self.merge_result()
         original=self.service.request
         def review(**kwargs):
-            self.assertEqual(self.battery_order,['prepare','validate'])
+            self.assertEqual(self.battery_order,['prepare','validate','prepare','validate'])
             return original(**kwargs)
         with mock.patch.object(self.service,'request',side_effect=review):
             self.assertEqual(self.tick()['state'],'reviewing')
@@ -463,20 +471,22 @@ class PipelineTests(unittest.TestCase):
         plan = read(self.directory / 'plan.json')
         for side in ('base', 'local', 'incoming'):
             plan['files'][side] = merge.inventory(self.directory / side)
+        shutil.copytree(self.directory/'local',self.code,dirs_exist_ok=True)
         plan['result'] = merge.inventory(self.directory / 'result')
         plan['result'].pop('module.py')
         (self.directory / 'result/module.py').unlink()
+        write(self.directory/'plan.json',plan)
         sources = pipeline._materials(self.directory, plan)
         row = self.service.request(trigger='contested_overlay', sources=sources,
-                                   overlay={'conflicts': ['module.py']}, operation_id='absence-fixture')
+                                   overlay={'conflicts': ['core-0/module.py']}, operation_id='absence-fixture')
         subject = self_review.validate_snapshot(row['snapshot'], row['subject_sha256'])
         self.assertFalse(subject['gaps'])
-        entry = next(entry for entry in subject['manifest'] if entry['path'] == 'resolved/module.py')
+        entry = next(entry for entry in subject['manifest'] if entry['path'] == 'resolved/core-0/module.py')
         self.assertIs(entry['exists'], False)
-        self.assertIn('mode', next(entry for entry in subject['manifest'] if entry['path'] == 'mine/options.json'))
+        self.assertIn('mode', next(entry for entry in subject['manifest'] if entry['path'] == 'mine/core-0/options.json'))
         from localharness.self_review_worker import SnapshotReviewer
         critic = SnapshotReviewer({'root': row['snapshot'], 'subject_sha256': row['subject_sha256']})
-        self.assertIs(json.loads(critic.dispatch({}, 'inspect', {'action': 'read', 'path': 'resolved/module.py'}))['exists'], False)
+        self.assertIs(json.loads(critic.dispatch({}, 'inspect', {'action': 'read', 'path': 'resolved/core-0/module.py'}))['exists'], False)
 
     def test_binary_and_private_material_gaps_cannot_be_clear(self):
         for side in ('base', 'local', 'incoming', 'result'):
@@ -485,13 +495,15 @@ class PipelineTests(unittest.TestCase):
         plan = read(self.directory / 'plan.json')
         for side in ('base', 'local', 'incoming'):
             plan['files'][side] = merge.inventory(self.directory / side)
+        shutil.copytree(self.directory/'local',self.code,dirs_exist_ok=True)
         plan['result'] = merge.inventory(self.directory / 'result')
+        write(self.directory/'plan.json',plan)
         row = self.service.request(trigger='contested_overlay', sources=pipeline._materials(self.directory, plan),
-                                   overlay={'conflicts': ['module.py']})
+                                   overlay={'conflicts': ['core-0/module.py']})
         subject = self_review.validate_snapshot(row['snapshot'], row['subject_sha256'])
         self.assertEqual(len(subject['gaps']), 8)
-        self.assertFalse((Path(row['snapshot']) / 'mine/AGENTS.md').exists())
-        self.assertFalse((Path(row['snapshot']) / 'mine/asset.bin').exists())
+        self.assertFalse((Path(row['snapshot']) / 'mine/core-0/AGENTS.md').exists())
+        self.assertFalse((Path(row['snapshot']) / 'mine/core-0/asset.bin').exists())
 
     def test_all_frozen_sides_and_live_local_and_candidate_are_freshness_authority(self):
         ready = self.ready()
