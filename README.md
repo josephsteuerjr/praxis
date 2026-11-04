@@ -9,8 +9,8 @@ need Git, a compiler or a separate Python installation to start.
 | --- | --- | --- |
 | Windows x64 | `Helene-…zip` | `helene.exe` |
 | macOS on Apple silicon | `Helene-…-macos-arm64.zip` | `Helene.app` |
-| Debian/Ubuntu x86_64 | `Helene-…-linux-x86_64.zip` | `Start Helene.sh` |
-| Fedora x86_64 | `Helene-…-fedora-x86_64.zip` | `Start Helene.sh` |
+| Debian/Ubuntu x86_64 | `Helene-…-linux-x86_64.zip` | `./helene` |
+| Fedora x86_64 | `Helene-…-fedora-x86_64.zip` | `./helene` |
 
 The first window helps you create an agent or connect your existing data. A new
 agent can start with the Hélène constitution or your own editable text or file.
@@ -21,6 +21,30 @@ material; download the application archive for your system.
 Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
+
+## Included in 2.3.0
+
+The stable release collects the 2.3 candidate work across the desktop, the agent
+runtime and the update system:
+
+- Praxis-style pages and a detailed right panel for actual model inputs, tool
+  arguments, execution receipts, worker activity and results.
+- Forge tasks with nested workers, observed model identity, partial outputs,
+  history and explicit control/acceptance states.
+- Durable host-owned updates that continue after a window closes, with source
+  preservation, independent review, explicit clean replacement and rollback.
+- Shared-application/multiple-core composition, scoped verification and isolated
+  execution, with truthful cancellation and process custody.
+- First-launch/migration flows that preserve existing profiles; a new agent can
+  start with the Hélène constitution or custom text/file before provider login.
+- Local Whisper/XTTS and remote Fish controls with free-form delivery, explicit
+  voice/model selection and exact paid-preview recovery after an interrupted
+  request or page reload. Remote provider credentials stay on the server.
+- Portable Windows, Apple-silicon, Debian 12 and Fedora 44 archives, with inspected
+  native Cocoa and Qt/X11 windows and explicit package/source evidence.
+
+Read the [complete 2.3.0 feature and validation notes](desk/docs/RELEASE-2.3.0.md),
+or [download the stable release](https://github.com/josephsteuerjr/praxis/releases/tag/v2.3.0).
 
 ## Your agent, your files
 
