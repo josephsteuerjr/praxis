@@ -29,6 +29,7 @@ import hmac
 import datetime as dt
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -184,6 +185,9 @@ _OPEN_PATHS = {"/m", "/m/", "/m/manifest.webmanifest", "/pair/redeem", "/tg/", "
 # дойти; закрытая от телефона, она бесполезна ровно в этом случае. Что можно
 # трогать — решает служба на сервере закрытым списком, а не эта строка.
 _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/media", "/api/artifact", "/api/forge",
+                 "/api/phone/settings", "/api/phone/settings/receipt",
+                 "/api/phone/subscription",
+                 "/api/phone/activity", "/api/phone/forge/tasks", "/api/phone/forge/events",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
                  "/api/interrupt", "/api/interrupt-step", "/api/panic", "/api/autonomy", "/api/voice/attachment"}
@@ -266,6 +270,11 @@ def _origin_ok(request: web.Request) -> tuple[bool, str]:
         return True, ""
     if origin in _ALLOWED_ORIGINS:
         return True, origin
+    # Reopened disposable windows register an exact origin with the persistent
+    # session host. No wildcard loopback CORS and no channel/agent restart.
+    from localharness.session_host import configured_origin
+    if configured_origin(os.environ.get('HELENE_CONFIG'), origin):
+        return True, origin
     # tauri.localhost — внутренний хост оболочки, из веба на него не попасть.
     # По имени, а не по точной строке: Tauri может отдавать окно и по http, и
     # по https (useHttpsScheme), а неверная строка означала бы пустое окно.
@@ -305,6 +314,42 @@ def _cors(origin: str) -> dict:
 _PAIRS: dict[str, dict] = {}
 _PAIR_TTL = 600
 _PAIR_USES = 3
+_PAIR_CACHE = {'path': None, 'stamp': None}
+
+
+def _pairs_path():
+    return _devices_path().with_name('phone-pairs.json')
+
+
+def _pairs():
+    """Pending enrollment is data, not a channel process's memory."""
+    path = _pairs_path()
+    if _PAIR_CACHE['path'] != str(path):
+        _PAIRS.clear(); _PAIR_CACHE.update(path=str(path), stamp=None)
+    try:
+        info = path.stat(); stamp = (info.st_mtime_ns, info.st_size)
+    except FileNotFoundError:
+        if _PAIR_CACHE['stamp'] is not None:
+            _PAIRS.clear();_PAIR_CACHE['stamp']=None
+        return _PAIRS
+    if _PAIRS and stamp == _PAIR_CACHE['stamp']: return _PAIRS
+    value = json.loads(path.read_text(encoding='utf8'))
+    if value.get('format') != 'helene-phone-pairs.v1' or not isinstance(value.get('pairs'), dict):
+        raise ValueError('Не удалось прочитать сохранённые коды подключения телефона')
+    rows = value['pairs']
+    if any(not isinstance(row, dict) or type(row.get('expires')) not in (int, float)
+           or not math.isfinite(row['expires']) or type(row.get('uses')) is not int or row['uses']<0
+           or ('key' in row and not isinstance(row['key'],str)) for row in rows.values()):
+        raise ValueError('Повреждён сохранённый код подключения телефона')
+    _PAIRS.clear(); _PAIRS.update(rows); _PAIR_CACHE['stamp'] = stamp
+    return _PAIRS
+
+
+def _save_pairs():
+    from localharness.package_notice import write
+    path = _pairs_path()
+    write(path, {'format': 'helene-phone-pairs.v1', 'pairs': _PAIRS})
+    info = path.stat(); _PAIR_CACHE.update(path=str(path), stamp=(info.st_mtime_ns, info.st_size))
 
 
 def _devices_path() -> Path:
@@ -327,7 +372,7 @@ def _devices_path() -> Path:
     return readers.tree() / "memory" / ".state" / "devices.json"
 
 
-_DEVICES_CACHE: dict = {"stamp": None, "rows": []}
+_DEVICES_CACHE: dict = {"path": None, "stamp": None, "rows": []}
 _DEVICES_LOCK = threading.Lock()
 
 
@@ -340,8 +385,10 @@ def _devices() -> list[dict]:
         stat = path.stat()
         stamp = (stat.st_mtime_ns, stat.st_size)
     except OSError:
-        stamp = None
-    if _DEVICES_CACHE["stamp"] == stamp:
+        _DEVICES_CACHE.update(path=str(path.resolve()),stamp=None,rows=[])
+        return []
+    identity=str(path.resolve())
+    if _DEVICES_CACHE.get('path') == identity and _DEVICES_CACHE["stamp"] == stamp:
         return _DEVICES_CACHE["rows"]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -350,6 +397,7 @@ def _devices() -> list[dict]:
         rows = []
     _DEVICES_CACHE["rows"] = rows
     _DEVICES_CACHE["stamp"] = stamp
+    _DEVICES_CACHE["path"] = identity
     return rows
 
 
@@ -523,12 +571,18 @@ async def _json_body(request: web.Request):
 
 
 def _new_pair() -> dict:
-    now = time.time()
-    for token, row in list(_PAIRS.items()):
-        if row["expires"] < now or row["uses"] <= 0:
-            _PAIRS.pop(token, None)
-    token = secrets.token_urlsafe(24)
-    _PAIRS[token] = {"expires": now + _PAIR_TTL, "uses": _PAIR_USES}
+    with _DEVICES_LOCK:
+        now = time.time()
+        pairs = _pairs()
+        before = dict(pairs)
+        for token, row in list(pairs.items()):
+            if row["expires"] < now or row["uses"] <= 0:
+                pairs.pop(token, None)
+        token = secrets.token_urlsafe(24)
+        pairs[token] = {"expires": now + _PAIR_TTL, "uses": _PAIR_USES}
+        try: _save_pairs()
+        except Exception:
+            _PAIRS.clear(); _PAIRS.update(before); raise
     return {"token": token, "path": "/m/?pair=" + token,
             "expires_in": _PAIR_TTL, "uses": _PAIR_USES}
 
@@ -564,7 +618,7 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
     ключ не сохранялся, а владелец видел «Код устарел» без объяснения.
     """
     with _DEVICES_LOCK:
-        row = _PAIRS.get(token)
+        row = _pairs().get(token)
         if row is None:
             raise web.HTTPForbidden(
                 text=json.dumps({'code': 'pair_unknown', 'error': 'Код не найден: ссылка могла истечь или канал перезапустился. Покажи QR заново.'}, ensure_ascii=False),
@@ -574,7 +628,12 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
                 text=json.dumps({'code': 'pair_expired', 'error': 'Код устарел или уже использован — покажи QR заново.'}, ensure_ascii=False),
                 content_type='application/json')
         if row.get("key"):
+            if not _device_ok(row['key']):
+                raise web.HTTPForbidden(text=json.dumps({'code':'pair_expired','error':'Устройство отвязано. Покажи новый QR.'}),content_type='application/json')
             row["uses"] -= 1
+            try: _save_pairs()
+            except Exception:
+                row['uses'] += 1; raise
             return {"key": row["key"], "uses_left": row["uses"]}
         key = "dk-" + secrets.token_urlsafe(30)
         kind = ("iPhone" if "iPhone" in ua else "iPad" if "iPad" in ua
@@ -601,6 +660,11 @@ def _redeem(token: str, ua: str, addr: str) -> dict:
                      "на сервере это отдельная папка на запись (server/desk-recipe).")
         row["key"] = key
         row["uses"] -= 1
+        try: _save_pairs()
+        except Exception:
+            row.pop('key',None); row['uses'] += 1
+            _save_devices(rows[:-1])
+            raise
         return {"key": key, "uses_left": row["uses"]}
 
 
@@ -609,13 +673,21 @@ async def api_pair_redeem(request):
     и браузер по умолчанию; 06.10 — слово владельца про Firefox)."""
     token = str(request.query.get("token") or "")
     peer = request.transport.get_extra_info("peername") if request.transport else None
-    got = await asyncio.to_thread(
-        _redeem, token, str(request.headers.get("User-Agent") or ""),
-        str(peer[0]) if peer else "")
+    supplied = request.headers.get('Authorization','')
+    device = supplied[7:] if supplied.startswith('Bearer dk-') else ''
+    if not token and device and await asyncio.to_thread(_device_ok,device):
+        # Reestablish this already-authorized device's cookie after importing
+        # an installed PWA fragment. No enrollment or new device is created.
+        got = {'key':device,'uses_left':None}
+    else:
+        got = await asyncio.to_thread(
+            _redeem, token, str(request.headers.get("User-Agent") or ""),
+            str(peer[0]) if peer else "")
     response = _json({"key": got["key"], "agent": _agent_name(),
                       "uses_left": got["uses_left"]})
+    response.headers['Cache-Control']='no-store'
     response.set_cookie(COOKIE, got["key"], max_age=365 * 24 * 3600,
-                        httponly=True, samesite="Lax")
+                        httponly=True, samesite="Lax",secure=request.scheme=='https' or request.headers.get('X-Forwarded-Proto')=='https')
     return response
 
 
@@ -774,13 +846,18 @@ async def api_pair_telegram(request):
 
 
 async def mobile_manifest(request):
-    """Манифест PWA: start_url несёт токен пары, чтобы установленное на экран
-    «Домой» приложение могло обменять его второй раз (iPhone)."""
+    """Stable app identity; installation carries its existing device session.
+
+    The fragment never reaches HTTP logs and creates no extra device. A fresh
+    install can open after enrollment expiry; revocation still invalidates it.
+    """
     pair = str(request.query.get("pair") or "")
     name = _agent_name()
-    start = "/m/?pair=" + pair if pair else "/m/"
+    device = str(request.cookies.get(COOKIE) or '')
+    device = device if device.startswith('dk-') and await asyncio.to_thread(_device_ok,device) else ''
+    start = '/m/#device=' + quote(device,safe='') if device else "/m/?pair=" + quote(pair,safe='') if pair else "/m/"
     manifest = {
-        "name": name, "short_name": name, "start_url": start, "scope": "/m/",
+        "id":"/m/", "name": name, "short_name": name, "start_url": start, "scope": "/m/",
         "display": "standalone", "background_color": "#fdfcfa", "theme_color": "#fdfcfa",
         "icons": [{"src": "/m/icon-192.png", "sizes": "192x192", "type": "image/png"},
                   {"src": "/m/icon-512.png", "sizes": "512x512", "type": "image/png"}],
@@ -875,6 +952,51 @@ async def _r_forge(c: Call):
     return await asyncio.to_thread(reader)
 
 
+async def _r_phone_settings(c: Call):
+    from deskd import phone_settings
+    try:return await asyncio.to_thread(phone_settings.snapshot)
+    except phone_settings.SettingsError as error:return Fail(error.status,str(error))
+
+
+async def _r_phone_settings_save(c: Call):
+    from deskd import phone_settings
+    try:return await asyncio.to_thread(phone_settings.save,c.body)
+    except phone_settings.SettingsError as error:return Fail(error.status,str(error))
+
+
+async def _r_phone_settings_receipt(c: Call):
+    operation=c.query.get('operation','')
+    if not re.fullmatch('[a-f0-9]{32}',operation):return Fail(400,'Не указан номер сохранения')
+    from localharness.package_notice import read
+    value=await asyncio.to_thread(read,readers.tree()/'memory/.state/phone-settings-receipt.json')
+    return value if value.get('operation')==operation else Fail(404,'Сохранение ещё не подтверждено')
+
+
+async def _r_phone_subscription(c: Call):
+    from deskd import phone_settings
+    try:return await asyncio.to_thread(phone_settings.subscription,c.body)
+    except phone_settings.SettingsError as error:return Fail(error.status,str(error))
+
+
+async def _r_phone_activity(c: Call):
+    from localharness.self_review_integration import activity
+    try:return await asyncio.to_thread(activity,readers.tree(),c.query.get('review_cursor',''),_int_arg(c.query,'review_limit',20,1,100))
+    except ValueError as error:return Fail(400,str(error))
+
+
+async def _r_phone_forge_tasks(c: Call):
+    from deskd import phone_activity
+    try:return await asyncio.to_thread(phone_activity.activity,readers.tree(),_int_arg(c.query,'limit',20,1,100),c.query.get('cursor',''))
+    except forge_reader.ReadError as error:return Fail(error.status,str(error))
+
+
+async def _r_phone_forge_events(c: Call):
+    from deskd import phone_activity
+    try:return await asyncio.to_thread(phone_activity.events,readers.tree(),c.query.get('task_id',''),c.query.get('unit_id',''),
+        _int_arg(c.query,'offset',0,0,2**53-1),_int_arg(c.query,'limit',50,1,100),c.query.get('generation',''),_int_arg(c.query,'after_seq',0,0,2**53-1))
+    except forge_reader.ReadError as error:return Fail(error.status,str(error))
+
+
 async def _forge_owner(c: Call, fn, *args, **kwargs):
     # Handler-level check also protects direct tunnel dispatch/tests, not only
     # the HTTP scope middleware. Owner records never extend paired /api/forge.
@@ -887,6 +1009,9 @@ async def _forge_owner(c: Call, fn, *args, **kwargs):
 
 
 async def _r_forge_tasks(c: Call):
+    if c.query.get('view') == 'active':
+        return await _forge_owner(c, forge_reader.activity,
+                                  _int_arg(c.query, 'limit', 20, 1, 100), c.query.get('cursor') or '')
     return await _forge_owner(c, forge_reader.tasks, _int_arg(c.query, "limit", 30, 1, 100))
 
 
@@ -1578,6 +1703,14 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/board", _reader(lambda: readers.board())),
     Route("GET", "/api/agenda", _reader(lambda: readers.agenda())),
     Route("GET", "/api/forge", _r_forge),
+    Route("GET", "/api/phone/settings", _r_phone_settings),
+    Route("POST", "/api/phone/settings", _r_phone_settings_save),
+    Route("GET", "/api/phone/settings/receipt", _r_phone_settings_receipt),
+    Route("GET", "/api/phone/subscription", _r_phone_subscription),
+    Route("POST", "/api/phone/subscription", _r_phone_subscription),
+    Route("GET", "/api/phone/activity", _r_phone_activity),
+    Route("GET", "/api/phone/forge/tasks", _r_phone_forge_tasks),
+    Route("GET", "/api/phone/forge/events", _r_phone_forge_events),
     Route("GET", "/api/forge/tasks", _r_forge_tasks),
     Route("GET", "/api/forge/task", _r_forge_task),
     Route("GET", "/api/forge/events", _r_forge_events),
@@ -2404,6 +2537,12 @@ def main() -> None:
     # Локальный харнесс обязан слушать ТОЛЬКО петлю: дерево без токена не должно
     # быть видно даже соседям по локальной сети. Сервер (за Caddy) — как раньше.
     host = (os.environ.get("HELENE_HOST") or os.environ.get("PRAXIS_DESK_HOST") or "0.0.0.0").strip()
+    config_path=readers.config_path()
+    configured=readers._load_json(config_path) if config_path else {}
+    if (configured.get('phone') or {}).get('mode')=='stable':
+        # A fixed reverse proxy/tunnel needs loopback only, including when an
+        # older supervisor still classifies every non-automatic mode as LAN.
+        host='127.0.0.1'
     _ensure_local_tree()
     if _boot is not None:
         # SIGTERM канал ловит сам aiohttp (GracefulExit в run_app) — сторожу

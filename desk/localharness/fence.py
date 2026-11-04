@@ -1787,7 +1787,8 @@ def _open_home(agent_mod, mounts: "Mounts") -> None:
     workshop._resolve_write = _resolve_write
 
 
-def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -> None:
+def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
+            *, program_root: Path | None = None) -> None:
     """Поднять ограду по helene.json. Ничего не роняет: не вышло — записано почему.
 
     `config_path` — тот же файл, который читал руннер. Он нужен монтированию:
@@ -1810,7 +1811,10 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
         log.debug("режим не спросился — ограда всё равно ставится по ручке",
                   exc_info=True)
     tree = Path(tree).resolve()
-    install_root = tree.parent
+    # Portable data can live outside the program, and secondary-agent configs
+    # live below agents/. The runner supplies its actual loaded program root.
+    install_root = (Path(program_root).resolve() if program_root is not None else
+                    Path(config_path).resolve().parent if config_path is not None else tree.parent)
     workspace = tree / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     STATE.update({"enabled": enabled, "container": False,
@@ -1911,7 +1915,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None) -
     impl = getattr(agent_mod, "TOOL_IMPL", None)
     if not isinstance(impl, dict):
         return
-    read_roots = [install_root]
+    read_roots = [install_root, tree]
     write_roots = [tree]
     secrets = secret_paths(install_root, tree)
     base = Path(getattr(agent_mod, "BASE", install_root))

@@ -1,0 +1,40 @@
+name: Hélène final shared delta native GUI consumer
+on:
+  push:
+    branches: [codex/rc18-macos-0111]
+    paths: [desk/tests/macos_final_delta_smoke.py, .github/workflows/rc18-macos-delta-smoke.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  gui:
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      CANDIDATE_SHA256: 29414244dbac27a6ef5beac33a4b754db3db919523c30a6b02c0051f0b972758
+      ARTIFACT_SHA256: e4ff88a30bbb533232be04bae9aa2a84081c0003fdde7b15714ffce61f2ee459
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/cache/restore@v4
+        id: archive
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-29414244dbac27a6
+      - if: steps.archive.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/josephsteuerjr/praxis/actions/artifacts/13085417762/zip > "$RUNNER_TEMP/qualified-release-artifact.zip"
+      - uses: actions/cache/save@v4
+        if: steps.archive.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/qualified-release-artifact.zip
+          key: helene-rc18-complete-29414244dbac27a6
+      - name: Only actual new GUI, Exit, folder move and data preservation
+        run: python3 desk/tests/macos_final_delta_smoke.py prepare
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: helene-rc18-final-delta-gui
+          path: evidence-rc18/

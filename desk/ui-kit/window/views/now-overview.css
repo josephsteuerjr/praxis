@@ -1,0 +1,9 @@
+.now-current, .now-context, .now-agents { margin: 12px 0; min-width: 0; }
+.now-current > summary, .now-context > summary, .now-agents > summary { cursor: pointer; padding: 8px 0; color: var(--ink-2); font: 500 13px/1.5 var(--sans); }
+.now-current .now-live { margin-top: 4px; }
+.now-context { border-bottom: var(--lw, 1px) solid var(--line); }
+.now-context .frame-strip { margin-top: 4px; }
+.now-agents .forge-compact { max-height: min(55vh, 520px); }
+.now-history-toggle { display: flex; align-items: center; gap: 8px; margin: 16px 0 10px; font: 500 13px/1.5 var(--sans); cursor: pointer; }
+.now-history-toggle input { margin: 0; accent-color: var(--accent); }
+.now-history[hidden] { display: none; }

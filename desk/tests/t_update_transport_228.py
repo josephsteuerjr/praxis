@@ -45,7 +45,8 @@ class ReviewTransport(unittest.TestCase):
     def test_shared_relay_spec_preserves_legacy_windows_arguments(self):
         from localharness import standalone_relay
         binary=self.root/'helene-relay.exe';binary.write_bytes(b'fixture only')
-        with mock.patch.object(standalone_relay,'executable',return_value=binary),mock.patch.object(transport.supervisor.os,'name','nt'):
+        windows_os=SimpleNamespace(**{**vars(transport.supervisor.os),'name':'nt'})
+        with mock.patch.object(standalone_relay,'executable',return_value=binary),mock.patch.object(transport.supervisor,'os',windows_os):
             spec=transport.supervisor.relay_spec(self.agent['config'],{'relay':{'enabled':True}},self.agent['tree'],Path(sys.executable),install_base=self.root,environ={})
             self.assertEqual(spec.argv,(str(binary),'--minimized','--start-api','--config',str(self.agent['config'].resolve())))
 
@@ -95,6 +96,63 @@ class ReviewTransport(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'identity is unavailable'):
                 with self.lease(timeout=0):pass
         spawn.assert_not_called()
+
+    def test_same_port_profiles_take_distinct_authenticated_execution_turns(self):
+        import socket, threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from localharness import standalone_relay
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]
+        binary = self.root/'praxis-relay'; binary.write_bytes(b'fixture')
+        entered = [threading.Event(), threading.Event()]; release = threading.Event()
+        errors = []; profiles = []; starts = []
+        for number in range(2):
+            cfg = self.root/str(number)/'helene.json'
+            write(cfg, {'relay': {'enabled': True, 'port': port, 'key': 'profile-'+str(number)}})
+            profiles.append({'tree': cfg.parent/'data', 'config': cfg, 'value': read(cfg)})
+        effective = {'roles': {'voice': {'framework': 'openai'}},
+            'frameworks': {'openai': {'base_url': 'http://127.0.0.1:'+str(port)+'/v1'}}}
+        def spawn(argv, *, cwd, env, log, stopped):
+            api = socket.socket(); api.bind(('127.0.0.1', port)); api.listen()
+            token = env['RELAY_API_KEY']; starts.append(token)
+            class Handler(BaseHTTPRequestHandler):
+                def log_message(self, *args): pass
+                def do_POST(self):
+                    if self.headers.get('X-Relay-Control') != token:
+                        self.send_error(403); return
+                    self.rfile.read(int(self.headers['Content-Length']))
+                    raw = json.dumps({'port': port, 'running': True}).encode()
+                    self.send_response(200); self.send_header('Content-Length', str(len(raw)))
+                    self.end_headers(); self.wfile.write(raw)
+            server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+            thread = threading.Thread(target=server.serve_forever); thread.start()
+            write(Path(env['RELAY_AUTH_DIR'])/'control.json', {'port': server.server_port, 'token': token})
+            class Child:
+                pid = 12345
+                def poll(self): return None
+                def stop(self):
+                    server.shutdown(); server.server_close(); thread.join(3); api.close()
+            return Child()
+        def worker(number):
+            try:
+                with transport.review_transport(profiles[number], self.root/'program', self.root/('job-'+str(number)), effective, lambda: False) as lease:
+                    self.assertTrue(lease.owned); self.assertFalse(lease.borrowed)
+                    self.assertEqual(transport.python_relay.control(lease.agent, 'status')['port'], port)
+                    entered[number].set()
+                    if number == 0: self.assertTrue(release.wait(5))
+            except BaseException as exc: errors.append(exc)
+        threads = [threading.Thread(target=worker, args=(number,)) for number in range(2)]
+        with mock.patch.object(standalone_relay, 'executable', return_value=binary), \
+             mock.patch.object(transport.supervisor.JobChild, 'spawn', side_effect=spawn):
+            try:
+                threads[0].start(); self.assertTrue(entered[0].wait(5))
+                threads[1].start(); self.assertFalse(entered[1].wait(.3))
+            finally:
+                release.set()
+                for thread in threads:
+                    if thread.ident is not None: thread.join(8)
+        self.assertFalse(any(thread.is_alive() for thread in threads)); self.assertFalse(errors, errors)
+        self.assertTrue(entered[1].is_set()); self.assertEqual(starts, ['profile-0', 'profile-1'])
 
     def test_worker_network_error_is_not_reported_as_stale_candidate(self):
         import t_source_update_pipeline_220 as fixtures

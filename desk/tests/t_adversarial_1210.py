@@ -81,6 +81,10 @@ class Context(unittest.TestCase):
         for phase in ('context-policy.json','context-policy-notice.json'):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as tmp:
                 tree=Path(tmp); (tree/'memory').mkdir()
+                # Exercise a REAL existing policy change, which publishes a
+                # notice. First initialization deliberately has no chat notice.
+                update_inspection.write(tree/'memory/context-policy.json',{
+                    'hard_at':300,'tape_chars':5500,'token_cap':40000})
                 journal=tree/'memory/context-policy.events.jsonl'; journal.write_text('{partial')
                 original=update_inspection.write
                 def interrupted(path,value):

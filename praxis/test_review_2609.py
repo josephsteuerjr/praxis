@@ -225,12 +225,26 @@ class FoldOffers(unittest.TestCase):
         self.assertIn("-1001", ml.fold_offers())
 
     def test_owner_force_cannot_clear_an_unwritten_offer(self):
-        with mock.patch.object(ml, "compact_if_due") as automatic:
-            out = ml.fold_now("-1001")
+        # The edition's compact_if_due is an authored offer, not generation.
+        # Exercise it rather than prohibiting the name of that safe consumer.
+        import llm
+        from test_coverage_vs_current import Base, ROOM
+        fixture = Base()
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        row = fixture._msg(1, "unwritten source")
+        ml.rebuild_state(ROOM)
+        canonical = {str(p): p.read_bytes() for p in ml.LIFE_DIR.rglob("*")
+                     if p.is_file() and p.suffix in {".jsonl", ".md"}}
+        with mock.patch.object(llm, "chat", side_effect=AssertionError("no model")):
+            out = ml.fold_now(ROOM)
         self.assertTrue(out["author_required"], out)
+        self.assertTrue(out["offered"], out)
         self.assertEqual(out["folded"], 0)
-        automatic.assert_not_called()
-        self.assertIn("-1001", ml.fold_offers())
+        self.assertIn(ROOM, ml.fold_offers())
+        self.assertIn(row["id"], [x["id"] for x in ml.rebuild_state(ROOM)["hot"]])
+        self.assertEqual(canonical, {str(p): p.read_bytes() for p in ml.LIFE_DIR.rglob("*")
+                                     if p.is_file() and p.suffix in {".jsonl", ".md"}})
 
     def test_tmp_names_differ_between_writes(self):
         seen = []

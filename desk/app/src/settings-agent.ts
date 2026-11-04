@@ -577,7 +577,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     : admission === "listed"
       ? "Запускать ход обращением могут владелец и участники из telegram.allowed_ids. Остальные сообщения сохраняются как контекст."
       : "Сейчас запускать ход обращением в Telegram может только владелец. Сообщения других участников сохраняются как контекст; даже имя агента само по себе не запускает ответ.");
-  tgBox.append(admissionHint, tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
+  tgBox.append(el("p", "field-hint", "Настройки подключения Telegram применятся после перезапуска агента: нажми «Сохранить», затем «Перезапустить сейчас»."),
+    admissionHint, tgPick, tgPanes.bot, tgPanes.account, ownerField, tgStatusRow, tgStatusHint,
     proxyToggle, proxyFields, el("p", "field-hint", "Сообщения и сессия остаются у агента. Сервер помогает Telegram подключиться без VPN. Сохрани настройки перед входом в аккаунт; новый маршрут применяется при перезапуске агента."));
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");

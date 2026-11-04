@@ -30,6 +30,13 @@ def _keep_upstream(program):
     program=Path(program)
     declaration=read(program/'source-admission.json')
     if not declaration:
+        # Portable releases already carry their exact B archive. Repacking it
+        # from extracted files changes ZIP timestamps/identity without changing
+        # source, invalidating the review choice that was bound before stop.
+        if (program/'code-upstream.json').exists() or (program/'code-upstream.zip').exists():
+            from .migration_source import verify
+            verify(program)
+            return
         seal(program)
         return
     from .source_admission import _upstream
@@ -75,6 +82,12 @@ def preflight(old, new, *, notify=True):
     from .app_migration import discover
     from . import source_update
     old, new = Path(old).resolve(), Path(new).resolve()
+    carrier=new/'code-transition-plan.json'
+    if carrier.exists():
+        import json
+        previous=json.loads(carrier.read_text(encoding='utf8'))
+        if not isinstance(previous,dict) or previous.get('format')!='helene-code-plan.v1':raise ValueError('Existing update protocol is unreadable or incompatible')
+    else:previous={}
     found = discover(old)
     sources = list(dict.fromkeys(str(Path(row['code']).resolve()) for row in found['agents']
                                 if row['value'].get('mode') != 'remote'))
@@ -82,25 +95,36 @@ def preflight(old, new, *, notify=True):
     from . import update_source
     source_choice=update_source.selected(old,new)
     exe = merge.executable(new, old)
-    root = old / '.source-updates'
+    # Work/evidence belong to persistent selected data, never replaceable app/UI.
+    root = Path(found['agents'][0]['tree']).resolve() / 'memory/.source-updates'
     root.mkdir(parents=True, exist_ok=True)
     plans = []
+    from . import update_composition
+    shared_repair = update_composition.shared(new)['changed']
+    from . import app_source_update
+    app_source=app_source_update.changed(old,new)
+    shared_repair=shared_repair or app_source is not None
     if not sources:
+        if app_source is not None:raise ValueError('Сохранение правок оболочки требует локального агента для совмещения и проверки')
         return {'state': 'ready', 'plans': []}
     with tempfile.TemporaryDirectory(prefix='baseline-', dir=root) as temporary:
         base = baseline(old, Path(temporary), sources)
         base_files = merge.inventory(base)
         for source in sources:
+            agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
+            plan_root = Path(agent['tree']).resolve() / 'memory/.source-updates'
+            plan_root.mkdir(parents=True, exist_ok=True)
             local_files = merge.inventory(source)
             identity = merge.signature({'base': base_files, 'local': local_files,
                                         'incoming': incoming, 'source': source,
                                         'operation':source_choice['new'] if source_choice else '',
+                                        'app_source':app_source,
                                         'version': read(new / 'python-app.json').get('version', '')})
-            directory = root / identity
+            directory = plan_root / identity
             plan = read(directory / 'plan.json')
             if not plan:
                 if directory.exists():
-                    directory.rename(root / (identity + '-incomplete-' + uuid.uuid4().hex))
+                    directory.rename(plan_root / (identity + '-incomplete-' + uuid.uuid4().hex))
                 plan = merge.create(base, source, new / 'tree', directory, exe=exe)
             if (plan['files'] != {'base': base_files, 'local': local_files, 'incoming': incoming}
                     or Path(plan['local_path']).resolve() != Path(source).resolve()):
@@ -109,32 +133,44 @@ def preflight(old, new, *, notify=True):
                 raise ValueError('Local code changed during preparation; retry the update')
             state = plan['state']
             detail = {}
-            if plan['conflicts'] or plan.get('repairs') or (source_choice or {}).get('require_review'):
-                agent = next(row for row in found['agents'] if str(Path(row['code']).resolve()) == source)
-                from . import update_source
-                choice=update_source.selected(old,new)
-                if (choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming'
-                        and plan['state']!='ready'):
-                    from .agent_source_update import request as agent_request, require_patch_tool
-                    require_patch_tool(old)
-                    agent_request(agent['tree'],old,source,directory,read(new/'python-app.json').get('version',''))
-                elif notify:
-                    source_update.ensure(agent['tree'], old, source, directory,
-                                         read(new / 'python-app.json').get('version', ''))
-                try:
-                    source_update.validate_ready(directory)
-                    state = 'ready'
-                except (OSError, ValueError, KeyError, TypeError) as exc:
-                    detail = read(directory / 'pipeline.json')
-                    state = detail.get('state', 'queued')
-                    if state == 'ready_to_apply':
-                        state = 'needs_attention'
-                        detail = {**detail, 'error': str(exc)}
-            plans.append({'source': source, 'directory': str(directory), 'state': state,
+            if app_source is not None:
+                if plan.get('app_source') not in (None,app_source):raise ValueError('Authored application inputs changed')
+                plan['app_source']=app_source
+            if shared_repair and not plan.get('shared_app_required'):
+                plan['shared_app_required'] = True
+            write(directory / 'plan.json', plan)
+            plans.append({'source': source, 'tree':str(Path(agent['tree']).resolve()), 'directory': str(directory), 'state': state,
                           'error': str(detail.get('error') or detail.get('reason') or '')})
-    write(new / 'code-transition-plan.json', {'format': 'helene-code-plan.v1', 'old': str(old),
-          'require_review':bool((source_choice or {}).get('require_review')),'choice':source_choice,
-          'sources': sources, 'incoming': incoming, 'plans': plans})
+    from . import direct_update
+    protocol=direct_update.protocol(plans,previous)
+    direct=protocol==direct_update.FORMAT
+    if direct:
+        direct_update.bind(new,plans,profiles=[{'tree':str(Path(r['tree']).resolve()),'source':str(Path(r['code']).resolve())}
+            for r in found['agents'] if r['value'].get('mode')!='remote'])
+    if direct and plans:
+        first=plans[0]
+        if source_update.requires_gate(merge.validate_inputs(first['directory']),first['directory']):
+            _admit(old,new,first,notify)
+        for row in plans:row.update(state=first['state'],error=first.get('error',''))
+    else:
+        for row in plans:
+            if source_update.requires_gate(merge.validate_inputs(row['directory']),row['directory']):_admit(old,new,row,notify)
+    record={'format':'helene-code-plan.v1','old':str(old),
+        'require_review':bool((source_choice or {}).get('require_review')),'choice':source_choice,
+        'sources':sources,'incoming':incoming,'plans':plans}
+    if direct:record['direct_update']=direct_update.FORMAT
+    write(new/'code-transition-plan.json',record)
+    if not direct:
+        shared=update_composition.shared(new,plans)
+        if not shared['consistent']:
+            for row in plans:
+                row.update(state='needs_attention',error='Final shared application differs; reconcile peer app candidates: '+', '.join(shared['different_paths']))
+                operation=read(Path(row['directory'])/'pipeline.json')
+                if operation.get('resolution_owner')=='agent' and operation.get('state')=='ready_to_apply':
+                    request_path=source_update.path(operation['tree']);request=read(request_path)
+                    if request.get('id')==operation['id'] and request.get('state')=='ready':
+                        request.update(state='pending',tries=0,retry_at=0);write(request_path,request)
+            write(new/'code-transition-plan.json',record)
     pending = [row for row in plans if row['state'] != 'ready']
     blocked = [row for row in pending if row['state'] in {'needs_attention', 'cancelled'}]
     message = ('Панель обновления требует внимания; старая версия сохранена. ' +
@@ -145,7 +181,25 @@ def preflight(old, new, *, notify=True):
             'message': message if pending else ''}
 
 
+def _admit(old,new,row,notify):
+    """Existing gate once per retained legacy row or once for a new leader."""
+    from . import source_update,update_source
+    directory=Path(row['directory']);choice=update_source.selected(old,new)
+    if choice and choice['mode']=='preserve' and choice.get('resolution_owner')!='incoming':
+        from .agent_source_update import request,require_patch_tool
+        require_patch_tool(choice.get('resolution_runtime') or old)
+        request(row['tree'],old,row['source'],directory,read(new/'python-app.json').get('version',''))
+    elif notify:source_update.ensure(row['tree'],old,row['source'],directory,read(new/'python-app.json').get('version',''))
+    try:source_update.validate_ready(directory);row.update(state='ready',error='')
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        detail=read(directory/'pipeline.json');state=detail.get('state','queued')
+        if state=='ready_to_apply':state='needs_attention';detail={**detail,'error':str(exc)}
+        row.update(state=state,error=str(detail.get('error') or detail.get('reason') or ''))
+
+
 def validate(new):
+    from .validation_read import checkpoint,digest
+    checkpoint()
     from .app_migration import discover
     from . import source_update
     record = read(Path(new) / 'code-transition-plan.json')
@@ -163,14 +217,32 @@ def validate(new):
                                 if row['value'].get('mode') != 'remote'))
     if sources != record.get('sources'):
         raise ValueError('Selected code paths changed before applying the update; retry')
-    if merge.inventory(Path(new) / 'tree') != record['incoming']:
+    selected_upstream=record.get('selected_upstream')
+    expected=selected_upstream.get('tree') if selected_upstream else record['incoming']
+    if merge.inventory(Path(new) / 'tree') != expected:
         raise ValueError('Incoming upstream code changed before applying the update; retry')
+    if selected_upstream:
+        base=read(Path(new)/'code-upstream.json');archive=Path(new)/'code-upstream.zip'
+        if base.get('files')!=record['incoming']:
+            raise ValueError('Pristine upstream merge base changed')
+        with archive.open('rb') as stream:measured=digest(stream)
+        if measured!=base.get('sha256'):
+            raise ValueError('Pristine upstream merge base changed')
+        for name,files in selected_upstream.items():
+            checkpoint()
+            merge.relative(name)
+            if merge.inventory(Path(new)/name)!=files:raise ValueError('Selected upstream result changed')
+    from . import update_composition
+    update_composition.require_shared(new, record.get('plans', []))
     for row in record.get('plans', []):
+        checkpoint()
         plan = merge.validate_inputs(row['directory'])
         if merge.inventory(row['source']) != plan['files']['local']:
             raise ValueError('Local code changed before applying the update; retry')
-        if plan['conflicts'] or plan.get('repairs') or record.get('require_review'):
+        if source_update.requires_gate(plan, row['directory']):
             source_update.validate_ready(row['directory'])
+    if (Path(new).parent / 'compound-overlay.json').exists():
+        update_composition.selected_files(new)
 
 
 def prepare(old, new, note, *, progress=None):
@@ -178,10 +250,15 @@ def prepare(old, new, note, *, progress=None):
     if not (new / 'tree').is_dir():
         return
     if not note['source_paths']:
+        from . import update_source,app_source_update
+        choice=update_source.require(old,new,progress)
+        if choice['mode']=='preserve' and app_source_update.changed(old,new):
+            raise ValueError('Сохранение правок оболочки требует локального агента для совмещения и проверки')
         _keep_upstream(new)
         return
     from . import update_source
     choice=update_source.require(old,new,progress)
+    note['source_policy']=choice['mode'];note['source_choice']=choice
     if choice['mode']=='clean':
         update_source.clean_prepare(old,new,note,choice)
         return
@@ -201,22 +278,32 @@ def prepare(old, new, note, *, progress=None):
     from .essential_backup import configs, load
     selected = {}
     receipts = []
+    from . import update_composition
+    update_composition.overlay(new, result['plans'])
+    portable=note.get('portable_folder_switch') is True
+    if portable:_keep_upstream(new)
     for row in note['source_paths']:
         original, target = Path(row['old']).resolve(), Path(row['selected']).resolve()
         if original in selected:
             row['selected'] = str(selected[original])
             continue
-        if original == target:
+        if portable:
+            target=new/'tree' if not selected else new/'code'/note['id']/str(len(selected))
+            row['selected']=str(target)
+        elif original == target:
             target = new / 'code' / note['id'] / str(len(selected))
             preserve_source(original, target, source_only=True)
             row['selected'] = str(target)
         plan_row = next(p for p in result['plans'] if Path(p['source']).resolve() == original)
         directory = Path(plan_row['directory'])
-        merge.apply(directory, target)
+        if portable:merge.apply_upstream(directory,target)
+        else:merge.apply(directory, target)
         selected[original] = target
         plan = read(directory / 'plan.json')
-        receipts.append({'source': str(original), 'directory': str(directory),
-                         'commits': plan['commits'], 'merged_commit': plan['merged_commit']})
+        from .clean_code_retirement import git_signature
+        receipts.append({'source': str(original), 'selected':str(target), 'directory': str(directory),
+                         'commits': plan['commits'], 'merged_commit': plan['merged_commit'],
+                         'previous_files':plan['files']['local'],'git_signature':git_signature(original/'.git')})
     for config in configs(new):
         if not config.is_file():
             continue
@@ -225,6 +312,10 @@ def prepare(old, new, note, *, progress=None):
         if prior in selected:
             value['code'] = str(selected[prior])
         write(config, value)
-    _keep_upstream(new)
+    if portable:
+        record=read(new/'code-transition-plan.json')
+        record['selected_upstream']={path.relative_to(new).as_posix():merge.inventory(path) for path in selected.values()}
+        write(new/'code-transition-plan.json',record)
+    else:_keep_upstream(new)
     write(new / 'code-transition.json', {'format': 'helene-code-transition.v2', 'merges': receipts})
-    note['code_transition'] = str(old / 'code-transition.json')
+    note['code_transition'] = str(new / 'code-transition.json')

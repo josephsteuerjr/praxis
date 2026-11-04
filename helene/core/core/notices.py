@@ -270,18 +270,52 @@ def note_owner_decision(text: str, *, run_id: str = "", ts: float | None = None)
 
 
 def note_node(*, task_id: str, unit_id: str, status: str, goal: str = "",
-              origin_chat: str = "", ts: float | None = None) -> dict | None:
-    """Узел Forge / субагент закончил. Дедуп по (task_id, unit_id)."""
+              origin_chat: str = "", ts: float | None = None, run_id: str = "",
+              work_ref: str = "", audience: str = "owner",
+              result_ref: dict | str | None = None) -> dict | None:
+    """Completion fact + stable work/result links, not a generated note summary.
+
+    Audience comes from the producer's captured authority, not result prose.
+    Missing legacy authority is owner-private. Dedup remains by task/unit.
+    """
     if not enabled():
         return None
+    import authored_notes
+    audience = authored_notes.note_audience(audience, chat_id=str(origin_chat or ""))
+    identity = {"task_id": str(task_id), "unit_id": str(unit_id),
+                "run_id": str(run_id or ""), "work_ref": work_ref}
+    reference = authored_notes.notice_work_reference(identity)
+    if not reference:
+        raise ValueError("completion work_ref contradicts its stable identity")
     now = float(ts) if ts else time.time()
     gist = f"узел {unit_id} задачи {task_id} закончил: {status}"
     if goal:
         gist += f" — {_clip(goal, 60)}"
     return _put({"kind": "node", "ts": now, "chat_id": str(origin_chat or ""),
                  "chat_title": "Forge", "who": str(unit_id), "message_id": "",
-                 "gist": _clip(gist, 160), "private": False},
+                 "gist": _clip(gist, 160), "private": audience == "owner",
+                 **identity, "work_ref": reference, "audience": audience,
+                 "status": str(status), "result_ref": result_ref or {}},
                 dedup=f"node:{task_id}:{unit_id}")
+
+
+def project_node(row: dict, *, owner: bool = False, chat_id: str = "",
+                 audience: str = "") -> dict:
+    """Consumer projection: private text AND private locators stay off public/paired views.
+
+    Re-evaluate persisted admission on every read; no copied note survives a
+    restart into a different audience. The raw pending() ledger is internal.
+    """
+    import authored_notes
+    if not authored_notes.visible(row, owner=owner, chat_id=chat_id, audience=audience):
+        return {"kind": "node", "ts": row.get("ts"), "status": row.get("status", ""),
+                "redacted": True}
+    out = {key: row[key] for key in (
+        "kind", "ts", "status", "task_id", "unit_id", "run_id", "work_ref",
+        "audience", "chat_id", "gist", "result_ref") if key in row}
+    out["authored_note"] = authored_notes.for_notice(
+        BASE, row, owner=owner, chat_id=chat_id, audience=audience)
+    return out
 
 
 def clear_chat(chat_id) -> int:
@@ -309,14 +343,25 @@ def pending(now: float | None = None) -> list[dict]:
 
 # ─────────────────────────────────────────────── блок в кадре
 
-def _line(row: dict, *, owner_context: bool, fresh: bool) -> str:
+def _line(row: dict, *, owner_context: bool, fresh: bool, chat_id: str = "",
+          audience: str = "") -> str:
     mark = "НОВОЕ" if fresh else "прочитано"
     when = _hhmm(row.get("ts") or 0)
     kind = row.get("kind")
     who = row.get("who") or "?"
     where = row.get("chat_title") or row.get("chat_id") or "?"
     gist = row.get("gist") or ""
-    private = bool(row.get("private"))
+    if kind == "node":
+        node = project_node(row, owner=owner_context, chat_id=chat_id, audience=audience)
+        if node.get("redacted"):
+            return f"• {mark}  Forge · узел закончил, {when} (подробности в исходной аудитории)"
+        lines = [f"• {mark}  {gist}, {when}"]
+        if node.get("authored_note"):
+            lines.append(node["authored_note"])
+        if node.get("result_ref"):
+            lines.append("Full result (separate evidence): " + json.dumps(
+                node["result_ref"], ensure_ascii=False, sort_keys=True))
+        return "\n".join(lines)
     if kind == "owner_decision":
         return f"• {mark}  решение владельца (твоя запись, {when}): «{gist}»"
     if kind == "owner_line":
@@ -330,17 +375,14 @@ def _line(row: dict, *, owner_context: bool, fresh: bool) -> str:
         # Чужая комната достаётся только там, где она своя, либо в owner-аудитории — то же
         # правило, что у recall (A10 F2): вне её — кто и где, не что. Узлы Forge несут
         # заказ владельца в gist — тоже только владельческой аудитории.
-        if kind == "node":
-            return f"• {mark}  Forge · узел {who} закончил, {when}"
         return f"• {mark}  {place} · {who} — {what}, {when}"
-    if kind == "node":
-        return f"• {mark}  {gist}, {when}"
     return f"• {mark}  {place} · {who} — {what}, {when}: «{gist}»"
 
 
 def block_for_input(*, run_id: str, run_kind: str, chat_id, owner_context: bool,
                     busy_label: str = "", mid_turn: bool = False,
-                    now: float | None = None, window: bool | None = None) -> str:
+                    now: float | None = None, window: bool | None = None,
+                    audience: str = "") -> str:
     """Текст блока для ЭТОГО ввода модели или '' — и пометка «показано» в накопителе.
 
     run_id/run_kind — живой run (без него не зовут: fail-closed на аудиторию);
@@ -398,7 +440,8 @@ def block_for_input(*, run_id: str, run_kind: str, chat_id, owner_context: bool,
     head = "Пока идёт другое" + (f" ({busy_label})" if busy_label else "") + ":"
     if mid_turn:
         head = "Пока шла работа, пришло:"
-    lines = [head] + [_line(row, owner_context=owner_context, fresh=fresh)
+    lines = [head] + [_line(row, owner_context=owner_context, fresh=fresh,
+                           chat_id=chat, audience=audience)
                       for row, fresh in shown]
     if rest:
         by_place: dict[str, int] = {}

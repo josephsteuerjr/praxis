@@ -12,7 +12,7 @@ import argparse
 import ctypes
 from ctypes import wintypes
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 if os.name == 'nt':
     import msvcrt
@@ -170,6 +170,8 @@ class Spec:
     env: dict[str, str]
     log: Path
     port: int
+    speech_selection: dict | None = field(default=None,compare=False)
+    unavailable: str = ''
 
 
 def _config(path: Path) -> dict:
@@ -217,7 +219,7 @@ def runner_required(cfg, agent_id):
 
 
 def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
-               install_base: Path, environ=None) -> Spec | None:
+               install_base: Path, environ=None, allow_missing=False) -> Spec | None:
     """The same private relay contract for desktop and incoming update custody."""
     ambient = os.environ if environ is None else environ
     relay = cfg.get("relay") or {}
@@ -229,8 +231,9 @@ def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
         return None
     from localharness.standalone_relay import executable as relay_executable
     exe = relay_executable(install_base, cfg)
-    if not exe.is_file():
-        raise ValueError("Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле")
+    unavailable = '' if exe.is_file() else 'Установи praxis-relay в Настройки → Компоненты или укажи путь к отдельному реле'
+    if unavailable and not allow_missing:
+        raise ValueError(unavailable)
     port = relay.get("port") or 5011
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("invalid relay port")
@@ -252,18 +255,18 @@ def relay_spec(config: Path, cfg: dict, tree: Path, python: Path, *,
     argv = ((str(exe), "--minimized", "--start-api", "--config", str(config.resolve()))
             if os.name == 'nt' and exe.name.lower() == 'helene-relay.exe'
             else (str(exe), 'serve', '--headless'))
-    return Spec("relay", argv, home, env, home / "logs/relay-console.log", port)
+    return Spec("relay", argv, home, env, home / "logs/relay-console.log", port, unavailable=unavailable)
 
 
 def _specs(config: Path, *, session_host: bool = False,
            agent_id: str = BASE_ID, port_override: int | None = None,
-           window_root: Path | None = None, environ=None) -> tuple[Path, dict[str, Spec]]:
+           window_root: Path | None = None, environ=None, runtime_program=None) -> tuple[Path, dict[str, Spec]]:
     cfg = _config(config)
     ambient = os.environ if environ is None else environ
     installed = cfg.get("installed") or {}
     if not isinstance(installed, dict):
         raise ValueError("installed settings are not an object")
-    if cfg.get("mode", "local") != "local" or (not session_host and
+    if cfg.get("mode", "local") != "local" or (not session_host and runtime_program is None and
             installed.get("service") is True):
         raise ValueError("opt-in Python supervisor needs local mode and session-host for a service installation")
     base = config.parent
@@ -274,9 +277,17 @@ def _specs(config: Path, *, session_host: bool = False,
     # exact interpreter the native launcher resolved for that PATH request.
     selected_python = cfg.get("python")
     python = Path(sys.executable) if selected_python in (None, "", "python") else _resolve(base, str(selected_python))
+    runner_python=python
     app = _resolve(base, str(cfg.get("app") or "deskapp.py"))
     runner = _resolve(base, str(cfg["runner"])) if cfg.get("runner") else None
-    if not python.is_file() or not app.is_file() or (runner is not None and not runner.is_file()):
+    if runtime_program is not None:
+        # Current B owns the channel/host; the selected agent keeps its existing
+        # compatible runner/interpreter until M passes the update gate.
+        from .update_process import interpreter_for
+        runtime_program=Path(runtime_program).resolve()
+        python=interpreter_for(runtime_program)
+        app=runtime_program/'app/deskapp.py'
+    if not python.is_file() or not app.is_file() or (runner is not None and (not runner.is_file() or not runner_python.is_file())):
         raise ValueError("python, channel or runner file missing")
     port = port_override if port_override is not None else cfg.get("port") or 8094
     if type(port) is not int or not 1 <= port <= 65535:
@@ -284,26 +295,38 @@ def _specs(config: Path, *, session_host: bool = False,
     token = _token(tree)
     common = dict(ambient, HELENE_TREE=str(tree), PYTHONUTF8="1", PYTHONUNBUFFERED="1",
                   HELENE_TOKEN=token, HELENE_CONFIG=str(config), HELENE_BROKER_DISABLED='1')
+    session_keys=('HELENE_MIGRATION_SESSION_TREE','HELENE_MIGRATION_SESSION_JOB')
+    for key in session_keys:common.pop(key,None)
     common.pop('HELENE_WINDOW_ROOT', None)
     if window_root is not None:common['HELENE_WINDOW_ROOT']=str(window_root.resolve())
     common.pop("PRAXIS_DESK_TOKEN", None)
     common.pop("RELAY_API_KEY", None)  # a sibling's ambient relay key is not this agent's authority
     phone = cfg.get("phone") or {}
-    lan = isinstance(phone, dict) and phone.get("enabled") is True and phone.get("mode") != "automatic"
+    lan = isinstance(phone, dict) and phone.get("enabled") is True and phone.get("mode") not in ("automatic","stable")
     channel_env = dict(common, HELENE_HOST="0.0.0.0" if lan else "127.0.0.1")
+    if runtime_program is not None and any(ambient.get(key) for key in session_keys):
+        if not all(ambient.get(key) for key in session_keys):raise ValueError('Incomplete migration session binding')
+        channel_env.update({key:ambient[key] for key in session_keys})
     specs = {f"{agent_id}:channel": Spec("channel", (str(python), "-u", str(app), str(port)),
                                   app.parent, channel_env, tree / "deskapp.log", port)}
     if runner:
         # A neighboring agent without a configured model may expose its channel
         # but not silently start a model process (the native roster contract).
         if runner_required(cfg, agent_id):
-            specs[f"{agent_id}:runner"] = Spec("runner", (str(python), "-u", str(runner),
+            specs[f"{agent_id}:runner"] = Spec("runner", (str(runner_python), "-u", str(runner),
                                                 "--config", str(config)), runner.parent,
                                     dict(common, HELENE_HOST="127.0.0.1"), tree / "runner.log", port)
     install_base = base if agent_id == BASE_ID else base.parent.parent
-    selected_relay = relay_spec(config, cfg, tree, python, install_base=install_base, environ=ambient)
+    selected_relay = relay_spec(config, cfg, tree, python, install_base=install_base, environ=ambient,
+                                allow_missing=True)
     if selected_relay is not None:
         specs[f"{agent_id}:relay"] = selected_relay
+        if selected_relay.unavailable and (cfg.get('relay') or {}).get('enabled') is True:
+            # Keep the channel/settings usable without spawning a model against
+            # a missing text transport. Image-only relay does not block text.
+            runner_key = f'{agent_id}:runner'
+            if runner_key in specs:
+                specs[runner_key] = replace(specs[runner_key], unavailable=selected_relay.unavailable)
     # XTTS is a sibling owned by this same process tree, not an agent-spawned
     # model thread or a second daemon outside Stop/owner-death custody.
     voice_cfg = cfg.get("voice") or {}
@@ -321,12 +344,15 @@ def _specs(config: Path, *, session_host: bool = False,
                 str(voice_cfg.get("tts_device") or "cpu")), tree,
                 {**{key:ambient[key] for key in ('PATH', 'SYSTEMROOT', 'HOME', 'USERPROFILE',
                     'LOCALAPPDATA', 'PROGRAMDATA') if key in ambient},
-                 "PYTHONUTF8":"1", "PYTHONUNBUFFERED":"1"}, tree / "xtts.log", 0)
+                 "PYTHONUTF8":"1", "PYTHONUNBUFFERED":"1"}, tree / "xtts.log", 0,
+                speech_selection={'speaker':str(voice_cfg.get('tts_speaker') or 'Ana Florence'),
+                    'language':str(voice_cfg.get('tts_language') or 'ru'),
+                    'reference':str(voice_cfg.get('tts_reference') or '')})
     return tree, specs
 
 
 def _plans(config: Path, *, session_host: bool,
-           desktop_roster: bool = False, environ=None) -> dict[str, tuple[Path, dict[str, Spec]]]:
+           desktop_roster: bool = False, environ=None, runtime_program=None) -> dict[str, tuple[Path, dict[str, Spec]]]:
     """One complete desired generation from the installation's roster owner.
 
     A malformed/remote neighbor is never turned into a default local agent.
@@ -335,7 +361,7 @@ def _plans(config: Path, *, session_host: bool,
     """
     base = config.parent
     window_root=base if desktop_roster else None
-    plans = {BASE_ID: _specs(config, session_host=session_host,window_root=window_root,environ=environ)}
+    plans = {BASE_ID: _specs(config, session_host=session_host,window_root=window_root,environ=environ,runtime_program=runtime_program)}
     if not (session_host or desktop_roster):
         return plans
     occupied = {plans[BASE_ID][0].resolve(strict=True)}
@@ -350,7 +376,7 @@ def _plans(config: Path, *, session_host: bool,
                    for section in ("agent", "telegram")):
                 raise ValueError("agent/telegram settings are not objects")
             tree, specs = _specs(agent.config, session_host=session_host, agent_id=agent.id,
-                                 port_override=agent.port,window_root=window_root,environ=environ)
+                                 port_override=agent.port,window_root=window_root,environ=environ,runtime_program=runtime_program)
             physical = tree.resolve(strict=True)
             if physical in occupied:
                 raise ValueError("another agent already owns this data tree")
@@ -376,7 +402,9 @@ def _port_busy(port: int) -> bool:
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
         return False
-    except OSError:
+    except OSError as error:
+        if os.name=='nt' and getattr(error,'winerror',None)==10013:
+            raise RuntimeError(f'Windows запретила внутренний порт {port}. Перезапусти движок для проверки и выбора доступного порта.') from error
         return True
 
 
@@ -440,16 +468,22 @@ def _tree_hold(tree: Path):
         yield lambda: record(b"clean\n")
 
 
+def _desktop_observation(nonce, seq, ack, installed, active):
+    """A fresh observation of handles owned by this loop, not desired config."""
+    return {"schema": 1, "nonce": nonce, "seq": seq, "ack": ack,
+            "agents": {agent: {"raised": f"{agent}:channel" in active,
+                               "roles": sorted(spec.role for key, spec in specs.items() if key in active),
+                               "problems": {spec.role:spec.unavailable for spec in specs.values() if spec.unavailable},
+                               "pids": {spec.role:active[key].pid for key,spec in specs.items() if key in active}}
+                       for agent, (_, specs) in installed.items()}}
+
+
 def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
                     installed: dict[str, tuple[Path, dict[str, Spec]]],
                     active: dict[str, JobChild]) -> None:
-    """One atomic generation-bound observation, not a promise based on config."""
+    """Atomic export for external readers; a failed write never exports an ack."""
     path = tree / ".python-desktop-status"
-    data = {"schema": 1, "nonce": nonce, "seq": seq, "ack": ack,
-            "agents": {agent: {"raised": f"{agent}:channel" in active,
-                               "roles": sorted(spec.role for key, spec in specs.items() if key in active),
-                               "pids": {spec.role:active[key].pid for key,spec in specs.items() if key in active}}
-                       for agent, (_, specs) in installed.items()}}
+    data = _desktop_observation(nonce, seq, ack, installed, active)
     temporary = path.with_name(f"{path.name}.{nonce}.{os.getpid()}.{seq}.tmp")
     try:
         with temporary.open("x", encoding="utf-8") as stream:
@@ -475,7 +509,8 @@ def _desktop_status(tree: Path, nonce: str, seq: int, ack: str | None,
 
 def run(config: Path, *, stop=None, session_host: bool = False,
         desktop_roster: bool = False, status_nonce: str | None = None,
-        commands: Queue | None = None) -> int:
+        commands: Queue | None = None, runtime_program=None, environ=None,
+        status_observer=None) -> int:
     """Run one owner generation; errors never fall back to another spawner."""
     if os.name != 'nt' and not (sys.platform.startswith('linux') or sys.platform == 'darwin'):
         raise RuntimeError('Desktop child custody has no qualified adapter for this OS')
@@ -487,8 +522,8 @@ def run(config: Path, *, stop=None, session_host: bool = False,
         raise ValueError("desktop owner requires a distinct 32-hex generation")
     # GUI libraries mutate process-wide environment during initialization. They
     # are not configuration edits and must not retire a healthy agent generation.
-    ambient = dict(os.environ)
-    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient)
+    ambient = dict(os.environ if environ is None else environ)
+    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient,runtime_program=runtime_program)
     tree, specs = desired[BASE_ID]
     wake = stop if stop is not None else Event()
     def stopped():
@@ -510,6 +545,8 @@ def run(config: Path, *, stop=None, session_host: bool = False,
         seq = 0
         receipt_seq = 0
         last_status = 0.0
+        pending_ack = None
+        export_problem = None
         uncertain = False
         def retire(agent_id: str) -> None:
             selected = {key: child for key, child in active.items()
@@ -532,7 +569,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
         try:
             while not stopped():
                 request = None
-                if commands is not None:
+                if commands is not None and (pending_ack is None or status_observer is not None):
                     try:
                         request = commands.get_nowait()
                     except Empty:
@@ -543,17 +580,16 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     # Re-read the actual roster/config, not a startup snapshot.
                     # Failure to read the base is terminal rather than an empty
                     # desired set that could release its ownership accidentally.
-                    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient)
-                    # Relay network/auth policy belongs to the relay child, not
-                    # to the channel or an in-flight agent turn. Keep their Jobs
-                    # and retry history when only relay specs were changed.
+                    desired = _plans(config, session_host=session_host, desktop_roster=desktop_roster,environ=ambient,runtime_program=runtime_program)
+                    # Transport settings belong to their own children. A phone
+                    # address change must not interrupt an in-flight agent turn.
                     for agent_id in installed.keys() & desired.keys():
                         old_tree, old_specs = installed[agent_id]
                         new_tree, new_specs = desired[agent_id]
                         changed = {key for key in old_specs.keys() | new_specs.keys()
                                    if old_specs.get(key) != new_specs.get(key)}
                         if (not changed or old_tree.resolve(strict=True) != new_tree.resolve(strict=True)
-                                or any(spec.role != 'relay' for key in changed
+                                or any(spec.role not in ('relay','channel') for key in changed
                                        for spec in (old_specs.get(key), new_specs.get(key)) if spec is not None)):
                             continue
                         for key in changed:
@@ -563,7 +599,7 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                             auth_seen.pop(key, None)
                             policy.children.pop(key, None)
                             if key in new_specs:
-                                policy.children[key] = ChildState('relay')
+                                policy.children[key] = ChildState(new_specs[key].role)
                         installed[agent_id] = desired[agent_id]
                     for agent_id in list(installed):
                         if agent_id != BASE_ID and installed[agent_id] != desired.get(agent_id):
@@ -596,8 +632,20 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                         installed[agent_id] = agent_tree, agent_specs
                         policy.children.update({key: ChildState(spec.role)
                                                 for key, spec in agent_specs.items()})
+                # Voice selection is a small private input to the existing
+                # worker, not a reason to reload its model/kill healthy siblings.
+                for agent_id in installed.keys() & desired.keys():
+                    if installed[agent_id]==desired[agent_id]:installed[agent_id]=desired[agent_id]
                 specs = {key: spec for _, agent_specs in installed.values()
                          for key, spec in agent_specs.items()}
+                for spec in specs.values():
+                    if spec.role=='xtts' and spec.speech_selection is not None:
+                        if __package__:from . import speech_protocol
+                        else:import speech_protocol
+                        home=Path(spec.argv[spec.argv.index('--home')+1])
+                        selection=home/'selection.json'
+                        if speech_protocol.read(selection)!=spec.speech_selection:
+                            speech_protocol.write(selection,spec.speech_selection)
                 for key, spec in specs.items():
                     if spec.role != "relay":
                         continue
@@ -636,6 +684,9 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     if key in active:
                         raise RuntimeError(f"duplicate live child {key}")
                     spec = specs[key]
+                    if spec.unavailable:
+                        policy.children[key].halted = True
+                        continue  # config/component refresh admits a fresh role
                     if stopped(): break
                     # A rival channel on this port means its runner owns the
                     # tree. A relay port belongs to a separate local service.
@@ -659,9 +710,28 @@ def run(config: Path, *, stop=None, session_host: bool = False,
                     except (OSError, RuntimeError) as exc:
                         print(f"[python-supervisor] {key} launch refused: {exc}", file=sys.stderr, flush=True)
                         policy.children[key].retry_at = int((time.monotonic() - started) * 1000) + 5000
-                if desktop_roster and (request is not None or time.monotonic() - last_status >= 1.0):
+                if request is not None:
+                    pending_ack = request
+                if desktop_roster and (pending_ack is not None or time.monotonic() - last_status >= 1.0):
                     receipt_seq += 1
-                    _desktop_status(tree, status_nonce, receipt_seq, request, installed, active)
+                    observation = _desktop_observation(status_nonce, receipt_seq, pending_ack, installed, active)
+                    try:
+                        _desktop_status(tree, status_nonce, receipt_seq, pending_ack, installed, active)
+                    except OSError as exc:
+                        # An unavailable observation export must not retire healthy
+                        # owned children. Only this publication boundary is caught;
+                        # process/custody/configuration faults still unwind normally.
+                        problem = type(exc).__name__ + ': ' + str(exc)
+                        observation['status_export_error'] = problem
+                        if problem != export_problem:
+                            print('[python-supervisor] status export unavailable: ' + problem,
+                                  file=sys.stderr, flush=True)
+                        export_problem = problem
+                    else:
+                        pending_ack = None
+                        export_problem = None
+                    if status_observer is not None:
+                        status_observer(observation)
                     last_status = time.monotonic()
                 wake.wait(.5)
         finally:

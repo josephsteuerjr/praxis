@@ -201,7 +201,7 @@ class Policy(unittest.TestCase):
         import deskpkg
         with tempfile.TemporaryDirectory() as tmp:
             stage = Path(tmp) / "app"
-            manifest = deskpkg.build(stage, deskpkg.WINDOWS, allow_partial=True, log=lambda _: None)
+            manifest = deskpkg.build(stage, deskpkg.WINDOWS, version='0.0.0-fixture', allow_partial=True, log=lambda _: None)
             for name in ("desktop_supervisor.py", "desktop_process.py", "agents.py", "owner_stop.py"):
                 source = DESK / "localharness" / name
                 target = stage / "localharness" / name
@@ -230,8 +230,7 @@ class Policy(unittest.TestCase):
             remote = base / "agents/remote"
             remote.mkdir(parents=True)
             (remote / "helene.json").write_text(json.dumps({"mode": "remote", "port": 8096}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "remote mode"):
-                _plans(base / "helene.json", session_host=True)
+            self.assertEqual(set(_plans(base / "helene.json", session_host=True)),{'main','neighbor'})
             (remote / "helene.json").write_text(json.dumps({"mode": "remote", "port": 8096,
                                                               "enabled": False}), encoding="utf-8")
             plans = _plans(base / "helene.json", session_host=True)
@@ -279,8 +278,7 @@ class Policy(unittest.TestCase):
                                          desktop_roster=True)), {"main", "peer"})
             data["mode"] = "remote"
             config.write_text(json.dumps(data), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "remote mode"):
-                _plans(base / "helene.json", session_host=False, desktop_roster=True)
+            self.assertEqual(set(_plans(base / "helene.json", session_host=False,desktop_roster=True)),{'main'})
             data["enabled"] = False
             config.write_text(json.dumps(data), encoding="utf-8")
             self.assertEqual(set(_plans(base / "helene.json", session_host=False,
@@ -332,8 +330,23 @@ class WindowsForeground(unittest.TestCase):
             "app": "app/deskapp.py", "runner": "app/runner.py", "tree": "data",
             "port": self.port, "relay": {"enabled": False}, "installed": {"service": False},
         }), encoding="utf-8")
+        # PID files are fixture readiness receipts. Existence must mean that the
+        # complete number is visible, including when a child is restarted.
+        (self.base / "app/fixture_pid.py").write_text(
+            "import os\n"
+            "from pathlib import Path\n"
+            "from localharness.package_notice import replace_with_retry\n"
+            "def publish_pid(path):\n"
+            " path=Path(path)\n"
+            " temporary=path.with_name(path.name+'.'+str(os.getpid())+'.tmp')\n"
+            " try:\n"
+            "  temporary.write_text(str(os.getpid()), encoding='ascii')\n"
+            "  replace_with_retry(temporary,path)\n"
+            " finally: temporary.unlink(missing_ok=True)\n", encoding="utf-8")
         (self.base / "app/deskapp.py").write_text(
             "import http.server, json, os, pathlib, sys, time\n"
+            "sys.path.insert(0,str(pathlib.Path(__file__).parent))\n"
+            "from fixture_pid import publish_pid\n"
             "tree=pathlib.Path(os.environ['HELENE_TREE'])\n"
             "if os.environ.get('FAKE_CHANNEL_FAIL_ONCE'):\n"
             " marker=tree/'failed-first-channel'\n"
@@ -352,15 +365,18 @@ class WindowsForeground(unittest.TestCase):
             " else: marker.write_text('first launch')\n"
             "class Server(http.server.ThreadingHTTPServer): allow_reuse_address=False\n"
             "server=Server(('127.0.0.1',int(sys.argv[1])),H)\n"
-            "(tree/'channel.pid').write_text(str(os.getpid()))\n"
+            "publish_pid(tree/'channel.pid')\n"
             "server.serve_forever()\n", encoding="utf-8")
         (self.base / "app/runner.py").write_text(
             "import os, pathlib, subprocess, sys, time\n"
+            "sys.path.insert(0,str(pathlib.Path(__file__).parent))\n"
+            "from fixture_pid import publish_pid\n"
             "tree=pathlib.Path(os.environ['HELENE_TREE'])\n"
             "child=subprocess.Popen([sys.executable,'-c',"
-            "'import os,pathlib,time,sys;pathlib.Path(sys.argv[1]).write_text(str(os.getpid()));time.sleep(120)',"
-            "str(tree/'grandchild.pid')],stdin=subprocess.DEVNULL)\n"
-            "(tree/'runner.pid').write_text(str(os.getpid()))\n"
+            "'import sys,time;sys.path.insert(0,sys.argv[2]);from fixture_pid import publish_pid;"
+            "publish_pid(sys.argv[1]);time.sleep(120)',"
+            "str(tree/'grandchild.pid'),str(pathlib.Path(__file__).parent)],stdin=subprocess.DEVNULL)\n"
+            "publish_pid(tree/'runner.pid')\n"
             "while True: time.sleep(.1)\n", encoding="utf-8")
         self.owner = None
         self.script = self.base / "app/localharness/desktop_supervisor.py"
@@ -492,13 +508,16 @@ class WindowsForeground(unittest.TestCase):
         self.assert_dead(base_ids)
         self.assertEqual((self.tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
 
-    def test_desktop_roster_remote_refuses_before_child_launch(self):
-        self.add_neighbor(mode="remote")
-        self.start_roster()
-        self.owner.wait(timeout=8)
-        self.assertNotEqual(self.owner.returncode, 0)
-        self.assertFalse((self.tree / "channel.pid").exists())
-        self.assertFalse((self.tree / ".python-desktop-status").exists())
+    def test_desktop_roster_remote_neighbor_has_no_local_brain_and_base_stays_alive(self):
+        neighbor_tree,_=self.add_neighbor(mode="remote")
+        nonce=self.start_roster()
+        base_ids=self.identities()[:3]
+        status=self.desktop_status(nonce)
+        self.assertEqual(set(status['agents']),{'main'})
+        self.assertFalse((neighbor_tree/'channel.pid').exists())
+        self.assertFalse((neighbor_tree/'runner.pid').exists())
+        self.assertTrue(all(self.psutil.pid_exists(pid) for pid in base_ids))
+        self.assertIsNone(self.owner.poll())
 
     def test_source_built_shell_host_python_owner_status_stop_and_refusals(self):
         binary = DESK / "shell/target/debug/helene-host.exe"
@@ -1112,6 +1131,12 @@ class WindowsForeground(unittest.TestCase):
         new["enabled"] = False
         neighbor_cfg.write_text(json.dumps(new), encoding="utf-8")
         self.wait_for(lambda: all(not self.psutil.pid_exists(pid) for pid in others))
+        # Child exits precede the supervisor's final clean marker and release
+        # of its parent-owned lease. Observe both before reading exclusively.
+        def released():
+            try:return (neighbor_tree / ".desktop-owner.lock").read_bytes() == b"clean\n"
+            except PermissionError:return False
+        self.wait_for(released)
         self.assertEqual((neighbor_tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
         self.assertTrue(self.psutil.pid_exists(int((self.tree / "channel.pid").read_text())))
         self.owner.send_signal(signal.CTRL_BREAK_EVENT)
@@ -1135,7 +1160,7 @@ class WindowsForeground(unittest.TestCase):
         self.owner.send_signal(signal.CTRL_BREAK_EVENT)
         self.owner.wait(timeout=8)
 
-    def test_session_host_neighbor_crash_then_remote_switch_refuses_owner(self):
+    def test_session_host_neighbor_crash_then_remote_switch_retires_only_neighbor(self):
         cfg = self.base / "helene.json"
         data = json.loads(cfg.read_text(encoding="utf-8"))
         data["installed"] = {"service": True}
@@ -1156,11 +1181,14 @@ class WindowsForeground(unittest.TestCase):
         new["mode"] = "remote"
         peer_cfg.write_text(json.dumps(new), encoding="utf-8")
         next_runner = int((neighbor_tree / "runner.pid").read_text())
-        self.wait_for(lambda: self.owner.poll() is not None)
-        self.assertNotEqual(self.owner.returncode, 0)
-        self.assert_dead([next_runner, *base_ids])
+        self.wait_for(lambda: not self.psutil.pid_exists(next_runner))
+        def neighbor_released():
+            try:return (neighbor_tree / ".desktop-owner.lock").read_bytes() == b"clean\n"
+            except PermissionError:return False
+        self.wait_for(neighbor_released)
+        self.assertTrue(all(self.psutil.pid_exists(pid) for pid in base_ids))
+        self.assertIsNone(self.owner.poll())
         self.assertEqual((neighbor_tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
-        self.assertEqual((self.tree / ".desktop-owner.lock").read_bytes(), b"clean\n")
 
     def test_stop_after_job_assignment_prevents_first_child_instruction(self):
         marker = self.tree / "should-not-run"

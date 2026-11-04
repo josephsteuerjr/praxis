@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import types
 import unittest
-from pathlib import Path
+from unittest.mock import patch
 
 import llm
 
@@ -111,8 +111,13 @@ class NothingCameBackOnEveryPath(unittest.TestCase):
     def test_whitespace_is_not_an_answer_either(self):
         for name, call in PATHS.items():
             with self.subTest(path=name):
-                with self.assertRaises(llm.EmptyResponseError):
+                # Anthropic has received an exact replay payload (including its
+                # whitespace); that is non-retryable evidence, not zero output.
+                expected = llm.TornStreamError if name == "anthropic" else llm.EmptyResponseError
+                with self.assertRaises(expected) as caught:
                     call(text="   \n\t ")
+                if name == "anthropic":
+                    self.assertTrue(caught.exception.partial.continuation["payload"])
 
     def test_the_anthropic_path_is_guarded_at_all(self):
         """Отдельно и вслух: до 15.08 здесь не было НИ ОДНОЙ проверки."""
@@ -248,37 +253,60 @@ class TheRetryNeverGoesOverWhatWasAlreadySaid(unittest.TestCase):
                          "оборванный стрим переспросили по тому же каналу — это повтор "
                          "поверх уже сказанного, а согласие 10.08 давалось на пустоту")
 
+    def test_actual_sdk_partial_is_retained_and_never_replayed_on_each_adapter(self):
+        for name, call in PATHS.items():
+            with self.subTest(path=name), patch.object(
+                    llm, "_call", side_effect=lambda *a, **kw: call(text="partial", stop="error")) as dispatch:
+                with self.assertRaises(llm.TornStreamError) as caught:
+                    llm._call_retrying_empty("offline", "model", system="s", messages=[])
+                self.assertEqual(dispatch.call_count, 1)
+                self.assertEqual(caught.exception.partial.text, "partial")
 
-class OneGuardNotFourCopies(unittest.TestCase):
-    """Сторож обязан оставаться ОДНИМ: копии расходятся молча — так и вышло в прошлый раз."""
+    def test_actual_sdk_empty_can_retry_without_replaying_received_output(self):
+        for name, call in PATHS.items():
+            with self.subTest(path=name), patch.object(
+                    llm, "_call", side_effect=lambda *a, **kw: call(text="")) as dispatch:
+                with self.assertRaises(llm.EmptyResponseError):
+                    llm._call_retrying_empty("offline", "model", system="s", messages=[])
+                self.assertEqual(dispatch.call_count, 3)
 
-    def test_the_condition_lives_in_exactly_one_place(self):
-        src = Path(llm.__file__).read_text(encoding="utf-8")
-        body = src[src.index("def _guard_answer"):src.index("def _call_anthropic")]
-        self.assertIn("not out.blocks and not out.text.strip()", body)
-        # Физический HTTP/SSE-адаптер обязан собрать stop=error и отдать его ЭТОМУ
-        # сторожу, а не размножать условия Empty/Torn по транспортным путям.
-        self.assertEqual(body.count("raise EmptyResponseError"),
-                         src.count("raise EmptyResponseError"))
-        self.assertEqual(body.count("raise TornStreamError"),
-                         src.count("raise TornStreamError"))
-        adapter = src[src.index("def _stream_transport_error"):
-                      src.index("# --------------------------------------------------------------------------- #",
-                                src.index("def _stream_transport_error"))]
-        self.assertIn("return _guard_answer(partial)", adapter)
 
-    def test_every_return_of_both_frameworks_goes_through_it(self):
-        src = Path(llm.__file__).read_text(encoding="utf-8")
-        anth = src[src.index("def _call_anthropic"):src.index("_OPENAI_STOP =")]
-        oai = src[src.index("def _call_openai"):src.index("def _note_truncation")]
-        for name, body in (("_call_anthropic", anth), ("_call_openai", oai)):
-            with self.subTest(fn=name):
-                returns = [ln.strip() for ln in body.splitlines()
-                           if ln.strip().startswith("return ")]
-                self.assertTrue(returns, f"{name}: не нашлось ни одного возврата")
-                for ln in returns:
-                    self.assertIn("_guard_answer", ln,
-                                  f"{name}: возврат «{ln}» уходит мимо сторожа")
+class EveryAdapterUsesSemanticGuard(unittest.TestCase):
+    """Exercise imported adapter returns, not source-wide counts of raise lines."""
+
+    def test_empty_and_visible_answers_reach_the_shared_guard(self):
+        for name, call in PATHS.items():
+            for text in ("", "visible answer"):
+                with self.subTest(path=name, text=text), \
+                        patch.object(llm, "_guard_answer", wraps=llm._guard_answer) as guard:
+                    if text:
+                        self.assertEqual(call(text=text).text, text)
+                    else:
+                        with self.assertRaises(llm.EmptyResponseError):
+                            call(text=text)
+                    guard.assert_called_once()
+
+    def test_opaque_received_payload_never_becomes_empty_or_replayed(self):
+        anth = _anth(content=[types.SimpleNamespace(type="thinking", thinking="opaque evidence")])
+        completion = _completion(text="")
+        completion.choices[0].message.reasoning_content = "opaque evidence"
+        chunk = _chunk(finish="stop")
+        chunk.choices[0].delta.reasoning_content = "opaque evidence"
+        paths = {
+            "anthropic": lambda: _call_anth(anth),
+            "openai completion": lambda: _call_oai(completion),
+            "openai stream": lambda: _call_oai([chunk]),
+        }
+        for name, call in paths.items():
+            with self.subTest(path=name), \
+                    patch.object(llm, "_call", side_effect=lambda *a, **kw: call()) as dispatch, \
+                    patch.object(llm, "EMPTY_RETRIES", 2), \
+                    patch.object(llm, "EMPTY_RETRY_PAUSE_SEC", 0):
+                with self.assertRaises(llm.TornStreamError) as caught:
+                    llm._call_retrying_empty("offline", "model", system="s", messages=[])
+                self.assertEqual(dispatch.call_count, 1)
+                self.assertTrue(caught.exception.partial.continuation["payload"])
+                self.assertFalse(caught.exception.partial.text.strip())
 
 
 class _BrokenStream:

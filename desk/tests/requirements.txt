@@ -1,0 +1,5 @@
+# Extras required by hermetic source tests. Exact resolved wheel hashes and
+# installed bytes belong to the verification executor provisioning receipt.
+numpy>=2
+paramiko>=3
+PyYAML>=6

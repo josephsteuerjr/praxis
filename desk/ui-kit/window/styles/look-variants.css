@@ -7,9 +7,11 @@
 :root[data-look-style="terminal"] :is(.card,.msg,#composer,.btn,button) { border-radius:0;box-shadow:none; }
 :root[data-look-style="terminal"] .card { border:1px solid var(--line-strong); }
 :root[data-look-font="sans"] { --hand:"Golos Text","Segoe UI",sans-serif;--serif:"Golos Text","Segoe UI",sans-serif; }
-:root[data-look-font="serif"] { --hand:Georgia,"Times New Roman",serif;--serif:Georgia,"Times New Roman",serif; }
-:root[data-look-font="mono"] { --hand:Consolas,"Liberation Mono",monospace;--serif:Consolas,"Liberation Mono",monospace; }
-:root[data-look-font="serif"] body,:root[data-look-font="mono"] body { font-family:var(--serif); }
+:root[data-look-font="serif"] { --sans:Georgia,"Times New Roman",serif;--hand:Georgia,"Times New Roman",serif;--serif:Georgia,"Times New Roman",serif; }
+:root[data-look-font="mono"] { --sans:Consolas,"Liberation Mono",monospace;--hand:Consolas,"Liberation Mono",monospace;--serif:Consolas,"Liberation Mono",monospace; }
+/* Optical corrections belong to handwriting, never to the chosen text font. */
+:root[data-look-font]:not([data-look-font="hand"]) :is(.room-name.hand,.head-title.hand) { transform:none;-webkit-text-stroke:0;letter-spacing:0; }
+:root[data-look-style="clean"] :is(.room-name.hand,.head-title.hand),:root[data-look-style="terminal"] :is(.room-name.hand,.head-title.hand) { transform:none;-webkit-text-stroke:0;letter-spacing:0; }
 :root[data-look-shape="round"] :is(.card,.msg,.voice-draft,#composer,.lrn-start-cards article) { border-radius:26px; }
 :root[data-look-shape="square"] :is(.card,.msg,.voice-draft,#composer,.lrn-start-cards article,.btn) { border-radius:0; }
 :root[data-look-backdrop="grid"] #app { background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:28px 28px; }

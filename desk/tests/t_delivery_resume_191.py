@@ -41,8 +41,9 @@ class ResumeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);before={'state':'preserving','data_paths':['retained']}
             app_migration.write_note(root,before)
-            with patch.object(Path,'replace',side_effect=OSError('disk full')):
+            with patch('localharness.package_notice.os.replace',side_effect=OSError('disk full')) as replace:
                 with self.assertRaisesRegex(OSError,'disk full'):app_migration.write_note(root,{'state':'prepared'})
+                replace.assert_called_once()
             self.assertEqual(json.loads((root/'python-migration.json').read_text()),before)
 
     def test_changed_directory_link_cannot_overwrite_another_tree(self):
@@ -141,7 +142,7 @@ class ResumeTests(unittest.TestCase):
             (package/'tree/agent.py').write_text('# factory source')
             new=root/'new';note=python_migrate.fresh(package,new,root/'data',extensions=[],launch=False)
             cfg=json.loads((new/'helene.json').read_text());self.assertFalse(cfg['setup_complete'])
-            self.assertFalse(runner_required(cfg,BASE_ID));self.assertEqual(Path(cfg['code']),new/'tree')
+            self.assertFalse(runner_required(cfg,BASE_ID));self.assertEqual((new/Path(cfg['code'])).resolve(),new/'tree')
             repeated=python_migrate.fresh(package,new,root/'data',extensions=[],launch=False)
             self.assertEqual(note['id'],repeated['id']);self.assertEqual(note['data_paths'],repeated['data_paths'])
 

@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -36,6 +37,13 @@ class TimeoutCustody(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        for name, value in [('BASE', self.root), ('STATE_DIR', self.root / 'state'),
+                            ('TASKS_DIR', self.root / 'state/tasks')]:
+            patch = mock.patch.object(forge, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        forge._save_task({'id': 'task-fixture', 'root': str(self.root), 'scope': 'self',
+                         'status': 'active', 'goal': 'custody fixture'})
 
     def request(self, **fields):
         directory = self.root / "unit"
@@ -105,7 +113,7 @@ class TimeoutCustody(unittest.TestCase):
              mock.patch.object(edition, "_unit_dir", return_value=directory), \
              mock.patch.object(edition, "_event"), \
              mock.patch.object(edition, "_kill_tree") as generic_kill, \
-             mock.patch.object(edition.os, "name", "nt"), \
+             mock.patch.object(edition, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"})), \
              mock.patch.object(FakeCommand, "poll", return_value=0), \
              mock.patch.object(edition.subprocess, "run") as taskkill, \
              mock.patch.dict(edition._RUNNERS, {fake.pid: fake}):
@@ -133,7 +141,7 @@ class TimeoutCustody(unittest.TestCase):
              mock.patch.object(forge, "_unit_dir", return_value=directory), \
              mock.patch.object(forge, "_event"), \
              mock.patch.object(forge, "_kill_tree") as generic_kill, \
-             mock.patch.object(forge.os, "name", "nt"), \
+             mock.patch.object(forge, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"})), \
              mock.patch.object(FakeCommand, "poll", return_value=0), \
              mock.patch.object(forge.subprocess, "run") as taskkill, \
              mock.patch.dict(forge._RUNNERS, {fake.pid: fake}):
@@ -151,7 +159,7 @@ class TimeoutCustody(unittest.TestCase):
              mock.patch.object(forge, "_unit_dir", return_value=directory), \
              mock.patch.object(forge, "_event"), \
              mock.patch.object(forge, "_kill_tree") as generic_kill, \
-             mock.patch.object(forge.os, "name", "nt"), \
+             mock.patch.object(forge, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"})), \
              mock.patch.object(forge.subprocess, "run", return_value=mock.Mock(returncode=128)) as taskkill, \
              mock.patch.dict(forge._RUNNERS, {fake.pid: fake}):
             result = forge.process("task-fixture", "stop", process_id="proc-fixture")
@@ -169,7 +177,7 @@ class TimeoutCustody(unittest.TestCase):
         with mock.patch.object(forge, "_task_root", return_value=({"scope": "self"}, self.root, "")), \
              mock.patch.object(forge, "_unit_dir", return_value=directory), \
              mock.patch.object(forge, "_event"), \
-             mock.patch.object(forge.os, "name", "nt"), \
+             mock.patch.object(forge, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"})), \
              mock.patch.object(forge.subprocess, "run", return_value=mock.Mock(returncode=0)), \
              mock.patch.dict(forge._RUNNERS, {fake.pid: fake}):
             result = forge.process("task-fixture", "stop", process_id="proc-fixture")
@@ -196,7 +204,7 @@ class TimeoutCustody(unittest.TestCase):
         # TERM and the grace-end census see the live child; KILL's next
         # census proves empty. No actual signal or process is touched.
         ticks = iter((0.0, .1, .2, 1.1, 2.0, 2.1))
-        with mock.patch.object(forge.os, "name", "posix"), \
+        with mock.patch.object(forge, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"})), \
              mock.patch.object(forge.sys, "platform", "darwin"), \
              mock.patch.object(forge.time, "monotonic", side_effect=lambda: next(ticks)), \
              mock.patch.object(forge.time, "sleep"), \
@@ -242,14 +250,13 @@ class TimeoutCustody(unittest.TestCase):
             directory = d / ident
             directory.mkdir(parents=True, exist_ok=True)
             return directory
-        with mock.patch.object(forge, "_task_root", return_value=({"scope": "self"}, self.root, "")), \
-             mock.patch.object(forge, "_task_dir", return_value=self.root), \
-             mock.patch.object(forge, "_unit_dir", side_effect=unit), \
+        with mock.patch.object(forge, "_unit_dir", side_effect=unit), \
              mock.patch.object(forge, "_proc_started_at", return_value="birth-fixture"), \
              mock.patch.object(forge, "_stop_foreground", return_value=(False, "group unconfirmed")), \
              mock.patch.object(forge, "_event"), \
-             mock.patch.object(forge.subprocess, "Popen", return_value=fake):
+             mock.patch('command_process.CommandProcess', return_value=fake) as spawn:
             result = forge.run("task-fixture", "echo child", timeout=1)
+        spawn.assert_called_once()
         self.addCleanup(forge._RUNNERS.pop, fake.pid, None)
         self.assertIn("forge: unknown", result)
         self.assertIn("process_id=", result)
@@ -285,7 +292,8 @@ class TimeoutCustody(unittest.TestCase):
 
     def test_process_timeout_unknown_writes_stop_and_no_terminal_result(self):
         req = self.request()
-        with mock.patch.object(forge_process.subprocess, "Popen", return_value=FakeCommand()), \
+        with mock.patch.object(forge_process, 'CommandProcess', return_value=FakeCommand()), \
+             mock.patch.object(forge_process, 'time', types.SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 2]))), \
              mock.patch.object(forge_process, "_terminate_tree",
                                return_value=(False, "taskkill permission denied")):
             self.assertEqual(forge_process.run(req), 2)
@@ -298,7 +306,8 @@ class TimeoutCustody(unittest.TestCase):
 
     def test_process_timeout_with_proven_cleanup_writes_terminal_timeout(self):
         req = self.request()
-        with mock.patch.object(forge_process.subprocess, "Popen", return_value=FakeCommand()), \
+        with mock.patch.object(forge_process, 'CommandProcess', return_value=FakeCommand()), \
+             mock.patch.object(forge_process, 'time', types.SimpleNamespace(monotonic=mock.Mock(side_effect=[0, 2, 3]))), \
              mock.patch.object(forge_process, "_terminate_tree",
                                return_value=(True, "group empty")):
             self.assertEqual(forge_process.run(req), 1)
@@ -308,7 +317,7 @@ class TimeoutCustody(unittest.TestCase):
 
     def test_verify_timeout_launches_private_group_and_does_not_pass(self):
         directory = self.root / "matrix"
-        with mock.patch.object(forge_verify.os, "name", "posix"), \
+        with mock.patch.object(forge_verify, 'os', types.SimpleNamespace(name='posix', environ=os.environ)), \
              mock.patch.object(forge_verify.subprocess, "Popen", return_value=FakeCommand()) as popen, \
              mock.patch.object(forge_verify, "_terminate_tree",
                                return_value=(False, "group still live")):
@@ -405,9 +414,7 @@ class TimeoutCustody(unittest.TestCase):
         def checked(proc):
             seen.append(proc.pid)
             return stop(proc)
-        with mock.patch.object(forge, "_task_root", return_value=({"scope": "self"}, self.root, "")), \
-             mock.patch.object(forge, "_task_dir", return_value=self.root), \
-             mock.patch.object(forge, "_event"), \
+        with mock.patch.object(forge, "_event"), \
              mock.patch.object(forge, "_stop_foreground", side_effect=checked):
             result = forge.run("task-fixture", command, timeout=1)
         self.assertIn("forge: timed_out", result)

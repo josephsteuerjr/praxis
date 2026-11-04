@@ -365,6 +365,7 @@ def _verify_version(binary: Path, home: Path) -> None:
             env=_version_environment(home),
             timeout=3,
             check=False,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise CloudflaredError("Could not execute the pinned cloudflared version check.") from exc

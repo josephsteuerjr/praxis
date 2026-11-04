@@ -19,25 +19,27 @@ HTML = r'''<!doctype html><html lang="ru"><meta charset="utf-8">
 :root{color-scheme:light;--paper:#f8eee0;--ink:#1d1a17;--muted:#7d6c5a;--accent:#9a4a1e;--line:rgba(29,26,23,.14);--hand:'Zen Kurenaido','Segoe Print',cursive}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--paper:#1d1914;--ink:#f1e4d0;--muted:#ab9982;--accent:#eda676;--line:rgba(241,228,208,.13)}}
 :root[data-theme=dark]{color-scheme:dark;--paper:#1d1914;--ink:#f1e4d0;--muted:#ab9982;--accent:#eda676;--line:rgba(241,228,208,.13)}
-*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15.5px/1.6 'Golos Text','Segoe UI',sans-serif;padding:28px 32px;overflow:auto;height:auto;min-height:100vh}
-body>main{position:relative;max-width:660px;margin:auto}small{color:var(--muted);font-size:11px;letter-spacing:.13em}h1{font-family:var(--hand);font-size:32px;font-weight:400;line-height:1.22;margin:18px 0 22px}
-#update-chrome{display:flex;align-items:center;justify-content:space-between;min-height:28px;gap:12px;margin:-12px -12px 0;padding-left:12px;user-select:none}
-.update-actions{display:flex;gap:2px}.update-actions button{font:20px/1 'Golos Text',sans-serif;width:30px;height:28px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.5 'Golos Text','Segoe UI',sans-serif;padding:24px;overflow:auto;height:auto;min-height:100vh}
+body>main{position:relative;max-width:660px;margin:auto}small{color:var(--muted);font-size:12px;letter-spacing:.04em}h1{font-family:var(--hand);font-size:28px;font-weight:400;line-height:1.2;margin:16px 0;overflow-wrap:anywhere}
+#update-chrome{display:flex;align-items:center;justify-content:space-between;min-height:32px;gap:8px;margin:0;padding:0;user-select:none}
+.update-actions{display:flex;gap:2px}.update-actions button{font:16px/1 'Golos Text',sans-serif;width:32px;height:32px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}
 .update-actions button:hover:not(:disabled){background:var(--line);color:var(--ink)}.update-actions button:disabled{opacity:.3;cursor:default}
-p{margin:9px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-size:13px}#error{color:var(--ink);white-space:pre-wrap}#history{border-top:1px solid var(--line);padding-top:15px;margin-top:22px}
-#source-choice{border:1px solid var(--line);border-radius:8px;padding:16px;margin:16px 0}#source-choice[hidden]{display:none}.source-options{display:flex;flex-wrap:wrap;gap:8px}.source-options button{font:inherit;border:1px solid var(--line);border-radius:6px;padding:9px 12px;background:transparent;color:var(--ink);cursor:pointer}.source-options button:first-child{background:var(--accent);color:var(--paper)}#source-choice p{font-size:13px;color:var(--muted)}
-.track{height:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden;margin:22px 0}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}p{margin:12px 0;overflow-wrap:anywhere}#detail,#history{color:var(--muted);font-size:13px}#error{color:var(--ink);white-space:pre-wrap}#history{border-top:1px solid var(--line);padding-top:16px;margin-top:24px}
+#source-choice{border:1px solid var(--line);border-radius:8px;padding:16px;margin:16px 0}#source-choice[hidden]{display:none}.source-options{display:flex;flex-wrap:wrap;gap:8px}.source-options button{font:inherit;min-width:0;max-width:100%;min-height:36px;white-space:normal;overflow-wrap:anywhere;text-align:left;border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:transparent;color:var(--ink);cursor:pointer}.source-options button:first-child{background:var(--accent);color:var(--paper)}#source-choice p{font-size:13px;color:var(--muted)}
+.track{height:3px;background:color-mix(in srgb,var(--accent) 16%,transparent);overflow:hidden;margin:16px 0}
 .track:before{content:'';display:block;width:28%;height:100%;background:var(--accent);animation:moving 2s ease-in-out infinite}
 @keyframes moving{0%{transform:translateX(-110%)}100%{transform:translateX(460%)}}
 body.done .track:before{animation:none;width:100%}body.failed .track:before{animation:none;width:0}
 @media(prefers-reduced-motion:reduce){.track:before{animation:none;transform:none}}
-@media(max-width:430px){body{padding:22px}h1{font-size:28px}}
+@media(max-width:430px){.source-options{flex-direction:column}.source-options button{width:100%}}
 </style><!--shared-appearance--><main><header id="update-chrome"><small>HÉLÈNE · ОБНОВЛЕНИЕ</small><div class="update-actions"><button id="minimize" aria-label="Свернуть окно">−</button><button id="close" aria-label="Закрыть окно" disabled>×</button></div></header><h1 id="stage">Подготавливаю обновление</h1>
 <div class="track" aria-hidden="true"></div><p id="detail" role="status" aria-live="polite"></p><p id="error"></p>
+<p id="reopen-note">Основное окно может закрыться на несколько минут. Hélène откроется сама — не запускай программу повторно.</p>
 <section id="source-choice" hidden><strong id="source-version"></strong><p>Сохранить изменения — агент совместит ваши правки с выпуском. Чистое обновление заменит локальные изменения кода. Прежний код останется для отката; память, переписка и настройки сохранятся.</p><div class="source-options"><button data-source="preserve">Сохранить правки · поручить агенту</button><button data-source="clean">Установить чистый код выпуска</button><button id="cancel-choice">Отмена</button></div></section>
 <p id="history"></p></main><script>
 const stage=document.getElementById('stage'),detail=document.getElementById('detail'),error=document.getElementById('error'),history=document.getElementById('history');
 function paint(r){stage.textContent=r.label||r.stage||'Подготавливаю переключение';
+document.getElementById('reopen-note').hidden=['completed','failed','cancelled'].includes(r.stage);
 const choice=r.stage==='choosing_source'&&r.source_choice;document.getElementById('source-choice').hidden=!choice;if(choice)document.getElementById('source-version').textContent='Код Hélène '+(choice.version||'нового выпуска');
 const now=r.finished_at||Date.now()/1000, s=r.stages?.at(-1); const seconds=s?Math.max(0,now-s.started_at):0;
 const parts=[`Этап: ${Math.floor(seconds)} с`];

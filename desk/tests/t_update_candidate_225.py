@@ -76,6 +76,7 @@ class ReviewedCandidate(unittest.TestCase):
         for root in (f.old / 'tree', f.new / 'tree'): put(root, 'dependency.py', HELPER)
         put(f.code, 'dependency.py', AUTHORED)
         f.preflight(); f.request = read(pipeline.path(f.tree)); f.directory = Path(f.request['directory'])
+        pipeline.ensure(f.tree,f.old,f.code,f.directory,'2.2.0',coordinator=f.coordinator)
         f.tick(); f.merge_result(); first = f.tick()
         first_subject = first['subject_sha256']
         f.review_result('findings'); f.tick(); f.tick()

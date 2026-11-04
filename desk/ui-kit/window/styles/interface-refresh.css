@@ -1,0 +1,154 @@
+@import './learn.css';
+
+/* Desktop rhythm, not another look: paper/material and appearance tokens still
+   own colour and family. Each page shares the same edges; prose keeps its measure. */
+:root { --page-max: 1120px; --page-gutter: 24px; --control-h: 40px; }
+#rail { padding-inline: 16px; }
+#rail .rail-item { margin-block: 2px; min-height: 40px; border-radius: 10px; padding-inline: 12px; }
+#rail .rail-item[aria-current="page"] { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+#rail .rail-item[aria-current="page"] svg { color: var(--accent); }
+#rail .rail-label { margin-inline: 12px; }
+#head { padding-inline: var(--page-gutter); gap: 16px; }
+#view { padding-inline: var(--page-gutter); }
+#view :is(.center,.wide,.settings,.learn) { width: 100%; max-width: var(--page-max); margin-inline: auto; }
+/* The chat has its own em-based reading measure and user zoom. */
+#view .center.talk { max-width: none; }
+#main:not(:has([data-page="talk"])) #head {
+  padding-inline: max(var(--page-gutter), calc((100cqw - var(--page-max)) / 2));
+}
+.head-kicker { color: var(--ink-2); font: 400 12.5px/1.5 var(--sans); letter-spacing: 0; }
+.head-title:not(.hand) { font: 500 28px/1.3 var(--serif); letter-spacing: -.02em; -webkit-text-stroke: 0; }
+#view .section-title { font: 550 18px/1.4 var(--serif); letter-spacing: -.01em; margin-block: 24px 12px; }
+#view .card > h3, #view .empty > b, .inspection-status h3, .journal-event h3 {
+  font: 550 20px/1.4 var(--serif); letter-spacing: -.01em; -webkit-text-stroke: 0;
+}
+#view .card { padding: 20px 24px; margin-bottom: 16px; border-color: var(--line-ink); }
+#view .card > h3 { margin: 0 0 12px; }
+#view .card > :last-child { margin-bottom: 0; }
+#view .page-intro { max-width: 72ch; font-size: 14px; line-height: 1.65; color: var(--ink-2); margin-bottom: 24px; }
+#view .page:not([data-page="talk"]) .empty { padding: 32px 0; border: 0; background: none; text-align: left; color: var(--ink-2); font-size: 14px; }
+#view .empty p { max-width: 68ch; line-height: 1.65; margin-block: 8px 0; }
+#view .empty > b { margin-bottom: 8px; }
+
+/* One form control geometry. Long translated/provider labels wrap, never crop. */
+#view .btn { height: auto; min-height: var(--control-h); padding: 8px 16px; font: 500 14px/1.5 var(--sans); white-space: normal; overflow-wrap: anywhere; max-width: 100%; gap: 8px; }
+#view :is(.field-input,.paper-select-trigger) { min-width: 0; height: auto; min-height: var(--control-h); padding: 8px 12px; border-radius: 9px; font: 400 14px/1.5 var(--sans); }
+#view .field-input.mono { font-family: var(--mono); font-size: 13px; }
+#view .field-label { font: 500 14px/1.5 var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink); }
+#view .field-hint, #view .choice-text { font-size: 13px; line-height: 1.6; color: var(--ink-2); overflow-wrap: anywhere; }
+#view .field-hint { margin-block: 4px 12px; }
+#view .field { gap: 8px; }
+#view .form-grid { gap: 16px 24px; }
+#view .choice { gap: 12px; }
+#view .choice-item { min-width: 0; padding: 12px 16px; gap: 4px; }
+#view .choice-title { font: 550 14px/1.5 var(--sans); }
+#view .switch { min-height: 32px; gap: 12px; font: 500 14px/1.5 var(--sans); }
+#view .actions { gap: 8px 12px; }
+#view :is(.receipt,.notice,.fold-body) { line-height: 1.6; overflow-wrap: anywhere; }
+#view .receipt:empty { display: none; }
+#view :is(.tools-row,.form-grid,.actions) > * { min-width: 0; }
+#view .tools-row { gap: 8px 12px; align-items: center; margin-bottom: 16px; }
+#view :is(.field-input,.md-editor):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+#view details.fold { margin-block: 8px; }
+#view details.fold > summary { min-height: 40px; padding: 10px 16px; font-size: 14px; line-height: 1.5; }
+#view .fold-body { padding: 8px 16px 16px; }
+
+/* Settings groups keep the same content column, including Appearance. Their
+   local index remains useful; it does not redefine the form's visual rhythm. */
+#view .settings { gap: 24px; }
+#view .settings > .settings-tabs { grid-column: 1 / -1; margin-bottom: 0; }
+#view .settings > .settings-nav { top: 64px; }
+#view .settings[data-group="look"] { grid-template-columns: 168px minmax(0,1fr); }
+#view .settings[data-group="look"] > .settings-nav { display: flex; }
+#view .settings[data-group="look"] .settings-body { max-width: none; margin: 0; }
+.settings-nav a { min-height: 36px; color: var(--ink-2); padding: 8px 12px; font: 400 13px/1.5 var(--sans); }
+.settings-tabs { gap: 4px; margin-bottom: 24px; padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper,var(--ground)); }
+.settings-tabs .settings-tab { flex: 1 1 auto; min-height: 40px; border-radius: 8px; padding: 8px 12px; font: 500 13px/1.5 var(--sans); }
+.settings-tabs .settings-tab[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line-strong); border-color: transparent; }
+#view .save-bar { margin-top: 16px; padding: 16px 24px; box-shadow: none; background: var(--surface); }
+#view .save-bar > .field-hint { margin: 8px 0 0; font-size: 12.5px; }
+#view .settings-source { font-size: 12.5px; line-height: 1.6; }
+#view .look-card { padding: 20px 24px; }
+#view .look-card > .field-hint { margin: 0 0 24px; }
+#view .look-card .look-label { font-size: 14px; }
+#view .look-card .look-row { grid-template-columns: 150px minmax(0,1fr); gap: 8px 16px; }
+#view .look-pill, #view .look-reset { height: auto; min-height: 36px; padding: 8px 12px; font: 400 13px/1.5 var(--sans); white-space: normal; }
+#view .look-name { font-size: 12.5px; line-height: 1.6; }
+
+/* Files and Context: a real reading pane, with long names contained in its
+   index. Wide machine data scrolls in its own table, not the whole window. */
+#view .split { grid-template-columns: 256px minmax(0,1fr); gap: 24px; }
+#view .split > :is(.list,.reading) { min-width: 0; }
+#view .item { min-width: 0; padding: 10px 12px; gap: 12px; line-height: 1.5; align-items: baseline; }
+#view .item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+#view .item .n { flex: none; font-size: 12.5px; line-height: 1.5; }
+#view :is(.reading,.card.md) { overflow-wrap: anywhere; }
+#view .reading { padding-right: 0; }
+#view .md :is(p,li) { max-width: 75ch; }
+#view .md table, #view table.grid { display: block; max-width: 100%; overflow-x: auto; }
+#view table.grid { font-size: 13px; }
+#view table.grid th { font: 500 12.5px/1.5 var(--sans); letter-spacing: 0; text-transform: none; }
+#view table.grid :is(th,td) { padding: 8px 12px; white-space: nowrap; overflow-wrap: normal; }
+#view :is(.md,.msg-body,.run-reading,.run-reading-preview) table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin-block: 12px; }
+#view :is(.md,.msg-body,.run-reading,.run-reading-preview) table :is(th,td) { padding: 8px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; min-width: 100px; }
+#view :is(.md,.msg-body,.run-reading,.run-reading-preview) table th { font-weight: 550; }
+#view .list > details.fold > summary > .muted { display: inline-block; white-space: nowrap; }
+#view :is(.diff,.md-editor) { line-height: 1.6; }
+
+/* List/inspection surfaces share left edges, not an arbitrary centre axis. */
+#view .journal-controls { gap: 8px 24px; align-items: center; }
+#view .journal-controls button { min-height: 36px; font: 500 14px/1.5 var(--sans); }
+#view .journal-event { grid-template-columns: 128px minmax(0,1fr); gap: 24px; padding-block: 24px; }
+#view .journal-event time { font-size: 12.5px; line-height: 1.6; padding-top: 4px; font-variant-numeric: tabular-nums; }
+#view .journal-event h3 { font-size: 18px; margin-bottom: 8px; }
+#view .journal-event small { font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+#view .journal-event pre { margin: 0; padding: 16px; font-size: 12.5px; }
+#view .inspection-status { padding-left: 16px; }
+#view .inspection-status h3 { font-size: 18px; }
+#view .system-overview { gap: 0 24px; }
+#view .system-overview :is(span,small) { font-size: 13px; line-height: 1.6; }
+#view .system-overview strong { font: 550 18px/1.5 var(--serif); }
+#view .ev-head { min-height: 40px; gap: 12px; padding: 8px 0; }
+#view .ev-title { font-size: 14px; line-height: 1.5; }
+#view .ev-time { font-size: 12.5px; line-height: 1.5; }
+#view .now .ev-head .dot { margin-top: 6px; }
+#view .now .turn-live-head, #view .usage-summary-title, #view .usage-heading h2 { font: 550 20px/1.4 var(--serif); letter-spacing: -.01em; }
+#view .now .turn-live-head .dot { top: 0; }
+#view .now-idle { font: 400 16px/1.6 var(--sans); letter-spacing: 0; }
+/* Open history and current work use one inset; collapsed rows stay unboxed. */
+#view .ev.open { padding: 0; margin-block: 8px 16px; border: 1px solid var(--line-ink); border-radius: 18px; background: var(--surface); }
+#view .ev.open > .ev-head { padding: 16px 24px 8px; }
+#view .ev.open > .ev-sub { margin: 0 24px 12px; white-space: normal; overflow-wrap: anywhere; }
+#view .ev.open > .ev-steps { padding: 0 24px 20px; }
+#view .now .turn-live { padding: 20px 24px; }
+#view .now .turn-live > .ev-steps { padding: 0; }
+
+@container (max-width: 840px) {
+  #view .settings .choice:not(.stack) { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  #view .settings[data-group="look"] { grid-template-columns: minmax(0,1fr); }
+  #view .split { grid-template-columns: 208px minmax(0,1fr); gap: 16px; }
+  #view .look-presets { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@container (max-width: 620px) {
+  #view .split { grid-template-columns: minmax(0,1fr); height: auto; }
+  #view .split > .list { max-height: 240px; }
+  #view .journal-event { grid-template-columns: minmax(0,1fr); gap: 8px; }
+  #view .form-grid.two, #view .form-grid.three, #view .look-fields { grid-template-columns: minmax(0,1fr); }
+  #view .look-card .look-row { grid-template-columns: minmax(0,1fr); }
+  #view .look-name { grid-column: 1; }
+}
+@media (max-width: 980px) { :root { --page-gutter: 16px; } }
+:root[data-density="compact"] #view .card { padding: 16px; }
+:root[data-density="compact"] #view .btn { min-height: 32px; padding-block: 4px; }
+
+/* Header actions belong to one compact baseline, including autonomy's note. */
+#head .engine-controls { gap: 8px; }
+#head .engine-controls button, #head .state-action { min-height: 32px; height: auto; padding: 6px 10px; font: 500 12.5px/1.5 var(--sans); border-radius: 8px; }
+#head .state-pill { min-height: 32px; height: auto; padding-block: 6px; font: 400 12.5px/1.5 var(--sans); }
+#head [data-autonomy-note] { font: 400 12.5px/1.5 var(--sans); color: var(--ink-2); }
+#head .head-side { column-gap: 12px; }
+/* Labels in the compact run roster stay legible at the owner's 90% scale. */
+.turns-room, .turns-n, .turn-time, .turn-meta, .st-meta, .st-state, .st-harness, .st-k, .st-pre, .st > .run-text .run-text-body { font-size: 12.5px; line-height: 1.5; }
+.turns-inner { padding-inline: 16px; }
+#panel .frame-strip-head > span:first-child { font: 500 14px/1.5 var(--sans); letter-spacing: 0; }
+#panel .st-line { min-height: 32px; }

@@ -1,0 +1,45 @@
+   Compiling praxis-body-protocol v0.1.0 (/Users/runner/work/_temp/rc18-native-source/crates/praxis-protocol)
+   Compiling praxis-body v0.1.0 (/Users/runner/work/_temp/rc18-native-source/crates/praxis-body)
+   Compiling praxis-bridge v0.1.0 (/Users/runner/work/_temp/rc18-native-source/crates/praxis-bridge)
+warning: method `mark` is never used
+   --> crates/praxis-body/src/uia.rs:635:8
+    |
+634 | impl Walk {
+    | --------- method in this implementation
+635 |     fn mark(&mut self, reason: &'static str) {
+    |        ^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `clip_utf16` is never used
+   --> crates/praxis-body/src/uia.rs:645:4
+    |
+645 | fn clip_utf16(text: &str, limit: u64) -> (String, bool) {
+    |    ^^^^^^^^^^
+
+warning: function `role_name` is never used
+   --> crates/praxis-body/src/uia.rs:661:4
+    |
+661 | fn role_name(control_type: i32) -> String {
+    |    ^^^^^^^^^
+
+warning: function `win32_role` is never used
+   --> crates/praxis-body/src/uia.rs:719:4
+    |
+719 | fn win32_role(class: &str) -> &'static str {
+    |    ^^^^^^^^^^
+
+warning: constant `WINDOW_READ_UIA_DETAIL` is never used
+    --> crates/praxis-body/src/uia.rs:2888:7
+     |
+2888 | const WINDOW_READ_UIA_DETAIL: &str =
+     |       ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `WINDOW_READ_WIN32_DETAIL` is never used
+    --> crates/praxis-body/src/uia.rs:2891:7
+     |
+2891 | const WINDOW_READ_WIN32_DETAIL: &str =
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `praxis-body` (bin "praxis-body") generated 6 warnings
+    Finished `release` profile [optimized] target(s) in 1m 12s

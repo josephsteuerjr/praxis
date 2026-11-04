@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / 'desk'))
 sys.path.insert(0, str(ROOT / 'helene/core'))
 sys.path.insert(0, str(Path(__file__).parent))
 from localharness import source_update as pipeline, source_merge as merge, code_transition
-from localharness import self_review, source_update_worker
+from localharness import self_review, source_update_worker,source_update_battery,source_update_launcher,update_composition,authored_baseline
 from localharness.package_notice import read, write
 from t_self_review_192 import load_forge
 from t_source_merge_211 import BASE, LOCAL, BOTH, put
@@ -34,11 +34,29 @@ class PipelineTests(unittest.TestCase):
         self.old, self.new, self.code, self.tree = [self.root / name for name in ('old', 'new', 'code', 'home')]
         put(self.old / 'tree', 'module.py', BASE)
         put(self.new / 'tree', 'module.py', BASE.replace('return 1', 'return 99'))
-        put(self.code, 'module.py', LOCAL)
+        put(self.code, 'module.py', BASE)
         self.tree.mkdir()
         write(self.old / 'helene.json', {'tree': str(self.tree), 'code': str(self.code), 'runner': ''})
         write(self.old / 'python-app.json', {'version': '2.1.1'})
-        write(self.new / 'python-app.json', {'version': '2.2.0'})
+        self.incoming_version = getattr(self, 'incoming_version', '2.2.0')
+        write(self.new / 'python-app.json', {'version': self.incoming_version})
+        # The real composition boundary is mandatory now. This unit fixture has
+        # a tiny declared app/runtime, never an installed profile/distribution.
+        for program in (self.old, self.new):
+            put(program/'app','fixture.py','# synthetic application\n')
+            if program==self.new:
+                for name,content in getattr(self,'incoming_app_files',{}).items():
+                    path=program/'app'/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+            # Both sides represent actual authored-update-capable deliveries.
+            # Seal pristine A/B before the selected owner code is changed, not
+            # by relabelling a legacy fixture or resealing an authored result.
+            code_transition.seal(program)
+            authored_baseline.seal(program)
+        put(self.code, 'module.py', LOCAL)
+        put(self.new/'runtime','fixture.lock','synthetic runtime identity\n')
+        write(self.new/'source-inputs.json',{'files':{'fixture.py':hashlib.sha256((self.new/'app/fixture.py').read_bytes()).hexdigest()}})
+        write(self.new/'python-package-files.json',{'files':{'runtime/fixture.lock':hashlib.sha256((self.new/'runtime/fixture.lock').read_bytes()).hexdigest()}})
+        self.coordinator={'kind':'incoming-update-runtime.v1','program':str(self.new.resolve())}
         self.forge = load_forge()
         self.forge.TASKS_DIR = self.tree / 'memory/.forge/tasks'
         self.forge.BASE = self.tree
@@ -51,12 +69,37 @@ class PipelineTests(unittest.TestCase):
             self.spawns.append((script, request, read(request)))
             return 99999999
         self.forge._spawn_runner = mock.Mock(side_effect=spawn)
-        self.service = self_review.Service(self.tree, self.code, self.old, self.forge, {'after_update': False})
+        self.service = self_review.Service(self.tree, self.code, self.old, self.forge, {'after_update': False},coordinator=self.coordinator)
         write(self.tree / 'memory/.self-review/runtime.json', {'source_update_supported': True,
               'app_root': str(self.old.resolve()), 'at': __import__('time').time()})
         self.preflight()
         self.request = read(pipeline.path(self.tree))
         self.directory = Path(self.request['directory'])
+        pipeline.ensure(self.tree,self.old,self.code,self.directory,self.incoming_version,coordinator=self.coordinator)
+        # Battery execution is a separately tested external boundary. These
+        # tests exercise coordinator/panel control, not full product test PASS.
+        # Fixture approvals bind exact real compositions and become stale on edit.
+        self.verified={};self.battery_order=[]
+        for mocker in [mock.patch.object(pipeline,'_verification_dependencies'),
+                       mock.patch.object(source_update_battery,'prepare',side_effect=self.prepare_battery),
+                       mock.patch.object(source_update_battery,'validate',side_effect=self.validate_battery),
+                       mock.patch.object(source_update_launcher,'tick',side_effect=lambda op,d,stop:source_update_battery.prepare(op,d,{},stop)),
+                       mock.patch.object(source_update_launcher,'collect',side_effect=lambda op,d:source_update_battery.prepare(op,d,{},lambda:False))]:
+            mocker.start();self.addCleanup(mocker.stop)
+
+    def prepare_battery(self,operation,directory,harness,stopped):
+        if stopped():raise InterruptedError('fixture owner Stop')
+        signature=update_composition.signature(directory,operation)
+        self.verified[str(directory)]=signature;self.battery_order.append('prepare')
+        evidence=Path(directory)/'fixture-battery'/signature
+        put(evidence,'report.md','Synthetic coordinator-unit boundary, NOT product verification.\n'+signature)
+        return {'battery':{'root':str(evidence),'files':{'report.md':'report.md'}}}
+
+    def validate_battery(self,operation,directory):
+        self.battery_order.append('validate')
+        if self.verified.get(str(directory))!=update_composition.signature(directory,operation):
+            raise ValueError('No exact fixture battery for this composition')
+        return {'fixture_only':True}
 
     def preflight(self):
         return code_transition.preflight(self.old, self.new)
@@ -65,7 +108,13 @@ class PipelineTests(unittest.TestCase):
         return read(self.directory / 'pipeline.json')
 
     def tick(self, **kwargs):
-        pipeline.tick(self.tree, self.forge, self.service, **kwargs)
+        pipeline.tick(self.tree, self.forge, self.service, coordinator=self.coordinator,**kwargs)
+        # The fake executor settles immediately; exercise the same successive
+        # host ticks a separately running launcher now requires. Native producer
+        # custody/execution is tested by direct_update_consumer, not this mock.
+        for _ in range(2):
+            if self.operation().get('resolution_owner')=='agent' or self.operation()['state'] not in ('verification_requested','review_requested'):break
+            pipeline.tick(self.tree,self.forge,self.service,coordinator=self.coordinator,**kwargs)
         return self.operation()
 
     def merge_result(self, content=BOTH, *, complete=True, forged=None):
@@ -88,7 +137,7 @@ class PipelineTests(unittest.TestCase):
         record = self.service.status(self.operation()['review_id'])
         for critic in record['critics']:
             unit = self.forge._unit_dir(record['task_id'], 'agents', critic['unit_id'])
-            finding = [{'path': 'resolved/module.py', 'scenario': 'overlapping edits', 'detail': 'preserve the second function'}]
+            finding = [{'path': 'resolved/core-0/module.py', 'scenario': 'overlapping edits', 'detail': 'preserve the second function'}]
             result = {'subject_sha256': record['subject_sha256'], 'verdict': verdict,
                       'summary': 'source-only fake reviewer', 'findings': finding if verdict == 'findings' else [], 'gaps': []}
             write(unit / 'result.json', {'status': 'done', 'complete': complete, 'snapshot_verified': True,
@@ -120,7 +169,7 @@ class PipelineTests(unittest.TestCase):
         self.merge_result(BOTH)
         second = self.tick()
         self.assertNotEqual(first_subject, second['subject_sha256'])
-        self.assertIn('source-update:' + self.request['id'] + ':' + second['candidate_sha256'],
+        self.assertIn('source-update:' + self.request['id'] + ':' + second['composition_sha256'],
                       self.service.status(second['review_id'])['operations'])
         self.review_result('clear')
         self.assertEqual(self.tick()['state'], 'ready_to_apply')
@@ -154,6 +203,40 @@ class PipelineTests(unittest.TestCase):
         self.review_result('clear')
         self.assertEqual(self.tick()['state'], 'ready_to_apply')
 
+    def test_automatic_merge_runs_battery_before_validating_or_starting_panel(self):
+        self.tick();self.merge_result()
+        original=self.service.request
+        def review(**kwargs):
+            self.assertEqual(self.battery_order,['prepare','validate','prepare','validate'])
+            return original(**kwargs)
+        with mock.patch.object(self.service,'request',side_effect=review):
+            self.assertEqual(self.tick()['state'],'reviewing')
+
+    def test_invalid_battery_evidence_never_admits_reviewers(self):
+        self.tick();self.merge_result()
+        with mock.patch.object(source_update_battery,'validate',side_effect=ValueError('fixture changed evidence')),\
+             mock.patch.object(self.service,'request') as request:
+            operation=self.tick()
+        self.assertEqual(operation['state'],'needs_attention')
+        self.assertIn('changed evidence',operation['error']);request.assert_not_called()
+
+    def test_failed_tests_reach_panel_and_clear_review_is_still_required(self):
+        self.tick();self.merge_result()
+        with mock.patch.object(source_update_battery,'validate',return_value={
+                'review_evidence_complete':True,'full_pass':False,'test_diagnostic':'obsolete assertion'}),\
+             mock.patch.object(source_update_battery,'failure_feedback',side_effect=AssertionError('no automatic repair before review')):
+            operation=self.tick()
+            self.assertEqual(operation['state'],'reviewing')
+            with self.assertRaises(ValueError):pipeline.validate_ready(self.directory)
+            record=self.service.status(operation['review_id'])
+            self.assertIn('battery',record['sources'])
+            subject=read(Path(record['snapshot'])/'subject.json')
+            self.assertTrue(any('Strong intentional mutations' in value for value in subject['criteria']))
+            self.review_result('clear')
+            self.assertEqual(self.tick()['state'],'ready_to_apply')
+            pipeline.validate_ready(self.directory)
+        self.assertEqual((self.code/'module.py').read_text(),LOCAL)
+
     def test_no_ordinary_agent_turn_and_no_manual_bypass(self):
         callback = mock.Mock(side_effect=AssertionError('must not wake ordinary Jarvis'))
         pipeline.notify_due(self.tree, callback)
@@ -167,6 +250,66 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             merge.apply(self.directory, target)
         self.assertEqual((target / 'module.py').read_text(), LOCAL)
+
+    def selected_automatic_candidate(self):
+        # Native pinned dependency provisioning is a separate external boundary,
+        # like the full battery mocked by this coordinator-only fixture.
+        dependencies=mock.patch.object(pipeline,'_verification_dependencies',return_value=None)
+        dependencies.start();self.addCleanup(dependencies.stop)
+        from localharness import agent_source_update as selected
+        operation=self.operation()
+        operation.update(state='waiting_agent',resolution_owner='agent',continuation=pipeline.AUTOMATIC)
+        write(self.directory/'pipeline.json',operation)
+        request=read(pipeline.path(self.tree));request.update(state='waiting_agent',resolution_owner='agent')
+        pipeline._save_request(self.tree,request)
+        write(selected.marker(self.directory),{'format':'helene-agent-resolution.v1',
+            'input_sha256':operation['input_sha256'],'source':str(self.code.resolve()),
+            'owner_update_requested':True,'continuation':pipeline.AUTOMATIC})
+        for name in merge.validate_inputs(self.directory)['conflicts']:
+            selected.command(self.tree,'resolve',path=name,content=BOTH,
+                expected_candidate_sha256=merge.candidate_signature(self.directory))
+        return selected
+
+    def test_selected_finish_automatically_verifies_reviews_and_reaches_apply_gate(self):
+        selected=self.selected_automatic_candidate()
+        result=selected.command(self.tree,'finish')
+        self.assertEqual(result['state'],'verification_requested')
+        self.assertEqual(self.tick()['state'],'review_requested')
+        self.assertEqual(self.tick()['state'],'reviewing')
+        self.review_result('clear')
+        self.assertEqual(self.tick()['state'],'ready_to_apply')
+        pipeline.validate_ready(self.directory)
+        self.assertEqual((self.code/'module.py').read_text(),LOCAL)
+
+    def test_selected_automatic_invalid_evidence_stops_before_review_or_apply(self):
+        selected=self.selected_automatic_candidate();selected.command(self.tree,'finish')
+        with mock.patch.object(source_update_battery,'validate',side_effect=ValueError('changed receipt')) ,\
+             mock.patch.object(self.service,'request') as request:
+            result=self.tick()
+        self.assertEqual(result['state'],'waiting_agent');self.assertIn('changed receipt',result['verification_error'])
+        request.assert_not_called();self.assertNotIn('finish_intent',result)
+        self.assertEqual(self.tick()['state'],'waiting_agent')
+        self.assertEqual((self.code/'module.py').read_text(),LOCAL)
+
+    def test_selected_automatic_failed_tests_reach_review_and_findings_reopen_candidate(self):
+        selected=self.selected_automatic_candidate();selected.command(self.tree,'finish')
+        with mock.patch.object(source_update_battery,'validate',return_value={
+                'review_evidence_complete':True,'full_pass':False,'test_diagnostic':'test failure'}):
+            self.assertEqual(self.tick()['state'],'review_requested')
+            self.assertEqual(self.tick()['state'],'reviewing')
+            self.review_result('findings')
+            self.assertEqual(self.tick()['state'],'waiting_agent')
+            with self.assertRaises(ValueError):pipeline.validate_ready(self.directory)
+        self.assertEqual((self.code/'module.py').read_text(),LOCAL)
+
+    def test_selected_finish_intent_recovers_without_another_model_turn(self):
+        self.selected_automatic_candidate()
+        operation=self.operation();operation['finish_intent']={'input_sha256':operation['input_sha256'],
+            'candidate_sha256':merge.candidate_signature(self.directory)}
+        write(self.directory/'pipeline.json',operation)
+        self.assertEqual(self.tick()['state'],'verification_requested')
+        self.assertEqual(merge.validate_inputs(self.directory)['state'],'ready')
+        self.assertNotIn('finish_intent',self.operation())
 
     def test_old_forge_is_explicit_attention_no_generic_worker(self):
         self.forge.SOURCE_UPDATE_API = 0
@@ -283,17 +426,31 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pipeline.validate_ready(self.directory)['state'], 'ready_to_apply')
 
     def test_attempt_budget_exhaustion_is_not_review_override(self):
+        limit=3
+        operation=self.operation();operation['max_attempts']=limit
+        write(self.directory/'pipeline.json',operation)
         self.tick()
-        for index in range(pipeline.MAX_ATTEMPTS):
+        for index in range(limit):
             self.merge_result(BOTH + '\ncorrection = ' + str(index) + '\n')
             self.tick()
             self.review_result('findings')
             self.tick()
-            if index < pipeline.MAX_ATTEMPTS - 1:
+            if index < limit - 1:
                 self.tick()
         self.assertEqual(self.operation()['state'], 'needs_attention')
         self.assertIn('budget exhausted', self.operation()['error'])
-        self.assertEqual(len(self.operation()['attempts']), pipeline.MAX_ATTEMPTS)
+        self.assertEqual(len(self.operation()['attempts']), limit)
+
+    def test_new_update_has_no_implicit_attempt_or_worker_step_ceiling(self):
+        self.assertEqual(self.operation()['max_attempts'],0)
+        self.tick()
+        for index in range(4):
+            request=self.merge_result(BOTH+'\ncorrection = '+str(index)+'\n')
+            self.assertEqual(request['max_iters'],0)
+            self.tick();self.review_result('findings');self.tick();self.tick()
+            self.assertEqual(self.operation()['state'],'merging')
+        self.assertEqual(len(self.operation()['attempts']),5)
+        self.assertFalse(self.operation().get('review_clear'))
 
     def test_merger_can_never_modify_a_nonconflict_path(self):
         self.tick()
@@ -314,20 +471,22 @@ class PipelineTests(unittest.TestCase):
         plan = read(self.directory / 'plan.json')
         for side in ('base', 'local', 'incoming'):
             plan['files'][side] = merge.inventory(self.directory / side)
+        shutil.copytree(self.directory/'local',self.code,dirs_exist_ok=True)
         plan['result'] = merge.inventory(self.directory / 'result')
         plan['result'].pop('module.py')
         (self.directory / 'result/module.py').unlink()
+        write(self.directory/'plan.json',plan)
         sources = pipeline._materials(self.directory, plan)
         row = self.service.request(trigger='contested_overlay', sources=sources,
-                                   overlay={'conflicts': ['module.py']}, operation_id='absence-fixture')
+                                   overlay={'conflicts': ['core-0/module.py']}, operation_id='absence-fixture')
         subject = self_review.validate_snapshot(row['snapshot'], row['subject_sha256'])
         self.assertFalse(subject['gaps'])
-        entry = next(entry for entry in subject['manifest'] if entry['path'] == 'resolved/module.py')
+        entry = next(entry for entry in subject['manifest'] if entry['path'] == 'resolved/core-0/module.py')
         self.assertIs(entry['exists'], False)
-        self.assertIn('mode', next(entry for entry in subject['manifest'] if entry['path'] == 'mine/options.json'))
+        self.assertIn('mode', next(entry for entry in subject['manifest'] if entry['path'] == 'mine/core-0/options.json'))
         from localharness.self_review_worker import SnapshotReviewer
         critic = SnapshotReviewer({'root': row['snapshot'], 'subject_sha256': row['subject_sha256']})
-        self.assertIs(json.loads(critic.dispatch({}, 'inspect', {'action': 'read', 'path': 'resolved/module.py'}))['exists'], False)
+        self.assertIs(json.loads(critic.dispatch({}, 'inspect', {'action': 'read', 'path': 'resolved/core-0/module.py'}))['exists'], False)
 
     def test_binary_and_private_material_gaps_cannot_be_clear(self):
         for side in ('base', 'local', 'incoming', 'result'):
@@ -336,13 +495,15 @@ class PipelineTests(unittest.TestCase):
         plan = read(self.directory / 'plan.json')
         for side in ('base', 'local', 'incoming'):
             plan['files'][side] = merge.inventory(self.directory / side)
+        shutil.copytree(self.directory/'local',self.code,dirs_exist_ok=True)
         plan['result'] = merge.inventory(self.directory / 'result')
+        write(self.directory/'plan.json',plan)
         row = self.service.request(trigger='contested_overlay', sources=pipeline._materials(self.directory, plan),
-                                   overlay={'conflicts': ['module.py']})
+                                   overlay={'conflicts': ['core-0/module.py']})
         subject = self_review.validate_snapshot(row['snapshot'], row['subject_sha256'])
         self.assertEqual(len(subject['gaps']), 8)
-        self.assertFalse((Path(row['snapshot']) / 'mine/AGENTS.md').exists())
-        self.assertFalse((Path(row['snapshot']) / 'mine/asset.bin').exists())
+        self.assertFalse((Path(row['snapshot']) / 'mine/core-0/AGENTS.md').exists())
+        self.assertFalse((Path(row['snapshot']) / 'mine/core-0/asset.bin').exists())
 
     def test_all_frozen_sides_and_live_local_and_candidate_are_freshness_authority(self):
         ready = self.ready()

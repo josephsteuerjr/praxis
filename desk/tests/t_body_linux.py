@@ -38,6 +38,10 @@ import unittest
 import zlib
 from pathlib import Path
 
+HELENE_TEST_NATIVE_INPUTS = ('HELENE_BODY_DIR', 'HELENE_BODY_BIN', 'DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR')
+
+HELENE_TEST_ISOLATION = 'quiescent'  # Real focus/clipboard/input share the private X11 desktop.
+
 LINUX = sys.platform.startswith("linux")
 BODY = os.environ.get("HELENE_BODY_BIN", "").strip()
 WITNESSES = ("xdotool", "xprop", "zenity", "xsetroot", "xclip")

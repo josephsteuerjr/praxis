@@ -49,6 +49,7 @@ class RunnerRollback(unittest.IsolatedAsyncioTestCase):
         }
         self.policy.write_text(json.dumps(self.policy_doc), encoding="utf-8")
         self.env = {
+            "PRAXIS_ABSTRACTDL_ROOT_CHAT_ID": ROOT,
             "PRAXIS_KEAT_CAPTURE": "on",
             "PRAXIS_KEAT_CAPTURE_POLICY": str(self.policy),
             "PRAXIS_KEAT_ROOT": self.tmp.name,

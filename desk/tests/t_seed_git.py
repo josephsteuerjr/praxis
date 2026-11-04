@@ -87,6 +87,18 @@ class SeedGit(unittest.TestCase):
         status = git(self.tmp, "status", "--porcelain")
         self.assertIn("soul/skills/wanting.md", status)
 
+    def test_first_snapshot_succeeds_while_the_desktop_owner_lock_is_held(self) -> None:
+        from localharness.phone_tunnel.platform_support import acquire_file_lock,release_file_lock
+        candidate=self.tmp/'new-agent';candidate.mkdir()
+        (candidate/'authored.md').write_text('private fixture source\n',encoding='utf8')
+        held=acquire_file_lock(candidate/'.desktop-owner.lock',timeout_sec=0)
+        try:
+            self.assertTrue(boot.seed_git(candidate,CFG))
+            tracked=set(git(candidate,'ls-files').splitlines())
+            self.assertIn('authored.md',tracked)
+            self.assertNotIn('.desktop-owner.lock',tracked)
+        finally:release_file_lock(held)
+
 
 class IgnoreTopUp(unittest.TestCase):
     """`.gitignore` пишется ОДИН раз, а список растёт — старый дом надо лечить.

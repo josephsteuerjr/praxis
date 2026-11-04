@@ -9,6 +9,13 @@ def background_flags():
     return (0x00000200 | 0x08000000) if os.name == 'nt' else 0
 
 
+def permanent_environment():
+    """A one-time migration runtime must not become the next update's default."""
+    result=dict(os.environ)
+    result.pop('HELENE_SOURCE_UPDATE_RUNTIME',None)
+    return result
+
+
 def interpreter_for(root):
     root = Path(root)
     if os.name != 'nt':

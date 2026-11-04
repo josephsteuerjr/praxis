@@ -20,9 +20,11 @@ Telegram, поднятые рычаги), и локальный харнесс �
 from __future__ import annotations
 
 import atexit
+from contextlib import contextmanager
 import hashlib
 import json
 import logging
+import math
 import os
 import sys
 import platform
@@ -150,6 +152,30 @@ def _names(text: str, cfg: dict) -> str:
     """Подстановка имён — одна на конституцию и на весь стартовый комплект."""
     return text.replace("{{agent}}", agent_name(cfg)).replace("{{owner}}",
                                                               owner_name(cfg))
+
+
+def initial_soul_seed(config_path: Path, tree: Path) -> str | None:
+    """Profile birth choice survives code updates before the first model login.
+
+    Existing secondary-agent seeds keep their legacy location and behaviour.
+    An unreadable explicit profile choice must never silently become canonical.
+    """
+    seed=tree/'memory/.state/soul-seed.md'
+    if seed.exists() or seed.is_symlink():
+        try:
+            text=read_config_text(seed)
+            if not text.strip():raise ValueError('пустой текст')
+            return text
+        except (OSError,ValueError) as error:
+            if (tree/'soul/SOUL.md').is_file():
+                log.warning('запись рождения не читается (%s); существующая конституция сохранена: %s',seed,error)
+                return None
+            raise LayoutError(f'Не удалось прочитать выбранную конституцию ({seed}): {error}') from error
+    seed=config_path.with_name('soul-seed.md')
+    try:return read_config_text(seed) if seed.is_file() else None
+    except (OSError,ValueError) as error:
+        log.warning('сид души не читается (%s): родится каноническая конституция — %s',seed,error)
+        return None
 
 
 def soul_text(cfg: dict) -> str:
@@ -473,6 +499,9 @@ memory/
 relay/
 telegram/
 body/
+.desktop-owner.lock
+.python-desktop-status
+.python-desktop-status.*.tmp
 # Модели голоса: полтора гигабайта снаряжения машины. В снимках правок агента им
 # не место — и попади они туда, личный репозиторий распух бы до неподъёмного.
 models/
@@ -493,7 +522,8 @@ __pycache__/
 #: Проверяются и в СУЩЕСТВУЮЩЕМ файле: он пишется один раз при заведении
 #: репозитория, а список с тех пор пополнялся — и у того, кто поставил продукт
 #: раньше, в снимки уехали бы гигабайты моделей голоса (снимок делает `add -A`).
-_IGNORE_MUST = ("memory/", "relay/", "telegram/", "body/", "models/",
+_IGNORE_MUST = ("memory/", "relay/", "telegram/", "body/", "models/", ".desktop-owner.lock",
+                ".python-desktop-status", ".python-desktop-status.*.tmp",
                 "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/")
 
 
@@ -604,7 +634,8 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     на память и ключи, автор — сам агент, первый снимок — дом в день ноль.
     Слово владельца 06.09: «git как в Уроборосе, из коробки, личный для агента».
 
-    Идемпотентно: живой `.git` не трогаем. Без git (ни поставки, ни системы) —
+    Живой `.git` не пересоздаём: обновляем игнор и снимаем из индекса только
+    производные замок/статус процесса. Без git (ни поставки, ни системы) —
     честное предупреждение в лог, кадру об этом скажет `runner._announce_git`.
     Полурепозиторий (init прошёл, снимок нет) сносится, чтобы следующий старт
     попробовал заново, а не жил с HEAD без коммита, на котором safety_point
@@ -612,8 +643,7 @@ def seed_git(tree: Path, cfg: dict) -> bool:
     """
     import shutil
     import subprocess
-    if (tree / ".git").exists():
-        return False
+    existing = (tree / ".git").exists()
     # Тот же ответ, что у `arm_git`: заглушка Apple без Command Line Tools —
     # это не git, и звать её отсюда значило бы открыть диалог посреди раскладки.
     if git_ready() is None:
@@ -626,6 +656,25 @@ def seed_git(tree: Path, cfg: dict) -> bool:
         return subprocess.run(["git", "-C", str(tree), *args], capture_output=True,
                               text=True, encoding="utf-8", errors="replace",
                               timeout=120, creationflags=flags)
+
+    if existing:
+        # Old homes may already track the exclusive runtime lock. Ignore rules
+        # do not untrack it. Remove only these derived index entries, never the
+        # working files, commits, authored source, or the live lock itself.
+        try:
+            ignore = tree / ".gitignore"
+            if not ignore.exists():
+                ignore.write_text(_GIT_IGNORE, encoding="utf-8", newline="\n")
+            else:
+                _top_up_ignore(ignore)
+            done = git("rm", "--cached", "--ignore-unmatch", "-f", "--",
+                       ".desktop-owner.lock", ".python-desktop-status")
+            if done.returncode:
+                log.warning("личный git: служебные файлы остались в индексе: %s",
+                            (done.stderr or done.stdout or "").strip()[:300])
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("личный git: проверка служебных файлов не завершена: %s", exc)
+        return False
 
     try:
         ignore = tree / ".gitignore"
@@ -893,6 +942,7 @@ def ensure_layout(tree: Path, cfg: dict | None = None, *, soul_seed: str | None 
 # пишет отдельный поток.
 _LOCK_FRESH_SEC = 180.0
 _LOCK: dict = {"path": None, "token": ""}
+_BIRTH_CUSTODY = threading.Lock()
 
 
 def tree_lock_path(tree: Path) -> Path:
@@ -942,6 +992,19 @@ def _lock_is_live(holder: dict) -> bool:
     """Владелец замка жив? Сомнение — в пользу ЖИВОГО: два агента хуже, чем один."""
     if not holder:
         return False
+    if holder.get('role')=='explicit first-create':
+        # Component installation can outlast the legacy heartbeat TTL. This
+        # short-lived lease is tied to an actual process generation instead;
+        # an unknown or remote owner never becomes permission to take it.
+        import psutil
+        if holder.get('host')!=platform.node():return True
+        try:
+            pid=holder.get('pid');birth=holder.get('birth')
+            if type(pid) is not int or pid<=0 or type(birth) not in (int,float) or not math.isfinite(birth) or birth<=0:return True
+            process=psutil.Process(pid)
+            return process.create_time()==birth and process.status()!=psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:return False
+        except (psutil.Error,OSError,ValueError,OverflowError):return True
     try:
         pid = int(holder.get("pid") or 0)
         at = float(holder.get("at") or 0.0)
@@ -972,7 +1035,7 @@ def _lock_is_live(holder: dict) -> bool:
     return True
 
 
-def claim_tree(tree: Path, *, agent: str = "", role: str = "") -> dict:
+def claim_tree(tree: Path, *, agent: str = "", role: str = "", reclaim_stale: bool = True) -> dict:
     """Забрать дерево себе. -> {} наш; иначе снимок ЖИВОГО владельца замка.
 
     ⚠ Замок по ПОРТУ (оболочка, служба) закрывает только случай «порт занят».
@@ -1001,6 +1064,11 @@ def claim_tree(tree: Path, *, agent: str = "", role: str = "") -> dict:
             handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             holder = _read_lock(path)
+            # A creator may have just reserved this name but not written its
+            # JSON yet. Unknown is not a dead process. Explicit first birth
+            # also never reclaims a pre-existing record, including stale ones.
+            if not holder or not reclaim_stale:
+                return holder or {"pid": 0, "state": "identity-unknown"}
             if _lock_is_live(holder):
                 return holder
             if attempt == 2:
@@ -1055,6 +1123,28 @@ def release_tree() -> None:
             path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+@contextmanager
+def birth_custody(tree: Path):
+    """First Create must own a real tree lock; legacy fail-open is insufficient."""
+    with _BIRTH_CUSTODY:
+        if _LOCK['path'] is not None:
+            raise LayoutError('Этот процесс уже владеет деревом; новое рождение не начато')
+        if os.path.lexists(tree_lock_path(tree)):
+            raise LayoutError('Есть прежняя запись владения данными; первое создание не удаляет чужие или неопределённые замки')
+        busy=claim_tree(tree,role='explicit first-create',reclaim_stale=False)
+        try:
+            path=tree_lock_path(tree);holder=_read_lock(path)
+            if (busy or _LOCK['path']!=path or not _LOCK['token']
+                    or holder.get('token')!=_LOCK['token'] or holder.get('pid')!=os.getpid()):
+                raise LayoutError('Не подтверждено исключительное владение данными; первое создание не начато')
+            import psutil
+            from .vision_policy import _document, _write
+            holder['birth']=psutil.Process(os.getpid()).create_time()
+            _write(path,_document(holder),private=True)
+            yield
+        finally:release_tree()
 
 
 # --------------------------------------------------------------------------- #

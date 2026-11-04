@@ -87,6 +87,38 @@ class Files(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'incoming file changed'):update_overlay.apply(self.new,self.old,self.recovery)
         self.assertEqual((self.old/'file').read_bytes(),b'OLD!')
 
+    def test_incoming_change_counter_drift_rehashes_identical_bytes_without_rebinding_receipt(self):
+        source=put(self.new,'file',b'NEW!');put(self.old,'file',b'OLD!')
+        counter=[1];change_time=update_io._change_time
+        with patch.object(update_io,'_change_time',side_effect=lambda p:counter[0] if Path(p)==source else change_time(p)):
+            prepared=update_overlay.prepare(self.new,self.old,self.recovery)
+            counter[0]=2
+            with patch.object(update_io,'measured_digest',wraps=update_io.measured_digest) as digest:
+                update_overlay.validate(self.new,self.old,self.recovery)
+            self.assertTrue(any(call.args[0]==source for call in digest.call_args_list))
+            self.assertEqual(json.loads((self.recovery/'prepared-overlay.json').read_text())['inventory'],prepared['inventory'])
+            update_overlay.apply(self.new,self.old,self.recovery)
+        self.assertEqual((self.old/'file').read_bytes(),b'NEW!')
+
+    @unittest.skipUnless(os.name=='nt','native NTFS metadata and filter drift')
+    def test_native_incoming_attribute_change_preserves_exact_content_validation(self):
+        import ctypes
+        source=put(self.new,'file',b'NEW!');put(self.old,'file',b'OLD!')
+        prepared=update_overlay.prepare(self.new,self.old,self.recovery)
+        attributes=source.stat().st_file_attributes
+        self.assertTrue(ctypes.windll.kernel32.SetFileAttributesW(str(source),attributes ^ 2))
+        current=update_io.stamp(source)
+        self.assertNotEqual(current['change_time'],prepared['inventory']['file']['incoming']['stat']['change_time'])
+        with patch.object(update_io,'measured_digest',wraps=update_io.measured_digest) as digest:
+            update_overlay.validate(self.new,self.old,self.recovery)
+        self.assertTrue(any(call.args[0]==source for call in digest.call_args_list))
+        before=source.stat()
+        with source.open('r+b') as stream:stream.write(b'EVIL')
+        os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns))
+        with self.assertRaisesRegex(ValueError,'incoming file changed'):
+            update_overlay.apply(self.new,self.old,self.recovery)
+        self.assertEqual((self.old/'file').read_bytes(),b'OLD!')
+
     def test_late_program_edit_after_preparation_is_not_restored_over(self):
         put(self.new,'file',b'NEW!');dest=put(self.old,'file',b'OLD!')
         update_overlay.prepare(self.new,self.old,self.recovery)
@@ -150,6 +182,8 @@ class Profile(unittest.TestCase):
         put(old,'helene.json',json.dumps({'tree':str(data),'code':str(code),'setup_complete':True}).encode())
         put(old,'python-app.json',b'{"version":"2.1.1","delivery":"portable"}')
         put(new,'python-app.json',b'{"version":"2.2.0","delivery":"portable"}')
+        from localharness.code_transition import seal
+        seal(new)
         return old,new,code,data
 
     def test_backup_is_configs_only_and_manual_essential_inventory_unchanged(self):
@@ -173,7 +207,10 @@ class Profile(unittest.TestCase):
                 # Fake .git isn't a repository; source preservation is not under
                 # test for this one metadata-only selection case.
                 if kind=='git':
-                    before=update_profile.selection(old);put(code,'.git/HEAD',b'ref: refs/heads/late\n')
+                    before=update_profile.selection(old)
+                    # Git publishes refs through lock-file replacement. Exercise
+                    # that identity change, independent of timestamp tick size.
+                    put(code,'.git/HEAD.lock',b'ref: refs/heads/late\n').replace(code/'.git/HEAD')
                     self.assertNotEqual(before,update_profile.selection(old));continue
                 updater.prepare_install(old,new)
                 before=(old/'python-app.json').read_bytes()
@@ -202,6 +239,7 @@ class Profile(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);old,new,code,data=self.fixture(root)
             before=(old/'helene.json').read_bytes()
+            updater.active_update(old).parent.mkdir(parents=True,exist_ok=True)
             updater.active_update(old).write_text('{"interrupted":true}')
             with patch.object(updater,'recover_interrupted',side_effect=AssertionError('must wait for startup')):
                 with self.assertRaisesRegex(RuntimeError,'startup recovery'):updater.prepare_install(old,new)

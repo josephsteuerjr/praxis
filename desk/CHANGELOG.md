@@ -1,30 +1,38 @@
-# 2.2.17
+# 2.3.0
 
-Fix the legacy update admission deadline and release the old runner startup lock during source preparation. See [release notes](docs/RELEASE-2.2.17.md).
+The desktop and right panel use the reviewed Praxis-style layout, with calmer
+onboarding and stable navigation/polling. Remote settings can use a server's
+Fish speech API: catalogue, explicit voice/model selection, separate words and
+delivery instructions, paid preview and honest cancellation/unknown outcomes.
+The server owns its credentials and voice selection; older servers hide the
+unsupported card. This does not install or enable a server speech backend.
 
-# 2.2.16
+Preserved updates now apply validated app composition before removing obsolete
+program files, retain executable modes, and exclude browser state from deletion.
+POSIX test launchers own their nested producers through native guardians;
+publishers receive their own selected tree instead of inheriting another lease.
+Browser acceptance tools remain runnable under `desk/app/acceptance`; the
+offline update battery no longer starts the long-running audit server.
 
-Exclude locked setup browser caches and provide the new update hand to the existing Python agent. See [release notes](docs/RELEASE-2.2.16.md).
+Portable Python desktop archives for Windows x64, Apple silicon, Debian/Ubuntu
+and Fedora x86_64. Durable updates remain owned by the host when the observing
+window closes. Preserved source uses conflict resolution, checks and independent
+review; clean mode selects verified release code while retaining the profile.
 
-# 2.2.15
+New agents can use the Hélène constitution or editable custom text/file. The
+explicit Create action materializes the first SOUL before provider sign-in,
+preserves existing agents, and refuses ambiguous rebirth after lost data.
+The window explains automatic reopening before an update closes it. Cancellation
+settles only the identified operation after its producers are confirmed absent.
 
-Route conflicts to the selected agent, add result diffs and explicit clean-code fallback for legacy agent tools. See [release notes](docs/RELEASE-2.2.15.md).
+Native runtime/tool identities and source/package inventories are independently
+bound. Optional voice payloads retain their existing immutable release pins.
+Full historical broad-test and physical-device acceptance remain separate from
+the platform evidence supplied with the release.
 
-# 2.2.14
+# 2.3.0-rc.4
 
-Fix equivalent Windows destination paths being rejected while copying into a new installation folder. See [release notes](docs/RELEASE-2.2.14.md).
-
-# 2.2.13
-
-Fix active runner startup and migration heartbeat confirmation; clarify update-wizard wording. See [release notes](docs/RELEASE-2.2.13.md).
-
-# 2.2.12
-
-Resume premature merge-agent completion, recover interrupted clean-code preparation, and show accurate setup stages. See [release notes](docs/RELEASE-2.2.12.md).
-
-# 2.2.11
-
-Unified setup, incoming-panel migration, direct data attachment, source recovery and deterministic cold desktop startup. See [release notes](docs/RELEASE-2.2.11.md).
+Keep an incoming Python window available during legacy handoff. Confirm the cold runner's exact PID, source and heartbeat with cancellable startup waiting. Failed bootstrap releases its own workers and profile lease before allowing the legacy launcher to reopen. The migration window can explicitly stop RC3's identified failed heartbeat handoff without replaying or applying its saved work. Update review and apply gates remain in force.
 
 # 2.2.9
 

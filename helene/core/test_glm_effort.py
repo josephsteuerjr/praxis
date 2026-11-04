@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import time
 import textwrap
 import unittest
 
@@ -64,6 +66,8 @@ class GlmEffortWireTests(unittest.TestCase):
                 import importlib
                 httpx = importlib.import_module(anthropic.DefaultHttpxClient.__mro__[1].__module__.split('.')[0])
                 import llm
+                from pathlib import Path
+                Path(sys.argv[2]).write_text("ready", encoding="utf8")
 
                 self = TestCase()
                 message = {"id": "msg_test", "type": "message", "role": "assistant",
@@ -99,13 +103,30 @@ class GlmEffortWireTests(unittest.TestCase):
                         self.assertNotIn("extra_body", bodies[0])
             print("wire-create-and-stream-ok")
         ''')
-        result = subprocess.run(
-            [sys.executable, "-I", "-c", script, str(Path(__file__).resolve().parent)],
-            capture_output=True, text=True, timeout=30,
-            cwd=Path(__file__).resolve().parent,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.strip(), "wire-create-and-stream-ok")
+        # Cold interpreter/SDK imports compete with the other full-gate workers.
+        # Give bootstrap its own bounded deadline; keep the wire check at 30s.
+        with tempfile.TemporaryDirectory(prefix="glm-wire-ready-") as temporary:
+            ready = Path(temporary) / "ready"
+            process = subprocess.Popen(
+                [sys.executable, "-I", "-B", "-c", script,
+                 str(Path(__file__).resolve().parent), str(ready)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                cwd=Path(__file__).resolve().parent,
+            )
+            try:
+                deadline = time.monotonic() + 120
+                while not ready.is_file() and process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        self.fail("SDK child did not finish imports within 120s")
+                    time.sleep(.02)
+                stdout, stderr = process.communicate(timeout=30)
+                self.assertEqual(process.returncode, 0, stdout + stderr)
+                self.assertTrue(ready.is_file(), "SDK child never acknowledged imports")
+                self.assertEqual(stdout.strip(), "wire-create-and-stream-ok")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
 
 
 if __name__ == "__main__":

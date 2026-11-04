@@ -10,9 +10,11 @@ import contextlib
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -137,6 +139,130 @@ class WorkerDurability(unittest.TestCase):
         self.assertEqual(len(result['trace']), 1)
         self.assertIn('Unresolved: module.py', json.dumps(self.calls[1]['messages']))
 
+    def test_actual_dispatch_has_its_own_receipt_before_handler_execution(self):
+        test=self
+        class ObservedAdapter(Adapter):
+            def dispatch(self,request,name,args):
+                latest=list(test.runtime._events(test.request_path.parent))[-1]
+                test.assertEqual(latest['kind'],'tool_dispatch')
+                test.assertEqual(latest['receipt']['status'],'entered')
+                test.assertTrue(latest['receipt']['handler'].endswith('ObservedAdapter.dispatch'))
+                return super().dispatch(request,name,args)
+        self.responses=[self.response('inspect',1),self.response()]
+        self.assertEqual(self.run_worker(ObservedAdapter()),0)
+        events=[row['kind'] for row in self.runtime._events(self.request_path.parent) if row.get('call_id')=='call-1']
+        self.assertEqual(events,['tool_start','tool_dispatch','tool_result'])
+
+    def test_progress_sharing_refusal_does_not_abort_or_repeat_worker_tool(self):
+        replace = self.runtime.os.replace
+        refused = []
+        def transient(source, target):
+            if Path(target).name == 'progress.json' and not refused:
+                refused.append(str(source))
+                error = PermissionError('fixture: Windows reader')
+                error.winerror = 32
+                raise error
+            return replace(source, target)
+        adapter = Adapter()
+        adapter.dispatch = mock.Mock(wraps=adapter.dispatch)
+        self.responses = [self.response('inspect', 1), self.response()]
+        with mock.patch.object(self.runtime.os, 'replace', side_effect=transient):
+            self.assertEqual(self.run_worker(adapter), 0)
+        result = json.loads((self.request_path.parent / 'result.json').read_text())
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['status'], 'done')
+        self.assertEqual(len(refused), 1)
+        adapter.dispatch.assert_called_once()
+        self.assertEqual(len(result['trace']), 1)
+
+    def test_atomic_json_persistent_sharing_denial_preserves_old_record(self):
+        target = self.base / 'durable.json'
+        self.runtime.atomic_json(target, {'before': True})
+        error = PermissionError('fixture: permanent Windows denial')
+        error.winerror = 5
+        with mock.patch.object(self.runtime.os, 'replace', side_effect=error), \
+                mock.patch.object(self.runtime.time, 'monotonic', side_effect=[10, 13]), \
+                mock.patch.object(self.runtime.time, 'sleep') as wait:
+            with self.assertRaises(PermissionError):
+                self.runtime.atomic_json(target, {'after': True})
+        wait.assert_not_called()
+        self.assertEqual(json.loads(target.read_text()), {'before': True})
+        self.assertEqual(list(self.base.glob('durable.json.*.tmp')), [])
+
+    def test_atomic_json_unrelated_permission_error_is_not_retried(self):
+        target = self.base / 'denied.json'
+        error = PermissionError('fixture: unrelated permission error')
+        with mock.patch.object(self.runtime.os, 'replace', side_effect=error) as replace, \
+                mock.patch.object(self.runtime.time, 'sleep') as wait:
+            with self.assertRaises(PermissionError):
+                self.runtime.atomic_json(target, {'after': True})
+        replace.assert_called_once()
+        wait.assert_not_called()
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.base.glob('denied.json.*.tmp')), [])
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows FILE_SHARE_DELETE semantics')
+    def test_real_reader_release_does_not_abort_worker_progress(self):
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        target = self.request_path.parent / 'progress.json'
+        self.runtime.atomic_json(target, {'before': True})
+        handle = kernel.CreateFileW(str(target), 0x80000000, 3, None, 3, 0x80, None)
+        self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+        refused = threading.Event()
+        closed = []
+        def release():
+            refused.wait(5)
+            closed.append(bool(kernel.CloseHandle(handle)))
+        closer = threading.Thread(target=release)
+        closer.start()
+        replace = self.runtime.os.replace
+        observed = []
+        def tracked(source, destination):
+            try:
+                return replace(source, destination)
+            except PermissionError as error:
+                if Path(destination) == target:
+                    observed.append(error.winerror)
+                    refused.set()
+                raise
+        adapter = Adapter()
+        adapter.dispatch = mock.Mock(wraps=adapter.dispatch)
+        self.responses = [self.response('inspect', 1), self.response()]
+        try:
+            with mock.patch.object(self.runtime.os, 'replace', side_effect=tracked):
+                self.assertEqual(self.run_worker(adapter), 0)
+        finally:
+            refused.set()
+            closer.join(timeout=5)
+        self.assertEqual(closed, [True])
+        self.assertTrue(observed)
+        self.assertTrue(all(code in (5, 32, 33) for code in observed))
+        result = json.loads((self.request_path.parent / 'result.json').read_text())
+        self.assertEqual(result['status'], 'done')
+        self.assertTrue(result['complete'])
+        adapter.dispatch.assert_called_once()
+
+    def test_dispatch_journal_failure_cannot_be_relabelled_as_a_completed_tool(self):
+        adapter=Adapter();adapter.dispatch=mock.Mock(return_value='effect must not execute')
+        original=self.runtime.Journal.event
+        def append(journal,kind,**fields):
+            if kind=='tool_dispatch':raise OSError('synthetic append failure')
+            return original(journal,kind,**fields)
+        self.responses=[self.response('inspect',1),self.response()]
+        with mock.patch.object(self.runtime.Journal,'event',append):
+            self.assertNotEqual(self.run_worker(adapter),0)
+        adapter.dispatch.assert_not_called()
+        result=json.loads((self.request_path.parent/'result.json').read_text())
+        self.assertEqual(result['status'],'error');self.assertFalse(result.get('complete'))
+        self.assertEqual(json.loads((self.request_path.parent/'checkpoint.json').read_text())['next_boundary'],'tool_in_flight')
+
     def test_premature_final_never_resets_turn_budget(self):
         adapter = Adapter()
         adapter.completion_feedback = lambda request: 'Still unresolved'
@@ -148,6 +274,35 @@ class WorkerDurability(unittest.TestCase):
         self.assertFalse(result['complete'])
         self.assertEqual(result['iters_used'], 2)
         self.assertEqual(len(self.calls), 3)
+
+    def test_default_and_zero_run_beyond_legacy_ceiling_with_real_journal(self):
+        for name,limit in [('omitted',None),('zero',0)]:
+            with self.subTest(limit=limit):
+                path,request=self.make_request('unbounded-'+name)
+                if limit is None:request.pop('max_iters')
+                else:request['max_iters']=limit
+                self.runtime.atomic_json(path,request)
+                self.responses=[self.response('inspect',i) for i in range(45)]+[self.response()]
+                self.assertEqual(self.run_worker(Adapter(),path,request),0)
+                result=json.loads((path.parent/'result.json').read_text('utf-8'))
+                checkpoint=json.loads((path.parent/'checkpoint.json').read_text('utf-8'))
+                self.assertTrue(result['complete']);self.assertEqual(result['iters_used'],46)
+                self.assertEqual(checkpoint['max_iters'],0)
+                self.assertEqual(len(result['trace']),45)
+
+    def test_unbounded_worker_still_obeys_owner_stop_after_legacy_ceiling(self):
+        self.request['max_iters']=0
+        self.runtime.atomic_json(self.request_path,self.request)
+        adapter=Adapter();count=[0]
+        def dispatch(*args):
+            count[0]+=1
+            if count[0]==41:self.allowed=False
+            return 'completed fixture effect'
+        adapter.dispatch=dispatch
+        self.responses=[self.response('inspect',i) for i in range(45)]+[self.response()]
+        self.assertEqual(self.run_worker(adapter),2)
+        result=json.loads((self.request_path.parent/'result.json').read_text('utf-8'))
+        self.assertEqual(result['status'],'stopped');self.assertEqual(count[0],41)
 
     def test_older_llm_without_assistant_helper_runs_and_checkpoints(self):
         del self.worker.llm.assistant_message
@@ -190,7 +345,8 @@ class WorkerDurability(unittest.TestCase):
             cp = json.loads((self.request_path.parent / "checkpoint.json").read_text("utf-8"))
             self.assertEqual(cp["next_boundary"], "tool_in_flight")
             events = list(self.runtime._events(self.request_path.parent))
-            self.assertEqual(events[-1]["kind"], "tool_start")
+            self.assertEqual(events[-2]["kind"], "tool_start")
+            self.assertEqual(events[-1]["kind"], "tool_dispatch")
             self.assertEqual(json.loads(self.runtime.read_payload_full(
                 self.request_path.parent, events[-1]["input_ref"])), args)
             return "effect completed"
@@ -463,7 +619,8 @@ class WorkerDurability(unittest.TestCase):
         second.close()
 
     def test_actual_snapshot_reviewer_keyword_is_compatible(self):
-        app = ROOT / "desk" / "localharness"
+        source_root = os.environ.get('HELENE_TEST_SOURCE_ROOT')
+        app = (Path(source_root) if source_root else ROOT) / "desk" / "localharness"
         if not (app / "self_review.py").is_file():
             app = CORE.parent / "app" / "localharness"
         if not (app / "self_review.py").is_file():

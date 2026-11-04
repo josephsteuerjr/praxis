@@ -8,12 +8,53 @@ import { frameStripHTML, type RunDetail } from "../../steps";
 import { activityHTML, updateActivity } from "../../activity";
 import { S, foreignHarness, runIsRecent, type Run } from "../state";
 import { bindRuns, loadWords, runDetail, runRowHTML } from "../runlist";
+import { forgePanel } from './forge-panel';
+import { observeActivity } from '../work-activity';
+import './forge-panel.css';
+import './now-overview.css';
 
 let root: HTMLElement | null = null;
 let liveTimer = 0;
-let liveBusy = false;
+let liveFlight: object | undefined;
 let gen = 0;
 let focusedRun: Run | undefined;
+let showPrevious=false,currentOpen=true,currentId='',scope='';
+let agentDrawer: HTMLDetailsElement | undefined, agents: ReturnType<typeof forgePanel> | undefined;
+let agentsRunning = false, unobserveAgents: (() => void) | undefined;
+let pendingAgentsOpen = false;
+
+function stopAgents() {
+  unobserveAgents?.();unobserveAgents=undefined;
+  agents?.stop();agentsRunning=false;
+}
+
+/** The cached disclosure survives navigation, but its reads/listener do not. */
+function syncAgents() {
+  if (!root || S.view !== 'now' || !agentDrawer?.isConnected || !agentDrawer.open) {
+    stopAgents();return;
+  }
+  if (agentsRunning) return;
+  agentsRunning=true;agents?.start();
+  unobserveAgents=observeActivity(()=>cfg.base+'\n'+cfg.key+'\n'+cfg.agent,value=>agents?.setReviewers(value));
+}
+
+/** Same captured records as the action panel; no duplicated task or status store. */
+function mountAgents(container: HTMLElement) {
+  const slot=container.querySelector<HTMLElement>('[data-now-agents]');
+  if(!slot)return;
+  if(!agentDrawer){
+    agentDrawer=document.createElement('details');agentDrawer.className='now-agents';
+    const summary=document.createElement('summary');summary.textContent='☰ Субагенты';
+    const host=document.createElement('section');agentDrawer.append(summary,host);
+    agents=forgePanel(host,undefined,2500,{compact:true,controls:true});
+    agentDrawer.addEventListener('toggle',syncAgents);
+  }
+  slot.append(agentDrawer);
+  if (pendingAgentsOpen) { agentDrawer.open=true;pendingAgentsOpen=false; }
+  syncAgents();
+}
+
+export function dispose() { ++gen;clearTimeout(liveTimer);stopAgents();liveFlight=undefined;pendingAgentsOpen=false;root=null; }
 
 /** Идущий ход по любой комнате: сердцебиение руннера, а у чужого харнесса — свежий running-манифест. */
 export function liveRun(): Run | undefined {
@@ -43,7 +84,12 @@ function idleHTML(): string {
   return `<div class="now-idle"><span class="dot ${!foreignHarness() && s.level === "error" ? "failed" : "ok"}"></span><span>${esc(phrase)}${esc(wake)}</span></div>`;
 }
 
-export async function render(container: HTMLElement): Promise<void> {
+export async function render(container: HTMLElement, opts: {openAgents?: boolean} = {}): Promise<void> {
+  const identity=JSON.stringify([cfg.base,cfg.key,cfg.agent]);
+  if(scope!==identity){stopAgents();agents=undefined;agentDrawer=undefined;pendingAgentsOpen=false;scope=identity;showPrevious=false;currentOpen=true;currentId='';}
+  // A refresh may supersede this read before a drawer exists. Keep the explicit
+  // Overview intent until a winning render mounts it, but never across leave/scope.
+  if(opts.openAgents)pendingAgentsOpen=true;
   root = container;
   const my = ++gen;
   const live = liveRun();
@@ -77,15 +123,24 @@ export async function render(container: HTMLElement): Promise<void> {
     ? activityHTML(shown, liveDetail, live ? since(live) : fmtTime(shown.created_at))
     : idleHTML();
   const rest = list.filter((r) => r.id !== shown?.id);
+  if(currentId!==(shown?.id || '')){currentId=shown?.id || '';currentOpen=true;}
   container.innerHTML = `<div class="center now">
-    ${liveHTML}
     ${usageShell(true)}
-    ${frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа", '<a href="#" data-go="frame">Посмотреть кадр →</a>')}
-    <h3 class="section-title">Последние действия <span class="muted">${rest.length}</span></h3>
+    ${shown ? `<details class="now-current" ${currentOpen ? 'open' : ''}><summary>Текущий ход</summary>${liveHTML}</details>` : liveHTML}
+    <div data-now-agents></div>
+    <details class="now-context"><summary>Контекст ${live ? 'сейчас' : 'последнего ответа'}</summary>${frameStripHTML(strip, live ? "Контекст сейчас" : "Контекст последнего ответа", '<a href="#" data-go="frame">Посмотреть кадр →</a>')}</details>
+    <label class="now-history-toggle"><input type="checkbox" data-now-history ${showPrevious ? 'checked' : ''}> Предыдущие ходы <span class="muted">${rest.length}</span></label>
+    <section class="now-history" ${showPrevious ? '' : 'hidden'}>
     ${rest.map((r) => runRowHTML(r, { showRoom: true })).join("") || `<div class="empty"><b>Здесь появятся действия и результаты</b>
-      Свежая установка открывается этим экраном, и он пуст по-честному: агент ещё ничего не делал.
+      <p>Здесь будут завершённые ходы. Поручи агенту дело в чате или выбери идею в онбординге.</p>
       <button class="btn btn-quiet" type="button" data-go="learn">Что ему можно поручить →</button></div>`}
+    </section>
   </div>`;
+  const previous=container.querySelector<HTMLInputElement>('[data-now-history]');
+  previous?.addEventListener('change',()=>{showPrevious=previous.checked;const history=container.querySelector<HTMLElement>('.now-history');if(history)history.hidden=!showPrevious;});
+  const current=container.querySelector<HTMLDetailsElement>('.now-current');
+  current?.addEventListener('toggle',()=>{currentOpen=current.open;});
+  mountAgents(container);
   for (const a of container.querySelectorAll<HTMLElement>("[data-go]")) {
     a.addEventListener("click", (e) => {
       e.preventDefault();
@@ -105,17 +160,18 @@ function scheduleLive(on: boolean) {
 
 async function refreshLive() {
   if (S.view !== "now" || !root) return;
-  if (liveBusy) { scheduleLive(true); return; }
+  if (liveFlight) { scheduleLive(true); return; }
+  const my = gen, container = root;
   const live = liveRun();
   const card = root.querySelector<HTMLElement>("#turn-live");
   if (!live || !card || card.dataset.run !== live.id) {
     if (card || live) void render(root);
     return;
   }
-  liveBusy = true;
+  const flight = {};liveFlight = flight;
   try {
     const d = await runDetail(live.id, true);
-    if (!card.isConnected || liveRun()?.id !== live.id) return;
+    if (my !== gen || root !== container || !card.isConnected || liveRun()?.id !== live.id) return;
     const steps = card.querySelector<HTMLElement>("#turn-live-steps");
     const t = card.querySelector<HTMLElement>("#turn-live-t");
     if (t) t.textContent = since(live);
@@ -123,9 +179,9 @@ async function refreshLive() {
   } catch {
     // следующий такт перечитает
   } finally {
-    liveBusy = false;
+    if (liveFlight === flight) liveFlight = undefined;
   }
-  scheduleLive(true);
+  if (my === gen && root === container) scheduleLive(true);
 }
 
 /** Событие прогона или вызова модели — обновить экран, если он открыт. */
@@ -137,6 +193,14 @@ export function onEvent(kind: string) {
     clearTimeout(liveTimer);
     liveTimer = window.setTimeout(() => void refreshLive(), 300);
   }
+}
+
+/** A room read may recover after startup failed, without a new run event. */
+export function runsChanged(previous: Run[]) {
+  if (S.view !== "now" || !root) return;
+  const visible = (rows: Run[]) => JSON.stringify(rows.filter((r) => r.kind !== "wake").slice(0, 40));
+  // Identical idle polls must leave open details and scroll position alone.
+  if (visible(previous) !== visible(S.runs)) void render(root);
 }
 
 /** Состояние обновилось: ход начался или кончился. */

@@ -1,0 +1,120 @@
+"""Passive progress is scoped, honest about liveness, and never an apply gate."""
+from pathlib import Path
+import os,sys,tempfile,time,unittest
+from unittest.mock import patch
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+from localharness import source_update as pipeline,source_update_activity as activity,session_host,runtime_identity
+from localharness.package_notice import read,write
+
+
+class Projection(unittest.TestCase):
+    def _cancelled_with_real_reader(self,program):
+        operation=read(self.directory/'pipeline.json');operation['state']='cancelled'
+        write(self.directory/'pipeline.json',operation)
+        (program/'app/localharness').mkdir(parents=True,exist_ok=True);(program/'tree').mkdir(exist_ok=True)
+        (program/'tree/agent.py').write_text('private_fixture=True')
+        (program/'app/localharness/runner.py').write_text('private_fixture=True')
+        write(program/'python-app.json',{'version':'private-native-fixture'})
+        context=runtime_identity.capture(program,program/'tree')
+        write(self.tree/'memory/.control/desk_inbox/.reader.json',{'pid':os.getpid(),'code_context':context})
+        return context
+
+    def test_real_replacement_worker_does_not_show_the_former_cancelled_badge(self):
+        self._cancelled_with_real_reader(self.root/'replacement')
+        self.assertTrue(runtime_identity.current(self.tree)['available'])
+        self.assertIsNone(activity.activity(self.tree))
+
+    def test_same_programme_still_shows_its_own_cancelled_result(self):
+        self._cancelled_with_real_reader(self.program)
+        self.assertEqual(activity.activity(self.tree)['state'],'cancelled')
+
+    def test_unconfirmed_replacement_cannot_hide_the_older_result(self):
+        context=self._cancelled_with_real_reader(self.root/'replacement');context['birth']-=100
+        write(self.tree/'memory/.control/desk_inbox/.reader.json',{'pid':os.getpid(),'code_context':context})
+        self.assertFalse(runtime_identity.current(self.tree)['available'])
+        self.assertEqual(activity.activity(self.tree)['state'],'cancelled')
+
+    def test_superseded_old_work_never_leaves_a_cancelled_badge_on_the_new_programme(self):
+        from localharness import update_supersession as supersession
+        write(supersession.marker(self.tree,self.identity,'source'),{
+            'format':supersession.FORMAT,'identity':supersession._identity(self.operation,'source')})
+        with patch.object(pipeline,'locate',side_effect=AssertionError('Superseded work is not current UI activity')):
+            self.assertIsNone(activity.activity(self.tree))
+
+    def test_idle_correction_progress_is_visible_without_executing_the_pipeline(self):
+        operation=read(self.directory/'pipeline.json');operation['state']='waiting_agent'
+        write(self.directory/'pipeline.json',operation)
+        write(self.directory/'plan.json',{'conflicts':['one.py'],'resolved':{'one.py':{'side':'incoming'}}})
+        write(self.directory/'app-merge/plan.json',{'conflicts':['index.html','sw.js'],'resolved':{'index.html':{'side':'incoming'}}})
+        before={p:p.read_bytes() for p in self.root.rglob('*.json')}
+        with patch.object(pipeline.merge,'validate_inputs',side_effect=AssertionError('No hashing for UI')), \
+             patch.object(session_host,'process_state',return_value='alive'):
+            value=activity.activity(self.tree)
+        self.assertEqual(value['state'],'waiting_agent');self.assertFalse(value.get('review_id'))
+        self.assertEqual(value['editing'],{'completed':2,'total':3,'pending':['app/sw.js']})
+        self.assertEqual(before,{p:p.read_bytes() for p in self.root.rglob('*.json')})
+    def test_completed_parent_job_does_not_look_like_an_update_still_running(self):
+        from localharness import desktop_update_request as jobs
+        operation=read(self.directory/'pipeline.json')
+        operation['coordinator']={'job_control':{'id':'parent-job','tree':str(self.tree),'path':str(jobs.path(self.tree))}}
+        write(self.directory/'pipeline.json',operation)
+        write(jobs.path(self.tree),{'id':'parent-job','program':str(self.program),'state':'completed'})
+        value=activity.activity(self.tree);self.assertEqual(value['state'],'completed');self.assertEqual(value['role'],'none')
+        write(jobs.path(self.tree),{'id':'unrelated-job','program':str(self.program),'state':'completed'})
+        self.assertEqual(activity.activity(self.tree)['state'],'verification_requested')
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name);self.tree=self.root/'profile';self.program=self.root/'incoming';self.identity='a'*64
+        self.directory=self.program/'.source-updates'/self.identity
+        self.operation={'id':self.identity,'tree':str(self.tree),'program':str(self.program),'directory':str(self.directory),
+            'state':'verification_requested','input_sha256':'b'*64,'candidate_sha256':'c'*64,'composition_sha256':'d'*64,'version':'2.3.test'}
+        write(pipeline.path(self.tree),self.operation);write(self.directory/'pipeline.json',self.operation)
+        write(self.directory/'coordinator-process.json',{'pid':123,'birth':456})
+        write(self.directory/'test-battery/current.json',{'key':'e'*64,**{key:self.operation[key] for key in ('input_sha256','candidate_sha256','composition_sha256')}})
+        self.progress=self.directory/'test-battery'/('e'*64)/'progress.json'
+        write(self.progress,{'state':'running','updated_at':time.time(),'completed':3,'total':12,'tests_completed':74,
+            'active':[{'slot':0,'file':'test_real.py','phase':'running','started_at':time.time(),
+                       'current_test':'ActualCase.test_in_progress','tests_completed':2}]})
+
+    def test_projection_reads_receipts_without_hashing_or_mutating_inputs(self):
+        before={p:p.read_bytes() for p in self.root.rglob('*.json')}
+        with patch.object(pipeline.merge,'validate_inputs',side_effect=AssertionError('UI may not hash source')), \
+             patch.object(session_host,'process_state',return_value='alive'):
+            value=activity.activity(self.tree)
+        self.assertEqual(value['tests']['completed'],3);self.assertTrue(value['tests']['live'])
+        self.assertEqual(value['tests']['active'][0]['file'],'test_real.py')
+        self.assertEqual(value['tests']['active'][0]['current_test'],'ActualCase.test_in_progress')
+        self.assertEqual(value['tests']['active'][0]['tests_completed'],2)
+        self.assertEqual(before,{p:p.read_bytes() for p in self.root.rglob('*.json')})
+
+    def test_old_composition_and_path_traversal_cannot_select_other_results(self):
+        pointer=read(self.directory/'test-battery/current.json');pointer['composition_sha256']='f'*64
+        write(self.directory/'test-battery/current.json',pointer)
+        with patch.object(session_host,'process_state',return_value='alive'):
+            self.assertNotIn('tests',activity.activity(self.tree))
+        request=read(pipeline.path(self.tree));request['directory']=str(self.root/'foreign')
+        write(pipeline.path(self.tree),request)
+        with self.assertRaises(ValueError):activity.activity(self.tree)
+
+    def test_stale_or_dead_producer_is_never_displayed_as_live(self):
+        with patch.object(session_host,'process_state',return_value='absent'):
+            self.assertFalse(activity.activity(self.tree)['tests']['live'])
+        row=read(self.progress);row['updated_at']=time.time()-60;write(self.progress,row)
+        with patch.object(session_host,'process_state',return_value='alive'):
+            self.assertFalse(activity.activity(self.tree)['tests']['live'])
+
+    def test_runtime_context_retains_startup_version_when_disk_changes(self):
+        (self.program/'app/localharness').mkdir(parents=True);(self.program/'tree').mkdir()
+        (self.program/'tree/agent.py').write_text('old=True')
+        (self.program/'app/localharness/runner.py').write_text('runner=True')
+        write(self.program/'python-app.json',{'version':'old-loaded'})
+        context=runtime_identity.capture(self.program,self.program/'tree')
+        write(self.tree/'memory/.control/desk_inbox/.reader.json',{'pid':os.getpid(),'code_context':context})
+        write(self.program/'python-app.json',{'version':'new-on-disk'})
+        self.assertEqual(runtime_identity.current(self.tree)['version_at_start'],'old-loaded')
+        self.assertTrue(runtime_identity.current(self.tree)['available'])
+        context['birth']-=100;write(self.tree/'memory/.control/desk_inbox/.reader.json',{'pid':os.getpid(),'code_context':context})
+        self.assertFalse(runtime_identity.current(self.tree)['available'])
+
+
+if __name__=='__main__':unittest.main()

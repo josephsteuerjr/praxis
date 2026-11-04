@@ -18,6 +18,7 @@ import QRCode from "qrcode";
 import { el } from "../../ui-kit/window/lib";
 import { card } from "../../ui-kit/dom";
 import { serverAgentCard } from "./serveragent";
+import { serverSpeechCard } from "../../ui-kit/window/server-speech";
 import type { Config, Edition, EditionContext } from "../../ui-kit/window/views/settings-frame";
 
 /** Одна карточка вместо семи: где живёт агент и что остаётся здесь. */
@@ -41,7 +42,7 @@ export async function serverEdition({ draft, saved }: EditionContext): Promise<E
     // собственном конфиге на сервере (). Это не возвращение
     // карточек Элен: те правят файл рядом с окном через оболочку, которой здесь
     // нет вовсе.
-    cards: [card("Агент живёт на сервере", box), serverAgentCard().el],
+    cards: [card("Агент живёт на сервере", box), serverAgentCard().el, serverSpeechCard()],
     // Подпись у изданий разная: здесь имена — подписи ОКНА, а не агента.
     namesHint:
       "Это подписи ЭТОГО окна: как оно зовёт агента и тебя. Сам агент живёт на сервере и своих имён отсюда не узнает — " +

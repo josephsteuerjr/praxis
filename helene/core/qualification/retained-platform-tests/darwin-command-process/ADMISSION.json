@@ -1,0 +1,18 @@
+{
+  "runtime": {
+    "kind": "incoming-update-runtime.v1",
+    "program": "/Users/runner/work/_temp/final-output/Helene",
+    "review_store": "isolated-v1",
+    "test_battery": 1,
+    "verification_bundle_sha256": "bc517ebe0dd0eaf19608a540cf56588e557e212000b83c1246dd2de3bb9d779a",
+    "core_sha256": "99f798488cee049d781cbcdca19ada7943d8dcf32a4a0b739b83c9b4d3aa1aca",
+    "app_sha256": "b0208549e0baa224f1d9a7df447861f467dc233a7ec1187601f7a730d6d7bcb2"
+  },
+  "executor": {
+    "node": "/Users/runner/work/_temp/final-output/Helene/verification-tools/bin/node",
+    "npm": "/Users/runner/work/_temp/final-output/Helene/verification-tools/bin/npm",
+    "npm_config_cache": "/Users/runner/work/_temp/native-executor-probe/native-executor-cache/d0073a56b241ae3224f01c5fb64344880a094053b4a77470fc94e6d6e0da2ffe"
+  },
+  "offline_all4_npm_projects": true,
+  "source_commit": "94407f1f6b5ddc3593dc1335c81ccf7fa820004d"
+}

@@ -12,6 +12,22 @@ from localharness import app_migration
 
 
 class ControllerTests(unittest.TestCase):
+    def test_load_never_pairs_old_document_with_replacement_file_receipt(self):
+        import contextlib,os
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);path=root/'helene.json';path.write_text('{"tree":"data","agent":{"name":"old"}}',encoding='utf-8')
+            replacement=root/'replacement.json';replacement.write_text('{"tree":"data","agent":{"name":"new"}}',encoding='utf-8')
+            owner=Controller(root,lambda *args:None);agent=owner.current();original=Path.open;changed=[]
+            @contextlib.contextmanager
+            def changing(file,*args,**kwargs):
+                with original(file,*args,**kwargs) as stream:yield stream
+                mode=args[0] if args else kwargs.get('mode','r')
+                if file==path and 'r' in mode and not changed:
+                    changed.append(True);os.replace(replacement,path)
+            with patch.object(owner,'current',return_value=agent),patch.object(Path,'open',changing):
+                with self.assertRaisesRegex(ValueError,'изменился'):owner.invoke('config_load',{})
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['agent']['name'],'new')
+
     def test_saved_model_applies_after_relay_start_and_reports_unavailable(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);(root/'helene.json').write_text('{"tree":"data"}')

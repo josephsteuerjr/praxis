@@ -26,6 +26,102 @@ SCOPES = frozenset({"global", "chat", "run"})
 STATUSES = frozenset({"open", "closed"})
 _LOCAL_LOCK = threading.RLock()
 _NOTE_ID_RE = re.compile(r"^note-[A-Za-z0-9][A-Za-z0-9._:-]{0,91}$")
+_WORK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$")
+
+
+def work_reference(value: Any) -> str:
+    """Validate an explicit stable identity, never a chat's 'latest work'."""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    parts = value.split(":")
+    if (parts[0] not in {"forge", "run", "task"}
+            or len(parts) not in ({2, 3} if parts[0] == "forge" else {2})
+            or not all(_WORK_ID_RE.fullmatch(part) for part in parts[1:])):
+        raise ValueError("work_ref requires forge:<task>[:<unit>], run:<run> or task:<task>")
+    return value
+
+
+def note_audience(value: Any = "", *, chat_id: str = "") -> str:
+    """Legacy/missing means owner-private, not public/global permission."""
+    value = str(value or "owner").strip()
+    if value == "owner":
+        return value
+    if value.startswith("chat:") and chat_id and value == f"chat:{chat_id}":
+        return value
+    raise ValueError("audience must be owner or chat:<this exact chat_id>")
+
+
+def visible(row: dict[str, Any], *, owner: bool = False, chat_id: str = "",
+            audience: str = "") -> bool:
+    """Admission at the consumer, including after restart or audience revocation.
+
+    An explicit paired/public/unknown audience never inherits owner permission.
+    The caller supplies current authority; ledger scope/global is not a grant.
+    """
+    target = str(row.get("audience") or "owner")
+    if audience and audience not in {"owner", f"chat:{chat_id}"}:
+        return False
+    if target == "owner":
+        return bool(owner and audience in {"", "owner"})
+    if not target.startswith("chat:") or not str(row.get("chat_id") or ""):
+        return False
+    if target != f"chat:{row['chat_id']}":
+        return False
+    return bool((owner and audience in {"", "owner"}) or (
+        chat_id and target == f"chat:{chat_id}" and audience in {"", target}))
+
+
+def notice_work_reference(notice: dict[str, Any]) -> str:
+    """Resolve producer identities and reject contradictory explicit links."""
+    task = str(notice.get("task_id") or "")
+    unit = str(notice.get("unit_id") or notice.get("agent_id") or "")
+    run = str(notice.get("run_id") or "")
+    explicit = work_reference(notice.get("work_ref"))
+    if explicit:
+        parts = explicit.split(":")
+        if parts[0] in {"forge", "task"} and task and parts[1] != task:
+            return ""
+        if parts[0] == "forge" and len(parts) == 3 and unit and parts[2] != unit:
+            return ""
+        if parts[0] == "run" and run and parts[1] != run:
+            return ""
+        return explicit
+    if task and unit:
+        return work_reference(f"forge:{task}:{unit}")
+    if task:
+        return work_reference(f"forge:{task}")
+    return work_reference(f"run:{run}") if run else ""
+
+
+def for_notice(base: str | Path, notice: dict[str, Any], *, owner: bool = False,
+               chat_id: str = "", audience: str = "") -> str:
+    """Only an open authored note for this exact work AND original audience.
+
+    Notice storage contains identities, not copied note prose. Closing a note or
+    entering another audience therefore takes effect without rewriting history.
+    Technical result/log summaries are never substituted for missing authorship.
+    """
+    if not visible(notice, owner=owner, chat_id=chat_id, audience=audience):
+        return ""
+    try:
+        reference = notice_work_reference(notice)
+    except ValueError:
+        return ""
+    if not reference:
+        return ""
+    target = str(notice.get("audience") or "owner")
+    for row in reversed(list(AuthoredNoteLedger(base).states().values())):
+        if row.get("work_ref") != reference or str(row.get("audience") or "owner") != target:
+            continue
+        # A closed newest note is an explicit withdrawal, not permission to
+        # resurrect an earlier convenient note about the same work.
+        if row.get("status") != "open" or not visible(
+                row, owner=owner, chat_id=chat_id, audience=audience):
+            return ""
+        text = str(row.get("text") or "")
+        return f"Authored work note `{row['id']}` (separate from the completion fact):\n{text}" if text else ""
+    return ""
 
 
 def _new_id() -> str:
@@ -91,6 +187,8 @@ class AuthoredNoteLedger:
                     "chat_id": str(event.get("chat_id") or ""),
                     "message_id": event.get("message_id"),
                     "source_ref": str(event.get("source_ref") or ""),
+                    "work_ref": str(event.get("work_ref") or ""),
+                    "audience": str(event.get("audience") or "owner"),
                     "closed_reason": "",
                 }
             elif event_type == "closed" and note_id in states:
@@ -121,7 +219,8 @@ class AuthoredNoteLedger:
 
     def write(self, text: str, *, kind: str = "note", scope: str = "global",
               run_id: str = "", chat_id: str = "", message_id: int | None = None,
-              source_ref: str = "", validate_locked: Callable[[], None] | None = None) -> dict[str, Any]:
+              source_ref: str = "", work_ref: str = "", audience: str = "owner",
+              validate_locked: Callable[[], None] | None = None) -> dict[str, Any]:
         kind = _text(kind, limit=20) or "note"
         scope = _text(scope, limit=20) or "global"
         if kind not in KINDS:
@@ -130,6 +229,8 @@ class AuthoredNoteLedger:
             raise ValueError("unknown note scope")
         run_id = _text(run_id, limit=120)
         chat_id = _text(chat_id, limit=120)
+        work_ref = work_reference(work_ref)
+        audience = note_audience(audience, chat_id=chat_id)
         if scope == "run" and not run_id:
             raise ValueError("run scope requires an active run")
         if scope == "chat" and not chat_id:
@@ -147,6 +248,8 @@ class AuthoredNoteLedger:
             "chat_id": chat_id,
             "message_id": int(message_id) if message_id is not None else None,
             "source_ref": _text(source_ref, limit=300),
+            "work_ref": work_ref,
+            "audience": audience,
         }
         with self.locked():
             if validate_locked is not None:

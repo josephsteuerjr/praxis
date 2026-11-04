@@ -29,6 +29,18 @@ class Host:
 
 
 class PythonApplicationTests(unittest.TestCase):
+    def test_normal_renderer_ready_is_published_for_the_actual_window(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app=python_app.Application(Path(temporary),Path(temporary))
+            try:
+                self.assertFalse(app.ui_ready)
+                app.invoke('python_ready',{})
+                receipt=json.loads(app.control_file.read_text(encoding='utf8'))
+                self.assertTrue(receipt['ui_ready'])
+                self.assertEqual(receipt['origin'],app.origin)
+                self.assertEqual(receipt['root'],str(Path(temporary).resolve()))
+            finally:app.server.server_close()
+
     @unittest.skipUnless(sys.platform == 'win32', 'Windows native error dialog')
     def test_startup_failure_is_logged_and_shown(self):
         from unittest.mock import patch
@@ -37,16 +49,40 @@ class PythonApplicationTests(unittest.TestCase):
             with patch.object(python_app, '_main', side_effect=RuntimeError('fixture startup failure')):
                 with patch.object(ctypes.windll.user32, 'MessageBoxW') as message:
                     self.assertEqual(python_app.main(['--root', temporary]), 1)
-            self.assertIn('fixture startup failure', (Path(temporary) / 'startup-error.log').read_text(encoding='utf-8'))
+            self.assertIn('fixture startup failure', python_app.startup_log(Path(temporary)).read_text(encoding='utf-8'))
             self.assertIn('fixture startup failure', message.call_args.args[1])
 
     def test_automatic_start_does_not_clear_stop_or_create_window(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as temporary:
             with patch('localharness.owner_stop.stopped', return_value=True):
-                with patch.object(python_app, 'Application') as application:
+                with patch.object(python_app, 'Application') as application, patch('first_start_window.main',side_effect=AssertionError('Automatic stop must precede first-start UI')):
                     self.assertEqual(python_app.main(['--root', temporary, '--launch-intent', 'automatic']), 0)
             application.assert_not_called()
+
+    def test_invalid_nonobserver_arguments_refuse_before_first_start_ui(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            for extra in (['--program',str(root/'other')],['--session-tree',str(root/'profile')]):
+                with self.subTest(arguments=extra),patch('first_start_window.main',side_effect=AssertionError('Invalid admission must not open first-start UI')):
+                    with self.assertRaises(ValueError):python_app._main(['--root',str(root),*extra])
+                self.assertFalse((root/'helene.json').exists())
+                self.assertFalse((root/'.helene/first-start.json').exists())
+
+    def test_pending_mac_profile_migration_reaches_recovery_before_first_start(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary).resolve()
+            (root/'python-app.json').write_text('{"target":"macos-arm64"}')
+            (root/'python-migration.json').write_text('{"state":"preserving","id":"interrupted-copy"}')
+            with patch.object(python_app.sys,'platform','darwin'), \
+                    patch('localharness.owner_stop.stopped',return_value=False), \
+                    patch('first_start_window.main',side_effect=AssertionError('Interrupted copy must keep its recovery entry')), \
+                    patch('helene_setup.main',return_value=0) as recovery:
+                self.assertEqual(python_app._main(['--root',str(root)]),0)
+                recovery.assert_called_once_with(['--root',str(root),'--source-mode','clean'])
+            self.assertFalse((root/'.helene/first-start.json').exists())
 
     def test_close_hides_but_exit_and_relaunch_destroy(self):
         from unittest.mock import Mock
@@ -124,7 +160,7 @@ class PythonApplicationTests(unittest.TestCase):
             app = python_app.Application(root, root)
             try:
                 app.window = Mock()
-                app.window.events = SimpleNamespace(maximized=Event(), restored=Event(), shown=Event())
+                app.window.events = SimpleNamespace(maximized=Event(), restored=Event(), shown=Event(), closing=Event())
                 python_app.bind_window_state(app)
                 app.invoke('python_window', {'action':'maximize'})
                 app.window.maximize.assert_called_once()

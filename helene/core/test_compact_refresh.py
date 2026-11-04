@@ -1,320 +1,185 @@
-"""Адресный ремонт устаревших свёрток — её шаг 4.
+"""Former skipped V1 auto-refresh scenarios, ported to acting-author contracts.
 
-Слой покрытия/показа честно перестал показывать свёртку, чьё исходное сообщение
-потом правили: recap не едет ни в кадр, ни в поиск, ни в цитату. Самовосстановление
-через раздувание горячего кольца она запретила осознанно, и потому потеря названа
-ДОЛГОМ. Ремонт — единственный путь этот долг закрыть.
-
-Её спека дословно: «пересобрать только затронутые leaf-компакты из ТЕКУЩЕЙ проекции
-их исходных message lineage, после чего обычной свёрткой поднять новые родители.
-Старые immutable-компакты остаются аудитом, но не frontier текущей памяти. Новый
-компакт — новый артефакт, а не переписывание старого файла». И отдельно: «не
-запускать молча модельную регенерацию».
-
-Запуск:  python praxis_test.py test_compact_refresh -v
+The automatic model planner/dry_run/price/quiet-timer API is retired, not made
+compatible. Exact debt, bounded source selection, immutable audit, edited/deleted
+sources, progressive successors and refusal/idempotence remain executable here.
+See EDITION-CONTRACTS-230.md for each removed oracle and its replacement.
 """
-
-from __future__ import annotations
-
-import json
-import shutil
-import sys
-import tempfile
 import unittest
-from pathlib import Path
-
+from unittest import mock
 import memory_life as ml
 import memory_provenance
-import telegram_routes as tr
+import test_coverage_vs_current as coverage
 
-ROOM = "-100999999999999999"
-
-#: ⚠⚠ ЭТОТ ФАЙЛ ПРОВЕРЯЕТ ПРЕЖНЕЕ ПОКОЛЕНИЕ ОБНОВЛЕНИЯ КОМПАКТОВ.
-#:
-#: Он приехал сюда портом (`6f69aac3`) и был красным КАЖДЫЙ день с тех пор —
-#: шестнадцать случаев, ни один из которых ни разу ничего не проверил. Сперва
-#: падал setUp (в модуле нет `REFRESH_QUIET_SEC`), а под ним обнаружилось
-#: главное: тесты зовут `refresh_compacts(..., dry_run=...)`, а в этом издании
-#: подпись другая — `refresh_compacts(chat_id, compact_id=None, *, max_chunks=1)`,
-#: схема `praxis.life.compact_refresh.v2`. Ни `dry_run`, ни плана с ценой, ни
-#: паузы там нет. У самой Праксис этого файла нет вовсе.
-#:
-#: Почему не удалён: шестнадцать случаев написаны про настоящие вещи — что долг
-#: считается честно, что план называет цену до оплаты, что удаление ограничено
-#: так же, как замена, что вытесненное тело не доезжает до модели. Это стоит
-#: перенести на v2, а не выбросить. Решение — владельца, и до него файл стоит
-#: тут с названной причиной, а не красным пятном, которое все пролистывают.
-_SKIP = ("проверяет прежнее поколение refresh_compacts (dry_run, план с ценой, "
-         "REFRESH_QUIET_SEC); в этом издании схема v2 и другая подпись — "
-         "случаи надо переносить, а не чинить по одному")
+ROOM = coverage.ROOM
 
 
-@unittest.skip(_SKIP)
-class Base(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="praxis_refresh_"))
-        # ⚠ `REFRESH_QUIET_SEC` в этом издании модуля НЕТ: пауза перед повторным
-        # обновлением ушла вместе со схемой v1, а стенд её только ГЛУШИЛ (ставил
-        # 0.0) и ничего о ней не утверждал. Но `getattr` без запаса роняет весь
-        # setUp — и все шестнадцать случаев этого файла были красными С САМОГО
-        # ПОРТА, ни разу ничего не проверив. Красный стенд, который не проверяет
-        # ничего, хуже отсутствующего: он занимает место проверки.
-        #
-        # Поэтому имена берём ПО ФАКТУ наличия, а исчезнувшие называем вслух.
-        wanted = ("BASE", "MEM_DIR", "LIFE_DIR", "EVENTS_DIR", "COMPACTS_DIR",
-                  "EPISODES_DIR", "CLAIMS_DIR", "PATCHES_DIR", "REFLECTIONS_DIR",
-                  "STATE_DIR", "LEGACY_SUMMARIES_DIR", "DIALOGUES_DIR",
-                  "REFRESH_QUIET_SEC", "_model_compact")
-        self._gone = [name for name in wanted if not hasattr(ml, name)]
-        self.assertEqual(self._gone, ["REFRESH_QUIET_SEC"],
-                         "состав ручек memory_life изменился — стенд надо читать заново, "
-                         "а не расширять этот список молча")
-        self._orig = {name: getattr(ml, name) for name in wanted if hasattr(ml, name)}
-        ml.BASE = self.tmp
-        ml.MEM_DIR = self.tmp / "memory"
-        ml.LIFE_DIR = ml.MEM_DIR / "life"
-        ml.EVENTS_DIR = ml.LIFE_DIR / "events"
-        ml.COMPACTS_DIR = ml.LIFE_DIR / "compacts"
-        ml.EPISODES_DIR = ml.LIFE_DIR / "episodes"
-        ml.CLAIMS_DIR = ml.LIFE_DIR / "claims"
-        ml.PATCHES_DIR = ml.LIFE_DIR / "patches"
-        ml.REFLECTIONS_DIR = ml.LIFE_DIR / "reflections"
-        ml.STATE_DIR = ml.MEM_DIR / ".state" / "life"
-        ml.LEGACY_SUMMARIES_DIR = ml.MEM_DIR / ".summaries"
-        ml.DIALOGUES_DIR = ml.MEM_DIR / "dialogues"
-        if hasattr(ml, "REFRESH_QUIET_SEC"):
-            ml.REFRESH_QUIET_SEC = 0.0
-        self.calls = []
-        ml._model_compact = self._model
-        self._routes = tr.DIR
-        tr.DIR = self.tmp / "memory" / ".state" / "group_context"
-        self.addCleanup(self._restore)
+class AuthoredRefreshContracts(coverage._AuthoredRefreshBase):
+    def scene(self, count=8, edit_at=3):
+        rows = [self._msg(i, 'original ' + str(i)) for i in range(1, count+1)]
+        old = self._compact(rows, summary='STALE original ' + str(edit_at))
+        if edit_at: self._edit(edit_at, 'current edited source', ts=70000)
+        return rows, old
 
-    def _restore(self):
-        for name, value in self._orig.items():
-            setattr(ml, name, value)
-        tr.DIR = self._routes
-        shutil.rmtree(self.tmp, ignore_errors=True)
+    def refresh(self, old, text='authored current recap', limit=50):
+        prepared = self._prepare(old['id'], limit=limit)
+        return prepared, self._apply(prepared, text)
 
-    def _model(self, inputs, **kw):
-        """Заглушка модели: пересказывает ровно то, что ей показали."""
-        self.calls.append([str(x.get("id")) for x in inputs])
-        shown = " | ".join(str(x.get("line") or "") for x in inputs)
-        return {"summary": f"НОВАЯ СВОДКА({len(inputs)}): {shown}"[:4000],
-                "open_threads": [], "claims": [], "episodes": []}
+    def test_stale_debt_closes_only_after_authored_text(self):
+        _, old=self.scene()
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],1)
+        prepared=self._prepare(old['id'])
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],1)
+        self._apply(prepared,'current authored recap')
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],0)
+        self.assertEqual(self.helper_calls,[])
 
-    # ------------------------------------------------------------------ сцена
-    def _msg(self, mid, text, *, ts=None):
-        return ml.record_message(ROOM, f"Николай: {text}", actor="Николай",
-                                 direction="in", source_id=str(mid),
-                                 ts=float(mid) if ts is None else ts,
-                                 dedupe_key=f"telegram:{ROOM}:{mid}:in")
+    def test_old_bytes_survive_and_successor_is_distinct(self):
+        _,old=self.scene(); before=self._files()
+        _,result=self.refresh(old)
+        self.assertNotEqual(result['compact_id'],old['id'])
+        self.assertEqual(self._files()[old['id']+'.md'],before[old['id']+'.md'])
+        self.assertIn(result['compact_id']+'.md',self._files())
 
-    def _compact(self, rows, summary="старая сводка"):
-        return ml._write_compact(
-            ROOM, {"summary": summary, "open_threads": [], "claims": [], "episodes": []},
-            tier=1, depth=1, source_events=[r["id"] for r in rows], source_compacts=[],
-            event_count=len(rows), continued=False,
-            first_ts=min(str(r["ts"]) for r in rows),
-            last_ts=max(str(r["ts"]) for r in rows))
+    def test_only_new_recap_reaches_frame(self):
+        _,old=self.scene()
+        self.assertNotIn('authored current recap',ml.context_summary(ROOM))
+        self.refresh(old)
+        self.assertIn('authored current recap',ml.context_summary(ROOM))
+        self.assertNotIn('STALE',ml.context_summary(ROOM))
 
-    def _edit(self, mid, text, ts=10_000.0):
-        ml.record_message(ROOM, f"Николай: {text}", actor="Николай", direction="in",
-                          source_id=f"{mid}:edit:1", ts=ts,
-                          dedupe_key=f"telegram:{ROOM}:{mid}:edit:in")
-        ml.note_message_revision(ROOM, mid, f"Николай: {text}")
+    def test_current_sources_never_reintroduce_superseded_body(self):
+        rows,old=self.scene()
+        prepared=self._prepare(old['id'])
+        shown='\n'.join(r['text'] for r in prepared['sources'])
+        self.assertIn('current edited source',shown)
+        self.assertNotIn('original 3',shown)
+        self.assertNotIn(rows[2]['id'],[r['id'] for r in prepared['sources']])
+        self._apply(prepared,'authored current recap')
+        self.assertEqual(self.helper_calls,[])
 
-    def _delete(self, mid, ts=10_000.0):
-        line = f"Telegram [deleted #{mid}]: message removed"
-        ml.record_message(ROOM, line, actor="Telegram", direction="in",
-                          source_id=f"{mid}:delete", ts=ts,
-                          dedupe_key=f"telegram:{ROOM}:{mid}:delete:in")
-        ml.note_message_revision(ROOM, mid, line)
+    def test_no_current_event_disappears_or_becomes_hot_twice(self):
+        _,old=self.scene(); self.refresh(old)
+        state=ml.rebuild_state(ROOM)
+        _,coverage_graph,_=ml._both_graphs(ROOM)
+        covered={str(e) for metadata,_ in coverage_graph.values() for e in metadata.get('source_event_ids',[])}
+        hot={str(r['id']) for r in state['hot']}
+        current={str(r['id']) for r in memory_provenance.current_conversation_events(
+            ml.iter_events(chat_id=ROOM,kinds={'conversation_message'}))}
+        self.assertFalse(covered & hot)
+        self.assertFalse(current-covered-hot)
 
-    def _scene(self, count=100, edit_at=50):
-        rows = [self._msg(i, f"реплика {i}") for i in range(1, count + 1)]
-        compact = self._compact(rows)
-        if edit_at:
-            self._edit(edit_at, "переписала")
-        return rows, compact
+    def test_deleted_body_is_absent_from_prepare_and_frame_but_audit_remains(self):
+        rows=[self._msg(1,'private deleted original'),self._msg(2,'survivor')]
+        old=self._compact(rows,summary='STALE private deleted original'); before=self._files()
+        self._delete(1,ts=71000)
+        prepared=self._prepare(old['id'])
+        self.assertNotIn('private deleted original',str(prepared['sources']))
+        self._apply(prepared,'after deletion')
+        self.assertNotIn('private deleted original',ml.context_summary(ROOM))
+        self.assertEqual(self._files()[old['id']+'.md'],before[old['id']+'.md'])
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],0)
 
+    def test_legacy_refresh_explicitly_refuses_without_generation_or_writes(self):
+        _,old=self.scene(); files,receipts=self._files(),self._receipts()
+        result=ml.refresh_compacts(ROOM,old['id'])
+        self.assertEqual(result,{'ok':False,'reason':'acting_author_required','chunks_written':0})
+        self.assertEqual(self._files(),files); self.assertEqual(self._receipts(),receipts)
+        self.assertEqual(self.helper_calls,[])
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],1)
 
-class TestTheDebtActuallyCloses(Base):
-    def test_a_stale_leaf_is_rebuilt_and_the_debt_reaches_zero(self):
-        _rows, old = self._scene()
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 1)
-        out = ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertEqual(out["blocked"], [], out)
-        self.assertEqual(len(out["done"]), 1)
-        debt = ml.refresh_debt(ROOM)
-        self.assertEqual(debt["needs_refresh"], 0, "долг не закрылся")
-        self.assertEqual(debt["retired"], 1, "снятие не записано")
-        self.assertGreaterEqual(debt["presentable"], 1, "кадру нечего показать")
+    def test_preparation_persists_selection_without_new_compact_or_helper_price(self):
+        _,old=self.scene(); files,receipts=self._files(),self._receipts()
+        prepared=self._prepare(old['id'],limit=2)
+        self.assertEqual(len(prepared['sources']),2)
+        self.assertGreater(prepared['remaining_unselected'],0)
+        self.assertTrue(prepared['shown_complete'])
+        self.assertTrue((ml.STATE_DIR/'authored'/(prepared['selection']+'.json')).is_file())
+        self.assertEqual(self._files(),files); self.assertEqual(self._receipts(),receipts)
+        self.assertEqual(self.helper_calls,[])
 
-    def test_the_old_file_stays_on_disk_as_audit(self):
-        """Компакт неизменяем: файл не переписывается и не удаляется никогда."""
-        _rows, old = self._scene()
-        path = ml._compact_dir(ROOM) / f"{old['id']}.md"
-        before = path.read_bytes()
-        ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertTrue(path.exists(), "старый компакт удалён — это не аудит")
-        self.assertEqual(path.read_bytes(), before, "старый компакт переписан")
+    def test_empty_author_never_pays_or_closes_debt_and_can_retry_explicitly(self):
+        _,old=self.scene(); files,receipts=self._files(),self._receipts()
+        prepared=self._prepare(old['id'])
+        denied=ml.apply_authored_fold(ROOM,prepared['selection'],'')
+        self.assertFalse(denied['ok']); self.assertEqual(denied['folded'],0)
+        self.assertEqual(self._files(),files); self.assertEqual(self._receipts(),receipts)
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],1)
+        self._apply(prepared,'explicitly authored retry')
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],0)
+        self.assertEqual(self.helper_calls,[])
 
-    def test_the_successor_is_a_new_artifact(self):
-        _rows, old = self._scene()
-        out = ml.refresh_compacts(ROOM, dry_run=False)
-        new_ids = out["done"][0]["successors"]
-        self.assertTrue(new_ids)
-        self.assertNotIn(old["id"], new_ids)
-        for new_id in new_ids:
-            self.assertTrue((ml._compact_dir(ROOM) / f"{new_id}.md").exists())
+    def test_row_quota_progresses_in_bounded_authored_chunks(self):
+        rows=[self._msg(i,'large source '+str(i)+' '+('я'*900)) for i in range(1,7)]
+        old=self._compact(rows); self._edit(3,'changed large source',ts=72000)
+        remaining=[]; new=[]
+        for i in range(3):
+            prepared,result=self.refresh(old,'chunk '+str(i),limit=2)
+            self.assertEqual(len(prepared['sources']),2)
+            remaining.append(result['remaining_count']); new.append(result['compact_id'])
+        self.assertEqual(remaining,[4,2,0]); self.assertEqual(len(set(new)),3)
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],0)
+        self.assertEqual(self.helper_calls,[])
 
-    def test_the_frame_gets_the_new_recap(self):
-        self._scene()
-        self.assertNotIn("НОВАЯ СВОДКА", ml.context_summary(ROOM))
-        ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertIn("НОВАЯ СВОДКА", ml.context_summary(ROOM),
-                      "кадр не восстановился — ремонт бесполезен")
+    def test_above_character_budget_leaf_retains_all_sources_across_actual_chunks(self):
+        # Text alone is 54,000 chars; full source rows exceed the actual 48,000
+        # serialization budget even with a permissive 100-row quota.
+        rows=[self._msg(i,'sized source '+str(i)+' '+('я'*900)) for i in range(1,61)]
+        old=self._compact(rows); self._edit(3,'edited source '+('я'*900),ts=72500)
+        current={str(r['id']) for r in memory_provenance.current_conversation_events(
+            ml.iter_events(chat_id=ROOM,kinds={'conversation_message'}))}
+        selected=[]; successors=[]
+        for step in range(60):
+            prepared=self._prepare(old['id'],limit=100)
+            if step==0:
+                self.assertLess(len(prepared['sources']),60)
+                self.assertGreater(prepared['remaining_unselected'],0)
+            selected.extend(str(r['id']) for r in prepared['sources'])
+            result=self._apply(prepared,'size-bounded authored chunk '+str(step))
+            successors.append(result['compact_id'])
+            if result['remaining_count']==0: break
+        self.assertGreaterEqual(len(successors),2)
+        self.assertEqual(len(set(successors)),len(successors))
+        self.assertEqual(len(selected),len(set(selected)))
+        self.assertEqual(set(selected),current)
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],0)
+        self.assertEqual(self.helper_calls,[])
 
+    def test_parent_is_repaired_from_current_sources_not_generated_from_old_recap(self):
+        rows=[self._msg(i,'source '+str(i)) for i in range(1,5)]
+        kids=[self._compact(rows[:2],summary='old child one'), self._compact(rows[2:],summary='old child two')]
+        parent=ml._write_compact(ROOM,{'summary':'old parent','open_threads':[],'claims':[],'episodes':[]},
+            tier=2,depth=2,source_events=[],source_compacts=[k['id'] for k in kids],
+            event_count=4,continued=False,first_ts=str(rows[0]['ts']),last_ts=str(rows[-1]['ts']))
+        self._edit(1,'new first source',ts=73000)
+        prepared=self._prepare(parent['id'])
+        self.assertNotIn('old parent',str(prepared['sources']))
+        self.assertNotIn('old child',str(prepared['sources']))
+        self._apply(prepared,'new authored parent')
+        self.assertEqual(ml.refresh_debt(ROOM)['needs_refresh'],0)
+        self.assertEqual(self.helper_calls,[])
 
-class TestTheInvariantsHold(Base):
-    def test_no_event_becomes_hot_again_or_disappears(self):
-        rows, _old = self._scene()
-        ml.refresh_compacts(ROOM, dry_run=False)
-        state = ml.rebuild_state(ROOM)
-        self.assertEqual([str(r.get("source_id")) for r in state["hot"]], ["50:edit:1"],
-                         "ремонт вернул в горячее чужие события")
-        presentable, coverage, _l, _r, _p = ml._both_graphs(ROOM)
-        covered = {str(e) for _c, (m, _x) in coverage.items()
-                   for e in (m.get("source_event_ids") or [])}
-        hot_ids = {str(r.get("id")) for r in state["hot"]}
-        self.assertEqual(covered & hot_ids, set(),
-                         "событие одновременно горячее и свёрнутое")
-        current = {str(r.get("id")) for r in
-                   memory_provenance.current_conversation_events(
-                       ml.iter_events(chat_id=ROOM, kinds={"conversation_message"}))}
-        self.assertEqual(current - covered - hot_ids, set(), "событие пропало")
+    def test_consumed_selection_cannot_rewrite_or_duplicate_work(self):
+        _,old=self.scene(); prepared,_=self.refresh(old)
+        files,receipts=self._files(),self._receipts()
+        result=ml.apply_authored_fold(ROOM,prepared['selection'],'duplicate')
+        self.assertFalse(result['ok']); self.assertEqual(result['folded'],0)
+        self.assertEqual(self._files(),files); self.assertEqual(self._receipts(),receipts)
 
-    def test_the_superseded_body_never_reaches_the_model(self):
-        """Единственная дверь, через которую тело правленого могло бы вернуться, —
-        показ модели старого recap или старой строки. Она закрыта."""
-        rows, _old = self._scene()
-        ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertTrue(self.calls, "модель не звалась вовсе")
-        shown = set(sum(self.calls, []))
-        self.assertNotIn(rows[49]["id"], shown,
-                         "модели показали вытесненную ревизию")
-        self.assertNotIn("реплика 50", ml.context_summary(ROOM))
-
-    def test_a_deletion_is_bounded_the_same_way(self):
-        rows = [self._msg(i, f"реплика {i}") for i in range(1, 21)]
-        self._compact(rows, summary="старая сводка про секрет")
-        self._delete(7)
-        ml.refresh_compacts(ROOM, dry_run=False)
-        summary = ml.context_summary(ROOM)
-        self.assertNotIn("реплика 7", summary, "тело удалённого вернулось в кадр")
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
-
-
-class TestNothingHappensSilently(Base):
-    def test_dry_run_is_the_default_and_never_calls_the_model(self):
-        self._scene()
-        out = ml.refresh_compacts(ROOM)
-        self.assertTrue(out["dry_run"])
-        self.assertEqual(self.calls, [], "модель позвана без явного разрешения")
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 1)
-        self.assertEqual(out["plan"]["model_calls_total"], 1, out["plan"])
-
-    def test_the_plan_names_the_price_before_paying_it(self):
-        self._scene()
-        plan = ml.refresh_plan(ROOM)
-        self.assertEqual(self.calls, [])
-        row = plan["rows"][0]
-        self.assertEqual(row["action"], "rebuild")
-        self.assertEqual(row["kind"], "leaf")
-        self.assertEqual(row["dropped"], 1)
-        self.assertEqual(row["survivors"], 99)
-
-    def test_a_silent_model_stops_the_run_and_says_so(self):
-        self._scene()
-        ml._model_compact = lambda *a, **kw: {}
-        out = ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertEqual(out["done"], [])
-        self.assertEqual(out["blocked"][0]["reason"], "model_unavailable")
-        debt = ml.refresh_debt(ROOM)
-        self.assertEqual(debt["needs_refresh"], 1, "долг закрылся без работы")
-        self.assertEqual(debt["blocked"], 1, "отказ не назван в описи")
-
-    def test_a_blocked_row_is_not_retried_for_free(self):
-        self._scene()
-        ml._model_compact = lambda *a, **kw: {}
-        ml.refresh_compacts(ROOM, dry_run=False)
-        plan = ml.refresh_plan(ROOM)
-        self.assertEqual(plan["model_calls_total"], 0,
-                         "заблокированная строка снова просит модель")
-        self.assertEqual(plan["rows"][0]["action"], "blocked")
+    def test_debt_distinguishes_known_clean_unknown_and_exact_stale_counts(self):
+        self.scene(edit_at=0)
+        clean=ml.refresh_debt(ROOM); unknown=ml.refresh_debt('-1009999999999')
+        # Current API reports evidence counts, not the retired V1 known/tree
+        # certificate. Absence of compact evidence must not certify known-clean.
+        self.assertGreater(clean['covered'],0); self.assertEqual(clean['needs_refresh'],0)
+        self.assertEqual(unknown['covered'],0); self.assertEqual(unknown['presentable'],0)
+        self.assertNotEqual(unknown.get('known'),True)
+        self._edit(3,'newest',ts=74000)
+        debt=ml.refresh_debt(ROOM)
+        self.assertEqual(debt['needs_refresh'],1); self.assertEqual(debt['unresolved_group_count'],1)
+        self.assertEqual(len(debt['sample']),1)
+        self.assertEqual(debt['sample'][0]['superseded_total'],1)
+        self.assertEqual(debt['sample'][0]['target_count'],8)
 
 
-class TestThePlanIsHonestAboutSize(Base):
-    def test_a_huge_leaf_becomes_several_successors(self):
-        """Один устаревший лист не обязан влезать в один промпт: на живых данных
-        такой лист несёт полторы тысячи событий, а в промпт входит около полутора
-        сотен. Иначе ремонт встал бы ровно там же, где стояла свёртка."""
-        rows = [self._msg(i, "реплика " + "я" * 900) for i in range(1, 61)]
-        self._compact(rows)
-        self._edit(3, "переписала")
-        plan = ml.refresh_plan(ROOM)
-        self.assertGreater(plan["rows"][0]["parts"], 1, plan["rows"][0])
-        self.assertEqual(plan["model_calls_total"], plan["rows"][0]["parts"])
-        out = ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertGreater(len(out["done"][0]["successors"]), 1)
-        self.assertEqual(ml.refresh_debt(ROOM)["needs_refresh"], 0)
-
-    def test_a_parent_costs_no_model_call(self):
-        rows = [self._msg(i, f"реплика {i}") for i in range(1, 21)]
-        kid = self._compact(rows[:10], summary="ребёнок один")
-        kid2 = self._compact(rows[10:], summary="ребёнок два")
-        ml._write_compact(ROOM, {"summary": "родитель", "open_threads": [],
-                                 "claims": [], "episodes": []},
-                          tier=2, depth=2, source_events=[],
-                          source_compacts=[kid["id"], kid2["id"]], event_count=20,
-                          continued=False, first_ts=str(rows[0]["ts"]),
-                          last_ts=str(rows[-1]["ts"]))
-        self._edit(3, "переписала")
-        plan = ml.refresh_plan(ROOM)
-        parents = [r for r in plan["rows"] if r["kind"] == "parent"]
-        self.assertTrue(parents, plan)
-        self.assertEqual(parents[0]["model_calls"], 0,
-                         "родитель просит модель — он поднимается свёрткой, не ремонтом")
-
-    def test_a_second_run_does_nothing(self):
-        self._scene()
-        ml.refresh_compacts(ROOM, dry_run=False)
-        before = len(self.calls)
-        out = ml.refresh_compacts(ROOM, dry_run=False)
-        self.assertEqual(out["done"], [])
-        self.assertEqual(len(self.calls), before, "ремонт повторил работу")
-
-
-class TestTheDebtDescribesItselfHonestly(Base):
-    def test_an_empty_place_is_told_apart_from_an_unknown_one(self):
-        rows = [self._msg(i, f"реплика {i}") for i in range(1, 6)]
-        self._compact(rows)
-        живое = ml.refresh_debt(ROOM)
-        self.assertTrue(живое["known"])
-        self.assertEqual(живое["needs_refresh"], 0)
-        чужое = ml.refresh_debt("-1009999999999")
-        self.assertFalse(чужое["known"], "неизвестное место выдано за чистое")
-        self.assertEqual(чужое["tree"], str(ml.MEM_DIR))
-
-    def test_the_debt_counts_leaves_parents_and_files(self):
-        self._scene()
-        debt = ml.refresh_debt(ROOM)
-        self.assertEqual(debt["leaf_debt"], 1)
-        self.assertEqual(debt["parent_debt"], 0)
-        self.assertGreaterEqual(debt["parsed"], 1)
-        self.assertEqual(debt["broken"], 0)
-
-
-if __name__ == "__main__":
-    unittest.main()
+if __name__=='__main__': unittest.main()

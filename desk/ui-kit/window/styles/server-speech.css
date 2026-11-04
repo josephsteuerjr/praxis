@@ -1,0 +1,9 @@
+.server-speech-content { display: grid; gap: 14px; }
+.server-speech-content[hidden] { display: none; }
+.server-speech .field-label { display: grid; gap: 7px; }
+.server-speech textarea { width: 100%; resize: vertical; }
+.server-speech audio { max-width: 100%; width: 100%; }
+.server-speech-voices { display: grid; gap: 12px; }
+.server-speech-voice { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; min-width: 0; }
+.server-speech-voice strong { overflow-wrap: anywhere; }
+.server-speech .actions { flex-wrap: wrap; }

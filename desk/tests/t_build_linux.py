@@ -71,7 +71,9 @@ class Package(unittest.TestCase):
                     subprocess.run(["dpkg-deb", "-x", str(package), str(extracted)], check=True)
                     self.assertEqual((extracted / "opt/helene/chrome-sandbox").stat().st_mode & 0o7777, 0o4755)
                 else:
-                    listing = subprocess.check_output(["rpm", "-qplv", str(package)], text=True)
+                    database=root/'rpmdb'
+                    subprocess.run(["rpm","--dbpath",str(database),"--initdb"],check=True,capture_output=True)
+                    listing = subprocess.check_output(["rpm", "--dbpath",str(database),"-qplv", str(package)], text=True)
                     self.assertTrue(any("/opt/helene/chrome-sandbox" in line and "rwsr-xr-x" in line for line in listing.splitlines()), listing)
 
     def test_names_follow_each_family(self):

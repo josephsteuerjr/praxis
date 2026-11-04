@@ -1,6 +1,6 @@
 """One supervised HTTPS tunnel for this channel; no second agent or VPS.
 
-Only an explicitly saved phone.mode=automatic enables exposure. Telegram
+Only an explicitly saved automatic or stable phone mode enables exposure. Telegram
 keeps its existing signed initData/owner authorization; QR keys keep their
 device scope. This module never stores or publishes bot/owner credentials.
 """
@@ -31,7 +31,38 @@ def atomic_json(path: Path, value: dict) -> None:
 
 def enabled(config: dict) -> bool:
     phone = config.get('phone') or {}
-    return phone.get('enabled') is True and phone.get('mode') == 'automatic'
+    return phone.get('enabled') is True and phone.get('mode') in ('automatic','stable')
+
+
+async def probe_origin(session,url,instance):
+    """Distinguish a valid TLS gateway with no upstream from certificate errors."""
+    import aiohttp
+    try:
+        async with session.get(url+'api/phone/probe') as response:
+            if response.status in (502,503,504):
+                return False,f'HTTPS-сервер доступен, но туннель к этому компьютеру не отвечает (HTTP {response.status}).'
+            if response.status!=200:return False,f'Адрес телефона отвечает HTTP {response.status}. Проверь настройку подключения.'
+            if (await response.json()).get('instance')!=instance:
+                return False,'Этот HTTPS-адрес ведёт к другой копии Hélène. Проверь адрес и локальный порт туннеля.'
+            return True,''
+    except aiohttp.ClientConnectorCertificateError:
+        return False,'Не удалось подтвердить сертификат HTTPS-адреса. Проверь сертификат сервера.'
+    except aiohttp.ClientConnectorDNSError:
+        return False,'Не удалось найти HTTPS-адрес через DNS. Проверяю сеть и повторяю.'
+    except asyncio.TimeoutError:
+        return False,'HTTPS-адрес не ответил вовремя. Проверяю сеть и повторяю.'
+    except (aiohttp.ClientError,ValueError):
+        return False,'HTTPS-подключение пока не подтвердилось. Проверяю сеть и повторяю.'
+
+
+def stable_origin(config:dict)->str:
+    phone=config.get('phone') or {}
+    if phone.get('mode')!='stable':return ''
+    value=str(phone.get('external') or '').strip()
+    parsed=urlsplit(value)
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('','/'):
+        raise ValueError('Укажи постоянный HTTPS-адрес телефона без пути и ключей.')
+    return value.rstrip('/')+'/'
 
 
 def migrate_config(path: Path, *, author: str) -> dict:
@@ -157,28 +188,31 @@ class PhoneAccess:
         if os.name != 'nt' and os.getpgrp() != os.getpid():
             raise ValueError('Надзор не выделил каналу отдельную группу процессов — перезапусти Hélène.')
         self.record('preparing', 'Подготавливаю защищённое подключение телефона…')
-        binary = await ensure_cloudflared(self.root)
-        self.tunnel = QuickTunnel(binary, self.root, self.port)
+        fixed=stable_origin(config)
+        if not fixed:
+            binary = await ensure_cloudflared(self.root)
+            self.tunnel = QuickTunnel(binary, self.root, self.port)
         try:
-            await self.tunnel.start()
-            self.url = await self.tunnel.wait_url(45)
+            if fixed:self.url=fixed
+            else:
+                await self.tunnel.start()
+                self.url = await self.tunnel.wait_url(45)
             import aiohttp
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=8), trust_env=False) as session:
+                reason='HTTPS-подключение пока не подтвердилось.'
                 for attempt in range(15):
-                    try:
-                        async with session.get(self.url + 'api/phone/probe') as response:
-                            if response.status == 200 and (await response.json()).get('instance') == self.instance:
-                                break
-                    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-                        pass
+                    confirmed,reason=await probe_origin(session,self.url,self.instance)
+                    if confirmed:break
+                    self.record('checking',reason,attempt=attempt+1)
                     await asyncio.sleep(2)
                 else:
-                    raise CloudflaredError('HTTPS origin readiness not confirmed')
+                    raise ValueError(reason)
             self.record('ready', 'Телефон подключается из любой сети.', telegram='waiting')
             menu_retry = 0.0
             probe_at, probe_failures = self.clock() + 30, 0
-            while enabled(self.load_config()) and self.tunnel.returncode is None:
+            while enabled(self.load_config()) and (self.tunnel is None or self.tunnel.returncode is None):
                 latest = self.load_config()
+                if latest.get('phone')!=config.get('phone'):break
                 if latest.get('telegram') != config.get('telegram'):
                     if self.menu:
                         await self.menu.restore()
@@ -218,7 +252,7 @@ class PhoneAccess:
                         self.record('ready', 'HTTPS готов. Для миниаппа укажи бота и id владельца в карточке Telegram.', telegram='unconfigured')
                         menu_retry = self.clock() + 30
                 await self.delay(2)
-            if self.tunnel.returncode is not None and enabled(self.load_config()):
+            if self.tunnel is not None and self.tunnel.returncode is not None and enabled(self.load_config()):
                 raise CloudflaredError('Tunnel disconnected')
         finally:
             self.url = ''

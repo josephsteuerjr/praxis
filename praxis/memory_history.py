@@ -37,7 +37,16 @@ def plain_path(path: Path) -> Path:
     return path.resolve()
 
 
+def _require_supported_storage() -> None:
+    # The opt-in Git history relies on POSIX ownership and no-follow opens.
+    # Refuse before reading manifests, creating locks or invoking Git elsewhere.
+    if (os.name != 'posix' or not getattr(os, 'O_NOFOLLOW', 0)
+            or not getattr(os, 'O_NONBLOCK', 0) or not callable(getattr(os, 'geteuid', None))):
+        raise HistoryError('memory history requires POSIX ownership and no-follow support')
+
+
 def collect(memory: Path, manifest: Path) -> dict[str, bytes]:
+    _require_supported_storage()
     entries = json.loads(manifest.read_text(encoding='utf-8'))
     if not isinstance(entries, list) or not entries:
         raise HistoryError('manifest must be a nonempty list of exact relative paths')
@@ -76,6 +85,7 @@ def collect(memory: Path, manifest: Path) -> dict[str, bytes]:
 
 
 def snapshot(memory: Path, history: Path, manifest: Path, source: Path, *, initialize=False) -> str:
+    _require_supported_storage()
     memory, history, source = map(plain_path, (memory, history, source))
     if any(history.is_relative_to(p) or p.is_relative_to(history) for p in (memory, source)):
         raise HistoryError('history must be separate from source and memory')
@@ -100,6 +110,7 @@ def snapshot(memory: Path, history: Path, manifest: Path, source: Path, *, initi
 
 
 def _snapshot(history: Path, files: dict[str, bytes], initialize: bool) -> str:
+    _require_supported_storage()
     # Do not inherit Git routing, config injection, credentials, alternates, or hooks.
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
