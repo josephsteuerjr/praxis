@@ -31,3 +31,12 @@ Fish controls appear when the selected server offers its speech API. The server 
 **What was verified.** Final Windows bytes were extracted and admitted by their bundled interpreter. The exact macOS archive opened in a real Cocoa window. Debian 12 and Fedora 44 archives ran as UID1000 under Xvfb/DBus, with the native Qt migration wizard and update regressions. All nine native screenshots were inspected. Targeted native regressions, 134 Node checks and 12 Fish browser checks passed, including real two-origin HTTP and fresh-page replay. GUI service data were synthetic. Physical microphone/TCC, live voice quality, a new independent whole-panel review and a rerun of the full historical battery are outside this release's stated evidence.
 
 Qualified runtimes and native wrappers retain their exact existing bytes. A signed macOS wrapper can retain its historical Info.plist version; `python-app.json` identifies 2.3.0. Exact artifact hashes, source identities and validation scope are supplied in `SHA256SUMS`, `SOURCE-2.3.0.json`, `RELEASE-EVIDENCE.json` and `NATIVE-GUI-2.3.0.zip`.
+
+### Reported Windows RC26 upgrade issue
+
+An upgrade from the Windows 2.3.0-rc.26 portable build has been reported to stop
+with `MigrationError: icacls не подтвердил защиту временного конфига`.
+The support bundle confirms the temporary-configuration ACL refusal but does
+not contain the underlying `icacls` failure. This specific report is under
+investigation; 2.3.0 has not been qualified as its fix. The updater's refusal
+before writing private configuration must remain in place.
