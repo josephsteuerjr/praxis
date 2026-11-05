@@ -8,6 +8,7 @@ No ordinary agent turn, tool admission or Forge import occurs in this module.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -137,12 +138,41 @@ def consume_pending(tree: Path, callback: Callable[..., dict], limit: int = 30) 
     if not commands.exists() and not processing.exists():
         return []
     out = []
+
+    def damaged(path: Path, error: Exception) -> None:
+        # Use the same bounded, non-redirected reader as valid commands. A file
+        # that cannot safely be read stays in place for owner inspection.
+        raw = reader._bytes(path.parent, path.name, required=True)
+        digest = hashlib.sha256(raw).hexdigest()
+        command_id = (path.stem if _COMMAND.fullmatch(path.stem) else
+                      hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:32])
+        evidence = reader._inside(root, root / "damaged")
+        evidence.mkdir(parents=True, exist_ok=True)
+        saved = evidence / (command_id + "-" + digest + ".json")
+        value = {"ok": False, "command_id": command_id, "state": "unknown",
+                 "observed_at": _utc(), "source_sha256": digest,
+                 "reason": "Control intent is unreadable; no effects replayed: " + str(error)}
+        # Fence replay before moving the bytes. If interrupted afterwards, the
+        # original intent or its exact damaged copy remains, with an unknown
+        # receipt already visible to the owner.
+        _write(results / (command_id + ".json"), value)
+        os.replace(path, saved)
+        out.append(value)
+
     # Recovered claims may already have performed effects. Keep them unknown.
     for path in sorted(processing.glob("*.json")):
-        request = reader._read(processing, path.name, required=True)
-        command_id = _command_id(path.stem)
         if (results / path.name).exists():
-            path.unlink()
+            prior = reader._read(results, path.name, required=True)
+            if prior.get("source_sha256"):
+                damaged(path, reader.ReadError("Previously unreadable control intent retained"))
+            else:
+                path.unlink()
+            continue
+        try:
+            request = reader._read(processing, path.name, required=True)
+            command_id = _command_id(path.stem)
+        except (ValueError, OSError) as exc:
+            damaged(path, exc)
             continue
         value = {"ok": False, "command_id": command_id, "state": "unknown", "command": request,
                  "task_id": request.get("task_id"), "agent_id": request.get("agent_id", ""),
@@ -152,10 +182,17 @@ def consume_pending(tree: Path, callback: Callable[..., dict], limit: int = 30) 
         path.unlink()
         out.append(value)
     for path in sorted(commands.glob("*.json"), key=lambda p: p.stat().st_mtime_ns)[:limit]:
-        command_id = _command_id(path.stem)
         if (results / path.name).exists():
+            prior = reader._read(results, path.name, required=True)
+            if prior.get("source_sha256"):
+                damaged(path, reader.ReadError("Previously unreadable control intent retained"))
             continue
-        request = reader._read(commands, path.name, required=True)
+        try:
+            command_id = _command_id(path.stem)
+            request = reader._read(commands, path.name, required=True)
+        except (ValueError, OSError) as exc:
+            damaged(path, exc)
+            continue
         processing.mkdir(parents=True, exist_ok=True)
         try:
             os.rename(path, processing / path.name)

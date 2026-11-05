@@ -145,9 +145,13 @@ def prepared_install_path(new):
     return new.parent / ('prepared-install-' + identity + '.json')
 
 
-def prepare_install(old, new, *, verified=None, progress=None, attached_data=None):
-    """Prepare before switching; legacy helpers do this after old-owner exit."""
+def prepare_install(old, new, *, verified=None, progress=None, attached_data=None, folder_switch=False):
+    """Prepare a mechanical overlay unless the caller selects a folder switch."""
     old, new = Path(old).resolve(), Path(new).resolve()
+    from localharness import clean_update
+    prepared=json.loads(prepared_install_path(new).read_text(encoding='utf-8')) if prepared_install_path(new).is_file() else {}
+    if prepared.get('format')==clean_update.FORMAT:return clean_update.identity(old,new,prepared)
+    if folder_switch:return clean_update.prepare(old,new,progress,attached_data=attached_data)
     from localharness.portable_app_publication import recover
     recover(new)
     from localharness import source_admission
@@ -224,7 +228,7 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
         raise ValueError('Settings or selected source changed before update handoff; retry')
     prepared = {'format': 'helene-prepared-install.v1', 'old': str(old), 'new': str(new),
                 'recovery': str(recovery), 'selection': before, 'note': note,
-                'progress': str(progress.path) if progress else ''}
+                'progress': str(progress.path) if progress else '', 'folder_switch': False}
     atomic_json(prepared_install_path(new), prepared)
     if progress:progress.phase('prepared', preparation_completed=True)
     return prepared
@@ -234,6 +238,8 @@ def _prepared_identity(old, new):
     """Bound handoff identity, not an assertion that mutable bytes stayed fresh."""
     old, new = Path(old).resolve(), Path(new).resolve()
     value = json.loads((prepared_install_path(new)).read_text(encoding='utf-8'))
+    from localharness import clean_update
+    if value.get('format')==clean_update.FORMAT:return clean_update.identity(old,new,value)
     from localharness import portable_switch
     if value.get('format')==portable_switch.FORMAT:return portable_switch.identity(old,new,value)
     if value['old'] != str(old) or value['new'] != str(new):
@@ -250,6 +256,8 @@ def validate_prepared(old, new, progress=None):
     from localharness.code_transition import validate
     old, new = Path(old).resolve(), Path(new).resolve()
     value = _prepared_identity(old, new)
+    from localharness import clean_update
+    if value.get('format')==clean_update.FORMAT:return value
     from localharness import portable_switch
     if value.get('format')==portable_switch.FORMAT:return portable_switch.validate(old,new,value)
     recovery = Path(value['recovery']).resolve()
@@ -269,6 +277,9 @@ def install(old, new, *, stopped=lambda:False):
     from localharness import update_overlay
     from localharness.update_progress import Progress
     value = json.loads((prepared_install_path(new)).read_text(encoding='utf-8'))
+    from localharness import clean_update
+    if value.get('format')==clean_update.FORMAT:
+        raise ValueError('A prepared folder switch requires the update helper handoff')
     progress = Progress(value['progress']) if value.get('progress') else None
     if progress:progress.phase('freshness')
     value = validate_prepared(old, new, progress)
@@ -380,19 +391,30 @@ def main():
     if Path(args.admission_name).name != args.admission_name:
         raise ValueError('Updater admission name leaves staging')
     mechanical = prepared_install_path(args.new).is_file()
+    if mechanical:
+        from localharness.clean_update import adopt_legacy
+        adopt_legacy(args.old,args.new)
     if not mechanical:
         from localharness.migration_job import legacy_update
         legacy_update(args.old,args.new,source_mode=args.source_mode or 'clean',
                       admission=args.staging/args.admission_name)
         return 0  # the confirmed persistent owner continues; browser/native alike
     if args.source_mode:
-        from localharness.update_source import selected
-        choice=selected(args.old,args.new)
-        if not choice or choice['mode']!=args.source_mode:
-            raise ValueError('Prepared source policy differs from the mechanical invocation')
+        from localharness import clean_update
+        from localharness import legacy_clean_bridge
+        fast=json.loads(prepared_install_path(args.new).read_text(encoding='utf-8'))
+        if fast.get('format')==clean_update.FORMAT or legacy_clean_bridge.required(args.old,args.new,fast):
+            if args.source_mode!='clean':raise ValueError('Prepared clean source policy differs')
+            if fast.get('format')==clean_update.FORMAT:clean_update.identity(args.old,args.new,fast)
+        else:
+            from localharness.update_source import selected
+            choice=selected(args.old,args.new)
+            if not choice or choice['mode']!=args.source_mode:
+                raise ValueError('Prepared source policy differs from the mechanical invocation')
     from localharness import portable_switch
     prepared=json.loads(prepared_install_path(args.new).read_text(encoding='utf-8'))
-    if prepared.get('format')==portable_switch.FORMAT:
+    from localharness import clean_update
+    if prepared.get('format') in (portable_switch.FORMAT,clean_update.FORMAT):
         try:return perform(args)
         except BaseException as exc:
             _job_report(args,'attention',error=f'{type(exc).__name__}: {exc}')
@@ -435,6 +457,17 @@ def _job_report(args,state,**details):
 
 
 def perform(args):
+    """Own clean admission/cutover under NEW, including direct legacy callers."""
+    if not getattr(args,'cleanup',False):
+        from localharness import clean_update
+        from localharness.package_notice import read
+        if read(prepared_install_path(args.new)).get('format')==clean_update.FORMAT:
+            from python_migrate import installation_lock
+            with installation_lock(args.new):return _perform(args)
+    return _perform(args)
+
+
+def _perform(args):
     if not args.cleanup:
         from localharness.update_process import interpreter_for, background_flags
     old,new=args.old.resolve(),args.new.resolve()
@@ -494,6 +527,26 @@ os.execv(entry,command)
                 cwd=new,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT,
                 creationflags=background_flags(),start_new_session=os.name!='nt')
         return True
+    def reopen_clean_failure(target):
+        # A failed recovery observation must retain the primary switch error.
+        # Never launch on uncertainty about programme or selected-data owners.
+        try:return reopen_clean_if_quiescent(target)
+        except Exception:return False
+    def reopen_clean_if_quiescent(target):
+        from localharness.package_notice import read
+        from localharness import migration_lifecycle
+        note=read(Path(target)/'python-migration.json')
+        if note.get('startup_proof') or note.get('state') in ('retiring_old','completed'):
+            return False
+        try:migration_lifecycle.quiescent(old)
+        except (OSError,ValueError,RuntimeError):return False
+        from localharness.app_migration import discover
+        paths=[row['tree'] for row in discover(old)['agents']]
+        paths.extend(note.get('old_data_paths',[]));paths.extend(note.get('data_paths',[]))
+        for data in dict.fromkeys(paths):
+            for relative in ('.desktop-owner.lock','memory/.control/desktop-session.lock'):
+                if not migration_lifecycle.owner_lease_available(Path(data)/relative):return False
+        return reopen_previous()
     staging=args.staging.resolve()
     validate_staging(args)
     legacy_prepare = not args.cleanup and not prepared_path.is_file() and (new/'python-app.json').is_file()
@@ -513,10 +566,17 @@ os.execv(entry,command)
         admitted=staging/admission_name
         part=admitted.with_suffix('.tmp')
         import psutil
-        part.write_text(json.dumps({'pid':os.getpid(),'birth':psutil.Process().create_time(),'target':str(old),
+        admission={'pid':os.getpid(),'birth':psutil.Process().create_time(),'target':str(old),
             'job_id':getattr(args,'job_id',''),'runtime':str(Path(sys.executable).resolve()),
-            'helper_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            'preparation_completed':not legacy_prepare}),encoding='utf-8');part.replace(admitted)
+            'preparation_completed':not legacy_prepare}
+        from localharness import clean_update
+        prepared_kind=json.loads(prepared_path.read_text(encoding='utf-8')).get('format') if prepared_path.is_file() else None
+        from localharness import legacy_clean_bridge
+        bridge=(legacy_clean_bridge.required(old,new,json.loads(prepared_path.read_text(encoding='utf-8')))
+                if prepared_path.is_file() else False)
+        if prepared_kind!=clean_update.FORMAT and not bridge:
+            admission['helper_sha256']=hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        part.write_text(json.dumps(admission),encoding='utf-8');part.replace(admitted)
     report('waiting_owner', label='Закрываю прежнее окно')
     if args.cleanup:wait_owner(args.pid)
     else:
@@ -526,6 +586,19 @@ os.execv(entry,command)
     if not args.cleanup and prepared_path.is_file():
         from localharness import portable_switch
         prepared=json.loads(prepared_path.read_text(encoding='utf-8'))
+        from localharness import clean_update
+        from localharness import legacy_clean_bridge
+        if legacy_clean_bridge.required(old,new,prepared):
+            try:return legacy_clean_bridge.handoff(args,prepared,report,stopped)
+            except BaseException:
+                if legacy_clean_bridge.can_reopen(old,new):
+                    reopen_clean_failure(legacy_clean_bridge.location(old,new)/'Helene')
+                raise
+        if prepared.get('format')==clean_update.FORMAT:
+            try:return clean_update.run(args,prepared,report,stopped)
+            except BaseException:
+                reopen_clean_failure(new)
+                raise
         if prepared.get('format')==portable_switch.FORMAT:
             try:return portable_switch.run(args,prepared,report,stopped)
             except BaseException:

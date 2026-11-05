@@ -395,6 +395,7 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(script, Path(self_review_worker.__file__).resolve())
         run_context = types.ModuleType("run_context")
         import contextlib
+        import contextvars
         run_context.bind_run = lambda value: contextlib.nullcontext()
         llm = types.ModuleType("llm")
         llm.BrokenChannelError = type("BrokenChannelError", (RuntimeError,), {})
@@ -404,6 +405,7 @@ class ReviewTests(unittest.TestCase):
 
         def chat(role, **kwargs):
             seen.append(kwargs)
+            self.assertTrue(namespace['_SINGLE_PROVIDER_ATTEMPT'].get())
             self.assertEqual(kwargs["framework"], "fake-route")
             self.assertIs(kwargs["allow_fallback"], False)
             if len(seen) == 1:
@@ -422,11 +424,17 @@ class ReviewTests(unittest.TestCase):
         import ast
         import copy
         source = ast.parse((ROOT / 'helene/core/llm.py').read_text(encoding='utf-8'))
-        helpers = [node for node in source.body if isinstance(node, ast.FunctionDef)
-                   and node.name in {'assistant_message', '_wire_value'}]
-        namespace = {'LLMResponse': object, 'copy': copy, 'json': json}
+        helpers = [node for node in source.body
+                   if (isinstance(node, ast.FunctionDef)
+                       and node.name in {'assistant_message', '_wire_value', 'single_provider_attempt'})
+                   or (isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == '_SINGLE_PROVIDER_ATTEMPT'
+                               for target in node.targets))]
+        namespace = {'LLMResponse': object, 'copy': copy, 'json': json,
+                     'contextlib': contextlib, '_cv': contextvars}
         exec(compile(ast.Module(body=helpers, type_ignores=[]), 'llm.py', 'exec'), namespace)
         llm.assistant_message = namespace['assistant_message']
+        llm.single_provider_attempt = namespace['single_provider_attempt']
         llm.chat = chat
         spec = importlib.util.spec_from_file_location("self_review_test_worker", ROOT / "helene/core/forge_worker.py")
         worker = importlib.util.module_from_spec(spec)
@@ -441,6 +449,8 @@ class ReviewTests(unittest.TestCase):
                 finally:
                     os.chdir(previous_cwd)
                     sys.path[:] = previous_path
+        self.assertEqual(len(seen), 2)
+        self.assertFalse(namespace['_SINGLE_PROVIDER_ATTEMPT'].get())
         self.service.tick()
         result = self.service.status(row["id"])
         self.assertEqual((result["execution"], result["verdict"]), ("done", "clear"))

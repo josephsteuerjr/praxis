@@ -80,6 +80,14 @@
 .paper-audio-toggle { flex:none; width:36px; height:36px; border:0; border-radius:50%; background:var(--accent); color:var(--accent-ink); cursor:pointer; }
 .paper-audio-main { flex:1; min-width:0; }
 .paper-audio-name { font:12px/1.4 var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.paper-audio-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:30px; }
+.paper-audio-heading [data-audio-time] { flex:none; font:11px/1.4 var(--sans); color:var(--ink-3); font-variant-numeric:tabular-nums; }
+.paper-audio-details { flex:none; align-self:flex-start; width:36px; height:36px; border:0; border-radius:50%; color:var(--ink-2); background:transparent; cursor:pointer; font:20px var(--sans); }
+.paper-audio-details[aria-expanded=true] { transform:rotate(180deg); }
+.paper-audio-detail[hidden] { display:none; }
+.paper-audio-detail { padding-top:8px; }
+.paper-audio [data-audio-status] { display:block; font:11px/1.4 var(--sans); color:var(--ink-3); overflow-wrap:anywhere; }
+.paper-audio [data-audio-status]:empty { display:none; }
 .paper-wave { min-height:8px; }
 .paper-wave > div { width:100%; }
 .paper-audio-seek { display:block; width:100%; height:14px; padding:0; margin:2px 0; accent-color:var(--accent); }

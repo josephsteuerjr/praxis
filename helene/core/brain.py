@@ -142,7 +142,8 @@ def catalog() -> dict:
         for role, rc in snap.items():
             out["roles"][role] = {k: rc.get(k) for k in
                                   ("framework", "model", "fallback_model", "fallback_framework", "on_fallback",
-                                   "last_error", "fallback_armed", "reasoning_effort")}
+                                   "last_error", "fallback_armed", "reasoning_effort",
+                                   "service_tier", "service_tier_requested", "service_tier_actual")}
     except Exception:
         log.debug("brain.catalog: snapshot не собрался", exc_info=True)
     voice = out["roles"].get("voice") or {}
@@ -443,7 +444,18 @@ def set_reasoning(role: str, effort: str, *, why: str = "") -> dict:
     value = (effort or "").strip().lower()
     if role not in llm.ROLES:
         return {"ok": False, "error": f"не знаю роли «{role}»; мои: {', '.join(llm.ROLES)}"}
-    if value and value not in llm.REASONING_EFFORTS:
+    config = llm._config()
+    selected = (config.get('roles') or {}).get(role) or {}
+    account = selected.get('framework')
+    spec = (config.get('frameworks') or {}).get(account) or {}
+    codex = spec.get('provider') == 'relay' and spec.get('protocol') == 'openai'
+    if value and codex:
+        try:
+            llm._available_models(account)
+            llm._validate_endpoint_effort(account, None, value, selected.get('model'))
+        except ValueError as exc:
+            return {'ok': False, 'error': str(exc)}
+    elif value and value not in llm.REASONING_EFFORTS:
         return {"ok": False, "error": "ступень из словаря реле: "
                                       + " | ".join(llm.REASONING_EFFORTS)
                                       + "; пусто — снять"}

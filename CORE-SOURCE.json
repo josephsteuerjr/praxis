@@ -1,15 +1,15 @@
 {
   "format": "praxis-public-source.v1",
-  "head": "4467942aa2d4b0dfe593f8e72371bfb404bb74c5",
-  "captured_at": "2026-11-05T01:16:16.247895+00:00",
+  "head": "ec97b59cb85f7c3611ba82de118924a0481b8060",
+  "captured_at": "2026-11-05T21:02:40.555504+00:00",
   "files": 742,
-  "scope": "Current cloud source mirror only; public-only paths retained. Private memory, authored soul, workspace and Git history excluded. Frozen desktop2.3.0 remains at tagv2.3.0.",
+  "scope": "Current cloud source mirror only; selected public source is clean. Private memory, authored soul, workspace and Git history are excluded. Desktop releases are bound by immutable tags and package inventories.",
   "mirror": "praxis",
   "source": "read-only live Praxis tracked source-only export",
   "dirty": false,
-  "taken_at": "2026-11-05T01:16:16.247895+00:00",
-  "digest": "512734f9f96b9c90a4db3e6773877b3c0d2215569c47fae2cc80cb88f0a1ed04",
-  "by": "source-only final reconciliation with qualified Fish discovery handoff",
+  "taken_at": "2026-11-05T21:02:40.555504+00:00",
+  "digest": "506d2c63fd8109bc9f0646879014f9fb99686937b5fa3aa18e654a0a87501f8b",
+  "by": "source-only reconciliation with the validated cloud Forge recovery handoff",
   "source_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".env.example": "85af3211c5085d5fdd13f7ab1cc6c10fc27fd33a95769666f928935be95e2396",
@@ -121,15 +121,15 @@
     "fish_miniapp_patch.py": "7595dc746845943f701079a9aae80f4236a02bec4b1bb2a9450a0a642c1dfec9",
     "fish_tts_client.py": "3335098bfc29b01f43f1630cbd9892b957d1614621cdc61ab84b6147c84258bb",
     "fish_voice_ui.py": "d67780e13aa9449df77ba8b9037da310ad3b25a3f553d1a3026a2b587662a239",
-    "forge.py": "89c38e75b0bf4bf3f842d109d2ad3861f31f6acd10fd7a2354cfd172be6732a4",
+    "forge.py": "b3f9edf300e994bcf86d49fb133da69544bda6e99f72364a5eb72538564718b1",
     "forge_battery.py": "ee89589e64d4d312ee7348882b59ebebadc5e953f9a611edd246505843a56cb4",
     "forge_control.py": "97c855e1a634f900ce484f544ab8ae2bd2af3d9324c3151bfcc63dd81380cc94",
     "forge_intelligence.py": "924a2d47b22616d71d1d2531ddde74abf2d8b283fb8d469d971926d41fa54401",
     "forge_learning.py": "b0b0ff26b495acce8b1305604564ecccab4a945e52f05444beeefbebf159910b",
     "forge_liveness.py": "c5d5a3e021c45310bd2b03dcec5f5a9eb3ff615b92fe4d8b4f41702ee17f4520",
     "forge_process.py": "c33344aaa09e207ad9179dce6c9df29ef623033dfd540d5a85a1d25a77d0ff36",
-    "forge_reader.py": "99a6aaa3b9840c2d558bb2dd53ba2b1fb8affad52eabe92906732c027e47bc94",
-    "forge_recovery.py": "6ab04dfca2b22dce73be3ac866c84b45097b0a52e5fe13d318edfa17c262dc21",
+    "forge_reader.py": "94d4a09bd4dc299a7128f1d4619427cd94968be96770bc77a26db6445b15227b",
+    "forge_recovery.py": "b622f2feed3457b8d4b34551151ff64bfcaa144d954d200f06f380c94d5830ae",
     "forge_remote_run.py": "72e5e13546c914eb2f6a501d898909d0ce12fb688133552fb197e05f3ab1053a",
     "forge_review.py": "4c34c94a06d7edc7e193df641d2b20c7f66450c51fd47f1502a4147dffc8c14a",
     "forge_review_worker.py": "2c76b4e8826c149b3334b994812c295ccdf46c226081c7ee2d1f619ae6f12e2a",
@@ -430,7 +430,7 @@
     "test_forge_lean.py": "9f7a1447ec7ba56d2fad70aab86ba367cf99577a7e028a4e628488e8c9fc8494",
     "test_forge_liveness_230.py": "513147c4c0e468d144a639d3495205ba7d3e35a6c663e6251694eb4a81f065af",
     "test_forge_observation_contract_2810.py": "a8fa2e961236283ee4be723ff5bec6d75ea12d6fd671da6299a39856ce91e4a3",
-    "test_forge_recovery_0311.py": "a300ff8b2f2b944786fa2bc9f688e75742a63881d28aff8f74a78ca76aa5e540",
+    "test_forge_recovery_0311.py": "c8c5525dea36414a3d88d1fad5ae1fcea2dc9da9333d16187844d7e74e58f3df",
     "test_forge_remote_admission_2710.py": "40b1bd5f8f4327e152c14c0bb79e11bbf11b2f0e3bc5770ff44ac07ffa09a25f",
     "test_forge_review_fixes_server.py": "e40e5a791e521bf19eb67c95c8e03960763ee506d226c5e4f88a7c3222ae2924",
     "test_forge_submission_truth.py": "c1084eb3a7712870bf34a0719710dfc8d5f93750efcfba073e1bba29a93f976a",
@@ -1515,7 +1515,7 @@
     "xtts_voice_rpc.py": "100644",
     "test_fish_discovery.py": "100644"
   },
-  "qualified_source": "805d92ed4c945a9ff547a0b236aca7c6bcd845df",
+  "qualified_source": "8332863d3c2882f6c8335be52ca9dffd5211d4df",
   "mirror_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".env.example": "85af3211c5085d5fdd13f7ab1cc6c10fc27fd33a95769666f928935be95e2396",
@@ -1627,15 +1627,15 @@
     "fish_miniapp_patch.py": "7595dc746845943f701079a9aae80f4236a02bec4b1bb2a9450a0a642c1dfec9",
     "fish_tts_client.py": "3335098bfc29b01f43f1630cbd9892b957d1614621cdc61ab84b6147c84258bb",
     "fish_voice_ui.py": "d67780e13aa9449df77ba8b9037da310ad3b25a3f553d1a3026a2b587662a239",
-    "forge.py": "89c38e75b0bf4bf3f842d109d2ad3861f31f6acd10fd7a2354cfd172be6732a4",
+    "forge.py": "b3f9edf300e994bcf86d49fb133da69544bda6e99f72364a5eb72538564718b1",
     "forge_battery.py": "ee89589e64d4d312ee7348882b59ebebadc5e953f9a611edd246505843a56cb4",
     "forge_control.py": "97c855e1a634f900ce484f544ab8ae2bd2af3d9324c3151bfcc63dd81380cc94",
     "forge_intelligence.py": "924a2d47b22616d71d1d2531ddde74abf2d8b283fb8d469d971926d41fa54401",
     "forge_learning.py": "b0b0ff26b495acce8b1305604564ecccab4a945e52f05444beeefbebf159910b",
     "forge_liveness.py": "c5d5a3e021c45310bd2b03dcec5f5a9eb3ff615b92fe4d8b4f41702ee17f4520",
     "forge_process.py": "c33344aaa09e207ad9179dce6c9df29ef623033dfd540d5a85a1d25a77d0ff36",
-    "forge_reader.py": "99a6aaa3b9840c2d558bb2dd53ba2b1fb8affad52eabe92906732c027e47bc94",
-    "forge_recovery.py": "6ab04dfca2b22dce73be3ac866c84b45097b0a52e5fe13d318edfa17c262dc21",
+    "forge_reader.py": "94d4a09bd4dc299a7128f1d4619427cd94968be96770bc77a26db6445b15227b",
+    "forge_recovery.py": "b622f2feed3457b8d4b34551151ff64bfcaa144d954d200f06f380c94d5830ae",
     "forge_remote_run.py": "72e5e13546c914eb2f6a501d898909d0ce12fb688133552fb197e05f3ab1053a",
     "forge_review.py": "4c34c94a06d7edc7e193df641d2b20c7f66450c51fd47f1502a4147dffc8c14a",
     "forge_review_worker.py": "2c76b4e8826c149b3334b994812c295ccdf46c226081c7ee2d1f619ae6f12e2a",
@@ -1936,7 +1936,7 @@
     "test_forge_lean.py": "9f7a1447ec7ba56d2fad70aab86ba367cf99577a7e028a4e628488e8c9fc8494",
     "test_forge_liveness_230.py": "513147c4c0e468d144a639d3495205ba7d3e35a6c663e6251694eb4a81f065af",
     "test_forge_observation_contract_2810.py": "a8fa2e961236283ee4be723ff5bec6d75ea12d6fd671da6299a39856ce91e4a3",
-    "test_forge_recovery_0311.py": "a300ff8b2f2b944786fa2bc9f688e75742a63881d28aff8f74a78ca76aa5e540",
+    "test_forge_recovery_0311.py": "c8c5525dea36414a3d88d1fad5ae1fcea2dc9da9333d16187844d7e74e58f3df",
     "test_forge_remote_admission_2710.py": "40b1bd5f8f4327e152c14c0bb79e11bbf11b2f0e3bc5770ff44ac07ffa09a25f",
     "test_forge_review_fixes_server.py": "e40e5a791e521bf19eb67c95c8e03960763ee506d226c5e4f88a7c3222ae2924",
     "test_forge_submission_truth.py": "c1084eb3a7712870bf34a0719710dfc8d5f93750efcfba073e1bba29a93f976a",
@@ -2268,6 +2268,31 @@
       "Ran 6992 tests in 636.189s\n\nOK (skipped=16)"
     ],
     "focused_tests_receipt": "qualified Fish discovery handoff",
-    "new_deployment": false
-  }
+    "new_deployment": false,
+    "canonical_cloud_full_gates_source": "4467942aa2d4b0dfe593f8e72371bfb404bb74c5",
+    "focused_tests_receipt_source": "805d92ed4c945a9ff547a0b236aca7c6bcd845df",
+    "current_source_capture": {
+      "head": "ec97b59cb85f7c3611ba82de118924a0481b8060",
+      "implementation": "8332863d3c2882f6c8335be52ca9dffd5211d4df",
+      "git_connectivity_exit": 0,
+      "live_secret_values_checked": 8,
+      "live_secret_matches": 0,
+      "new_personal_findings": 0,
+      "desktop_composition_qualification": "pending final 2.5.0 gates"
+    }
+  },
+  "qualified_sources": {
+    "fish_discovery": "805d92ed4c945a9ff547a0b236aca7c6bcd845df",
+    "forge_recovery": "8332863d3c2882f6c8335be52ca9dffd5211d4df"
+  },
+  "working_state": {
+    "selected_public_source_clean": true,
+    "private_status_entries_preserved": 16,
+    "private_status_counts": {
+      " M": 13,
+      "??": 3
+    },
+    "head_index_status_refs_preserved_during_capture": true
+  },
+  "excluded_count_scope": "retained historical admission count"
 }

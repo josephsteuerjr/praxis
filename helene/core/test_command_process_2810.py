@@ -18,7 +18,8 @@ def command(root, delay):
     child = ("from pathlib import Path;import time;"
              f"p=Path({str(root)!r});(p/'ready').write_text('ready');"
              f"time.sleep({delay});(p/'written').write_text('done')")
-    parent = f"import subprocess,sys;subprocess.Popen([sys.executable,'-c',{child!r}])"
+    parent = (f"import os,subprocess,sys;from pathlib import Path;subprocess.Popen([sys.executable,'-c',{child!r}]);"
+              f"Path({str(root/'parent-pid')!r}).write_text(str(os.getpid()))")
     parts = [sys.executable, '-c', parent]
     return subprocess.list2cmdline(parts) if os.name == 'nt' else shlex.join(parts)
 
@@ -212,7 +213,18 @@ sys.exit(forge_worker.run(p))
                     until(exited, seconds=max(0, admission_deadline-time.monotonic()))
                 else:
                     proc = next(iter(forge._RUNNERS.values()))
-                    until(proc._leader_exited, seconds=max(0, admission_deadline-time.monotonic()))
+                    if proc.custody_identity()['kind']=='linux-subreaper-v1':
+                        def parent_exited():
+                            marker=root/'parent-pid'
+                            if not marker.exists():return False
+                            try:
+                                state=(Path('/proc')/marker.read_text()/'stat').read_text().rsplit(')',1)[1].split()[0]
+                                return state in {'Z','X'}
+                            except FileNotFoundError:return True
+                        until(parent_exited, seconds=max(0, admission_deadline-time.monotonic()))
+                        self.assertFalse(proc._leader_exited(),'the private custodian must retain its live descendant')
+                    else:
+                        until(proc._leader_exited, seconds=max(0, admission_deadline-time.monotonic()))
                 units = forge._units(tid, 'processes')
                 self.assertEqual(len(units), 1)
                 self.assertEqual(units[0]['status'], 'running')

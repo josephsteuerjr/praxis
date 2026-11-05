@@ -50,7 +50,25 @@ def probe_model(base_url, key="", framework="openai"):
             got = json.load(response)
         rows = got.get("data", []) if isinstance(got, dict) else []
         models = sorted({row["id"] for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"].strip()}) if isinstance(rows, list) else []
-        return {"ok": bool(models), "models": models,
+        details = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or row.get('id') not in models:
+                continue
+            detail = {'id': row['id']}
+            efforts = row.get('reasoning_efforts')
+            if isinstance(efforts, list) and all(isinstance(value, str) for value in efforts):
+                detail['reasoning_efforts'] = efforts
+            default = row.get('default_reasoning_effort')
+            if isinstance(default, str):
+                detail['default_reasoning_effort'] = default
+            tiers = row.get('service_tiers')
+            if isinstance(tiers, list) and all(isinstance(value, dict) and isinstance(value.get('id'), str) for value in tiers):
+                detail['service_tiers'] = [{key:value[key] for key in ('id','name','description') if isinstance(value.get(key),str)} for value in tiers]
+            speeds = row.get('additional_speed_tiers')
+            if isinstance(speeds, list) and all(isinstance(value, str) for value in speeds):
+                detail['additional_speed_tiers'] = speeds
+            details.append(detail)
+        return {"ok": bool(models), "models": models, "model_details": details,
                 "note": "Список моделей получен; генерация и доступ к выбранной модели не проверялись" if models else "Список моделей пуст или недоступен; это не проверка генерации"}
     except (OSError, ValueError) as exc:
         return {"ok": False, "models": [], "note": str(exc)}

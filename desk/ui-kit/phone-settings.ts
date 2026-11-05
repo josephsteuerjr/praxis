@@ -1,8 +1,11 @@
 import { el } from './dom';
 import { relayAccounts } from '../app/src/relay-accounts';
 import { lookCard } from './window/look';
+import { serviceTierReceipt } from './service-tier';
+import { effortPlan, fastModeAvailability, type ModelDetails, type ProviderKind } from './providers';
+import { setEffortOptions, setTierOptions, type ModelCatalog } from './model-controls';
 
-type Field={path:string;label:string;group:string;section:string;type:string;value:string|number|boolean|string[];stored?:boolean;min?:number;max?:number;choices?:Array<[string,string]>};
+type Field={path:string;label:string;group:string;section:string;type:string;value:string|number|boolean|string[];stored?:boolean;min?:number;max?:number;choices?:Array<[string,string]>;hint?:string};
 type Snapshot={groups:Array<[string,string]>;fields:Field[];mtime_ns:string;scope_id:string;agent:string};
 type Reply={ok:boolean;mtime_ns?:string;note?:string;restart_needed?:boolean};
 export type SettingsRequest=<T>(path:string,body?:unknown)=>Promise<T>;
@@ -19,7 +22,9 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
   save.type=reload.type=restart.type='button';restart.hidden=true;save.disabled=true;
   footer.append(save,reload,restart,note);root.append(nav,body,footer);
   let snapshot:Snapshot|undefined,group='',busy=false,revision=0;
+  let codexModels:ModelDetails[]=[];
   const changes=new Map<string,unknown>(),controls=new Map<string,HTMLElement>();
+  const tierObservation=el('p','receipt');tierObservation.dataset.serviceTierActual='';
   const subscription=el('section','phone-subscription');
   const subscriptionNote=el('p','field-hint'),install=el('button','btn btn-quiet','Установить praxis-relay') as HTMLButtonElement;
   install.type='button';install.hidden=true;
@@ -62,10 +67,12 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
     if(original&&original.type!=='password'&&value===original.value)changes.delete(path);else changes.set(path,value);
     revision++;save.disabled=busy||changes.size===0;
     root.dataset.dirty=String(changes.size>0);
-    if(['provider','images.enabled','telegram.mode','relay.proxy.mode'].includes(path))visibility();
+    if(['provider','model.model','model.base_url','model.service_tier','images.enabled','telegram.mode','relay.proxy.mode'].includes(path))visibility();
   }
   function visibility() {
     const provider=changes.get('provider')??snapshot?.fields.find(row=>row.path==='provider')?.value;
+    const tier=controls.get('model.service_tier')?.closest<HTMLElement>('.phone-setting');
+    if(tier)tier.hidden=provider!=='chatgpt';
     const images=changes.get('images.enabled')??snapshot?.fields.find(row=>row.path==='images.enabled')?.value;
     subscription.hidden=provider!=='chatgpt'&&!images;
     for(const path of ['model.key','model.base_url']) {
@@ -76,6 +83,30 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
     const external=controls.get('phone.external')?.closest<HTMLElement>('.phone-setting');
     if(external)external.hidden=phoneMode!=='stable';
     const current=(path:string)=>changes.get(path)??snapshot?.fields.find(row=>row.path===path)?.value;
+    const details=codexModels.find(item=>item.id===String(current('model.model') || ''));
+    const fastAvailable=fastModeAvailability(details);
+    const tierSelect=controls.get('model.service_tier') as HTMLSelectElement|undefined;
+    if(tierSelect)setTierOptions(tierSelect,fastAvailable,String(current('model.service_tier') || ''));
+    const effort=controls.get('model.reasoning_effort') as HTMLSelectElement|undefined;
+    if(effort) {
+      const model=String(current('model.model') || '');
+      const providerKind=(provider==='openai'?'api':provider) as ProviderKind;
+      const plan=effortPlan(providerKind,model,String(current('model.base_url') || ''),codexModels.find(item=>item.id===model)?.reasoning_efforts);
+      setEffortOptions(effort,plan.chips.length?plan.chips:[{value:'',label:'По умолчанию'}],String(current('model.reasoning_effort') || ''));
+      const wrapper=effort.closest<HTMLElement>('.phone-setting');
+      if(wrapper) {
+        let hint=wrapper.querySelector<HTMLElement>('[data-codex-effort-hint]');
+        if(!hint){hint=el('span','field-hint');hint.dataset.codexEffortHint='';wrapper.append(hint);}
+        hint.textContent=provider==='chatgpt'&&current('model.reasoning_effort')==='none'
+          ? 'В старой настройке сохранено «none». Сейчас применяется рассуждение модели по умолчанию.' : '';
+        hint.hidden=!hint.textContent;
+      }
+    }
+    const fastHint=controls.get('model.service_tier')?.closest<HTMLElement>('.phone-setting')?.querySelector<HTMLElement>('[data-service-tier-hint]');
+    if(fastHint) {
+      const original=snapshot?.fields.find(row=>row.path==='model.service_tier')?.hint || '';
+      fastHint.textContent=original+(fastAvailable===null?' Каталог ещё не подтвердил ускорение этой модели.':fastAvailable===false?' Выбранная модель не объявила поддержку Fast mode.':' Фактический режим определяется ответом сервера.');
+    }
     for(const [path,control] of controls) {
       if(path.startsWith('relay.proxy.')&&path!=='relay.proxy.mode')control.closest<HTMLElement>('.phone-setting')!.hidden=current('relay.proxy.mode')!=='proxy';
       if(['telegram.api_id','telegram.api_hash','telegram.phone'].includes(path))control.closest<HTMLElement>('.phone-setting')!.hidden=current('telegram.mode')!=='account';
@@ -132,6 +163,12 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
           if(field.type==='boolean')label.classList.add('is-toggle');
         }
         controls.set(field.path,control);label.append(caption,control);
+        if(field.hint) {
+          const hint=el('span','field-hint',field.hint);
+          if(field.path==='model.service_tier')hint.dataset.serviceTierHint='';
+          label.append(hint);
+        }
+        if(field.path==='model.service_tier')label.append(tierObservation);
         if(field.type==='password'&&field.stored) {
           const clear=el('button','phone-setting-clear','Удалить сохранённый ключ') as HTMLButtonElement;clear.type='button';
           clear.addEventListener('click',event=>{event.preventDefault();(control as HTMLInputElement).value='';changed(field.path,'');clear.textContent='Будет удалён после сохранения'});
@@ -153,15 +190,36 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
   }
   async function load() {
     if(busy)return;busy=true;save.disabled=reload.disabled=true;note.textContent='Читаю настройки агента…';
-    try{draw(await request<Snapshot>('/api/phone/settings'));note.textContent='';}
+    try{
+      const value=await request<Snapshot>('/api/phone/settings');codexModels=[];draw(value);note.textContent='';
+      tierObservation.textContent=serviceTierReceipt(null);
+      const scope=snapshot?.scope_id;
+      void request<{brain?:{service_tier_actual?:string|null}}>('/api/state').then(value=>{
+        if(snapshot?.scope_id===scope)tierObservation.textContent=serviceTierReceipt(value.brain?.service_tier_actual);
+      }).catch(()=>{});
+      void request<{by_framework?:Record<string,ModelCatalog>}>('/api/brain-models').then(value=>{
+        if(snapshot?.scope_id!==scope)return;
+        codexModels=Object.values(value.by_framework || {}).filter(catalog=>catalog.codex===true).flatMap(catalog=>catalog.model_details || []);
+        visibility();
+      }).catch(()=>{});
+    }
     catch(error){note.textContent=String(error instanceof Error?error.message:error);note.className='receipt err';}
     finally{busy=false;reload.disabled=false;save.disabled=changes.size===0;}
   }
   save.addEventListener('click',async()=>{
     if(busy||!snapshot||!changes.size)return;
+    const current=(path:string)=>changes.get(path)??snapshot?.fields.find(row=>row.path===path)?.value;
+    const provider=current('provider');
+    const model=String(current('model.model') || '');
+    const effort=String(current('model.reasoning_effort') || '');
+    const plan=effortPlan((provider==='openai'?'api':provider) as ProviderKind,model,String(current('model.base_url') || ''),codexModels.find(item=>item.id===model)?.reasoning_efforts);
+    if((changes.has('provider')||changes.has('model.model')||changes.has('model.reasoning_effort'))&&effort&&!plan.chips.some(chip=>chip.value===effort)) {
+      note.textContent='Выбери допустимое усилие для новой модели или «По умолчанию».';note.className='receipt err';return;
+    }
     busy=true;save.disabled=reload.disabled=true;note.className='receipt';note.textContent='Сохраняю настройки агента…';
     const bytes=crypto.getRandomValues(new Uint8Array(16));const operation=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
     const submitted=new Map(changes),submittedRevision=revision;
+    if((changes.has('provider')||changes.has('model.model'))&&['priority','fast'].includes(String(current('model.service_tier')))&&(provider!=='chatgpt'||fastModeAvailability(codexModels.find(item=>item.id===model))!==true))submitted.set('model.service_tier','');
     try {
       let reply:Reply;
       try {reply=await request<Reply>('/api/phone/settings',{changes:Object.fromEntries(submitted),mtime_ns:snapshot.mtime_ns,scope_id:snapshot.scope_id,operation})}
@@ -179,6 +237,7 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
       }
       note.textContent=(reply.note||'Сохранено.')+(changes.size?' Есть новые несохранённые правки.':'');
       note.className='receipt ok';restart.hidden=!reply.restart_needed;root.dataset.dirty=String(changes.size>0);
+      visibility();
       void accounts.refresh();
     }catch(error){note.textContent=(error instanceof Error?error.message:String(error))+' Правки остались в форме.';note.className='receipt err';}
     finally{busy=false;reload.disabled=false;save.disabled=changes.size===0;}

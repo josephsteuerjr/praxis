@@ -139,7 +139,7 @@ export function voiceCard(draft: Config): VoiceCard {
     voice.enabled = v;
     void refresh();
   });
-  const keepOff = toggle("Держать модель в памяти между голосовыми", keep, (v) => {
+  const keepOff = toggle("Прогревать Whisper при запуске", keep, (v) => {
     keep = v;
     voice.keep_loaded = v;
   });
@@ -489,8 +489,8 @@ export function voiceCard(draft: Config): VoiceCard {
 
   box.append(voicePreferencesFields(), onOff, status, pickBox, actions, keepOff,
     el("p", "field-hint",
-      "Распознавание использует около 1,5 ГБ памяти. На компьютере модель выгружается после обработки, " +
-      "на сервере остаётся в памяти. Изменения применяются после перезапуска."),
+      "Whisper использует все доступные потоки CPU и остаётся в памяти 30 минут после последнего использования. " +
+      "Объём памяти зависит от выбранной модели. Прогрев при запуске готовит её заранее. Изменения применяются после перезапуска."),
     el("hr", "card-split"),
     speakOff, speechPickBox, speechStatus, speechFields, fishFields,
     (()=>{const field=voiceField('Текст для прослушивания');field.append(sample);return field})(), audio, speechActions,

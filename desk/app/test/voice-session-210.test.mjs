@@ -25,7 +25,7 @@ function harness({permission,failSend=false}={}){
  await h.session.send();assert.equal(h.sent.length,1);assert.deepEqual(h.sent[0].target,target);assert.equal(h.session.state,'idle');assert.equal(h.stops(),1);
 }
 {
- const h=harness();await h.session.hold(target,'send');h.time(1500);h.session.release();h.session.release();await flush();assert.equal(h.sent.length,1);assert.equal(h.session.state,'idle');
+ const h=harness();await h.session.hold(target,'send');h.time(1500);h.session.release();h.session.release();await flush();assert.equal(h.sent.length,1);assert.equal(h.session.state,'idle');assert.ok(!h.states.includes('paused'),'release-send never paints a paused preview');
 }
 {
  const h=harness();await h.session.hold(target,'send');h.time(800);h.session.pause();h.session.release();await flush();assert.equal(h.sent.length,0);assert.equal(h.session.state,'paused');

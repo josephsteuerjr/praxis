@@ -11,7 +11,7 @@ function nativeHint(){const b=nativeState.bindings;return b?.record ? `Клав�
 export function voicePreferences(): VoicePreferences {
   let saved: Partial<VoicePreferences> = {};
   try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
-  return {hotkey: typeof saved.hotkey === 'string' ? saved.hotkey : 'Ctrl+Alt+Space', global: saved.global !== false, autoplay: saved.autoplay === true};
+  return {hotkey: typeof saved.hotkey === 'string' ? saved.hotkey : 'Ctrl+Alt+Space', global: saved.global !== false, autoplay: saved.autoplay !== false};
 }
 export function writeVoicePreferences(patch: Partial<VoicePreferences>) {
   const next = {...voicePreferences(), ...patch};
@@ -30,13 +30,13 @@ export function shortcutFromEvent(e: KeyboardEvent): string | null {
 export function voiceHelp() {
   const ui = paperDialog('Говори, когда удобно'); ui.dialog.classList.add('voice-help');
   const prefs = voicePreferences();
-  ui.body.innerHTML = `<p class="lrn-kicker">Голосовые сообщения</p><p class="lrn-lead">Удерживай <kbd>${esc(nativeState.bindings?.record||prefs.hotkey)}</kbd>, пока говоришь.</p><div class="voice-help-grid"><div><b>В окне Hélène</b><p>Отпусти — запись останется на паузе. Можно послушать, продолжить или отправить.</p></div><div><b>В другом приложении</b><p>Отпусти — голосовое сразу отправится в выбранный чат.</p></div></div><p>${nativeHint() ? esc(nativeHint())+' В окне также работают Shift и Esc.' : '<kbd>Shift</kbd> во время записи — оставить на паузе, без отправки. <kbd>Esc</kbd> — удалить запись.'}</p><p>Кнопка микрофона тоже включает запись и ставит её на паузу. Сочетание и автоозвучка меняются в настройках.</p>`;
+  ui.body.innerHTML = `<p class="lrn-kicker">Голосовые сообщения</p><p class="lrn-lead">Удерживай <kbd>${esc(nativeState.bindings?.record||prefs.hotkey)}</kbd>, пока говоришь. Отпусти — голосовое отправится.</p><div class="voice-help-grid"><div><b>В окне Hélène</b><p>Отпускание сразу отправляет запись в выбранный чат.</p></div><div><b>В другом приложении</b><p>То же сочетание, то же действие: отпусти, чтобы отправить.</p></div></div><p>${nativeHint() ? esc(nativeHint()) : '<kbd>Shift</kbd> во время записи — оставить на паузе, без отправки. <kbd>Esc</kbd> — удалить запись.'}</p><p>Чтобы послушать запись перед отправкой, поставь её на паузу. Если Shift входит в сочетание записи, используй кнопку паузы. Микрофон включает запись; повторное нажатие отправляет её. Новые голосовые ответы воспроизводятся автоматически, если автоозвучка включена в настройках.</p>`;
   ui.footer.append(paperButton('Настройки голоса', () => { ui.dialog.close(); localStorage.setItem('settings.group','brain'); dispatchEvent(new CustomEvent('frame-go', {detail: 'settings'})); let attempts=0; const timer=setInterval(()=>{const target=document.querySelector('[data-voice-preferences]'); if(target){document.querySelector<HTMLButtonElement>('.settings-tab[data-group=brain]')?.click();target.scrollIntoView({block:'center',behavior:'smooth'});clearInterval(timer);}else if(++attempts>=30)clearInterval(timer);},100); }, true));
 }
 export function voicePreferencesFields(): HTMLElement {
   const box = document.createElement('section'); box.dataset.voicePreferences = ''; box.className = 'voice-preferences';
   const prefs = voicePreferences();
-  box.innerHTML = `<h4>Запись и воспроизведение</h4><label class="field-label">Горячие клавиши <input class="field-input" data-hotkey readonly aria-label="Сочетание для записи" value="${esc(prefs.hotkey)}"></label><p class="field-hint">Нажми в поле и задай сочетание. В окне отпускание ставит запись на паузу; вне окна — отправляет.</p><label class="voice-option"><input type="checkbox" data-global ${prefs.global ? 'checked' : ''}> Записывать из других приложений</label><label class="voice-option"><input type="checkbox" data-autoplay ${prefs.autoplay ? 'checked' : ''}> Автоматически воспроизводить новые голосовые ответы</label><p class="field-hint" data-voice-native-status></p>`;
+  box.innerHTML = `<h4>Запись и воспроизведение</h4><label class="field-label">Горячие клавиши <input class="field-input" data-hotkey readonly aria-label="Сочетание для записи" value="${esc(prefs.hotkey)}"></label><p class="field-hint">Нажми в поле и задай сочетание. Удерживай для записи, отпусти для отправки — и в окне, и вне его. Shift — пауза, Esc — отмена.</p><label class="voice-option"><input type="checkbox" data-global ${prefs.global ? 'checked' : ''}> Записывать из других приложений</label><label class="voice-option"><input type="checkbox" data-autoplay ${prefs.autoplay ? 'checked' : ''}> Автоматически воспроизводить новые голосовые ответы</label><p class="field-hint" data-voice-native-status></p>`;
   const status = box.querySelector<HTMLElement>('[data-voice-native-status]')!;
   const describe = async () => {
     if (electron?.shell !== 'python') { status.textContent = 'В этом окне сочетание работает, пока окно активно.'; return; }

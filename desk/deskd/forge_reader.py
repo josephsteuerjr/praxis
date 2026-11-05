@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Owner-only Forge observations. No core import, locks, process probes or writes.
+"""Owner-only Forge observations. No Forge runtime, locks, process probes or writes.
 
 Files remain owned by Forge. Missing optional progress is not a dead worker;
 malformed/unreadable records are errors, not an empty team. Content is addressed
@@ -11,6 +11,7 @@ import datetime as dt
 import codecs
 import base64
 import hashlib
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -133,6 +134,32 @@ def _payload_refs(result: dict) -> dict:
     return out
 
 
+def _recovered_status(folder: Path, result: dict) -> str | None:
+    if not (folder/'custody-recovery.json').is_file():
+        return None
+    # Use the shipped pure validator, independently of the profile's code path.
+    # The two layouts are portable app/deskd and repository desk/deskd.
+    root = Path(__file__).resolve().parents[2]
+    path = root/'tree/forge_recovery.py'
+    if not path.is_file():
+        path = root/'praxis/forge_recovery.py'
+    if not path.is_file():
+        return None
+    try:
+        path = _inside(root,path)
+        spec = importlib.util.spec_from_file_location('_helene_forge_recovery_reader',path)
+        if spec is None or spec.loader is None:
+            return None
+        validator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(validator)
+        if validator.read_recovery(folder) is None:
+            return None
+        status = str(result.get('status') or 'lost')
+        return status if status in validator.TERMINAL else 'lost'
+    except (ImportError, OSError, SyntaxError, AttributeError, ReadError):
+        return None
+
+
 def _unit(folder: Path, task_id: str) -> dict:
     request = _read(folder, "request.json", required=True)
     if request.get("id") not in (None, folder.name) or request.get("task_id") not in (None, task_id):
@@ -174,6 +201,9 @@ def _unit(folder: Path, task_id: str) -> dict:
                  'waiting' if progress.get('phase') == 'waiting' else
                  'queued' if request.get('status') == 'queued' else
                  'running' if fresh and liveness.get('state')=='alive' and request.get('status') in ('starting','running','finishing') else 'unknown')
+    recovered = _recovered_status(folder,result)
+    if recovered is not None:
+        effective = recovered
     process=request.get('process_identity') or {}
     return {
         "id": folder.name, "parent_unit_id": str(request.get("parent_unit_id") or ""),
@@ -182,7 +212,8 @@ def _unit(folder: Path, task_id: str) -> dict:
         "subtask": request.get("brief") or request.get("goal") or "",
         "status": effective,
         "request_status": str(request.get("status") or ""),
-        "custody": "unresolved_stop" if unresolved else "result" if result else "unknown",
+        "custody": "recovered_boundary" if recovered is not None else "unresolved_stop" if unresolved else "result" if result else "unknown",
+        "custody_recovered": recovered is not None,
         "created": request.get("created"), "finished": result.get("finished"),
         "started": process.get('birth') if isinstance(process,dict) and process.get('adapter')=='psutil-v1' else None,
         "observation": observation, "process_liveness": liveness['state'], "liveness": liveness,
@@ -270,7 +301,8 @@ def activity(tree: Path, limit: int = 20, cursor: str = '') -> dict:
         row = task_detail(tree, folder.name)
         if not row['agents']:
             continue
-        if any(unit['status'] not in _TERMINAL for unit in row['agents']):
+        if any(not unit.get('custody_recovered') and unit['status'] not in _TERMINAL
+               for unit in row['agents']):
             active.append(row)
         else:
             recent.append(row)

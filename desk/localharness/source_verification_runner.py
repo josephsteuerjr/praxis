@@ -252,6 +252,13 @@ def _pytest(source,value,sandbox=None):
     return 0 if value['successful'] and value['coverage_complete'] and value['collected'] else 1
 
 
+def _bootstrap(root, *, required=False):
+    """Use the selected core's hermetic entrypoint before test imports."""
+    path = root / 'praxis_test.py'
+    if required or path.is_file():
+        runpy.run_path(str(path), run_name='verification_bootstrap')
+
+
 def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None, dependencies=None,framework='unittest',shard_index=0,shard_count=1,python_sdk=None,modules_file=None,shared_root=None):
     root = Path(root).resolve()
     value = {'format': 'helene-unittest-observation.v1', 'collected': [], 'executed': [], 'outcomes': [], 'complete': False}
@@ -326,6 +333,7 @@ def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None,
         sys.path[:0] = [str(root), str(root / 'localharness')]
         if framework=='pytest':
             if not source:raise ValueError('Pytest lane requires its exact source')
+            _bootstrap(root)
             code=_pytest(source,value,sandbox)
             Path(report).write_text(json.dumps(value,ensure_ascii=False,sort_keys=True),encoding='utf8')
             return code
@@ -334,7 +342,7 @@ def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None,
             names=json.loads(Path(modules_file).read_text(encoding='utf8'))
             if (not isinstance(names,list) or any(not isinstance(n,str) for n in names)
                     or len(names)!=len(set(names))):raise ValueError('Invalid module partition')
-            runpy.run_path(str(root/'praxis_test.py'),run_name='verification_bootstrap')
+            _bootstrap(root, required=True)
             suite=unittest.TestSuite()
             for name in names:
                 path=Path(name)
@@ -347,14 +355,13 @@ def run(root, report, *, source='', pattern='test*.py', lock=None, sandbox=None,
             value['module_sources']=names
         elif not source:
             # Exactly the product's hermetic bootstrap, then its full discovery.
-            runpy.run_path(str(root / 'praxis_test.py'), run_name='verification_bootstrap')
+            _bootstrap(root, required=True)
             suite = unittest.defaultTestLoader.discover(str(root), pattern=pattern, top_level_dir=str(root))
         else:
             path = Path(source).resolve()
             # A focused core file needs the same disposable environment,
             # credentials and network fence as full core discovery.
-            if (root / 'praxis_test.py').is_file():
-                runpy.run_path(str(root / 'praxis_test.py'), run_name='verification_bootstrap')
+            _bootstrap(root)
             sys.path.insert(0, str(path.parent))
             spec = importlib.util.spec_from_file_location(path.stem, path)
             if spec is None or spec.loader is None:

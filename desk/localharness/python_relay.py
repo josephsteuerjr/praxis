@@ -85,8 +85,10 @@ def control(agent,op,*,timeout_sec=20,**arguments):
 
 def hot_settings(agent):
     config=load(agent.config);model=config.get('model') or {}
+    effort=str(model.get('reasoning_effort') or 'default').strip().lower()
+    if effort=='none':effort='default'
     return control(agent,'configure',settings={'defaults':{'model':model.get('model',''),
-        'reasoning':model.get('reasoning_effort') or 'none'}})
+        'reasoning':effort}})
 
 
 def invoke(owner,command,args):

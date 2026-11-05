@@ -64,16 +64,23 @@ class Findings(unittest.TestCase):
     def test_uncertain_local_timeout_keeps_one_owned_identity_for_subtree_stop(self):
         parent = self.unit(status='queued')
         proc = mock.Mock(pid=9281, returncode=None)
+        identity = {'kind': 'fixture-command', 'pid': proc.pid}
+        proc.custody_identity.return_value = identity
         proc.poll.return_value = None
         proc.wait.side_effect = forge.subprocess.TimeoutExpired('echo test', 1)
         self.patch('_remote_client', lambda _: None)
         self.patch('_stop_foreground', lambda _: (False, 'group census unavailable'))
         self.patch('_RUNNERS', {})
-        with mock.patch('command_process.CommandProcess', return_value=proc):
+        with mock.patch('command_process.CommandProcess', return_value=proc) as constructor:
             result = forge.run(self.tid, 'echo test', timeout=1, _parent_request_path=str(parent/'request.json'))
+        self.assertTrue(constructor.call_args.kwargs['defer_start'])
+        proc.admit.assert_called_once_with()
         rows = forge._units(self.tid, 'processes')
         self.assertEqual(len(rows), 1, 'one admitted command must retain one owned identity')
         self.assertEqual(rows[0]['parent_unit_id'], parent.name)
+        self.assertEqual(rows[0]['command_identity'], identity)
+        self.assertEqual(rows[0]['supervisor_pid'], proc.pid)
+        self.assertEqual(rows[0]['status'], 'unknown')
         self.assertIn(rows[0]['id'], result)
         self.patch('_kill_tree', lambda *args, **kw: 'остановлен')
         self.patch('_pid_alive', lambda *args: False)
@@ -133,12 +140,14 @@ class LegacySDK(unittest.TestCase):
         with mock.patch.object(llm, '_client_for', return_value=old) as client, \
              mock.patch.object(llm, '_config', return_value=config), \
              mock.patch.object(llm, '_protocol', return_value='openai'), \
-             mock.patch.object(llm, '_call_openai', return_value='chat') as chat, \
-             mock.patch.object(llm, '_call_responses', return_value='responses') as responses:
-            self.assertEqual(llm._call('openai', 'test', _resolved=True), 'chat')
+             mock.patch.object(llm, '_call_openai', return_value=llm.LLMResponse(text='chat')) as chat, \
+             mock.patch.object(llm, '_call_responses', return_value=llm.LLMResponse(text='responses')) as responses:
+            reply = llm._call('openai', 'test', _resolved=True)
+            self.assertEqual(reply.text, 'chat')
+            self.assertIsNone(reply.service_tier_requested)
             responses.assert_not_called()
             client.return_value = modern
-            self.assertEqual(llm._call('openai', 'test', _resolved=True), 'responses')
+            self.assertEqual(llm._call('openai', 'test', _resolved=True).text, 'responses')
             config['frameworks']['openai']['api_mode'] = 'responses'
             client.return_value = old
             with self.assertRaisesRegex(RuntimeError, 'SDK.*Responses'):

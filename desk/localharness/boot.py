@@ -1803,7 +1803,8 @@ def _brain_config(cfg: dict) -> dict:
         if vision:
             role_cfg["vision_model"] = vision
         effort = str(block.get("reasoning_effort") or "").strip().lower()
-        if effort and not inherited:
+        codex_none = effort == 'none' and out['frameworks'][primary].get('provider') == 'relay'
+        if effort and not inherited and not codex_none:
             role_cfg["reasoning_effort"] = effort
         elif inherited and role_cfg["model"].strip().lower().startswith("glm-"):
             # 08.09: у GLM серверное умолчание глубины — max. Оценщик без ступени
@@ -1811,6 +1812,13 @@ def _brain_config(cfg: dict) -> dict:
             # поставил на low. Ступень оценщика — low, если не задана явно блоком
             # `evaluator`; чужим провайдерам ничего не подставляется.
             role_cfg["reasoning_effort"] = "low"
+        from localharness.fast_mode import normalize as tier_value
+        override = (cfg.get('roles') or {}).get(role) or {}
+        selected_tier = override.get('service_tier', block.get('service_tier') if not inherited else None)
+        if out['frameworks'][primary].get('provider') == 'relay':
+            tier = tier_value(selected_tier)
+            if tier is not None:
+                role_cfg['service_tier'] = tier
         out["roles"][role] = role_cfg
     out["limits"]["max_tool_iters"] = _int_or(cfg.get("max_tool_iters") or 20, 20,
                                               what="max_tool_iters")
@@ -1879,9 +1887,9 @@ _OWNED_ROLE_KEYS = ("framework", "model", "max_tokens", "fallback_model",
                     "fallback_framework", "vision_model", "reasoning_effort")
 
 
-def _projected_fields(built: dict) -> dict[str, list[str]]:
+def _projected_fields(built: dict) -> dict[str, object]:
     """Какие поля фреймворков проекция записала непустыми — расписке, чтобы уметь их снять."""
-    out: dict[str, list[str]] = {}
+    out: dict[str, object] = {}
     for name, sub in (built.get("frameworks") or {}).items():
         if isinstance(sub, dict):
             fields = sorted(k for k, v in sub.items() if v not in (None, ""))
@@ -1890,6 +1898,10 @@ def _projected_fields(built: dict) -> dict[str, list[str]]:
     channel = built.get("image_channel")
     if isinstance(channel, dict):
         out["_image_channel"] = sorted(k for k, v in channel.items() if v not in (None, ""))
+    tiers = {name: value['service_tier'] for name, value in (built.get('roles') or {}).items()
+             if isinstance(value, dict) and value.get('service_tier') is not None}
+    if tiers:
+        out['_service_tiers'] = tiers
     return out
 
 
@@ -1944,6 +1956,10 @@ def _merge_brain(current: dict, built: dict, previously_projected: dict | None =
             for name, sub in value.items():
                 if isinstance(sub, dict) and isinstance(block.get(name), dict):
                     kept = {k: v for k, v in block[name].items() if k not in _OWNED_ROLE_KEYS}
+                    prior_tier = (prev.get('_service_tiers') or {}).get(name)
+                    if ('service_tier' not in sub and prior_tier is not None
+                            and kept.get('service_tier') == prior_tier):
+                        kept.pop('service_tier', None)
                     block[name] = {**kept, **sub}
                 else:
                     block[name] = sub
@@ -2012,7 +2028,7 @@ def _consumer_brain_config(built, code_dir):
             role.pop('fallback_framework', None)
     legacy['frameworks'] = {key: {'base_url': '', 'api_key': ''} for key in ('openai', 'anthropic')}
     for protocol, (_, spec) in selected.items():
-        legacy['frameworks'][protocol] = {key: spec.get(key, '') for key in ('base_url', 'api_key')}
+        legacy['frameworks'][protocol] = {key: spec.get(key, '') for key in ('base_url', 'api_key', 'protocol', 'provider', 'api_mode')}
     return legacy
 
 

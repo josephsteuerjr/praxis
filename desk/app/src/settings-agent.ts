@@ -14,10 +14,12 @@
 // пишется здесь, идёт через `keepBlock`.
 import QRCode from "qrcode";
 import { api, shell } from "../../ui-kit/window/api";
-import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan } from "../../ui-kit/providers";
+import { ANTHROPIC_PRESETS, BILLING_LABEL, clampEffort, effortPlan, fastModeAvailability, type ModelDetails } from "../../ui-kit/providers";
 import { keepBlock } from "../../ui-kit/window/config";
 import { el, humanError, toast } from "../../ui-kit/window/lib";
-import { button, card, chips, field, setField, toggle } from "../../ui-kit/dom";
+import { button, card, chips, choice, field, setField, toggle } from "../../ui-kit/dom";
+import { FAST_MODE_HINT, collectServiceTier, serviceTierChoices, serviceTierReceipt } from "../../ui-kit/service-tier";
+import { S } from "../../ui-kit/window/state";
 import { computerCard, storedComputer } from "./computer";
 import { MODE_KEY, loadMode, type ModeState } from "../../ui-kit/window/mode";
 import { modeCard } from "./modecard";
@@ -109,6 +111,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   }
   let provider = providerOf(draft);
   const savedProvider = provider;
+  let savedModelProvider = provider;
+  let savedModelName = String(draft.model.model || '').trim();
   // Ключи провайдеров храним раздельно. Раньше в конфиге был один model.key, а
   // черновик неактивной вкладки заполнялся пустотой: щелчок по чужой вкладке и
   // «Сохранить» стирали боевой ключ прежнего провайдера — единственную копию на
@@ -145,6 +149,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       provider = value;
       syncPick();
       syncEffort();
+      syncFastMode();
+      if (provider === 'chatgpt') void loadCodexModels();
       syncSpare();
     });
     pick.append(b);
@@ -242,9 +248,11 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   let relayExecutable=String(draft.relay?.executable||'');
   const relayExecutableField=field('Путь к отдельному praxis-relay',relayExecutable,v=>{relayExecutable=v;},{placeholder:'Автоматически после установки компонента'});
   const chatgptDraft = { model: provider === "chatgpt" ? String(draft.model.model || "gpt-5.6-sol") : "gpt-5.6-sol" };
+  let codexModels: ModelDetails[] = [];
+  let catalogLoading = false;
   const chatgptGrid = el("div", "form-grid two");
   chatgptGrid.style.marginTop = "14px";
-  const chatgptModelField = field("Модель", chatgptDraft.model, (v) => (chatgptDraft.model = v), { mono: true });
+  const chatgptModelField = field("Модель", chatgptDraft.model, (v) => {chatgptDraft.model = v;syncEffort();syncFastMode();}, { mono: true });
   chatgptGrid.append(chatgptModelField);
   const chatgptModels = el("div", "models");
   chatgptModels.hidden = true;
@@ -258,7 +266,10 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         // Ключ сюда не отдаём: /v1/models у реле авторизацию не проверяет вовсе,
         // а порт 5011 в этот момент может держать не наше реле — и боевой ключ
         // OpenAI уехал бы чужому процессу заголовком Authorization.
-        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT), key: "", framework: "openai" });
+        const r = await shell<{ ok: boolean; note: string; models?: string[]; model_details?:ModelDetails[] }>("probe_model", { baseUrl: relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT), key: "", framework: "openai" });
+        codexModels = r.model_details || [];
+        syncEffort();
+        syncFastMode();
         // Ответ /v1/models доказывает только то, что процесс реле жив: ни вход в
         // аккаунт, ни остаток лимита он не проверяет. Зелёное «моделей 6» при
         // невыполненном входе и было механизмом «всё зелёное, агент молчит».
@@ -280,6 +291,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         renderModels(chatgptModels, r.models || [], chatgptDraft.model, (id) => {
           chatgptDraft.model = id;
           setField(chatgptModelField, id);
+          syncEffort();
+          syncFastMode();
         });
       } catch (e) {
         chatgptProbeOut.className = "receipt err";
@@ -330,13 +343,27 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const modelForEffort = () =>
     provider === "anthropic" ? anthDraft.model : provider === "api" ? apiDraft.model : provider === "local" ? localDraft.model : chatgptDraft.model;
   const urlForEffort = () => provider === "anthropic" ? anthDraft.base_url : provider === "api" ? apiDraft.base_url : provider === "local" ? localDraft.base_url : "";
+  const codexEfforts = () => codexModels.find(model => model.id === chatgptDraft.model.trim())?.reasoning_efforts;
+  async function loadCodexModels() {
+    if (catalogLoading || provider !== 'chatgpt') return;
+    catalogLoading = true;
+    try {
+      const response = await shell<{model_details?:ModelDetails[]}>('probe_model', {
+        baseUrl:relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT),key:'',framework:'openai',
+      });
+      codexModels = response.model_details || [];
+      syncEffort();
+      syncFastMode();
+    } catch { /* Keep the stored choice while the catalog is unavailable. */ }
+    finally { catalogLoading = false; }
+  }
   const syncEffort = () => {
-    const plan = effortPlan(provider, modelForEffort(), urlForEffort());
+    const plan = effortPlan(provider, modelForEffort(), urlForEffort(), codexEfforts());
     effortRow.replaceChildren(el("span", "models-label", "Усилие рассуждения"));
     for (const { value, label } of plan.chips) {
       const chip = el("button", "model-chip", label);
       chip.type = "button";
-      chip.setAttribute("aria-pressed", String(effort === value));
+      chip.setAttribute("aria-pressed", String(effort === value || provider === 'chatgpt' && effort === 'none' && value === ''));
       chip.addEventListener("click", () => {
         effort = value;
         effortChanged = true;
@@ -344,9 +371,43 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       });
       effortRow.append(chip);
     }
-    if (!plan.chips.length) effortRow.append(el("span", "receipt", "шкала этого адреса не подтверждена"));
-    effortHint.textContent = plan.hint + (effort && !plan.chips.some((chip) => chip.value === effort) ? ` Сохранённое значение «${effort}» останется, пока ты его не изменишь.` : "");
+    if (!plan.chips.length) {
+      effortRow.append(el("span", "receipt", "шкала этого адреса не подтверждена"));
+      if (effort) effortRow.append(button('По умолчанию', 'quiet', () => {
+        effort = '';effortChanged = true;syncEffort();
+      }));
+    }
+    effortHint.textContent = plan.hint + (provider === 'chatgpt' && effort === 'none'
+      ? ' В старой настройке сохранено «none». Сейчас применяется рассуждение модели по умолчанию.'
+      : effort && !plan.chips.some((chip) => chip.value === effort) ? ` Сохранённое значение «${effort}» останется, пока ты его не изменишь.` : '');
   };
+  let serviceTier = String(draft.model.service_tier || '');
+  let serviceTierChanged = false;
+  const fastMode = el('section', 'fast-mode');
+  fastMode.dataset.fastMode = '';
+  const fastHint = el('p', 'field-hint');
+  const fastChoices = el('div');
+  const fastAvailable = () => fastModeAvailability(codexModels.find(model => model.id === chatgptDraft.model.trim()));
+  const syncFastMode = () => {
+    fastMode.hidden = provider !== 'chatgpt';
+    const available = fastAvailable();
+    const options = serviceTierChoices(serviceTier, 'По настройке провайдера', available === true);
+    const pick = choice(options.map(([value, title]) => ({
+      value, title,
+      text: value === '' ? 'Сохранить выбор сервера' : value === 'default' ? 'Запросить обычную обработку'
+        : ['priority', 'fast'].includes(value) ? 'Запросить ускоренную обработку' : 'Оставить текущий выбор',
+    })), serviceTier, value => {serviceTier = value;serviceTierChanged = true;syncFastMode();});
+    pick.el.setAttribute('aria-label', 'Скорость обработки модели');
+    pick.el.style.setProperty('--fast-mode-columns', String(options.length));
+    fastChoices.replaceChildren(pick.el);
+    fastHint.textContent = FAST_MODE_HINT + (available === null
+      ? ' Каталог ещё не подтвердил ускорение для выбранной модели.' : available === false
+        ? ' Выбранная модель не объявила поддержку Fast mode.'
+        : ' Выбранный режим будет запрошен для ответов и шагов управления компьютером.');
+    if (available !== true && ['priority','fast'].includes(serviceTier)) fastHint.textContent += ' Сохранён запрос Fast mode. Его можно снять обычным режимом или настройкой провайдера.';
+  };
+  fastMode.append(el('h4', '', 'Скорость обработки'), fastChoices, fastHint,
+    el('p', 'receipt', serviceTierReceipt(S.agentState?.brain?.service_tier_actual)));
   // Запасная и зрячая модели — ручки того же блока `model`, общие для всех провайдеров.
   // До 09.09 их можно было задать только правкой helene.json руками (boot.py их переносил,
   // окно — нет): владелец спросил «есть ли фолбэк в интерфейсе» — не было.
@@ -431,10 +492,12 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     toggle("Закрепить модель", pinnedModel, (v) => (pinnedModel = v)),
     el("span", "field-hint", "агент не сменит модель сам — только ты, здесь"),
   );
-  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, pinRow, spareBox, visionGrid, spareHint);
+  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, fastMode, pinRow, spareBox, visionGrid, spareHint);
   syncSpare();
   syncPick();
   syncEffort();
+  syncFastMode();
+  if (provider === 'chatgpt') void loadCodexModels();
   cards.push(inGroup(card("Модель", model), GROUP.brain));
   const subscriptionBody = el("div");
   subscriptionBody.append(subscriptions.element, relayConnection.element, relayExecutableField);
@@ -741,6 +804,16 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     // «всё зелёное, а агент молчит»: в снимок состояния он не попадает, и
     // фраза состояния сказать про него не может.
     note: () => noKeyNote + mode.note(),
+    didSave(saved: Config) {
+      savedModelProvider = providerOf(saved);
+      savedModelName = String(saved.model?.model || '').trim();
+      effortChanged = false;
+      serviceTier = String(saved.model?.service_tier || '');
+      serviceTierChanged = false;
+      if (saved.model?.service_tier !== undefined) draft.model.service_tier = saved.model.service_tier;
+      else delete draft.model.service_tier;
+      syncFastMode();
+    },
     collect(out: Config): string {
         out.model = keepBlock(out.model, { framework: "openai" });
         out.model.provider = provider;
@@ -807,9 +880,17 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         }
         // Ключи неактивных провайдеров переживают смену вкладки.
         out.model.keys = keys;
-        const effortOut = effortChanged ? clampEffort(provider, modelForEffort(), effort, urlForEffort()) : effort;
+        const selectedPlan = effortPlan(provider, modelForEffort(), urlForEffort(), codexEfforts());
+        const routeChanged = provider !== savedModelProvider || modelForEffort().trim() !== savedModelName;
+        if ((routeChanged || effortChanged) && effort && !selectedPlan.chips.some(chip => chip.value === effort)) {
+          return 'Выбери допустимое усилие для новой модели или «По умолчанию». Сохранённая ступень не подходит выбранному маршруту.';
+        }
+        const effortOut = effortChanged ? clampEffort(provider, modelForEffort(), effort, urlForEffort(), codexEfforts()) : effort;
         if (effortOut) out.model.reasoning_effort = effortOut;
         else delete out.model.reasoning_effort;
+        collectServiceTier(out.model, serviceTier, serviceTierChanged);
+        if (provider !== savedModelProvider && provider !== 'chatgpt') delete out.model.service_tier;
+        if (routeChanged && provider === 'chatgpt' && fastAvailable() !== true && ['priority','fast'].includes(String(out.model.service_tier))) delete out.model.service_tier;
         // Запасная и зрячая модели: пустое поле — снять ручку, а не записать "".
         delete out.model.fallback_framework;
         delete out.model.fallback_base_url;

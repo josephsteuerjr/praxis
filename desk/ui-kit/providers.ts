@@ -92,22 +92,40 @@ export interface EffortPlan {
   hint: string;
 }
 
+export interface ModelDetails {
+  id: string;
+  reasoning_efforts?: string[];
+  default_reasoning_effort?: string;
+  service_tiers?: Array<{id:string;name?:string;description?:string}>;
+  additional_speed_tiers?: string[];
+}
+
+export function fastModeAvailability(details?: ModelDetails): boolean | null {
+  if (!details || details.service_tiers === undefined && details.additional_speed_tiers === undefined) return null;
+  if (details.service_tiers !== undefined) return details.service_tiers.some(tier => tier.id === 'priority' || tier.id === 'fast');
+  return details.additional_speed_tiers?.some(tier => tier === 'priority' || tier === 'fast') === true;
+}
+
 const LOW: EffortChip = { value: "low", label: "low" };
 const MEDIUM: EffortChip = { value: "medium", label: "medium" };
 const HIGH: EffortChip = { value: "high", label: "high" };
 const XHIGH: EffortChip = { value: "xhigh", label: "xhigh" };
+export const CODEX_REASONING_LEVELS = ['minimal','low','medium','high','xhigh','max','ultra'] as const;
 
 /** Шкала рассуждения, которую программа ДЕЙСТВИТЕЛЬНО передаст провайдеру. */
-export function effortPlan(provider: ProviderKind, model: string, baseUrl = ""): EffortPlan {
+export function effortPlan(provider: ProviderKind, model: string, baseUrl = "", reasoningEfforts?: readonly string[]): EffortPlan {
   const m = (model || "").trim().toLowerCase();
   let host = "";
   try { host = new URL(baseUrl).hostname; } catch {}
   const max: EffortChip = { value: "max", label: "max" };
   const defaults: EffortChip = { value: "", label: "не задавать" };
   if (provider === "chatgpt") {
+    const allowed = [...new Set((reasoningEfforts || []).filter(value => (CODEX_REASONING_LEVELS as readonly string[]).includes(value)))];
     return {
-      chips: [defaults, LOW, MEDIUM, HIGH, XHIGH],
-      hint: "Ступень передаётся реле; доступные значения и умолчание зависят от выбранной модели и аккаунта. Пустое поле не обещает отключения рассуждения.",
+      chips: [{value:'',label:'По умолчанию'}, ...allowed.map(value => ({value,label:value}))],
+      hint: reasoningEfforts === undefined
+        ? 'Допустимые ступени выбранной модели ещё не подтверждены каталогом Codex. По умолчанию используется настройка модели.'
+        : 'Ступени получены из каталога выбранной модели Codex. По умолчанию используется её настройка рассуждения.',
     };
   }
   if (provider === "anthropic") {
@@ -151,7 +169,7 @@ export function effortPlan(provider: ProviderKind, model: string, baseUrl = ""):
 }
 
 /** Ступень, которую можно сохранить для провайдера: чужая сбрасывается в пустую. */
-export function clampEffort(provider: ProviderKind, model: string, effort: string, baseUrl = ""): string {
+export function clampEffort(provider: ProviderKind, model: string, effort: string, baseUrl = "", reasoningEfforts?: readonly string[]): string {
   const value = (effort || "").trim().toLowerCase();
-  return effortPlan(provider, model, baseUrl).chips.some((c) => c.value === value) ? value : "";
+  return effortPlan(provider, model, baseUrl, reasoningEfforts).chips.some((c) => c.value === value) ? value : "";
 }

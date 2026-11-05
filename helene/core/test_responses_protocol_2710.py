@@ -24,12 +24,12 @@ class ResponsesProtocol(unittest.TestCase):
         with mock.patch.object(llm, '_client_for', return_value=old) as client, \
              mock.patch.object(llm, '_config', return_value=config), \
              mock.patch.object(llm, '_protocol', return_value='openai'), \
-             mock.patch.object(llm, '_call_openai', return_value='chat') as chat, \
-             mock.patch.object(llm, '_call_responses', return_value='responses') as responses:
-            self.assertEqual(llm._call('openai','fixture',_resolved=True),'chat')
+             mock.patch.object(llm, '_call_openai', return_value=llm.LLMResponse(text='chat')) as chat, \
+             mock.patch.object(llm, '_call_responses', return_value=llm.LLMResponse(text='responses')) as responses:
+            self.assertEqual(llm._call('openai','fixture',_resolved=True).text,'chat')
             responses.assert_not_called()
             client.return_value = modern
-            self.assertEqual(llm._call('openai','fixture',_resolved=True),'responses')
+            self.assertEqual(llm._call('openai','fixture',_resolved=True).text,'responses')
             client.return_value = old;config['frameworks']['openai']['api_mode']='responses'
             with self.assertRaisesRegex(RuntimeError,'SDK.*Responses'):
                 llm._call('openai','fixture',_resolved=True)

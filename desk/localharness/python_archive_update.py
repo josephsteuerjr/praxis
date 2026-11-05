@@ -39,6 +39,35 @@ def declared_runtime_file(old,name,inventory):
 
 
 def prepare(package,target,old,data,*,progress,source_mode='clean',cancelled=None,data_destination=None):
+    if source_mode=='clean':
+        from . import clean_update,migration_lifecycle
+        from .windows_installation import WizardProgress
+        from .parallel_files import copytree
+        from python_migrate import installation_lock
+        package,target,old,data=(Path(p).resolve() for p in (package,target,old,data))
+        clean_update.roots(old,target)
+        if package!=target:clean_update.roots(package,target)
+        if package==old or package.is_relative_to(old):raise ValueError('Incoming programme must be independent of the old one')
+        if not is_python_program(old):raise ValueError('Portable update needs the previous Python programme')
+        if not data.is_dir():raise ValueError('Select the existing agent data folder')
+        require_idle_data(data)
+        def check():
+            if cancelled is not None and cancelled.is_set():raise InterruptedError('Owner cancelled the portable update')
+        check()
+        with installation_lock(target):
+            if package!=target:
+                from .python_source_updater import prepared_install_path
+                prepared=read(prepared_install_path(target))
+                if prepared.get('format')!=clean_update.FORMAT:
+                    if any(path.name!='.helene' for path in target.iterdir()):
+                        raise ValueError('Choose an empty separate programme folder')
+                    copytree(package,target,dirs_exist_ok=True,
+                        ignore=lambda here,names:['.helene'] if Path(here)==package else [])
+            value=clean_update.prepare(old,target,WizardProgress(progress),attached_data=data,data_destination=data_destination)
+            check();progress('stopping_old')
+            migration_lifecycle.stop(old);migration_lifecycle.quiescent(old)
+            check();clean_update.relocate(old,target,value)
+            progress('prepared');return value['note']
     from . import code_transition,update_profile,update_source,migration_source,migration_lifecycle
     from .windows_installation import WizardProgress
     from .python_updates import prepare_code

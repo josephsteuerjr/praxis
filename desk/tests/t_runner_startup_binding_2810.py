@@ -26,12 +26,17 @@ class RunnerStartupBinding(unittest.TestCase):
         self.assertTrue(any(isinstance(n,ast.Expr) for n in selected))
         main.body=selected
         boundary=types.ModuleType('control_watch');installed=[]
+        deliver_callback=object()
+        failure_callback=object()
         namespace={'control_watch':boundary,'agent':object(),'tree':object(),'config_path':object(),
-                   'owner_stop':object(),'speech_bridge':types.SimpleNamespace(install=lambda *args,**kw:installed.append(kw['boundary']))}
+                   'owner_stop':object(),'deliver_speech':deliver_callback,'speech_failed':failure_callback,
+                   'speech_bridge':types.SimpleNamespace(install=lambda *args,**kw:installed.append(kw))}
         with mock.patch.dict(sys.modules,{'control_watch':boundary}):
             exec(compile(ast.fix_missing_locations(ast.Module(body=[main],type_ignores=[])),str(path),'exec'),namespace)
             namespace['main']()
-        self.assertEqual(installed,[boundary])
+        self.assertEqual([row['boundary'] for row in installed],[boundary])
+        self.assertIs(installed[0]['deliver'],deliver_callback)
+        self.assertIs(installed[0]['failed'],failure_callback)
 
 
 if __name__=='__main__':unittest.main()

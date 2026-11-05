@@ -4441,3 +4441,11 @@ body.first-run #state {
   #view .settings .voice-settings .choice.voice-providers,
   #view #connection-guide .choice.connection-goals { grid-template-columns: minmax(0,1fr); }
 }
+
+.fast-mode { margin-top:20px; padding-top:18px; border-top:1px solid var(--line); }
+.fast-mode h4 { margin:0 0 12px; font-size:14px; font-weight:600; }
+#view .settings .fast-mode .choice:not(.stack) { display:grid; grid-template-columns:repeat(var(--fast-mode-columns,3),minmax(0,1fr)); align-items:stretch; }
+.fast-mode .choice-item { min-width:0; height:100%; }
+@media(max-width:560px) { #view .settings .fast-mode .choice:not(.stack) { grid-template-columns:1fr; } }
+
+.fast-mode[hidden], [data-service-tier-field][hidden] { display:none; }

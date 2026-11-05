@@ -85,6 +85,8 @@ def payload(program,*,runtime=True):
 
 
 def prepare(old,new,progress=None,*,verified=None,attached_data=None):
+    from . import clean_update
+    if clean_update.selected(old,new):return clean_update.prepare(old,new,progress,attached_data=attached_data)
     from . import code_transition,update_composition,update_profile
     from .first_start import _bind,_write,FORMAT as FIRST_FORMAT,receipt
     from .python_source_updater import prepared_install_path

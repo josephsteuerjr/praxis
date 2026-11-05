@@ -16,6 +16,14 @@ def main(argv=None,*,places=None):
     values=list(sys.argv[1:] if argv is None else argv)
     parser=argparse.ArgumentParser(add_help=False);parser.add_argument('--root',type=Path,required=True)
     known,arguments=parser.parse_known_args(values);root=known.root.resolve()
+    from localharness import clean_update
+    if clean_update.ready(root):
+        from localharness.package_notice import read
+        note=read(root/'python-migration.json')
+        os.environ['HELENE_USER_DATA']=note['data_paths'][0]
+        if not note.get('startup_proof') and '--migration' not in arguments:
+            arguments=[*arguments,'--migration',note['id']]
+        return ordinary(root,arguments)
     from localharness import first_start
     selected=places or first_start.Places.current()
     completed=first_start.ready(root,selected)

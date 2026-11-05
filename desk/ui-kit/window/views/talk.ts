@@ -485,7 +485,7 @@ export async function render(container: HTMLElement): Promise<void> {
   title.textContent = S.roomName;
   // Над своей комнатой агент подписан своим почерком; чужие комнаты — нет.
   title.classList.toggle("hand", S.room === WINDOW_ROOM);
-  dispatchEvent(new Event("frame-room"));
+  dispatchEvent(new CustomEvent("frame-room", {detail: {scope: S.agent+'|'+S.room}}));
   const peer = S.room;
   let dom = doms.get(container);
   if (!dom || dom.peer !== peer) dom = skeleton(container, peer);

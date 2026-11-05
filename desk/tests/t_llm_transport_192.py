@@ -342,9 +342,11 @@ class ResponsesTests(unittest.TestCase):
                                   ("http://127.0.0.1:5011", None, "chat"),
                                   ("https://other.invalid/v1", "responses", "responses")):
             config = {"frameworks": {"voice_primary": {"protocol": "openai", "api_mode": mode}}}
+            responses = llm.LLMResponse(text='responses')
+            chat = llm.LLMResponse(text='chat')
             with patch.object(llm, "_config", return_value=config), patch.object(llm, "_client_for", return_value=SDK([], url=url)), \
-                 patch.object(llm, "_call_responses", return_value="responses"), patch.object(llm, "_call_openai", return_value="chat"):
-                self.assertEqual(llm._call("voice_primary", "gpt-6.1-sol", _resolved=True), target)
+                 patch.object(llm, "_call_responses", return_value=responses), patch.object(llm, "_call_openai", return_value=chat):
+                self.assertEqual(llm._call("voice_primary", "gpt-6.1-sol", _resolved=True).text, target)
 
     def test_invalid_direct_effort_is_explicit_not_paid_failure(self):
         client = SDK([])

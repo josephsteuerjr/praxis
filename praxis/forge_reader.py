@@ -213,11 +213,21 @@ def _job(folder,task_id,family):
             import forge_remote_run
             projection=forge_remote_run.project_result(folder,request,result,scope=_read(folder.parent.parent,'task.json').get('scope') or 'self')
             effective=projection.get('status','unknown')
+    import forge_recovery
+    recovery = forge_recovery.read_recovery(folder)
+    if recovery:
+        # Same explicit, subject-bound reboot proof as the operational guard.
+        # It discharges custody, not the historical outcome or Stop evidence.
+        effective = result.get('status') or 'lost'
+        if effective not in forge_recovery.TERMINAL:
+            effective = 'lost'
+        projection = {'custody_recovered': True}
     return {'id':folder.name,'family':family,'role':'process' if family=='processes' else 'verification',
         'parent_unit_id':str(request.get('parent_unit_id') or ''),'status':effective,
         'subtask':request.get('command') or request.get('goal') or request.get('name') or '',
         'created':request.get('created'),'finished':result.get('finished'),'request_status':request.get('status'),
-        'custody':'unresolved_stop' if unknown else 'exit_unconfirmed' if effective=='unknown' else 'exit_reconciled' if projection.get('exit_reconciliation') else 'terminal_result' if result else 'exit_unconfirmed',
+        'custody':'recovered_boundary' if recovery else 'unresolved_stop' if unknown else 'exit_unconfirmed' if effective=='unknown' else 'exit_reconciled' if projection.get('exit_reconciliation') else 'terminal_result' if result else 'exit_unconfirmed',
+        'custody_recovered':bool(recovery),
         'exit_reconciliation':projection.get('exit_reconciliation'),
         'process_liveness':'not_probed','supervisor_pid':request.get('supervisor_pid'),
         'observation':{'phase':state.get('status') or request.get('status') or 'unknown','observed_at':state.get('finished') or state.get('started')},

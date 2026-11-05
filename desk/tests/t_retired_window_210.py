@@ -58,18 +58,38 @@ class Retirement(unittest.TestCase):
             self.assertTrue(migration.owner_lease_available(record))
             self.assertEqual(record.read_bytes(),b'active\n')
     @unittest.skipUnless(os.name=='nt','Windows process discovery')
-    def test_pythonw_owner_uses_authenticated_exit_without_service(self):
+    def test_normal_windows_entries_use_authenticated_exit_without_service(self):
         with tempfile.TemporaryDirectory() as temp:
             old=Path(temp);(old/'tree').mkdir();(old/'tree/.desktop-owner.lock').write_bytes(b'active\n')
-            row={'ProcessId':123,'Birth':100.0,'ExecutablePath':str(old/'runtime/pythonw.exe'),
-                 'CommandLine':f'"{old}/runtime/pythonw.exe" -s "{old}/app/python_app.py" --root "{old}"'}
-            with patch.object(migration,'process_snapshot',return_value=[row]), \
-                    patch('psutil.Process') as process,patch.object(migration,'powershell') as ps, \
-                    patch.object(migration,'request_python_exit') as exit_, \
-                    patch('localharness.app_migration.discover',return_value={'agents':[{'tree':str(old/'tree'),'value':{}}]}):
-                process.return_value.create_time.return_value=row['Birth']
-                migration.close_python(old);exit_.assert_called_once_with(old,123)
-                process.return_value.wait.assert_called_once_with(timeout=25);ps.assert_not_called()
+            for interpreter in ('python.exe','pythonw.exe'):
+                for entry in ('python_app.py','windows_start.py'):
+                    with self.subTest(interpreter=interpreter,entry=entry):
+                        row={'ProcessId':123,'Birth':100.0,'ExecutablePath':str(old/'runtime'/interpreter),
+                             'CommandLine':f'"{old}/runtime/{interpreter}" -s "{old}/app/{entry}" --root "{old}"'}
+                        with patch.object(migration,'process_snapshot',return_value=[row]), \
+                                patch('psutil.Process') as process,patch.object(migration,'powershell') as ps, \
+                                patch.object(migration,'request_python_exit') as exit_, \
+                                patch('localharness.app_migration.discover',return_value={'agents':[{'tree':str(old/'tree'),'value':{}}]}):
+                            process.return_value.create_time.return_value=row['Birth']
+                            migration.close_python(old);exit_.assert_called_once_with(old,123)
+                            process.return_value.wait.assert_called_once_with(timeout=25);ps.assert_not_called()
+
+    @unittest.skipUnless(os.name=='nt','Windows process discovery')
+    def test_python_close_ignores_other_interpreters_and_entries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            old=Path(temp)/'old';other=Path(temp)/'other'
+            rows=[]
+            for image,entry in ((other/'runtime/pythonw.exe',old/'app/windows_start.py'),
+                                (old/'runtime/pythonw.exe',other/'app/windows_start.py'),
+                                (old/'runtime/python.exe',old/'app/deskapp.py'),
+                                (old/'runtime/pythonw.exe',old/'app/windows_start.py.bak')):
+                rows.append({'ProcessId':123,'Birth':100.0,'ExecutablePath':str(image),
+                             'CommandLine':f'"{image}" -s "{entry}" --root "{old}"'})
+            with patch.object(migration,'process_snapshot',return_value=rows), \
+                    patch('psutil.Process') as process,patch.object(migration,'request_python_exit') as exit_, \
+                    patch('localharness.app_migration.discover') as discover:
+                migration.close_python(old)
+                exit_.assert_not_called();process.assert_not_called();discover.assert_not_called()
     def test_pinned_shortcut_is_retargeted_and_unrelated_binding_is_untouched(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);old=root/'old';new=root/'new';folders=[root/str(i) for i in range(6)]

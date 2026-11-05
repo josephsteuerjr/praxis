@@ -21,6 +21,7 @@ export class VoiceSession {
   private since = 0;
   private parked = false;
   private mode: 'pause' | 'send' = 'pause';
+  get sendsOnRelease() { return this.mode === 'send'; }
   private flushes = new Set<() => void>();
   constructor(private deps: VoiceDependencies) {}
   private now() { return this.deps.now?.() ?? Date.now(); }
@@ -76,7 +77,14 @@ export class VoiceSession {
   }
   async send() {
     if (this.state !== 'recording' && this.state !== 'paused') return;
-    this.pause();
+    // Sending is not an intermediate preview/pause screen. Keep the final
+    // recorder flush, but publish only the sending state to the interface.
+    this.parked = true;
+    if (this.state === 'recording' && this.recorder) {
+      this.elapsed += this.now() - this.since;
+      this.recorder.pause();
+      this.stream?.getAudioTracks().forEach(track => { track.enabled = false; });
+    }
     if (!this.recorder || !this.target) return;
     const epoch = this.epoch, target = {...this.target};
     this.state = 'sending'; this.changed();

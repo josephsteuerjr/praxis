@@ -137,6 +137,18 @@ class LegacyAdmission(unittest.TestCase):
         with patch.object(sys, 'argv', argv):
             return updater.main()
 
+    def test_mechanical_api_marks_in_place_clean_and_preserves_recovery_protocol(self):
+        from localharness import clean_update
+        value = updater.prepare_install(self.old, self.new)
+        self.assertEqual(value['format'], 'helene-prepared-install.v1')
+        self.assertIs(value['folder_switch'], False)
+        self.assertTrue(Path(value['recovery']).is_dir())
+        before = updater.prepared_install_path(self.new).read_bytes()
+        with patch.object(clean_update, 'prepare', side_effect=AssertionError('In-place API must retain its protocol')):
+            self.assertEqual(clean_update.adopt_legacy(self.old, self.new), value)
+        self.assertEqual(updater.prepared_install_path(self.new).read_bytes(), before)
+        self.assert_old_unchanged()
+
     def test_current_main_admits_real_durable_job_without_wizard_or_preparation(self):
         import psutil
         spawned = SimpleNamespace(pid=os.getpid(), handle=object(), poll=Mock(return_value=None),

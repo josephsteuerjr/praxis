@@ -84,7 +84,7 @@ export interface Config {
   // выключено), хранить `keep` снимков, папка `dir` (пусто — backups рядом с программой).
   backup?: { every_days?: number; keep?: number; dir?: string };
   owner?: { name?: string; room?: string };
-  model?: { framework?: string; provider?: string; provider_id?: string; api_mode?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; fallback_api_mode?: string; fallback_provider_id?: string; vision_model?: string; pinned?: boolean };
+  model?: { framework?: string; provider?: string; provider_id?: string; api_mode?: string; base_url?: string; model?: string; key?: string; keys?: Record<string, string>; max_tokens?: number; reasoning_effort?: string; service_tier?: string; fallback_model?: string; fallback_framework?: string; fallback_base_url?: string; fallback_key?: string; fallback_api_mode?: string; fallback_provider_id?: string; vision_model?: string; pinned?: boolean };
   // `instructions` экран не показывает, но обязан сохранить: этой ручкой
   // оболочка гасит 23 КБ чужого системного промпта Codex CLI перед конституцией
   // (shell/src/main.rs, RELAY_INSTRUCTIONS). Раньше блок relay пересобирался
@@ -222,6 +222,8 @@ export interface Edition {
    * бросать исключение здесь значило бы уронить экран на ожидаемой развилке.
    */
   collect(out: Config): string;
+  /** Refresh route-specific controls only after a confirmed config write. */
+  didSave?(config: Config): void;
   /** Подпись под карточкой «Имена»: у изданий она разная. */
   namesHint: string;
   /**
@@ -861,6 +863,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       if (r && typeof r === "object" && r.ok === false) throw new Error(r.error || "Настройки не сохранились");
       if (r && typeof r === "object" && r.mtime_ns != null) seenMtime = String(r.mtime_ns);
       if (revision === container.dataset.settingsRevision) delete container.dataset.settingsDirty;
+      let saved = out;
       // Фикс-волна 06.10 (P3-2): срез `c` тянем за СОБСТВЕННОЙ записью тем же
       // гребнем, что freshness.accept. Без этого «Сохранить» сравнивал черновик
       // со срезом открытия, а легаси-нормализация collect оставляла вечный
@@ -871,11 +874,13 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         if (r2 && typeof r2 === "object" && r2.config && typeof r2.config === "object"
           && r2.mtime_ns != null && seenMtime != null && String(r2.mtime_ns) === seenMtime) {
           c = r2.config;
+          saved = r2.config;
         }
       }).catch(() => {
         // Не перечиталось — срез остаётся прежним; худшее, что даёт эта
         // миллисекундная гонка, — один лишний хвост у расписки.
       });
+      if (revision === container.dataset.settingsRevision) built.didSave?.(saved);
       // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
       return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";
     } catch (e) {

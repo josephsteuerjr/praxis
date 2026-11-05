@@ -2237,6 +2237,12 @@ def _state_impl() -> dict:
         model_cfg["base_url"] = str(product.get("base_url") or "")
     llm_rows = tail_jsonl(st / "llm_calls.jsonl", 12)
     last = llm_rows[-1] if llm_rows else {}
+    voice_tier = next((row for row in reversed(llm_rows) if row.get('role') == 'voice'), {})
+    tier_status = _load_json(st / 'service-tiers.json').get('voice') or {}
+    if _num(tier_status.get('at')) > _num(voice_tier.get('ts')):
+        voice_tier = {}
+    requested_tier = voice_tier.get('service_tier_requested', tier_status.get('requested'))
+    actual_tier = voice_tier.get('service_tier_actual', tier_status.get('actual'))
     last_ts = _num(last.get("ts"))
     last_err = str(last.get("err") or "") if last else ""
     # Строка с ok=True и err — не ошибка: так след помечает удачный фолбэк («fallback»)
@@ -2335,6 +2341,9 @@ def _state_impl() -> dict:
         "anatomy": bool(anatomy),
         "brain": {"configured": configured, "model": str(model_cfg.get("model") or ""),
                   "base_url": str(model_cfg.get("base_url") or ""),
+                  "service_tier": voice.get('service_tier'),
+                  "service_tier_requested": requested_tier,
+                  "service_tier_actual": actual_tier,
                   "last_call_at": last_ts or None,
                   "last_error": _short_error(last_err) if recent_error else None,
                   "last_error_raw": (last_err[:300] if recent_error else None),

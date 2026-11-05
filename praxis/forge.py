@@ -3944,7 +3944,10 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
         return json.dumps(state,ensure_ascii=False)
     if action == "poll":
         result = _read_json(d / "result.json") or _read_json(d / "state.json", {}) or state
-        if state.get("status") == "unknown":
+        if state.get('custody_recovered'):
+            result = {**result, 'status': state['status'], 'custody_recovered': True,
+                      'liveness': state.get('liveness')}
+        elif state.get("status") == "unknown":
             result = {**result, "status": "unknown", "liveness": state.get("liveness")}
         logs = []
         for log in sorted((d / "logs").glob("*.log")) if (d / "logs").is_dir() else []:

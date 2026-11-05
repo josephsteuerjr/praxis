@@ -147,6 +147,37 @@ class Battery(unittest.TestCase):
         self.assertTrue(observed['complete']);self.assertTrue(observed['coverage_complete'])
         self.assertEqual([row['status'] for row in observed['outcomes']],['passed'])
 
+    def test_pytest_core_bootstraps_disposable_telegram_before_collection(self):
+        stock = Path(__file__).resolve().parents[2] / 'helene/core'
+        for name in ('praxis_test.py', '_sandbox.py', '_standenv.py'):
+            self.put(self.core / name, (stock / name).read_text(encoding='utf-8'))
+        source = self.core / 'test_pytest_bootstrap.py'
+        self.put(source, 'import os\nfrom pathlib import Path\nfrom telethon import TelegramClient\n'
+                 'client=TelegramClient(os.environ.get("TELEGRAM_SESSION","absent-session"),\n'
+                 ' int(os.environ.get("TELEGRAM_API_ID","0")),os.environ.get("TELEGRAM_API_HASH",""))\n'
+                 'client.session.close()\n'
+                 'def test_declared_environment():\n'
+                 ' assert os.environ["PRAXIS_TEST"]=="1"\n'
+                 ' assert os.environ["TELEGRAM_API_ID"]=="1"\n'
+                 ' assert os.environ["TELEGRAM_API_HASH"]=="x"\n'
+                 ' assert Path(os.environ["PRAXIS_BASE"]).resolve()!=Path(__file__).parent\n'
+                 ' assert Path(os.environ["TELEGRAM_SESSION"]).parent==Path(os.environ["PRAXIS_BASE"])\n')
+        env = battery._environment(self.root / 'pytest-home', self.core, self.app)
+        self.assertNotIn('TELEGRAM_API_ID', env)
+        self.assertNotIn('TELEGRAM_API_HASH', env)
+        observation = self.root / 'pytest-bootstrap-observation.json'
+        command = [sys.executable, '-I', '-X', 'utf8', '-S', '-B', '-s',
+                   str(self.bundle / 'runner/source_verification_runner.py'),
+                   '--root', str(self.core), '--source', str(source), '--report', str(observation),
+                   '--sandbox', str(self.root), '--framework', 'pytest']
+        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        observed = read(observation)
+        self.assertEqual(observed['format'], 'helene-pytest-observation.v1')
+        self.assertTrue(observed['complete']); self.assertTrue(observed['coverage_complete'])
+        self.assertEqual(observed['collected'], observed['executed'])
+        self.assertEqual([row['status'] for row in observed['outcomes']], ['passed'])
+
     def test_actual_full_python_node_and_missing_native_fail_honestly(self):
         cache, report = self.prepare()
         core = next(r for r in report['results'] if r['id'] == 'core')

@@ -97,14 +97,16 @@ def progress_belongs(program,path):
     return False
 
 
-def staging(program,identity):
+def staging(program,identity,*,folder_switch=False):
     identity=_identity(identity)
     if os.name=='nt':
         from .first_start import ready,branded
-        if ready(program):
+        if folder_switch or ready(program):
             parent=Path(program).resolve().parent
             if Path(program).name.casefold()=='helene' and branded(parent.name):parent=parent.parent
             return parent/('Helene-update-'+identity)
+    if folder_switch:
+        return Path(program).resolve().parent/('.helene-update-'+identity)
     return directory(program,'updates')/('.helene-update-'+identity)
 
 
@@ -112,7 +114,7 @@ def staging_belongs(program,path):
     program,path=_plain(program),_plain(path)
     if path.name.startswith('Helene-update-'):
         identity=_identity(path.name[len('Helene-update-'):])
-        return os.name=='nt' and path==staging(program,identity)
+        return os.name=='nt' and path==staging(program,identity,folder_switch=True)
     if not path.name.startswith('.helene-update-'):return False
     _identity(path.name[len('.helene-update-'):])
     return path.parent in (directory(program,'updates',create=False),program.parent)

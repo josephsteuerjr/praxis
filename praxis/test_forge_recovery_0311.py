@@ -61,6 +61,7 @@ class RebootRecovery(unittest.TestCase):
     def test_failed_host_verification_stays_failed_after_release(self):
         old_dir=self.directory;self.kind='verifications';self.uid='verify-old'
         self.directory=forge._unit_dir(self.tid,self.kind,self.uid);self.directory.mkdir(parents=True)
+        task=forge.get(self.tid);task['scope']='host';forge._save_task(task)
         req={**self.request,'id':self.uid,'scope':'host'};self.put('request.json',req)
         result={'status':'failed','checks':[{'exit':139,'status':'failed'}]};self.put('result.json',result)
         before=(self.directory/'result.json').read_bytes()
@@ -73,6 +74,64 @@ class RebootRecovery(unittest.TestCase):
             stopped=json.loads(forge.verify(self.tid,'stop',verification_id=self.uid))
         self.assertEqual(stopped['status'],'failed');self.assertTrue(stopped['custody_recovered'])
         self.assertEqual(before,(self.directory/'result.json').read_bytes())
+
+    def legacy_verification(self, status='passed'):
+        (self.directory/'request.json').unlink()
+        self.directory.rmdir()
+        self.kind='verifications';self.uid='verify-old'
+        self.directory=forge._unit_dir(self.tid,self.kind,self.uid);self.directory.mkdir(parents=True)
+        task=forge.get(self.tid);task['scope']='host';forge._save_task(task)
+        self.put('request.json',{**self.request,'id':self.uid,'scope':'host',
+            'checks':[{'id':f'custom-{i}'} for i in range(1,4)]})
+        self.put('result.json',{'status':status,'checks':[
+            {'id':f'custom-{i}','status':'passed','exit':0,
+             'remote_log':f'/opt/praxis-serverd/state/operations/op-{i:016x}/command.log'}
+            for i in range(1,4)]})
+        with self.events.open('a') as f:
+            f.write(json.dumps({'at':self.request['created'],'kind':'verification_started',
+                               'verification_id':self.uid})+'\n')
+
+    def test_legacy_passed_matrix_needs_explicit_extinction_proof_in_all_views(self):
+        import forge_reader
+        self.legacy_verification()
+        before={n:(self.directory/n).read_bytes() for n in ('request.json','result.json')}
+        self.assertEqual(forge._unit_state(self.directory)['status'],'unknown')
+        self.assertIn(self.uid,forge._shared_writer_reason(self.tid,''))
+        self.assertEqual(forge_reader.task_detail(self.base,self.tid)['verifications'][0]['status'],'unknown')
+        self.recover()
+        self.assertEqual(forge._shared_writer_reason(self.tid,''),'')
+        self.assertEqual(forge._unit_state(self.directory)['status'],'passed')
+        row=forge_reader.task_detail(self.base,self.tid)['verifications'][0]
+        self.assertEqual(row['status'],'passed');self.assertTrue(row['custody_recovered'])
+        self.assertEqual(row['custody'],'recovered_boundary')
+        reply=forge.verify(self.tid,'poll',verification_id=self.uid)
+        self.assertIn('"custody_recovered": true',reply)
+        self.assertEqual(before,{n:(self.directory/n).read_bytes() for n in before})
+        # Even a successful old result cannot release a changed subject.
+        self.put('request.json',{**json.loads(before['request.json']),'supervisor_pid':222})
+        self.assertEqual(forge._unit_state(self.directory)['status'],'unknown')
+        self.assertEqual(forge_reader.task_detail(self.base,self.tid)['verifications'][0]['status'],'unknown')
+        self.assertIn(self.uid,forge._shared_writer_reason(self.tid,''))
+
+    def test_recovered_boundary_preserves_unknown_outcome_and_historical_stop(self):
+        import forge_reader
+        self.legacy_verification('unknown')
+        self.put('stop.json',{'state':'unresolved','note':'old stop'})
+        raw=(self.directory/'stop.json').read_bytes()
+        self.recover()
+        row=forge_reader.task_detail(self.base,self.tid)['verifications'][0]
+        self.assertEqual(row['status'],'lost');self.assertTrue(row['custody_recovered'])
+        self.assertEqual(row['stop']['state'],'unresolved')
+        self.assertIn('"status": "lost"',forge.verify(self.tid,'poll',verification_id=self.uid))
+        self.assertEqual(raw,(self.directory/'stop.json').read_bytes())
+
+    def test_recovery_refuses_contradictory_owner_scope_or_root(self):
+        for change in ({'scope':'host'},{'root':str(self.base/'other')}):
+            with self.subTest(change=change):
+                self.put('request.json',{**self.request,**change})
+                with self.assertRaisesRegex(ValueError,'contradicts owning task'):
+                    self.recover()
+                self.assertFalse((self.directory/forge_recovery.FILE).exists())
 
     def test_proof_is_idempotent(self):
         first=self.recover();raw=(self.directory/forge_recovery.FILE).read_bytes()

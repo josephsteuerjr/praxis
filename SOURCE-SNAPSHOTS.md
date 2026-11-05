@@ -1,6 +1,15 @@
 # Source and package bindings
 
-## Desktop 2.4.0 composition
+## Desktop 2.5.0 composition
+
+The 2.5.0 build selects current `praxis/` followed by the explicit
+`helene/core/` overlay, together with `desk/` and its built shared interfaces.
+Each archive's `source-composition.json`, `source-inputs.json` and verification
+manifest bind the selected source tree, file bytes and executable modes.
+For published 2.5.0 builds, use the immutable `v2.5.0` tag and that archive's
+inventories to identify the exact qualified composition.
+
+## Historical desktop 2.4.0 composition
 
 Use the release's immutable `v2.4.0` tag and the archive's
 `source-composition.json`, `source-inputs.json` and verification manifest to
@@ -21,18 +30,26 @@ beyond that frozen desktop code.
 
 ## Current cloud Praxis mirror
 
-`praxis/` on main mirrors qualified live cloud source
-`4467942aa2d4b0dfe593f8e72371bfb404bb74c5` (Fish discovery implementation
-`805d92ed4c945a9ff547a0b236aca7c6bcd845df` plus a private status-only commit).
-`CORE-SOURCE.json` records every selected source digest and executable mode.
-Private memory, soul, workspace, credentials and private Git history are excluded.
-Two existing public documentation sanitizations preserve the executable AST.
-The deployed code and source Git agree after line-ending normalization.
+`praxis/` mirrors the selected public source from cloud HEAD
+`ec97b59cb85f7c3611ba82de118924a0481b8060`, captured at
+`2026-11-05T21:02:40.555504+00:00`. Forge recovery implementation
+`8332863d3c2882f6c8335be52ca9dffd5211d4df` advances the earlier Fish discovery implementation
+`805d92ed4c945a9ff547a0b236aca7c6bcd845df`, which remains recorded in the provenance.
+`CORE-SOURCE.json` records all 742 selected source digests, mirror digests
+and executable modes, together with the canonical mirror digest.
 
-Updating this cloud mirror is a source synchronization, not a new desktop build
-or cloud deployment. Since `praxis/` is also the shared base for development,
-the composition of main can advance beyond the frozen desktop release. The
-release tag and shipped per-platform inventories remain its authority.
+The selected public source matches committed cloud source after line-ending
+normalization. The cloud repository also contains 16 private working entries
+outside that selection. Capture preserved its HEAD, index, private status and
+all refs. Private memory, soul, workspace, credentials and private Git history
+are excluded. Two existing public documentation sanitizations preserve the
+executable AST.
+
+Historical cloud full-gate receipts remain bound to their recorded earlier
+snapshot in `CORE-SOURCE.json`. Current desktop composition qualification is
+bound to the 2.5.0 package inventories. Cloud source synchronization advances
+the shared development base. Immutable desktop tags and shipped per-platform
+inventories retain the authority for each released composition.
 
 The records below describe historical 2.2.9 deliveries. Their immutable tags,
 digests and older voice references are provenance, not the current desktop source

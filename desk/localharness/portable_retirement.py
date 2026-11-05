@@ -302,6 +302,15 @@ def lease(program,identity,*,timeout_ms=20000):
 
 def start(program,host=None,*,owner=None):
     """The authenticated session owns this helper's Job, including on Exit."""
+    from . import clean_update
+    clean=read(Path(program)/'python-migration.json')
+    if clean.get('clean_switch')==clean_update.FORMAT:
+        if not clean.get('app_retirement'):
+            return {'started':False,'clean_switch':True,'helper_owned':True}
+        if owner is None:
+            if host is not None and callable(getattr(host,'retirement',None)):return host.retirement()
+            return {'started':False,'session_required':True,'clean_switch':True}
+        return clean_update.start_retirement(program,owner=owner)
     program=Path(program);value=read(path(program))
     if not value or value.get('mode') not in ('archive','update'):return {'started':False}
     if value.get('state')=='completed' and (value['mode']=='archive' or value.get('finalized_at')):return {'started':False,'completed':True}

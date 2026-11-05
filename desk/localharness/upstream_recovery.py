@@ -31,11 +31,14 @@ def receipt(root,operation):
 
 
 def modern(root):
+    from .authored_baseline import PROTOCOL
+    if read(Path(root)/'python-app.json').get('source_update_protocol')==PROTOCOL:
+        return True
     from .portable_switch import enabled
     return enabled(root)
 
 
-def stage(root,operation,*,check=None,progress=None):
+def stage(root,operation,*,check=None,progress=None,folder_switch=False):
     """Only passport-owned program files; never walk/copy the agent data tree."""
     from .code_transition import baseline
     from . import source_merge as merge,authored_baseline
@@ -53,7 +56,8 @@ def stage(root,operation,*,check=None,progress=None):
     if v2:authored_baseline.validate(root)
     if check:check()
     from .program_state import staging as private_staging
-    staging=private_staging(root,'recovery-'+operation)
+    staging=(private_staging(root,'recovery-'+operation,folder_switch=True) if folder_switch
+             else private_staging(root,'recovery-'+operation))
     staging.mkdir(exist_ok=False)
     try:
         new=staging/'Helene';new.mkdir()
@@ -184,8 +188,8 @@ def restore_owned(owner,*,operation=''):
         if job:
             from .desktop_update_request import checkpoint
             checkpoint(owner,job,phase='preparing',
-                staging=str(program_state.staging(root,'recovery-'+operation)),progress=str(progress.path))
-        new=stage(root,operation,check=lambda:_require_owner(owner),progress=progress)
+                staging=str(program_state.staging(root,'recovery-'+operation,folder_switch=True)),progress=str(progress.path))
+        new=stage(root,operation,check=lambda:_require_owner(owner),progress=progress,folder_switch=True)
         _require_owner(owner)
         return python_updates._prepare_handoff(owner,new.parent,{},progress,False,sourceMode='clean')
     except BaseException as exc:

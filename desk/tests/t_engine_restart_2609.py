@@ -94,16 +94,16 @@ class TranscriptionYieldsTheProcessor(unittest.TestCase):
             self.assertEqual(kernel.GetPriorityClass(handle), 0x4000)
         self.assertEqual(kernel.GetPriorityClass(handle), before)
 
-    def test_whisper_leaves_a_core_to_the_owner(self):
+    def test_whisper_uses_all_available_cores(self):
         ready = {"ready": True, "installed": {"path": "C:/models/turbo"}, "why": ""}
         original = voice.stt_state
         voice.stt_state = lambda tree, cfg: ready
         self.addCleanup(lambda: setattr(voice, "stt_state", original))
-        cores = os.cpu_count() or 4
+        cores = getattr(os, 'process_cpu_count', os.cpu_count)() or os.cpu_count() or 1
         env = voice.env_for(Path("."), {"voice": {"threads": 64}})
-        self.assertEqual(int(env["PRAXIS_STT_CPU_THREADS"]), max(1, min(64, cores - 1)))
+        self.assertEqual(int(env["PRAXIS_STT_CPU_THREADS"]), cores)
         env = voice.env_for(Path("."), {"voice": {"threads": 1}})
-        self.assertEqual(env["PRAXIS_STT_CPU_THREADS"], "1")
+        self.assertEqual(int(env["PRAXIS_STT_CPU_THREADS"]), cores)
 
 
 if __name__ == "__main__":

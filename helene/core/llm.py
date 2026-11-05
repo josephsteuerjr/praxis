@@ -33,12 +33,33 @@ import os
 import re
 import tempfile
 import contextvars as _cv
+import contextlib
 import threading
 import time as _time
 import tool_offerings
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
+
+_SINGLE_PROVIDER_ATTEMPT = _cv.ContextVar('single_provider_attempt', default=False)
+
+
+@contextlib.contextmanager
+def single_provider_attempt():
+    """Let a durable executor own retries and preserve an unknown attempt."""
+    token = _SINGLE_PROVIDER_ATTEMPT.set(True)
+    try:
+        yield
+    finally:
+        _SINGLE_PROVIDER_ATTEMPT.reset(token)
+
+
+def _custody_client(client):
+    options = getattr(client, 'with_options', None)
+    if _SINGLE_PROVIDER_ATTEMPT.get() and callable(options):
+        return options(max_retries=0)
+    return client
+
 
 log = logging.getLogger("praxis-llm")
 
@@ -59,6 +80,44 @@ USAGE_SCHEMA = 2
 
 FRAMEWORKS = ("anthropic", "openai")
 ROLES = ("voice", "evaluator")
+LLM_SERVICE_TIER_API = 1
+
+
+def normalize_service_tier(value):
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError("service_tier must be auto, default or priority")
+    tier = value.strip().lower()
+    tier = "priority" if tier == "fast" else tier
+    if tier not in ("auto", "default", "priority"):
+        raise ValueError("service_tier must be auto, default or priority")
+    return tier
+
+
+def _request_service_tier(cli, value):
+    tier = normalize_service_tier(value)
+    family = _provider_family(cli)
+    if family not in ("", "openai"):
+        if tier == "priority":
+            raise ValueError("Fast mode is unavailable for this provider")
+        return None
+    return tier
+
+
+def _observed_service_tier(value):
+    tier = value.get("service_tier") if isinstance(value, dict) else getattr(value, "service_tier", None)
+    return tier if isinstance(tier, str) else None
+
+
+def _service_tier_present(value):
+    if isinstance(value, dict):
+        return 'service_tier' in value
+    fields = getattr(value, 'model_fields_set', None)
+    if fields is not None:
+        return 'service_tier' in fields or 'service_tier' in (getattr(value, 'model_extra', None) or {})
+    return 'service_tier' in getattr(value, '__dict__', {})
+
 _ROLE_RU = {"voice": "голос", "evaluator": "вспомогательная"}
 
 DEFAULT_MAX_TOKENS = {"voice": 1024, "evaluator": 400}
@@ -385,6 +444,8 @@ class LLMResponse:
     # Appended for positional compatibility; chat() binds it from its actual leg,
     # never a post-response config read. Low-level adapter calls leave it unknown.
     account_route: str = ""
+    service_tier_requested: str | None = None
+    service_tier: str | None = None
 
 @dataclass(frozen=True)
 class Limits:
@@ -453,8 +514,14 @@ def _normalize(cfg: dict) -> dict:
         # Нормализация фиксированным набором ключей молча съедала бы её решение —
         # ровно класс HEADER_KEYS из реестра переноса днём раньше.
         effort = str(cur.get("reasoning_effort") or "").strip().lower()
-        if effort in REASONING_EFFORTS:
+        codex_role = str(out['frameworks'][fw].get('provider') or '').casefold() == 'relay'
+        if codex_role and effort == 'none':
+            pass  # Legacy saved preference means the model default, without a rewrite.
+        elif effort in REASONING_EFFORTS or (codex_role and re.fullmatch(r'[a-z][a-z0-9_-]{0,31}', effort)):
             out["roles"][role]["reasoning_effort"] = effort
+        tier = normalize_service_tier(cur.get("service_tier"))
+        if tier is not None:
+            out["roles"][role]["service_tier"] = tier
         # 09.09: зрячая замена текстовой модели на ход с изображением (vision_model) —
         # тот же класс: без строки здесь нормализация стирала бы ручку владельца.
         vision = str(cur.get("vision_model") or "").strip()
@@ -721,7 +788,7 @@ def swap_fallback(role: str) -> dict:
 def _client_for(framework: str):
     """SDK-клиент фреймворка (или тестовый фейк). None — не настроен."""
     if framework in _TEST_CLIENTS:
-        return _TEST_CLIENTS[framework]
+        return _custody_client(_TEST_CLIENTS[framework])
     if os.environ.get("PRAXIS_TEST"):
         return None  # герметичность: в тестах сеть только через фейки (use_test_client)
     fw = (_config().get("frameworks") or {}).get(framework) or {}
@@ -731,7 +798,7 @@ def _client_for(framework: str):
     fp = (_protocol(framework), base_url, key)
     cached = _CLIENTS.get(framework)
     if cached and cached[0] == fp:
-        return cached[1]
+        return _custody_client(cached[1])
     if _protocol(framework) == "anthropic":
         from anthropic import Anthropic
         cli = Anthropic(api_key=key, base_url=base_url)
@@ -739,7 +806,7 @@ def _client_for(framework: str):
         from openai import OpenAI
         cli = OpenAI(api_key=key, base_url=base_url)
     _CLIENTS[framework] = (fp, cli)
-    return cli
+    return _custody_client(cli)
 
 
 def configured(role: str = "voice") -> bool:
@@ -1320,30 +1387,37 @@ def _openai_reasoning_effort(thinking) -> str | None:
 # Canonical role vocabulary, not a claim about every compatible endpoint.
 # GLM and direct providers use max. The explicitly configured embedded relay has
 # a narrower LOCAL integration policy; its retained donor binary is unqualified.
-REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-EMBEDDED_RELAY_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+EMBEDDED_RELAY_EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 
 class UnsupportedReasoningEffort(ValueError):
     """Local endpoint-policy refusal before SDK preparation, never a downshift."""
 
-    def __init__(self, account: str, requested: str):
+    def __init__(self, account: str, requested: str, supported=None):
         self.account = account
         self.requested = requested
-        self.supported = EMBEDDED_RELAY_EFFORTS
-        self.policy = "embedded-relay-local-six-tier-v1"
+        self.supported = tuple(supported) if supported is not None else EMBEDDED_RELAY_EFFORTS
+        self.policy = "codex-model-catalog-v1"
         super().__init__(f"llm: account {account}: reasoning effort {requested!r} "
                          f"unsupported by local embedded-relay integration policy; "
-                         f"supported: {', '.join(self.supported)}; donor binary support unknown")
+                         f"supported: {', '.join(self.supported)}")
 
 
-def _validate_endpoint_effort(account: str, thinking, reasoning_effort) -> None:
+def _validate_endpoint_effort(account: str, thinking, reasoning_effort, model=None) -> None:
     spec = (_config().get("frameworks") or {}).get(account) or {}
-    effort = _effective_effort(thinking, reasoning_effort)
-    if (str(spec.get("provider") or "").casefold() == "relay"
-            and _protocol(account) == "openai" and effort
-            and effort not in EMBEDDED_RELAY_EFFORTS):
-        raise UnsupportedReasoningEffort(account, effort)
+    effort = _openai_reasoning_effort(thinking) or str(reasoning_effort or '').strip().lower()
+    if str(spec.get("provider") or "").casefold() != "relay" or _protocol(account) != "openai" or not effort:
+        return
+    supported = EMBEDDED_RELAY_EFFORTS
+    details = _MODEL_DETAILS.get(account)
+    if details and details['expires'] > _time.time() and details['endpoint'] == _endpoint_key(account):
+        row = details['models'].get(str(model)) or {}
+        levels = row.get('reasoning_efforts')
+        if isinstance(levels, list):
+            supported = tuple(level for level in levels if level in EMBEDDED_RELAY_EFFORTS)
+    if effort not in supported:
+        raise UnsupportedReasoningEffort(account, effort, supported)
 # 25.08: проекция ступеней реле в словарь z.ai для glm-* (GLM-5.3: low/high/max,
 # СЕРВЕРНЫЙ ДЕФОЛТ — max на каждый вызов; thinking обязателен и невыключаем,
 # поэтому «none/minimal» глубже low не проецируются — выключить нечего).
@@ -2184,7 +2258,7 @@ def _max_tokens_field(cli) -> str:
 
 
 def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinking,
-                 reasoning_effort: str | None = None) -> LLMResponse:
+                 reasoning_effort: str | None = None, service_tier: str | None = None) -> LLMResponse:
     scope = _continuation_scope(cli, "chat_completions", model)
     msgs = messages_to_openai(messages, scope=scope)
     sys_text = system_text(system)
@@ -2195,6 +2269,9 @@ def _call_openai(cli, model: str, *, system, messages, tools, max_tokens, thinki
     # умеет stream, так что путь общий. Фейки/не-стриминговые сервера отдают единый объект (ветка ниже).
     kw: dict = {"model": model, "messages": msgs, "stream": True,
                 "stream_options": {"include_usage": True}}
+    tier = _request_service_tier(cli, service_tier)
+    if tier is not None:
+        kw["service_tier"] = tier
     address = cache_address(model, sys_text)
     if address:
         kw["extra_body"] = {"prompt_cache_key": address}
@@ -2311,7 +2388,7 @@ def _openai_from_completion(resp, model: str) -> LLMResponse:
                "in": _openai_fresh_in(usage, cached),
                "out": int(getattr(usage, "completion_tokens", 0) or 0),
                **({"cache_read": cached} if cached else {})},
-        framework="openai", model=model)
+        framework="openai", model=model, service_tier=_observed_service_tier(resp))
 
 
 def _openai_fresh_in(usage, cached: int) -> int:
@@ -2394,9 +2471,12 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
     reasoning_details = []
     u_in = u_out = u_cached = 0
     observations = provider_observation.Collector()
+    actual_tier = None
     transport_error = None
     try:
         for chunk in stream:
+            if _service_tier_present(chunk):
+                actual_tier = _observed_service_tier(chunk)
             observations.merge(provider_observation.packet_of(chunk))
             # 25.09: терминал реле — ДО choices и content. Диагностика лимита подписки
             # приходила текстом в content и читалась как ответ модели (см.
@@ -2448,6 +2528,7 @@ def _openai_from_stream(stream, model: str) -> LLMResponse:
         transport_error = exc
     result = _openai_stream_result(parts, tools_acc, finish, u_in, u_out, u_cached, model,
                                    observation=observations.receipt())
+    result.service_tier = actual_tier
     payload = messages_to_openai([{"role": "assistant", "content": result.blocks}])[0]
     for key, fragments in reasoning.items():
         if fragments:
@@ -2517,6 +2598,7 @@ def _openai_stream_result(parts: list[str], tools_acc: dict[int, dict], finish: 
 # --------------------------------------------------------------------------- #
 
 _MODELS_CACHE: dict[str, tuple[float, list[str]]] = {}   # framework -> (expiry_epoch, [ids])
+_MODEL_DETAILS: dict[str, dict] = {}
 _MODELS_TTL = float(os.getenv("PRAXIS_MODELS_TTL", "600"))
 
 
@@ -2555,6 +2637,8 @@ def _available_models(framework: str) -> list[str]:
                 "anthropic-version": "2023-06-01"})
             data = json.loads(urllib.request.urlopen(req, timeout=6).read())
             ids = [str(m.get("id")) for m in (data.get("data") or []) if m.get("id")]
+            _MODEL_DETAILS[framework] = {'expires': now + _MODELS_TTL, 'endpoint': _endpoint_key(framework),
+                'models': {str(row['id']): row for row in data.get('data', []) if isinstance(row, dict) and row.get('id')}}
     except Exception as e:
         log.debug("llm: список моделей %s не получить (%s)", framework, type(e).__name__)
         ids = []
@@ -2655,21 +2739,53 @@ def _resolve_fallback_model(primary_framework: str, primary_model: str,
 
 def _call(framework: str, model: str, *, _resolved: bool = False, **kw) -> LLMResponse:
     spec = (_config().get("frameworks") or {}).get(framework) or {}
-    _validate_endpoint_effort(framework, kw.get("thinking"), kw.get("reasoning_effort"))
+    _validate_endpoint_effort(framework, kw.get("thinking"), kw.get("reasoning_effort"), model)
+    tier = normalize_service_tier(kw.pop("service_tier", None))
+    protocol = _protocol(framework)
+    if tier == "priority" and str(spec.get("provider") or "").casefold() != "relay":
+        raise ValueError("Fast mode requires a configured Codex subscription route")
+    details = _MODEL_DETAILS.get(framework)
+    if tier == 'priority' and details and details['expires'] > _time.time() and details['endpoint'] == _endpoint_key(framework):
+        card = details['models'].get(str(model)) or {}
+        if 'service_tiers' in card or 'additional_speed_tiers' in card:
+            tiers = card.get('service_tiers') or []
+            available = [row.get('id') if isinstance(row, dict) else row for row in tiers]
+            if 'service_tiers' not in card:
+                available.extend(card.get('additional_speed_tiers') or [])
+            if not any(value in ('priority', 'fast') for value in available):
+                raise ValueError('Fast mode is unavailable for this Codex model')
+    if protocol == "anthropic" and tier == "priority":
+        raise ValueError("Fast mode requires an OpenAI transport")
     cli = _client_for(framework)
     if cli is None:
         raise RuntimeError(f"llm: фреймворк {framework} не настроен (нет ключа)")
     if not _resolved:
-        model = _resolve_model(framework, model)  # ротация наименований провайдера
-    if _protocol(framework) == "anthropic":
-        return _call_anthropic(cli, model, **kw)
-    mode = spec.get("api_mode")
-    supports_responses = callable(getattr(getattr(cli, 'responses', None), 'create', None))
-    if mode == 'responses' and not supports_responses:
-        raise RuntimeError('llm: configured SDK does not support Responses; upgrade the OpenAI SDK')
-    if mode == "responses" or (not mode and supports_responses and _provider_family(cli) == "openai"):
-        return _call_responses(cli, model, **kw)
-    return _call_openai(cli, model, **kw)
+        model = _resolve_model(framework, model)
+    if protocol != "anthropic":
+        tier = _request_service_tier(cli, tier)
+        if tier is not None:
+            kw["service_tier"] = tier
+        mode = spec.get("api_mode")
+        supports_responses = callable(getattr(getattr(cli, 'responses', None), 'create', None))
+        if mode == 'responses' and not supports_responses:
+            raise RuntimeError('llm: configured SDK does not support Responses; upgrade the OpenAI SDK')
+    else:
+        tier = None
+    try:
+        if protocol == "anthropic":
+            response = _call_anthropic(cli, model, **kw)
+        elif mode == "responses" or (not mode and supports_responses and _provider_family(cli) == "openai"):
+            response = _call_responses(cli, model, **kw)
+        else:
+            response = _call_openai(cli, model, **kw)
+    except Exception as exc:
+        if not isinstance(exc, ValueError):
+            exc.service_tier_attempted = True
+            exc.service_tier_requested = tier
+            exc.service_tier_actual = getattr(getattr(exc, 'partial', None), 'service_tier', None)
+        raise
+    response.service_tier_requested = tier
+    return response
 
 
 def _fallbackable(e: Exception) -> bool:
@@ -2786,7 +2902,8 @@ def _call_retrying_net(fw: str, model: str, retries: int | None = None, **kw):
         except Exception as exc:
             # Призрак брошенного хода ретраев не гоняет: его ответ выброшен,
             # а каждая попытка — это живая сеть и живые деньги (ревью 05.10).
-            if not _is_network_error(exc) or attempt >= NET_RETRIES or call_abandoned():
+            if (_SINGLE_PROVIDER_ATTEMPT.get() or not _is_network_error(exc)
+                    or attempt >= NET_RETRIES or call_abandoned()):
                 raise
             attempt += 1
             _time.sleep(NET_RETRY_PAUSE_SEC * attempt)
@@ -2810,6 +2927,8 @@ def _call_retrying_empty(fw: str, model: str, retries: int | None = None,
     """
     last = None
     retries = EMPTY_RETRIES if retries is None else max(0, int(retries))
+    if _SINGLE_PROVIDER_ATTEMPT.get():
+        retries = 0
     for attempt in range(retries + 1):
         try:
             return _call(fw, model, _resolved=_resolved, **kw), attempt
@@ -2874,7 +2993,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
          end_after_spoken: bool = False, model: str | None = None,
          reasoning_effort: str | None = None,
          framework: str | None = None,
-         allow_fallback: bool = True) -> LLMResponse:
+         service_tier: str | None = None, allow_fallback: bool = True) -> LLMResponse:
     """Вызов модели по роли, с необязательным адресным override без смены роли.
 
     Фолбэк на противоположный фреймворк — один повтор, честно в дневник.
@@ -2950,6 +3069,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         role_effort = str(reasoning_effort).strip().lower() or None
     else:
         role_effort = str(rc.get("reasoning_effort") or "").strip() or None
+        if role_effort == 'none' and str((cfg.get('frameworks', {}).get(fw) or {}).get('provider') or '').casefold() == 'relay':
+            role_effort = None
+    selected_tier = normalize_service_tier(service_tier if service_tier is not None else rc.get("service_tier"))
     st = _STATE[role]
     t0 = _time.time()
     # Пауза до этого вызова — рядом с исходом. Префикс остывает ВРЕМЕНЕМ, и
@@ -2986,7 +3108,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         resp, net_retries, empty_retries = _call_retrying_net(
             fw, model, retries=(1 if end_after_spoken else None),
             system=system, messages=messages, tools=tools,
-            max_tokens=mt, thinking=thinking, reasoning_effort=role_effort)
+            max_tokens=mt, thinking=thinking, reasoning_effort=role_effort, service_tier=selected_tier)
         # Призрак брошенного хода доделался успешно? Расход запишем ниже честно
         # — поход в сеть был. Но удержание эндпойнта он снять не может: снимок
         # `_hold` принадлежит мёртвому ходу, а за это время живой ход мог
@@ -3011,6 +3133,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         st["on_fallback"], st["last_error"] = False, ""
         # 9.1: расход копится; сбой записи вызова не роняет. PASS 22: по ФАКТИЧЕСКОМУ имени
         # (после ротации _resolve_model конфигное имя может врать в by-model разрезе).
+        if not call_abandoned():
+            st.update(service_tier_requested=getattr(resp, "service_tier_requested", None),
+                      service_tier_actual=getattr(resp, "service_tier", None))
         resp.account_route = fw
         resp.vision = bool(vision_used)
         if pixels_omitted:
@@ -3027,6 +3152,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         # 08.09 (издание): ступень и stop_reason — в след. Спор «max или low» неделю
         # решался на глаз, потому что журнал вызовов не хранил ни того, ни другого.
         _call_trace(role, resp.model or model, ok=True,
+                    service_tier_requested=getattr(resp, "service_tier_requested", None),
+                    service_tier_actual=getattr(resp, "service_tier", None),
                     cached=_u.get("cache_read", 0), prompt=_u.get("in", 0),
                     out_tokens=_u.get("out", 0), latency_ms=_lat,
                     retries=empty_retries + net_retries, gap_sec=_gap, tools_digest=_tools,
@@ -3052,6 +3179,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # уходит наверх: _look_once честно отступит, картинка поедет прежним путём.
             raise
         _synthetic = bool(getattr(e, "synthetic", False))
+        if getattr(e, 'service_tier_attempted', False) and not _synthetic:
+            st.update(service_tier_requested=getattr(e, 'service_tier_requested', None),
+                      service_tier_actual=getattr(e, 'service_tier_actual', None))
         if isinstance(e, RelayTerminalError) and not _synthetic:
             # Реле назвало лимит/вход кодом: эндпойнт закрываем до часа восстановления и
             # говорим об этом словами — при смене состояния, не на каждый ход.
@@ -3063,11 +3193,15 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # уже принятое решение — «луна слала ту же реплику заново»). В след — честная
             # строка с ok=True и нулями: вызов состоялся, продолжения не будет.
             _call_trace(role, model, ok=True, cached=0, prompt=0, out_tokens=0,
+                        service_tier_requested=getattr(e, 'service_tier_requested', _TIER_UNSET),
+                        service_tier_actual=getattr(e, 'service_tier_actual', _TIER_UNSET),
                         latency_ms=(_time.time() - t0) * 1000, error="end_after_spoken",
                         gap_sec=_gap, tools_digest=_tools, vision=vision_used, images=image_stats,
                         key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
             return LLMResponse(text="", blocks=[], stop_reason="end_turn",
-                               usage={}, framework=fw, model=model, vision=vision_used)
+                               usage={}, framework=fw, model=model, vision=vision_used,
+                               service_tier_requested=getattr(e, 'service_tier_requested', None),
+                               service_tier=getattr(e, 'service_tier_actual', None))
         err = f"{type(e).__name__}: {str(e)[:120]}"
         st["last_error"] = err
         if not _synthetic:
@@ -3084,6 +3218,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             # Синтетический отказ по удержанию — ноль походов в сеть: строка следа с
             # ok=False считалась бы окном как ошибка модели (A1 F6). Не пишем ничего.
             _call_trace(role, model, ok=False, cached=0, prompt=0, out_tokens=0,
+                        service_tier_requested=getattr(e, 'service_tier_requested', _TIER_UNSET),
+                        service_tier_actual=getattr(e, 'service_tier_actual', _TIER_UNSET),
                         latency_ms=(_time.time() - t0) * 1000, error=err, gap_sec=_gap,
                         tools_digest=_tools, vision=vision_used, images=image_stats,
                         key=_key, sys_sha8=_sys_sha, sys_len=_sys_len)
@@ -3095,7 +3231,7 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _journal("%s: канал оборвал стрим ошибкой уже после %d знаков — начатый ответ "
                      "потерян; по тому же каналу не переспрашиваю, это была бы не транспортная "
                      "попытка, а повтор поверх сказанного" % (_ROLE_RU[role], _lost))
-        if not allow_fallback or not _fallbackable(e):
+        if _SINGLE_PROVIDER_ATTEMPT.get() or not allow_fallback or not _fallbackable(e):
             raise
         # 17.08.2026: фреймворк фолбэка стал настраиваемым. По умолчанию — противоположный
         # (прежнее поведение байт-в-байт); `fallback_framework: "openai"` при framework=openai
@@ -3141,12 +3277,17 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         try:
             resp = _call(other, resolved_fb_model, _resolved=True,
                          system=system, messages=fallback_messages, tools=tools,
-                         max_tokens=mt, thinking=None, reasoning_effort=role_effort)
+                         max_tokens=mt, thinking=None, reasoning_effort=role_effort, service_tier=selected_tier)
         except Exception as e2:
+            if getattr(e2, 'service_tier_attempted', False) and not call_abandoned():
+                st.update(service_tier_requested=getattr(e2, 'service_tier_requested', None),
+                          service_tier_actual=getattr(e2, 'service_tier_actual', None))
             _brain_note(role, other, resolved_fb_model, ok=False,
                         error=f"{type(e2).__name__}: {str(e2)[:80]}",
                         empty=isinstance(e2, BrokenChannelError))
             _call_trace(role, resolved_fb_model, ok=False, cached=0, prompt=0,
+                        service_tier_requested=getattr(e2, 'service_tier_requested', _TIER_UNSET),
+                        service_tier_actual=getattr(e2, 'service_tier_actual', _TIER_UNSET),
                         out_tokens=0, latency_ms=(_time.time() - t1) * 1000,
                         error=f"{type(e2).__name__}: {str(e2)[:120]}",
                         fallback=True, tools_digest=_tools, vision=fallback_vision_used, images=fallback_image_stats,
@@ -3158,6 +3299,9 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
             _journal(f"{_ROLE_RU[role]} упал ({type(e).__name__}), уход на фолбэк "
                      f"{other}/{resolved_fb_model}")
         st["on_fallback"] = True
+        if not call_abandoned():
+            st.update(service_tier_requested=getattr(resp, "service_tier_requested", None),
+                      service_tier_actual=getattr(resp, "service_tier", None))
         resp.account_route = other
         resp.vision = bool(fallback_vision_used)
         if fallback_omitted:
@@ -3173,6 +3317,8 @@ def chat(role: str, *, system=None, messages: list, tools: list | None = None,
         try:
             _fu = resp.usage if isinstance(resp.usage, dict) else {}
             _call_trace(role, resp.model or resolved_fb_model, ok=True,
+                        service_tier_requested=getattr(resp, "service_tier_requested", None),
+                        service_tier_actual=getattr(resp, "service_tier", None),
                         cached=int(_fu.get("cache_read", 0) or 0),
                         prompt=int(_fu.get("in", 0) or 0),
                         out_tokens=int(_fu.get("out", 0) or 0),
@@ -3208,6 +3354,7 @@ _CALL_TRACE = USAGE_PATH.parent / "llm_calls.jsonl"
 # процесс уезжает вместе со старым файлом (open("a") на каждый вызов — новый файл
 # подхватится следующей строкой), ни одна строка не теряется.
 _CALL_TRACE_ROTATE_BYTES = 8_000_000  # ~35 тыс. строк по ~230 байт
+_TIER_UNSET = object()
 
 
 def _sent_effort(fw: str, model: str, thinking, role_effort) -> str:
@@ -3227,7 +3374,7 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                 tools_digest: str = "", effort: str = "", stop: str = "",
                 vision: bool = False, fallback: bool = False, key: str = "",
                 sys_sha8: str = "", sys_len: int = 0, cc: int = -1,
-                images: dict | None = None) -> None:
+                images: dict | None = None, service_tier_requested=_TIER_UNSET, service_tier_actual=_TIER_UNSET) -> None:
     """Одна строка на вызов: доля кэша рядом с исходом. Никогда не роняет вызов.
 
     `tools` рядом с `cached` — отпечаток набора рук этого вызова. Схемы едут ВЫШЕ
@@ -3240,6 +3387,10 @@ def _call_trace(role: str, model: str, *, ok: bool, cached: int, prompt: int,
                "ok": bool(ok), "cached": int(cached or 0), "in": int(prompt or 0),
                "out": int(out_tokens or 0), "ms": int(latency_ms),
                "retries": int(retries or 0), "iter": int(_CALL_ITER.get() or 0)}
+        if service_tier_requested is not _TIER_UNSET:
+            row["service_tier_requested"] = service_tier_requested
+        if service_tier_actual is not _TIER_UNSET:
+            row["service_tier_actual"] = service_tier_actual
         if tools_digest:
             row["tools"] = str(tools_digest)[:16]
         if effort:
@@ -3393,6 +3544,9 @@ def snapshot() -> dict:
                      "protocol": _protocol(rc["framework"]),
                      "max_tokens": rc.get("max_tokens"),
                      "reasoning_effort": rc.get("reasoning_effort") or "",
+                     "service_tier": rc.get("service_tier"),
+                     "service_tier_requested": st.get("service_tier_requested"),
+                     "service_tier_actual": st.get("service_tier_actual"),
                      "fallback_model": rc.get("fallback_model") or "",
                      "fallback_framework": other,
                      "fallback_armed": armed,
@@ -3603,7 +3757,7 @@ def _anthropic_controls(cli, model: str, thinking, role_effort) -> dict | None:
 
 
 def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thinking,
-                    reasoning_effort: str | None = None) -> LLMResponse:
+                    reasoning_effort: str | None = None, service_tier: str | None = None) -> LLMResponse:
     scope = _continuation_scope(cli, "responses", model)
     inputs = []
     for message in messages or []:
@@ -3631,6 +3785,9 @@ def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thi
                                "arguments": call["function"]["arguments"]})
     kw = {"model": model, "input": inputs, "max_output_tokens": max_tokens,
           "stream": True, "store": False, "include": ["reasoning.encrypted_content"]}
+    tier = _request_service_tier(cli, service_tier)
+    if tier is not None:
+        kw["service_tier"] = tier
     if system:
         kw["instructions"] = system_text(system)
     effort = _effective_effort(thinking, reasoning_effort)
@@ -3655,8 +3812,14 @@ def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thi
         return _guard_answer(_responses_result(stream, model, scope))
     items = {}
     final = None
+    actual_tier = None
     try:
         for event in stream:
+            if _service_tier_present(event):
+                actual_tier = _observed_service_tier(event)
+            event_response = getattr(event, 'response', None)
+            if _service_tier_present(event_response):
+                actual_tier = _observed_service_tier(event_response)
             kind = str(getattr(event, "type", "") or "")
             index = int(getattr(event, "output_index", 0) or 0)
             if kind in ("response.completed", "response.incomplete", "response.failed"):
@@ -3673,18 +3836,23 @@ def _call_responses(cli, model: str, *, system, messages, tools, max_tokens, thi
                     item["content"].append({"type": "output_text", "text": ""})
                 item["content"][content_index]["text"] += event.delta
             elif kind == "error":
-                raise TornStreamError(str(getattr(event, "message", "Responses stream failed")),
-                                      partial=_responses_result({"status": "failed", "output": list(items.values())}, model, scope))
+                partial = _responses_result({"status": "failed", "output": list(items.values())}, model, scope)
+                partial.service_tier = actual_tier
+                raise TornStreamError(str(getattr(event, "message", "Responses stream failed")), partial=partial)
     except Exception as exc:
         if not _stream_transport_error(exc):
             raise
         partial = _responses_result({"status": "failed", "output": [items[index] for index in sorted(items)]}, model, scope)
+        partial.service_tier = actual_tier
         # The shared guard permits the established empty-response retry only
         # before any output; opaque reasoning/tool items still fence replay.
         return _guard_answer(partial)
     if final is None:
         final = {"status": "failed", "output": [items[index] for index in sorted(items)]}
-    return _guard_answer(_responses_result(final, model, scope))
+    result = _responses_result(final, model, scope)
+    if not _service_tier_present(final):
+        result.service_tier = actual_tier
+    return _guard_answer(result)
 
 
 def _responses_result(response, model: str, scope: str) -> LLMResponse:
@@ -3716,7 +3884,8 @@ def _responses_result(response, model: str, scope: str) -> LLMResponse:
                        blocks=blocks, stop_reason=stop, model=str(raw.get("model") or model), framework="openai",
                        usage={"schema": USAGE_SCHEMA, "in": max(0, int(usage.get("input_tokens") or 0) - cached),
                               "out": int(usage.get("output_tokens") or 0), "cache_read": cached},
-                       continuation={"scope": scope, "format": "responses", "payload": output})
+                       continuation={"scope": scope, "format": "responses", "payload": output},
+                       service_tier=_observed_service_tier(raw))
 
 
 def _openai_replay_message(message) -> dict:

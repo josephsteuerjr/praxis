@@ -371,7 +371,7 @@ export function start(opts: WindowOptions): void {
     attachInput.value = "";
   });
 
-  // Shared recording owner: mouse/local hold pauses, global release sends.
+  // Shared recording owner: release sends in the window and globally; Shift pauses.
   const micBtn = document.querySelector<HTMLButtonElement>("#mic");
   const voiceComposer = micBtn ? mountVoiceComposer({mic: micBtn, composer: composerBox,
     target: () => ownerState?.stopped || engineOperation || S.rooms.find(r=>r.key===S.room)?.stub ? null
@@ -1277,7 +1277,7 @@ export function start(opts: WindowOptions): void {
       // The header identifies the model; detailed usage remains in the tooltip,
       // context disclosure and System. Keep the conversation visually primary.
       pulseHTML =
-        `<span class="muted">Последний ответ</span> <b>${esc(l.model || "")}</b>${l.err ? ' · <span class="err-msg">ошибка</span>' : ""}`;
+        `<span class="muted">Последний ответ</span> <b>${esc(l.model || "")}</b>${l.err && l.ok !== true ? ' · <span class="err-msg">ошибка</span>' : ""}`;
       pulseLast = `Последний вызов модели — ${fmtTs(l.ts)}: из кэша провайдера ${share}% входа, ` +
         `вход ${fmtK(total)} → ответ ${fmtK(l.out || 0)}.`;
       pulseStamp = new Date().toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });

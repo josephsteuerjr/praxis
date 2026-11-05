@@ -331,7 +331,10 @@ new file mode 100644
             'input': {'action': 'replace', 'path': 'app.py', 'old': 'return 41', 'new': 'return 42'}}],
             stop_reason='tool_use', model='offline')
         final = llm.LLMResponse(text='changed once', stop_reason='end_turn', model='offline')
-        replies = iter([llm.BrokenChannelError('empty transport EOF'), tool, final])
+        # This fixture carries proof that this request was refused before admission.
+        refused = llm.BrokenChannelError('request refused before provider admission')
+        refused.request_not_admitted = True
+        replies = iter([refused, tool, final])
         frames = []
         def chat(*args, **kwargs):
             frames.append(copy.deepcopy((kwargs['system'], kwargs['messages'])))
@@ -367,11 +370,14 @@ new file mode 100644
             stop_reason="tool_use", model="fake-coder")
         recovered = llm.LLMResponse(text="Summary recovered after the transport break.",
                                     stop_reason="end_turn", model="fake-coder")
+        # The edit already ran once. Only the new summary request was refused.
+        refused = llm.BrokenChannelError("summary request refused before provider admission")
+        refused.request_not_admitted = True
         with mock.patch.dict(os.environ, {
                 "PRAXIS_FORGE_TRANSPORT_RETRIES": "1",
                 "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
                 mock.patch.object(forge_worker.llm, "chat", side_effect=[
-                    tool_call, llm.BrokenChannelError("summary EOF"), recovered,
+                    tool_call, refused, recovered,
                 ]) as chat:
             code = forge_worker.run(request_path)
         self.assertEqual(code, 0)
@@ -406,18 +412,25 @@ new file mode 100644
                    "root": str(self.project), "proposal_id": "", "role": "scout",
                    "brief": "inspect without edits", "max_iters": 2, "created": forge._now()}
         forge._atomic_json(request_path, request)
+        refused = llm.BrokenChannelError("request refused before provider admission")
+        refused.request_not_admitted = True
         with mock.patch.dict(os.environ, {
                 "PRAXIS_FORGE_TRANSPORT_RETRIES": "2",
                 "PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}), \
-                mock.patch.object(forge_worker.llm, "chat",
-                                  side_effect=llm.BrokenChannelError("upstream EOF")) as chat:
+                mock.patch.object(forge_worker.llm, "chat", side_effect=refused) as chat:
             code = forge_worker.run(request_path)
         self.assertEqual(code, 2)
         self.assertEqual(chat.call_count, 3)
         result = forge._read_json(request_path.parent / "result.json")
         self.assertEqual(result["status"], "error")
-        self.assertIn("BrokenChannelError: upstream EOF", result["error"])
+        self.assertIn("BrokenChannelError: request refused before provider admission", result["error"])
         self.assertEqual(result["trace"], [])
+        import forge_runtime
+        attempts = [row for row in forge_runtime.read_events(request_path.parent)['events']
+                    if row['kind'] == 'model_transport_error']
+        self.assertEqual([row['attempt'] for row in attempts], [0, 1, 2])
+        self.assertEqual([row['retry'] for row in attempts], [True, True, False])
+        self.assertTrue(all(not row['partial_not_dispatched'] for row in attempts))
 
     def test_worker_does_not_retry_non_transport_exceptions(self):
         import forge_worker

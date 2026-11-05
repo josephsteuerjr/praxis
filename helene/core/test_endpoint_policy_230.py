@@ -34,6 +34,11 @@ class EndpointPolicy(unittest.TestCase):
                     'api_key': 'synthetic-test-only'}},
             'roles': {'voice': {'framework': 'embedded', 'model': 'synthetic-model'}}})
         self.enterContext(mock.patch.object(llm, '_config', return_value=self.cfg))
+        self.catalog = {'reasoning_efforts': ['low', 'medium', 'high', 'max', 'ultra'],
+                        'default_reasoning_effort': 'high'}
+        self.enterContext(mock.patch.object(llm, '_MODEL_DETAILS', {'embedded': {
+            'expires': llm._time.time() + 60, 'endpoint': llm._endpoint_key('embedded'),
+            'models': {'synthetic-model': self.catalog}}}))
         self.seen = []
 
     def capture(self, request):
@@ -78,21 +83,22 @@ class EndpointPolicy(unittest.TestCase):
                     _resolved=True, system='synthetic', messages=[{'role':'user','content':'test'}],
                     tools=None, max_tokens=128, thinking=thinking, reasoning_effort=effort)
 
-    def test_all_six_relay_tiers_reach_the_actual_sdk_transport(self):
-        for effort in llm.EMBEDDED_RELAY_EFFORTS:
+    def test_advertised_relay_tiers_reach_the_actual_sdk_transport(self):
+        for effort in self.catalog['reasoning_efforts']:
             with self.subTest(effort=effort):
                 self.assertEqual(self.call('embedded', effort).text, 'ok')
                 self.assertEqual(self.seen[-1]['reasoning_effort'], effort)
-        self.assertEqual(len(self.seen), 6)
+        self.assertEqual(len(self.seen), len(self.catalog['reasoning_efforts']))
 
-    def test_relay_max_refuses_before_sdk_client_or_send_without_downshift(self):
+    def test_unadvertised_relay_max_refuses_before_sdk_client_or_send_without_downshift(self):
+        self.catalog['reasoning_efforts'] = [effort for effort in self.catalog['reasoning_efforts'] if effort != 'max']
         with mock.patch.object(llm, '_client_for', side_effect=AssertionError('SDK must not prepare')):
             with self.assertRaises(llm.UnsupportedReasoningEffort) as raised:
                 llm._call('embedded', 'synthetic-model', thinking=None, reasoning_effort='max')
         self.assertEqual(raised.exception.requested, 'max')
         self.assertEqual(raised.exception.account, 'embedded')
-        self.assertEqual(raised.exception.supported, llm.EMBEDDED_RELAY_EFFORTS)
-        self.assertIn('donor binary support unknown', str(raised.exception))
+        self.assertEqual(raised.exception.supported, tuple(self.catalog['reasoning_efforts']))
+        self.assertEqual(raised.exception.policy, 'codex-model-catalog-v1')
         self.assertEqual(self.seen, [])
 
     def test_held_relay_preserves_configured_direct_fallback_canonical_max_and_route(self):

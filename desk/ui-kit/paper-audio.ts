@@ -2,21 +2,21 @@ import { esc } from './text';
 import type { PaperMedia, MediaClient } from './paper-media';
 
 interface Wave { loadBlob(blob: Blob): Promise<void>; destroy(): void }
-interface WaveModule { create(options: {container: HTMLElement; media: HTMLMediaElement; height: number; waveColor: string; progressColor: string; barWidth: number; barGap: number; dragToSeek: boolean; normalize: boolean}): Wave }
+interface WaveModule { create(options: {container: HTMLElement; media: HTMLMediaElement; height: number; waveColor: string; progressColor: string; barWidth: number; barGap: number; dragToSeek: boolean; interact: boolean; normalize: boolean}): Wave }
 let loader: (() => Promise<WaveModule>) | undefined;
 export function setAudioPlayer(load: () => Promise<WaveModule>) { loader = load; }
 const activePlayers = new Set<HTMLAudioElement>();
 export function pausePaperAudio() { for (const player of activePlayers) player.pause(); }
 const clock = (n: number) => { n = Number.isFinite(n) ? Math.max(0, n) : 0; return `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`; };
-const title = (media: PaperMedia) => /^(?:voice[-_]|audio[-_]|voice$)/i.test(media.name) ? 'Голосовое сообщение' : media.name;
+const title = (media: PaperMedia) => /^(?:voice[-_]|audio[-_]|voice$|[a-f0-9]{32}\.)/i.test(media.name) ? 'Голосовое сообщение' : media.name;
 
 export function audioHTML(m: PaperMedia, data: string) {
-  return `<figure class="paper-media paper-audio" ${data}><button type="button" class="paper-audio-toggle" data-audio-toggle aria-label="Воспроизвести">▶</button><div class="paper-audio-main"><div class="paper-audio-name">${esc(title(m))}</div><div class="paper-wave" aria-hidden="true"></div><input class="paper-audio-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция воспроизведения"><div class="paper-audio-meta"><span data-audio-time>0:00</span><span data-audio-status role="status">Голосовая запись</span><button type="button" class="paper-link" data-paper-save>Сохранить…</button></div><div class="paper-transcription" data-voice-state hidden></div><button type="button" class="paper-link" data-voice-retry hidden>Повторить расшифровку</button></div></figure>`;
+  return `<figure class="paper-media paper-audio" ${data}><button type="button" class="paper-audio-toggle" data-audio-toggle aria-label="Воспроизвести">▶</button><div class="paper-audio-main"><div class="paper-audio-heading"><span class="paper-audio-name">${esc(title(m))}</span><span data-audio-time>0:00</span></div><span data-audio-status role="status"></span><div class="paper-audio-detail" hidden><div class="paper-wave" aria-hidden="true"></div><input class="paper-audio-seek" type="range" min="0" max="1000" value="0" aria-label="Позиция воспроизведения"><div class="paper-audio-meta"><button type="button" class="paper-link" data-paper-save>Сохранить…</button></div><div class="paper-transcription" data-voice-state hidden></div><button type="button" class="paper-link" data-voice-retry hidden>Повторить расшифровку</button></div></div><button type="button" class="paper-audio-details" data-audio-details aria-label="Детали голосового" aria-expanded="false">⌄</button></figure>`;
 }
 
 /** Audio belongs to the mounted conversation, not its scrolling/virtualized row. */
 export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
-  type Track = {media: PaperMedia; audio: HTMLAudioElement; waveform: HTMLElement; wave?: Wave; blob?: Blob; url?: string; loading?: Promise<void>; error?: string; listeners: (() => void)[]};
+  type Track = {media: PaperMedia; audio: HTMLAudioElement; waveform: HTMLElement; wave?: Wave; waveMedia?: HTMLAudioElement; waveLoading?: Promise<void>; blob?: Blob; url?: string; loading?: Promise<void>; error?: string; listeners: (() => void)[]};
   const tracks = new Map<string, Track>();
   const statuses = new Map<string, Awaited<ReturnType<NonNullable<MediaClient['voice']>>>>();
   const retrying = new Set<string>();
@@ -35,6 +35,8 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     if (disposed) return;
     for (const node of nodes()) {
       const status = statuses.get(key(node));
+      const recognition=status?.status==='error'?'Не расшифровано · детали':status?.status==='transcribing'?'Распознаю речь…':status?.status==='unavailable'?'Расшифровка недоступна · детали':'';
+      node.querySelector('[data-audio-status]')!.textContent=recognition;
       if (status) {
         const label = node.querySelector<HTMLElement>('[data-voice-state]')!, retry = node.querySelector<HTMLButtonElement>('[data-voice-retry]')!;
         label.hidden = false;
@@ -46,7 +48,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       const a = track.audio, toggle = node.querySelector<HTMLButtonElement>('[data-audio-toggle]')!;
       toggle.textContent = a.paused ? '▶' : 'Ⅱ'; toggle.setAttribute('aria-label', a.paused ? 'Воспроизвести' : 'Пауза');
       node.querySelector('[data-audio-time]')!.textContent = `${clock(a.currentTime)} / ${clock(a.duration)}`;
-      node.querySelector('[data-audio-status]')!.textContent = track.error || (track.loading ? 'Загружаю…' : '');
+      node.querySelector('[data-audio-status]')!.textContent = track.error || (track.loading ? 'Загружаю…' : recognition);
       const seek = node.querySelector<HTMLInputElement>('.paper-audio-seek')!; seek.value = String(Number.isFinite(a.duration) && a.duration ? a.currentTime / a.duration * 1000 : 0);
       const slot = node.querySelector<HTMLElement>('.paper-wave')!;
       if (track.waveform.parentElement !== slot) slot.replaceChildren(track.waveform);
@@ -55,7 +57,7 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       if(key(node)!==client.key(active!.media))return false;
       const rect=node.getBoundingClientRect();return rect.bottom>0 && rect.top<innerHeight;
     });
-    bar.hidden = !active || !!visibleActive || !root.classList.contains('with-panel');
+    bar.hidden = !active || active.audio.paused || !!visibleActive || !root.classList.contains('with-panel');
     if (active) {
       const a = active.audio;
       bar.querySelector('[data-audio-title]')!.textContent = title(active.media);
@@ -66,8 +68,13 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
       bar.querySelector<HTMLButtonElement>('[data-audio-next]')!.disabled = i < 0 || i >= queue.length - 1;
     }
   }
+  function clearWave(t: Track) {
+    t.wave?.destroy();t.wave=undefined;
+    if(t.waveMedia){t.waveMedia.removeAttribute('src');t.waveMedia.load();}
+    t.waveMedia=undefined;
+  }
   function drop(k: string, t: Track) {
-    t.audio.pause(); activePlayers.delete(t.audio); t.wave?.destroy();
+    t.audio.pause(); activePlayers.delete(t.audio);clearWave(t);
     for (const off of t.listeners) off();
     t.audio.removeAttribute('src'); t.audio.load();
     if (t.url) URL.revokeObjectURL(t.url);
@@ -78,7 +85,6 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     const kept = new Set(nodes().map(key));
     for (const [k,t] of tracks) if (!kept.has(k) && t !== active) drop(k,t);
     paint(); void pollVoice();
-    for (const node of nodes()) waveObserver.observe(node);
   }
   async function pollVoice() {
     if(disposed || polling || !client.voice || document.hidden) return;
@@ -113,26 +119,31 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     t.error = undefined;
     t.loading = (async () => {
       const blob = await client.bytes(t.media); if (!blob.size) throw new Error('Файл пуст');
-      const module = loader ? await loader() : undefined;
-      if (disposed || !tracks.has(client.key(t.media))) return;
+      if (disposed || tracks.get(client.key(t.media))!==t) return;
       t.blob = blob;
-      if (module) {
-        const style = getComputedStyle(root);
-        t.wave = module.create({container:t.waveform, media:t.audio, height:32, waveColor:style.getPropertyValue('--ink-3').trim() || '#8a8277', progressColor:style.getPropertyValue('--accent').trim() || '#8d593d', barWidth:2, barGap:2, dragToSeek:true, normalize:true});
-        await new Promise<void>((resolve,reject) => {
-          const fail = () => finish(new Error('Формат аудио не воспроизводится'));
-          const timer = setTimeout(() => finish(new Error('Аудио не подготовилось вовремя')),30000);
-          const finish = (error?: unknown) => { clearTimeout(timer); t.audio.removeEventListener('error',fail); error ? reject(error) : resolve(); };
-          t.audio.addEventListener('error',fail,{once:true});
-          t.wave!.loadBlob(blob).then(() => finish(),finish);
-        });
-      } else { t.url = URL.createObjectURL(blob); t.audio.src = t.url; }
+      // Source first: neither a waveform import nor audio decoding gates play.
+      t.url = URL.createObjectURL(blob); t.audio.src = t.url;
     })();
     try { await t.loading; } catch(e) {
-      t.wave?.destroy(); t.wave=undefined; t.blob=undefined;
+      t.blob=undefined;
       if(t.url) URL.revokeObjectURL(t.url); t.url=undefined; t.error = 'Не удалось открыть. Нажми, чтобы повторить.';
       throw e;
     } finally { t.loading=undefined; paint(); }
+  }
+  async function waveform(t: Track) {
+    if(t.wave || t.waveLoading || !loader)return;
+    t.waveLoading=(async()=>{
+      await load(t);const module=await loader!();
+      if(disposed || !t.blob || tracks.get(client.key(t.media))!==t)return;
+      const color=getComputedStyle(root).getPropertyValue('--ink-3').trim() || '#8a8277';
+      // A separate, silent media element keeps optional history decoding from
+      // changing the source, playback position or state of the live audio.
+      t.waveMedia=new Audio();t.waveMedia.muted=true;
+      t.wave=module.create({container:t.waveform,media:t.waveMedia,height:32,waveColor:color,progressColor:color,barWidth:2,barGap:2,dragToSeek:false,interact:false,normalize:true});
+      await t.wave.loadBlob(t.blob);
+    })();
+    try {await t.waveLoading;}catch {clearWave(t);}
+    finally{t.waveLoading=undefined;}
   }
   async function play(t: Track) {
     const seq = ++generation;
@@ -146,6 +157,12 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
   function onClick(e: Event) {
     const node = (e.target as Element).closest<HTMLElement>('.paper-audio[data-paper-path]');
     if(!node) return;
+    if((e.target as Element).closest('[data-audio-details]')){
+      const button=node.querySelector<HTMLButtonElement>('[data-audio-details]')!,detail=node.querySelector<HTMLElement>('.paper-audio-detail')!;
+      detail.hidden=!detail.hidden;button.setAttribute('aria-expanded',String(!detail.hidden));
+      if(!detail.hidden)void waveform(trackFor(node));
+      return;
+    }
     if((e.target as Element).closest('[data-voice-retry]') && client.voice) {
       const k=key(node); if(retrying.has(k)) return; retrying.add(k); paint();
       void client.voice(media(node),true).then(status=>{if(!disposed) statuses.set(k,status);},()=>{if(!disposed) statuses.set(k,{status:'unavailable',error:'Ответ о повторе не получен; проверь состояние.'});}).finally(()=>{retrying.delete(k);paint();});
@@ -172,33 +189,39 @@ export function mountPaperAudio(root: HTMLElement, client: MediaClient) {
     if(input.hasAttribute('data-audio-speed')) speed=Number(input.value);
     for(const t of tracks.values()) { t.audio.volume=volume; t.audio.playbackRate=speed; }
   }
-  const waveObserver = new IntersectionObserver(entries => {
-    for (const entry of entries) if (entry.isIntersecting) {
-      const node=entry.target as HTMLElement; waveObserver.unobserve(node);
-      const t=trackFor(node); void load(t).catch(()=>{});
-    }
-  }, {rootMargin:'200px'});
   const autoplay: PaperMedia[]=[];
-  let autoRunning=false, recording=false;
+  let autoRunning=false, recording=false, autoEpoch=0, scope='';
+  let detachAuto=()=>{};
+  const cancelAuto=()=>{++autoEpoch;detachAuto();detachAuto=()=>{};autoRunning=false;};
   async function playNext() {
     if(autoRunning||recording||disposed||!autoplay.length)return;
-    autoRunning=true;
+    autoRunning=true;const epoch=autoEpoch;
     const t=trackForMedia(autoplay.shift()!);
-    await play(t);
-    if(disposed)return;
-    if(t.audio.paused){autoRunning=false;return;}
-    const done=()=>{t.audio.removeEventListener('ended',done);t.audio.removeEventListener('error',done);autoRunning=false;void playNext();};
+    const done=()=>{detach();if(epoch!==autoEpoch)return;autoRunning=false;void playNext();};
+    const detach=()=>{t.audio.removeEventListener('ended',done);t.audio.removeEventListener('error',done);};
+    detachAuto=detach;
     t.audio.addEventListener('ended',done,{once:true});t.audio.addEventListener('error',done,{once:true});
+    await play(t);
+    if(disposed||epoch!==autoEpoch)return;
+    if(t.audio.paused){detach();autoRunning=false;void playNext();}
   }
   const incoming=(event:Event)=>{autoplay.push((event as CustomEvent<PaperMedia>).detail);void playNext();};
-  const hush=()=>{recording=true;pausePaperAudio();autoplay.length=0;autoRunning=false;};
-  const quietEnd=()=>{recording=false;};
+  const hush=()=>{recording=true;++generation;cancelAuto();pausePaperAudio();autoplay.length=0;};
+  const quietEnd=()=>{recording=false;void playNext();};
+  const roomChanged=(event:Event)=>{
+    const next=(event as CustomEvent<{scope?:string}>).detail?.scope;
+    if(!next || next===scope)return;
+    scope=next;++generation;cancelAuto();autoplay.length=0;active=undefined;
+    for(const [k,t] of tracks)drop(k,t);statuses.clear();paint();
+  };
+  const preferences=(event:Event)=>{if((event as CustomEvent<{autoplay?:boolean}>).detail?.autoplay===false){++generation;cancelAuto();autoplay.length=0;pausePaperAudio();}};
   addEventListener('helene:voice-incoming',incoming);addEventListener('helene:recording',hush);addEventListener('helene:recording-ended',quietEnd);
+  addEventListener('frame-room',roomChanged);addEventListener('helene:voice-preferences',preferences);
   root.addEventListener('click',onClick); root.addEventListener('input',onSeek);
   bar.addEventListener('click',onBar); bar.addEventListener('input',onSettings); bar.addEventListener('change',onSettings);
   const containsAudio = (n: Node) => n instanceof Element && (n.matches('.paper-audio') || !!n.querySelector('.paper-audio'));
   const observer=new MutationObserver(records => { if(records.some(r => [...r.addedNodes,...r.removedNodes].some(containsAudio))) reconcile(); }); observer.observe(root,{childList:true,subtree:true});
   const pollTimer=setInterval(()=>void pollVoice(),2500); void pollVoice();
   reconcile();
-  return () => { disposed=true; clearInterval(pollTimer); ++generation; observer.disconnect(); waveObserver.disconnect();removeEventListener('helene:voice-incoming',incoming);removeEventListener('helene:recording',hush);removeEventListener('helene:recording-ended',quietEnd);root.removeEventListener('click',onClick); root.removeEventListener('input',onSeek); bar.removeEventListener('click',onBar); bar.removeEventListener('input',onSettings); bar.removeEventListener('change',onSettings); for(const [k,t] of tracks) drop(k,t); active=undefined; bar.remove(); };
+  return () => { disposed=true; clearInterval(pollTimer); ++generation;cancelAuto(); observer.disconnect();removeEventListener('frame-room',roomChanged);removeEventListener('helene:voice-preferences',preferences);removeEventListener('helene:voice-incoming',incoming);removeEventListener('helene:recording',hush);removeEventListener('helene:recording-ended',quietEnd);root.removeEventListener('click',onClick); root.removeEventListener('input',onSeek); bar.removeEventListener('click',onBar); bar.removeEventListener('input',onSettings); bar.removeEventListener('change',onSettings); for(const [k,t] of tracks) drop(k,t); active=undefined; bar.remove(); };
 }

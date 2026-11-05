@@ -231,7 +231,7 @@ class SpeechApplication(unittest.TestCase):
             "spec = importlib.util.spec_from_file_location('_old_audio_fixture', Path(__file__).with_name('media_audio.py'))\n"
             "media_audio = importlib.util.module_from_spec(spec); spec.loader.exec_module(media_audio)\n"
             "def tool_speak(*args, **kwargs): return 'old-edge-only'\n"
-            "_TURN_CHANNEL = ContextVar('old_channel', default=object())\n"
+            "_TURN_CHANNEL = ContextVar('old_channel', default=None)\n"
             "_TURN_OUTBOUND = ContextVar('old_outbound', default=None)\n"
             "_TURN_MEDIA_GUARD = ContextVar('old_guard', default=None)\n"
             "TOOL_IMPL = {'speak': tool_speak}\n", encoding='utf-8')
@@ -241,64 +241,55 @@ class SpeechApplication(unittest.TestCase):
         runs = types.SimpleNamespace(manifest=lambda rid: state, status=lambda rid: state)
         old.run_context = types.SimpleNamespace(current_run=lambda: types.SimpleNamespace(run_id='run'))
         old._runs = lambda: runs
+        old._TURN_CHANNEL.set(types.SimpleNamespace(chat_id='window'))
+        old.current_tool_execution = lambda: {'call_id':'call-fixture'}
         return old, source, state
 
     @contextmanager
     def boundary(self, runs, run_id):
         yield True
 
-    def test_old_authored_adapter_preserves_bytes_and_stt_and_stages_voice_note(self):
+    def test_old_authored_adapter_preserves_bytes_stt_and_delivers_without_agent_staging(self):
         old, source, state = self.old_agent()
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         config = self.root / 'helene.json'; ipc.write(config, CFG)
-        staged = []; old._TURN_OUTBOUND.set(staged)
-        audio_path = self.root / 'generated.ogg'
-        audio_path.write_bytes(b'transport fixture; codec qualification is separate')
-        audio = types.SimpleNamespace(path=audio_path, check=lambda stopped: None)
-        old._stage_turn_media = Mock(return_value='staged')
-        boundary = types.SimpleNamespace(delivery=self.boundary,
-            cancelled=lambda state: state.get('control', {}).get('action') == 'cancel')
-        speech_bridge.install(old, self.root, config, boundary=boundary, owner=owner_stop)
+        outbound = []; old._TURN_OUTBOUND.set(outbound)
+        path = self.root / 'generated.ogg'; path.write_bytes(b'controlled codec fixture')
+        audio = types.SimpleNamespace(path=path, check=Mock(side_effect=AssertionError('No generated-audio review')))
+        old._stage_turn_media = Mock(side_effect=AssertionError('No agent staging'))
+        boundary = types.SimpleNamespace(delivery=self.boundary, cancelled=lambda state: False)
+        delivered = threading.Event(); sent = []
+        def send(job, audio, check):
+            check(); sent.append((job['chat_id'], audio.path.read_bytes())); delivered.set(); return 'accepted'
+        service = speech_bridge.install(old, self.root, config, boundary=boundary, owner=owner_stop, deliver=send)
+        self.addCleanup(service.close)
         with patch.object(speech_client, 'synthesize', return_value=audio) as synth:
-            self.assertEqual(old.TOOL_IMPL['speak']('whole text', 'caption'), 'staged')
+            self.assertIn('принят', old.tool_speak('whole text', 'caption'))
+            self.assertTrue(delivered.wait(3)); service.pending.join()
             self.assertIs(old.TOOL_IMPL['speak'], old.tool_speak)
             self.assertTrue(synth.call_args.kwargs['configuration']()['voice']['speak'])
-        self.assertEqual(old._stage_turn_media.call_args.kwargs['voice_note'], True)
-        self.assertEqual(old._stage_turn_media.call_args.kwargs['guard_text'], 'Точный текст синтезированной речи: whole text')
+        self.assertEqual(sent, [('window', b'controlled codec fixture')]); self.assertEqual(outbound, [])
+        old._stage_turn_media.assert_not_called(); audio.check.assert_not_called()
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)
         self.assertEqual(old.media_audio.transcribe(None), 'STT untouched')
-        self.assertFalse((source.parent / 'xtts_tts_worker.py').exists())
-        self.assertFalse(audio_path.exists())
+        self.assertFalse((source.parent / 'xtts_tts_worker.py').exists()); self.assertFalse(path.exists())
 
-    def test_cancel_or_generation_change_during_staging_removes_only_new_item(self):
-        for action in ('cancel', 'pause', 'generation'):
-            with self.subTest(action=action):
-                old, source, state = self.old_agent() if not (self.root / 'authored').exists() else self._reuse_old()
-                config = self.root / 'helene.json'; ipc.write(config, CFG)
-                existing = types.SimpleNamespace(path=self.root / 'earlier.ogg', queue_id='earlier')
-                existing.path.write_bytes(b'earlier')
-                outbound = [existing]; old._TURN_OUTBOUND.set(outbound)
-                path = self.root / 'new.ogg'; path.write_bytes(b'new fixture')
-                self.ready()
-                paused = threading.Event()
-                audio = speech_client.Audio(path, self.home, self.root, GEN, lambda: CFG)
-                def stage(source, **kwargs):
-                    moved = self.root / 'spool.ogg'; shutil.move(source, moved)
-                    outbound.append(types.SimpleNamespace(path=moved, queue_id='new'))
-                    if action == 'cancel': state.update(status='cancelled')
-                    elif action == 'pause': paused.set()
-                    else:
-                        ready = ipc.read(self.home/'ready.json'); ready['generation'] = 'd'*32
-                        ipc.write(self.home/'ready.json', ready)
-                    return 'staged'
-                old._stage_turn_media = stage
-                boundary = types.SimpleNamespace(delivery=self.boundary, cancelled=lambda state: False)
-                speech_bridge.install(old, self.root, config, boundary=boundary, owner=owner_stop)
-                with patch.object(speech_client, 'synthesize', return_value=audio), patch.object(ipc, 'blocked', side_effect=lambda tree: paused.is_set()):
-                    self.assertIn('отменена', old.tool_speak('test'))
-                self.assertEqual(outbound, [existing])
-                self.assertTrue(existing.path.exists())
-                self.assertFalse((self.root / 'spool.ogg').exists())
+    def test_cancel_during_generation_keeps_unrelated_turn_media(self):
+        old, source, state = self.old_agent()
+        config = self.root / 'helene.json'; ipc.write(config, CFG)
+        existing = types.SimpleNamespace(path=self.root / 'earlier.ogg', queue_id='earlier')
+        existing.path.write_bytes(b'earlier'); outbound=[existing]; old._TURN_OUTBOUND.set(outbound)
+        path = self.root / 'new.ogg'; path.write_bytes(b'new fixture')
+        boundary = types.SimpleNamespace(delivery=self.boundary, cancelled=lambda value: value.get('status')=='cancelled')
+        send = Mock(return_value='must not deliver')
+        service = speech_bridge.install(old, self.root, config, boundary=boundary, owner=owner_stop, deliver=send)
+        self.addCleanup(service.close)
+        def produce(*args, **kwargs):
+            state['status']='cancelled'; return types.SimpleNamespace(path=path)
+        with patch.object(speech_client, 'synthesize', side_effect=produce):
+            self.assertIn('принят',old.tool_speak('test')); service.pending.join()
+        send.assert_not_called(); self.assertEqual(outbound,[existing]); self.assertTrue(existing.path.exists())
+        self.assertFalse(path.exists())
 
     def _reuse_old(self):
         for path in (self.root / 'authored').iterdir(): path.unlink()

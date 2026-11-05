@@ -80,30 +80,31 @@ def write(root,*,launcher_binary=None):
 def instructions():
     return '''# Hélène for Windows
 
-Extract the complete archive into a new folder.
-Open **helene.exe**. Python and the complete runtime are included.
+Extract the complete archive into a new folder, then open **helene.exe**.
+Python and the complete runtime are included.
 
-The first launch retires legacy installations and migration remnants,
-finds existing data in AppData or Program Files, and moves it to:
+For a clean upgrade of an existing Python Hélène, the completed extraction is
+used directly: the application reconnects the existing data, opens the new
+version and removes the previous programme folder after its startup acknowledgement.
+There is no comparison of files in either programme folder and no five-minute
+trial. Save any source edits you want separately before choosing clean code.
+
+The usual data home is:
 
     %USERPROFILE%\\Helene\\data
 
-Legacy Hélène folders and migration remnants in AppData are removed. Outside
-AppData, cleanup considers recognised Hélène copies next to this programme.
-Copies with a valid completed receipt, including their outer archive folders,
-are kept until the agent has run continuously for five minutes. All captured
-old copies are then retired. Pausing, closing or restarting resets this check.
+Memory, conversations, credentials and settings are kept separately from the
+programme. Pinned Whisper and XTTS dependencies stay in their permanent store;
+the updater reuses their small references instead of copying the weights.
 
-An existing agent opens automatically. If there is no agent, enter a name and
-model credentials. Later launches open the ordinary application directly.
+If there is no recognised Python owner, the first-start window connects existing
+data or creates an agent. Legacy native installations use their migration flow.
+Later launches open the ordinary application directly.
 
-Opening a fresh archive runs its upstream code with your existing data.
-The first upgrade from an old release replaces programme code. Save any code
-edits you need separately before migration; agent data are preserved.
-After migrating, Update in the running application can preserve code edits and
-resolve conflicts. It switches to a separate new folder and applies the same
-five-minute check before retiring captured old copies.
+Update inside Hélène offers two explicit choices. Clean code uses the new
+programme directly. Preserve edits reconciles the selected changes and retains
+its review and validation policy.
 
-The programme is portable. Your data live separately in your user profile.
-Whisper and XTTS are optional in Settings. No compiler or build tools are needed.
+The programme is portable. Whisper and XTTS are optional in Settings.
+No compiler or build tools are needed.
 '''

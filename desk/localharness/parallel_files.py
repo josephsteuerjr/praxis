@@ -9,20 +9,20 @@ import time
 import uuid
 import zipfile
 
-WORKERS=min(12,os.cpu_count() or 1)
+WORKERS=max(1,(getattr(os,'process_cpu_count',os.cpu_count)() or os.cpu_count() or 1))
 
 
 def digest(path):
     with Path(path).open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
 
 
-def copytree(source,destination,*,symlinks=True,ignore=None,copy_function=shutil.copy2,workers=WORKERS):
+def copytree(source,destination,*,symlinks=True,ignore=None,copy_function=shutil.copy2,workers=WORKERS,dirs_exist_ok=False):
     """Create directories once, copy independent leaves, restore directory modes."""
     source,destination=Path(source),Path(destination)
     futures=[];directories=[]
     with ThreadPoolExecutor(max_workers=workers) as pool:
         def walk(src,dst):
-            dst.mkdir(parents=True);directories.append((src,dst))
+            dst.mkdir(parents=True,exist_ok=dirs_exist_ok);directories.append((src,dst))
             paths=list(src.iterdir());ignored=set(ignore(str(src),[p.name for p in paths])) if ignore else set()
             for path in paths:
                 if path.name in ignored:continue
@@ -63,7 +63,7 @@ def verify_pairs(pairs, progress=None, workers=WORKERS):
         record(map(check,small));record(future.result() for future in pending)
 
 
-def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
+def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS,*,verify=True):
     destination=Path(destination).resolve()
     with zipfile.ZipFile(archive) as reader:entries=reader.infolist()
     seen={}
@@ -103,17 +103,19 @@ def extract(archive,destination,progress=None,prefix='Helene/',workers=WORKERS):
         try:
             # Each worker has an independent reader, avoiding ZipFile's shared
             # seek lock. Reading to EOF checks CRC for every single member.
-            digest=hashlib.sha256()
+            digest=hashlib.sha256() if verify else None
             with local.reader.open(entry) as source,temporary.open('xb') as output:
                 while chunk:=source.read(1024*1024):
-                    digest.update(chunk);output.write(chunk);report(len(chunk),entry.filename)
+                    if digest is not None:digest.update(chunk)
+                    output.write(chunk);report(len(chunk),entry.filename)
             if os.name!='nt':temporary.chmod(((entry.external_attr>>16)&0o777 or 0o644)&~0o022)
             temporary.replace(target);report(0,entry.filename,True)
             from .update_io import stamp, count
             count(progress, 'extracted', entry.file_size)
             # Later archive overlays replace this receipt; later config/code
             # writes invalidate it through the exact file change identity.
-            with lock:verified[str(target)]={'sha256':digest.hexdigest(),'stat':stamp(target)}
+            if digest is not None:
+                with lock:verified[str(target)]={'sha256':digest.hexdigest(),'stat':stamp(target)}
         finally:temporary.unlink(missing_ok=True)
     try:
         if workers==1:

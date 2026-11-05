@@ -28,17 +28,16 @@
 Ручки владельца — блок `voice` в `helene.json`:
 
     {"voice": {"enabled": true, "model": "turbo", "language": "ru",
-               "threads": 4, "keep_loaded": false}}
+               "keep_loaded": false}}
 
-⚠ `keep_loaded` по умолчанию ВЫКЛЮЧЕН, в отличие от сервера. На сервере модель
-держат в памяти, чтобы не платить секундами на каждое голосовое; на домашней
-машине это 1,5–2 ГБ занятой памяти всё время, пока агент жив, — за то, чем
-пользуются несколько раз в день.
+`keep_loaded` requests optional startup warmup. After any use the application
+retains Whisper for thirty idle minutes; inference uses all available CPUs.
 
-Живые числа (машина владельца, 10.09.2026, int8, 4 потока, 9,2 с русской речи):
+Исторический замер с фиксированными настройками (машина владельца,
+10.09.2026, int8, 4 потока, 9,2 с русской речи):
 `small` — загрузка модели с диска 3,8 с, расшифровка 3,9 с, но «реле на сервере»
 расслышано как «Релена сервере»; `large-v3-turbo` — расшифровка 25 с и ни одной
-ошибки. Отсюда и выбор в окне: скорость против точности, оба варианта названы.
+ошибки.
 """
 from __future__ import annotations
 
@@ -70,17 +69,13 @@ CATALOG: dict[str, dict] = {
         "repo": "Systran/faster-whisper-small",
         "title": "small — быстрее и легче",
         "size_mb": 480,
-        "note": "Понимает речь, но путается в именах и редких словах: «перезапусти реле "
-                "на сервере» расслышала как «перезапусти Релена сервере». Быстрая — "
-                "9 секунд речи разобрала за 4 (машина владельца, 4 потока).",
+        "note": "Компактнее large-v3-turbo. Может путаться в именах и редких словах.",
     },
     "turbo": {
         "repo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
         "title": "large-v3-turbo — как на сервере",
         "size_mb": 1600,
-        "note": "Та же модель, что у агента на сервере: ту же фразу разобрала без "
-                "ошибок. Медленнее и тяжелее — 9 секунд речи за 25 (машина владельца, "
-                "4 потока), в памяти около 1,5 ГБ.",
+        "note": "Крупнее small и требует больше памяти. Скорость зависит от процессора и длины записи.",
     },
 }
 DEFAULT_MODEL = "turbo"
@@ -644,10 +639,9 @@ def _stt_env(tree: Path, cfg: dict, said: dict) -> dict:
         return {}
     have = said["installed"]
     voice = block(cfg)
-    # 26.09: окну и владельцу — хотя бы одно ядро. Четыре потока на четырёх ядрах
-    # забирали процессор целиком, и окно дёргалось, пока шла расшифровка.
-    wanted = int(voice.get("threads") or 4)
-    threads = str(max(1, min(wanted, (os.cpu_count() or 4) - 1)))
+    # Owner selects maximum throughput: use every CPU available to this process.
+    counter = getattr(os, 'process_cpu_count', os.cpu_count)
+    threads = str(max(1, counter() or os.cpu_count() or 1))
     return {
         "PRAXIS_AUDIO_MODEL_DIR": str(Path(tree) / "models"),
         # Путь, а не имя: имя разрешается через кэш Hugging Face и молча
@@ -659,9 +653,8 @@ def _stt_env(tree: Path, cfg: dict, said: dict) -> dict:
         "PRAXIS_STT_CPU_THREADS": threads,
         "PRAXIS_STT_BEAM_SIZE": str(voice.get("beam_size") or 5),
         "PRAXIS_STT_LANGUAGE": str(voice.get("language") or "ru"),
-        # На домашней машине держать модель в памяти постоянно — 1,5–2 ГБ за
-        # несколько голосовых в день. На сервере наоборот; там своё значение.
-        "PRAXIS_STT_KEEP_LOADED": "1" if voice.get("keep_loaded") else "0",
+        # The application releases the model after thirty idle minutes.
+        "PRAXIS_STT_KEEP_LOADED": "1",
     }
 
 

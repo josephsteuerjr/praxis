@@ -400,7 +400,7 @@ class Desk:
         return out
 
     # ------------------------------------------------------------ доставка
-    def deliver_once(self, text: str, *, key: str) -> str:
+    def deliver_once(self, text: str, *, key: str, media_path: str = "", media_kind: str = "") -> str:
         """Принять конкретную доставку один раз, даже после рестарта процесса."""
         if not key:
             raise ValueError("delivery key must not be empty")
@@ -422,7 +422,9 @@ class Desk:
                             existing = row
                             break
             if existing is not None:
-                if existing.get("text") != body or existing.get("outgoing") is not True:
+                if (existing.get("text") != body or existing.get("outgoing") is not True
+                        or existing.get('media_path', '') != media_path
+                        or existing.get('media_kind', '') != media_kind):
                     raise ValueError("delivery key already belongs to different content")
                 message_id = existing["message_id"]
                 now = dt.datetime.fromisoformat(existing["timestamp"])
@@ -431,6 +433,13 @@ class Desk:
                        "text": body, "sender_name": self.agent_name,
                        "delivery_key": key, "message_id": message_id,
                        'source_audience': {'chat': self.stream, 'is_dm': True, 'owner': True}}
+                if media_path:
+                    from deskd import artifacts
+                    path, error = artifacts.resolve(self.tree, media_path)
+                    if path is None:
+                        raise ValueError(error)
+                    row.update(media_path=media_path, media_kind=media_kind,
+                               **artifacts.metadata(self.tree, media_path))
                 data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
                 with archive.open("ab+") as sink:
                     if sink.tell():

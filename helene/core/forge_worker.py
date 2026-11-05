@@ -63,17 +63,23 @@ def _chat_with_transport_retry(request: dict, *, request_path: Path, system: str
     for attempt in range(retries + 1):
         _control(request_path)  # Pause/Stop may arrive during a failed call or retry delay.
         try:
-            return llm.chat("voice", system=system, messages=messages, tools=tools,
-                            model=str(request.get("model") or "").strip() or None,
-                            **(call_options or {}))
+            with llm.single_provider_attempt():
+                return llm.chat("voice", system=system, messages=messages, tools=tools,
+                                model=str(request.get("model") or "").strip() or None,
+                                **(call_options or {}))
         except llm.BrokenChannelError as exc:
-            retry = attempt < retries and not isinstance(exc, llm.TornStreamError)
+            retry = (attempt < retries and not isinstance(exc, llm.TornStreamError)
+                     and getattr(exc, 'partial', None) is None
+                     and getattr(exc, 'request_not_admitted', False) is True)
             if journal is not None:
                 partial = getattr(exc, "partial", None)
                 reference = None
                 if partial is not None:
                     reference = journal.payload(json.dumps({"text": partial.text, "blocks": partial.blocks,
                         "stop_reason": partial.stop_reason, "model": partial.model,
+                        "usage": getattr(partial, "usage", {}),
+                        "framework": getattr(partial, "framework", ""),
+                        "provider_observation": getattr(partial, "provider_observation", {}),
                         "assistant": _assistant(partial)}, ensure_ascii=False))
                 journal.event("model_transport_error", error=f"{type(exc).__name__}: {exc}",
                               output_ref=reference, attempt=attempt, retry=retry,

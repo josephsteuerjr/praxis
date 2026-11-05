@@ -214,9 +214,10 @@ def close_python(old, *, force=False):
     import psutil
     old=Path(old).resolve()
     interpreters={old/'runtime/python.exe',old/'runtime/pythonw.exe'}
+    entries=(old/'app/python_app.py',old/'app/windows_start.py')
     owners=[row for row in process_snapshot() if row.get('ExecutablePath')
             and Path(row['ExecutablePath']).resolve() in interpreters
-            and references_root(row.get('CommandLine',''),str(old/'app/python_app.py'))]
+            and any(references_root(row.get('CommandLine',''),str(entry)) for entry in entries)]
     for row in owners:
         request_error=None
         try:request_python_exit(old,int(row['ProcessId']))

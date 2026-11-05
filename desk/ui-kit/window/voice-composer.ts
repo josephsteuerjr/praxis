@@ -45,7 +45,7 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
   let analyser: AnalyserNode | null=null, context: AudioContext | null=null, stream: MediaStream | null=null, previousState='idle';
   const paint = (session: VoiceSession) => {
     if(disposed)return;
-    bar.hidden=session.state==='idle';bar.dataset.state=session.state;
+    bar.hidden=session.state==='idle';bar.dataset.state=session.state;bar.dataset.mode=session.sendsOnRelease?'send':'pause';
     options.mic.classList.toggle('recording',session.state==='recording');
     options.mic.title=`Записать голосовое · ${voicePreferences().hotkey}`;
     options.mic.disabled=session.state==='starting'||session.state==='sending';
@@ -78,8 +78,8 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
     send:options.send,changed:paint,error:toast,
   });
   const start=(mode:'pause'|'send')=>{const target=options.target();if(!target){toast('Выбери доступный чат для записи.');return;}void session.hold(target,mode);};
-  options.mic.onclick=()=>{if(session.state==='recording')session.pause();else start('pause');};
-  bar.querySelector<HTMLButtonElement>('[data-resume]')!.onclick=options.mic.onclick as () => void;
+  options.mic.onclick=()=>{if(session.state==='recording')void session.send();else start('send');};
+  bar.querySelector<HTMLButtonElement>('[data-resume]')!.onclick=()=>{if(session.state==='recording')session.pause();else start('send');};
   bar.querySelector<HTMLButtonElement>('[data-send]')!.onclick=()=>void session.send();
   bar.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick=()=>session.cancel();
   bar.querySelector<HTMLButtonElement>('[data-preview]')!.onclick=()=>{if(preview.paused){pausePaperAudio();void preview.play().catch(e=>toast(String(e)));}else preview.pause();};
@@ -87,15 +87,15 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
   const down=(e:KeyboardEvent)=>{
     if((e.target as Element)?.closest?.('[data-hotkey]'))return;
     if(e.key==='Escape'&&session.state!=='idle'){e.preventDefault();session.cancel();return;}
-    if(e.key==='Shift'&&session.state==='recording'&&!e.repeat){e.preventDefault();session.pause();return;}
+    if(e.key==='Shift'&&session.state==='recording'&&!e.repeat&&!voicePreferences().hotkey.split('+').includes('Shift')){e.preventDefault();session.pause();return;}
     if(native||e.repeat||e.isComposing||e.defaultPrevented||shortcutFromEvent(e)!==voicePreferences().hotkey)return;
-    e.preventDefault();held=true;heldCode=e.code;start('pause');
+    e.preventDefault();held=true;heldCode=e.code;start('send');
   };
   const up=(e:KeyboardEvent)=>{if(held&&(e.code===heldCode||['Control','Alt','Meta','Shift'].includes(e.key))){held=false;e.preventDefault();session.release();}};
   const blur=()=>{if(held){held=false;session.pause();}};
   const shortcut=(e:Event)=>{
     const detail=(e as CustomEvent).detail;
-    if(detail.action==='down')start(document.hasFocus()&&!document.hidden?'pause':'send');
+    if(detail.action==='down')start('send');
     else if(detail.action==='up')session.release();
     else if(detail.action==='pause')session.pause();
     else if(detail.action==='cancel')session.cancel();

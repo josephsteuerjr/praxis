@@ -30,6 +30,8 @@ FIELDS=[
     field('model.model','Модель'),field('model.base_url','Адрес API'),
     field('model.key','Ключ API',kind='password'),
     field('model.reasoning_effort','Усилие рассуждения',kind='select',choices=[[v,v or 'Автоматически'] for v in ('','low','medium','high','xhigh','max')]),
+    field('model.service_tier','Скорость обработки',kind='select',choices=[['','По настройке провайдера'],['default','Обычный'],['priority','Fast mode']],
+          hint='Fast mode увеличивает расход лимитов подписки или кредитов. Доступность ускорения определяет Codex. Выбор относится к ответам и шагам управления компьютером.'),
     field('model.pinned','Закрепить модель',kind='boolean'),
     field('model.fallback_model','Запасная модель'),field('model.fallback_framework','Протокол запасной',kind='select',choices=[['','Тот же провайдер'],['openai','OpenAI'],['anthropic','Anthropic']]),
     field('model.fallback_base_url','Адрес запасной'),field('model.fallback_key','Ключ запасной',kind='password'),
@@ -42,7 +44,7 @@ FIELDS=[
     field('images.size','Размер изображений',default='auto'),
     field('images.background','Фон изображений',kind='select',default='opaque',choices=[['opaque','Обычный'],['transparent','Прозрачный'],['auto','Автоматически']]),
     field('voice.enabled','Распознавать речь','voice','boolean'),field('voice.model','Модель распознавания','voice',default='turbo'),
-    field('voice.keep_loaded','Держать распознавание в памяти','voice','boolean',default=False),
+    field('voice.keep_loaded','Прогревать Whisper при запуске','voice','boolean',default=False),
     field('voice.speak','Озвучивать ответы','voice','boolean'),field('voice.voice','Движок голоса','voice',default='xtts'),
     field('voice.tts_language','Язык озвучивания','voice',default='ru'),field('voice.tts_device','Устройство XTTS','voice','select',default='cpu',choices=[['cpu','Процессор'],['cuda','Видеокарта']]),
     field('voice.tts_speaker','Голос XTTS','voice',default='Ana Florence'),
@@ -143,6 +145,7 @@ def _value(spec,value):
             raise SettingsError(f"{spec['label']}: от {spec['min']} до {spec['max']}")
     else:
         if not isinstance(value,str) or len(value)>16384:raise SettingsError(spec['label']+': неверное значение')
+        if spec['path']=='model.service_tier' and value=='fast':value='priority'
         if kind=='select' and value not in [row[0] for row in spec['choices']]:raise SettingsError(spec['label']+': выбери значение из списка')
         value=value.strip()
         if kind=='list':value=list(dict.fromkeys(item.strip() for item in value.split(',') if item.strip()))
@@ -157,11 +160,23 @@ def prepare(config,changes):
     if not isinstance(changes,dict) or not changes:raise SettingsError('Нет изменений')
     if set(changes)-set(BY_PATH):raise SettingsError('Эти параметры не относятся к настройкам агента')
     result=copy.deepcopy(config);before=provider(config);selected=changes.get('provider',before)
+    if selected!='chatgpt' and changes.get('model.service_tier') in ('priority','fast'):
+        raise SettingsError('Fast mode доступен в подключении Codex через подписку ChatGPT')
     for path,value in changes.items():
-        value=_value(BY_PATH[path],value)
-        if path!='provider':put(result,path,value)
+        spec=BY_PATH[path]
+        if path=='model.reasoning_effort' and selected=='chatgpt':
+            if not isinstance(value,str) or value not in ('','minimal','low','medium','high','xhigh','max','ultra'):
+                raise SettingsError('Выбери усилие модели Codex или её настройку по умолчанию')
+            # The client intersects the live model catalog with transport
+            # levels. The adapter validates model availability again at send.
+            spec=dict(spec,choices=[[value,value]])
+        value=_value(spec,value)
+        if path=='model.service_tier' and not value:
+            result.setdefault('model',{}).pop('service_tier',None)
+        elif path!='provider':put(result,path,value)
     model=result.setdefault('model',{});relay=result.setdefault('relay',{})
     if selected!=before:
+        if selected!='chatgpt':model.pop('service_tier',None)
         keys=dict((config.get('model') or {}).get('keys') or {})
         old=(config.get('model') or {}).get('key')
         if old:keys[before if before!='openai' else 'api']=old

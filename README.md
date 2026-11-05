@@ -22,6 +22,17 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.5.0
+
+- Application-owned asynchronous Fish and XTTS voice delivery after one speak call.
+- Recording submission on hotkey release, compact playback and thirty-minute warm Whisper residency.
+- Codex Fast mode with model-specific speed and reasoning controls across desktop and Mini App.
+- Clean extraction and restart updates with retained agent data and shared model storage.
+- Native Windows handover and truthful successful-response status improvements.
+- Forge command admission, owned-job Stop and Pause/finish custody repairs.
+
+Read the [2.5.0 changes and evidence boundaries](desk/docs/RELEASE-2.5.0.md).
+
 ## Included in 2.4.0
 
 - Independent Fish speech for local agents, alongside XTTS, with private keys,

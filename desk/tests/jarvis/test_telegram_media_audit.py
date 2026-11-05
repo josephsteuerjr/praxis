@@ -8,7 +8,7 @@ import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-APP = Path(__file__).resolve().parents[1]
+APP = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(APP / 'localharness'))
 module_path = Path(os.environ.get('MEDIA_AUDIT_MODULE', APP / 'localharness/telegram_media.py'))
 spec = importlib.util.spec_from_file_location('audit_telegram_media', module_path)
@@ -179,17 +179,17 @@ class AudioConfigurationTests(unittest.TestCase):
         with patch.object(voice, 'stt_state', return_value={'ready': False}):
             self.assertEqual(voice.env_for(Path('unused'), {}), {})
 
-    def test_ready_stt_uses_local_model_cpu_and_reserves_one_core(self):
+    def test_ready_stt_uses_local_model_and_all_available_cpu(self):
         import voice
         from unittest.mock import patch
         state = {'ready': True, 'installed': {'path': 'local-model'}}
-        with patch.object(voice, 'stt_state', return_value=state), patch.object(voice.os, 'cpu_count', return_value=4):
+        with patch.object(voice, 'stt_state', return_value=state), patch.object(voice.os, 'process_cpu_count', return_value=4, create=True):
             env = voice.env_for(Path('unused'), {'voice': {'threads': 99}})
         self.assertEqual(env['PRAXIS_STT_MODEL'], 'local-model')
         self.assertEqual(env['PRAXIS_STT_LOCAL_FILES_ONLY'], '1')
         self.assertEqual(env['PRAXIS_STT_DEVICE'], 'cpu')
-        self.assertEqual(env['PRAXIS_STT_CPU_THREADS'], '3')
-        self.assertEqual(env['PRAXIS_STT_KEEP_LOADED'], '0')
+        self.assertEqual(env['PRAXIS_STT_CPU_THREADS'], '4')
+        self.assertEqual(env['PRAXIS_STT_KEEP_LOADED'], '1')
 
 
 if __name__ == '__main__':

@@ -73,6 +73,10 @@ def blank_config(program, data):
 
 def finish(new, note, *, remove_old, progress):
     """Only a confirmed new owner may remove the old program/integrations."""
+    from . import clean_update
+    if note.get('clean_switch')==clean_update.FORMAT:
+        progress('retiring_old')
+        return clean_update.finish(note['old_root'],new,note)
     if note.get('state') != 'new_app_started' or not note.get('startup_proof'):
         raise ValueError('Новое приложение ещё не подтвердило запуск')
     old = Path(note['old_root']).resolve() if note.get('old_root') else None
@@ -283,6 +287,15 @@ def in_place(package, old, *, data=None, progress,source_mode='preserve',cancell
     # A separate preparation lease serializes wizards sharing that old runner.
     preparation = old.parent / ('.helene-preparation-' + old.name)
     with installation_lock(preparation):
+        if source_mode=='clean':
+            from . import clean_update
+            clean_update.prepare(old,package,attached_data=data)
+            if cancelled and cancelled.is_set():raise InterruptedError('Owner cancelled clean update')
+            migration_windows.stop(old);migration_windows.quiescent(old)
+            ready=threading.Event();ready.set()
+            updater.perform(SimpleNamespace(old=old,new=package,pid=0,staging=staging,
+                archive=[],cleanup=False,browser=False,observer_ready=ready))
+            return read(package/'python-migration.json')
         migration_source.verify(package)
         from .python_updates import prepare_code
         prepare_code(old,package,WizardProgress(progress),source_mode,cancelled=cancelled,

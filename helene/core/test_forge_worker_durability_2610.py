@@ -75,6 +75,7 @@ class WorkerDurability(unittest.TestCase):
         fake_llm = types.ModuleType("llm")
         fake_llm.BrokenChannelError = type("BrokenChannelError", (Exception,), {})
         fake_llm.TornStreamError = type("TornStreamError", (fake_llm.BrokenChannelError,), {})
+        fake_llm.single_provider_attempt = contextlib.nullcontext
         fake_llm.limits = lambda: types.SimpleNamespace(max_tool_iters=20)
         fake_llm.chat = self.chat
         fake_llm.snapshot = lambda: {"voice": {"framework": "fake", "model": "snapshot-model"}}
@@ -495,7 +496,7 @@ class WorkerDurability(unittest.TestCase):
         self.assertEqual(result["status"], "stopped")
         self.assertNotIn("complete", result)
 
-    def test_partial_transport_response_retained_before_recorded_retry(self):
+    def test_partial_transport_response_retained_without_retry(self):
         partial = self.response("run", 99)
         error = self.worker.llm.BrokenChannelError("partial channel result")
         error.partial = partial
@@ -503,18 +504,21 @@ class WorkerDurability(unittest.TestCase):
         adapter.dispatch = mock.Mock(return_value="never dispatch partial")
         self.responses = [error, self.response()]
         with mock.patch.dict("os.environ", {"PRAXIS_FORGE_TRANSPORT_RETRY_PAUSE_SEC": "0"}):
-            self.assertEqual(self.run_worker(adapter), 0)
+            self.assertEqual(self.run_worker(adapter), 2)
         adapter.dispatch.assert_not_called()
         events = list(self.runtime._events(self.request_path.parent))
         receipt = next(row for row in events if row["kind"] == "model_transport_error")
-        self.assertTrue(receipt["retry"])
+        self.assertFalse(receipt["retry"])
+        self.assertEqual(len(self.calls),1)
         self.assertTrue(receipt["partial_not_dispatched"])
         retained = json.loads(self.runtime.read_payload_full(self.request_path.parent, receipt["output_ref"]))
         self.assertEqual(retained["blocks"], partial.blocks)
         self.assertEqual(retained["assistant"]["provider_continuation"]["payload"], "signed-carry")
 
     def test_pause_during_transport_retry_delay_prevents_another_provider_call(self):
-        self.responses = [self.worker.llm.BrokenChannelError("transport failed"), self.response()]
+        error=self.worker.llm.BrokenChannelError("request explicitly refused before admission")
+        error.request_not_admitted=True
+        self.responses = [error, self.response()]
         adapter = Adapter()
         adapter.dispatch = mock.Mock()
         def pause_owner(_delay):

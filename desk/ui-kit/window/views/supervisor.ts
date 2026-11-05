@@ -19,6 +19,8 @@ import { esc, fmtTime } from "../lib";
 import { updateActive, updateCardHTML, type UpdateState } from "./update-card";
 import { mountAutonomy, type AutonomyState } from "../../autonomy";
 import { cfg } from "../api";
+import { FAST_MODE_HINT, serviceTierChoices, serviceTierReceipt } from "../../service-tier";
+import { bindBrainModelControls, brainModelProblem, tierClearedByRoute, type ModelCatalog } from "../../model-controls";
 
 export interface SupervisorChild {
   id: string;
@@ -186,13 +188,14 @@ export interface Brain {
   path?: string;
   writable?: boolean;
   roles?: Record<string, Record<string, string | number>>;
+  service_tiers?: Record<string, {requested?:string|null;actual?:string|null;available?:boolean|null;codex?:boolean}>;
   frameworks?: Record<string, { base_url: string; key_present: boolean }>;
 }
 
 export interface BrainModels {
   ok: boolean;
   why?: string;
-  by_framework?: Record<string, { ok: boolean; models?: string[]; why?: string; url?: string }>;
+  by_framework?: Record<string, ModelCatalog & { ok: boolean; models?: string[]; why?: string; url?: string }>;
 }
 
 /**
@@ -262,13 +265,16 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
         `<input class="field-input" list="brain-models" data-f="${k}" data-was="${esc(f(k))}" value="${esc(f(k))}" placeholder="${esc(placeholder)}" spellcheck="false">`;
       const select = (k: string, values: string[]) =>
         `<select class="field-input" data-f="${k}" data-was="${esc(f(k))}">${choice(values, f(k))}</select>`;
-      return `<tr data-brain-form="${esc(role)}"><td><b>${esc(role)}</b><div class="muted">${esc(f("framework"))} · ${esc(f("model"))}</div></td>
+      const tier = `<select class="field-input" data-f="service_tier" data-was="${esc(f('service_tier'))}">${serviceTierChoices(f('service_tier')).map(([value,title])=>`<option value="${esc(value)}"${value===f('service_tier')?' selected':''}>${esc(title)}</option>`).join('')}</select>`;
+      return `<tr data-brain-form="${esc(role)}" data-codex="${state.service_tiers?.[role]?.codex===true || state.service_tiers?.[role]?.available===true}" data-fast-available="${state.service_tiers?.[role]?.available}"><td><b>${esc(role)}</b><div class="muted">${esc(f("framework"))} · ${esc(f("model"))}</div></td>
       <td>
         <label class="field"><span class="muted">Модель</span>${input("model")}</label>
         <label class="field"><span class="muted">Фреймворк</span>${select("framework", frameworks)}</label>
         <label class="field"><span class="muted">Запасная модель</span>${input("fallback_model", "пусто — без запасной")}</label>
         <label class="field"><span class="muted">Фреймворк запасной</span>${select("fallback_framework", ["", ...frameworks])}</label>
         <label class="field"><span class="muted">Усилие</span>${select("reasoning_effort", efforts)}</label>
+        <label class="field" data-service-tier-field${state.service_tiers?.[role]?.codex || state.service_tiers?.[role]?.available?'':' hidden'}><span class="muted">Скорость обработки</span>${tier}</label>
+        <p class="field-hint">${esc(serviceTierReceipt(state.service_tiers?.[role]?.actual))}</p>
       </td>
       <td class="actions"><button class="btn quiet" data-brain-apply="${esc(role)}">Применить</button></td></tr>`;
     })
@@ -279,6 +285,7 @@ export function brainHTML(state: Brain | null, models: BrainModels | null): stri
   return `<h3 class="section-title">Мозг</h3>
     <p class="muted">${esc(liveNote)} Смена пишется в его конфиг и применяется, когда агент перечитает мозг —
       перезапусти его выше, если нужно сейчас. Ключи провайдеров сюда не отдаются вовсе.</p>
+    <p class="muted">${esc(FAST_MODE_HINT)} Основная роль voice выполняет также шаги управления компьютером.</p>
     ${datalist}<table class="grid">${rows}</table>
     <p class="receipt" id="brain-note"></p>`;
 }
@@ -325,6 +332,7 @@ async function draw(box: HTMLElement): Promise<void> {
   // Элен её нет, и пустой раздел там был бы обещанием без исполнителя.
   const extra = boxes?.available ? containersHTML(boxes) + brainHTML(brain, models) : "";
   box.innerHTML = `<h3 class="section-title">Управление</h3>${interruptHTML()}${supervisorHTML(state)}<div id="update-box"></div>${extra}${logsHTML(logs)}`;
+  bindBrainModelControls(box, models?.by_framework || {});
   mountAutonomy(box.querySelector<HTMLElement>("[data-autonomy-box]")!, {
     read: () => api<AutonomyState>("/api/autonomy"), write: action => post("/api/autonomy", { action }),
     identity: () => cfg.base + "\n" + cfg.key,
@@ -514,11 +522,14 @@ export async function mountSupervisor(box: HTMLElement): Promise<void> {
       const role = spot.getAttribute("data-brain-apply");
       if (role) {
         const form = box.querySelector<HTMLElement>(`[data-brain-form="${role}"]`);
+        const problem = brainModelProblem(form);
+        if (problem) { if (note) note.textContent = problem; return; }
         const fields: Record<string, string> = {};
         form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-f]").forEach((el) => {
           const key = el.getAttribute("data-f") || "";
-          if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) fields[key] = el.value.trim();
+          if (key && el.dataset.storedEffort === undefined && el.dataset.storedServiceTier === undefined && el.value.trim() !== (el.getAttribute("data-was") ?? "")) fields[key] = el.value.trim();
         });
+        if (tierClearedByRoute(form)) fields.service_tier = '';
         if (!Object.keys(fields).length) {
           if (note) {
             note.className = "receipt";

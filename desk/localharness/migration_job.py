@@ -400,7 +400,8 @@ def _execute_update(host,owner,value):
     owner.migration_data=Path(value['tree']);jobs.bind_incoming(value,package)
     before=None;stopped=False
     try:
-        runtime=verified_runtime(package)
+        runtime=({'kind':'clean-extracted-runtime','program':str(package)}
+                 if request['source_mode']=='clean' else verified_runtime(package))
         before=migration_lifecycle.service(old)
         stopped_old=migration_lifecycle.stop(old);stopped=True;migration_lifecycle.quiescent(old)
         jobs.checkpoint(owner,value,legacy_handoff={'old':str(old),'service':before,'stop':stopped_old,'runtime':runtime,'at':time.time()})

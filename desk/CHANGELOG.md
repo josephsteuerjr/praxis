@@ -1,3 +1,42 @@
+# 2.5.0
+
+Codex Fast mode is available through model-aware speed controls in desktop,
+phone and Telegram Mini App settings. Relay requests carry the selected service
+tier through to Codex, and receipts report the tier observed in the response.
+Model catalog metadata controls the available speed and reasoning choices.
+Codex omits the no-reasoning choice and preserves model defaults when no effort
+is selected. Fast mode consumes subscription limits or credits at a higher rate.
+
+`speak` accepts one asynchronous request. The application generates and delivers
+voice independently of the agent turn, without generated-audio review, polling
+or a second send. Fish and local XTTS share this contract. Recipient binding,
+explicit cancellation, durable pause transitions and no ambiguous paid retry
+remain enforced by the application.
+
+Recording sends on hotkey release in the foreground and background. Explicit
+pause keeps optional preview; voice history uses compact replay controls.
+Playback starts before optional waveform import/decoding. Whisper uses every
+available CPU, reuses unchanged warm settings and retains its model for thirty
+idle minutes. Windows inbox notifications remove the idle polling delay.
+
+Clean updates use completed extraction, restart and retirement of the exact old
+programme, without programme inventories, per-file comparisons or a trial.
+Agent data and persistent voice components remain independent. Preserve-edits
+updates keep their existing reconciliation and review workflow.
+
+Graceful Windows migration recognizes the clickable binary startup entry.
+Voice controls describe startup warmup and the actual idle residency policy.
+Successful model closures retain their successful header status.
+
+Foreground Forge commands record intent before execution admission. Stop follows the
+selected worker's owned process and verification jobs. Finish respects Pause
+and unresolved writer custody. Ambiguous provider attempts retain their
+partial response and identity, with retry ownership held by the executor.
+
+Read the [changes and evidence boundaries](docs/RELEASE-2.5.0.md). Release evidence
+separates native platform qualification, controlled transport tests and the live
+Windows owner session from physical microphone, CUDA and provider entitlement.
+
 # 2.4.0
 
 Independent Fish synthesis for local agents, with private credentials, explicit

@@ -882,6 +882,29 @@ def prepare(root,*,places=None,backend=None,progress=None):
     report=progress or (lambda value:None)
     with backend.exclusive(target):
         if ready(root,places):return {'state':'completed','data':str(target),'agent':agent_exists(target)}
+        # A clean archive beside the known Python owner already has its full
+        # programme from extraction. Adopt only that exact selected data and
+        # owner; do not discover/hash every old/new programme or run a trial.
+        from . import clean_update
+        owner=load(target/'memory/.control/desktop-session.json') if (target/'memory/.control/desktop-session.json').is_file() else {}
+        previous=owner.get('program')
+        if previous and agent_exists(target):
+            old=plain(previous)
+            if old!=root and (old/'python-app.json').is_file() and (old/'helene.json').is_file():
+                config=load(old/'helene.json');data=Path(config.get('tree') or 'data')
+                data=plain(data if data.is_absolute() else old/data)
+                if data==target:
+                    clean_update.roots(old,root)
+                    value=clean_update.prepare(old,root,attached_data=target)
+                    value['note']['app_retirement']=True
+                    from .python_source_updater import prepared_install_path
+                    from .package_notice import write as write_note
+                    write_note(prepared_install_path(root),value);write_note(root/'python-migration.json',value['note'])
+                    report({'stage':'stopping','label':'Завершаем прежнюю Hélène'})
+                    backend.stop([old],[target]);backend.assert_quiet([old],[target])
+                    clean_update.relocate(old,root,value)
+                    report({'stage':'completed','label':'Готово'})
+                    return {'state':'completed','data':str(target),'agent':True,'clean_switch':True}
         required=('runtime/python.exe','app/python_app.py','app/deskapp.py','app/windows_start.py',
                   'app/resources/first-start.html','tree/agent.py','tree/llm.py','python-app.json')
         if any(not (root/name).is_file() for name in required):

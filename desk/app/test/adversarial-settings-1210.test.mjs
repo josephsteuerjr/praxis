@@ -19,7 +19,7 @@ export function stand(config, draft, options = {}) {
   let c = structuredClone(config), disk = structuredClone(config), seenMtime = '100';
   let saves=0; const container={dataset:{settingsRevision:'1',settingsDirty:'true'}};
   const cfg={needs_local_setup:options.first}; const S={agent:'Agent'};
-  const built={collect:()=>'',note:()=>''}, saveOut={className:'',textContent:''}, restartBtn={hidden:true}, conflictBox={hidden:true};
+  const built={collect:()=>'',note:()=>'',didSave:options.didSave}, saveOut={className:'',textContent:''}, restartBtn={hidden:true}, conflictBox={hidden:true};
   const keepBlock=(a,b)=>({...a,...b}), collectConnection=()=>'', validateOwnerContext=()=>{};
   const humanError=e=>({text:e.message});
   const shell=async(name,args)=>{
@@ -54,5 +54,9 @@ export function stand(config, draft, options = {}) {
   const foreign=stand(base,changed,{stale:true}); await foreign.normal();
   assert.equal(foreign.saves,0); assert.equal(foreign.conflictBox.hidden,false);
   await foreign.force(); assert.equal(foreign.saves,1); assert.equal(foreign.restartBtn.hidden,false);
+  const accepted=[];
+  const receipt=stand(base,changed,{stale:true,didSave:value=>accepted.push(structuredClone(value))});
+  await receipt.normal();assert.equal(accepted.length,0,'failed save cannot clear a pending route-specific selection');
+  await receipt.force();assert.equal(accepted.length,1);assert.deepEqual(accepted[0],receipt.disk,'controls accept only confirmed persisted values');
   console.log('adversarial-settings: 10 save paths PASS');
 } finally { rmSync(dir,{recursive:true,force:true}); }

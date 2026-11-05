@@ -197,7 +197,7 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(any(isinstance(row.func, ast.Attribute) and row.func.attr == "tick"
             and isinstance(row.func.value, ast.Name) and row.func.value.id == "_self_review" for row in calls))
         source = (ROOT / "desk/localharness/runner.py").read_text(encoding="utf-8")
-        self.assertIn("speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop)", source)
+        self.assertIn("speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop,", source)
 
     def test_selected_agent_update_notifier_owns_the_pending_request(self):
         self.runner.update(_tree=self.tree, _desk=object(), updates=mock.Mock(), _turn_in_window=mock.Mock(),_source_update_turn=mock.Mock())

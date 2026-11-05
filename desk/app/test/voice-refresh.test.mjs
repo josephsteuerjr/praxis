@@ -2,6 +2,10 @@ import {strict as assert} from 'node:assert';
 import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 const source=readFileSync(new URL('../src/voicecard.ts',import.meta.url),'utf8');
+assert.ok(source.includes('Прогревать Whisper при запуске'));
+assert.ok(source.includes('все доступные потоки CPU'));
+assert.ok(source.includes('30 минут после последнего использования'));
+assert.ok(!source.includes('модель выгружается после обработки'));
 // Execute the actual refresh closure with a delayed channel and deterministic clock.
 const fragment=source.slice(source.indexOf('  const fresh ='),source.indexOf('  const start = async'));
 const factory=new Function('api','box','say','sayVoice','setTimeout','clearTimeout',`

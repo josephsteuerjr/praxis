@@ -2,6 +2,7 @@
 from __future__ import annotations
 import ast
 import contextlib
+import contextvars
 import copy
 import hashlib
 import importlib.util
@@ -565,13 +566,21 @@ class PipelineTests(unittest.TestCase):
         llm.limits = lambda: types.SimpleNamespace(max_tool_iters=10)
         llm.snapshot = lambda: {'voice': {'framework': 'fake-route', 'model': 'fake-model'}}
         parsed = ast.parse((ROOT / 'helene/core/llm.py').read_text(encoding='utf-8'))
-        namespace = {'LLMResponse': object, 'copy': copy, 'json': json}
-        helpers = [node for node in parsed.body if isinstance(node, ast.FunctionDef) and node.name in {'assistant_message', '_wire_value'}]
+        namespace = {'LLMResponse': object, 'copy': copy, 'json': json,
+                     'contextlib': contextlib, '_cv': contextvars}
+        helpers = [node for node in parsed.body
+                   if (isinstance(node, ast.FunctionDef)
+                       and node.name in {'assistant_message', '_wire_value', 'single_provider_attempt'})
+                   or (isinstance(node, ast.Assign)
+                       and any(isinstance(target, ast.Name) and target.id == '_SINGLE_PROVIDER_ATTEMPT'
+                               for target in node.targets))]
         exec(compile(ast.Module(body=helpers, type_ignores=[]), 'llm.py', 'exec'), namespace)
         llm.assistant_message = namespace['assistant_message']
+        llm.single_provider_attempt = namespace['single_provider_attempt']
         calls = []
         def chat(role, **kwargs):
             calls.append(kwargs)
+            self.assertTrue(namespace['_SINGLE_PROVIDER_ATTEMPT'].get())
             self.assertEqual([t['name'] for t in kwargs['tools']], ['merge_source'])
             self.assertFalse(kwargs['allow_fallback'])
             sha = self.operation()['input_sha256']
@@ -595,6 +604,8 @@ class PipelineTests(unittest.TestCase):
             finally:
                 os.chdir(prior_cwd)
                 sys.path[:] = prior_path
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(namespace['_SINGLE_PROVIDER_ATTEMPT'].get())
         result = read(request_path.parent / 'result.json')
         self.assertTrue(result['candidate_verified'])
         self.assertEqual(result['status'], 'done')

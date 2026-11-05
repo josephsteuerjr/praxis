@@ -13,7 +13,7 @@ FORMAT='helene-probation-settings.v1'
 # in the frozen projection. No import/runtime/data/installation selector occurs
 # here; provider credentials and ordinary preferences are not programme code.
 MODEL=('framework','provider','provider_id','api_mode','base_url','model','key','keys','max_tokens',
-       'reasoning_effort','fallback_model','fallback_framework','fallback_base_url','fallback_key',
+       'reasoning_effort','service_tier','fallback_model','fallback_framework','fallback_base_url','fallback_key',
        'fallback_api_mode','fallback_provider_id','vision_model','pinned','temperature')
 MUTABLE={
     'agent':('name',),'owner':('name','room'),'model':MODEL,

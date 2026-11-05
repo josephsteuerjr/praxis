@@ -362,6 +362,7 @@ else:
     import voice_admission
 _voice_config_path = None
 _voice_signature = None
+_recognition = None
 
 
 def _audio_source(rel):
@@ -461,28 +462,31 @@ def _stt_signature():
 
 
 def _transcribe_path(src: Path) -> str:
-    global _voice_state, _voice_signature
-    signature='startup'
-    if _voice_config_path is not None:
-        try:
-            cfg=json.loads(boot.read_config_text(_voice_config_path))
-            ready=voice.apply_stt(Path(_tree),cfg)
-            _voice_state={'ready':bool(ready.get('ready')),'why':str(ready.get('why') or '')}
-            signature=_stt_signature()
-        except Exception as exc:
-            _voice_state={'ready':False,'why':f'{type(exc).__name__}: {exc}'}
-            signature='configuration-error:'+_voice_state['why']
-    def decode(source):
-        global _voice_signature
-        if not _voice_state.get('ready'):
-            raise RuntimeError(_voice_state.get('why') or 'Распознавание не настроено: Настройки → Голос')
-        import importlib
-        backend=importlib.import_module('media_audio')
-        if _voice_signature!=signature:
-            backend.set_default_backend(None);_voice_signature=signature
-        with _low_priority():
-            return backend.transcribe(source)
-    return voice_admission.resolve(src,decode,signature=signature)
+    global _voice_state, _voice_signature, _recognition
+    from localharness.recognition import Recognition
+    if _voice_config_path is None:
+        # Direct, already-configured harness callers do not have a desktop
+        # config file. Keep their injected recognition path and receipt key.
+        def decode(source):
+            if not _voice_state.get('ready'):
+                raise RuntimeError(_voice_state.get('why') or 'Распознавание не настроено')
+            import importlib
+            from localharness.whisper_residency import install
+            module = importlib.import_module('media_audio'); install(module)
+            return module.transcribe(source)
+        return voice_admission.resolve(src, decode, signature='startup')
+    if _recognition is None:
+        _recognition = Recognition(_tree, _voice_config_path, boot.read_config_text)
+    try:
+        ready, signature = _recognition.current()
+        _voice_state = {'ready': bool(ready.get('ready')), 'why': str(ready.get('why') or '')}
+        _voice_signature = signature
+    except Exception as exc:
+        _voice_state = {'ready': False, 'why': f'{type(exc).__name__}: {exc}'}
+        raise voice_admission.VoicePending(_voice_state['why']) from exc
+    # Admission still binds the actual recording and caches its transcript. An
+    # unchanged warm configuration performs no model/library readiness scan.
+    return voice_admission.resolve(src, _recognition.transcribe, signature=signature)
 
 
 def _ingest_attachments(paths: list[str], *, chat_id: str, message_id: str,
@@ -746,8 +750,11 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         # 07.10 (Джарвис): приоритетный баннер встаёт ПЕРВОЙ строкой orient —
         # кадр открывается «сработал приоритет, требуется действие».
         turn_orient = orient
+        if getattr(_agent, '_application_speech', None) is not None:
+            from localharness.speech_bridge import TURN_NOTE
+            turn_orient = TURN_NOTE + '\n\n' + str(turn_orient or '')
         if priority_note:
-            turn_orient = str(priority_note) + "\n\n" + str(orient or "")
+            turn_orient = str(priority_note) + "\n\n" + str(turn_orient or "")
         from contextlib import nullcontext
         continuation_gap = ('media_adapter_not_qualified' if media_refs else
                             'keat_adapter' if keat_stream or os.getenv('PRAXIS_KEAT') == 'serve' else
@@ -886,6 +893,38 @@ def deliver_one_media(item, chat_id: str) -> str:
     note = caption
     return str(room.deliver(note,
                             media_path=relative, media_kind=media_kind if relative else ""))
+
+
+def deliver_speech(job, audio, check) -> str:
+    """Complete an admitted voice request without reopening its model turn."""
+    target = job['chat_id']
+    check()
+    if _bot is not None and target != STREAM and botapi.is_telegram_key(target):
+        result = _bot.deliver_file(audio.path, chat_id=target, caption=job['caption'],
+                                   media_kind='audio', voice_note=True)
+        refusal = getattr(_agent, 'DirectSendRefusal', ())
+        if refusal and isinstance(result, refusal):
+            raise RuntimeError('Speech delivery refused')
+        return str(result)
+    if not transport.is_room(target):
+        raise RuntimeError('Speech recipient transport is unavailable')
+    from deskd import artifacts
+    room = _room(target)
+    if room is None or room.stream != target:
+        raise RuntimeError('Speech recipient room is unavailable')
+    relative = artifacts.stage(room.tree, audio.path)
+    check()
+    message_id = room.deliver_once(job['caption'], key='speech:' + job['id'],
+                                   media_path=relative, media_kind='audio')
+    return 'window:' + str(message_id)
+
+
+def speech_failed(job, status):
+    """A product notice, never an instruction asking the agent to inspect audio."""
+    log.warning('Speech request %s ended as %s', job['id'], status)
+    if transport.is_room(job['chat_id']):
+        _room(job['chat_id']).deliver('Озвучка не доставлена. Проверь настройки голоса и доступность сервиса.',
+            system=True, kind='speech', source_id='speech-error:' + job['id'])
 
 
 def _media_receipt_message_id(receipt: str) -> str:
@@ -1228,7 +1267,8 @@ def _turn_in_window(source_id: str, *, speaker: str, birth: bool = False,
                 desk.deliver(f"⋯ молчание по решению {_agent_name}"
                              + (f": {word}" if word else " (это выбор, не сбой)"),
                              source_id=source_id, system=True, kind="silence")
-            elif not birth:
+            elif not birth and not (getattr(_agent, '_application_speech', None)
+                    and _agent._application_speech.accepted_for_run(run_id)):
                 # При рождении плашку кладёт _maybe_birth — со своими словами.
                 log.info("ход %s: закрыт без слова для окна%s", run_id,
                          " (только файл)" if media_count else "")
@@ -1829,6 +1869,8 @@ def _warm_voice_models(cfg: dict) -> None:
         try:
             import importlib
             media_audio = importlib.import_module("media_audio")
+            from localharness.whisper_residency import install
+            install(media_audio)
             with _low_priority():
                 if stt:
                     said.update(media_audio.warm(stt=True, tts=False))
@@ -3464,9 +3506,18 @@ def main() -> None:
     except Exception:
         log.exception('синтез не настроен; распознавание речи остаётся независимым')
     agent, memory_life = _load_tree(code_dir, tree, cfg)
+    from localharness import fast_mode
+    import importlib
+    fast_mode.install(importlib.import_module('llm'), tree)
+    # Install lifecycle hooks without loading weights. Agent-owned calls to
+    # media_audio.transcribe need the same idle lease as incoming recordings.
+    import importlib
+    from localharness import whisper_residency
+    whisper_residency.install(importlib.import_module('media_audio'))
     owner_stop.configure(tree)
     from localharness import speech_bridge
-    speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop)
+    speech_bridge.install(agent, tree, config_path, boundary=control_watch, owner=owner_stop,
+                          deliver=deliver_speech, failed=speech_failed)
     def edition_panic(reason=""):
         import emergency
         return emergency.request(config_path, via="agent", reason=reason)['note']
@@ -3719,6 +3770,9 @@ def main() -> None:
     replay_at = 0.0          # первый проход replay — на первом же тике после старта
     update_at = 0.0
     sleep_at = time.time()
+    from localharness.inbox_wake import InboxWake
+    inbox_wake = InboxWake(inbox)
+    atexit.register(inbox_wake.close)
     while True:
         if owner_stop.stopped():
             process_scope.cancel_all()
@@ -3819,7 +3873,7 @@ def main() -> None:
         if time.time() - swept_at > 6 * 3600:
             swept_at = time.time()
             _sweep_processed(processed)
-        time.sleep(_POLL_SEC)
+        inbox_wake.wait(_POLL_SEC)
 
 
 if __name__ == "__main__":

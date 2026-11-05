@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import python_archive_update as archive,python_updates,code_transition
-from localharness import migration_source,migration_lifecycle,source_admission,source_update_host
+from localharness import migration_source,migration_lifecycle,source_admission,source_update_host,clean_update
 from localharness.package_notice import read,write
 _verify_upstream=migration_source.verify
 
@@ -20,22 +20,17 @@ class Archive(unittest.TestCase):
         (self.data/'memory/history.jsonl').write_bytes(b'authored history\n')
         (self.old/'tree/module.py').write_bytes(b'authored=True\n')
         self.events=[]
+        default=patch('localharness.portable_profile.default_data',return_value=self.root/'permanent/data')
+        default.start();self.addCleanup(default.stop)
         for target,method,kwargs in ((source_update_host,'verified_runtime',{'return_value':{'fixture_only':True}}),
             (source_admission,'activate',{}),(migration_source,'verify',{}),
             (migration_lifecycle,'stop',{'side_effect':lambda *a:self.events.append('stop') or {'stopped':True}}),
             (migration_lifecycle,'quiescent',{})):
             mocker=patch.object(target,method,**kwargs);mocker.start();self.addCleanup(mocker.stop)
 
-    def test_prepare_keeps_data_and_old_programme_until_verified_new_start(self):
-        def reviewed(*args,**kwargs):
-            self.assertEqual(kwargs['sourceMode'],'clean');self.assertFalse(kwargs['require_review'])
-            self.events.append('prepare-code')
-        def selected(old,new,note,**kwargs):
-            self.assertEqual(self.events,['prepare-code','stop'])
-            target=new/'tree/module.py';target.write_bytes(b'pristine=True\n')
-            cfg=read(new/'helene.json');cfg['code']=str(target.parent);write(new/'helene.json',cfg)
-            (new/'code-transition-plan.json').write_text('{}')
-        with patch.object(python_updates,'prepare_code',side_effect=reviewed),patch.object(code_transition,'prepare',side_effect=selected),patch.object(code_transition,'validate'):
+    def test_clean_prepare_keeps_data_and_old_programme_without_directory_verification(self):
+        (self.new/'tree/module.py').write_bytes(b'pristine=True\n')
+        with patch.object(python_updates,'prepare_code',side_effect=AssertionError('No source sweep')),patch.object(code_transition,'prepare',side_effect=AssertionError('No directory merge/verify')),patch.object(code_transition,'validate',side_effect=AssertionError('No programme verification')):
             note=archive.prepare(self.new,self.new,self.old,self.data,progress=lambda *a:None)
         self.assertTrue(note['normal_python_update']);self.assertEqual(note['source_policy'],'clean')
         self.assertTrue((self.old/'app/python_app.py').is_file());self.assertEqual((self.old/'tree/module.py').read_bytes(),b'authored=True\n')
@@ -44,9 +39,9 @@ class Archive(unittest.TestCase):
         self.assertFalse(any(self.new.glob('**/history.jsonl')))
         with self.assertRaisesRegex(ValueError,'confirmed startup'):archive.validate_retirement(self.old,self.new,note)
 
-    def test_failed_pristine_preparation_does_not_stop_or_replace_previous_programme(self):
-        with patch.object(python_updates,'prepare_code',side_effect=RuntimeError('pristine verification unresolved')):
-            with self.assertRaisesRegex(RuntimeError,'pristine verification unresolved'):
+    def test_failed_data_preparation_does_not_stop_or_replace_previous_programme(self):
+        with patch.object(clean_update,'prepare',side_effect=RuntimeError('selected data unavailable')):
+            with self.assertRaisesRegex(RuntimeError,'selected data unavailable'):
                 archive.prepare(self.new,self.new,self.old,self.data,progress=lambda *a:None)
         self.assertFalse(self.events);self.assertFalse((self.new/'helene.json').exists())
         self.assertEqual((self.old/'tree/module.py').read_bytes(),b'authored=True\n')
@@ -58,13 +53,13 @@ class Archive(unittest.TestCase):
             prepare.assert_not_called()
         self.assertFalse(self.events)
 
-    def test_data_inside_old_programme_requires_explicit_external_destination(self):
+    def test_data_inside_old_programme_moves_to_independent_permanent_destination(self):
         inside=self.old/'data';inside.mkdir()
         with patch.object(python_updates,'prepare_code') as review:
-            with self.assertRaisesRegex(ValueError,'permanent folder'):
-                archive.prepare(self.new,self.new,self.old,inside,progress=lambda *a:None)
+            note=archive.prepare(self.new,self.new,self.old,inside,progress=lambda *a:None)
             review.assert_not_called()
-        self.assertFalse(self.events)
+        self.assertFalse(inside.exists());self.assertTrue(Path(note['data_paths'][0]).is_dir())
+        self.assertFalse(Path(note['data_paths'][0]).is_relative_to(self.old))
 
     def test_private_ui_state_moves_without_copy_and_unknown_files_remain(self):
         import hashlib

@@ -7,9 +7,13 @@ the suspended child is resumed. Neither Stop nor poll targets a recycled PID.
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
+import secrets
 import signal
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 
@@ -70,10 +74,14 @@ class WindowsJob:
         if not k.SetInformationJobObject(self.handle, 9, c.byref(limits), c.sizeof(limits)):
             error = c.WinError(c.get_last_error());self.close();raise error
 
-    def attach_and_resume(self, proc):
+    def attach_and_resume(self, proc, resume=True):
         # CREATE_SUSPENDED prevents any spawn before the job association.
         if not self.api.AssignProcessToJobObject(self.handle, int(proc._handle)):
             raise self.c.WinError(self.c.get_last_error())
+        if resume:
+            self.resume(proc)
+
+    def resume(self, proc):
         import psutil
         threads = psutil.Process(proc.pid).threads()
         if len(threads) != 1:raise RuntimeError('Suspended process has no unique initial thread')
@@ -100,24 +108,72 @@ class WindowsJob:
 
 
 class CommandProcess:
-    """Popen's small poll/wait surface, with command-group completion semantics."""
+    """Popen's small poll/wait surface, with command-group completion semantics.
+
+    Explicit deferred POSIX calls reject preexec_fn before any child starts.
+    Linux deferred custody requires close_fds=True and no extra pass_fds.
+    """
     def __init__(self, command, **kwargs):
         self._lock = threading.RLock()
         self._job = WindowsJob() if os.name == 'nt' else None
         self.returncode = None
         self._stopped = False
+        self._deferred = bool(kwargs.pop('defer_start', False))
+        custody_directory = kwargs.pop('custody_directory', None)
+        self._custody = None
+        self._temporary_custody = None
+        self._nonce = None
+        self._admission_fd = None
+        gate_read = None
+        self._linux_custody = False
         if self._job:
             kwargs['creationflags'] = kwargs.get('creationflags', 0) | 0x4  # CREATE_SUSPENDED
         else:
             if not all(hasattr(os, name) for name in ('waitid', 'WNOWAIT', 'WEXITED', 'P_PID')):
                 raise OSError('Safe command custody requires waitid/WNOWAIT')
             kwargs['start_new_session'] = True
+            if self._deferred:
+                if kwargs.get('preexec_fn') is not None:
+                    raise ValueError('Deferred POSIX commands cannot use preexec_fn')
+                if sys.platform.startswith('linux') and (kwargs.get('pass_fds') or not kwargs.get('close_fds', True)):
+                    raise ValueError('Deferred Linux commands require close_fds=True and empty pass_fds')
+                if custody_directory is None:
+                    self._temporary_custody = tempfile.TemporaryDirectory(prefix='helene-command-')
+                    self._custody = Path(self._temporary_custody.name)
+                else:
+                    self._custody = Path(custody_directory).resolve()
+                    self._custody.mkdir(mode=0o700)
+                self._nonce = secrets.token_hex(24)
+                args = ([os.fsdecode(command)] if isinstance(command, (str, bytes, os.PathLike))
+                        else [os.fsdecode(value) for value in command])
+                shell = bool(kwargs.pop('shell', False))
+                executable = kwargs.pop('executable', None)
+                executable = os.fsdecode(executable) if executable is not None else None
+                request = {'command': args[0] if isinstance(command, (str, bytes, os.PathLike)) else args,
+                           'shell': shell, 'executable': executable, 'nonce': self._nonce,
+                           'deferred': True, 'parent_pid': os.getpid()}
+                (self._custody/'request.json').write_text(json.dumps(request), encoding='utf-8')
+                os.chmod(self._custody/'request.json', 0o600)
+                self._linux_custody = sys.platform.startswith('linux')
+                if self._linux_custody:
+                    if not hasattr(os, 'pidfd_open') or not hasattr(signal, 'pidfd_send_signal'):
+                        raise OSError('Linux command custody requires pidfds')
+                    command = [sys.executable, '-I', '-S', '-B', str(Path(__file__).with_name('command_child.py')),
+                               str(self._custody)]
+                else:
+                    gate_read, self._admission_fd = os.pipe()
+                    if kwargs.get('pass_fds') or kwargs.get('close_fds', True):
+                        kwargs['pass_fds'] = (*kwargs.get('pass_fds', ()), gate_read)
+                    else:
+                        os.set_inheritable(gate_read, True)
+                    command = [sys.executable, '-I', '-S', '-B', str(Path(__file__).with_name('command_admission.py')),
+                               str(self._custody), str(gate_read)]
         self._proc = None
         try:
             self._proc = subprocess.Popen(command, **kwargs)
             self.pid = self._proc.pid
             self.args = self._proc.args
-            if self._job:self._job.attach_and_resume(self._proc)
+            if self._job:self._job.attach_and_resume(self._proc, resume=not self._deferred)
         except BaseException:
             # Failure before resume cannot have produced descendants. Use the
             # Popen handle, never a PID-based replacement lookup.
@@ -126,7 +182,46 @@ class CommandProcess:
                     self._proc.kill();self._proc.wait()
             finally:
                 if self._job:self._job.close()
+                self._close_admission()
             raise
+        finally:
+            if gate_read is not None:
+                os.close(gate_read)
+        if self._custody:
+            end = time.monotonic() + 3
+            while not (self._custody/'ready').exists() and not self._leader_exited() and time.monotonic() < end:
+                time.sleep(.01)
+
+    def _close_admission(self):
+        if self._admission_fd is not None:
+            os.close(self._admission_fd)
+            self._admission_fd = None
+
+    def admit(self):
+        """Resume only after the caller persisted this exact command identity."""
+        with self._lock:
+            if not self._deferred:
+                return
+            if self._leader_exited():
+                raise OSError('Command custodian exited before admission')
+            if self._job:
+                self._job.resume(self._proc)
+            elif self._linux_custody:
+                temporary = self._custody/'admitted.tmp'
+                temporary.write_text(self._nonce, encoding='utf-8')
+                temporary.replace(self._custody/'admitted')
+            else:
+                token = self._nonce.encode('ascii')
+                if os.write(self._admission_fd, token) != len(token):
+                    raise OSError('Incomplete command admission')
+                self._close_admission()
+            self._deferred = False
+
+    def custody_identity(self):
+        if self._custody:
+            return {'kind': 'linux-subreaper-v1' if self._linux_custody else 'posix-admission-v1',
+                    'pid': self.pid, 'directory': str(self._custody), 'nonce': self._nonce}
+        return {'kind': 'windows-job' if self._job else 'posix-group', 'pid': self.pid}
 
     def _leader_exited(self):
         if self._job:return self._proc.poll() is not None
@@ -140,7 +235,21 @@ class CommandProcess:
         with self._lock:
             if self.returncode is not None:return self.returncode
             if self._leader_exited() and self._live() is False:
-                self.returncode = self._proc.wait()
+                if self._linux_custody:
+                    try:
+                        receipt = json.loads((self._custody/'settled.json').read_text(encoding='utf-8'))
+                    except (OSError, ValueError):
+                        return None
+                    if receipt.get('nonce') != self._nonce or receipt.get('settled') is not True:
+                        return None
+                    self._proc.wait()
+                    self.returncode = int(receipt['exit_code'])
+                else:
+                    self.returncode = self._proc.wait()
+                self._close_admission()
+                if self._temporary_custody is not None:
+                    self._temporary_custody.cleanup()
+                    self._temporary_custody = None
                 if self._job:self._job.close()
             return self.returncode
 
@@ -165,6 +274,14 @@ class CommandProcess:
                     # foreign waiter/reaper makes this fail closed before signals.
                     phase='unreaped-child identity'
                     self._leader_exited()
+                    if self._linux_custody:
+                        if self._leader_exited():
+                            return False, f'Command subreaper exited without settlement: {self._custody}'
+                        phase='subreaper stop'
+                        os.kill(self.pid, signal.SIGTERM)
+                        self.wait(5)
+                        self._stopped = True
+                        return True, 'Linux subreaper reaped every descendant'
                     phase='group census'
                     if self._live() is None:return False, 'private group census unavailable'
                     for sig in (signal.SIGTERM, signal.SIGKILL):

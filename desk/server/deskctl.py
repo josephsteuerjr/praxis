@@ -44,6 +44,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import aiohttp
@@ -65,7 +66,8 @@ CONTAINERS = tuple(name.strip() for name in
 
 #: Роли мозга, которые вправе менять окно. Остальные ключи `llm.json` — не наше
 #: дело: там ключи провайдеров и цены.
-BRAIN_FIELDS = ("model", "fallback_model", "framework", "fallback_framework", "reasoning_effort")
+BRAIN_FIELDS = ("model", "fallback_model", "framework", "fallback_framework", "reasoning_effort", "service_tier")
+_MODEL_CAPABILITIES = {}
 IMAGE_DEFAULTS = {"enabled": False, "model": "gpt-image-2", "quality": "auto", "size": "auto", "background": "opaque"}
 
 
@@ -225,6 +227,79 @@ def brain_path() -> Path:
     return TREE / "memory" / "llm.json"
 
 
+def _codex_role(raw, role):
+    selected = (raw.get('roles') or {}).get(role) or {}
+    name = selected.get('framework') or 'openai'
+    spec = (raw.get('frameworks') or {}).get(name) or {}
+    return (spec.get('provider') == 'relay'
+            and (spec.get('protocol') or spec.get('transport') or name) == 'openai')
+
+
+def _service_tier(value):
+    if value is None or value == '':
+        return None
+    if not isinstance(value, str):
+        raise ValueError('service_tier must be auto, default or priority')
+    value = value.strip().lower()
+    value = 'priority' if value == 'fast' else value
+    if value not in ('auto', 'default', 'priority'):
+        raise ValueError('service_tier must be auto, default or priority')
+    return value
+
+
+def _fast_available(raw, role):
+    if not _codex_role(raw, role):
+        return False
+    selected = raw['roles'][role]
+    framework = selected.get('framework') or 'openai'
+    spec = raw['frameworks'][framework]
+    cached = _MODEL_CAPABILITIES.get(framework) or {}
+    if (cached.get('base_url') != spec.get('base_url') or cached.get('api_key') != spec.get('api_key')
+            or cached.get('expires', 0) < time.monotonic()):
+        return None
+    card = (cached.get('models') or {}).get(selected.get('model')) or {}
+    if 'service_tiers' not in card and 'additional_speed_tiers' not in card:
+        return None
+    tiers = [item.get('id') if isinstance(item, dict) else item for item in card.get('service_tiers') or []]
+    if 'service_tiers' not in card:
+        tiers.extend(card.get('additional_speed_tiers') or [])
+    return any(value in ('fast', 'priority') for value in tiers)
+
+
+def _recent_service_tiers(path):
+    state = path.parent / '.state'
+    result = {}
+    try:
+        result = json.loads((state / 'service-tiers.json').read_text(encoding='utf8'))
+        if not isinstance(result, dict):
+            result = {}
+    except (OSError, ValueError):
+        pass
+    try:
+        with (state / 'llm_calls.jsonl').open('rb') as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - 65536))
+            lines = stream.read().decode('utf8', errors='replace').splitlines()
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if (isinstance(row, dict) and row.get('role')
+                    and ('service_tier_requested' in row or 'service_tier_actual' in row)):
+                previous = result.get(row['role']) or {}
+                previous_at = previous.get('at') if isinstance(previous, dict) else None
+                observed_at = row.get('ts')
+                if isinstance(previous_at, (int, float)) and (not isinstance(observed_at, (int, float)) or observed_at < previous_at):
+                    continue
+                result[row['role']] = {'requested': row.get('service_tier_requested'),
+                    'actual': row.get('service_tier_actual'), 'at': observed_at}
+    except OSError:
+        pass
+    return result
+
+
 def brain_state() -> dict:
     """Роли и их модели. Ключи провайдеров НЕ отдаются — только адреса и имена."""
     path = brain_path()
@@ -243,7 +318,11 @@ def brain_state() -> dict:
             frameworks[name] = {"base_url": spec.get("base_url", ""),
                                 "protocol": spec.get("protocol") or spec.get("transport") or name,
                                 "key_present": bool(str(spec.get("api_key") or "").strip())}
+    observed = _recent_service_tiers(path)
+    service_tiers = {role: {**(observed.get(role) or {}), 'codex': _codex_role(raw, role),
+        'available': _fast_available(raw, role)} for role in roles}
     return {"ok": True, "path": str(path), "roles": roles, "frameworks": frameworks,
+            "service_tiers": service_tiers,
             "images": image_settings(raw), "image_models": ["gpt-image-2"],
             "writable": os.access(path, os.W_OK)}
 
@@ -304,8 +383,23 @@ def brain_models() -> dict:
             request = urllib.request.Request(url, headers=headers)
             with urllib.request.build_opener(CatalogRedirect()).open(request, timeout=15) as answer:
                 body = json.loads(answer.read(4 * 1024 * 1024).decode("utf-8", "replace"))
-            ids = [str(row.get("id")) for row in (body.get("data") or []) if row.get("id")]
-            out["by_framework"][name] = {"ok": True, "models": ids}
+            models = [row for row in (body.get('data') or []) if isinstance(row, dict) and row.get('id')]
+            ids = [str(row['id']) for row in models]
+            details = []
+            for row in models:
+                item = {'id': str(row['id'])}
+                if isinstance(row.get('reasoning_efforts'), list):
+                    item['reasoning_efforts'] = [value for value in row['reasoning_efforts'] if isinstance(value, str)]
+                if isinstance(row.get('default_reasoning_effort'), str):
+                    item['default_reasoning_effort'] = row['default_reasoning_effort']
+                for field in ('service_tiers', 'additional_speed_tiers'):
+                    if isinstance(row.get(field), list):
+                        item[field] = row[field]
+                details.append(item)
+            _MODEL_CAPABILITIES[name] = {'base_url': spec.get('base_url'), 'api_key': spec.get('api_key'),
+                'expires': time.monotonic() + 60, 'models': {row['id']: row for row in details}}
+            out["by_framework"][name] = {"ok": True, "models": ids, 'model_details': details,
+                'codex': spec.get('provider') == 'relay' and protocol == 'openai'}
         except Exception as exc:
             out["by_framework"][name] = {"ok": False,
                                          "why": f"каталог недоступен ({type(exc).__name__})"}
@@ -353,6 +447,24 @@ def brain_set(role: str, fields: dict) -> dict:
                                      f"(есть: {', '.join(sorted(roles or {}))})"}
     change = {key: value for key, value in (fields or {}).items()
               if key in BRAIN_FIELDS and isinstance(value, (str, int, float))}
+    if 'service_tier' in (fields or {}):
+        try:
+            change['service_tier'] = _service_tier(fields['service_tier'])
+        except ValueError as exc:
+            return {'ok': False, 'note': str(exc)}
+    preview = dict(raw, roles={**roles, role: {**roles[role], **change}})
+    route_changed = any(key in change and change[key] != roles[role].get(key)
+                        for key in ('framework', 'model'))
+    if (route_changed and 'service_tier' not in change
+            and str(roles[role].get('service_tier') or '').strip().lower() in ('priority', 'fast')
+            and _fast_available(preview, role) is not True):
+        change['service_tier'] = None
+    if change.get('service_tier') == 'priority' and not _codex_role(preview, role):
+        return {'ok': False, 'note': 'Fast mode requires a configured Codex subscription route'}
+    if change.get('service_tier') == 'priority' and _fast_available(preview, role) is False:
+        return {'ok': False, 'note': 'Fast mode is unavailable for this Codex model'}
+    if change.get('reasoning_effort') == 'none' and _codex_role(preview, role):
+        return {'ok': False, 'note': 'Codex does not support reasoning effort none'}
     if not change:
         return {"ok": False, "note": f"менять нечего: разрешены {', '.join(BRAIN_FIELDS)}"}
     was = {key: roles[role].get(key) for key in change}
@@ -360,6 +472,8 @@ def brain_set(role: str, fields: dict) -> dict:
     try:
         shutil.copy2(path, backup)
         roles[role].update(change)
+        if 'service_tier' in change and change['service_tier'] is None:
+            roles[role].pop('service_tier', None)
         tmp = path.with_name(".tmp-llm.json")
         tmp.write_text(json.dumps(raw, ensure_ascii=False, indent=1) + "\n",
                        encoding="utf-8", newline="\n")

@@ -3055,8 +3055,13 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                 if reason:
                     return f"Run refused: {reason}"
                 parent_id, _ = _worker_parent(task_id, _parent_request_path)
+                intent = {"id": unit_id, "task_id": task_id, "command_custody": "foreground-group-v1",
+                          "command": command, "cwd": str(place), "created": _now(), "status": "starting",
+                          "parent_unit_id": parent_id, "log": str(log_path)}
+                _atomic_json(directory / "request.json", intent)
                 from command_process import CommandProcess
                 proc = CommandProcess(command, shell=True, cwd=str(place), stdout=log_file,
+                                        defer_start=True, custody_directory=directory / "command-custody",
                                         stderr=subprocess.STDOUT,
                                         start_new_session=(os.name != "nt"),
                                         creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0))
@@ -3066,9 +3071,11 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                     "command_custody": "foreground-group-v1",
                     "command": command, "cwd": str(place), "created": _now(), "status": "running",
                     "supervisor_pid": proc.pid, "supervisor_started_at": born,
-                    "parent_unit_id": parent_id, "log": str(log_path)})
+                    "parent_unit_id": parent_id, "log": str(log_path),
+                    "command_identity": proc.custody_identity()})
                 _atomic_json(directory / "state.json", {"foreground": True,
                     "child_pid": proc.pid, "child_started_at": born})
+                proc.admit()
             deadline = time.monotonic() + seconds if seconds else None
             while True:
                 denied = (_parent_request_path and not worker_control(_parent_request_path).get('allowed'))
@@ -3101,6 +3108,10 @@ def run(task_id: str, command: str, cwd: str = ".", timeout: int = 600,
                                                     log_path, f"{type(exc).__name__}: {exc}", born, unit_id, parent_id)
         else:
             log_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
+            if (directory / "request.json").exists():
+                _atomic_json(directory / "result.json", {"status": "error", "finished": _now(),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "note": "command was not admitted; no executable child resumed"})
     duration = round(time.monotonic() - t0, 3)
     if proc is not None and status != "unknown":
         with _mutation_lock(task_id):
@@ -3183,7 +3194,19 @@ def _pid_alive(pid: int, started_at: str = "") -> bool:
 
 def _unit_state(path: Path) -> dict:
     request = _read_json(path / "request.json", {}) or {}
+    request.pop('custody_recovered', None)
     result = _read_json(path / "result.json")
+    if isinstance(result, dict):
+        result.pop('custody_recovered', None)
+    import forge_recovery
+    recovery = forge_recovery.read_recovery(path)
+    if recovery:
+        outcome = result if isinstance(result, dict) else {}
+        status = str(outcome.get('status') or 'lost')
+        if status not in forge_recovery.TERMINAL:
+            status = 'lost'
+        return {**request, **outcome, 'id': request.get('id') or path.name,
+                'status': status, 'custody_recovered': True, 'liveness': recovery['outcome']}
     stop = _read_json(path / "stop.json")
     if isinstance(stop, dict) and stop.get("state") in {"pending", "unresolved"}:
         # A process-stop attempt may have signalled a child without proving the
@@ -3209,7 +3232,9 @@ def _unit_state(path: Path) -> dict:
                 _RUNNERS.pop(pid, None)
         return {**request, **result, "id": request.get("id") or path.name}
     if request.get("remote"):
-        return {**request, **(_read_json(path / "state.json", {}) or {}),
+        remote_state = _read_json(path / "state.json", {}) or {}
+        remote_state.pop('custody_recovered', None)
+        return {**request, **remote_state,
                 "status": "unknown", "liveness": "remote process requires poll/stop reconciliation"}
     if request.get("status") == "queued":
         return {**request, "id": request.get("id") or path.name}
@@ -3322,6 +3347,8 @@ def _admission_reason(task_id: str, parent_request_path: str = "", *, general: b
         return "owner Stop/Pause is active"
     if (BASE / "memory" / ".control" / "autonomy-paused.json").exists():
         return "owner Pause is active"
+    if (BASE / 'memory' / '.panic').exists():
+        return 'owner panic Stop is active'
     parent_id, caller_request = _worker_parent(task_id, parent_request_path)
     caller, below = parent_id, ""
     seen: set[str] = set()
@@ -3369,7 +3396,7 @@ def _shared_writer_reason(task_id: str, caller: str) -> str:
     # and Stop remain available; starting another writer must wait for exit.
     for kind in ("processes", "verifications"):
         writers.extend(str(row["id"]) for row in _units(task_id, kind)
-                       if row.get("status") not in (_TERMINAL_AGENT_STATES | {
+                       if not row.get('custody_recovered') and row.get("status") not in (_TERMINAL_AGENT_STATES | {
                            "passed", "passed_with_skips", "stale"}))
     return "shared-root writer occupied: " + ",".join(writers) if writers else ""
 
@@ -3639,6 +3666,11 @@ def _process_unlocked(task_id: str, action: str, process_id: str = "", command: 
         return err
     assert root is not None
     action = str(action or "list").strip().lower()
+    if action in {'poll', 'stop'} and process_id:
+        directory = _unit_dir(task_id, 'processes', process_id)
+        import forge_recovery
+        if forge_recovery.read_recovery(directory):
+            return json.dumps(_unit_state(directory), ensure_ascii=False)
     remote = _remote_client(task or {})
     if remote is not None:
         if action == 'start':
@@ -3826,6 +3858,11 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
         return err
     assert task is not None and root is not None
     action = str(action or "plan").strip().lower()
+    if action in {'poll', 'stop'} and verification_id:
+        directory = _unit_dir(task_id, 'verifications', verification_id)
+        import forge_recovery
+        if forge_recovery.read_recovery(directory):
+            return json.dumps(_unit_state(directory), ensure_ascii=False)
     remote = _remote_client(task)
     if action == "list":
         rows = _units(task_id, "verifications")
@@ -3910,7 +3947,10 @@ def _verify_unlocked(task_id: str, action: str = "plan", verification_id: str = 
     state = _unit_state(d)
     if action == "poll":
         result = _read_json(d / "result.json") or _read_json(d / "state.json", {}) or state
-        if state.get("status") == "unknown":
+        if state.get('custody_recovered'):
+            result = {**result, 'status': state['status'], 'custody_recovered': True,
+                      'liveness': state.get('liveness')}
+        elif state.get("status") == "unknown":
             result = {**result, "status": "unknown", "liveness": state.get("liveness")}
         logs = []
         for log in sorted((d / "logs").glob("*.log")) if (d / "logs").is_dir() else []:
@@ -4086,7 +4126,7 @@ def _agent_capacity(task_id: str, request: dict, *, units: dict | None = None,
         writers = [str(r["id"]) for r in active if r.get("role") == "worker"]
         for kind in ("processes", "verifications"):
             writers.extend(str(r["id"]) for r in rows_of(kind)
-                           if r.get("status") not in (_TERMINAL_AGENT_STATES | {
+                           if not r.get('custody_recovered') and r.get("status") not in (_TERMINAL_AGENT_STATES | {
                                "passed", "passed_with_skips", "stale"}))
         if writers:
             return "shared-root writer occupied: " + ",".join(writers)
@@ -4130,7 +4170,7 @@ def _root_released(task_id: str, unit_id: str) -> bool:
 def _detached_writer_reason(task_id: str) -> str:
     settled = _TERMINAL_AGENT_STATES | {"passed", "passed_with_skips", "stale"}
     outstanding = [str(row["id"]) for kind in ("processes", "verifications")
-                   for row in _units(task_id, kind) if row.get("status") not in settled]
+                   for row in _units(task_id, kind) if not row.get('custody_recovered') and row.get("status") not in settled]
     return "detached writer exit unconfirmed: " + ",".join(outstanding) if outstanding else ""
 
 
@@ -4368,6 +4408,9 @@ def tick_queued(task_id: str = "") -> list[dict]:
 
 
 def _writer_ended(directory: Path) -> bool:
+    import forge_recovery
+    if forge_recovery.read_recovery(directory):
+        return True
     request = _read_json(directory / "request.json", {}) or {}
     if request.get("status") == "queued" and not request.get("supervisor_pid"):
         return True
@@ -4447,6 +4490,164 @@ def _resume_agent(task_id: str, agent_id: str, expected_generation: str = "") ->
                 "reason": resumed["queued_reason"]}
 
 
+def _stop_agent_branch(task_id: str, agent_id: str, parent_id: str = "") -> tuple[str, set]:
+    """Shared existing agent Stop path, retaining per-unit immutable history."""
+    import forge_recovery
+    visited = set()
+    if not _unit_dir(task_id, "agents", agent_id).is_dir():
+        return f"Нет субагента {agent_id}.", visited
+    try:
+        with _mutation_lock(task_id):
+            # The entire discovered subtree is fixed under the same admission lock.
+            # Even an already-finished parent must fence children still running.
+            targets = [r["id"] for r in _units(task_id, "agents")
+                       if _in_subtree(task_id, agent_id, r["id"])]
+            for unit in targets:
+                directory = _unit_dir(task_id, "agents", unit)
+                if forge_recovery.read_recovery(directory):
+                    continue
+                if not (directory / "stop.json").exists():
+                    _atomic_json(directory / "stop.json", {"requested_at": _now(),
+                                 "requested_by": parent_id or "root", "target": agent_id,
+                                 "state": "pending"})
+    except TimeoutError as exc:
+        return f"Stop not fenced: {exc}", visited
+    receipts = []
+    # Deepest children first: each Forge worker has its OWN process session.
+    for unit in sorted(targets, key=lambda x: _worker_depth(task_id, x), reverse=True):
+        directory = _unit_dir(task_id, "agents", unit)
+        visited.add(('agents', unit))
+        if forge_recovery.read_recovery(directory):
+            receipts.append(f'{unit}: old execution boundary extinct; historical outcome retained')
+            continue
+        # A synchronous command has its own process group, but its owning
+        # handle lives in this worker. Ask it to stop before killing that
+        # worker; an unresolved command must retain its live custodian.
+        commands = [row for row in _units(task_id, 'processes')
+                    if row.get('parent_unit_id') == unit and not row.get('custody_recovered')]
+        for row in commands:
+            process(task_id, 'stop', process_id=row['id'])
+            visited.add(('processes', row['id']))
+        checks = [row for row in _units(task_id, 'verifications')
+                  if row.get('parent_unit_id') == unit and not row.get('custody_recovered')]
+        for row in checks:
+            verify(task_id, 'stop', verification_id=row['id'])
+            visited.add(('verifications', row['id']))
+        unresolved_commands = [row['id'] for row in commands
+            if _unit_state(_unit_dir(task_id, 'processes', row['id'])).get('status')
+            not in {'done', 'stopped', 'failed', 'timed_out', 'error'}]
+        unresolved_commands += [row['id'] for row in checks
+            if _unit_state(_unit_dir(task_id, 'verifications', row['id'])).get('status')
+            not in (_TERMINAL_AGENT_STATES | {'passed', 'passed_with_skips', 'stale'})]
+        request = _read_json(directory / "request.json", {}) or {}
+        never_started = request.get('status') == 'queued' and not request.get('supervisor_pid')
+        if unresolved_commands and not never_started:
+            note = 'owned command/check exit unproven; worker retained: ' + ','.join(unresolved_commands)
+            receipt = _read_json(directory / 'stop.json', {}) or {}
+            receipt.update(state='unresolved', observed_at=_now(), note=note)
+            _atomic_json(directory / 'stop.json', receipt)
+            receipts.append(f'{unit}: {note}')
+            continue
+        prior = _read_json(directory / "result.json")
+        request = _read_json(directory / "request.json", {}) or {}
+        previous_stop = _read_json(directory / "stop.json", {}) or {}
+        if (isinstance(prior, dict) and prior.get("status") in _TERMINAL_AGENT_STATES
+                and previous_stop.get("state") == "settled"
+                and previous_stop.get("result_sha256") == _result_identity(directory / "result.json")):
+            # Resume creates another unit identity. Rechecking other group
+            # members must not replace this exact unit's proven Stop with
+            # uncertainty merely because its stopped Windows PID is absent.
+            receipts.append(f"{unit}: settled Stop receipt and result retained")
+            continue
+        stop_confirmed = False
+        if request.get("status") == "queued" and not request.get("supervisor_pid"):
+            if not isinstance(prior, dict):
+                prior = {"status": "stopped", "finished": _now(), "never_started": True,
+                         "note": "queued request stopped before process admission"}
+                _atomic_json(directory / "result.json", prior)
+            outcome = "queued unit never started; result retained"
+            stop_confirmed = True
+        elif (os.name == "nt" and request.get("supervisor_pid")
+              and not _pid_alive(int(request["supervisor_pid"]), str(request.get("supervisor_started_at") or ""))
+              and _snapshot_reviewer_has_no_children(task_id, request)):
+            outcome = "bound snapshot reviewer exited; executable tools and delegation were unavailable"
+            stop_confirmed = True
+            if not isinstance(prior, dict) or prior.get("status") not in _TERMINAL_AGENT_STATES:
+                with _mutation_lock(task_id):
+                    current_result = _read_json(directory / "result.json", {}) or {}
+                    if current_result.get("status") not in _TERMINAL_AGENT_STATES:
+                        _atomic_json(directory / "result.json", {**current_result,
+                            "status": "stopped", "stopped": _now(), "finished": _now(), "note": outcome})
+        elif isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
+            outcome = f"settled {prior.get('status')}; result retained (результат сохранён)"
+            # A result is not process-death evidence. The worker may still be
+            # unwinding (or have left a descendant); stop it when its bound
+            # supervisor is observed alive, without rewriting the result.
+            request = _read_json(directory / "request.json", {}) or {}
+            pid = int(request.get("supervisor_pid") or 0)
+            born = str(request.get("supervisor_started_at") or "")
+            group_live = _group_live_members(pid) if pid and os.name != "nt" else None
+            if pid and (_pid_alive(pid, born) or group_live is True):
+                stopped = _kill_tree(pid, born, expect=str(directory / "request.json"))
+                if stopped == "остановлен":
+                    remaining = (_group_live_members(pid) if os.name != "nt"
+                                 else _pid_alive(pid, born))
+                    if remaining is not False:
+                        stopped = "unknown: stop acknowledged but group exit unproven"
+                stop_confirmed = stopped == "остановлен"
+                outcome += f"; supervisor group stop: {stopped}"
+            elif pid and group_live is False:
+                stop_confirmed = True
+            elif not pid:
+                outcome += "; group identity absent; descendant liveness unproven"
+            elif group_live is None:
+                outcome += "; group liveness unproven after terminal result"
+        else:
+            current = _unit_state(directory)
+            pid = int(current.get("supervisor_pid") or 0)
+            outcome = (_kill_tree(pid, str(current.get("supervisor_started_at") or ""),
+                                  expect=str(directory / "request.json"))
+                       if pid else "unknown: supervisor pid absent")
+            # A successful signal/return code alone does not prove process exit.
+            # Already gone without a result is LOST/UNKNOWN, not a clean stop.
+            if outcome == "остановлен" and _pid_alive(pid, str(current.get("supervisor_started_at") or "")):
+                outcome = "unknown: stop acknowledged but supervisor remains alive"
+            if outcome == "остановлен":
+                stop_confirmed = True
+                with _mutation_lock(task_id):
+                    result_path = directory / "result.json"
+                    current_result = _read_json(result_path)
+                    if result_path.exists() and not isinstance(current_result, dict):
+                        outcome = "worker result unreadable; терминальный статус НЕ записан"
+                    elif not isinstance(current_result, dict) or str(current_result.get("status") or "") in {
+                        "running", "starting", "finishing",
+                    }:
+                        # Keep a legacy partial result's observations while
+                        # settling it. A concurrent terminal writer wins.
+                        stopped = dict(current_result or prior or {})
+                        stopped.update(status="stopped", stopped=_now(),
+                                       finished=_now(), note=outcome)
+                        _atomic_json(directory / "result.json", stopped)
+                        emit_unit_event(task_id, unit, stopped,
+                                        request=_read_json(directory / "request.json", {}) or {})
+                    else:
+                        outcome = "worker settled concurrently; result retained"
+            else:
+                outcome += " — терминальный статус НЕ записан"
+        receipt = _read_json(directory / "stop.json", {}) or {}
+        receipt.update({"observed_at": _now(),
+                        "state": "settled" if stop_confirmed else "unresolved",
+                        "note": outcome,
+                        "result_sha256": _result_identity(directory / "result.json")})
+        _atomic_json(directory / "stop.json", receipt)
+        receipts.append(f"{unit}: {outcome}")
+        _event(task_id, "agent_stopped" if stop_confirmed
+               else "agent_stop_uncertain", agent_id=unit, summary=outcome)
+    message = ("\n".join(receipts) + "\n[scope] agent descendants and their process/verification jobs were fenced; "
+               "unresolved custody retains its worker; unrelated task jobs were preserved.")
+    return message, visited
+
+
 def control(task_id: str, action: str, agent_id: str = "", expected_generation: str = "") -> dict:
     """Owner/coordinator control. Submission is not an assertion of process exit."""
     action = str(action or "").lower()
@@ -4484,7 +4685,12 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
             for row in rows:
                 if not any(_in_subtree(task_id, target, row["id"]) for target in targets):
                     targets.append(row["id"])  # orphan/corrupt ancestry is still group-owned
-    receipts = [agent(task_id, "stop", agent_id=unit) for unit in targets]
+    receipts = []
+    visited = set()
+    for unit in targets:
+        message, stopped_units = _stop_agent_branch(task_id, unit)
+        receipts.append(message)
+        visited.update(stopped_units)
     # Detached commands/checks are part of group Stop. Unit Stop also owns the
     # jobs recorded from its subtree; legacy task-scoped jobs remain group-owned.
     def owned(kind, row):
@@ -4496,10 +4702,10 @@ def control(task_id: str, action: str, agent_id: str = "", expected_generation: 
     for kind, key, fn in (("processes", "process_id", process),
                           ("verifications", "verification_id", verify)):
         for row in _units(task_id, kind):
-            if owned(kind, row):
+            if owned(kind, row) and (kind, row['id']) not in visited:
                 receipts.append(fn(task_id, "stop", **{key: row["id"]}))
     unknown = [r["id"] for kind in ("agents", "processes", "verifications")
-               for r in _units(task_id, kind) if owned(kind, r) and r.get("status") in
+               for r in _units(task_id, kind) if owned(kind, r) and not r.get('custody_recovered') and r.get("status") in
                (_LIVE_UNIT_STATES | {"unknown", "lost", "queued"})]
     value = {"status": "unknown" if unknown else "settled", "action": action,
              "task_id": task_id, "agent_id": agent_id, "unknown_units": unknown, "receipts": receipts}
@@ -4611,7 +4817,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                     "id": unit_id, "task_id": task_id, "goal": task.get("goal"),
                     "run_context": (None if task.get("self_review") or task.get("source_update") else
                                     parent_request.get("run_context") if parent_id else
-                                    task.get("run_context") or _task_run_context(task_id)),
+                                    task.get("run_context")),
                     "root": str(root), "proposal_id": task.get("proposal_id") or "",
                     "role": role, "brief": brief, "model": str(model or "").strip(),
                     "max_iters": max(0, int(max_iters or 0)),
@@ -4666,6 +4872,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
                            "continuation": forge_runtime.continuation_info(d),
                            "current_disposition": _agent_snapshot(task_id, agent_id)["current_disposition"],
                            "status": state.get("status"), "liveness": state.get("liveness"),
+                           "custody_recovered": bool(state.get('custody_recovered')),
                            "agent_id": agent_id, "parent_unit_id": _parent_of(task_id, agent_id),
                            "result_sha256": _result_identity(d / "result.json"),
                            "dispositions": [r.get("dispositions") for r in _worker_tree(task_id)
@@ -4708,140 +4915,7 @@ def agent(task_id: str, action: str, agent_id: str = "", brief: str = "",
     if action == "wait":
         return _wait_worker_child(task_id, _parent_request_path, agent_id)
     if action == "stop":
-        try:
-            with _mutation_lock(task_id):
-                # The entire discovered subtree is fixed under the same admission lock.
-                # Even an already-finished parent must fence children still running.
-                targets = [r["id"] for r in _units(task_id, "agents")
-                           if _in_subtree(task_id, agent_id, r["id"])]
-                for unit in targets:
-                    directory = _unit_dir(task_id, "agents", unit)
-                    if not (directory / "stop.json").exists():
-                        _atomic_json(directory / "stop.json", {"requested_at": _now(),
-                                     "requested_by": parent_id or "root", "target": agent_id,
-                                     "state": "pending"})
-        except TimeoutError as exc:
-            return f"Stop not fenced: {exc}"
-        receipts = []
-        # Deepest children first: each Forge worker has its OWN process session.
-        for unit in sorted(targets, key=lambda x: _worker_depth(task_id, x), reverse=True):
-            directory = _unit_dir(task_id, "agents", unit)
-            # A synchronous command has its own process group, but its owning
-            # handle lives in this worker. Ask it to stop before killing that
-            # worker; an unresolved command must retain its live custodian.
-            commands = [row for row in _units(task_id, 'processes')
-                        if row.get('parent_unit_id') == unit
-                        and (_read_json(_unit_dir(task_id, 'processes', row['id']) / 'state.json', {}) or {}).get('foreground')]
-            for row in commands:
-                process(task_id, 'stop', process_id=row['id'])
-            unresolved_commands = [row['id'] for row in commands
-                if _unit_state(_unit_dir(task_id, 'processes', row['id'])).get('status')
-                not in {'done', 'stopped', 'failed', 'timed_out', 'error'}]
-            if unresolved_commands:
-                note = 'foreground command exit unproven; worker retained: ' + ','.join(unresolved_commands)
-                receipt = _read_json(directory / 'stop.json', {}) or {}
-                receipt.update(state='unresolved', observed_at=_now(), note=note)
-                _atomic_json(directory / 'stop.json', receipt)
-                receipts.append(f'{unit}: {note}')
-                continue
-            prior = _read_json(directory / "result.json")
-            request = _read_json(directory / "request.json", {}) or {}
-            previous_stop = _read_json(directory / "stop.json", {}) or {}
-            if (isinstance(prior, dict) and prior.get("status") in _TERMINAL_AGENT_STATES
-                    and previous_stop.get("state") == "settled"
-                    and previous_stop.get("result_sha256") == _result_identity(directory / "result.json")):
-                # Resume creates another unit identity. Rechecking other group
-                # members must not replace this exact unit's proven Stop with
-                # uncertainty merely because its stopped Windows PID is absent.
-                receipts.append(f"{unit}: settled Stop receipt and result retained")
-                continue
-            stop_confirmed = False
-            if request.get("status") == "queued" and not request.get("supervisor_pid"):
-                if not isinstance(prior, dict):
-                    prior = {"status": "stopped", "finished": _now(), "never_started": True,
-                             "note": "queued request stopped before process admission"}
-                    _atomic_json(directory / "result.json", prior)
-                outcome = "queued unit never started; result retained"
-                stop_confirmed = True
-            elif (os.name == "nt" and request.get("supervisor_pid")
-                  and not _pid_alive(int(request["supervisor_pid"]), str(request.get("supervisor_started_at") or ""))
-                  and _snapshot_reviewer_has_no_children(task_id, request)):
-                outcome = "bound snapshot reviewer exited; executable tools and delegation were unavailable"
-                stop_confirmed = True
-                if not isinstance(prior, dict) or prior.get("status") not in _TERMINAL_AGENT_STATES:
-                    with _mutation_lock(task_id):
-                        current_result = _read_json(directory / "result.json", {}) or {}
-                        if current_result.get("status") not in _TERMINAL_AGENT_STATES:
-                            _atomic_json(directory / "result.json", {**current_result,
-                                "status": "stopped", "stopped": _now(), "finished": _now(), "note": outcome})
-            elif isinstance(prior, dict) and str(prior.get("status") or "") in _TERMINAL_AGENT_STATES:
-                outcome = f"settled {prior.get('status')}; result retained (результат сохранён)"
-                # A result is not process-death evidence. The worker may still be
-                # unwinding (or have left a descendant); stop it when its bound
-                # supervisor is observed alive, without rewriting the result.
-                request = _read_json(directory / "request.json", {}) or {}
-                pid = int(request.get("supervisor_pid") or 0)
-                born = str(request.get("supervisor_started_at") or "")
-                group_live = _group_live_members(pid) if pid and os.name != "nt" else None
-                if pid and (_pid_alive(pid, born) or group_live is True):
-                    stopped = _kill_tree(pid, born, expect=str(directory / "request.json"))
-                    if stopped == "остановлен":
-                        remaining = (_group_live_members(pid) if os.name != "nt"
-                                     else _pid_alive(pid, born))
-                        if remaining is not False:
-                            stopped = "unknown: stop acknowledged but group exit unproven"
-                    stop_confirmed = stopped == "остановлен"
-                    outcome += f"; supervisor group stop: {stopped}"
-                elif pid and group_live is False:
-                    stop_confirmed = True
-                elif not pid:
-                    outcome += "; group identity absent; descendant liveness unproven"
-                elif group_live is None:
-                    outcome += "; group liveness unproven after terminal result"
-            else:
-                current = _unit_state(directory)
-                pid = int(current.get("supervisor_pid") or 0)
-                outcome = (_kill_tree(pid, str(current.get("supervisor_started_at") or ""),
-                                      expect=str(directory / "request.json"))
-                           if pid else "unknown: supervisor pid absent")
-                # A successful signal/return code alone does not prove process exit.
-                # Already gone without a result is LOST/UNKNOWN, not a clean stop.
-                if outcome == "остановлен" and _pid_alive(pid, str(current.get("supervisor_started_at") or "")):
-                    outcome = "unknown: stop acknowledged but supervisor remains alive"
-                if outcome == "остановлен":
-                    stop_confirmed = True
-                    with _mutation_lock(task_id):
-                        result_path = directory / "result.json"
-                        current_result = _read_json(result_path)
-                        if result_path.exists() and not isinstance(current_result, dict):
-                            outcome = "worker result unreadable; терминальный статус НЕ записан"
-                        elif not isinstance(current_result, dict) or str(current_result.get("status") or "") in {
-                            "running", "starting", "finishing",
-                        }:
-                            # Keep a legacy partial result's observations while
-                            # settling it. A concurrent terminal writer wins.
-                            stopped = dict(current_result or prior or {})
-                            stopped.update(status="stopped", stopped=_now(),
-                                           finished=_now(), note=outcome)
-                            _atomic_json(directory / "result.json", stopped)
-                            emit_unit_event(task_id, unit, stopped,
-                                            request=_read_json(directory / "request.json", {}) or {})
-                        else:
-                            outcome = "worker settled concurrently; result retained"
-                else:
-                    outcome += " — терминальный статус НЕ записан"
-            receipt = _read_json(directory / "stop.json", {}) or {}
-            receipt.update({"observed_at": _now(),
-                            "state": "settled" if stop_confirmed else "unresolved",
-                            "note": outcome,
-                            "result_sha256": _result_identity(directory / "result.json")})
-            _atomic_json(directory / "stop.json", receipt)
-            receipts.append(f"{unit}: {outcome}")
-            _event(task_id, "agent_stopped" if stop_confirmed
-                   else "agent_stop_uncertain", agent_id=unit, summary=outcome)
-        return ("\n".join(receipts) + "\n[scope] stop fenced agent descendants only; "
-                "detached coding_process/coding_verify jobs remain task-scoped. "
-                "Poll and stop them separately before task finish.")
+        return _stop_agent_branch(task_id, agent_id, parent_id)[0]
     return "action: spawn | poll | stop | pause | resume | tick | disposition | list"
 
 
@@ -5265,6 +5339,9 @@ def _finish_unlocked(task_id: str, title: str = "", review: str = "", checked: s
     assert task is not None and root is not None
     remote = _remote_client(task)
     beat = beat if callable(beat) else (lambda lease_sec=0.0: None)
+    custody = _admission_reason(task_id) or _shared_writer_reason(task_id, '')
+    if custody:
+        return 'Finish refused: ' + custody
     if survey is None:                       # прямой вызов (тест/внутренний путь)
         survey = _finish_survey(task_id, beat=beat)
         if survey.get("error"):
@@ -5443,6 +5520,9 @@ def finish(task_id: str, title: str = "", review: str = "", checked: str = "",
             task = get(task_id)
             if task and task.get("status") not in LIVE_TASK_STATUSES:
                 return f"{task_id} is terminal ({task.get('status')}); result retained."
+            custody = _admission_reason(task_id) or _shared_writer_reason(task_id, '')
+            if custody:
+                return 'Finish refused: ' + custody
             survey = _finish_survey(task_id, beat=beat)
             if survey.get("error"):
                 return str(survey["error"])

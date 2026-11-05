@@ -58,7 +58,7 @@ class ModernRecovery(unittest.TestCase):
     def put(self,path,raw):path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
     def sha(self,path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
     def snapshot(self,path):return {p.relative_to(path).as_posix():p.read_bytes() for p in Path(path).rglob('*') if p.is_file()}
-    def outside_stage(self,root,identity):return Path(root).parent/('.helene-update-'+identity)
+    def outside_stage(self,root,identity,**kwargs):return Path(root).parent/('.helene-update-'+identity)
 
     def test_whole_app_and_tree_are_exact_A_not_live_M_and_data_remains(self):
         old=self.snapshot(self.root);data=self.snapshot(self.data)
@@ -106,6 +106,21 @@ class ModernRecovery(unittest.TestCase):
             common.assert_called_once()
         self.assertEqual(len(seen),1)
 
+    def test_normal_v2_owner_restore_uses_independent_staging_without_platform_mocks(self):
+        self.assertTrue(recovery.modern(self.root))
+        before=self.snapshot(self.root);data=self.snapshot(self.data)
+        def handoff(owner,destination,verified,progress,force,sourceMode=None):
+            self.assertIs(owner,self.owner);self.assertEqual(sourceMode,'clean')
+            self.assertFalse(destination.is_relative_to(self.root))
+            self.assertTrue(program_state.staging_belongs(self.root,destination))
+            self.assertEqual(self.snapshot(destination/'Helene/app'),self.factory)
+            return {'staging':str(destination)}
+        with patch.object(python_updates,'_prepare_handoff',side_effect=handoff) as common:
+            result=recovery.restore_owned(self.owner,operation='9'*32)
+        common.assert_called_once();self.assertTrue(Path(result['staging']).is_dir())
+        self.assertEqual(self.snapshot(self.data),data)
+        for name,raw in before.items():self.assertEqual((self.root/name).read_bytes(),raw)
+
     def test_failed_common_preparation_keeps_old_app_and_data_and_clears_guard(self):
         old=self.snapshot(self.root);data=self.snapshot(self.data)
         with patch.object(recovery,'modern',return_value=True),patch.object(program_state,'staging',side_effect=self.outside_stage), \
@@ -123,6 +138,7 @@ class ModernRecovery(unittest.TestCase):
         timer=Mock()
         def prepare(old,new,**kwargs):
             prepared.append((old,new));self.assertEqual(self.snapshot(new/'app'),self.factory)
+            self.assertIs(kwargs['folder_switch'],True)
             self.assertEqual(read(new/'.helene/source-choice.json').get('mode'),'clean')
         def launch(command,**kwargs):
             commands.append((command,kwargs));order.append('launch');return child

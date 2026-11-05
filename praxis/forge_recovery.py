@@ -78,6 +78,10 @@ def _scope(directory: Path, request: dict) -> str:
     if (scope not in {'self','host'} or task.get('scope','self') not in {'self','host'}
             or request.get('device_id') or task.get('device_id')):
         raise ValueError('device or foreign-host custody cannot use a local reboot proof')
+    if request.get('scope') and request['scope'] != task.get('scope','self'):
+        raise ValueError('request scope contradicts owning task')
+    if request.get('root') != task.get('root'):
+        raise ValueError('request root contradicts owning task')
     if request.get('remote') and scope != 'host':
         raise ValueError('remote execution needs its own bound host proof')
     return scope

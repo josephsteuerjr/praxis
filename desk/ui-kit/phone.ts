@@ -22,6 +22,8 @@ import { phoneSettings } from './phone-settings';
 import { phoneActions } from './phone-actions';
 import { mountPaperSelects } from './paper-select';
 import { apply as applyLook,load as loadLook } from './window/look';
+import { FAST_MODE_HINT, serviceTierChoices, serviceTierReceipt } from './service-tier';
+import { bindBrainModelControls, brainModelProblem, tierClearedByRoute, type ModelCatalog } from './model-controls';
 
 export type Level = "ok" | "live" | "warn" | "error" | "off";
 
@@ -593,13 +595,16 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const role = spot.getAttribute("data-brain-apply");
     if (role) {
       const form = screen.querySelector<HTMLElement>(`[data-brain-form="${role}"]`);
+      const problem = brainModelProblem(form);
+      if (problem) {say(problem);return;}
       const fields: Record<string, string | boolean> = {};
       form?.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-f]").forEach((el) => {
         const key = el.getAttribute("data-f") || "";
-        if (key && el.value.trim() !== (el.getAttribute("data-was") ?? "")) {
+        if (key && el.dataset.storedEffort === undefined && el.dataset.storedServiceTier === undefined && el.value.trim() !== (el.getAttribute("data-was") ?? "")) {
           fields[key] = role === "images" && key === "enabled" ? el.value === "true" : el.value.trim();
         }
       });
+      if (tierClearedByRoute(form)) fields.service_tier = '';
       if (!Object.keys(fields).length) {
         say("ничего не изменено");
         return;
@@ -945,8 +950,8 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     screen.innerHTML = '<div class="empty">читаю…</div>';
     const [boxes, brain, models, panicState] = await Promise.all([
       scoped<{ available: boolean; why: string; containers: Array<{ name: string; up: boolean; status: string; image: string }> }>("/api/containers", "containers"),
-      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
-      scoped<{ ok: boolean; by_framework?: Record<string, { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
+      scoped<{ ok: boolean; note?: string; roles?: Record<string, Record<string, string>>; service_tiers?:Record<string,{requested?:string|null;actual?:string|null;available?:boolean|null;codex?:boolean}>; frameworks?: Record<string, unknown>; images?: Record<string, string | boolean>; image_models?: string[] }>("/api/brain", "brain"),
+      scoped<{ ok: boolean; by_framework?: Record<string, ModelCatalog & { ok: boolean; models?: string[] }> }>("/api/brain-models", "brain"),
       api<{ stopped: boolean | null }>("/api/panic").catch(() => null),
     ]);
     if (!guard()) return;
@@ -1006,13 +1011,16 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
               `<input list="brain-models" data-f="${k}" data-was="${esc(f(k))}" value="${esc(f(k))}" placeholder="${esc(placeholder)}" autocapitalize="off" autocorrect="off" spellcheck="false">`;
             const select = (k: string, values: string[]) =>
               `<select data-f="${k}" data-was="${esc(f(k))}">${opt(values, f(k))}</select>`;
-            return `<div class="task-row" data-brain-form="${esc(role)}">
+            const tier = `<select data-f="service_tier" data-was="${esc(f('service_tier'))}">${serviceTierChoices(f('service_tier')).map(([value,title])=>`<option value="${esc(value)}"${value===f('service_tier')?' selected':''}>${esc(title)}</option>`).join('')}</select>`;
+            return `<div class="task-row" data-brain-form="${esc(role)}" data-codex="${brain.service_tiers?.[role]?.codex===true || brain.service_tiers?.[role]?.available===true}" data-fast-available="${brain.service_tiers?.[role]?.available}">
               <div class="task-head"><b>${esc(role)}</b> <span class="muted">${esc(f("framework"))} · ${esc(f("model"))}</span></div>
               ${field("Модель", input("model"))}
               ${field("Фреймворк", select("framework", frameworks))}
               ${field("Запасная модель", input("fallback_model", "пусто — без запасной"))}
               ${field("Фреймворк запасной", select("fallback_framework", ["", ...frameworks]))}
               ${field("Усилие", select("reasoning_effort", efforts))}
+              <div data-service-tier-field${brain.service_tiers?.[role]?.codex || brain.service_tiers?.[role]?.available?'':' hidden'}>${field("Скорость обработки", tier)}</div>
+              <p class="muted">${esc(serviceTierReceipt(brain.service_tiers?.[role]?.actual))}</p>
               <div class="actions"><button type="button" class="chip" data-brain-apply="${esc(role)}">Применить</button></div>
             </div>`;
           })
@@ -1034,9 +1042,10 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     screen.innerHTML = interruptHTML +
       `<div class="screen-title">Контейнеры <span class="n">${boxes.containers.length}</span></div>${rows}` +
       `<p class="muted" style="padding:0 14px">Идёт мимо агента: перезапуск нужен тогда, когда он не отвечает.</p>` +
-      `<div class="screen-title">Мозг</div>${brainRows}${imageRows}` +
+      `<div class="screen-title">Мозг</div><p class="muted" style="padding:0 14px">${esc(FAST_MODE_HINT)} Основная роль voice выполняет также шаги управления компьютером.</p>${brainRows}${imageRows}` +
       `<p class="muted" id="sys-note" style="padding:0 14px"></p>` +
       `<pre class="mono" id="sys-log" style="padding:0 14px;white-space:pre-wrap;overflow:auto;max-height:50vh" hidden></pre>`;
+    bindBrainModelControls(screen, models?.by_framework || {});
     mountPause();
   }
 

@@ -299,9 +299,9 @@ def update_download(owner,url,sha256=None,extensions=None):
     return result
 
 
-def _extract(archive, destination, progress=None, prefix='Helene/'):
+def _extract(archive, destination, progress=None, prefix='Helene/', *, verify=True):
     from .parallel_files import extract
-    return extract(archive,destination,progress,prefix)
+    return extract(archive,destination,progress,prefix,verify=verify)
 
 
 def update_install(owner,path,forceExtensions=False,sourceMode=None):
@@ -362,9 +362,17 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
     if archive.suffix.lower()!='.zip' or not archive.is_file():
         raise ValueError('Choose a Hélène update ZIP')
     job = getattr(owner, 'update_job', None)
-    destination=Path(job['staging']) if job and job.get('staging') else program_state.staging(owner.root,job['id'] if job else uuid.uuid4().hex)
+    if job and job.get('staging'):
+        destination=Path(job['staging'])
+    else:
+        identity=job['id'] if job else uuid.uuid4().hex
+        destination=(program_state.staging(owner.root,identity,folder_switch=True)
+                     if sourceMode=='clean' else program_state.staging(owner.root,identity))
     if not program_state.staging_belongs(owner.root,destination):
         raise ValueError('Durable update staging identity differs')
+    if sourceMode=='clean':
+        from .clean_update import roots
+        roots(owner.root,destination/'Helene')
     resumed = bool(job and job.get('staging') and (destination/'extraction.json').is_file())
     destination.mkdir(exist_ok=resumed)
     if job:
@@ -407,7 +415,7 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
             return candidate.parent in (cache,legacy) and candidate.name in COMPONENTS
         if Path(rows[0]['path']).resolve()!=archive or any(not valid_component(r) for r in rows[1:]):
             raise ValueError('Download receipt paths differ')
-        for row in rows:
+        for row in rows if sourceMode!='clean' else ():
             candidate=Path(row['path'])
             with candidate.open('rb') as source:actual=hashlib.file_digest(source,'sha256').hexdigest()
             if actual!=row['sha256']:raise ValueError('Downloaded archive changed: '+candidate.name)
@@ -420,7 +428,7 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
     try:
         progress.phase('unpacking',staging=str(destination))
         for item in archives:
-            verified.update(_extract(item,destination,progress))
+            verified.update(_extract(item,destination,progress,verify=sourceMode!='clean'))
         if job:
             from .package_notice import write
             write(destination / 'extraction.json', {'archive_sha256':job['archive_sha256'], 'verified':verified})
@@ -434,6 +442,24 @@ def _update_install(owner,path,forceExtensions=False,sourceMode=None):
 def _prepare_handoff(owner,destination,verified,progress,forceExtensions,sourceMode=None):
     new_root=destination/'Helene'
     _wait_pause(owner,progress,source_mode=sourceMode)
+    if sourceMode=='clean':
+        if forceExtensions:raise ValueError('Incompatible-extension override is obsolete')
+        from . import clean_update
+        from .python_source_updater import prepare_install
+        from .python_platform import require_runtime
+        from .update_process import interpreter_for
+        from python_migrate import installation_lock
+        require_runtime(new_root,owner.root)
+        job=getattr(owner,'update_job',None)
+        if job:
+            from .desktop_update_request import checkpoint,bind_incoming
+            bind_incoming(job,new_root);checkpoint(owner,job,phase='preparing',staging=str(destination))
+        with installation_lock(owner.root):
+            clean_update.choose(owner.root,new_root)
+            prepare_install(owner.root,new_root,progress=progress,
+                attached_data=getattr(owner,'migration_data',None),folder_switch=True)
+        _wait_pause(owner,progress,source_mode='clean')
+        return _launch_handoff(owner,destination,new_root,interpreter_for(new_root),progress)
     from .portable_app_publication import recover
     recover(new_root)
     from . import source_admission
@@ -507,6 +533,14 @@ class _Cancellation:
 
 def prepare_code(old,new_root,progress,sourceMode=None,forceExtensions=False,cancelled=None,require_review=False,resolution_owner='agent'):
     """The incoming hand is temporarily attached to the existing agent."""
+    if sourceMode=='clean':
+        if forceExtensions:raise ValueError('Incompatible-extension override is obsolete')
+        if cancelled is not None and cancelled.is_set():raise InterruptedError('Owner stopped clean update')
+        from .clean_update import choose
+        from .python_platform import require_runtime
+        from .update_process import interpreter_for
+        choose(old,new_root);require_runtime(new_root,old)
+        return None,interpreter_for(new_root)
     from .legacy_update_tool import provide
     from .agent_source_update import AgentResolutionUnavailable
     from . import update_source

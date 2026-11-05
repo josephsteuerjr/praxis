@@ -139,7 +139,7 @@ class Recovery(unittest.TestCase):
             self.assertEqual((assembled/'helene.exe').read_bytes(),(root/'helene.exe').read_bytes())
             self.assertFalse((assembled/'helene.json').exists())
             self.assertFalse(list(root.glob('*.vbs')))
-            self.assertIn('Open **helene.exe**.',(root/'START-HERE.md').read_text(encoding='utf-8'))
+            self.assertIn('open **helene.exe**.',(root/'START-HERE.md').read_text(encoding='utf-8'))
             env=dict(os.environ,PYTHONHOME=sys.base_prefix)
             result=subprocess.run([str(root/'helene.exe'),'--migration-wizard'],env=env,capture_output=True,timeout=10)
             self.assertEqual(result.returncode,0,(result.stdout,result.stderr))

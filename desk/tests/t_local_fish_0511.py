@@ -198,33 +198,35 @@ class LocalFish(unittest.TestCase):
         with wave.open(str(decoded),'rb') as wav:self.assertGreater(wav.getnframes(),0)
         self.assertEqual(self.calls[0][2]['format'],'opus')
 
-    def test_agent_bridge_uses_stable_run_call_identity_and_owned_staging(self):
+    def test_agent_bridge_uses_stable_identity_and_automatic_delivery(self):
         # Real HTTP + real speech_client; use a valid WAV fixture here. Actual
         # Opus decoder/platform qualification is a separate integration gate.
         config = self.tree/'helene.json'; ipc.write(config,self.config)
         outbound=[]; staged=[]
-        agent=types.SimpleNamespace(_TURN_CHANNEL=ContextVar('channel',default='telegram'),
+        agent=types.SimpleNamespace(_TURN_CHANNEL=ContextVar('channel',default=types.SimpleNamespace(chat_id='123')),
             _TURN_OUTBOUND=ContextVar('outbound',default=outbound),tool_speak=lambda:None,
             run_context=types.SimpleNamespace(current_run=lambda:types.SimpleNamespace(run_id='run-fixture')),
             _runs=lambda:types.SimpleNamespace(manifest=lambda run:{'status':'running'}),
             current_tool_execution=lambda:{'call_id':'call-fixture'}, TOOL_IMPL={})
-        def stage(path,**kwargs):
-            staged.append((Path(path).read_bytes(),kwargs)); return 'staged'
-        agent._stage_turn_media=stage
+        def send(job,audio,check):
+            check(); staged.append((audio.path.read_bytes(),job)); return 'delivered'
+        agent._stage_turn_media=lambda *a,**k: (_ for _ in ()).throw(AssertionError('No per-turn staging'))
         @contextmanager
         def delivery(*args): yield True
         boundary=types.SimpleNamespace(cancelled=lambda state:False,delivery=delivery)
         owner=types.SimpleNamespace(LOCK=threading.RLock())
-        speech_bridge.install(agent,self.tree,config,boundary=boundary,owner=owner)
+        service=speech_bridge.install(agent,self.tree,config,boundary=boundary,owner=owner,deliver=send)
+        self.addCleanup(service.close)
         original=speech_client.synthesize
         def wav_transport(*args,**kwargs):return original(*args,**dict(kwargs,format='wav'))
         with patch.object(speech_client,'synthesize',side_effect=wav_transport):
-            self.assertEqual(agent.tool_speak('agent speech'), 'staged')
-            self.assertIn('completed',agent.tool_speak('agent speech'))
+            self.assertIn('принят',agent.tool_speak('agent speech'));service.pending.join()
+            self.assertIn('delivered',agent.tool_speak('agent speech'))
         self.assertEqual(len(self.calls),1);self.assertEqual(len(staged),1)
-        self.assertTrue(staged[0][1]['voice_note']); self.assertIn('guard_text',staged[0][1])
+        self.assertEqual(staged[0][1]['chat_id'],'123')
         identity=hashlib.sha256(b'run-fixture:call-fixture').hexdigest()[:32]
         self.assertEqual(fish.status(self.tree,identity)['status'],'completed')
+
 
 
 if __name__=='__main__':unittest.main()
