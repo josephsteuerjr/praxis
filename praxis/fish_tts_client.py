@@ -233,19 +233,53 @@ class FishTTSClient:
         # Keep documented raw units, without inventing a USD conversion.
         return {'provider': 'fish', 'api_credit_raw': credit}
 
-    def voices(self, *, own=True, language=None, page=1):
+    def voices(self, *, own=True, language=None, page=1, title='', tag='',
+               sort_by='score', licensed=False):
         if type(page) is not int or page < 1:
+            raise FishError('fish_invalid_request')
+        if (not isinstance(title,str) or len(title)>512 or
+                not isinstance(tag,str) or len(tag)>256 or
+                sort_by not in {'score','task_count','created_at'} or
+                type(licensed) is not bool or
+                (language is not None and (not isinstance(language,str) or
+                 re.fullmatch(r'[A-Za-z0-9_-]{0,35}',language) is None))):
             raise FishError('fish_invalid_request')
         query = {'self': str(own).lower(), 'page_number': page, 'page_size': 20}
         if language:
             query['language'] = language
-        value = self._json('/model?' + urllib.parse.urlencode(query))
+        if title.strip():query['title']=title.strip()
+        if tag.strip():query['tag']=[v.strip() for v in tag.split(',') if v.strip()]
+        query.update(sort_by=sort_by,licensed=str(licensed).lower())
+        value = self._json('/model?' + urllib.parse.urlencode(query,doseq=True))
         items = value.get('items')
         if not isinstance(items, list) or any(not isinstance(v, dict) for v in items):
             raise FishError('fish_invalid_response')
-        return {'voices': [{k: v[k] for k in ('_id', 'title', 'languages', 'visibility') if k in v}
+        return {'voices': [{k: v[k] for k in ('_id','title','description','languages','visibility',
+                                            'tags','licensed','author','task_count') if k in v}
                            for v in items],
-                'page': page, 'has_more': value.get('has_more')}
+                'page':page,**{k:value[k] for k in ('has_more','total','total_is_exact','window_limited','max_offset') if k in value}}
+
+    def voice(self, reference):
+        """Resolve a Fish share link locally, then request only the fixed API host."""
+        if not isinstance(reference,str) or len(reference)>2048:
+            raise FishError('fish_invalid_reference')
+        identity=reference.strip()
+        if '://' in identity:
+            try:
+                link=urllib.parse.urlsplit(identity)
+                if (link.scheme!='https' or link.hostname not in {'fish.audio','www.fish.audio','beta.fish.audio'}
+                        or link.username or link.password or link.port not in (None,443)):
+                    raise FishError('fish_invalid_reference')
+                match=re.fullmatch(r'/(?:[a-z]{2}(?:-[A-Za-z]{2})?/)?(?:app/)?m/([a-fA-F0-9]{32})(?:/[^?#]*)?/?',link.path)
+                if not match:raise FishError('fish_invalid_reference')
+                identity=match[1]
+            except ValueError:raise FishError('fish_invalid_reference') from None
+        if re.fullmatch(r'[a-fA-F0-9]{32}',identity) is None:
+            raise FishError('fish_invalid_reference')
+        identity=identity.lower()
+        value=self._json('/model/'+identity)
+        if value.get('_id')!=identity:raise FishError('fish_invalid_response')
+        return value
 
     def stream_intent(self, intent, destination, *, stopped=lambda: False):
         request = validate_intent(intent)

@@ -85,6 +85,8 @@ def routes(route):
     speech = (
         ('GET', '/api/speech/status', 'status', 0),
         ('GET', '/api/speech/fish/catalog/{catalog_page}', 'catalog', 0),
+        ('POST', '/api/speech/fish/search', 'search', 4096),
+        ('POST', '/api/speech/fish/resolve', 'resolve', 4096),
         ('POST', '/api/speech/fish/jobs', 'submit', 65536),
         ('GET', '/api/speech/fish/jobs/{voice_job}', 'job', 0),
         ('POST', '/api/speech/fish/jobs/{voice_job}/cancel', 'cancel', 4096),

@@ -11,8 +11,8 @@ on main retain that desktop code, with the subsequent release documentation.
 ## Current cloud Praxis mirror
 
 `praxis/` on main mirrors qualified live cloud source
-`3b46b63aa4ce499e3da176f6bc4859e94dc71916` (Fish implementation
-`c18b538bdb2098b55b3dd1fd97a458967a488cdf` plus a private status-only commit).
+`4467942aa2d4b0dfe593f8e72371bfb404bb74c5` (Fish discovery implementation
+`805d92ed4c945a9ff547a0b236aca7c6bcd845df` plus a private status-only commit).
 `CORE-SOURCE.json` records every selected source digest and executable mode.
 Private memory, soul, workspace, credentials and private Git history are excluded.
 Two existing public documentation sanitizations preserve the executable AST.

@@ -1,8 +1,8 @@
 /** Fish performance controls over the actual server API. No vendor key in UI. */
 type Selection = {provider:string;enabled:boolean;revision:string;reference_id?:string;model?:string};
 type Status = {ok:boolean;selection:Selection;fish:{configured:boolean;authenticated?:boolean;api_credit_raw?:string;error?:string}};
-type Voice = {id:string;name:string;model:string};
-type Catalog = {voices:Voice[];has_more:boolean;page:number};
+type Voice = {id:string;name:string;model:string;description?:string;author?:string;tags?:string[];languages?:string[];licensed?:boolean;task_count?:number};
+type Catalog = {voices:Voice[];has_more:boolean;page:number;total?:number;total_is_exact?:boolean;window_limited?:boolean};
 type Job = {id:string;state:string;error?:string};
 type AudioResult = {data:string;mime:string};
 type Channel = {base?:string;key?:string};
@@ -43,11 +43,15 @@ const messages:Record<string,string>={unauthorized:'Нет доступа к н�
   fish_key_unavailable:'API-ключ Fish ещё не настроен на сервере.',fish_forbidden:'Fish отказал в доступе.',
   config_changed:'Настройки уже изменились. Обновите состояние перед выбором.',voice_conflict:'Этот запрос уже использован для другого действия.',
   fish_rate_limited:'Fish ограничил частоту запросов.',invalid_text:'Введите текст для пробы.',
-  profile_changed:'Профиль голоса изменился. Обновите каталог.',unavailable:'Сервер озвучки недоступен.'};
+  profile_changed:'Профиль голоса изменился. Обновите каталог.',unavailable:'Сервер озвучки недоступен.',
+  fish_invalid_reference:'Вставьте ID голоса или ссылку https://fish.audio/m/…',fish_not_found:'Такой голос не найден или недоступен.',
+  fish_invalid_request:'Проверьте параметры поиска.'};
 
 export function mountFishControls(root:HTMLElement,legacy:HTMLElement[]=[]):()=>void {
   const aborter=new AbortController();let disposed=false,status:Status|undefined,page=1,catalog:Catalog|undefined;
   let view='fish',job='',version=0,url='',signature='',catalogVersion=0,timer:ReturnType<typeof setTimeout>|undefined;
+  let linked:Voice|undefined,currentVoice:Voice|undefined,currentReference='',resolveVersion=0;
+  let search={query:'',language:'ru',tag:'',sort_by:'score',licensed:false};
   root.classList.add('fish-panel');
   root.innerHTML=`<h2 class="screen-title">Озвучка и интонация</h2><div class="xtts-body">
     <p data-fish-status class="muted" role="status">Проверяю сервер…</p>
@@ -63,7 +67,17 @@ export function mountFishControls(root:HTMLElement,legacy:HTMLElement[]=[]):()=>
       <p class="muted">Прослушивание расходует API-баланс. Проба и выбор голоса ничего не отправляют в Telegram.</p>
       <div data-fish-player hidden><span data-fish-playing></span><audio controls preload="none"></audio></div>
       <button class="chip" type="button" data-fish-cancel hidden>Остановить пробу</button>
+      <div data-fish-current></div>
+      <h3>Найти голос</h3><label>Название<input type="search" data-fish-query maxlength="512" placeholder="Juniper, рассказчик…"></label>
+      <div class="actions"><label>Язык каталога<select data-fish-language><option value="ru">Русский</option><option value="">Все языки</option><option value="en">Английский</option><option value="de">Немецкий</option><option value="fr">Французский</option><option value="es">Испанский</option><option value="zh">Китайский</option><option value="ja">Японский</option></select></label>
+      <label>Порядок<select data-fish-sort><option value="score">Рекомендации Fish</option><option value="task_count">Часто используют</option><option value="created_at">Новые</option></select></label></div>
+      <div class="actions"><button class="chip" type="button" data-fish-tag-pick="female">Женский</button><button class="chip" type="button" data-fish-tag-pick="male">Мужской</button><button class="chip" type="button" data-fish-tag-pick="calm">Спокойный</button><button class="chip" type="button" data-fish-tag-pick="warm">Тёплый</button><button class="chip" type="button" data-fish-tag-pick="conversational">Разговорный</button></div>
+      <label>Теги через запятую<input data-fish-tag maxlength="256" placeholder="female, calm"></label>
+      <label class="fish-check"><input type="checkbox" data-fish-licensed> Только лицензированные Fish</label>
+      <div class="actions"><button class="chip" type="button" data-fish-search>Найти</button><a href="https://fish.audio/app/discovery/" target="_blank" rel="noopener noreferrer">Открыть каталог Fish ↗</a></div>
       <div data-fish-voices class="xtts-voices"></div><div class="actions"><button class="chip" type="button" data-fish-prev>Назад</button><span data-fish-page></span><button class="chip" type="button" data-fish-next>Дальше</button></div>
+      <h3>Голос с сайта Fish</h3><label>Ссылка или ID<input data-fish-reference maxlength="2048" placeholder="https://fish.audio/m/…"></label>
+      <button class="chip" type="button" data-fish-resolve>Открыть голос</button><div data-fish-linked></div>
     </div></div>`;
   const find=<T extends HTMLElement>(selector:string)=>root.querySelector<T>(selector)!;
   const audio=find<HTMLAudioElement>('audio');
@@ -76,19 +90,38 @@ export function mountFishControls(root:HTMLElement,legacy:HTMLElement[]=[]):()=>
   };
   const showVoices=()=>{
     const voices=catalog?.voices||[];
-    const next=JSON.stringify([voices,status?.selection.reference_id,page,catalog?.has_more]);if(next===signature)return;signature=next;
-    find<HTMLElement>('[data-fish-voices]').innerHTML=voices.map(v=>`<div class="task-row"><b>${esc(v.name)}</b>${status?.selection.reference_id===v.id?' <span class="muted">· выбран</span>':''}<div class="actions"><button class="chip" type="button" data-fish-preview="${esc(v.id)}">Послушать</button><button class="chip" type="button" data-fish-select="${esc(v.id)}">Выбрать и включить</button></div></div>`).join('')||'<p class="muted">В этой части каталога голосов нет.</p>';
+    const next=JSON.stringify([catalog,currentVoice,linked,status?.selection.reference_id,page]);if(next===signature)return;signature=next;
+    const card=(v:Voice)=>`<div class="task-row"><b>${esc(v.name)}</b>${status?.selection.reference_id===v.id?' <span class="muted">· выбран</span>':''}
+      <p class="muted">${esc([v.author,...(v.languages||[]),v.licensed?'Лицензирован Fish':''].filter(Boolean).join(' · '))}</p>
+      ${v.description?`<p class="fish-description">${esc(v.description)}</p>`:''}
+      ${(v.tags||[]).length?`<p class="muted">${esc(v.tags!.join(' · '))}</p>`:''}
+      <div class="actions"><button class="chip" type="button" data-fish-preview="${esc(v.id)}">Послушать</button><button class="chip" type="button" data-fish-select="${esc(v.id)}">Выбрать и включить</button><a href="https://fish.audio/m/${encodeURIComponent(v.id)}/" target="_blank" rel="noopener noreferrer">На Fish ↗</a></div></div>`;
+    find<HTMLElement>('[data-fish-current]').innerHTML=currentVoice?'<h3>Текущий голос</h3>'+card(currentVoice):'';
+    find<HTMLElement>('[data-fish-linked]').innerHTML=linked?card(linked):'';
+    find<HTMLElement>('[data-fish-voices]').innerHTML=voices.map(card).join('')||'<p class="muted">Голосов не найдено. Попробуйте другой запрос или выберите все языки.</p>';
     find<HTMLButtonElement>('[data-fish-prev]').disabled=page===1;find<HTMLButtonElement>('[data-fish-next]').disabled=!catalog?.has_more;
-    find<HTMLElement>('[data-fish-page]').textContent=`Страница ${page}`;
+    find<HTMLElement>('[data-fish-page]').textContent=`Страница ${page}${catalog?.total!==undefined&&catalog.total_is_exact?' · найдено '+catalog.total:''}`;
   };
   async function refresh(){
     status=await api<Status>('/api/speech/status',undefined,aborter.signal);if(disposed)return;
     const selected=status.selection;
+    if(selected.provider==='fish'&&selected.reference_id!==currentReference){
+      currentReference=selected.reference_id||'';currentVoice=undefined;
+      const reference=currentReference;
+      if(reference)void api<{voice:Voice}>('/api/speech/fish/resolve',{reference,model:selected.model||'drama-3'},aborter.signal)
+        .then(result=>{if(!disposed&&reference===currentReference){currentVoice=result.voice;showVoices();}}).catch(()=>{/* Status is still shown if the model card is temporarily unavailable. */});
+    }else if(selected.provider!=='fish'){currentReference='';currentVoice=undefined;}
     find<HTMLElement>('[data-fish-status]').textContent=`Активный движок: ${selected.provider==='fish'?'Fish Audio':'XTTS'} · ${selected.enabled?'озвучка включена':'озвучка приостановлена'}. Fish API: ${status.fish.authenticated?'подключён':'не подтверждён'}${status.fish.api_credit_raw!==undefined?' · баланс '+status.fish.api_credit_raw:''}.`;
     find<HTMLButtonElement>('[data-fish-power]').textContent=selected.enabled?'Приостановить озвучку':'Включить озвучку';
     renderView();showVoices();
   }
-  async function loadCatalog(){const current=++catalogVersion;const result=await api<Catalog>(`/api/speech/fish/catalog/${page}`,undefined,aborter.signal);if(!disposed&&current===catalogVersion){catalog=result;showVoices();}}
+  async function loadCatalog(){const current=++catalogVersion;const result=await api<Catalog>('/api/speech/fish/search',{...search,page,model:find<HTMLSelectElement>('[data-fish-model]').value},aborter.signal);if(!disposed&&current===catalogVersion){catalog=result;showVoices();}}
+  async function applySearch(){
+    search={query:find<HTMLInputElement>('[data-fish-query]').value,language:find<HTMLSelectElement>('[data-fish-language]').value,
+      tag:find<HTMLInputElement>('[data-fish-tag]').value,sort_by:find<HTMLSelectElement>('[data-fish-sort]').value,
+      licensed:find<HTMLInputElement>('[data-fish-licensed]').checked};
+    page=1;await loadCatalog();
+  }
   function stop(cancel=true){
     version++;const old=job;job='';audio.pause();if(url)URL.revokeObjectURL(url);url='';audio.removeAttribute('src');
     find<HTMLElement>('[data-fish-player]').hidden=true;find<HTMLElement>('[data-fish-cancel]').hidden=true;
@@ -124,20 +157,35 @@ export function mountFishControls(root:HTMLElement,legacy:HTMLElement[]=[]):()=>
   const click=(event:Event)=>{
     const button=(event.target as HTMLElement).closest<HTMLButtonElement>('button');if(!button||!root.contains(button))return;
     const run=async()=>{
-      if(button.hasAttribute('data-fish-refresh')){await refresh();return loadCatalog();}
+      if(button.hasAttribute('data-fish-refresh')){currentReference='';await refresh();return loadCatalog();}
       if(button.hasAttribute('data-fish-cancel')){stop();forgetPreview();note('Локальная проба остановлена. Остановка генерации у Fish не подтверждается.');return;}
       if(button.hasAttribute('data-fish-power'))return select(status!.selection.provider,undefined,!status!.selection.enabled);
       if(button.hasAttribute('data-fish-use-xtts'))return select('xtts');
       if(button.hasAttribute('data-fish-prev')){page=Math.max(1,page-1);return loadCatalog();}
       if(button.hasAttribute('data-fish-next')){page++;return loadCatalog();}
+      if(button.hasAttribute('data-fish-search'))return applySearch();
+      if(button.dataset.fishTagPick){
+        const input=find<HTMLInputElement>('[data-fish-tag]'),tag=button.dataset.fishTagPick;
+        const tags=input.value.split(',').map(v=>v.trim()).filter(Boolean);
+        input.value=(tags.includes(tag)?tags.filter(v=>v!==tag):[...tags,tag]).join(', ');return applySearch();
+      }
+      if(button.hasAttribute('data-fish-resolve')){
+        const version=++resolveVersion;
+        const result=await api<{voice:Voice}>('/api/speech/fish/resolve',{reference:find<HTMLInputElement>('[data-fish-reference]').value,
+          model:find<HTMLSelectElement>('[data-fish-model]').value},aborter.signal);
+        if(!disposed&&version===resolveVersion){linked=result.voice;showVoices();note('Голос открыт. Действующий голос не изменён.');}return;
+      }
       const id=button.dataset.fishPreview||button.dataset.fishSelect;
-      const voice=catalog?.voices.find(v=>v.id===id);if(!voice)return;
+      const voice=[...(catalog?.voices||[]),...(linked?[linked]:[]),...(currentVoice?[currentVoice]:[])].find(v=>v.id===id);if(!voice)return;
       if(button.dataset.fishPreview)return preview(voice);
       if(button.dataset.fishSelect)return select('fish',voice);
     };
     button.disabled=true;void run().catch(error=>note(failure(error),true)).finally(()=>{if(!disposed){button.disabled=false;showVoices();}});
   };
   root.addEventListener('click',click);
+  for(const name of ['query','tag','reference'])find<HTMLInputElement>(`[data-fish-${name}]`).addEventListener('keydown',event=>{
+    if(event.key==='Enter'){event.preventDefault();find<HTMLButtonElement>(name==='reference'?'[data-fish-resolve]':'[data-fish-search]').click();}
+  });
   find<HTMLSelectElement>('[data-fish-view]').addEventListener('change',event=>{view=(event.target as HTMLSelectElement).value;renderView();});
   const poll=async()=>{if(disposed)return;try{await refresh();}catch(error){note(failure(error),true);}if(!disposed)timer=setTimeout(poll,5000);};
   void poll();void loadCatalog().catch(error=>note(failure(error),true));

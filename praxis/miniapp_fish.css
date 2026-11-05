@@ -1,6 +1,6 @@
 .fish-panel{font:inherit;color:inherit;min-width:0}
 .fish-panel label{display:block;font-size:12px;margin:12px 0 6px;min-width:0}
-.fish-panel select,.fish-panel textarea{display:block;width:100%;max-width:100%;box-sizing:border-box;margin-top:5px;padding:9px 10px;font:inherit;color:inherit;background:transparent;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:8px}
+.fish-panel select,.fish-panel textarea,.fish-panel input:not([type=checkbox]){display:block;width:100%;max-width:100%;box-sizing:border-box;margin-top:5px;padding:9px 10px;font:inherit;color:inherit;background:transparent;border:1px solid color-mix(in srgb,currentColor 20%,transparent);border-radius:8px}
 .fish-panel textarea{resize:vertical;min-height:66px}
 .fish-panel .actions{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
 .fish-panel .actions>label{flex:1 1 150px}
@@ -10,3 +10,7 @@
 .fish-panel [data-fish-status],.fish-panel [data-fish-note]{overflow-wrap:anywhere;font-size:13px;line-height:1.45}
 .fish-panel audio{width:100%;margin:8px 0}
 .fish-panel [hidden]{display:none!important}
+.fish-panel .fish-check{display:flex;align-items:center;gap:8px}
+.fish-panel .fish-check input{flex:0 0 auto;margin:0}
+.fish-panel .fish-description{font-size:13px;line-height:1.4;white-space:pre-line;max-height:6em;overflow:auto}
+.fish-panel [data-fish-current] .task-row,.fish-panel [data-fish-linked] .task-row{padding:10px;overflow-wrap:anywhere;border:1px solid color-mix(in srgb,currentColor 15%,transparent);border-radius:9px;margin:10px 0}

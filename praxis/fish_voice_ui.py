@@ -38,17 +38,37 @@ class FishVoiceUI:
         result['checked_at']=time.time()
         return result
 
-    def catalog(self,page=1,model='drama-3'):
+    @staticmethod
+    def _card(value,model):
+        profile=FishProfile(value['_id'],model=model)
+        strings=lambda name:[v for v in value.get(name,[]) if isinstance(v,str)] if isinstance(value.get(name),list) else []
+        author=value.get('author') or {}
+        return {'id':profile.reference_id,'name':str(value.get('title') or profile.reference_id),
+                'provider':'fish','model':model,'kind':'cloud',**profile.selection(),
+                'languages':strings('languages'),'tags':strings('tags'),
+                'description':value.get('description') if isinstance(value.get('description'),str) else '',
+                'author':author.get('nickname','') if isinstance(author,dict) else '',
+                'licensed':value.get('licensed') is True,'task_count':value.get('task_count'),
+                'site_url':'https://fish.audio/m/'+profile.reference_id+'/'}
+
+    def catalog(self,page=1,model='drama-3',**filters):
         probe=self.client_factory(None)
-        result=probe.voices(own=False,language='ru',page=page)
+        result=probe.voices(own=False,page=page,**({'language':'ru'}|filters))
         rows=[]
         for value in result['voices']:
             if not isinstance(value.get('_id'),str):continue
-            profile=FishProfile(value['_id'],model=model)
-            rows.append({'id':profile.reference_id,'name':str(value.get('title') or profile.reference_id),
-                         'provider':'fish','model':model,'kind':'cloud',**profile.selection(),
-                         'languages':value.get('languages',[])})
-        return {'ok':True,'voices':rows,'page':page,'has_more':result['has_more'],'model':model}
+            rows.append(self._card(value,model))
+        return {'ok':True,'voices':rows,'page':page,'model':model,
+                **{k:result.get(k) for k in ('has_more','total','total_is_exact','window_limited')}}
+
+    def search(self,body):
+        return self.catalog(body.get('page',1),body.get('model','drama-3'),
+            title=body.get('query',''),language=body.get('language','ru'),tag=body.get('tag',''),
+            sort_by=body.get('sort_by','score'),licensed=body.get('licensed',False))
+
+    def resolve(self,body):
+        value=self.client_factory(None).voice(body.get('reference'))
+        return {'ok':True,'voice':self._card(value,body.get('model','drama-3'))}
 
     def submit(self,body,role):
         if self.closed:raise XttsError('unavailable')
@@ -109,6 +129,8 @@ class FishVoiceUI:
             body=body or {}
             if action=='status':return self.status()
             if action=='catalog':return self.catalog(int(params.get('catalog_page','1')))
+            if action=='search':return self.search(body)
+            if action=='resolve':return self.resolve(body)
             if action=='submit':return self.submit(body,role)
             if action=='selection':return self.selection(body,role)
             if action=='job':return self.job(params.get('voice_job'))

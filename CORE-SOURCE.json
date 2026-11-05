@@ -1,15 +1,15 @@
 {
   "format": "praxis-public-source.v1",
-  "head": "3b46b63aa4ce499e3da176f6bc4859e94dc71916",
-  "captured_at": "2026-11-04T23:34:40.315727+00:00",
-  "files": 741,
+  "head": "4467942aa2d4b0dfe593f8e72371bfb404bb74c5",
+  "captured_at": "2026-11-05T01:16:16.247895+00:00",
+  "files": 742,
   "scope": "Current cloud source mirror only; public-only paths retained. Private memory, authored soul, workspace and Git history excluded. Frozen desktop2.3.0 remains at tagv2.3.0.",
   "mirror": "praxis",
   "source": "read-only live Praxis tracked source-only export",
   "dirty": false,
-  "taken_at": "2026-11-04T23:34:40.315727+00:00",
-  "digest": "cb5a2b4b563c57b52cd6802eadad4e63564d579e7d85ea8b96cc13d597a03dd8",
-  "by": "source-only reconciliation with qualified deployed Fish source",
+  "taken_at": "2026-11-05T01:16:16.247895+00:00",
+  "digest": "512734f9f96b9c90a4db3e6773877b3c0d2215569c47fae2cc80cb88f0a1ed04",
+  "by": "source-only final reconciliation with qualified Fish discovery handoff",
   "source_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".env.example": "85af3211c5085d5fdd13f7ab1cc6c10fc27fd33a95769666f928935be95e2396",
@@ -118,9 +118,9 @@
     "docs/reviews/1009-uia-repair.md": "fb25f8afa2a55caf45e78588746ccea076d320d39f40dc25f2105a92ea54c162",
     "docs/run_retention.md": "a8760cd1049be951f3c619f4a689ccc368509593919544731acd431f0d867af5",
     "epoch_repair.py": "14ae776ba8a390849efb6c80446d81d3b332d990bfb95841a5e1bd0458aef756",
-    "fish_miniapp_patch.py": "297e4ee2ab67624dc70900c8eea86b5cff10255ea33487ceb8fbb67c5761a6ff",
-    "fish_tts_client.py": "85ef0d1badefafded92f69aa9bc36a25b7065bb6bfb5ce7aa83864651c7dbce8",
-    "fish_voice_ui.py": "461046e5913cef5717e42eb8f67fbc458900c94d30433a4a97a34602fe01ce93",
+    "fish_miniapp_patch.py": "7595dc746845943f701079a9aae80f4236a02bec4b1bb2a9450a0a642c1dfec9",
+    "fish_tts_client.py": "3335098bfc29b01f43f1630cbd9892b957d1614621cdc61ab84b6147c84258bb",
+    "fish_voice_ui.py": "d67780e13aa9449df77ba8b9037da310ad3b25a3f553d1a3026a2b587662a239",
     "forge.py": "89c38e75b0bf4bf3f842d109d2ad3861f31f6acd10fd7a2354cfd172be6732a4",
     "forge_battery.py": "ee89589e64d4d312ee7348882b59ebebadc5e953f9a611edd246505843a56cb4",
     "forge_control.py": "97c855e1a634f900ce484f544ab8ae2bd2af3d9324c3151bfcc63dd81380cc94",
@@ -197,8 +197,8 @@
     "memory_provenance.py": "e5f8b28f289c6e6da8d76078648b79eedda2ad863e71df7fc6a9b5c69a5f9250",
     "memory_viz.py": "a3661e39f3866937ae8077b5a581fdd14431c5b807e576a274402db46e7299b1",
     "migrate_places.py": "cc3e46027ec362a35be3db92a818aba4bcf0ebd1d81e15eac6757e5c4c4ecc20",
-    "miniapp_fish.css": "e20af98dfedb4d9f81c35817fbff21a3f97b45fe2ce0d6c2899d4f99f91c5e23",
-    "miniapp_fish.ts": "a703561c9a4982856641f68579fb4ef4c6582d441a700a74298b032da6b899ae",
+    "miniapp_fish.css": "daddf4d74b2f02c5d1604d501b8c957182fe39fd5379b8eb84d260f13f02c58f",
+    "miniapp_fish.ts": "c5c4e80264637f27e2e073cd96a92e0e44853a88ea7e25f5e95d3e8dea3e7207",
     "miniapp_voice.css": "1e415e3c3ccbd63a3d7d23404623bf1cae5b22afc906323137672e82d78439c3",
     "miniapp_voice.ts": "b678ca0a10a109658b98858e89769c39be4d2da081948ca87af4533352dc6bb8",
     "moderation_shadow.py": "a8af233870726a94bc4972ccdb9d166884ed0f74ce1c9c010d1bda8eea72d286",
@@ -738,7 +738,7 @@
     "workshop.py": "c6f6d89ca173b820c8d41880e7ef48e44343354ff39ee03b025d9bab45c94f49",
     "xtts.service": "0c019fd9a59fbbd2ea0cea02f0a89befc61870d33e48c07db2924703cbb65a3b",
     "xtts_control.py": "ab82cee70d0dfea61ecd1ed7c012b4575ec45b1c6487aa88e352960d733cbb15",
-    "xtts_desk_adapter.py": "b7609e628d9485e4889421a6e82d3fa43d4259f265786101a7170ad186e538c5",
+    "xtts_desk_adapter.py": "8ac9999f36426c649ec85bc76f2b80522037f5c35c91f6e3a4b3f024b1fb3e0c",
     "xtts_engine.py": "cc96d35da435a6ad0a1fc487a8a69337d2022606ac099a01241021a345ec60e6",
     "xtts_generations.py": "0e56816c9c0ae7c3a6d73b50bc66bcfc46c5f3db0a65d2da2bd36a5b91230ecb",
     "xtts_install.py": "2abc5ee7675a194389e0f1e077afdcc292b12d85e6da8a08ea365b3bcd79786b",
@@ -751,7 +751,8 @@
     "xtts_stream_upload.py": "ffa1e063a4b95ed0f329a515210804f573031d921fbe580d00bbf74a2a6f4162",
     "xtts_tool_contracts.py": "77ae800b8bc93f4c7e01e36196c7c1d495ef37577dfa03bd0a67dd8886f888d1",
     "xtts_tts_client.py": "7b38b864da5fd79092bb3a39cc3255b5d3887caa0b5a5aefe866673dc259985a",
-    "xtts_voice_rpc.py": "3c31a33e5ce29bad868e24e443448ebcd121e48baf0b797061dfcbd9069cc776"
+    "xtts_voice_rpc.py": "3c31a33e5ce29bad868e24e443448ebcd121e48baf0b797061dfcbd9069cc776",
+    "test_fish_discovery.py": "c697ed5407debbdfe92f2fb50b4b809d83eff817ec53850554c1cb2ddf3185cc"
   },
   "private_history_published": false,
   "sanitization": {
@@ -1511,9 +1512,10 @@
     "xtts_stream_upload.py": "100644",
     "xtts_tool_contracts.py": "100644",
     "xtts_tts_client.py": "100644",
-    "xtts_voice_rpc.py": "100644"
+    "xtts_voice_rpc.py": "100644",
+    "test_fish_discovery.py": "100644"
   },
-  "qualified_source": "c18b538bdb2098b55b3dd1fd97a458967a488cdf",
+  "qualified_source": "805d92ed4c945a9ff547a0b236aca7c6bcd845df",
   "mirror_files": {
     ".dockerignore": "428940d8d886786dce2a4c91bce9b27aac22f52f2e73841dc50cbfa1ad8d569d",
     ".env.example": "85af3211c5085d5fdd13f7ab1cc6c10fc27fd33a95769666f928935be95e2396",
@@ -1622,9 +1624,9 @@
     "docs/reviews/1009-uia-repair.md": "fb25f8afa2a55caf45e78588746ccea076d320d39f40dc25f2105a92ea54c162",
     "docs/run_retention.md": "a8760cd1049be951f3c619f4a689ccc368509593919544731acd431f0d867af5",
     "epoch_repair.py": "14ae776ba8a390849efb6c80446d81d3b332d990bfb95841a5e1bd0458aef756",
-    "fish_miniapp_patch.py": "297e4ee2ab67624dc70900c8eea86b5cff10255ea33487ceb8fbb67c5761a6ff",
-    "fish_tts_client.py": "85ef0d1badefafded92f69aa9bc36a25b7065bb6bfb5ce7aa83864651c7dbce8",
-    "fish_voice_ui.py": "461046e5913cef5717e42eb8f67fbc458900c94d30433a4a97a34602fe01ce93",
+    "fish_miniapp_patch.py": "7595dc746845943f701079a9aae80f4236a02bec4b1bb2a9450a0a642c1dfec9",
+    "fish_tts_client.py": "3335098bfc29b01f43f1630cbd9892b957d1614621cdc61ab84b6147c84258bb",
+    "fish_voice_ui.py": "d67780e13aa9449df77ba8b9037da310ad3b25a3f553d1a3026a2b587662a239",
     "forge.py": "89c38e75b0bf4bf3f842d109d2ad3861f31f6acd10fd7a2354cfd172be6732a4",
     "forge_battery.py": "ee89589e64d4d312ee7348882b59ebebadc5e953f9a611edd246505843a56cb4",
     "forge_control.py": "97c855e1a634f900ce484f544ab8ae2bd2af3d9324c3151bfcc63dd81380cc94",
@@ -1701,8 +1703,8 @@
     "memory_provenance.py": "e5f8b28f289c6e6da8d76078648b79eedda2ad863e71df7fc6a9b5c69a5f9250",
     "memory_viz.py": "a3661e39f3866937ae8077b5a581fdd14431c5b807e576a274402db46e7299b1",
     "migrate_places.py": "cc3e46027ec362a35be3db92a818aba4bcf0ebd1d81e15eac6757e5c4c4ecc20",
-    "miniapp_fish.css": "e20af98dfedb4d9f81c35817fbff21a3f97b45fe2ce0d6c2899d4f99f91c5e23",
-    "miniapp_fish.ts": "a703561c9a4982856641f68579fb4ef4c6582d441a700a74298b032da6b899ae",
+    "miniapp_fish.css": "daddf4d74b2f02c5d1604d501b8c957182fe39fd5379b8eb84d260f13f02c58f",
+    "miniapp_fish.ts": "c5c4e80264637f27e2e073cd96a92e0e44853a88ea7e25f5e95d3e8dea3e7207",
     "miniapp_voice.css": "1e415e3c3ccbd63a3d7d23404623bf1cae5b22afc906323137672e82d78439c3",
     "miniapp_voice.ts": "b678ca0a10a109658b98858e89769c39be4d2da081948ca87af4533352dc6bb8",
     "moderation_shadow.py": "a8af233870726a94bc4972ccdb9d166884ed0f74ce1c9c010d1bda8eea72d286",
@@ -2242,7 +2244,7 @@
     "workshop.py": "c6f6d89ca173b820c8d41880e7ef48e44343354ff39ee03b025d9bab45c94f49",
     "xtts.service": "0c019fd9a59fbbd2ea0cea02f0a89befc61870d33e48c07db2924703cbb65a3b",
     "xtts_control.py": "ab82cee70d0dfea61ecd1ed7c012b4575ec45b1c6487aa88e352960d733cbb15",
-    "xtts_desk_adapter.py": "b7609e628d9485e4889421a6e82d3fa43d4259f265786101a7170ad186e538c5",
+    "xtts_desk_adapter.py": "8ac9999f36426c649ec85bc76f2b80522037f5c35c91f6e3a4b3f024b1fb3e0c",
     "xtts_engine.py": "cc96d35da435a6ad0a1fc487a8a69337d2022606ac099a01241021a345ec60e6",
     "xtts_generations.py": "0e56816c9c0ae7c3a6d73b50bc66bcfc46c5f3db0a65d2da2bd36a5b91230ecb",
     "xtts_install.py": "2abc5ee7675a194389e0f1e077afdcc292b12d85e6da8a08ea365b3bcd79786b",
@@ -2255,15 +2257,17 @@
     "xtts_stream_upload.py": "ffa1e063a4b95ed0f329a515210804f573031d921fbe580d00bbf74a2a6f4162",
     "xtts_tool_contracts.py": "77ae800b8bc93f4c7e01e36196c7c1d495ef37577dfa03bd0a67dd8886f888d1",
     "xtts_tts_client.py": "7b38b864da5fd79092bb3a39cc3255b5d3887caa0b5a5aefe866673dc259985a",
-    "xtts_voice_rpc.py": "3c31a33e5ce29bad868e24e443448ebcd121e48baf0b797061dfcbd9069cc776"
+    "xtts_voice_rpc.py": "3c31a33e5ce29bad868e24e443448ebcd121e48baf0b797061dfcbd9069cc776",
+    "test_fish_discovery.py": "c697ed5407debbdfe92f2fb50b4b809d83eff817ec53850554c1cb2ddf3185cc"
   },
   "working_line_endings_normalized": 22,
   "secret_values_checked_before_export": 8,
   "validation": {
-    "canonical_cloud_full_gates": 2,
-    "tests_per_full_gate": 6985,
-    "skips_per_full_gate": 16,
-    "focused_tests": 127,
+    "canonical_cloud_full_gates": [
+      "Ran 6992 tests in 631.677s\n\nOK (skipped=16)",
+      "Ran 6992 tests in 636.189s\n\nOK (skipped=16)"
+    ],
+    "focused_tests_receipt": "qualified Fish discovery handoff",
     "new_deployment": false
   }
 }
