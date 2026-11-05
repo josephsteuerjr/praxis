@@ -47,7 +47,9 @@ class Continuity(unittest.TestCase):
         pair,key=self.pair();deskapp._revoke_device(deskapp._device_rows()[0]['id'])
         self.restart()
         with self.assertRaises(web.HTTPForbidden):deskapp._redeem(pair['token'],'iPhone','127.0.0.1')
-        self.assertEqual(self.manifest(key)['start_url'],'/m/')
+        retired=self.manifest(key)
+        self.assertNotIn('start_url',retired)
+        self.assertNotIn(key,json.dumps(retired))
         self.assertEqual(deskapp._devices(),[])
 
     def test_expired_enrollment_stays_expired_after_restart(self):
@@ -65,15 +67,15 @@ class Continuity(unittest.TestCase):
         self.assertEqual(deskapp._pairs()[pair['token']]['uses'],pair['uses'])
         self.assertNotIn('key',deskapp._pairs()[pair['token']])
 
-    def test_manifest_identity_and_authorized_install_session_survive_shell_update(self):
+    def test_retired_install_manifest_never_reopens_enrollment_after_shell_update(self):
         pair,key=self.pair();self.restart()
         first=self.manifest(key,pair['token'])
         with patch.object(deskapp,'_agent_name',return_value='Renamed agent'):
             second=self.manifest(key)
-        self.assertEqual(first['id'],second['id'])
-        self.assertEqual(first['start_url'],second['start_url'])
-        self.assertIn('#device='+key,first['start_url']);self.assertNotIn('?pair=',first['start_url'])
-        self.assertEqual(self.manifest()['start_url'],'/m/')
+        self.assertEqual(first,second)
+        for value in (first,second,self.manifest()):
+            self.assertNotIn('id',value);self.assertNotIn('start_url',value)
+            self.assertNotIn(key,json.dumps(value));self.assertNotIn(pair['token'],json.dumps(value))
 
     def test_existing_device_cookie_refresh_never_creates_or_redeems_a_pair(self):
         pair,key=self.pair();uses=deskapp._PAIRS[pair['token']]['uses']

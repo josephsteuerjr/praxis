@@ -41,11 +41,7 @@ assert.deepEqual(controls('attention'),{active:true,cancellable:true,cancelLabel
 assert.equal(controls('cancelled').active,false);assert.equal(controls('superseded').active,false);assert.equal(controls('running').active,true);
 const availability=stripTypeScriptTypes(readFileSync(new URL('../../ui-kit/window/feature-availability.ts',import.meta.url),'utf8')).replace(/export /g,'');
 const flags=new Function(availability+';return {SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE};')();
-const guide=readFileSync(new URL('../../ui-kit/window/connection-guide.ts',import.meta.url),'utf8');
-const guarded=stripTypeScriptTypes(guide.slice(guide.indexOf('function drawNewServer(host:HTMLElement)')));
-let serverCalls=0;const host=new Element('div');host.replaceChildren=(...children)=>host.children=children;
-const el=(tag,cls,text)=>Object.assign(new Element(tag),{className:cls,textContent:text});
-new Function('el','SERVER_TRANSFER_AVAILABLE','SERVER_TRANSFER_NOTICE','shell',guarded+';return drawNewServer;')
-  (el,flags.SERVER_TRANSFER_AVAILABLE,flags.SERVER_TRANSFER_NOTICE,()=>{serverCalls++;throw new Error('Unexpected server operation');})(host);
-assert.equal(serverCalls,0);assert.match(host.children[1].textContent,/пока недоступен/);assert.equal(host.children.some(node=>node.tag==='input'),false);
-console.log('PASS: passive release notice, pending/dispose/dismissal, attention recovery controls, unavailable server path');
+// The product transfer is enabled again. Its real UI actions/Stop/SSH and
+// no-effect-before-confirmation are exercised by connection-guide.test.mjs.
+assert.equal(flags.SERVER_TRANSFER_AVAILABLE,true);
+console.log('PASS: passive release notice, pending/dispose/dismissal, attention recovery controls, enabled server feature');

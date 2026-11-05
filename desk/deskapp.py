@@ -840,36 +840,17 @@ async def api_pair_telegram(request):
     peer = request.transport.get_extra_info("peername") if request.transport else None
     got = await asyncio.to_thread(_tg_login, user, str(peer[0]) if peer else "")
     response = _json({"key": got["key"], "agent": _agent_name(), "device": got["name"]})
+    response.headers['Cache-Control'] = 'no-store'
     response.set_cookie(COOKIE, got["key"], max_age=365 * 24 * 3600,
-                        httponly=True, samesite="Lax")
+                        httponly=True, samesite="Lax",
+                        secure=request.scheme=='https' or request.headers.get('X-Forwarded-Proto')=='https')
     return response
 
 
 async def mobile_manifest(request):
-    """Stable app identity; installation carries its existing device session.
-
-    The fragment never reaches HTTP logs and creates no extra device. A fresh
-    install can open after enrollment expiry; revocation still invalidates it.
-    """
-    pair = str(request.query.get("pair") or "")
-    name = _agent_name()
-    device = str(request.cookies.get(COOKIE) or '')
-    device = device if device.startswith('dk-') and await asyncio.to_thread(_device_ok,device) else ''
-    start = '/m/#device=' + quote(device,safe='') if device else "/m/?pair=" + quote(pair,safe='') if pair else "/m/"
-    manifest = {
-        "id":"/m/", "name": name, "short_name": name, "start_url": start, "scope": "/m/",
-        "display": "standalone", "background_color": "#fdfcfa", "theme_color": "#fdfcfa",
-        "icons": [{"src": "/m/icon-192.png", "sizes": "192x192", "type": "image/png"},
-                  {"src": "/m/icon-512.png", "sizes": "512x512", "type": "image/png"}],
-    }
-    # no-store обязателен: манифест — единственное место, где живёт токен пары,
-    # и без заголовков свежести браузер вправе держать его сколько угодно.
-    # Закэшированный манифест удерживал бы протухший токен и делал смерть значка
-    # на «Домой» неизлечимой даже после переустановки значка (та же мина липкого
-    # кэша, из-за которой в окне появился штамп ?v=<mtime>).
-    return web.json_response(manifest, content_type="application/manifest+json",
-                             headers={"Cache-Control": "no-store"},
-                             dumps=lambda d: json.dumps(d, ensure_ascii=False))
+    """Retired standalone install endpoint; never export a device in a URL."""
+    return web.json_response({'code': 'miniapp_only', 'message': 'Открой меню своего Telegram-бота или отправь /app.'},
+                             status=410, headers={'Cache-Control': 'no-store'})
 
 
 class SafeAccessLogger(AbstractAccessLogger):
@@ -1539,7 +1520,7 @@ def _voice_config() -> dict:
     except (OSError, ValueError):
         return {}
     block = raw.get("voice") if isinstance(raw, dict) else None
-    return {"voice": block if isinstance(block, dict) else {}}
+    return {"voice": block if isinstance(block, dict) else {}, '_speech_epoch': path.stat().st_mtime_ns}
 
 
 async def _r_voice(c: Call):
@@ -1556,7 +1537,26 @@ async def _r_voice(c: Call):
 
 async def _r_voice_preview(c: Call):
     if voice is None:raise ValueError('Voice component unavailable')
-    return await asyncio.to_thread(voice.preview, readers.tree(), _voice_config(), c.body or {})
+    tree = readers.tree().resolve()
+    config = readers.config_path()
+    from localharness import fish_speech
+    identity = (c.body or {}).get('request_id')
+    return await asyncio.to_thread(voice.preview, tree, _voice_config(), c.body or {},
+        configuration=_voice_config, stopped=lambda: readers.tree().resolve()!=tree or readers.config_path()!=config
+            or (bool(identity) and fish_speech.status(tree, identity).get('cancelled') is True))
+
+
+async def _r_voice_fish_key(c: Call):
+    from localharness import fish_speech
+    body = c.body or {}
+    return await asyncio.to_thread(fish_speech.configure_key, readers.tree(), None if body.get('delete') is True else body.get('key', ''))
+
+
+async def _r_voice_intent(c: Call):
+    from localharness import fish_speech
+    identity = (c.body or {}).get('request_id') if c.body else c.query.get('request_id')
+    action = fish_speech.cancel if c.body and c.body.get('cancel') is True else fish_speech.status
+    return await asyncio.to_thread(action, readers.tree(), identity)
 
 
 async def _r_voice_attachment(c: Call):
@@ -1774,6 +1774,9 @@ ROUTES: tuple[Route, ...] = (
     # Compaction belongs to the acting agent; no owner force-fold ingress.
     Route("GET", "/api/voice", _r_voice),
     Route("POST", "/api/voice/preview", _r_voice_preview),
+    Route("POST", "/api/voice/fish-key", _r_voice_fish_key),
+    Route("GET", "/api/voice/intent", _r_voice_intent),
+    Route("POST", "/api/voice/intent", _r_voice_intent),
     Route("GET", "/api/voice/attachment", _r_voice_attachment),
     Route("POST", "/api/voice/attachment", _r_voice_attachment),
     Route("GET", "/api/supervisor", _r_supervisor),

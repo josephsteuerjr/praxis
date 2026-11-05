@@ -992,7 +992,7 @@ def _lock_is_live(holder: dict) -> bool:
     """Владелец замка жив? Сомнение — в пользу ЖИВОГО: два агента хуже, чем один."""
     if not holder:
         return False
-    if holder.get('role')=='explicit first-create':
+    if holder.get('role') in ('explicit first-create','server-transfer'):
         # Component installation can outlast the legacy heartbeat TTL. This
         # short-lived lease is tied to an actual process generation instead;
         # an unknown or remote owner never becomes permission to take it.
@@ -1050,6 +1050,15 @@ def claim_tree(tree: Path, *, agent: str = "", role: str = "", reclaim_stale: bo
     Гонка двух одновременных стартов закрыта O_EXCL; брошенный замок (руннер
     убит) снимается проверкой живости pid.
     """
+    # A different selected agent/global Resume must never restart this local
+    # copy while a VPS may own its life. This survives controller replacement.
+    transfer = Path(tree)/'memory/.state/server-transfer.json'
+    try:
+        moved = json.loads(transfer.read_text(encoding='utf-8'))
+    except FileNotFoundError: moved = None
+    except (OSError,ValueError): raise LayoutError('Не прочитана квитанция переноса на VPS; местный запуск заблокирован') from None
+    if moved is not None and (not isinstance(moved,dict) or moved.get('phase')!='server-stopped'):
+        raise LayoutError('Этот агент перенесён на VPS или перенос ещё не завершён; сначала останови серверную копию через восстановление')
     path = tree_lock_path(tree)
     mine = {"pid": os.getpid(), "at": time.time(), "agent": str(agent or ""),
             "role": str(role or ""), "host": platform.node(),
@@ -2087,7 +2096,8 @@ def project_brain(tree: Path, cfg: dict, *, code_dir: Path | None = None) -> str
     _write_private_config(
         target, json.dumps(merged, ensure_ascii=False, indent=1).encode("utf-8"),
         private=True)
-    _own_only(target)
+    # Already protected and verified through replacement. The historical
+    # USERNAME/icacls helper must not grant another account access afterwards.
     receipt.parent.mkdir(parents=True, exist_ok=True)
     receipt.write_text(json.dumps({"fingerprint": fingerprint,
                                    "projected": _projected_fields(built)}, ensure_ascii=False),

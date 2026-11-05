@@ -7,8 +7,8 @@ files are retained, never overwritten. Model licence stays with the model.
 from __future__ import annotations
 import json
 import os
-import shutil
 import tempfile
+import shutil
 from pathlib import Path
 if __package__:
     from .app_components import digest
@@ -17,44 +17,65 @@ else:
 
 
 def runtime_for(program):
-    legacy=Path(program)/'voice-xtts'
+    from localharness.component_store import path
+    legacy=path(program,'voice-xtts')
     executable='python.exe' if os.name=='nt' else 'bin/python3'
-    return legacy if (legacy/executable).is_file() else Path(program)/'components/xtts/runtime'
+    return legacy if (legacy/executable).is_file() else path(program,'components/xtts')/'runtime'
 
 
 def install(tree: Path, bundle: Path | None = None, *, program: Path | None = None):
     program=Path(program or Path(__file__).resolve().parents[2])
-    bundle=Path(bundle or program/'components/xtts')
+    from localharness import component_store as store
+    bundle=Path(bundle or store.path(program,'components/xtts'))
     note=json.loads((bundle/'xtts-bundle.json').read_text(encoding='utf-8'))
     if note.get('format')!='helene-xtts.v1' or not isinstance(note.get('files'),dict) or not note['files']:
         raise ValueError('invalid XTTS bundle')
-    runtime=runtime_for(program)
-    if runtime==program/'components/xtts/runtime' and bundle.resolve()!=(program/'components/xtts').resolve():
-        runtime=program/'voice-xtts'  # An external removable bundle must not own execution.
-    model=Path(tree)/'models/xtts'
-    missing=[]
-    for relative,expected in note['files'].items():
+    # Validate the supplied bundle before publishing either runtime or model.
+    for relative, expected in note['files'].items():
         rel=Path(relative)
-        if rel.is_absolute() or '..' in rel.parts or rel.parts[0] not in ('runtime','model') or '\\' in relative or ':' in relative:
+        if rel.is_absolute() or '..' in rel.parts or not rel.parts or rel.parts[0] not in ('runtime','model') or '\\' in relative or ':' in relative:
             raise ValueError('invalid XTTS bundle path')
         source=(bundle/rel).resolve()
         if not source.is_relative_to(bundle.resolve()) or not source.is_file() or digest(source)!=expected:
             raise ValueError('XTTS bundle changed: '+relative)
-        destination=(runtime if rel.parts[0]=='runtime' else model).joinpath(*rel.parts[1:])
-        if destination.exists():
-            if destination.is_symlink() or not destination.is_file() or (not source.samefile(destination) and digest(destination)!=expected):
-                raise FileExistsError('XTTS destination differs; retained: '+str(destination))
-        else:missing.append((source,destination,expected,rel.parts[0]))
-    program.mkdir(parents=True,exist_ok=True)
-    for source,destination,expected,kind in missing:
-        destination.parent.mkdir(parents=True,exist_ok=True)
-        handle,raw=tempfile.mkstemp(prefix='.xtts-',dir=destination.parent);os.close(handle);temporary=Path(raw)
-        try:
-            if kind=='model' and source.suffix=='.pth' and source.stat().st_dev==temporary.stat().st_dev:
-                temporary.unlink();os.link(source,temporary)
-            else:shutil.copy2(source,temporary)
-            if not source.samefile(temporary) and digest(temporary)!=expected:raise ValueError('XTTS copy changed')
-            # Never overwrite a racing file; a retry verifies it before reuse.
-            os.link(temporary,destination)
-        finally:temporary.unlink(missing_ok=True)
-    return {'ok':True,'state':'done','backend':'xtts','python':str(runtime/('python.exe' if os.name=='nt' else 'bin/python3')),'restart_required':True}
+    existing = store.model_path(tree,'xtts')
+    prior_ref=store._pins(tree)['pins'].get('models/xtts')
+    prior_files=(json.loads((existing.parent/'receipt.json').read_text())['files'] if prior_ref else {})
+    for relative, expected in note['files'].items():
+        rel=Path(relative)
+        if rel.parts[0]!='model':continue
+        current=existing.joinpath(*rel.parts[1:])
+        if current.exists():
+            got=digest(current) if current.is_file() else None
+            previous=prior_files.get(Path(*rel.parts[1:]).as_posix())
+            if got!=expected and (not previous or got!=previous[1]):
+                raise FileExistsError('XTTS model differs; existing selection retained')
+    # Both a removable offline bundle and legacy installation become permanent
+    # store objects; the agent holds a model-only pin shared across agents.
+    reference, report = store.import_directory(bundle, program=program)
+    model_source = store._reference(reference)/'model'
+    runtime_ref, runtime_report = store.import_directory(store._reference(reference)/'runtime', program=program)
+    # Retain personal sample files alongside unchanged weights. Assemble a new
+    # immutable view; never add metadata into a model held by a running worker.
+    with tempfile.TemporaryDirectory(prefix='.model-view-',dir=store.root()) as temporary:
+        assembled=Path(temporary)/'model';assembled.mkdir()
+        def link_or_copy(src,dst):
+            try:os.link(Path(src).resolve(),dst)
+            except OSError:shutil.copyfile(src,dst)
+            return str(dst)
+        def ignore_replaced(directory,names):
+            relative=Path(directory).relative_to(existing)
+            return [name for name in names if (model_source/relative/name).is_file()]
+        if existing.is_dir():shutil.copytree(existing,assembled,dirs_exist_ok=True,copy_function=link_or_copy,ignore=ignore_replaced)
+        for path in model_source.rglob('*'):
+            if path.is_file():
+                destination=assembled/path.relative_to(model_source)
+                if not destination.exists():destination.parent.mkdir(parents=True,exist_ok=True);link_or_copy(path,destination)
+        model_ref, model_report = store.import_directory(assembled)
+    store.pin(program, 'components/xtts', reference)
+    store.pin(program, 'voice-xtts', runtime_ref)
+    store.pin(tree, 'models/xtts', model_ref)
+    runtime=store.path(program,'voice-xtts')
+    return {'ok':True,'state':'done','backend':'xtts',
+        'python':str(runtime/('python.exe' if os.name=='nt' else 'bin/python3')),
+        'restart_required':True,'copied_bytes':report['copied_bytes']+model_report['copied_bytes']+runtime_report['copied_bytes']}

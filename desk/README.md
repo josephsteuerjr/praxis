@@ -1,8 +1,12 @@
-# Hélène 2.3.0 — portable Python desktop
+# Hélène 2.4.0 — portable Python desktop
 
 Windows x64, macOS Apple Silicon, Debian and Fedora x86_64 archives carry their own Python runtime. Extract once into a permanent writable folder. Current updates offer preserved source with independent review or clean release code; the selected profile stays separate from the program. Legacy migration follows its explicit preview. Optional downloads are Whisper and XTTS only; the subscription relay is independently distributed.
 
 See the [release overview](../README.md), [platform source snapshots](../SOURCE-SNAPSHOTS.md) and [release workflow](installer/RELEASE.md). Older native builder documentation below describes previous editions.
+
+The [2.4.0 notes](docs/RELEASE-2.4.0.md) cover independent local Fish, persistent
+voice components, bot-only fullscreen Mini App access, resumable VPS transfer
+and explicit clean/preserve update cards, including acceptance limits.
 
 # Hélène
 

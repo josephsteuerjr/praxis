@@ -10,11 +10,13 @@ from unittest.mock import patch
 import zipfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import component_downloads as cd, python_updates as updates
+from localharness import component_store as store
 
 class Components(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)/'Helene';self.root.mkdir()
+        mocked=patch.object(store,'root',return_value=Path(self.tmp.name)/'store');mocked.start();self.addCleanup(mocked.stop)
         self.blobs={};artifacts={}
         for name in ('toolchain','xtts','whisper'):
             buf=io.BytesIO()
@@ -83,8 +85,8 @@ class Components(unittest.TestCase):
             return original_copy(source,*args,**kwargs)
         with patch.object(hashlib,'file_digest',side_effect=digest),patch.object(shutil,'copy2',side_effect=copy):
             cd.prepare(self.root,['whisper'])
-        self.assertEqual((self.root/'voice/fixture').read_text(),'whisper')
-        self.assertEqual(hashed,[(cd.cache_dir(self.root)/cd.cache_name(self.manifest['artifacts']['whisper'])).resolve()])
+        self.assertEqual((store.path(self.root,'voice')/'fixture').read_text(),'whisper')
+        self.assertEqual(hashed.count((cd.cache_dir(self.root)/cd.cache_name(self.manifest['artifacts']['whisper'])).resolve()),1)
         self.assertEqual(len(self.calls),1)
 
     def test_ordinary_update_preserves_unchanged_pin_but_changed_pin_is_fetched(self):
@@ -100,8 +102,10 @@ class Components(unittest.TestCase):
             path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(name)
         target=self.root.parent/'Migrated'
         cd.preserve_installed(self.root,target)
-        for path in self.root.rglob('*'):
-            if path.is_file() and path.parts[-2]!='app':self.assertEqual((target/path.relative_to(self.root)).read_bytes(),path.read_bytes())
+        for relative in ('voice','voice-xtts'):
+            self.assertEqual(store.path(target,relative),store.path(self.root,relative))
+            self.assertFalse((target/relative).exists())
+        self.assertEqual((target/'components/toolchain/compiler').read_text(),'components/toolchain/compiler')
         self.assertEqual(self.calls,[])
 
 if __name__=='__main__':unittest.main()

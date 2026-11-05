@@ -150,8 +150,9 @@ export function apply(look: Look) {
   scroll.setPhysics(look.feel, look.edge);
   applyTheme(readTheme());
   document.documentElement.style.zoom = String(look.uiScale);
+  r.setProperty('--ui-scale', String(look.uiScale));
   const app=document.getElementById("app");
-  if(app) app.style.height=`calc(100dvh / ${look.uiScale})`;
+  if(app) app.style.height=`calc(var(--app-height, 100dvh) / ${look.uiScale})`;
   document.documentElement.dataset.lookStyle = look.style;
   document.documentElement.dataset.lookFont = look.font;
   document.documentElement.dataset.lookShape = look.shape;

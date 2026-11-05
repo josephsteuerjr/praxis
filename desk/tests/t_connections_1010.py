@@ -106,13 +106,14 @@ class Transfer(unittest.TestCase):
         self.client=types.SimpleNamespace(close=lambda:None,open_sftp=self.sftp)
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(transfer,'connect',return_value=self.client).start()
+        mock.patch.object(transfer.owner_stop,'stopped',return_value=True).start()
         mock.patch.object(transfer,'execute',side_effect=self.execute).start()
         mock.patch.object(transfer,'probe',side_effect=self.probe).start()
         mock.patch.object(transfer.carry,'export',side_effect=self.export).start()
         mock.patch.object(transfer.remote_locator,'locate',return_value='https://verified.test').start()
-        mock.patch.object(transfer.remote_locator,'read',return_value={'runner':{'alive':True}}).start()
+        mock.patch.object(transfer.remote_locator,'read',side_effect=lambda r: {'stopped':False} if r.full_url.endswith('/panic') else {'kind':'serverboot','alive':True,'children':[{'id':'channel','alive':True},{'id':'runner','alive':True}]} if r.full_url.endswith('/supervisor') else {'agent':{'name':'fixture'},'desk':{'version':'2.7.9'},'runner':{'alive':True}}).start()
     def probe(self,*args):return {'ok':True,'docker':True,'fingerprint':'SHA256:tested','existing':transfer.MARKER_PATH in self.files,'resumable':transfer.MARKER_PATH in self.files}
-    def export(self,config,path):path.write_bytes(b'cold-memory-archive');return {'archive':str(path)}
+    def export(self,config,path,**kwargs):path.write_bytes(b'cold-memory-archive');return {'archive':str(path)}
     @contextlib.contextmanager
     def sftp(self):
         owner=self
@@ -133,8 +134,35 @@ class Transfer(unittest.TestCase):
         result=transfer.run(self.raw,self.config,self.program)
         self.assertTrue(result['ok']);self.assertEqual(result['key'],'new-owner-key')
         self.assertTrue(Path(result['archive']).is_file())
+        self.assertTrue(Path(result['archive']).is_relative_to(self.root/'data/memory/.state/server-transfer-archives'))
         row=transfer.saved_transfer(self.config);self.assertEqual(row['phase'],'ready')
         self.assertNotIn('never-in-argv',json.dumps(row));self.assertNotIn('new-owner-key',json.dumps(row))
+    def test_archive_is_exported_under_the_actual_runner_lease(self):
+        exported=self.export
+        def capture(config,path,**kwargs):
+            tree=transfer.carry.tree_of(config,json.loads(config.read_text()))
+            holder=transfer.boot._read_lock(transfer.boot.tree_lock_path(tree))
+            self.assertEqual(holder.get('role'),'server-transfer')
+            self.assertTrue(transfer.boot._lock_is_live(holder))
+            self.assertTrue(transfer.boot._lock_is_live({**holder,'at':0}),'large exports use process generation rather than a heartbeat TTL')
+            return exported(config,path,**kwargs)
+        transfer.carry.export.side_effect=capture
+        transfer.run(self.raw,self.config,self.program)
+        self.assertFalse(transfer.boot.tree_lock_path(self.root/'data').exists())
+    def test_snapshot_refuses_legacy_lock_fail_open(self):
+        with mock.patch.object(transfer.boot,'claim_tree',return_value={}):
+            with self.assertRaisesRegex(transfer.TransferError,'владение'):transfer.run(self.raw,self.config,self.program)
+        transfer.carry.export.assert_not_called()
+    def test_new_destination_after_confirmed_retirement_keeps_old_receipt_and_archive(self):
+        first=transfer.run(self.raw,self.config,self.program)
+        previous=transfer.saved_transfer(self.config);previous['phase']='server-stopped';transfer.save_transfer(self.config,previous)
+        self.files.clear()  # independently empty second synthetic server
+        second=transfer.run({**self.raw,'host':'second.test'},self.config,self.program)
+        history=transfer.receipt_path(self.config).parent/'server-transfer-history'/(previous['id']+'.json')
+        self.assertEqual(json.loads(history.read_text()),previous)
+        self.assertTrue(Path(first['archive']).is_file());self.assertTrue(Path(second['archive']).is_file())
+        self.assertNotEqual(first['archive'],second['archive'])
+        self.assertEqual(transfer.carry.export.call_count,2)
     def test_interrupted_install_continues_the_same_archive(self):
         self.fail_install=True
         with self.assertRaises(transfer.TransferError):transfer.run(self.raw,self.config,self.program)
@@ -147,6 +175,13 @@ class Transfer(unittest.TestCase):
         with self.assertRaises(transfer.TransferError):transfer.run(self.raw,self.config,self.program)
         self.assertFalse(any('sh server/install.sh' in c for c in self.commands))
         self.assertNotIn(transfer.MARKER_PATH,self.files)
+    def test_resume_refuses_changed_program_before_another_install(self):
+        self.fail_install=True
+        with self.assertRaises(transfer.TransferError):transfer.run(self.raw,self.config,self.program)
+        installs=sum('sh server/install.sh' in c for c in self.commands)
+        (self.program/'tree/agent.py').write_text('changed programme with same version')
+        with self.assertRaisesRegex(transfer.TransferError,'Исходники'):transfer.run(self.raw,self.config,self.program)
+        self.assertEqual(sum('sh server/install.sh' in c for c in self.commands),installs)
     def test_existing_unrelated_agent_is_never_replaced(self):
         transfer.probe.side_effect=lambda *args:{'ok':True,'existing':True,'resumable':False,'fingerprint':'SHA256:tested'}
         with self.assertRaises(transfer.TransferError):transfer.run(self.raw,self.config,self.program)
@@ -197,6 +232,9 @@ class VoicePreparation(unittest.TestCase):
             with mock.patch.object(server_prepare.voice,'state',return_value={'ready':False}),mock.patch.object(server_prepare.voice,'speech_state',return_value={'ready':False}),mock.patch.object(server_prepare.voice,'fetch') as hearing,mock.patch.object(server_prepare.voice,'fetch_voice') as speech:
                 server_prepare.prepare(config);hearing.assert_not_called();speech.assert_not_called()
                 config.write_text('{"tree":"data","voice":{"enabled":true,"speak":true}}')
+                # An explicitly native package can provision its declared
+                # components. A bare VPS kit must not install desktop binaries.
+                (Path(folder)/'python-app.json').write_text('{"version":"synthetic-native-package"}')
                 with self.assertRaises(RuntimeError):server_prepare.prepare(config)
                 hearing.assert_called_once();speech.assert_called_once()
 

@@ -244,8 +244,15 @@ class InitialTelegramLifecycle(unittest.TestCase):
 
         # No manual RunContext, binding, _dialogue, _voice, projector, drain,
         # durable creation, checkpoint implementation, or activation mock.
-        with self.assertRaises(AtFirstProvider):
-            runner.handle_bot("123")
+        try:
+            with self.assertRaises(AtFirstProvider):
+                runner.handle_bot("123")
+        finally:
+            if not seen:
+                print('INITIAL TELEGRAM DIAGNOSTIC',json.dumps({
+                    'trace':trace,'recognition_calls':recognition.call_count,
+                    'provider_calls':provider.call_count,'input':bot.inputs.get('123:1'),
+                    'archive':bot.rooms.lines('123',20)},ensure_ascii=False,default=str),file=sys.stderr)
 
         self.assertTrue(seen, "the actual first provider boundary was not reached")
         provider.assert_called_once()

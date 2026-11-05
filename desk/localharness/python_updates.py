@@ -123,8 +123,9 @@ COMPONENTS = tuple(name for names in EXTENSION_ASSETS.values() for name in names
 def installed_extensions(root):
     """Keep the owner's current choices on update; wizard defaults apply only once."""
     root=Path(root)
-    return [name for name,path in (('xtts',root/'components/xtts'),('whisper',root/'voice/site-packages'))
-            if path.is_dir() or (name=='xtts' and (root/'voice-xtts').is_dir()) or (name=='whisper' and any((root/'runtime'/site/'faster_whisper').is_dir() for site in ('','Lib/site-packages')))]
+    from .component_store import path
+    return [name for name,selected in (('xtts',path(root,'components/xtts')),('whisper',path(root,'voice')/'site-packages'))
+            if selected.is_dir() or (name=='xtts' and path(root,'voice-xtts').is_dir()) or (name=='whisper' and any((root/'runtime'/site/'faster_whisper').is_dir() for site in ('','Lib/site-packages')))]
 
 
 def asset_sha(url):

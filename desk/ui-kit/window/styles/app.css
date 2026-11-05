@@ -2071,7 +2071,7 @@ select.field-input {
   border-color: var(--ink-3);
 }
 
-.choice-item[aria-checked="true"] {
+.choice-item[aria-checked="true"], .connection-goals .choice-item[aria-pressed="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
@@ -4417,3 +4417,27 @@ body.first-run #state {
 .journal-empty { padding: 32px 0; font-size: 20px; }
 .journal-empty p { font-size: 14px; }
 @container (max-width: 620px) { .system-overview { grid-template-columns: 1fr; } .journal-event { grid-template-columns: 1fr; gap: 6px; } }
+
+/* Connection choices keep equal peer geometry and stack at phone widths. */
+.connection-goals { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
+.connection-goals .choice-item { min-width: 0; width: 100%; }
+.server-fingerprint { overflow-wrap: anywhere; word-break: break-word; }
+.server-preparation { display: grid; justify-items: start; gap: 12px; margin: 16px 0; }
+.server-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+@media (max-width: 620px) { .connection-goals { grid-template-columns: minmax(0,1fr); } }
+
+/* One form rhythm for both speech providers and the shared paper choices. */
+.voice-settings .voice-provider-fields { margin: 16px 0; align-items: start; }
+.voice-settings .voice-provider-fields[hidden] { display: none; }
+.voice-settings .voice-full-row { grid-column: 1 / -1; }
+.voice-settings .field-input, .voice-settings audio { width: 100%; max-width: 100%; }
+.voice-settings textarea.field-input { min-height: 96px; resize: vertical; }
+.voice-settings > .field { margin: 16px 0; }
+@media (max-width: 560px) {
+  #view .settings .voice-settings .choice.voice-providers { grid-template-columns: minmax(0,1fr); }
+}
+#view #connection-guide .choice.connection-goals { grid-template-columns: repeat(3,minmax(0,1fr)); }
+@container (max-width: 620px) {
+  #view .settings .voice-settings .choice.voice-providers,
+  #view #connection-guide .choice.connection-goals { grid-template-columns: minmax(0,1fr); }
+}

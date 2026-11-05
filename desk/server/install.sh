@@ -20,6 +20,7 @@
 #   HELENE_HOSTS=helene.example.com sh Helene/server/install.sh
 # Оно запоминается в server/.env установки.
 set -eu
+umask 077
 
 say() { printf '%s\n' "$*"; }
 die() { printf '\n✗ %s\n' "$*" >&2; exit 1; }
@@ -28,6 +29,7 @@ die() { printf '\n✗ %s\n' "$*" >&2; exit 1; }
 quiet() {
   log=$(mktemp)
   if "$@" >"$log" 2>&1; then rm -f "$log"; return 0; fi
+  cp "$log" "$INSTALL/.install-last.log"
   tail -30 "$log" >&2; rm -f "$log"; return 1
 }
 
@@ -75,6 +77,15 @@ fi
 INSTALL=${INSTALL:-/opt/helene}
 UPDATER_CONTAINER="$CONTAINER-updater"
 export HELENE_DIR="$INSTALL" HELENE_CONTAINER="$CONTAINER" HELENE_PROJECT="$PROJECT"
+# Serialize all installers for this exact directory, including recovery.
+case "$INSTALL" in /*) ;; *) die "HELENE_DIR must be absolute";; esac
+[ ! -L "$INSTALL" ] || die "linked installation refused"
+mkdir -p "$INSTALL"
+[ "$(cd "$INSTALL" && pwd -P)" = "$INSTALL" ] || die "installation path is not canonical"
+command -v flock >/dev/null 2>&1 || die "flock (util-linux) is required"
+exec 9>"$INSTALL/.install.lock"
+flock -n 9 || die "another installer owns this installation"
+[ ! -e "$INSTALL/.window-transfer-stopped" ] || die "перенос остановлен владельцем для возврата; автоматический запуск запрещён"
 say "Hélène $VERSION → $INSTALL"
 
 remember_host() {
@@ -134,11 +145,9 @@ lock_folder() {
 window_key() {
   tries=0
   while [ "$tries" -lt 30 ]; do
-    line=$(docker logs "$CONTAINER" 2>&1 | grep -A1 'ключ окна' | tail -1 || true)
-    if [ -n "$line" ]; then
+    if [ -s "$INSTALL/data/.serverboot/desk-token" ]; then
       say ""
-      say "Ключ для окна на ПК (Настройки → «Перенос» → «Подключить к серверу»):"
-      say "  $line"
+      say "Канал готов. Ключ окна хранится приватно: $INSTALL/data/.serverboot/desk-token"
       return 0
     fi
     tries=$((tries + 1)); sleep 2
@@ -153,22 +162,22 @@ prepare_archive() {
   marker="$INSTALL/.transfer-import.sha256"
   (cd "$INSTALL" && quiet docker compose -f server/docker-compose.yml build) \
     || die "сборка не удалась — агент ещё не запущен"
-  if [ ! -f "$marker" ]; then
-    say "· разворачиваю агента из архива"
-    quiet docker run --rm -v "$INSTALL:/opt/helene" -v "$ARCHIVE:/carry.zip:ro" -w /opt/helene \
-      --entrypoint python "$PROJECT-helene" app/localharness/carry.py import \
-      --config /opt/helene/helene.json --archive /carry.zip \
-      || die "архив агента не развернулся — данные сохранены; повтори перенос"
-    printf '%s\n' "$sum" > "$marker"
-  else
-    [ "$(cat "$marker")" = "$sum" ] || die "эта установка уже перенесена из другого архива"
+  if [ -f "$marker" ] && [ "$(cat "$marker")" != "$sum" ]; then
+    die "эта установка уже перенесена из другого архива"
   fi
-  say "· готовлю включённые слух и голос агента"
+  say "· проверяю или восстанавливаю импорт агента"
+  quiet docker run --rm --network none -v "$INSTALL:/opt/helene" -v "$ARCHIVE:/carry.zip:ro" -w /opt/helene \
+    --entrypoint python "$PROJECT-helene" server/import_agent.py --root /opt/helene --archive /carry.zip \
+    || die "импорт не завершён — архив и прежние файлы сохранены; повтори перенос"
+  say "· готовлю подключения, слух и голос агента"
   connect_args=""
   [ "${HELENE_AUTOMATIC_CONNECTION:-}" != "1" ] || connect_args="--connect"
-  quiet docker run --rm --init -v "$INSTALL:/opt/helene" -w /opt/helene \
+  quiet docker run --rm --init -v "$INSTALL:/opt/helene" \
+    -v "$INSTALL/component-store:/opt/helene/.local/share/helene/component-store-v1" \
+    -e XDG_DATA_HOME=/opt/helene/.local/share -e HELENE_COMPONENT_PROGRAM=/opt/helene \
+    -e HELENE_SUPERVISOR=serverboot -w /opt/helene \
     --entrypoint python "$PROJECT-helene" app/localharness/server_prepare.py --config /opt/helene/helene.json $connect_args \
-    || die "слух или голос не подготовлен — агент ещё не запущен; повтори перенос"
+    || die "подключения или компоненты не подготовлены — агент ещё не запущен; данные сохранены, повтори перенос"
 }
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
@@ -195,12 +204,16 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
     lock_folder
     window_key
     say ""
-    say "Готово: Hélène $VERSION запущена. Дальше обновления — кнопкой «Обновить» в окне"
+    say "Готово: установка Hélène $VERSION поднята; сохранённый Stop остаётся в силе. Дальше обновления — кнопкой «Обновить» в окне"
     say "(Система → Обновление) или просто скажи агенту «обновись»."
     exit 0
   fi
 fi
 
+if [ -n "$ARCHIVE" ] && docker inspect "$CONTAINER" >/dev/null 2>&1; then
+  [ -f "$INSTALL/.transfer-import.sha256" ] || die "работающий агент без квитанции импорта — повторный импорт запрещён"
+  [ "$(cat "$INSTALL/.transfer-import.sha256")" = "$(sha256sum "$ARCHIVE" | cut -d ' ' -f 1)" ] || die "эта установка уже перенесена из другого архива"
+fi
 INSTALLED=$(passport_version "$INSTALL")
 if [ "$REL" != "$INSTALL" ] && { [ ! -f "$INSTALL/server/updater/updater.py" ] \
     || { [ -n "$INSTALLED" ] && newer "$VERSION" "$INSTALLED"; }; }; then

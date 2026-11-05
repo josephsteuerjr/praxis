@@ -68,6 +68,8 @@ class SSH(unittest.TestCase):
         self.sock=socket.socket();self.sock.bind(('127.0.0.1',0));self.sock.listen(8);self.sock.settimeout(.2)
         self.stop=threading.Event();self.peers=[];self.workers=[]
         self.raw={'host':'127.0.0.1','port':self.sock.getsockname()[1],'login':'root','password':self.password}
+        identity='helene-ssh-fixture-'+secrets.token_hex(6)
+        self.raw['deployment']={'directory':'/opt/'+identity,'project':identity,'port':19879}
         def serve():
             while not self.stop.is_set():
                 try:peer,_=self.sock.accept()

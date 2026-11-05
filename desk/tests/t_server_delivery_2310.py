@@ -184,7 +184,8 @@ class ServerDelivery(unittest.TestCase):
         self.assertNotIn("docker exec helene-updater", script)
         self.assertNotIn("--entrypoint python helene-helene", script)
         self.assertIn('"$PROJECT-helene"', script)
-        self.assertIn("COPY helene-relay ./helene-relay", (DESK / "server/Dockerfile").read_text(encoding="utf-8"))
+        self.assertNotIn("COPY helene-relay ./helene-relay", (DESK / "server/Dockerfile").read_text(encoding="utf-8"))
+        self.assertIn("../relay-product:/opt/helene/relay-product:ro", (DESK / "server/docker-compose.yml").read_text(encoding="utf-8"))
 
     def test_server_catalog_uses_private_keys_and_endpoint_protocol_without_returning_secrets(self):
         frameworks = {
@@ -263,6 +264,8 @@ if args[0] == "inspect":
         else: print("helene-qualification")
 elif args[0] == "compose" and "up" in args and not any("updater" in value for value in args):
     (root / "running").write_text("running")
+    token=Path(os.environ['HELENE_DIR'])/'data/.serverboot/desk-token'
+    token.parent.mkdir(parents=True,exist_ok=True);token.write_text('fixture-only')
 elif args[0] == "logs":
     print("ключ окна\\nfixture-only")
 ''', encoding="utf-8")

@@ -24,9 +24,10 @@ def settings_snapshot(old, operation, progress=None):
     path = folder / (operation + '-settings.zip')
     staged = path.with_suffix('.tmp')
     total = 0
+    from .component_store import PINS
     try:
         with zipfile.ZipFile(staged, 'x', zipfile.ZIP_DEFLATED) as output:
-            for source in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'))]:
+            for source in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json', PINS))]:
                 if source.is_file():
                     content = source.read_bytes()
                     output.writestr(source.relative_to(old).as_posix(), content)
@@ -54,7 +55,8 @@ def selection(old):
     found = app_migration.discover(old)
     from .update_composition import app_inventory
     result = {'settings': {}, 'sources': {}, 'git': {},'app':app_inventory(old/'app')}
-    for config in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'))]:
+    from .component_store import PINS
+    for config in [*configs(old), *(old / n for n in ('agent-default.json', 'window-preferences.json', 'owner-stop.json', PINS))]:
         checkpoint()
         if config.is_file():
             with config.open('rb') as stream:result['settings'][config.relative_to(old).as_posix()]=digest(stream)
@@ -91,9 +93,33 @@ def selection(old):
     return result
 
 
+def _component_references(old, new):
+    """Consume the voice-owned store; no updater-owned payload copy or GC.
+
+    Older standalone update runtimes predate the store. They may proceed only
+    when neither installation has pins; an incomplete store-aware runtime must
+    not silently abandon dependency references. The ordinary overlay journals
+    the new pin file just like settings, including its previous rollback bytes.
+    """
+    from importlib import import_module
+    name = __package__ + '.component_store'
+    try:
+        store = import_module(name)
+    except ModuleNotFoundError as exc:
+        if exc.name != name:
+            raise
+        if any((root / '.helene-component-pins.json').exists() for root in (old, new)):
+            raise RuntimeError('Component-store support is required to update pinned dependencies') from None
+        return None
+    migrated = store.prepare_update(old, new)
+    references = store.export_references(new)
+    return {'references': references, 'migration': migrated}
+
+
 def prepare(old, new, progress=None, *, attached_data=None, snapshot=True):
     old, new = Path(old).resolve(), Path(new).resolve()
     found = app_migration.discover(old)
+    components = _component_references(old, new)
     operation = uuid.uuid4().hex
     backup = (settings_snapshot(old, operation, progress) if snapshot else
               {'path':'','scope':'programme-preimages-only','bytes':0,'archive_bytes':0})
@@ -127,7 +153,9 @@ def prepare(old, new, progress=None, *, attached_data=None, snapshot=True):
                 value['backup'] = dict(value['backup'], dir=str((Path(row['config']).parent / folder).resolve()))
         if isinstance(value.get('voice'),dict) and value['voice'].get('tts_reference'):
             reference=Path(value['voice']['tts_reference'])
-            if not reference.is_absolute():value['voice']=dict(value['voice'],tts_reference=str((Path(row['config']).parent/reference).resolve()))
+            if not reference.is_absolute():
+                from .component_store import reference_path
+                value['voice']=dict(value['voice'],tts_reference=str(reference_path(Path(value['tree']),reference,program=Path(row['config']).parent).resolve()))
         write(new / row['relative'], value)
     for name in ('agent-default.json', 'window-preferences.json', 'owner-stop.json'):
         if (old / name).is_file():
@@ -138,5 +166,7 @@ def prepare(old, new, progress=None, *, attached_data=None, snapshot=True):
             'copied_data': [], 'preserved_roots': {}, 'data_home': str(old / 'profile'),
             'in_place_profile': True, 'backup_scope': backup['scope'],
             'backup_bytes': backup['bytes'], 'backup_archive_bytes': backup['archive_bytes']}
+    if components is not None:
+        note['component_store'] = components
     app_migration.write_note(new, note)
     return note

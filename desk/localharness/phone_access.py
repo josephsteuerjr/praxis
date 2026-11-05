@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 import botapi
 import telegram_proxy
+import phone_entry
 from phone_tunnel.cloudflare_tunnel import CloudflaredError, QuickTunnel, ensure_cloudflared
 from phone_tunnel.platform_support import acquire_file_lock, release_file_lock
 
@@ -112,11 +113,14 @@ class MenuOwner:
         return row
 
     async def publish(self, url: str, label: str) -> None:
+        url = phone_entry.origin(url)
         current = await self.call('getChatMenuButton', chat_id=self.chat_id)
         row = self.ledger()
         if row and current not in (row.get('previous'), row.get('installed'), row.get('pending')):
             raise ValueError('Кнопка бота изменена отдельно: Hélène сохранила её и не перезаписывает.')
         if not row:
+            if current.get('type') == 'web_app':
+                raise ValueError('У этого бота уже есть миниапп другой установки. Для каждого локального агента подключи отдельного бота.')
             chat = await self.call('getChat', chat_id=self.chat_id)
             if chat.get('type') != 'private' or int(chat.get('id') or 0) != self.chat_id:
                 raise ValueError('Для миниаппа нужен личный чат владельца с ботом.')
@@ -160,12 +164,20 @@ class PhoneAccess:
     def host(self) -> str:
         return urlsplit(self.url).hostname or ''
 
+    def transfer_pending(self) -> bool:
+        """A frozen local publisher cannot race the moved server's bot menu."""
+        try:row=json.loads((self.root.parent/'server-transfer.json').read_text(encoding='utf-8'))
+        except FileNotFoundError:return False
+        except (OSError,ValueError):return True
+        return not isinstance(row,dict) or row.get('phase')!='server-stopped'
+
     def state(self) -> dict:
         return {**self.status, 'url': self.url, 'telegram_url': self.url + 'tg/' if self.url else ''}
 
     def record(self, state: str, message: str, **extra):
         self.status = {'state': state, 'message': message, **extra}
-        atomic_json(self.root / 'status.json', {**self.state(), 'pid': os.getpid(), 'at': time.time()})
+        atomic_json(self.root / 'status.json', {**self.state(), 'pid': os.getpid(), 'at': time.time(),
+                    'entry_identity': self.menu.identity if self.menu and extra.get('telegram') == 'ready' else ''})
 
     def retry(self):
         self.retry_event.set()
@@ -210,7 +222,7 @@ class PhoneAccess:
             self.record('ready', 'Телефон подключается из любой сети.', telegram='waiting')
             menu_retry = 0.0
             probe_at, probe_failures = self.clock() + 30, 0
-            while enabled(self.load_config()) and (self.tunnel is None or self.tunnel.returncode is None):
+            while enabled(self.load_config()) and not self.transfer_pending() and (self.tunnel is None or self.tunnel.returncode is None):
                 latest = self.load_config()
                 if latest.get('phone')!=config.get('phone'):break
                 if latest.get('telegram') != config.get('telegram'):
@@ -241,8 +253,10 @@ class PhoneAccess:
                         try:
                             await self.menu.publish(self.url, str((config.get('agent') or {}).get('name') or 'Hélène'))
                             me = await self.menu.call('getMe')
-                            bot_url = 'https://t.me/' + me['username'] if me.get('username') else ''
-                            self.record('ready', 'Телефон подключён. Миниапп доступен кнопкой в твоём боте.', telegram='ready', bot_url=bot_url)
+                            import re
+                            username = str(me.get('username') or '')
+                            bot_url = 'https://t.me/' + username + '?start=helene' if re.fullmatch(r'[A-Za-z0-9_]+', username) else ''
+                            self.record('ready', 'Миниапп подключён. Открой меню своего бота или отправь /app для свежей кнопки.', telegram='ready', bot_url=bot_url)
                             menu_retry = self.clock() + 60
                         except Exception as exc:
                             message = 'HTTPS готов. ' + str(exc) if isinstance(exc, ValueError) else 'HTTPS готов; Telegram пока не подтвердил кнопку. Повторяю автоматически.'
@@ -256,6 +270,10 @@ class PhoneAccess:
                 raise CloudflaredError('Tunnel disconnected')
         finally:
             self.url = ''
+            self.record('checking', 'Подключение меняется. Открой меню бота после восстановления связи.', telegram='waiting')
+            if self.menu:
+                with contextlib.suppress(Exception):
+                    await self.menu.restore()
             if self.tunnel is not None:
                 await self.tunnel.stop()
                 self.tunnel = None
@@ -277,7 +295,7 @@ class PhoneAccess:
         try:
             while True:
                 config = self.load_config()
-                if not enabled(config):
+                if not enabled(config) or self.transfer_pending():
                     if self.menu:
                         try:
                             await self.menu.restore()
@@ -302,6 +320,9 @@ class PhoneAccess:
         finally:
             self.url = ''
             self.record('off', 'Канал остановлен; телефон подключится после запуска Hélène.')
+            if self.menu:
+                with contextlib.suppress(Exception):
+                    await self.menu.restore()
             release_file_lock(lock)
 
     async def context(self, app):

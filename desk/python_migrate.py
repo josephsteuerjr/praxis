@@ -81,12 +81,15 @@ def copy_program(package, new, progress, extensions=None):
         return h.hexdigest()
     root_identity=_program_path_identity(new)
     extensions=set(extensions or ())
+    from localharness.component_store import prepare_package, PINS
+    pinned=prepare_package(package,new,extensions)
     from localharness.source_admission import copy_exclusions
     preserved=copy_exclusions(package,new)
     bundle=package/'components/xtts/xtts-bundle.json'
     xtts_files=set(json.loads(bundle.read_text(encoding='utf-8'))['files'])|{'xtts-bundle.json'} if bundle.is_file() else None
     def selected(path):
         parts=path.relative_to(package).parts
+        if path.name==PINS or any(path.relative_to(package).as_posix().startswith(root+'/') for root in pinned):return False
         if parts[0] in preserved:return False
         if parts[:2]==('components','toolchain'):return False
         if parts[:2]==('components','xtts'):return 'xtts' in extensions and (xtts_files is None or Path(*parts[2:]).as_posix() in xtts_files)

@@ -48,11 +48,11 @@ async function restart(box:HTMLElement) {
 
 export function mountConnectionGuide(host:HTMLElement) {
   const goals=[
-    ["phone","На телефоне","QR открывает этого агента в браузере. Миниапп — кнопкой в твоём боте."],
+    ["phone","Mini App Telegram","Меню твоего бота открывает агента по текущему адресу. Вручную переносить ссылку не нужно."],
     ["telegram","Telegram без VPN","Прокси помогает агенту подключиться к Telegram. Это отдельная настройка связи."],
     ["server","Агент на сервере","Перенеси агента, чтобы он работал и при выключенном компьютере."],
   ];
-  const tabs=el("div","choice images-options"); tabs.setAttribute("role","group"); tabs.setAttribute("aria-label","Что подключить");
+  const tabs=el("div","choice images-options connection-goals"); tabs.setAttribute("role","group"); tabs.setAttribute("aria-label","Что подключить");
   const content=el("div","guide-content"); host.append(tabs,content);
   let serial=0;
   const pick=async(kind:string)=>{
@@ -81,7 +81,7 @@ export function mountConnectionGuide(host:HTMLElement) {
   void pick("phone");
 }
 function drawPhone(host:HTMLElement,session:Session,reload:()=>void) {
-  host.append(steps([session.remote?"Телефон подключится к тому же агенту на сервере.":"Включи подключение: Hélène сама подготовит защищённый адрес.","Нажми «Показать QR» и наведи камеру телефона. Отдельный сервер для этого не нужен.","Для кнопки миниаппа сначала подключи своего бота в соседнем шаге Telegram. "+(session.remote?"Сервер должен оставаться включённым.":"Компьютер должен оставаться включённым.")]));
+  host.append(steps(["Подключи своего бота и укажи id владельца в карточке Telegram. Для каждого локального агента используй отдельного бота.",session.remote?"Mini App подключится к тому же агенту на сервере.":"Включи Mini App: Hélène подготовит подключение и обновит меню бота.","Открой меню бота или отправь /app. Бот выдаст свежую кнопку. Кнопки в старых сообщениях сохраняют прежний адрес.",session.remote?"Сервер должен оставаться включённым.":"Компьютер должен оставаться включённым и подключённым к интернету."]));
   const config=structuredClone(session.config);
   const card=phoneCard(config,!!config.phone?.enabled,config.phone?.mode||"",session.remote?cfg.base:"",qrRenderer,{showToggle:false});
   const out=el("p","receipt");
@@ -202,20 +202,22 @@ function drawNewServer(host:HTMLElement) {
     host.replaceChildren(el('h4','','Перенос на сервер'),unavailable);
     return;
   }
-  const data:Record<string,unknown>={login:"root",port:22,install_docker:true};
+  const data:Record<string,unknown>={login:"root",port:22,install_docker:false,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
   let ready=false,busy=false;
   const out=el("p","receipt");const trust=el("div");trust.hidden=true;
   const grid=el("div","form-grid two");
   const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
   grid.append(field("Адрес сервера","",value=>{data.host=value;changed();},{placeholder:"IP или имя из панели сервера"}),field("Логин","root",value=>{data.login=value;changed();}),field("Пароль сервера","",value=>{data.password=value;changed();},{type:"password",hint:"Приложение использует его для SSH. В чат пароль не отправляется."}));
-  const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","","Войти по SSH-ключу или изменить порт"),inner);
+  const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","","Параметры установки и SSH-ключ"),inner);
+  const deployment=data.deployment as Record<string,unknown>;
+  inner.append(field("Папка установки","/opt/helene",value=>{deployment.directory=value;changed();}),field("Проект Compose","helene",value=>{deployment.project=value;deployment.container=value;changed();}),field("Порт канала на сервере","8094",value=>{deployment.port=Number(value);changed();}));
   inner.append(field("Порт SSH","22",value=>{data.port=Number(value);changed();}),field("Пароль SSH-ключа","",value=>{data.key_password=value;changed();},{type:"password"}));
   const keyLabel=el("span","receipt");
   inner.append(button("Выбрать SSH-ключ","quiet",async()=>{
     try{const files=await pickPaperFiles(true,1,32768);if(files[0]){data.key_text=await files[0].text();keyLabel.textContent=files[0].name;changed();}}
     catch(error){receipt(out,humanError(error).text,true);}
   }),keyLabel);
-  const docker=toggle("Подготовить Docker, если его ещё нет",true,value=>data.install_docker=value);
+  const docker=toggle("Подготовить Docker, если его ещё нет",false,value=>data.install_docker=value);
   const check=button("Проверить сервер","quiet",()=>void probe());
   const start=button("Перенести и подключить","primary",async()=>{
     if(!ready||busy||transferBusy)return;busy=true;transferBusy=true;start.disabled=true;check.disabled=true;
@@ -233,28 +235,51 @@ function drawNewServer(host:HTMLElement) {
       receipt(out,"Собираю архив и переношу агента. Подготовка сервера и голоса может занять несколько минут; дождись результата.");
       const result=await shell<{ok:boolean;message?:string;base?:string;key?:string;server_locator?:string}>("server_transfer",{action:"run",request:JSON.stringify({...data,expected_config:source.path})});
       if(!result.ok||!result.base||!result.key)throw new Error(result.message||"Перенос ещё не подтверждён. Местные данные сохранены.");
-      receipt(out,"Перенос проверен. Открываю агента на сервере…");
+      receipt(out,"Перенос и канал проверены. Stop сохранён; открываю серверную установку…");
       host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
       await attachServer(result.base,result.key,source,result.server_locator);
     }catch(error){receipt(out,humanError(error).text+" Местная память сохранена. Если сервер уже запущен, не включай второго агента одновременно.",true);}
     finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);check.disabled=false;start.disabled=!ready;}
   });start.disabled=true;
+  const recover=button("Остановить серверную копию для возврата","quiet",async()=>{
+    if(!ready||busy||transferBusy)return;
+    busy=true;transferBusy=true;recover.disabled=true;
+    try {
+      const source=await shell<Loaded>("config_load");
+      const result=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"recover-local",request:JSON.stringify({...data,expected_config:source.path})});
+      if(!result.ok)throw new Error(result.message||"Остановка не подтверждена");
+      receipt(out,result.message||"Серверная копия остановлена. Местный Stop сохранён.");
+    } catch(error){receipt(out,humanError(error).text,true);}
+    finally{busy=false;transferBusy=false;recover.disabled=false;}
+  });recover.hidden=true;
+
   async function probe() {
     if(busy)return;busy=true;check.disabled=true;receipt(out,"Проверяю сервер…");
     try{
       const result=await shell<{ok:boolean;message:string;trust_needed?:boolean;fingerprint?:string;existing?:boolean;resumable?:boolean}>("server_transfer",{action:"probe",request:JSON.stringify(data)});
-      ready=result.ok&&(!result.existing||!!result.resumable);
+      ready=result.ok&&!result.trust_needed&&(!result.existing||!!result.resumable);
+      recover.hidden=!result.resumable;
       start.textContent=result.resumable?"Продолжить перенос":"Перенести и подключить";
       if(result.fingerprint)data.fingerprint=result.fingerprint;
       if(result.trust_needed) {
-        trust.hidden=false;trust.replaceChildren(el("p","field-hint",result.message),el("p","mono",result.fingerprint||""),button("Это мой сервер — проверить вход","quiet",()=>{data.confirmed_host=true;void probe();}));
+        trust.hidden=false;trust.replaceChildren(el("p","field-hint",result.message),el("p","mono server-fingerprint",result.fingerprint||""),button("Это мой сервер — проверить вход","quiet",()=>{data.confirmed_host=true;void probe();}));
       }else trust.hidden=true;
       receipt(out,result.resumable?"Найден твой предыдущий перенос. Продолжу с сохранённого этапа; повторный импорт памяти не нужен.":result.existing?"На сервере уже есть Hélène. Выбери «Сервер уже работает», чтобы подключить окно.":result.message,!ready&&!result.trust_needed);
       start.disabled=!ready;
     }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
   }
-  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем выбранный агент продолжит работу на сервере. Приложение подготовит Ubuntu/Debian x64 и проверит подключение."),grid,advanced,docker,check,trust,start,out);
-  void shell<{pending:boolean;message:string;host?:string}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
-    if(result.pending&&host.isConnected)receipt(out,result.message+(result.host?" Сервер: "+result.host+".":""));
+  const preparation=el("div","server-preparation");preparation.append(docker,check);
+  const actions=el("div","server-actions");actions.append(start,recover);
+  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем канал управления будет доступен на сервере. Агент останется остановленным; возобновление — отдельная команда владельца на сервере. Приложение подготовит Ubuntu/Debian x64 и проверит подключение."),grid,advanced,preparation,trust,actions,out);
+  void shell<{pending:boolean;message:string;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
+    if(result.pending&&host.isConnected){
+      receipt(out,result.message+(result.host?" Сервер: "+result.host+".":""));
+      if(!data.host){
+        data.host=result.host;data.login=result.login||"root";data.port=result.ssh_port||22;
+        const inputs=grid.querySelectorAll<HTMLInputElement>("input");if(inputs[0])inputs[0].value=String(data.host||"");if(inputs[1])inputs[1].value=String(data.login);
+        if(result.deployment)Object.assign(deployment,result.deployment);
+        const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port,data.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
+      }
+    }
   }).catch(error=>receipt(out,humanError(error).text,true));
 }

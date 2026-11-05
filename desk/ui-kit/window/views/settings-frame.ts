@@ -25,7 +25,7 @@ import { componentsCard } from "../components-card";
 import { updateError } from "../../update-error";
 import { requestAgentUpdate } from '../update-admission';
 import { keepBlock } from "../config";
-import { bindFail, el, esc, failHTML, humanError, toast } from "../lib";
+import { bindFail, el, failHTML, humanError, toast } from "../lib";
 import { button, card, field, toggle } from "../../dom";
 import { PRODUCT_NAME, S } from "../state";
 import { hostInfo, type HostInfo } from "../host";
@@ -41,6 +41,8 @@ import { workActivity, observeActivity, type WorkActivity, type UpdateActivity }
 import '../styles/work-activity.css';
 import { SERVER_TRANSFER_NOTICE } from '../feature-availability';
 import { updateOperationControls } from '../update-operation-controls';
+import { sourceModeCards } from '../source-mode-cards';
+import '../styles/source-mode-cards.css';
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
@@ -428,7 +430,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   const pythonUpdate = electron?.shell === 'python';
   let sourceMode: 'preserve' | 'clean' | undefined;
   const sourceChoices = el('div', 'field');
-  const modeChoice = el('select', 'field-input'); modeChoice.setAttribute('aria-label', 'Код программы'); modeChoice.hidden = true;
+  const modeChoice = sourceModeCards(value => { sourceMode = value; showMode(); });
+  modeChoice.configure([]);
   const sourceHint = el('p', 'field-hint', 'Проверяем доступные режимы обновления…');
   sourceHint.id = 'update-source-mode-hint';
   const reopenHint = el('p', 'field-hint', 'Во время обновления окно закроется. Hélène откроется сама — это может занять несколько минут. Не запускай программу повторно.');
@@ -437,17 +440,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   developerDetails.append(el('summary', '', 'Если вы меняли код'), el('p', 'field-hint', 'При конфликте агент подготовит совмещённый код в отдельном кандидате. Обновление продолжится после проверок и ревью. До подтверждения нового запуска прежняя программа пригодна для восстановления.'));
   const showMode = () => {
     sourceHint.textContent = sourceMode === 'preserve'
-      ? 'Обновление сохранит правки программы и совместит их с новым выпуском. Память, переписка и настройки сохранятся.'
+      ? 'Правки пройдут проверку и ревью. Конфликты и неподтверждённый результат потребуют решения перед продолжением.'
       : sourceMode === 'clean'
-        ? 'Установим чистый код нового выпуска. Память, переписка и настройки сохранятся.'
-        : 'Не удалось проверить возможность сохранения правок. Можно выбрать чистую замену кода.';
+        ? 'Установим чистый код нового выпуска. Локальные правки исходников не переносятся.'
+        : 'Выберите, что сделать с исходниками при обновлении.';
     developerDetails.hidden = sourceMode !== 'preserve';
   };
-  modeChoice.addEventListener('change', () => {
-    sourceMode = modeChoice.value === 'preserve' ? 'preserve' : modeChoice.value === 'clean' ? 'clean' : undefined;
-    showMode();
-  });
-  sourceChoices.append(modeChoice, sourceHint, reopenHint, developerDetails); sourceChoices.hidden = !pythonUpdate;
+  const preservedHint = el('p', 'field-hint', 'Память, переписка и настройки сохраняются в обоих режимах.');
+  sourceChoices.append(modeChoice.el, preservedHint, sourceHint, reopenHint, developerDetails); sourceChoices.hidden = !pythonUpdate;
   let agentProposalId = '';
   const confirmAgentUpdate = button('Подтвердить предложение агента', 'primary', async () => {
     if (!agentProposalId) return;
@@ -467,15 +467,16 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     const row = await shell<{id?: string; state?: string; source_mode?: string; proposal_current?: boolean;
       source_modes?: string[]; default_source_mode?: 'preserve' | 'clean' | null; source_mode_error?: string}>('update_agent_request');
     const modes = (row.source_modes || []).filter(v => v === 'clean' || v === 'preserve');
-    sourceMode = row.default_source_mode && modes.includes(row.default_source_mode) ? row.default_source_mode : undefined;
-    modeChoice.replaceChildren();
-    if (!sourceMode) { const option = el('option', '', 'Выберите режим'); option.value = ''; modeChoice.append(option); }
-    for (const mode of modes) { const option = el('option', '', mode === 'preserve' ? 'Сохранить правки' : 'Чистый код'); option.value = mode; modeChoice.append(option); }
-    modeChoice.hidden = modes.length < 2 && !!sourceMode; modeChoice.value = sourceMode || ''; showMode();
+    // A default, including clean-only legacy admission, is not an owner click.
+    // Re-reading availability must also retain an explicit choice already made.
+    if (sourceMode && !modes.includes(sourceMode)) sourceMode = undefined;
+    const bound = !!row.id && !!row.proposal_current && ['awaiting', 'confirmed', 'running', 'handed_off', 'attention', 'paused'].includes(row.state || '');
+    if (bound && (row.source_mode === 'clean' || row.source_mode === 'preserve')) sourceMode = row.source_mode;
+    modeChoice.configure(modes, sourceMode, bound); showMode();
     if (row.state !== 'awaiting' || !row.id || !row.proposal_current || !sourceChoices.isConnected) return;
     if (row.source_mode !== 'clean' && row.source_mode !== 'preserve') return;
     if (!modes.includes(row.source_mode)) return;
-    sourceMode = row.source_mode; modeChoice.value = sourceMode; modeChoice.disabled = true; showMode();
+    sourceMode = row.source_mode;
     agentProposalId = row.id;
     confirmAgentUpdate.hidden = false;
   };
@@ -552,6 +553,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
       if (!sourceMode) { try { await loadSourceModes(); } catch { /* admission has not been sent */ } }
       if (!sourceMode) { toast('Выберите режим обновления кода.'); return; }
       dlBtn.disabled = true;
+      modeChoice.lock();
       updOut.className = 'receipt'; updOut.textContent = 'Передаю задание владельцу процессов…';
       beginUpdateObservation();
       try {
@@ -1287,7 +1289,7 @@ function transferCard(draft: Config, posix = false): HTMLElement {
   const baseField = field("Адрес канала на сервере", String(draft.base || ""), (v) => (draft.base = v), {
     mono: true,
     placeholder: "https://helene.example.com",
-    hint: "HTTPS-адрес уже работающего агента. Автоматический перенос на новый сервер пока недоступен.",
+    hint: "HTTPS-адрес работающего канала. Для переноса на новый VPS используй «Настроить подключения».",
   });
   const keyField = field("Ключ окна", String(draft.key || ""), (v) => (draft.key = v), {
     type: "password",
@@ -1310,35 +1312,25 @@ function transferCard(draft: Config, posix = false): HTMLElement {
 }
 
 /**
- * Карточка «Телефон»: QR, по которому телефон получает свой ключ.
- *
- * `remoteBase` не пуст — окно ходит к харнессу на сервере, и тогда всё здесь
- * другое: слушать сеть решает сервер (тумблера нет), QR ведёт на его адрес по
- * https, правило брандмауэра этой машины ни при чём. До 09.09 карточка знала
- * только местную раскладку: кнопка звала `/pair/new` на сервер и получала
- * «только с этой машины (403)», а если бы и получила пару — свела бы QR на
- * локальный адрес, куда телефону идти незачем.
+ * Mini App entry belongs to the configured bot, locally and on a VPS.
+ * The origin is diagnostic; users never copy it or enroll through a QR.
  */
 interface PhoneState { state: string; message: string; url?: string; telegram?: string; bot_url?: string }
 
 export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: string,
-                   remoteBase: string, qrSvg: (text: string) => Promise<string>, opts:{showToggle?:boolean}={}): HTMLElement {
+                   remoteBase: string, _qrSvg: (text: string) => Promise<string>, opts:{showToggle?:boolean}={}): HTMLElement {
   draft.phone = draft.phone || {};
   if(!['automatic','stable'].includes(draft.phone.mode || ''))draft.phone.mode = "automatic";
   const remote = !!remoteBase;
   const phone = el("div");
-  const hint = el("p", "field-hint", remote
-    ? "Телефон подключается к тому же каналу, что и это окно."
-    : "Агент остаётся на этом компьютере. Hélène сама открывает защищённый HTTPS-доступ из любой сети — сервер, Tailscale и настройка роутера не нужны. Компьютер должен быть включён и подключён к интернету.");
+  const hint = el("p", "field-hint", "Открывай Mini App через своего Telegram-бота: меню или /app каждый раз ведут к текущему подключению. У каждого локального агента должен быть свой бот. Компьютер или сервер с агентом должен оставаться включённым.");
   const receipt = el("p", "receipt");
   receipt.setAttribute("aria-live", "polite");
-  const status: PhoneState = { state: remote ? "ready" : "waiting", message: "Проверяю подключение…", url: remoteBase };
+  let status: PhoneState = {state:"waiting",message:"Проверяю вход через бота…"};
   const devicesBox = el("div", "devices");
-  const qrOut = el("div", "qr-out");
-  qrOut.hidden = true;
   const drawDevices = async () => {
     try {
-      const rows = await api<Array<{id: string; name: string; created: string}>>("/pair/devices");
+      const rows = await api<Array<{id:string;name:string;created:string}>>("/pair/devices");
       devicesBox.replaceChildren();
       if (!rows.length) return;
       devicesBox.append(el("p", "field-label", "Подключённые устройства"));
@@ -1351,110 +1343,51 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
         }));
         devicesBox.append(row);
       }
-    } catch { /* state row below shows connection errors */ }
+    } catch { /* existing paired devices stay revocable through the channel */ }
   };
-  let busy = false;
-  let qrDialog: HTMLDialogElement | null = null;
-  let qrExpires = 0;
-  const closeQR = () => { qrDialog?.close(); qrDialog = null; };
-  const qrBtn = button("Показать QR", "quiet", async () => {
-    busy = true;
-    qrBtn.disabled = true;
-    qrOut.hidden = false;
-    qrOut.textContent = "Создаю код подключения…";
-    try {
-      const pair = await post<{path:string; url?:string; expires_in?:number; uses?:number}>("/pair/new", {});
-      const expiresAt = Date.now() + (pair.expires_in || 600) * 1000;
-      const base = remote ? (cfg.base || remoteBase) : pair.url;
-      if (!base) throw new Error("Защищённый адрес ещё не готов. Дождись подключения и повтори.");
-      const link = base.replace(/\/+$/, "") + pair.path;
-      const svg = await qrSvg(link);
-      if (!cardNode.isConnected) return;
-      if (Date.now() >= expiresAt || (remote && base !== (cfg.base || remoteBase)) || (!remote && (status.state !== "ready" ||
-          (status.url || "").replace(/\/+$/, "") !== base.replace(/\/+$/, "")))) {
-        throw new Error("Подключение изменилось во время создания кода. Покажи QR заново.");
-      }
-      closeQR();
-      const modal = paperDialog("Подключить телефон", true);
-      qrDialog = modal.dialog;
-      qrExpires = expiresAt;
-      modal.body.innerHTML = `<div class="qr-pair"><div class="qr">${svg}</div><div class="qr-text">
-        <p><b>Из любой сети.</b> Открой камеру телефона и наведи на код.</p>
-        <p>Ссылка живёт ${Math.ceil((pair.expires_in || 600) / 60)} мин. и допускает подключений: ${pair.uses || 3}.</p>
-        <p class="mono qr-url">${esc(link)}</p></div></div>
-        <p class="field-hint">Для следующего входа открой кнопку в Telegram-боте или покажи свежий QR здесь. Автоматический HTTPS-адрес может измениться после перезапуска подключения.</p>`;
-      qrOut.textContent = "Код показан в отдельном окне. Если он устареет, создай новый.";
-      void drawDevices();
-    } catch (e) {
-      const error = humanError(e);
-      qrOut.replaceChildren(el("p", "receipt err", "QR не создан: " + (error.detail || error.text)));
-    } finally { busy = false; sync(); }
-  });
-  const retry = button("Повторить подключение", "quiet", async () => {
+  const retry = button("Обновить подключение", "quiet", async () => {
     await post("/api/phone/retry", {}).catch(e => toast(humanError(e).text));
     void refresh();
   });
-  const botLink = el("a", "btn btn-quiet", "Открыть бота");
+  const botLink = el("a", "btn btn-quiet", "Открыть своего бота");
   botLink.target = "_blank";
   botLink.rel = "noopener noreferrer";
   botLink.hidden = true;
   function sync() {
-    if(!remote)hint.textContent=draft.phone?.mode==='stable'
-      ? 'Постоянный адрес использует уже настроенный прокси или туннель к этому компьютеру. Он должен запускаться самостоятельно. Hélène проверяет адрес перед выдачей QR; временный Cloudflare-туннель в этом режиме выключен.'
-      : 'Hélène сама открывает защищённый HTTPS-доступ. Сервер и настройка роутера не нужны. После следующего обновления открой на телефоне новую ссылку из Telegram или отсканируй свежий QR-код. Временный адрес может измениться и при перезапуске.';
     const saved = remote || (savedEnabled && ['automatic','stable'].includes(savedMode) && savedMode===draft.phone?.mode);
     const on = remote || !!draft.phone?.enabled;
     receipt.textContent = !on ? "Подключение выключено. Нажми «Сохранить», чтобы применить." : !saved
-      ? draft.phone?.mode==='stable'?'Нажми «Сохранить» — Hélène проверит настроенный постоянный адрес.':'Нажми «Сохранить» — Hélène подготовит HTTPS-подключение сама.' : status.message;
+      ? "Нажми «Сохранить» — Hélène подготовит вход через бота." : status.message;
     receipt.classList.toggle("err", status.state === "error" || status.state === "retry");
-    qrBtn.disabled = busy || !on || !saved || status.state !== "ready";
-    retry.hidden = remote || !saved || !on || status.state === "ready";
-    botLink.hidden = !status.bot_url || status.telegram !== "ready";
-    if (status.bot_url) botLink.href = status.bot_url;
-    if (!on || status.state !== "ready") qrOut.hidden = true;
-    if (!on || status.state !== "ready") closeQR();
+    retry.hidden = !saved || !on;
+    const validBot = /^https:\/\/t\.me\/[A-Za-z0-9_]+(?:\?start=helene)?$/.test(status.bot_url || '');
+    botLink.hidden = !on || !saved || status.telegram !== "ready" || !validBot;
+    if (validBot) botLink.href = status.bot_url!;
   }
   async function refresh() {
-    if (remote || !savedEnabled || !['automatic','stable'].includes(savedMode)) { sync(); return; }
-    try {
-      const fresh = await api<PhoneState>("/api/phone");
-      if (status.url && status.url !== fresh.url) { qrOut.replaceChildren(); closeQR(); }
-      Object.assign(status, fresh);
-    } catch (e) {
-      const error = humanError(e);
-      Object.assign(status, {state:"error", url:"", message:error.detail || error.text});
-    }
+    if (!remote && (!savedEnabled || !['automatic','stable'].includes(savedMode))) { sync(); return; }
+    try { status = await api<PhoneState>("/api/phone"); }
+    catch (e) { const error=humanError(e); status={state:"error",message:error.detail || error.text}; }
     sync();
   }
-  if (!remote&&opts.showToggle!==false) phone.append(toggle("Подключать телефон и миниапп Telegram", !!draft.phone.enabled, v => {
-    draft.phone!.enabled = v;
-    sync();
-  }));
-  if(!remote){
-    const route=document.createElement('select');route.setAttribute('aria-label','Адрес телефона');
-    for(const [value,label] of [['automatic','Автоматический временный адрес'],['stable','Постоянный HTTPS-адрес']]){const option=document.createElement('option');option.value=value;option.textContent=label;route.append(option)}
+  if (!remote && opts.showToggle!==false) phone.append(toggle("Подключать Mini App Telegram", !!draft.phone.enabled, v => { draft.phone!.enabled=v;sync(); }));
+  if(!remote) {
+    const route=document.createElement('select');route.setAttribute('aria-label','Подключение Mini App');
+    for(const [value,label] of [['automatic','Автоматически через Hélène'],['stable','Постоянный HTTPS-сервер']]) {
+      const option=document.createElement('option');option.value=value;option.textContent=label;route.append(option);
+    }
     route.value=draft.phone.mode || 'automatic';
-    const fixed=field('Постоянный HTTPS-адрес',draft.phone.external || '',value=>{draft.phone!.external=value.trim()},{placeholder:'https://…',hint:'Уже настроенный адрес прокси или туннеля к этому компьютеру. Он сохраняется при обновлении.'});
+    const fixed=field('Постоянный HTTPS-адрес',draft.phone.external || '',value=>{draft.phone!.external=value.trim()},
+      {placeholder:'https://…',hint:'Адрес уже настроенного сервера. Hélène проверяет его и обновляет вход в боте автоматически.'});
     fixed.hidden=route.value!=='stable';
     route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;fixed.hidden=route.value!=='stable';sync()});
     phone.append(route,fixed);
   }
-  phone.append(hint, receipt);
-  const actions = el("div", "actions");
-  actions.append(qrBtn, botLink, retry);
-  phone.append(actions, qrOut, devicesBox);
-  void refresh();
-  void drawDevices();
-  const cardNode = card("Телефон", phone);
-  const poll = () => {
-    if (!cardNode.isConnected) { closeQR(); return; }
-    if (remote && status.url !== (cfg.base || remoteBase)) {
-      status.url=cfg.base||remoteBase;closeQR();qrOut.replaceChildren();
-    }
-    if (qrDialog && Date.now() >= qrExpires) { closeQR(); qrOut.textContent = "Время кода истекло. Нажми «Показать QR», чтобы создать новый."; }
-    if (!remote) void refresh();
-    setTimeout(poll, 2000);
-  };
-  setTimeout(poll, 2000);
+  phone.append(hint,receipt);
+  const actions=el('div','actions');actions.append(botLink,retry);phone.append(actions,devicesBox);
+  const cardNode=card('Mini App Telegram',phone);
+  void refresh();void drawDevices();
+  const poll=()=>{if(!cardNode.isConnected)return;void refresh();setTimeout(poll,2000)};
+  setTimeout(poll,2000);
   return cardNode;
 }

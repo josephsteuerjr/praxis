@@ -330,10 +330,12 @@ def _specs(config: Path, *, session_host: bool = False,
     # XTTS is a sibling owned by this same process tree, not an agent-spawned
     # model thread or a second daemon outside Stop/owner-death custody.
     voice_cfg = cfg.get("voice") or {}
-    if isinstance(voice_cfg, dict) and voice_cfg.get("speak") is True:
+    if (isinstance(voice_cfg, dict) and voice_cfg.get("speak") is True
+            and str(voice_cfg.get('voice') or 'xtts') == 'xtts'):
         install_base = base if agent_id == BASE_ID else base.parent.parent
         speech_python = runtime_for(install_base) / ("python.exe" if os.name == "nt" else "bin/python3")
-        model_home = tree / "models/xtts"
+        from localharness.component_store import model_path
+        model_home = model_path(tree, 'xtts')
         # Service code belongs to the application, not the agent's deliberately
         # preserved/maybe older authored tree. No fallback into cfg.code.
         worker = Path(__file__).resolve().with_name('speech_worker.py')

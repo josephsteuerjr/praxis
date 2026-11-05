@@ -22,7 +22,22 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
-## Included in 2.3.0
+## Included in 2.4.0
+
+- Independent Fish speech for local agents, alongside XTTS, with private keys,
+  explicit voice/model selection and durable paid-preview recovery.
+- Persistent optional voice components and model files, shared across program
+  versions; personal samples stay with the agent and survive migration.
+- Fullscreen Telegram Mini App access through your own bot, with the current
+  tunnel address refreshed automatically. The temporary-address PWA flow is retired.
+- Restored desktop-to-VPS transfer with SSH host verification, resumable import,
+  persistent Stop and guarded recovery.
+- Two explicit source-update cards, verified private configuration writes and
+  aligned light/dark forms at desktop and phone widths.
+
+Read the [2.4.0 changes and limits](desk/docs/RELEASE-2.4.0.md).
+
+## The 2.3 desktop foundation
 
 The stable release collects the 2.3 candidate work across the desktop, the agent
 runtime and the update system:
@@ -44,7 +59,7 @@ runtime and the update system:
   native Cocoa and Qt/X11 windows and explicit package/source evidence.
 
 Read the [complete 2.3.0 feature and validation notes](desk/docs/RELEASE-2.3.0.md),
-or [download the stable release](https://github.com/josephsteuerjr/praxis/releases/tag/v2.3.0).
+or [download 2.3.0](https://github.com/josephsteuerjr/praxis/releases/tag/v2.3.0).
 
 ## Your agent, your files
 
@@ -124,11 +139,12 @@ with the provider. The standalone [Praxis relay](https://github.com/josephsteuer
 is distributed separately.
 
 Telegram supports a bot connection or a separate MTProto account. Their
-capabilities follow the account's actual rights. Phone and browser access need
-a configured connection to the host; downloading the desktop does not supply a
-public server or tunnel.
+capabilities follow the account's actual rights. The Mini App opens through the
+bot at the host's current tunnel address; the host must remain online, or the
+agent can be transferred to a supported VPS.
 
 Whisper and XTTS can run locally when their optional components are installed.
+Fish is an alternative synthesis provider using your own Fish API access.
 CPU speech synthesis can take time. XTTS weights use the Coqui Public Model
 License, including its non-commercial conditions. Consult the bundled licenses
 and third-party notices.

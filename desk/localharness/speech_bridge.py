@@ -7,6 +7,7 @@ agent's own privacy/guard/outbox boundary; this adapter never sends a message.
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 from . import essential_backup, speech_client
 
@@ -19,7 +20,9 @@ def install(agent, tree: Path, config_path: Path, *, boundary, owner):
         raise RuntimeError('Authored speech staging contract unavailable: ' + ', '.join(missing))
     tree, config_path = Path(tree), Path(config_path)
     def configuration():
-        return essential_backup.load(config_path)
+        value = essential_backup.load(config_path)
+        value['_speech_epoch'] = config_path.stat().st_mtime_ns
+        return value
 
     def speak(text: str, caption: str = '') -> str:
         if agent._TURN_CHANNEL.get() is None or agent._TURN_OUTBOUND.get() is None:
@@ -33,8 +36,12 @@ def install(agent, tree: Path, config_path: Path, *, boundary, owner):
             return state.get('status') != 'running' or boundary.cancelled(state)
         audio = None
         try:
+            execution = getattr(agent, 'current_tool_execution', lambda: None)() or {}
+            call_id = execution.get('call_id')
+            identity = (hashlib.sha256((run_id + ':' + str(call_id)).encode()).hexdigest()[:32]
+                        if run_id and call_id else None)
             audio = speech_client.synthesize(text, tree, tree / 'media/tts',
-                                            configuration=configuration, stopped=stopped)
+                                            configuration=configuration, stopped=stopped, request_id=identity)
             # Same locks/order as the edition's cancellation/delivery consumer.
             # Pause winning first suppresses staging. Already admitted staging
             # completes before cancellation is acknowledged; actual delivery is
@@ -77,4 +84,4 @@ def install(agent, tree: Path, config_path: Path, *, boundary, owner):
     agent.tool_speak = speak
     if isinstance(getattr(agent, 'TOOL_IMPL', None), dict):
         agent.TOOL_IMPL['speak'] = speak
-    return {'installed': True, 'backend': 'application-xtts', 'authored_files_changed': False}
+    return {'installed': True, 'backend': 'application-speech', 'authored_files_changed': False}

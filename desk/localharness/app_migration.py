@@ -27,19 +27,29 @@ def preserve_source(source: Path, destination: Path, progress=None, *, source_on
     """
     if not source.is_dir():
         raise FileNotFoundError(source)
+    from .component_store import preserve_models
+    # Pin the source first; its tiny marker is copied with the agent. Do not
+    # precreate destination: git clone/copytree require an absent directory.
+    pinned_models = {row['root'] for row in preserve_models(source, source)} if not source_only else set()
     # An OS lease describes a running generation, not the agent's durable
     # state. A copy of `active` would falsely claim ownership in the new tree.
     # Old records remain in the old installation for diagnosis; no source,
     # memory, Git index or owner Stop/pause record is removed.
     ephemeral = {'.desktop-owner.lock', '.python-desktop-status'}
     def ignore(directory, names):
+        relative_dir = Path(directory).relative_to(source)
+        model_names = [n for n in names if (relative_dir/n).as_posix() in pinned_models]
+        if not source_only and Path(directory).name == 'models':
+            from .component_store import export_references
+            refs = export_references(Path(directory).parent)['pins']
+            model_names += [n for n in names if 'models/'+n in refs]
         if source_only:
             from .source_merge import allowed
             relative = Path(directory).relative_to(source)
             if '.git' in relative.parts:
                 return []
             return [n for n in names if n != '.git' and not allowed((relative / n).as_posix())]
-        return [n for n in names if n in ephemeral or n.startswith(('.python-desktop-status.', '.python-window-'))]
+        return model_names + [n for n in names if n in ephemeral or n.startswith(('.python-desktop-status.', '.python-window-'))]
     from .parallel_files import copytree
     copied = 0
     progress_lock=threading.Lock()
@@ -47,6 +57,10 @@ def preserve_source(source: Path, destination: Path, progress=None, *, source_on
         nonlocal copied
         path=Path(src)
         relative=path.relative_to(source)
+        if path.parts[-4:] == ('memory','.secrets','fish','api-key'):
+            from .fish_speech import _private
+            _private(Path(dst),path.read_bytes())
+            return str(dst)
         # Model checkpoints are immutable inputs, not authored memory/code.
         # Same-volume links keep both names valid after legacy retirement and
         # avoid another multi-gigabyte copy. Replacement downloads use rename.
@@ -151,15 +165,21 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
     into the selected old owner's message queues or executable source.
     """
     from .app_components import digest
+    from .component_store import preserve_models
+    pinned = {row['root'] for row in preserve_models(source, destination)}
+    def model_item(item):
+        relative = item.relative_to(source).as_posix()
+        return any(relative == root or relative.startswith(root + '/') for root in pinned)
     ephemeral={'.desktop-owner.lock','.python-desktop-status'}
     def linked(path):return path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction())
     def safe_parent(path,base):
         for relative in path.relative_to(base).parents:
             if linked(base/relative):raise ValueError('Retained copy contains a directory link; inspect it before resuming')
     def ignored(directory,names):
-        return [n for n in names if Path(directory)==source and (n in ephemeral or n.startswith('.python-desktop-status.'))]
+        return [n for n in names if model_item(Path(directory)/n) or (Path(directory)==source and (n in ephemeral or n.startswith('.python-desktop-status.')))]
     wanted={p.relative_to(source) for p in source.rglob('*')}
     for item in source.rglob('*'):
+        if model_item(item):continue
         if item.is_dir() and not linked(item) and linked(destination/item.relative_to(source)):
             raise ValueError('Retained copy contains a directory link; inspect it before resuming')
     for item in sorted(destination.rglob('*'),key=lambda p:len(p.parts),reverse=True):
@@ -180,6 +200,10 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
         src,dst=Path(src),Path(dst)
         safe_parent(dst,destination)
         expected=digest(src)
+        if src.parts[-4:] == ('memory','.secrets','fish','api-key'):
+            from .fish_speech import _private
+            _private(dst,src.read_bytes());copied+=1
+            return str(dst)
         if dst.is_file() and not dst.is_symlink() and src.stat().st_size==dst.stat().st_size and digest(dst)==expected:
             reused+=1
         else:
@@ -193,6 +217,7 @@ def refresh_preserved(source:Path,destination:Path,delta:Path,progress=None):
         return str(dst)
     # copytree recreates symlinks itself; retain the existing link first.
     for item in source.rglob('*'):
+        if model_item(item):continue
         if item.is_symlink():
             target=destination/item.relative_to(source)
             if target.is_symlink():
@@ -301,6 +326,11 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
             if template.read_bytes() != fresh_template:
                 raise ValueError('Fresh destination template changed during backup')
             template.unlink()  # the existing preserving journal now owns recovery
+        from .component_store import preserve_models
+        for row in found['agents']:
+            agent_tree = Path(row['tree'])
+            if selected(agent_tree) != agent_tree:
+                preserve_models(agent_tree, agent_tree)
         for index,(source,destination) in enumerate(relocated.items()):
             if destination.exists():
                 refresh_preserved(source,destination,data_home/operation/('previous-delta-'+str(index)),progress)
@@ -316,6 +346,15 @@ def prepare(old_root: Path, new_root: Path, data_home: Path, *, old_service_stop
             destination = selected(source)
             value = dict(row["value"])
             value["tree"] = str(destination)
+            voice=value.get('voice')
+            if isinstance(voice,dict) and voice.get('tts_reference'):
+                from .component_store import reference_path
+                reference=reference_path(source,voice['tts_reference'],program=Path(row['config']).parent)
+                revised=reference_path(destination,selected(reference))
+                if revised.is_relative_to(old_root) and reference.is_file():
+                    from .carry_voice import retain_sample
+                    revised=retain_sample(destination,reference)
+                value['voice']=dict(voice,tts_reference=str(revised))
             if had_service:
                 value["installed"] = dict(value.get("installed") or {}, service=False)
             # Match the runner's actual default, not a guessed stock tree.

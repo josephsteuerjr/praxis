@@ -138,7 +138,12 @@ def desk_build(root: Path | None = None) -> dict:
         return _DESK_CACHE["value"]
     raw = _load_json(path)
     value: dict = {}
-    if isinstance(raw, dict) and raw.get("product") == "desk":
+    modern = (isinstance(raw,dict) and 'product' not in raw
+              and isinstance(raw.get('files'),dict) and raw.get('files')
+              and isinstance(raw.get('version'),str)
+              and re.fullmatch(r'\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?',raw['version'])
+              and all(isinstance(raw.get(key),str) and re.fullmatch('[a-f0-9]{64}',raw[key]) for key in ('digest','static')))
+    if isinstance(raw, dict) and (raw.get("product") == "desk" or modern):
         value = {"version": str(raw.get("version") or ""),
                  "flavor": str(raw.get("flavor") or ""),
                  # Двенадцати знаков хватает, чтобы сверить выкладку с

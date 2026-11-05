@@ -10,6 +10,8 @@ import prepare_whisper as whisper
 class Offline(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+  from localharness import component_store
+  selected=patch.object(component_store,'root',return_value=Path(self.tmp.name)/'persistent-store');selected.start();self.addCleanup(selected.stop)
   self.root=Path(self.tmp.name)/'Helene';(self.root/'app').mkdir(parents=True)
   b=io.BytesIO()
   with zipfile.ZipFile(b,'w') as z:z.writestr('Helene/voice/site-packages/probe.py','VALUE=1')
@@ -34,7 +36,8 @@ class Offline(unittest.TestCase):
   cache=cd.cache_dir(self.root)/cd.cache_name(self.row);cache.write_bytes(b'broken')
   with patch.object(python_updates,'_download',side_effect=AssertionError('network')):
    cd.prepare(self.root,['whisper'],offline=source)
-   self.assertEqual((self.root/'voice/site-packages/probe.py').read_text(),'VALUE=1')
+   from localharness.component_store import path
+   self.assertEqual((path(self.root,'voice')/'site-packages/probe.py').read_text(),'VALUE=1')
    self.assertTrue(list(cache.parent.glob(cache.name+'.invalid-*')))
    self.assertTrue(cd.fetch(self.root,self.manifest,['whisper'])[0]['reused'])
    cd.install(self.root,['whisper'])
@@ -44,7 +47,8 @@ class Offline(unittest.TestCase):
   source=self.root.parent/'extensions';source.mkdir();(source/'whisper.zip').write_bytes(self.data)
   marker=self.root/'helene.json';marker.write_text('{"keep":"selected profile"}')
   cd.prepare(self.root,['whisper'],offline=source)
-  self.assertEqual((self.root/'voice/site-packages/probe.py').read_text(),'VALUE=1')
+  from localharness.component_store import path
+  self.assertEqual((path(self.root,'voice')/'site-packages/probe.py').read_text(),'VALUE=1')
   self.assertEqual(marker.read_text(),'{"keep":"selected profile"}')
   self.assertFalse((self.root.parent/'Helene').exists())
 
@@ -61,7 +65,8 @@ class Offline(unittest.TestCase):
    target=cd.cache_dir(self.root)/cd.cache_name(self.row);target.write_bytes(self.data)
    result=voice.fetch_engine(self.root)
    self.assertEqual(result['sha256'],self.row['sha256'])
-   self.assertEqual((self.root/'voice/site-packages/probe.py').read_text(),'VALUE=1')
+   from localharness.component_store import path
+   self.assertEqual((path(self.root,'voice')/'site-packages/probe.py').read_text(),'VALUE=1')
    self.assertEqual(target.read_bytes(),self.data)
  def test_voice_never_guesses_url_for_offline_map(self):
   with patch.dict('os.environ',{},clear=True):self.assertEqual(voice._pack_url(self.root,self.row),'')

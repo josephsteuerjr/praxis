@@ -1,0 +1,15 @@
+.source-mode-cards{border:0;padding:0;margin:0;min-width:0}
+.source-mode-cards legend{padding:0;margin-bottom:10px}
+.source-mode-cards .source-mode-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.source-mode-card{min-width:0;gap:12px;padding:16px;cursor:pointer;color:var(--ink);background:var(--paper);height:100%}
+.source-mode-heading{display:flex;align-items:center;gap:10px}
+.source-mode-heading input{margin:0;accent-color:var(--accent);flex:0 0 auto}
+.source-mode-card .choice-title{font-size:15px;line-height:1.4}
+.source-mode-card .choice-text{color:var(--ink-2);flex:1}
+.source-mode-state{font:500 12px/1.4 var(--sans);color:var(--ink-3)}
+.source-mode-card[data-selected=true]{border-color:var(--accent);background:var(--accent-soft)}
+.source-mode-card[data-selected=true] .source-mode-state{color:var(--accent)}
+.source-mode-card:focus-within{outline:2px solid var(--accent);outline-offset:3px}
+.source-mode-card:has(input:disabled){opacity:.6;cursor:default}
+.source-mode-cards:disabled .source-mode-card{cursor:default}
+@media(max-width:560px){#view .settings .source-mode-cards .choice.source-mode-grid{grid-template-columns:minmax(0,1fr)}}

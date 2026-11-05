@@ -1,12 +1,11 @@
 import { defineConfig } from "vite";
-import { devOverride, stampServiceWorker } from "../ui-kit/vite-dev";
+import { devOverride } from "../ui-kit/vite-dev";
 
-// PWA для телефона. Отдаётся deskapp по пути /m/ с того же origin, что и API:
-// один канал, один ключ устройства. ui-kit лежит выше корня — fs.allow.
+// Compatibility shell for /m/ bookmarks. The bot provides the current entry.
 export default defineConfig({
   base: "/m/",
   clearScreen: false,
-  plugins: [devOverride(), stampServiceWorker()],
+  plugins: [devOverride()],
   server: {
     port: 5175,
     strictPort: true,

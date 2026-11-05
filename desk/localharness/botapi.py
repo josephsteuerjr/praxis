@@ -929,6 +929,8 @@ class BotTransport:
         word = str(message.get("text") or "").strip()
         if re.fullmatch(r"/(pause|resume)(?:@[A-Za-z0-9_]+)?", word, re.I):
             return False
+        if re.fullmatch(r'/(app|start)(?:@[A-Za-z0-9_]+)?(?:\s+helene)?', word, re.I):
+            return False
         command = word.split(maxsplit=1)
         panic = re.fullmatch(r"/panic(?:@([A-Za-z0-9_]+))?", command[0], re.I) if command else None
         if panic and (not panic[1] or panic[1].lower() == str(self.username).lower()):
@@ -1018,6 +1020,9 @@ class BotTransport:
         if outgoing or edited or update.get("_history"):
             return
         sender_id = str(sender.get("id") or "")
+        import phone_entry
+        if phone_entry.handle(self, update, message):
+            return
         autonomous = re.fullmatch(r'/(pause|resume)(?:@([A-Za-z0-9_]+))?', str(message.get('text') or '').strip(), re.I)
         if autonomous:
             # Never replay a control from history/reconnection or accept another

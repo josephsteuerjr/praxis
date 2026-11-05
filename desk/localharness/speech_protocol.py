@@ -16,8 +16,8 @@ import uuid
 def selection(value,tree):
     reference=str(value.get('reference') or '').strip()
     if reference:
-        path=Path(reference).expanduser()
-        reference=str((path if path.is_absolute() else Path(tree)/path).resolve())
+        from localharness.component_store import reference_path
+        reference=str(reference_path(tree,reference).resolve())
     return {'speaker':str(value.get('speaker') or 'Ana Florence'),
         'language':str(value.get('language') or 'ru'),'reference':reference}
 

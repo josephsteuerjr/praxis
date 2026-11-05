@@ -159,7 +159,8 @@ def deploy(args, man: dict, blob: bytes) -> int:
 
     password = os.environ.get("PRAXIS_DEPLOY_PASSWORD") or None
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
     client.connect(args.host, username=args.user, password=password, timeout=30)
 
     def run(cmd: str, timeout: int = 120) -> tuple[int, str, str]:

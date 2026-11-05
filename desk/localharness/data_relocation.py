@@ -153,7 +153,20 @@ def prepare(transfer,receipt,progress,cancelled=None):
         if _signature(source)!=sig:raise RuntimeError('Source data changed during transfer')
         digest=hashlib.sha256();part=target.with_name('.helene-transfer-'+transfer['id']+'-'+uuid.uuid4().hex)
         try:
-            if target.exists():
+            if source.parts[-4:] == ('memory','.secrets','fish','api-key'):
+                from .fish_speech import _private
+                if not 0 < sig[2] <= 4096:raise ValueError('Invalid private Fish key file')
+                content=source.read_bytes();digest.update(content)
+                if target.exists():
+                    with target.open('rb') as stream:
+                        if hashlib.file_digest(stream,'sha256').digest()!=digest.digest():
+                            raise RuntimeError('Private data destination differs; original retained')
+                    _private(target,content)
+                else:
+                    _private(part,content)
+                    _publish_copy(part,target)
+                if _signature(source)!=sig:raise RuntimeError('Source data changed during transfer')
+            elif target.exists():
                 with source.open('rb') as stream:
                     while chunk:=stream.read(1024*1024):_check(cancelled);digest.update(chunk)
             else:

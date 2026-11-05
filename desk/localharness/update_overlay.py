@@ -46,9 +46,12 @@ def _destination(target, relative):
 
 def _program_files(source):
     """The running setup window's browser profile is never program payload."""
+    from .component_store import export_references
+    pinned=set(export_references(source)['pins'])
     for directory,dirs,names in os.walk(source,followlinks=False):
         here=Path(directory)
-        dirs[:]=sorted(d for d in dirs if d not in {'.helene','.migration-webview','.webview','__pycache__'})
+        dirs[:]=sorted(d for d in dirs if d not in {'.helene','.migration-webview','.webview','__pycache__'}
+                      and (here/d).relative_to(source).as_posix() not in pinned)
         for name in [*dirs,*sorted(names)]:
             item=here/name
             if item.name.startswith('.python-') or item.suffix=='.pyc':continue

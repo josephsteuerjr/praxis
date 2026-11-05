@@ -3450,11 +3450,48 @@ async fn owner_control(action: String) -> Result<String, String> {
         .await.map_err(|e| e.to_string())?
 }
 
+fn transfer_resume_allowed(receipt: &std::path::Path) -> bool {
+    match std::fs::symlink_metadata(receipt) {
+        Err(error) => return error.kind() == std::io::ErrorKind::NotFound,
+        Ok(info) if !info.file_type().is_file() => return false,
+        _ => {}
+    }
+    std::fs::read(receipt).ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .as_ref().and_then(|row| row.get("phase")).and_then(|value| value.as_str())
+        == Some("server-stopped")
+}
+
+#[test]
+fn transfer_resume_requires_a_confirmed_retirement_or_no_transfer() {
+    let root = std::env::temp_dir().join(format!("helene-transfer-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("receipt.json");
+    assert!(transfer_resume_allowed(&path));
+    std::fs::write(&path, b"broken receipt").unwrap();
+    assert!(!transfer_resume_allowed(&path));
+    std::fs::write(&path, br#"{"phase":"complete"}"#).unwrap();
+    assert!(!transfer_resume_allowed(&path));
+    std::fs::write(&path, br#"{"phase":"server-stopped"}"#).unwrap();
+    assert!(transfer_resume_allowed(&path));
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(!transfer_resume_allowed(&path));
+    std::fs::remove_dir(&path).unwrap(); std::fs::remove_dir(&root).unwrap();
+}
+
 fn owner_control_blocking(action: String) -> Result<String, String> {
     if action != "panic" && action != "resume" { return Err("panic | resume".into()); }
     let _resume_gate = if action == "resume" {
         Some(RESUME_TRANSFER_GATE.try_lock().map_err(|_| "Другая команда запуска или переноса ещё выполняется".to_string())?)
     } else { None };
+    if action == "resume" {
+        let receipt = current_tree().join("memory/.state/server-transfer.json");
+        if !transfer_resume_allowed(&receipt) {
+            return Err("Сохранён перенос на VPS. Сначала останови серверную копию через восстановление переноса; местный запуск создаст второго агента.".into());
+        }
+    }
     if action=="resume" && SERVER_TRANSFER_BUSY.load(std::sync::atomic::Ordering::SeqCst) {
         return Err("Перенос на сервер ещё идёт. Дождись его результата, чтобы не запустить второго агента.".into());
     }
@@ -9475,16 +9512,16 @@ static SERVER_TRANSFER_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::
 static RESUME_TRANSFER_GATE: Mutex<()> = Mutex::new(());
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn server_transfer(action: String, request: String) -> Result<serde_json::Value, String> {
-    if !["probe", "run", "locate", "status", "telegram-check"].contains(&action.as_str()) || request.len() > 32768 {
+    if !["probe", "run", "recover-local", "locate", "status", "telegram-check"].contains(&action.as_str()) || request.len() > 32768 {
         return Err("неверный запрос подключения сервера".into());
     }
     let base = install_root();
     let config = current_config_path();
-    let moving = action == "run";
+    let moving = action == "run" || action == "recover-local";
     let transfer_gate = if moving {
         Some(RESUME_TRANSFER_GATE.try_lock().map_err(|_| "Команда возобновления ещё выполняется".to_string())?)
     } else { None };
-    if action == "run" {
+    if moving {
         let input:serde_json::Value=serde_json::from_str(&request).map_err(|_|"неверные данные подключения".to_string())?;
         if input.get("expected_config").and_then(|v|v.as_str())!=Some(config.to_string_lossy().as_ref()) {
             return Err("В окне выбран другой агент. Вернись к переносимому агенту и повтори.".into());

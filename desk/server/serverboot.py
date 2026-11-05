@@ -380,6 +380,8 @@ def relay_child(base: Path, cfg: dict, tree: Path, env: dict, *, check_port: boo
         return None
     exe = Path((os.environ.get("HELENE_RELAY") or "").strip() or (base / RELAY_NAME))
     if not exe.is_file():
+        exe=base/"relay-product/praxis-relay-headless"
+    if not exe.is_file():
         print(f"[serverboot] ⚠ relay.enabled, но реле рядом нет ({exe}) — агент с подпиской "
               "ChatGPT будет нем. Собери Linux-бинарь реле в поставку "
               "(installer/build_dist.py) и пересобери образ", flush=True)
@@ -426,11 +428,16 @@ def xtts_child(base: Path, cfg: dict, tree: Path, env: dict,
     voice = cfg.get("voice") or {}
     if not isinstance(voice, dict) or voice.get("speak") is not True:
         return None
-    python = Path(env.get("HELENE_XTTS_PYTHON") or "/opt/helene-xtts/bin/python3")
     app = base / str(cfg.get("app") or "app/deskapp.py")
+    if str(voice.get('voice') or 'xtts') != 'xtts':return None
+    sys.path.insert(0,str(app.parent))
+    from localharness.xtts_install import runtime_for
+    from localharness.voice import voices_dir
+    from localharness.component_store import reference_path
+    python = Path(env.get("HELENE_XTTS_PYTHON") or (runtime_for(base)/"bin/python3"))
     worker = app.parent / "localharness/speech_worker.py"
     engine = worker.with_name("xtts_tts_worker.py")
-    model = tree / "models" / "xtts"
+    model = voices_dir(tree)
     if not python.is_file() or not worker.is_file() or not engine.is_file() or not all(
             (model / name).is_file() for name in ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth")):
         print("[serverboot] XTTS включён, но Linux runtime, worker или модель не установлены; "
@@ -444,7 +451,7 @@ def xtts_child(base: Path, cfg: dict, tree: Path, env: dict,
     return Child("xtts", "XTTS", [str(python), "-u", str(worker), "--home",
                  str(tree / "memory/.state/xtts"), "--model", str(model), "--tree", str(tree), "--device",
                  str(voice.get("tts_device") or "cpu"), '--speaker', str(voice.get('tts_speaker') or 'Ana Florence'),
-                 '--language', str(voice.get('tts_language') or 'ru'), '--reference', str(voice.get('tts_reference') or '')],
+                 '--language', str(voice.get('tts_language') or 'ru'), '--reference', str(reference_path(tree, voice['tts_reference'])) if voice.get('tts_reference') else ''],
                  worker_env, tree, tree / "xtts.log",
                  user=user, group=group)
 
@@ -494,6 +501,10 @@ def main() -> int:
     else:
         print("[serverboot] ⚠ образ без пользователей helene/desk (или надзор не root) — агент "
               "работает под root, как до 1.2.5; пересобери образ из поставки 1.2.5+", flush=True)
+    sys.path.insert(0,str(app.parent))
+    os.environ['HELENE_SUPERVISOR'] = 'serverboot'
+    from localharness.server_components import prepare as prepare_components
+    prepare_components(base, tree)
     channel_env, runner_env = dict(env), dict(env)
     remote_controller = secrets.token_urlsafe(32)
     channel_env['HELENE_REMOTE_CONTROLLER_TOKEN'] = remote_controller
@@ -537,9 +548,7 @@ def main() -> int:
         print(f"[serverboot] ⚠ управление из окна недоступно: {exc}", flush=True)
 
     public = os.environ.get("HELENE_PUBLIC_URL", "").strip()
-    print("[serverboot] ключ окна для helene.json на ПК владельца:", flush=True)
-    print(json.dumps({"mode": "remote", "base": public or f"http://<хост>:{port}", "key": token},
-                     ensure_ascii=False), flush=True)
+    print("[serverboot] ключ окна хранится в data/.serverboot/desk-token; в журналы не выводится", flush=True)
     started_utc = _utc()
     stopping = False
 

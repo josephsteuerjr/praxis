@@ -8,18 +8,9 @@ setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
 import { setAnimationPlayer } from '../../ui-kit/paper-media';
 setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
 import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
+import { mountTelegramShell, type TelegramWebApp } from './telegram-shell';
 import { applyTheme, type Theme } from "../../ui-kit/dom";
 import { watchShellVersion } from "../../ui-kit/version";
-
-interface TelegramWebApp {
-  initData: string;
-  colorScheme: "light" | "dark";
-  ready(): void;
-  expand(): void;
-  onEvent(name: string, fn: () => void): void;
-  BackButton: { show(): void; hide(): void; onClick(fn: () => void): void };
-  initDataUnsafe?: { user?: { first_name?: string } };
-}
 
 declare global {
   interface Window {
@@ -30,22 +21,21 @@ declare global {
 }
 
 const tg = window.Telegram?.WebApp;
-const params = new URLSearchParams(location.search);
 // Приоритет: подстановка dev-сервера, потом config.js хостинга.
 const override = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG || undefined;
 const base = override?.base || "";
 const STORAGE = "frame.tg.device";
+if (!tg?.initData) remember(STORAGE, '');
 
-// Ключ прямо в адресе — только для проверки из браузера (?key=…).
-const directKey = params.get("key") || override?.key || "";
-if (directKey) remember(STORAGE, directKey);
+// initData is the only enrollment path. Strip legacy URL credentials before
+// any API traffic; public bot URLs never carry channel/device credentials.
+if (location.search || location.hash) history.replaceState(null, '', location.pathname);
 
 // WKWebView Telegram держит старую сборку по адресу кнопки — страница сама
 // сверяет сборку с сервером и перезагружается на новую.
 watchShellVersion();
 
-tg?.ready();
-tg?.expand();
+mountTelegramShell(tg);
 
 // Тема — от Telegram: пользователь выбирает её там, а не у нас.
 const theme = (): Theme => (tg ? (tg.colorScheme === "dark" ? "dark" : "light") : "system");
@@ -76,11 +66,11 @@ async function redeem(): Promise<{ result: Redeem; key?: string; agent?: string 
 function pairScreen(pair: Redeem | null): { title: string; text: string; retry: boolean } {
   switch (pair) {
     case "foreign":
-      return { title: "Кнопка ведёт на прежний канал", text: "На компьютере открой Знакомство → Телефон и Telegram и проверь подключение. После обновления HTTPS-адреса бот получит новую кнопку миниаппа.", retry: true };
+      return { title: "Открой свежую кнопку", text: "Вернись в своего бота и отправь /app или открой его меню. Hélène обновляет вход при смене адреса; кнопки в старых сообщениях сохраняют прежний адрес.", retry: true };
     case "closed":
       return { title: "Это не твой агент", text: "Мини-апп открывает переписку только владельцу: канал сверил подпись Telegram и id — и не совпало.", retry: false };
     case "offline":
-      return { title: "Нет связи", text: "Канал агента не отвечает. Попробуй через минуту.", retry: true };
+      return { title: "Нет связи", text: "Проверь, что Hélène запущена и подключена к интернету. Затем вернись в своего бота и открой меню или отправь /app для свежей кнопки.", retry: true };
     case "broke":
       return { title: "Канал ответил ошибкой", text: "Вход не удался на стороне канала. Попробуй ещё раз; если повторится — смотри журнал канала.", retry: true };
     case "none":
@@ -103,7 +93,8 @@ const app = mountPhone(document.getElementById("app")!, {
   },
   auth: {
     storageKey: STORAGE,
-    hasCredential: () => !!tg?.initData && !directKey,
+    requireCredential: true,
+    hasCredential: () => !!tg?.initData,
     redeem,
     pairScreen,
   },

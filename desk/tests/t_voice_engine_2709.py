@@ -162,6 +162,9 @@ class Engine(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         base = Path(self.tmp.name)
+        from localharness import component_store
+        store_patch=patch.object(component_store,'root',return_value=base/'store')
+        store_patch.start();self.addCleanup(store_patch.stop)
         site = base / "runtime" / "Lib" / "site-packages"
         stage = base / "voice-stage" / "site-packages"
         fake_runtime(site)
@@ -229,7 +232,7 @@ class Engine(unittest.TestCase):
         with self.assertRaises(SystemExit):
             voice.fetch_engine()
         self.assertFalse(voice.engine_site().exists())
-        self.assertEqual([p.name for p in voice.engine_home().iterdir()], [])
+        self.assertFalse(voice.engine_home().exists())
 
     def test_движок_другого_питона_не_ставится(self):
         stage = Path(self.tmp.name) / "voice-stage" / "site-packages"

@@ -3,12 +3,13 @@ from pathlib import Path
 import json,os,sys,tempfile,threading,types,unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from localharness import voice,component_downloads,xtts_install,component_install_job
+from localharness import voice,component_downloads,xtts_install,component_install_job,component_store
 
 class Downloads(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);base=Path(self.tmp.name)
   self.root=base/'Программа';self.root.mkdir();self.tree=base/'Profile'
+  self.enterContext(patch.object(component_store,'root',return_value=base/'store'))
   self.enterContext(patch.object(voice,'install_root',return_value=self.root))
  def prepared_bundle(self):
   p=self.root/'components/xtts/xtts-bundle.json';p.parent.mkdir(parents=True);p.write_text('{}')

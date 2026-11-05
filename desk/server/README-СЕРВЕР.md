@@ -1,5 +1,7 @@
 # Hélène на сервере: перенос агента и запуск в Docker
 
+Путь из приложения, сохранение Stop и восстановление после обрыва описаны в [инструкции переноса](ПЕРЕНОС-И-ВОССТАНОВЛЕНИЕ.md).
+
 ## Аварийный стоп
 
 Кнопка «Аварийный стоп» в телефонном приложении, owner-команда `/panic` в Telegram и инструмент агента `panic` сохраняют запрет в `data/.owner-stop/stop.json`. Надзор завершает агентские процессы; перезапуск или замена контейнера не снимает этот флаг. После остановки поднимается только канал управления.
@@ -136,7 +138,7 @@ cd /opt/helene
 HELENE_PUBLIC_URL=https://helene.example.com HELENE_HOSTS=helene.example.com \
 HELENE_MODELS=/opt/praxis-models \
 docker compose -f server/docker-compose.yml up -d --build
-docker logs helene | head -20     # строка ключа окна печатается при старте
+sudo cat data/.serverboot/desk-token  # приватный ключ окна; в журналы он не выводится
 ```
 
 По умолчанию проект и контейнер называются `helene`, исполнитель — `helene-updater`.
@@ -175,10 +177,12 @@ STT: контейнер получает те же `PRAXIS_STT_*`, что у П�
 
 XTTS необязателен: Piper больше не устанавливается как скрытая замена. Для речи
 нужен совместимый **Linux** runtime с `TTS`/torch в отдельной папке; задай её через
-`HELENE_XTTS_RUNTIME` (по умолчанию `server/xtts-runtime`). Compose монтирует runtime
-только на чтение в `/opt/helene-xtts`, а модель хранится в `data/models/xtts` вместе
+`HELENE_XTTS_RUNTIME` (по умолчанию `server/xtts-runtime`) и явно выбери
+`HELENE_XTTS_PYTHON=/opt/helene-xtts/bin/python3`. Без этого переопределения надзор
+использует штатный `runtime_for` установленного компонента. Compose монтирует внешний runtime
+только на чтение в `/opt/helene-xtts`, а модель разрешается штатным voice API (для прежней установки — `data/models/xtts`) вместе
 с её лицензией. Windows `python.exe` здесь не подходит. При `voice.speak: true`
-надзор запускает `tree/xtts_tts_worker.py` тем же владельцем, что и раннер, и
+надзор запускает принадлежащий приложению `app/localharness/speech_worker.py` тем же владельцем, что и раннер, и
 останавливает вместе с агентом. Без runtime/модели он сообщает о недоступности речи,
 не мешая тексту и не скачивая тяжёлые пакеты сам. Обновление сохраняет путь runtime,
 данные и модель. Работоспособность библиотек и синтеза проверяется на Linux отдельно.

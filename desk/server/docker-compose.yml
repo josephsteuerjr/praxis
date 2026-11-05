@@ -21,12 +21,14 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONUTF8=1
+      - XDG_DATA_HOME=/opt/helene/.local/share
+      - HELENE_COMPONENT_PROGRAM=/opt/helene
       # Публичный адрес канала для строки ключа окна (печатается при старте).
       - HELENE_PUBLIC_URL=${HELENE_PUBLIC_URL:-}
       # Host-заголовки, которые канал пускает сверх localhost/IP/*.ts.net —
       # имя, по которому окно и телефон приходят через Caddy.
       - HELENE_HOSTS=${HELENE_HOSTS:-}
-      - HELENE_XTTS_PYTHON=/opt/helene-xtts/bin/python3
+      - HELENE_XTTS_PYTHON=${HELENE_XTTS_PYTHON:-}
       - HELENE_HOST_BROKER_SOCKET=/run/helene-host/broker.sock
       # STT — та же коробка, что у Праксис (тома и модель ниже). Пусто в
       # HELENE_MODELS — модели нет, голосовые не расшифровываются, дерево
@@ -54,6 +56,10 @@ services:
       # версию; распаковка поставки поверх руками — затрёт их (README-СЕРВЕР, §3.2).
       - ../tree:/opt/helene/tree
       - ../app:/opt/helene/app
+      - ../relay-product:/opt/helene/relay-product:ro
+      - ../components:/opt/helene/components
+      - ../component-store:/opt/helene/.local/share/helene/component-store-v1
+      - ../component-state:/opt/helene/component-state
       # Модели тяжёлые и живут вне поставки; в контейнере только читаются.
       # На сервере автора это /opt/praxis-models (та же модель, что у Праксис).
       - ${HELENE_MODELS:-./models}:/models:ro

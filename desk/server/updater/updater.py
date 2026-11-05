@@ -121,7 +121,9 @@ from codecarry import (  # noqa: E402,F401
 
 #: Что остаётся на месте при подмене: данные агента, его конфиг и моя папка. Остальное —
 #: поставка, её меняем целиком (как «распаковать поверх» в README-СЕРВЕР).
-KEEP_IN_PLACE = frozenset({"data", "helene.json", ".updater"})
+KEEP_IN_PLACE = frozenset({"data", "helene.json", ".updater", "relay-product", ".host-access",
+    "components", "component-store", "component-state", ".helene-component-pins.json",
+    ".window-transfer.json", ".window-transfer-stopped", ".transfer-import", ".transfer-import.sha256", ".install.lock"})
 #: Чего из архива серверу не нужно: `runtime/` — встроенный Python для Windows (~590 МБ).
 #: Его не распаковываю и не трогаю — на сервере Python свой, в образе.
 SERVER_SKIP = frozenset({"runtime"})
@@ -627,8 +629,15 @@ def evaluate(probe: dict, info: dict, checks: list[str], version: str, before: d
             runner = _dict(state.get("runner"))
             at = _num(_dict(probe.get("reader")).get("at"))
             ours = born > 0 and at >= born
-            ok = runner.get("alive") is True and ours
-            note = ("жив" if ok else
+            stopped = probe.get("owner_stopped") is True
+            sup = _dict(probe.get("supervisor"))
+            children = sup.get("children") if isinstance(sup.get("children"), list) else []
+            fresh_sup = (born > 0 and iso_epoch(sup.get("started_utc", "")) >= born
+                         and 0 <= _num(probe.get("now"))-_num(sup.get("beat_epoch")) <= protocol.BEAT_STALE)
+            quiescent = bool(children) and any(c.get('id')=='channel' and c.get('alive') is True for c in children)
+            quiescent = quiescent and all(c.get('alive') is False for c in children if c.get('id')!='channel')
+            ok = (stopped and fresh_sup and quiescent) or (not stopped and runner.get("alive") is True and ours)
+            note = "Stop владельца сохранён; канал жив, агентские процессы остановлены" if stopped and ok else ("жив" if ok else
                     "квитанция раннера — от прежнего контейнера, новый ещё не отметился"
                     if runner.get("alive") is True else
                     f"не отвечает (возраст квитанции {_text(runner.get('age_s'), 20)})")
@@ -674,9 +683,12 @@ def doomed(probe: dict, info: dict) -> str:
     Записка надзора — только ЭТОГО контейнера: при откате в `data/` ещё лежит записка
     сломанной версии с её падениями, и по ней откат счёлся бы несостоявшимся.
     """
+    if info.get('restarting') is True and _num(info.get('restart_count'))>=FALLS_DOOMED:
+        return 'контейнер перезапускается раз за разом; рабочий канал не поднялся'
     sup = _dict(_dict(probe).get("supervisor"))
     if iso_epoch(sup.get("started_utc", "")) < iso_epoch(info.get("started_at", "")) - 1.0:
         return ""
+    if _dict(probe).get("owner_stopped") is True:return ""
     children = sup.get("children")
     for child in children if isinstance(children, list) else []:
         if not isinstance(child, dict) or child.get("id") != "runner":
@@ -786,14 +798,16 @@ def check_layout(root: Path, version: str) -> dict:
         raise UpdateError("поставка собрана неполной: "
                           + ", ".join(passport.get("partial_reason") or []))
     if (protocol.version_tuple(version) or ()) >= (1, 9, 2):
-        needed = ("helene-relay", "server/emergency_stop.py", "server/updater/codecarry.py",
+        needed = ("server/emergency_stop.py", "server/updater/codecarry.py",
                   "app/localharness/relay_network.py")
         missing = [rel for rel in needed if not (root / rel).is_file()]
         if missing:
             raise UpdateError(f"серверная поставка неполна: {', '.join(missing)}")
-        with (root / "helene-relay").open("rb") as relay:
-            if relay.read(4) != b"\x7fELF":
-                raise UpdateError("helene-relay — не Linux ELF-бинарь")
+        if (root / "helene-relay").is_file():
+            with (root / "helene-relay").open("rb") as relay:
+                if relay.read(4) != b"\x7fELF":raise UpdateError("helene-relay — не Linux ELF-бинарь")
+        elif not (root / 'app/localharness/standalone_relay.py').is_file():
+            raise UpdateError('Нет подготовщика закреплённого серверного реле')
     return {"version": version, "built_utc": str(passport.get("built_utc") or ""),
             "git": (passport.get("git") or {}).get("desk", ""),
             "relay_linux": (root / "helene-relay").is_file()}
@@ -855,6 +869,7 @@ try:
 except Exception as exc:
     key = ""
     out["key_error"] = str(exc)[:200]
+out["owner_stopped"] = (tree / ".owner-stop/stop.json").exists()
 for name in ("health", "state"):
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/{name}?key={key}", timeout=10) as answer:

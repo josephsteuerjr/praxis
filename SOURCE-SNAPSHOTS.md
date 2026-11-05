@@ -1,12 +1,23 @@
 # Source and package bindings
 
+## Desktop 2.4.0 composition
+
+Use the release's immutable `v2.4.0` tag and the archive's
+`source-composition.json`, `source-inputs.json` and verification manifest to
+identify its exact code. The selection rule is current `praxis/` followed by
+the explicit `helene/core/` overlay, together with `desk/` and its built shared
+interfaces. An overlay directory alone is not the complete runtime. The release
+source manifest binds the selected Git tree and each file's bytes and mode.
+The cloud mirror below is synchronized source; this desktop release does not
+deploy it to production.
+
 ## Stable desktop 2.3.0
 
 The immutable `v2.3.0` tag at
 `3194d41ece4de021f913c31f240d17b2faf91786` binds the released desktop source,
 all four platform archives and their verification inventories. Build or inspect
-that tag to reproduce the released composition. `desk/` and `helene/core/`
-on main retain that desktop code, with the subsequent release documentation.
+that tag to reproduce the released composition. Development on main can advance
+beyond that frozen desktop code.
 
 ## Current cloud Praxis mirror
 
@@ -24,7 +35,7 @@ the composition of main can advance beyond the frozen desktop release. The
 release tag and shipped per-platform inventories remain its authority.
 
 The records below describe historical 2.2.9 deliveries. Their immutable tags,
-digests and older voice references are provenance, not the current 2.3.0 source
+digests and older voice references are provenance, not the current desktop source
 selection. `HELENE-SOURCE.json` and `helene/PLATFORM-SOURCE.json` are retained as
 historical inputs; current composition inventories are generated for each new
 archive.

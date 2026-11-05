@@ -227,8 +227,13 @@ while True:time.sleep(.1)
             # entire product test suite here would execute an undeclared nested
             # full battery with different dependencies. The release battery
             # independently runs the complete, canonical product inventory.
-            shutil.copytree(ROOT/'helene/core',new/'tree',dirs_exist_ok=True,
-                            ignore=shutil.ignore_patterns('__pycache__','.git','test*.py','conftest.py','praxis_test.py'))
+            sys.path.insert(0,str(ROOT/'desk/installer'))
+            from portable_sources import compose_core
+            import fnmatch
+            for name,entry in compose_core(ROOT)[0].items():
+                if fnmatch.fnmatch(Path(name).name,'test*.py') or Path(name).name in ('conftest.py','praxis_test.py'):continue
+                target=new/'tree'/name;target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes(entry.data);target.chmod(int(entry.mode[-3:],8))
             from update_verification_fixture import BOOTSTRAP
             (new/'tree/praxis_test.py').write_text(BOOTSTRAP,encoding='utf8')
             # A real previous release already has the unchanged runtime/core
@@ -250,7 +255,18 @@ while True:time.sleep(.1)
             for name,values in (application or {}).get('files',{}).items():
                 target=new/'app'/name;target.parent.mkdir(parents=True,exist_ok=True)
                 target.write_text(values['incoming'],encoding='utf8')
-            shutil.copy2(sys.executable,new/'runtime/bin/python3')
+            # A standalone distribution's binary cannot discover encodings
+            # after being copied alone. A real venv binds this fixture to the
+            # current native test executor and its qualified dependency closure.
+            subprocess.run([sys.executable,'-m','venv','--without-pip','--system-site-packages',
+                            '--copies',str(new/'runtime')],check=True,capture_output=True)
+            # venv --copies still adds a lib64 -> lib convenience link on
+            # Linux. Installable runtimes deliberately forbid links; this
+            # alias is unnecessary for the fixture's native interpreter.
+            lib64=new/'runtime/lib64'
+            if lib64.is_symlink():
+                self.assertEqual(lib64.resolve(),(new/'runtime/lib').resolve())
+                lib64.unlink()
             write(old/'python-app.json',{'version':'2.1.1','delivery':'portable'})
             write(new/'python-app.json',{'version':'2.2.4','delivery':'portable'})
             write(old/'helene.json',{'tree':str(home),'code':str(code),'runner':'','setup_complete':True,
@@ -274,9 +290,13 @@ while True:time.sleep(.1)
                    for p in (new/'app').rglob('*') if p.is_file()}
             write(new/'source-inputs.json',{'files':files})
             from update_verification_fixture import bind
-            bind(root,new,'2.2.4',desk_test=(application or {}).get('desk_test'))
+            # This protocol fixture executes only stdlib unittest, one pure
+            # candidate module and Node's built-in assert. Do not accidentally
+            # declare every package in the outer test stand as its dependency.
+            bind(root,new,'2.2.4',desk_test=(application or {}).get('desk_test'),executor_packages=())
             passport=read(new/'python-package-files.json')
-            passport['files']['runtime/bin/python3']=hashlib.sha256((new/'runtime/bin/python3').read_bytes()).hexdigest()
+            for runtime_file in (new/'runtime').rglob('*'):
+                if runtime_file.is_file():passport['files'][runtime_file.relative_to(new).as_posix()]=hashlib.sha256(runtime_file.read_bytes()).hexdigest()
             write(new/'python-package-files.json',passport)
             requests=[];errors=[];merger_runs=[0]
             old_app_before={p.relative_to(old/'app').as_posix():p.read_bytes()
@@ -317,11 +337,30 @@ while True:time.sleep(.1)
                         elif tools=={'inspect'}:
                             digest=re.search(r'Subject SHA-256: ([0-9a-f]{64})',system)[1]
                             findings=[]
-                            expected=[('resolved/upgrade_fixture.py',MERGED),
-                                      ('resolved/compatibility_fixture.py',LOCAL_FEATURE+HELPER)]
-                            expected.extend((application or {}).get('expected',{}).items())
-                            if count<len(expected):call=('inspect',{'action':'read','path':expected[count][0]})
+                            expected=[]
+                            if count==0:
+                                call=('inspect',{'action':'status'})
                             else:
+                                returned=[json.loads(m['content']) for m in body['messages'] if m['role']=='tool']
+                                status=returned[0]
+                                assert status['subject_sha256']==digest
+                                navigation=status['merge_review']
+                                names=set(navigation['changed_from_local'])|set(navigation['conflicts'])
+                                names.update(row['path'] for row in navigation.get('repairs',[]))
+                                # The real shared-app composition namespaces core
+                                # variants. Discover its exact frozen paths instead
+                                # of assuming an obsolete single-core snapshot.
+                                matches=[path for path in names if Path(path).name=='upgrade_fixture.py']
+                                assert len(matches)==1,matches
+                                core=Path(matches[0]).parent
+                                for name,wanted in (('upgrade_fixture.py',MERGED),
+                                                    ('compatibility_fixture.py',LOCAL_FEATURE+HELPER)):
+                                    # A coupling dependency can be unchanged in
+                                    # M and absent from the changed-path index.
+                                    expected.append(('resolved/'+(core/name).as_posix(),wanted))
+                                expected.extend((application or {}).get('expected',{}).items())
+                                if count<=len(expected):call=('inspect',{'action':'read','path':expected[count-1][0]})
+                            if count>len(expected):
                                 observed={}
                                 for message in body['messages']:
                                     if message['role']=='tool':
@@ -353,7 +392,9 @@ while True:time.sleep(.1)
                         else:raw=json.dumps(result).encode();kind='application/json'
                         self.send_response(200);self.send_header('Content-Type',kind);self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
                     except BaseException as e:
-                        errors.append(repr(e));self.send_error(500)
+                        errors.append(repr(e))
+                        print('FIXTURE_PROVIDER_ERROR',repr(e),file=sys.stderr,flush=True)
+                        self.send_error(500)
                 def assert_path(self,body):assert self.path=='/v1/chat/completions',self.path
             server=ThreadingHTTPServer(('127.0.0.1',0),Provider)
             thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
@@ -390,6 +431,8 @@ while True:time.sleep(.1)
                     for output in root.rglob('*.output'):
                         if 'battery' in str(output):
                             print('CHILD BATTERY',output.name,output.read_text(errors='replace')[-5000:],file=sys.stderr)
+                    for output in root.rglob('source-review-*.log'):
+                        print('CHILD COORDINATOR',output.name,output.read_text(errors='replace')[-5000:],file=sys.stderr)
                     raise
                 self.assertFalse(errors,errors)
                 accepted=source_update.validate_ready(directory)
@@ -402,17 +445,26 @@ while True:time.sleep(.1)
                 self.assertEqual({tuple(r['tools']) for r in requests},{('merge_source',),('inspect',)})
                 if application:
                     self.assertEqual(len(accepted['attempts']),3)
-                    self.assertEqual(len(accepted.get('failed_batteries',[])),1)
-                    failed=accepted['failed_batteries'][0]['findings']
-                    self.assertTrue(any('test_authored_identity_uses_new_upstream_contract' in row['case_id']
-                        and 'authored/v2-broken' in row['detail'] for row in failed))
                     repairs=[r for r in requests if r['action']=='resolve' and r['attempt'] in (2,3)]
                     self.assertTrue(repairs)
                     self.assertTrue(all(r['logical'].startswith('app/') for r in repairs))
-                    reports=[read(p) for p in (directory/'test-battery').glob('*/report.json')]
-                    self.assertEqual(len(reports),3)
+                    report_paths=list((directory/'test-battery').glob('*/report.json'))
+                    reports=[read(p) for p in report_paths]
+                    self.assertEqual(len(reports),len(accepted['attempts']))
                     self.assertEqual(sum(r.get('full_pass') is False for r in reports),1)
                     self.assertEqual(sum(r.get('full_pass') is True for r in reports),2)
+                    # Current policy keeps failures advisory for independent
+                    # review. Assert the real immutable observation and log,
+                    # rather than a removed legacy failed_batteries summary.
+                    failed_path=next(p for p in report_paths if read(p).get('full_pass') is False)
+                    failed=read(failed_path)
+                    outcomes=[case for row in failed['results'] for case in
+                              (row.get('observation') or {}).get('outcomes',[])]
+                    self.assertTrue(any(case['status']=='failed' and
+                        case['id'].endswith('test_authored_identity_uses_new_upstream_contract')
+                        for case in outcomes),outcomes)
+                    failed_logs='\n'.join(p.read_text(errors='replace') for p in (failed_path.parent/'evidence').glob('*.md'))
+                    self.assertIn('authored/v2-broken',failed_logs)
                     self.assertEqual(len({r['binding']['candidate_sha256'] for r in reports}),1)
                     self.assertEqual(len({r['binding']['composition_sha256'] for r in reports}),3)
                     reviews=[read(p) for p in home.glob('memory/.source-update-reviews/review-*/request.json')]

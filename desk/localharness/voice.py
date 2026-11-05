@@ -54,6 +54,7 @@ import shutil
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 
 SCHEMA = "helene.voice.v1"
@@ -86,7 +87,9 @@ DEFAULT_MODEL = "turbo"
 
 # XTTS voices are model speakers or owner-supplied references, never Piper aliases.
 VOICES = {"xtts": {"voice":"xtts", "title":"XTTS — локальный голос", "size_mb":0,
-                   "note":"Отдельный локальный runtime и модель; без сетевого fallback."}}
+                   "note":"Отдельный локальный runtime и модель; без сетевого fallback."},
+          "fish": {"voice":"fish", "title":"Fish — облачный голос", "size_mb":0,
+                   "note":"Собственный API-ключ и оплата Fish. Без локальных весов и XTTS-worker."}}
 DEFAULT_VOICE = "xtts"
 
 
@@ -123,12 +126,18 @@ def chosen_model(cfg: dict) -> str:
 def models_dir(tree: Path) -> Path:
     """Куда кладутся модели. Внутри — раскладка кэша Hugging Face, как её
     делает сам faster-whisper: своей мы не изобретаем, иначе он её не найдёт."""
-    return Path(tree) / "models" / "whisper"
+    from localharness.component_store import model_path
+    return model_path(tree, 'whisper')
 
 
 def manifest(tree: Path) -> dict:
     """Что скачано на самом деле. Пусто — не скачано ничего."""
     value=_read(models_dir(tree) / INSTALLED)
+    if value.get('relative_path'):
+        relative=Path(value['relative_path'])
+        if not relative.is_absolute() and '..' not in relative.parts:
+            candidate=models_dir(tree)/relative
+            if candidate.is_dir():value=dict(value,path=str(candidate.resolve()))
     recorded=Path(str(value.get('path') or ''))
     repo=value.get('repo')
     # download_model records an absolute cache path. A preserved/copied tree has
@@ -164,7 +173,8 @@ def install_root() -> Path:
 
 
 def engine_home(root: Path | None = None) -> Path:
-    return Path(root or install_root()) / "voice"
+    from localharness.component_store import path
+    return path(root or install_root(), 'voice')
 
 
 def engine_site(root: Path | None = None) -> Path:
@@ -303,8 +313,10 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
         raise SystemExit("Windows-движок голоса не подходит этой системе; нужны зависимости серверной поставки")
     if not rec.get("name") or (not rec.get("sha256") and rec.get('format')!='helene-component-zip.v1'):
         raise SystemExit("в этой сборке движок голоса едет в рантайме — качать нечего")
-    home = engine_home(root)
-    home.mkdir(parents=True, exist_ok=True)
+    # Assemble a new engine away from every pinned/running environment.
+    from localharness.component_store import work_area
+    home = work_area('voice',uuid.uuid4().hex)
+    published = home / 'published'; published.mkdir()
     tag = f"{os.getpid()}-{int(time.time())}"
     part, fresh, old = home / f".part-{tag}", home / f".new-{tag}", home / f".old-{tag}"
     total = int(rec.get("bytes") or 0)
@@ -347,7 +359,7 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
         if meta.get("python") and not _same_python(str(meta["python"])):
             raise SystemExit(f"движок собран под питон {meta['python']}, а здесь "
                              f"{sys.version_info.major}.{sys.version_info.minor}")
-        site_dir = engine_site(root)
+        site_dir = published / 'site-packages'
         if site_dir.exists():
             os.replace(site_dir, old)
         os.replace(content / "site-packages", site_dir)
@@ -356,15 +368,18 @@ def fetch_engine(root: Path | None = None, on_bytes=None) -> dict:
                   "python": str(meta.get("python") or rec.get("python") or ""),
                   "sha256": rec["sha256"], "bytes": got, "dists": meta.get("dists") or {},
                   "got_utc": _utc()}
-        _write(home / INSTALLED, result)
+        _write(published / INSTALLED, result)
+        from localharness.component_store import import_directory, pin
+        reference, _ = import_directory(published, program=root)
+        pin(root, 'voice', reference)
         committed = True
     except BaseException:
         # The previous engine stays recoverable until its new receipt is durable.
         # A failed rename or full disk must not erase an otherwise working voice.
         if installed_new:
-            os.replace(engine_site(root), fresh / "site-packages")
+            os.replace(published / 'site-packages', fresh / "site-packages")
         if old.exists():
-            os.replace(old, engine_site(root))
+            os.replace(old, published / 'site-packages')
         raise
     finally:
         for leftover in (part, fresh, *([old] if committed else [])):
@@ -405,11 +420,14 @@ def dir_size(path: Path) -> int:
 
 
 def chosen_voice(cfg: dict) -> str:
-    return "xtts"
+    selected = str(block(cfg).get('voice') or 'xtts')
+    if selected not in VOICES: raise ValueError('Unsupported speech provider')
+    return selected
 
 
 def voices_dir(tree: Path) -> Path:
-    return Path(tree) / "models" / "xtts"
+    from localharness.component_store import model_path
+    return model_path(tree, 'xtts')
 
 
 def speech_library() -> dict:
@@ -418,10 +436,16 @@ def speech_library() -> dict:
     else:
         from xtts_install import runtime_for
     python = Path(os.environ.get("HELENE_XTTS_PYTHON") or runtime_for(install_root()) / ("python.exe" if os.name == "nt" else "bin/python3"))
-    metadata=_read(install_root()/'components/xtts/xtts-bundle.json').get('runtime') or {}
+    from localharness.component_store import path
+    metadata=_read(path(install_root(),'components/xtts')/'xtts-bundle.json').get('runtime') or {}
     cuda=(bool(metadata['cuda_build']) if 'cuda_build' in metadata else None) if not os.environ.get('HELENE_XTTS_PYTHON') else None
     unavailable=None
-    if (install_root()/'app/component-downloads.json').is_file():
+    server = os.environ.get('HELENE_SUPERVISOR') == 'serverboot'
+    if server and not (install_root()/'python-app.json').is_file():
+        # A transferred server kit has the desktop's model catalogue, not its
+        # native Windows interpreter. Never feed that map into a Linux install.
+        unavailable='Для XTTS на VPS нужен совместимый Linux runtime и модель; Windows-компонент сюда не устанавливается.'
+    elif (install_root()/'app/component-downloads.json').is_file():
         if __package__:from . import component_downloads
         else:import component_downloads
         unavailable=component_downloads.load(install_root()).get('unavailable',{}).get('xtts')
@@ -478,6 +502,26 @@ def download_progress(path):
 
 def speech_state(tree: Path, cfg: dict) -> dict:
     tree = Path(tree)
+    if chosen_voice(cfg) == 'fish':
+        from localharness import fish_speech, speech_protocol
+        enabled = block(cfg).get('speak') is True
+        configured = fish_speech.key_path(tree).is_file()
+        why = ''
+        try: fish_speech.profile(block(cfg))
+        except ValueError as exc: why = str(exc)
+        if not configured: why = 'Добавь собственный API-ключ Fish'
+        if not enabled: why = 'голос агента выключен'
+        paused = speech_protocol.blocked(tree)
+        return {'enabled': enabled, 'voice': 'fish',
+            'catalog': [dict(value, id=key, installed=configured if key=='fish' else False) for key,value in VOICES.items()],
+            'library': {'present': True, 'downloadable': False, 'why': ''},
+            'ready': not bool(why), 'why': why, 'worker_ready': not bool(why) and not paused,
+            'worker_phase': 'paused' if paused else 'ready' if not why else 'off',
+            'model': str(block(cfg).get('fish_model') or ''), 'dir': '',
+            'speaker': str(block(cfg).get('fish_voice') or ''), 'language': '', 'download': None,
+            'fish': {'configured': configured, 'models': list(fish_speech.MODELS),
+                     'last_request':fish_speech.latest(tree)},
+            'voice_note_ready': not bool(why) and not paused}
     lib = speech_library()
     model = voices_dir(tree)
     ready_model = all((model / name).is_file() for name in ("config.json", "model.pth", "vocab.json", "speakers_xtts.pth"))
@@ -500,7 +544,7 @@ def speech_state(tree: Path, cfg: dict) -> dict:
     speakers = (worker.get('speakers') if live else None) or catalog.get('speakers') or []
     languages = (worker.get('languages') if live else None) or catalog.get('languages') or []
     why = "голос агента выключен" if not enabled else lib["why"] if not lib["present"] else "XTTS модель не установлена" if not ready_model else ""
-    return {"enabled":enabled,"voice":"xtts","catalog":[dict(VOICES["xtts"],id="xtts",installed=ready_model)],
+    return {"enabled":enabled,"voice":"xtts","catalog":[dict(value,id=key,installed=ready_model if key=='xtts' else False) for key,value in VOICES.items()],
             "library":lib,"model":str(model),"dir":str(model),"ready":not bool(why),"why":why,
             "download":download_progress(tree / "memory/.state" / SPEECH_PROGRESS),
             "speaker":str(block(cfg).get("tts_speaker") or "Ana Florence"),
@@ -511,10 +555,12 @@ def speech_state(tree: Path, cfg: dict) -> dict:
             'device_actual':status.get('device'),
             "generation":worker.get('generation') if live is True else None,
             "voice_note_ready":selected_ready and worker.get('ogg_opus') is True,
-            "device":str(block(cfg).get('tts_device') or 'cpu')}
+            "device":str(block(cfg).get('tts_device') or 'cpu'),
+            'fish': {'configured': (tree/'memory/.secrets/fish/api-key').is_file(),
+                     'models': ['s2.1-pro', 's2.1-pro-free', 's2-pro', 'drama-3', 's1']}}
 
 
-def preview(tree: Path, cfg: dict, request: dict, timeout=90):
+def preview(tree: Path, cfg: dict, request: dict, timeout=90, *, configuration=None, stopped=lambda: False):
     """One local sample via the supervised worker, never a Telegram delivery."""
     import base64
     if __package__:
@@ -524,9 +570,11 @@ def preview(tree: Path, cfg: dict, request: dict, timeout=90):
     text=str(request.get('text') or 'Привет. Это мой голос. Настройки можно изменить.')
     if not 1<=len(text.strip())<=300:raise ValueError('Образец: от 1 до 300 символов')
     selection={key:request[name] for name,key in (('speaker','tts_speaker'),
-               ('language','tts_language'),('reference','tts_reference')) if request.get(name)}
+               ('language','tts_language'),('reference','tts_reference'), ('voice','voice'),
+               ('fish_model','fish_model'),('fish_voice','fish_voice'),('fish_delivery','fish_delivery')) if name in request}
     audio=speech_client.synthesize(text, Path(tree), Path(tree)/'media/tts-preview',
-            configuration=lambda: cfg, selection=selection, format='wav', timeout=timeout)
+            configuration=configuration or (lambda: cfg), stopped=stopped, selection=selection,
+            format='wav', timeout=timeout, request_id=request.get('request_id'))
     try:
         audio.check()
         if audio.path.stat().st_size>8*1024*1024:raise ValueError('Образец слишком велик')
@@ -619,7 +667,11 @@ def _stt_env(tree: Path, cfg: dict, said: dict) -> dict:
 
 def speech_env_for(tree: Path, cfg: dict) -> dict:
     said = speech_state(tree, cfg)
+    # Older authored MediaAudio accepts only its original backend names. The
+    # application speech_bridge owns actual dispatch, reading live selection;
+    # this compatibility value neither starts XTTS nor selects a fallback.
     return {"PRAXIS_TTS_BACKEND":"xtts" if said["ready"] else "disabled",
+            'HELENE_SPEECH_PROVIDER':chosen_voice(cfg),
             "HELENE_TTS_REASON":said["why"],
             "HELENE_XTTS_HOME":str(Path(tree) / "memory/.state/xtts"),
             "HELENE_XTTS_SPEAKER":said["speaker"],"HELENE_XTTS_LANGUAGE":said["language"],
@@ -662,7 +714,10 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
     if model not in CATALOG:
         raise SystemExit(f"нет такой модели: {model} (есть: {', '.join(CATALOG)})")
     spec = CATALOG[model]
-    dest = models_dir(tree)
+    # A different model publishes a new immutable object; previous snapshots
+    # and running recognizers keep their pinned directory through rollback.
+    from localharness.component_store import work_area
+    dest = work_area('whisper',hashlib.sha256(spec['repo'].encode()).hexdigest())
     dest.mkdir(parents=True, exist_ok=True)
     progress_path = tree / "memory" / ".state" / PROGRESS
     total = int(spec["size_mb"]) * 1024 * 1024
@@ -729,10 +784,15 @@ def fetch(tree: Path, model: str, *, quiet: bool = False) -> dict:
         result = {
             "schema": SCHEMA, "model": model, "repo": spec["repo"],
             "path": str(Path(path).resolve()),
+            "relative_path": Path(path).resolve().relative_to(dest.resolve()).as_posix(),
             "bytes": dir_size(Path(path)),
             "got_utc": _utc(),
         }
         _write(dest / INSTALLED, result)
+        from localharness.component_store import import_directory, pin
+        reference, _ = import_directory(dest)
+        pin(tree, 'models/whisper', reference)
+        result = manifest(tree)
         say("done", "модель на месте", max(0, dir_size(dest) - base))
         if not quiet:
             print(f"готово: {path}", flush=True)
@@ -765,7 +825,8 @@ def fetch_voice(tree: Path, voice_id: str, *, quiet: bool = False) -> dict:
             from xtts_install import install,runtime_for
         program=install_root();runtime=runtime_for(program)
         python=runtime/('python.exe' if os.name=='nt' else 'bin/python3')
-        if not (program/'components/xtts/xtts-bundle.json').is_file() or not python.is_file():
+        from localharness.component_store import path as component_path
+        if not (component_path(program,'components/xtts')/'xtts-bundle.json').is_file() or not python.is_file():
             if __package__:from . import component_downloads
             else:import component_downloads
             def report(value):

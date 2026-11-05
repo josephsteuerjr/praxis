@@ -166,6 +166,9 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
     update_source.require(old,new,progress)
     from localharness.update_progress import atomic_json
     from localharness.essential_backup import configs
+    # Stage candidate dependencies without changing the running selection.
+    # Complete staging before binding candidate/freshness metadata.
+    update_profile._component_references(old,new)
     before = update_profile.selection(old)
     for config in configs(new):
         if config.is_file():config.unlink()

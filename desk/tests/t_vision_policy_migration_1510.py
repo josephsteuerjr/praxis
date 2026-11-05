@@ -309,7 +309,8 @@ class Migration(unittest.TestCase):
               '$aces=@($a.Access); '
               '@{protected=$a.AreAccessRulesProtected; '
               'inherited=@($aces|Where-Object {$_.IsInherited}).Count; '
-              'count=$aces.Count}|ConvertTo-Json -Compress')
+              'count=$aces.Count;expected_count=@(@([Security.Principal.WindowsIdentity]::GetCurrent().User.Value, '
+              "'S-1-5-18','S-1-5-32-544')|Select-Object -Unique).Count}|ConvertTo-Json -Compress")
         for path in (target, self.target):
             with self.subTest(path=path.name):
                 result = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
@@ -323,7 +324,7 @@ class Migration(unittest.TestCase):
                 facts = json.loads(result.stdout)
                 self.assertTrue(facts["protected"])
                 self.assertEqual(facts["inherited"], 0)
-                self.assertEqual(facts["count"], 3)  # user, SYSTEM, Administrators
+                self.assertEqual(facts["count"], facts["expected_count"])
 
     def test_crash_after_archive_does_not_duplicate_old_notice(self):
         self.profile()

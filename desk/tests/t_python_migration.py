@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from localharness import app_migration
+from localharness import app_migration, component_store
 import python_migrate
 
 
@@ -20,6 +20,10 @@ def git(path,*args):
 
 class MigrationTests(unittest.TestCase):
     def setUp(self):
+        from localharness import component_store
+        self.store_temp=tempfile.TemporaryDirectory();self.addCleanup(self.store_temp.cleanup)
+        boundary=patch.object(component_store,'root',return_value=Path(self.store_temp.name)/'store')
+        boundary.start();self.addCleanup(boundary.stop)
         from localharness import source_update_host
         for boundary in (patch.object(source_update_host,'verified_runtime',return_value={'kind':'fixture-runtime-boundary'}),
             patch.object(python_migrate.migration_windows,'stop',return_value={}),
@@ -55,7 +59,8 @@ class MigrationTests(unittest.TestCase):
             new=root/'new';app_migration.prepare(old,new,root/'saved')
             self.assertEqual((new/'agent-default.json').read_bytes(),(old/'agent-default.json').read_bytes())
             self.assertEqual((new/'window-preferences.json').read_bytes(),(old/'window-preferences.json').read_bytes())
-            self.assertEqual((new/'voice-xtts'/executable).read_bytes(),b'legacy-runtime')
+            self.assertEqual((component_store.path(new,'voice-xtts')/executable).read_bytes(),b'legacy-runtime')
+            self.assertFalse((new/'voice-xtts').exists())
 
     def test_fresh_config_uses_the_actual_model_contract_and_retains_edits_on_retry(self):
         with tempfile.TemporaryDirectory() as temp:

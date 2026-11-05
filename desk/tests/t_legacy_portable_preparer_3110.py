@@ -113,7 +113,11 @@ class LegacyPreparer(unittest.TestCase):
         with patch.object(update_profile,'selection',side_effect=legacy.selection):
             value=legacy.prepare(self.old,self.new)
         self.assertEqual(set(value['selection']),{'settings','sources','git'})
-        self.assertNotIn('retirement',value);self.assertEqual(len(value['relocations']),2)
+        original=json.loads(self.original['helene.json'])
+        selected_assets={(self.old/original[section][field]).resolve()
+                         for section,field in (('backup','dir'),('voice','tts_reference'))}
+        self.assertNotIn('retirement',value)
+        self.assertEqual({Path(row['source']).resolve() for row in value['relocations']},selected_assets)
         self.assertFalse(self.backend.actions)
         return value
 

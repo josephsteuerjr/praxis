@@ -126,14 +126,13 @@ def cache_name(row):
 
 
 def cache_dir(program):
-    from .program_state import directory
-    path = directory(program,'component-downloads')
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    from .component_store import cache
+    return cache()
 
 
 def fetch(program, manifest, extensions, progress=None):
     from .python_updates import _download
+    preserve_cache(program,program)
     rows = []
     for artifact in select(manifest, extensions):
         target = cache_dir(program) / cache_name(artifact)
@@ -189,7 +188,10 @@ def _preserve_cache_files(source,target):
             continue
         temporary = target / ('.' + uuid.uuid4().hex + '.copy')
         try:
-            shutil.copyfile(item, temporary)
+            try:
+                import os
+                os.link(item, temporary)
+            except OSError: shutil.copyfile(item, temporary)
             temporary.replace(destination)
         finally:
             temporary.unlink(missing_ok=True)
@@ -218,13 +220,16 @@ def changed_extensions(program, manifest, extensions):
 def preserve_installed(previous, current):
     """First migration retains optional payloads without fetching them again."""
     from .parallel_files import copytree
+    from .component_store import preserve as preserve_components
     previous,current=Path(previous),Path(current)
     from .standalone_relay import preserve
     preserve(previous,current)
-    for relative in ('components/toolchain','components/xtts','components/whisper','voice','voice-xtts'):
+    results = preserve_components(previous, current)
+    for relative in ('components/toolchain',):
         source=previous/relative;target=current/relative
         if source.is_dir() and not target.exists():
             copytree(source,target,symlinks=False)
+    return results
 
 
 def _overlay(program, rows, progress=None, *, xtts_tree=None):
@@ -244,18 +249,23 @@ def _overlay(program, rows, progress=None, *, xtts_tree=None):
         for entry in payload.iterdir():
             if entry.name not in {'components', 'voice'} or not entry.is_dir():
                 raise ValueError('Unexpected optional payload root: ' + entry.name)
-        from .python_source_updater import apply_files, rollback
+        from .component_store import ROOTS, import_directory, pin, PINS
         if progress:progress({'stage':'installing'})
-        recovery=program/('.component-recovery-'+uuid.uuid4().hex)
-        # The stage lives on this same volume. Move each fully extracted file
-        # into place after journalling preimages instead of copying GB again.
-        apply_files(payload,program.resolve(),recovery,consume=True,verified=verified)
+        prior = (program/PINS).read_bytes() if (program/PINS).exists() else None
         try:
+            # Publish a NEW immutable object then change only this release's
+            # pin. Never overlay an environment held by an active process.
+            for relative in ROOTS:
+                source = payload/relative
+                if source.is_dir():
+                    reference, _ = import_directory(source, program=program)
+                    pin(program, relative, reference)
             if xtts_tree is not None:
                 from .xtts_install import install as install_xtts
                 install_xtts(Path(xtts_tree),program=program)
         except BaseException:
-            rollback(program,recovery)
+            if prior is None: (program/PINS).unlink(missing_ok=True)
+            else: (program/PINS).write_bytes(prior)
             raise
 
 
@@ -295,6 +305,7 @@ def status(program):
 def prepare(program, extensions, *, offline=None, progress=None):
     """Wizard entry after its main ZIP was verified; use the very same parser."""
     program=Path(program).resolve()
+    preserve_cache(program,program)
     manifest=load(program)
     if offline is None:
         archives=fetch(program,manifest,extensions,progress)

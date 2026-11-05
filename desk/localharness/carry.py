@@ -79,10 +79,13 @@ SKIP_PATHS = ("body/", "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
               "relay/logs/", "memory/.state/harness.lock", "memory/.state/desk-token",
               "memory/.state/body.json",
               "memory/.state/phone-access/", # tunnel binary, origin and menu lease belong to this host
+              "memory/.state/server-transfer.json", "memory/.state/server-transfer.lock",
+              "memory/.state/server-transfer-history/",
+              "memory/.state/server-transfer-archives/",
               # Модели голоса (`models/whisper`, 0,5–1,6 ГБ) — не агент, а
               # снаряжение машины: они скачиваются заново одной кнопкой, а в
               # архиве превратили бы перенос памяти в перенос гигабайтов.
-              "models/")
+              "models/", ".helene-component-pins.json")
 SKIP_NAMES = ("__pycache__", ".pytest_cache")
 SKIP_SUFFIXES = (".log", ".log.1", ".pyc")
 
@@ -93,6 +96,7 @@ SECRET_SPOTS = (
     ("data/relay/local_auth (вход ChatGPT)", lambda cfg, data: (data / "relay" / "local_auth").is_dir()),
     ("data/telegram (сессия аккаунта)", lambda cfg, data: (data / "telegram").is_dir()),
     ("data/memory/llm.json (выбор мозга с ключом)", lambda cfg, data: (data / "memory" / "llm.json").is_file()),
+    ("data/memory/.secrets/fish/api-key (Fish)", lambda cfg, data: (data / "memory/.secrets/fish/api-key").is_file()),
 )
 
 
@@ -111,10 +115,8 @@ def _read_config(path: Path) -> dict:
 
 
 def _write_config(path: Path, cfg: dict) -> None:
-    tmp = path.with_name(".tmp-" + path.name)
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
-                   encoding="utf-8", newline="\n")
-    os.replace(tmp, path)
+    from private_files import write_private
+    write_private(path,(json.dumps(cfg,ensure_ascii=False,indent=2)+'\n').encode())
 
 
 def tree_of(config_path: Path, cfg: dict) -> Path:
@@ -347,7 +349,7 @@ def _import_code(zf: zipfile.ZipFile, root: Path, data: Path) -> dict:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def export(config_path: Path, out: Path | None = None) -> dict:
+def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: bool = False) -> dict:
     """Собрать архив переноса. -> паспорт (он же лежит в архиве)."""
     config_path = Path(config_path).resolve()
     cfg = _read_config(config_path)
@@ -383,11 +385,30 @@ def export(config_path: Path, out: Path | None = None) -> dict:
     total = 0
     tmp = out.with_suffix(out.suffix + ".part")
     try:
+        from private_files import write_private
+        write_private(tmp,b'')  # protection is verified BEFORE the ZIP receives secrets
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             for src, arc in _walk(data):
                 zf.write(src, arc)
                 files += 1
                 total += src.stat().st_size
+            # Only the cold, GUI-owned VPS transfer may hand over menu custody.
+            # Ordinary Export deliberately excludes all live tunnel state.
+            lease=data/'memory/.state/phone-access/telegram-menu.json'
+            if preserve_phone_lease and lease.is_file():
+                if _is_reparse(lease):raise ValueError('Linked phone-menu lease refused')
+                raw=lease.read_bytes()
+                if len(raw)>32768:raise ValueError('Phone-menu lease is too large')
+                row=json.loads(raw);tg=cfg.get('telegram') or {}
+                owner=str(int(tg.get('owner_id') or 0))
+                identity=hashlib.sha256(f"{str(tg.get('bot_token') or '').strip()}:{owner}".encode()).hexdigest()
+                if not isinstance(row,dict) or row.get('identity')!=identity:raise ValueError('Phone-menu lease belongs to another bot or owner')
+                zf.writestr('data/memory/.state/phone-access/telegram-menu.json',raw)
+                files+=1;total+=len(raw);passport['phone_menu_lease']=True
+            from localharness.carry_voice import export as export_voice
+            exported_cfg, voice_files, voice_bytes = export_voice(zf, data, cfg, program=config_path.parent)
+            files += voice_files; total += voice_bytes
+            passport["voice_samples"] = voice_files
             passport["files"] = files
             passport["bytes"] = total
             passport["code"] = _export_code(zf, config_path.parent, cfg)
@@ -474,7 +495,10 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
                 continue
             if not name.startswith("data/"):
                 continue
-            target = data / name[len("data/"):]
+            if name == "data/.helene-component-pins.json":
+                receipt["ignored_host_component_pins"] = True
+                continue
+            target = data / name[len("data/"): ]
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(info) as src, open(target, "wb") as dst:
                 shutil.copyfileobj(src, dst)

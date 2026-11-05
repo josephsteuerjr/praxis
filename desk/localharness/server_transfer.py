@@ -24,6 +24,8 @@ import paramiko
 import boot
 import carry
 import remote_locator
+import owner_stop
+from server_destination import destination, accepted
 from deskd.connection_checks import check_telegram
 
 class TransferError(RuntimeError):pass
@@ -32,29 +34,65 @@ TOKEN_PATH=TARGET+'/data/.serverboot/desk-token'
 MARKER_PATH=TARGET+'/.window-transfer.json'
 
 def receipt_path(config_path):
-    identity=hashlib.sha256(str(config_path.resolve()).encode()).hexdigest()[:20]
-    return config_path.parent/('.server-transfer-'+identity+'.json')
+    config=json.loads(config_path.read_text(encoding='utf-8-sig'))
+    return carry.tree_of(config_path,config)/'memory/.state/server-transfer.json'
 
 def saved_transfer(config_path):
+    path=receipt_path(config_path)
+    legacy=config_path.parent/('.server-transfer-'+hashlib.sha256(str(config_path.resolve()).encode()).hexdigest()[:20]+'.json')
+    adjacent=config_path.with_name(config_path.name+'.server-transfer.json')
+    if not path.exists() and adjacent.exists():path=adjacent
+    if not path.exists() and legacy.exists():path=legacy
     try:
-        row=json.loads(receipt_path(config_path).read_text(encoding='utf-8'))
-        return row if isinstance(row,dict) else {}
-    except (OSError,ValueError):return {}
+        row=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(row,dict) or not re.fullmatch(r'[0-9a-f]{24}',str(row.get('id',''))):raise ValueError()
+        return row
+    except FileNotFoundError:return {}
+    except (OSError,ValueError):raise TransferError('Квитанция переноса не прочиталась. Местный запуск заблокирован; сохрани архив и проверь сервер') from None
 
 def save_transfer(config_path,row):
-    path=receipt_path(config_path);tmp=path.with_suffix('.part')
-    with tmp.open('w',encoding='utf-8') as output:
-        if os.name!='nt':os.chmod(tmp,0o600)
-        json.dump(row,output,ensure_ascii=False);output.flush();os.fsync(output.fileno())
-    os.replace(tmp,path)
+    from private_files import write_private
+    receipt_path(config_path).parent.mkdir(parents=True,exist_ok=True)
+    write_private(receipt_path(config_path),(json.dumps(row,ensure_ascii=False)+'\n').encode())
+
+@contextlib.contextmanager
+def custody(config_path):
+    # OS lock survives UI/helper races; the kernel releases it on helper death.
+    path=receipt_path(config_path).with_suffix('.lock')
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('a+b') as lock:
+        lock.seek(0);lock.write(b'0');lock.flush();lock.seek(0)
+        try:
+            if os.name=='nt':
+                import msvcrt
+                msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
+            else:
+                import fcntl
+                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except OSError:raise TransferError('Перенос уже выполняется в другом окне') from None
+        try:yield
+        finally:
+            if os.name=='nt':
+                lock.seek(0);msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
+            else:fcntl.flock(lock,fcntl.LOCK_UN)
+
+@contextlib.contextmanager
+def phone_custody(config_path):
+    from phone_tunnel.platform_support import acquire_file_lock,release_file_lock,PlatformSupportError
+    folder=receipt_path(config_path).parent/'phone-access';folder.mkdir(parents=True,exist_ok=True)
+    try:handle=acquire_file_lock(folder/'runtime.lock',timeout_sec=1)
+    except PlatformSupportError:raise TransferError('Прежний телефонный канал ещё работает. Дождись Stop и повтори перенос') from None
+    try:yield
+    finally:release_file_lock(handle)
 
 def same_destination(row,raw):
-    return bool(row.get('id')) and row.get('destination')==list(parameters(raw)) and row.get('fingerprint')==raw.get('fingerprint')
+    return bool(row.get('id')) and row.get('destination')==list(parameters(raw)) and row.get('fingerprint')==raw.get('fingerprint') and row.get('deployment',destination({}))==destination(raw)
 
 def status(config_path):
     row=saved_transfer(config_path)
     return {'ok':True,'pending':bool(row),'phase':row.get('phase'),'host':(row.get('destination') or [''])[0],
-            'archive':row.get('archive'),'message':'Предыдущий перенос сохранён. Укажи тот же сервер и нажми «Продолжить перенос»; память повторно импортирована не будет.' if row else ''}
+            'archive':row.get('archive'),'message':('Серверная копия остановлена. Местный Stop сохраняется до отдельной команды владельца.' if row.get('phase')=='server-stopped' else 'Предыдущий перенос сохранён. Укажи тот же сервер и нажми «Продолжить перенос»; память повторно импортирована не будет.') if row else '',
+            **({'deployment':row.get('deployment',destination({})),'ssh_port':row['destination'][1],'login':row['destination'][2]} if row else {})}
 
 def fingerprint(key):return 'SHA256:'+base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip('=')
 def parameters(raw):
@@ -112,6 +150,7 @@ def execute(client,command,timeout=30,check=True):
 
 def probe(raw,config_path=None):
     host,port,login=parameters(raw)
+    target=destination(raw);directory=shlex.quote(target['directory']);container=shlex.quote(target['container'])
     transport=None
     try:
         transport=paramiko.Transport((host,port))
@@ -128,24 +167,35 @@ def probe(raw,config_path=None):
         return {'ok':False,'trust_needed':True,'fingerprint':seen,'message':'Сверь отпечаток с панелью сервера и подтверди, что это твой сервер. Пароль ещё не отправлен.'}
     with contextlib.closing(connect({**raw,'fingerprint':seen})) as client:
         root=execute(client,'id -u')[1].strip()=='0'
+        if root and execute(client,'command -v python3 >/dev/null && command -v flock >/dev/null',check=False)[0]:
+            raise TransferError('Для восстановления установки на сервере нужны python3 и flock (util-linux)')
+        if execute(client,f'test "$(realpath -m {directory})" = {directory}',check=False)[0]:
+            raise TransferError('Папка установки проходит через ссылку. Выбери отдельный канонический путь')
         os_info=execute(client,'cat /etc/os-release')[1]
         arch=execute(client,'uname -m')[1].strip()
         docker=execute(client,'docker info --format "{{.ServerVersion}}"',check=False)[0]==0
         compose=docker and execute(client,'docker compose version --short',check=False)[0]==0
-        exists=execute(client,f'test -e {TARGET}/helene.json',check=False)[0]==0
+        exists=execute(client,f'test -e {directory}/helene.json',check=False)[0]==0
+        nonempty=execute(client,f'test -d {directory} && test -n "$(ls -A {directory})"',check=False)[0]==0
         supported=bool(re.search(r'(?m)^ID=(?:"?ubuntu"?|"?debian"?)$',os_info)) and arch=='x86_64'
-        occupied=execute(client,'docker inspect helene',check=False)[0]==0
+        occupied=execute(client,'docker inspect '+container,check=False)[0]==0
         resumable=False
         if config_path:
             row=saved_transfer(config_path)
             if same_destination(row,{**raw,'fingerprint':seen}):
-                code,value,_=execute(client,'cat '+MARKER_PATH,check=False)
-                with contextlib.suppress(ValueError):resumable=code==0 and json.loads(value).get('id')==row['id']
-        port_busy=execute(client,"if command -v ss >/dev/null 2>&1; then ss -ltnH 'sport = :8094'; else awk 'NR>1 && $2 ~ /:1F9E$/ && $4==\"0A\" {print}' /proc/net/tcp /proc/net/tcp6; fi",check=False)[1].strip()!=''
+                code,value,_=execute(client,'cat '+directory+'/.window-transfer.json',check=False)
+                with contextlib.suppress(ValueError):resumable=code==0 and json.loads(value).get('id')==row['id'] and json.loads(value).get('archive_sha')==row['archive_sha']
+        suffix=format(target['port'],'04X')
+        port_busy=execute(client,"if command -v ss >/dev/null 2>&1; then ss -ltnH 'sport = :"+str(target['port'])+"'; else test -r /proc/net/tcp && awk 'NR>1 && $2 ~ /:"+suffix+"$/ && $4==\"0A\" {print}' /proc/net/tcp /proc/net/tcp6; fi",check=False)
+        if port_busy[0]!=0:raise TransferError('Не удалось проверить занятость порта: на сервере нужен ss (iproute2)')
+        port_busy=bool(port_busy[1].strip())
+
     okay=root and arch=='x86_64' and (supported or docker and compose)
     message='Сервер готов к переносу.' if okay else 'Для автоматической установки нужен администратор сервера Ubuntu/Debian x64.'
+    if (nonempty or occupied or port_busy) and not resumable:
+        okay=False;message='Папка, контейнер или порт уже заняты. Укажи отдельные параметры установки; существующие данные не изменены.'
     if port_busy and not resumable and not exists:
-        okay=False;message='Порт Hélène на этом сервере занят другой программой. Выбери другой сервер или освободи порт 8094 в его панели.'
+        okay=False;message='Порт Hélène на этом сервере занят другой программой. Выбери другой сервер или освободи выбранный порт в его панели.'
     if occupied and not exists and not resumable:
         okay=False;message='Имя контейнера Hélène уже занято другой установкой. Она не изменена; выбери другой сервер.'
     return {'ok':okay,'fingerprint':seen,'trusted':trusted,'root':root,'docker':docker and compose,
@@ -158,13 +208,24 @@ def digest(path):
     return value.hexdigest()
 
 def make_program(root:Path,path:Path):
-    allowed=('app','tree','server','requirements.txt','helene-relay','helene-build.json')
+    allowed=('app','tree','server','requirements.txt','helene-build.json')
     if any(not (root/name).exists() for name in allowed):raise TransferError('В поставке нет полного комплекта для сервера. Скачай полную Windows-поставку Hélène')
     def include(info):
-        if info.issym() or info.islnk() or any(part in ('.git','__pycache__','node_modules','target') for part in Path(info.name).parts):return None
+        if info.issym() or info.islnk() or any(part in ('.git','__pycache__','node_modules','target') or part=='.env' or part.startswith('.env.') for part in Path(info.name).parts):return None
         return info
     with tarfile.open(path,'w:gz') as target:
         for name in allowed:target.add(root/name,arcname=name,filter=include)
+        legacy=root/'helene-relay'
+        if legacy.is_file() and legacy.read_bytes()[:4]==b'\x7fELF':target.add(legacy,arcname='helene-relay',filter=include)
+
+def kit_signature(path):
+    rows=[]
+    with tarfile.open(path) as kit:
+        for info in kit:
+            if info.isfile():
+                with kit.extractfile(info) as stream:
+                    rows.append((info.name,info.mode,hashlib.file_digest(stream,'sha256').hexdigest()))
+    return hashlib.sha256(json.dumps(sorted(rows)).encode()).hexdigest()
 
 def install_docker(client):
     # Official apt repository. Never uninstall/replace an existing Docker installation.
@@ -186,11 +247,38 @@ systemctl start docker
     execute(client,'sh -c '+shlex.quote(script),timeout=1200)
 
 def require_cold(config_path,config):
+    if not owner_stop.stopped():raise TransferError('Сначала включи Stop в приложении; перенос не возобновляет агента')
     tree=carry.tree_of(config_path,config)
     holder=boot._read_lock(boot.tree_lock_path(tree))
     if boot._lock_is_live(holder):raise TransferError('Местный агент ещё работает. Сначала останови его в окне и повтори перенос')
 
+@contextlib.contextmanager
+def snapshot_custody(config_path,config):
+    """Hold the runner's own tree lease until the durable VPS fence is saved."""
+    tree=carry.tree_of(config_path,config);path=boot.tree_lock_path(tree)
+    busy=boot.claim_tree(tree,role='server-transfer')
+    if busy:raise TransferError('Память занята другим процессом; архив переноса не начат')
+    token=boot._LOCK.get('token')
+    try:
+        holder=boot._read_lock(path)
+        if not token or boot._LOCK.get('path')!=path or holder.get('token')!=token or holder.get('pid')!=os.getpid():
+            raise TransferError('Не подтверждено владение памятью; архив переноса не начат')
+        # Reuse the process-generation contract of explicit first-create. A
+        # large archive must not outlive a TTL and look like an abandoned lock.
+        import psutil
+        from private_files import write_private
+        holder['birth']=psutil.Process(os.getpid()).create_time()
+        write_private(path,(json.dumps(holder,ensure_ascii=False)+'\n').encode())
+        yield
+    finally:
+        if token and boot._LOCK.get('path')==path and boot._LOCK.get('token')==token:boot.release_tree()
+
 def run(raw,config_path:Path,program:Path):
+    with custody(config_path),phone_custody(config_path):return _run(raw,config_path,program)
+
+def _run(raw,config_path:Path,program:Path):
+    target=destination(raw);directory=target['directory']
+    marker_path=directory+'/.window-transfer.json';token_path=directory+'/data/.serverboot/desk-token'
     config=json.loads(config_path.read_text(encoding='utf-8-sig'))
     if config.get('mode')=='remote':raise TransferError('Этот агент уже на сервере. Подключи окно к нему или выполняй перенос с его компьютера')
     require_cold(config_path,config)
@@ -203,6 +291,13 @@ def run(raw,config_path:Path,program:Path):
     if not checked.get('docker') and not raw.get('install_docker'):raise TransferError('Для переноса требуется подготовить Docker. Разреши приложению сделать это в шаге подключения')
     expected=json.loads((program/'helene-build.json').read_text(encoding='utf-8-sig')).get('version')
     row=saved_transfer(config_path)
+    if row.get('phase')=='server-stopped':
+        if same_destination(row,{**raw,'fingerprint':checked['fingerprint']}):
+            raise TransferError('Этот перенос закрыт для возврата. Для нового переноса выбери отдельную папку/проект; прежний архив и серверные данные сохраняются')
+        from private_files import write_private
+        history=receipt_path(config_path).parent/'server-transfer-history';history.mkdir(exist_ok=True)
+        write_private(history/(row['id']+'.json'),(json.dumps(row,ensure_ascii=False)+'\n').encode())
+        row={}
     continuing=same_destination(row,{**raw,'fingerprint':checked['fingerprint']})
     if row and not continuing:raise TransferError('Есть незавершённый перенос на другой сервер. Сначала продолжи его: так не появится второй работающий агент')
     if continuing:
@@ -211,17 +306,24 @@ def run(raw,config_path:Path,program:Path):
         if not archive.is_file() or digest(archive)!=row.get('archive_sha'):raise TransferError('Сохранённый архив переноса не найден или изменён. Сервер и местная память оставлены на месте')
     else:
         require_cold(config_path,config)
-        archive_root=Path(tempfile.mkdtemp(prefix='helene-transfer-archive-'))
-        archive=Path(carry.export(config_path,archive_root/('agent-'+secrets.token_hex(12)+'.zip'))['archive'])
-        row={'id':secrets.token_hex(12),'destination':list(parameters(raw)),'fingerprint':checked['fingerprint'],
-             'archive':str(archive),'archive_sha':digest(archive),'version':expected,'phase':'archive'}
-        save_transfer(config_path,row)
-    stage='/opt/helene-transfer-'+row['id']
+        with snapshot_custody(config_path,config):
+            archive_root=receipt_path(config_path).parent/'server-transfer-archives'/secrets.token_hex(12)
+            archive_root.mkdir(parents=True,mode=0o700)
+            archive=Path(carry.export(config_path,archive_root/('agent-'+secrets.token_hex(12)+'.zip'),preserve_phone_lease=True)['archive'])
+            row={'id':secrets.token_hex(12),'destination':list(parameters(raw)),'fingerprint':checked['fingerprint'],
+                 'archive':str(archive),'archive_sha':digest(archive),'version':expected,'phase':'archive','deployment':target}
+            save_transfer(config_path,row)
+    stage=directory+'.transfer-'+row['id']
     with tempfile.TemporaryDirectory(prefix='helene-server-kit-') as temporary:
         kit=Path(temporary)/'program.tar.gz';make_program(program,kit)
+        signature=kit_signature(kit)
+        if row.get('program_sha') and row['program_sha']!=signature:
+            raise TransferError('Исходники программы изменились после начала переноса. Сохранённая серверная установка не заменена')
+        if not row.get('program_sha'):
+            row['program_sha']=signature;save_transfer(config_path,row)
         with contextlib.closing(connect({**raw,'fingerprint':checked['fingerprint']})) as client:
             if not checked['docker']:install_docker(client)
-            execute(client,f'mkdir -p -m 700 {shlex.quote(stage)}')
+            execute(client,f'umask 077; mkdir -p -m 700 {shlex.quote(stage)}; test ! -L {shlex.quote(stage)}')
             with client.open_sftp() as sftp:
                 sftp.put(str(kit),stage+'/program.tar.gz');sftp.put(str(archive),stage+'/agent.zip')
             for local,remote in ((kit,stage+'/program.tar.gz'),(archive,stage+'/agent.zip')):
@@ -230,15 +332,16 @@ def run(raw,config_path:Path,program:Path):
             execute(client,f'mkdir -p {stage}/program && tar -xzf {stage}/program.tar.gz -C {stage}/program')
             # Existing installations and unrelated containers are not touched by this path.
             if not checked.get('resumable'):
-                execute(client,f'test ! -e {TARGET}/helene.json && test ! -e {MARKER_PATH} && mkdir -p -m 700 {TARGET}')
+                execute(client,f'umask 077; test ! -L {directory}; mkdir -p -m 700 {directory}; test -z "$(ls -A {directory})"')
                 with client.open_sftp() as sftp:
-                    with sftp.file(MARKER_PATH,'w') as marker:marker.write(json.dumps({'id':row['id'],'archive_sha':row['archive_sha']}))
-                    sftp.chmod(MARKER_PATH,0o600)
+                    with sftp.file(marker_path,'wx') as marker:marker.write(json.dumps({'id':row['id'],'archive_sha':row['archive_sha']}))
+                    sftp.chmod(marker_path,0o600)
             row['phase']='installing';save_transfer(config_path,row)
-            command=f'cd {stage}/program && HELENE_DIR={TARGET} HELENE_AUTOMATIC_CONNECTION=1 sh server/install.sh {stage}/agent.zip'
+            environment={'HELENE_DIR':directory,'HELENE_PROJECT':target['project'],'HELENE_CONTAINER':target['container'],'HELENE_PORT':str(target['port']),'HELENE_AUTOMATIC_CONNECTION':'1'}
+            command=f'cd {stage}/program && '+ ' '.join(k+'='+shlex.quote(v) for k,v in environment.items())+f' sh server/install.sh {stage}/agent.zip'
             execute(client,command,timeout=2400)
-            token=execute(client,f'cat {TOKEN_PATH}')[1].strip()
-            version=json.loads(execute(client,f'cat {TARGET}/helene-build.json')[1]).get('version')
+            token=execute(client,f'cat {token_path}')[1].strip()
+            version=json.loads(execute(client,f'cat {directory}/helene-build.json')[1]).get('version')
             row['phase']='connecting';save_transfer(config_path,row)
     if version!=expected:raise TransferError('На сервере обнаружена другая версия. Местная память сохранена; проверь сервер перед подключением')
     # Give the owner menu time to acquire its current automatic HTTPS address.
@@ -247,15 +350,35 @@ def run(raw,config_path:Path,program:Path):
             base=remote_locator.locate({**config,'key':token})
             request=urllib.request.Request(base+'/api/state',headers={'Authorization':'Bearer '+token})
             state=remote_locator.read(request)
-            if state.get('runner',{}).get('alive') is True:
+            supervisor=remote_locator.read(urllib.request.Request(base+'/api/supervisor',headers={'Authorization':'Bearer '+token}))
+            panic=remote_locator.read(urllib.request.Request(base+'/api/panic',headers={'Authorization':'Bearer '+token}))
+            if accepted(state,supervisor,panic,expected):
                 row['phase']='ready';save_transfer(config_path,row)
-                return {'ok':True,'base':base,'key':token,'version':version,'archive':str(archive),'server_locator':'telegram-menu'}
+                return {'ok':True,'base':base,'key':token,'version':version,'archive':str(archive),'server_locator':'telegram-menu','stopped':panic.get('stopped') is True}
         except Exception:pass
         time.sleep(2)
     raise TransferError('Перенос завершён, но защищённое подключение ещё не подтвердилось. Не запускай местного агента одновременно: проверь сервер и повтори подключение')
 
+def recover_local(raw,config_path):
+    """Explicitly stop this transfer's two containers; retain every byte.
+
+    The local owner must still choose Resume separately. Failure or uncertainty
+    keeps the durable local fence. Credentials and host pin are checked anew.
+    """
+    with custody(config_path):
+        row=saved_transfer(config_path)
+        if not same_destination(row,raw):raise TransferError('Укажи тот же сервер, отпечаток и параметры сохранённого переноса')
+        helper=next((p for p in (Path(__file__).resolve().parents[1]/'server/transfer_recover.py',Path(__file__).resolve().parents[2]/'server/transfer_recover.py') if p.is_file()),None)
+        if helper is None:raise TransferError('В поставке нет помощника восстановления VPS')
+        with contextlib.closing(connect(raw)) as client:
+            _,value,_=execute(client,'python3 -c '+shlex.quote(helper.read_text(encoding='utf-8'))+' '+shlex.quote(json.dumps(row)),timeout=240)
+            reply=json.loads(value)
+            if reply.get('ok') is not True:raise TransferError(reply.get('message') or 'Сервер не подтвердил остановку. Местный Stop сохранён')
+        row['phase']='server-stopped';save_transfer(config_path,row)
+        return {'ok':True,'message':'Серверная копия остановлена, все данные сохранены. Местная копия содержит снимок до переноса; возобнови её отдельной командой только если это нужная память.'}
+
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('action',choices=('probe','run','locate','status','telegram-check'));parser.add_argument('--config',required=True);parser.add_argument('--program',required=True)
+    parser=argparse.ArgumentParser();parser.add_argument('action',choices=('probe','run','recover-local','locate','status','telegram-check'));parser.add_argument('--config',required=True);parser.add_argument('--program',required=True)
     args=parser.parse_args()
     try:
         payload=sys.stdin.read(32769)
@@ -264,6 +387,7 @@ def main():
         if not isinstance(raw,dict):raise TransferError('Не удалось прочитать настройки подключения')
         if args.action=='probe':result=probe(raw,Path(args.config))
         elif args.action=='run':result=run(raw,Path(args.config),Path(args.program))
+        elif args.action=='recover-local':result=recover_local(raw,Path(args.config))
         elif args.action=='status':result=status(Path(args.config))
         elif args.action=='telegram-check':result=check_telegram(json.loads(Path(args.config).read_text(encoding='utf-8-sig')))
         else:result={'ok':True,'base':remote_locator.locate(json.loads(Path(args.config).read_text(encoding='utf-8-sig')))}

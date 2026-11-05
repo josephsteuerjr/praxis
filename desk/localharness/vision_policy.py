@@ -10,10 +10,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import stat
-import subprocess
 import tempfile
 import uuid
+
+try:
+    from . import private_files
+except ImportError:  # legacy runner imports localharness modules by bare name
+    import private_files
 
 
 class MigrationError(Exception):
@@ -31,43 +34,24 @@ def _json(path: Path) -> dict:
 
 
 def _protect_private_temp(name: str) -> None:
-    """Protect an EMPTY temp file before sensitive llm.json bytes enter it.
-
-    chmod on Windows changes read-only, not the inherited ACL. A best-effort
-    post-replace fix leaves both a disclosure window and a possibly public
-    replacement; fail closed before writing instead. The same-volume replace
-    carries this already-restricted file's descriptor into the target.
-    """
-    if os.name != "nt":
-        os.chmod(name, 0o600)
-        if stat.S_IMODE(os.stat(name).st_mode) & 0o077:
-            raise MigrationError("временный конфиг сохранил чужие права")
-        return
-    user = os.environ.get("USERNAME") or ""
-    if not user:
-        raise MigrationError("USERNAME отсутствует — нельзя сузить права конфига")
+    """Compatibility hook: protect and verify an empty file before secrets."""
     try:
-        result = subprocess.run(
-            ["icacls", name, "/inheritance:r", "/grant:r", f"{user}:F",
-             "/grant:r", "*S-1-5-18:F", "/grant:r", "*S-1-5-32-544:F", "/Q"],
-            capture_output=True, text=True, encoding="cp866", errors="replace",
-            creationflags=0x08000000, timeout=60)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise MigrationError(f"права временного конфига не подтверждены: {type(exc).__name__}") from exc
-    if result.returncode:
-        raise MigrationError("icacls не подтвердил защиту временного конфига")
+        private_files.protect_private_temp(name)
+    except private_files.PrivateFileError as exc:
+        raise MigrationError(str(exc)) from None
 
 
 def _write(path: Path, data: bytes, *, private: bool = False) -> None:
+    if private:
+        try:
+            private_files._atomic_write(path, data, before_write=_protect_private_temp)
+        except private_files.PrivateFileError as exc:
+            raise MigrationError(str(exc)) from None
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
     try:
-        # An empty name can inherit liberal directory ACLs for milliseconds;
-        # no credential bytes are present there. Close the handle so icacls on
-        # Windows can change its ACL, then reopen only after success.
         os.close(fd)
-        if private:
-            _protect_private_temp(name)
         with open(name, "wb") as dst:
             dst.write(data)
             dst.flush()
@@ -236,8 +220,6 @@ def migrate(tree: Path, *, code_dir: Path | None = None, read_dotenv: bool = Fal
             if hashlib.sha256(_document(config)).hexdigest() != event["after_sha256"]:
                 raise MigrationError("повтор миграции не совпал с приготовленным профилем")
             _write(target, _document(config), private=True)
-            import boot
-            boot._own_only(target)
         elif observed != event["after_sha256"]:
             raise MigrationError("профиль изменился после незавершённой миграции зрения — ручная сверка")
         _finish(tree, event)
@@ -261,10 +243,8 @@ def migrate(tree: Path, *, code_dir: Path | None = None, read_dotenv: bool = Fal
     try:
         _write(transaction, _document(event))
         _write(target, content, private=True)
-        # Windows ACLs on a replaced private config are not inherited from its old
-        # inode: reapply the existing boot security policy before returning.
-        import boot
-        boot._own_only(target)
+        # The verified descriptor travels with the replacement. Do not regrant
+        # permissions through the historical USERNAME helper after this point.
         _finish(tree, event)
     except (OSError, UnicodeError, ValueError) as exc:
         raise MigrationError(f"миграция зрения не завершена (повтор после восстановления): {exc}") from exc

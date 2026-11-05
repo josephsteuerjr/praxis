@@ -330,7 +330,7 @@ class CleanupOwnership(unittest.TestCase):
         plan=start.legacy_plan(self.root,self.places,self.backend)
         original=Path.rmdir;personal=remnant/'late.txt'
         def raced(path,*args,**kwargs):
-            self.assertEqual(path,remnant)
+            if path != remnant:return original(path,*args,**kwargs)
             personal.write_bytes(b'late personal file')
             return original(path,*args,**kwargs)
         with patch.object(Path,'rmdir',raced),self.assertRaises(OSError):

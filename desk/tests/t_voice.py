@@ -258,7 +258,7 @@ class Speaking(Ground):
         self.install_voice()
         said = voice.speech_state(self.tree, {"voice": {"speak": True}})
         marks = {one["id"]: one["installed"] for one in said["catalog"]}
-        self.assertEqual(marks,{'xtts':True})
+        self.assertEqual(marks,{'xtts':True,'fish':False})
 
 
 class Choosing(Ground):
@@ -317,7 +317,8 @@ class ChannelDoor(unittest.TestCase):
                     os.environ.pop("HELENE_CONFIG", None)
                 else:
                     os.environ["HELENE_CONFIG"] = was
-        self.assertEqual(got, {"voice": {"enabled": True, "model": "small"}})
+        self.assertEqual(got['voice'], {"enabled": True, "model": "small"})
+        self.assertEqual(set(got), {'voice', '_speech_epoch'})
         self.assertNotIn("sk-живой-ключ", json.dumps(got, ensure_ascii=False))
 
 

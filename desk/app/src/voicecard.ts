@@ -56,6 +56,7 @@ interface EngineState {
 
 /** Голос агента наружу — вторая половина того же ответа канала. */
 interface SpeechState {
+  fish?: {configured: boolean; models: string[]; last_request?: {request_id: string; status: string; cancelled?: boolean}|null};
   speaker?: string;
   speakers?: string[];
   languages?: string[];
@@ -84,6 +85,12 @@ export interface VoiceCard {
 }
 
 const MB = 1024 * 1024;
+
+function voiceField(title: string): HTMLLabelElement {
+  const label = el('label', 'field');
+  label.append(el('span', 'field-label', title));
+  return label;
+}
 
 export function speechStatusText(state: SpeechState): string {
   if (!state.ready) return `Агент отвечает текстом: ${state.why}.`;
@@ -116,10 +123,10 @@ export function voiceCard(draft: Config): VoiceCard {
   // Речь — отдельный выключатель, а не часть слуха: слышать голосовые и
   // отвечать голосом — разные желания, и одно без другого законно.
   let speak = !!voice.speak;
-  let speakVoice = "xtts";
+  let speakVoice = String(voice.voice || 'xtts');
   voice.voice = speakVoice;
 
-  const box = el("div");
+  const box = el("div", "voice-settings");
   const status = el("p", "field-hint", "спрашиваю канал…");
   const pickBox = el("div");
   const actions = el("div", "actions");
@@ -222,6 +229,7 @@ export function voiceCard(draft: Config): VoiceCard {
       // первым ровно тогда, когда владелец нажимает обе кнопки подряд.
       const speech = state.speech;
       if (speech) {
+        if (speech.worker_phase === 'paused') cancelPreview();
         const mine = { ...speech, voice: speakVoice, enabled: speak };
         if (!speechPicker.el.childElementCount) drawVoices(mine);
         sayVoice(mine);
@@ -237,8 +245,14 @@ export function voiceCard(draft: Config): VoiceCard {
           speakerSelect.disabled = !names.length;
           speakerCount.textContent = names.length ? `${names.length} голосов установленной модели` : 'Каталог появится после установки XTTS';
         }
-        previewBtn.disabled = previewing || speech.worker_ready !== true;
-        if (!previewing) previewNote.textContent = speech.worker_ready === true ? '' : speechStatusText(mine);
+        fishKeyNote.textContent = speech.fish?.configured ? 'Ключ сохранён приватно на этом ПК.' : 'Собственный ключ Fish ещё не добавлен.';
+        if(!previewing&&speakVoice==='fish'&&speech.fish?.last_request?.status==='unknown'){
+          const last=speech.fish.last_request;
+          previewNote.textContent='Fish · '+last.request_id+' · результат неизвестен'+(last.cancelled?' · аудио отменено':'')+'. Автоматического повтора нет.';
+        }
+        previewBtn.disabled = previewing || !speak || speech.worker_phase === 'paused' || (speakVoice === 'xtts' && speech.worker_ready !== true)
+          || (speakVoice === 'fish' && (!speech.fish?.configured || !voice.fish_model || !voice.fish_voice));
+        if (!previewing && speakVoice === 'xtts') previewNote.textContent = speech.worker_ready === true ? '' : speechStatusText(mine);
       } else {
         speechStatus.textContent = "этот канал про голос агента ничего не знает";
         speechBtn.disabled = true;
@@ -286,17 +300,52 @@ export function voiceCard(draft: Config): VoiceCard {
   const speechNote = el("span", "receipt");
   const speechBtn = button("Скачать и установить XTTS", "quiet", () => void startVoice());
   speechActions.append(speechBtn, speechNote);
-  const speechFields = el("div");
-  const deviceLabel=el('label','field-label','Вычисления XTTS');
+  const speechFields = el("div", "form-grid two voice-provider-fields");
+  const fishFields = el('div', 'form-grid two voice-provider-fields');
+  const fishKeyNote = el('small', 'field-hint');
+  const fishKey = el('input', 'field-input') as HTMLInputElement;
+  fishKey.type='password';fishKey.autocomplete='new-password';fishKey.maxLength=4096;
+  fishKey.setAttribute('aria-label','Собственный API-ключ Fish');
+  const keyLabel=voiceField('API-ключ Fish');keyLabel.classList.add('voice-full-row');keyLabel.append(fishKey,fishKeyNote);
+  const keyActions=el('div','actions voice-full-row');
+  const saveKey=button('Сохранить ключ','quiet',async()=>{
+    const key=fishKey.value;fishKey.value='';saveKey.disabled=true;
+    try{const response=await fetch(channelURL('/api/voice/fish-key'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})});
+      if(!response.ok)throw new Error('Не удалось приватно сохранить ключ Fish');
+      fishKeyNote.textContent='Ключ сохранён приватно на этом ПК.';void refresh();
+    }catch(e){fishKeyNote.textContent=humanError(e).text}finally{saveKey.disabled=false}
+  });
+  const deleteKey=button('Удалить ключ','quiet',async()=>{
+    cancelPreview();fishKey.value='';
+    const response=await fetch(channelURL('/api/voice/fish-key'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({delete:true})});
+    fishKeyNote.textContent=response.ok?'Ключ удалён.':'Не удалось удалить ключ.';void refresh();
+  });
+  keyActions.append(saveKey,deleteKey);
+  const fishModelLabel=voiceField('Модель Fish');
+  const fishModel=document.createElement('select');fishModel.className='field-input';
+  fishModel.append(new Option('Выбери модель явно',''),...['s2.1-pro','s2.1-pro-free','s2-pro','drama-3','s1'].map(id=>new Option(id,id)));
+  fishModel.value=String(voice.fish_model||'');fishModel.onchange=()=>{cancelPreview();voice.fish_model=fishModel.value;void refresh()};fishModelLabel.append(fishModel);
+  const fishVoiceLabel=voiceField('Идентификатор голоса Fish');
+  const fishVoice=el('input','field-input') as HTMLInputElement;
+  fishVoice.value=String(voice.fish_voice||'');fishVoice.maxLength=128;
+  fishVoice.oninput=()=>{cancelPreview();voice.fish_voice=fishVoice.value;void refresh()};fishVoiceLabel.append(fishVoice);
+  const fishDeliveryLabel=voiceField('Подача и интонация');fishDeliveryLabel.classList.add('voice-full-row');
+  const fishDelivery=el('textarea','field-input') as HTMLTextAreaElement;
+  fishDelivery.value=String(voice.fish_delivery||'');fishDelivery.maxLength=1000;
+  fishDelivery.placeholder='Например: спокойно, тепло, с лёгкой улыбкой';
+  fishDelivery.oninput=()=>{cancelPreview();voice.fish_delivery=fishDelivery.value};fishDeliveryLabel.append(fishDelivery);
+  fishFields.append(keyLabel,keyActions,fishModelLabel,fishVoiceLabel,fishDeliveryLabel,
+    el('p','field-hint voice-full-row','Текст и подача отправляются Fish. Каждый новый образец — отдельный запрос по тарифу Fish. При обрыве результат может остаться неизвестным; автоматического повтора нет. Ключ не входит в настройки агента.'));
+  const deviceLabel=voiceField('Вычисления XTTS');
   const deviceSelect=document.createElement('select');deviceSelect.className='field-input';
   const cudaOption=new Option('CUDA · совместимая NVIDIA GPU','cuda');
   deviceSelect.append(new Option('CPU · работает без видеокарты','cpu'),cudaOption);
-  deviceSelect.value=String(voice.tts_device||'cpu');deviceSelect.onchange=()=>{voice.tts_device=deviceSelect.value};
+  deviceSelect.value=String(voice.tts_device||'cpu');deviceSelect.onchange=()=>{cancelPreview();voice.tts_device=deviceSelect.value};
   const deviceNote=el('small','field-hint','CPU — базовый путь; поддержку CUDA определяет runtime.');
   deviceLabel.append(deviceSelect,deviceNote);speechFields.append(deviceLabel);
-  const speakerLabel = el('label','field-label','Голос XTTS');
+  const speakerLabel = voiceField('Голос XTTS');
   const speakerSelect = document.createElement('select');speakerSelect.className='field-input';
-  speakerSelect.onchange=()=>{voice.tts_speaker=speakerSelect.value};
+  speakerSelect.onchange=()=>{cancelPreview();voice.tts_speaker=speakerSelect.value};
   const speakerCount=el('small','field-hint','Читаю каталог установленной модели…');
   speakerLabel.append(speakerSelect,speakerCount);speechFields.append(speakerLabel);
   const sample=el('input','field-input') as HTMLInputElement;
@@ -305,37 +354,65 @@ export function voiceCard(draft: Config): VoiceCard {
   const audio=document.createElement('audio');audio.controls=true;audio.preload='none';audio.hidden=true;
   audio.setAttribute('aria-label','Образец выбранного голоса');
   let previewing = false;
+  let previewEpoch=0;
+  let activePreview: {id:string; cancelURL:string; controller:AbortController}|null=null;
+  const cancelPreview=()=>{
+    previewEpoch++;audio.pause();audio.removeAttribute('src');audio.hidden=true;
+    const current=activePreview;activePreview=null;
+    if(current){current.controller.abort();void fetch(current.cancelURL,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({request_id:current.id,cancel:true}),keepalive:true}).catch(()=>{});}
+    previewing=false;
+  };
+  sample.oninput=()=>cancelPreview();
   const previewNote=el('span','receipt');
   const previewBtn=button('Прослушать голос','quiet',async()=>{
     if (previewing) return;
-    previewing=true;previewBtn.disabled=true;previewNote.textContent='Готовлю образец локально…';
+    cancelPreview();const epoch=previewEpoch;const controller=new AbortController();
+    const id=Array.from(crypto.getRandomValues(new Uint8Array(16)),v=>v.toString(16).padStart(2,'0')).join('');
+    const url=channelURL('/api/voice/preview');
+    activePreview={id,cancelURL:channelURL('/api/voice/intent'),controller};
+    previewing=true;previewBtn.disabled=true;previewNote.textContent=speakVoice==='fish'?'Fish готовит образец · запрос '+id:'Готовлю образец локально…';
     try {
       // Synthesis can exceed the event tunnel's 25s. Use the same authenticated
       // HTTP channel, not a second service or the model/Telegram transport.
-      const response=await fetch(channelURL('/api/voice/preview'),{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({speaker:speakerSelect.value,language:voice.tts_language||'ru',text:sample.value})});
+      const response=await fetch(url,{method:'POST',signal:controller.signal,headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({request_id:id,voice:speakVoice,speaker:speakerSelect.value,language:voice.tts_language||'ru',
+          reference:voice.tts_reference||'',fish_model:voice.fish_model,fish_voice:voice.fish_voice,fish_delivery:voice.fish_delivery,text:sample.value})});
       if(!response.ok)throw new Error(await response.text());
       const result=await response.json();
-      if(result.mime!=='audio/wav'||typeof result.base64!=='string')throw new Error('Нет аудио в ответе XTTS');
+      if(result.mime!=='audio/wav'||typeof result.base64!=='string')throw new Error('Нет аудио в ответе синтеза');
+      if(epoch!==previewEpoch||!box.isConnected||url!==channelURL('/api/voice/preview'))return;
+      const live=await api<VoiceState>('/api/voice');
+      if(epoch!==previewEpoch||!box.isConnected||url!==channelURL('/api/voice/preview')
+        ||live.speech?.worker_phase==='paused'||live.speech?.enabled!==true)return;
       audio.src='data:audio/wav;base64,'+result.base64;audio.hidden=false;
       await audio.play();previewNote.textContent='Образец готов. Выбор сохранится вместе с настройками.';
-    }catch(e){previewNote.textContent=humanError(e).text}finally{previewing=false;previewBtn.disabled=false}
+    }catch(e){if(epoch===previewEpoch){
+      let outcome='unknown';
+      if(speakVoice==='fish')try{const response=await fetch(channelURL('/api/voice/intent?request_id='+id));
+        if(response.ok){const receipt=await response.json();outcome=receipt.status||'unknown';}}catch{}
+      if(epoch===previewEpoch)previewNote.textContent=speakVoice==='fish'
+        ? 'Запрос '+id+' · '+outcome+'. Автоматического повтора нет. '+humanError(e).text:humanError(e).text;
+    }
+    }finally{if(epoch===previewEpoch){previewing=false;activePreview=null;void refresh()}}
   });
   previewBtn.disabled=true;
   speechActions.append(previewBtn,previewNote);
-  speechFields.append(sample,audio);
+  const stopPreview=button('Остановить образец','quiet',()=>{cancelPreview();previewNote.textContent='Прослушивание отменено. Уже принятый Fish запрос может быть оплачен.';void refresh()});
+  speechActions.append(stopPreview);
   for (const [key, title, fallback] of [
     ["tts_language", "Язык синтеза", "ru"],
     ["tts_reference", "Свой образец голоса (локальный WAV, необязательно)", ""],
   ]) {
-    const label = el("label", "field-label", title);
+    const label = voiceField(title);
     const input = el("input", "field-input") as HTMLInputElement;
     input.value = String(voice[key] || fallback);
-    input.oninput = () => { voice[key] = input.value; };
+    input.oninput = () => { cancelPreview();voice[key] = input.value; };
     label.append(input); speechFields.append(label);
   }
   const speakOff = toggle("Отвечать голосом, когда сочтёт нужным", speak, (v) => {
     speak = v;
+    cancelPreview();
     voice.speak = v;
     void refresh();
   });
@@ -344,18 +421,27 @@ export function voiceCard(draft: Config): VoiceCard {
   const drawVoices = (state: SpeechState) => {
     const items = state.catalog.map((one) => ({
       value: one.id,
-      title: one.title + (one.installed ? " · скачан" : ` · ${one.size_mb} МБ`),
+      title: one.title,
       text: one.note,
     }));
     speechPicker = choice<string>(items, speakVoice, (v) => {
       speakVoice = v;
+      cancelPreview();
       voice.voice = v;
+      showProvider();
       void refresh();
-    }, { stack: true });
+    });
+    speechPicker.el.classList.add('voice-providers');
     speechPickBox.replaceChildren(speechPicker.el);
   };
 
   const sayVoice = (state: SpeechState) => {
+    if(speakVoice==='fish'){
+      speechStatus.textContent=!speak?'Голос агента выключен.':state.fish?.configured
+        ? 'Fish озвучивает через твой API-ключ. Выбери модель, голос и подачу; сохрани настройки.'
+        : 'Добавь собственный API-ключ Fish, выбери модель и голос. Скачивать XTTS не требуется.';
+      return;
+    }
     const down = state.download;
     const busy = !!down && down.state === "running" && (down.active ?? fresh(down.at || ""));
     speechBtn.disabled = busy;
@@ -406,9 +492,14 @@ export function voiceCard(draft: Config): VoiceCard {
       "Распознавание использует около 1,5 ГБ памяти. На компьютере модель выгружается после обработки, " +
       "на сервере остаётся в памяти. Изменения применяются после перезапуска."),
     el("hr", "card-split"),
-    speakOff, speechStatus, speechPickBox, speechFields, speechActions,
+    speakOff, speechPickBox, speechStatus, speechFields, fishFields,
+    (()=>{const field=voiceField('Текст для прослушивания');field.append(sample);return field})(), audio, speechActions,
     el("p", "field-hint",
-      "Whisper распознаёт твои голосовые, XTTS озвучивает ответы локально. Выбранный голос применяется после сохранения. XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License)."));
+      "Whisper распознаёт твои голосовые независимо от выбранного синтеза. XTTS работает локально, Fish — через API. Выбранный голос применяется после сохранения. XTTS-v2 и её аудио — только для некоммерческого использования (Coqui Public Model License)."));
+  const showProvider=()=>{speechFields.hidden=speakVoice!=='xtts';fishFields.hidden=speakVoice!=='fish';speechBtn.hidden=speakVoice!=='xtts';speechNote.hidden=speakVoice!=='xtts'};
+  showProvider();
+  const observer=new MutationObserver(()=>{if(!box.isConnected){cancelPreview();fishKey.value='';observer.disconnect();if(timer)clearTimeout(timer)}});
+  observer.observe(document.body,{childList:true,subtree:true});
 
   const onSection = (event: Event) => {
     if (!box.closest(".page")) {
@@ -417,14 +508,16 @@ export function voiceCard(draft: Config): VoiceCard {
       return;
     }
     if ((event as CustomEvent).detail === "settings" && box.isConnected) void refresh();
-    else {audio.pause();if (timer) { clearTimeout(timer); timer = null; }}
+    else {cancelPreview();fishKey.value='';if (timer) { clearTimeout(timer); timer = null; }}
   };
   addEventListener("frame-section", onSection);
+  const onControl=()=>{cancelPreview();if(!box.isConnected)removeEventListener('frame-live-action',onControl)};
+  addEventListener('frame-live-action',onControl);
   void refresh();
 
   return {
     el: card("Голос", box,
-      "Распознавание и синтез речи работают локально. Распознанный текст получает выбранная модель агента. Голосовые компоненты можно подготовить, когда они понадобятся."),
+      "Whisper распознаёт речь на этом ПК. Для озвучки выбери локальный XTTS или Fish с собственным API-ключом. Распознанный текст получает выбранная модель агента."),
     enabled: () => enabled,
     model: () => model,
     keepLoaded: () => keep,

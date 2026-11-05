@@ -11,6 +11,7 @@ import os
 import shutil
 import time
 import uuid
+import json
 
 from . import speech_protocol as ipc
 
@@ -37,9 +38,17 @@ class Audio:
     tree: Path
     generation: str
     configuration: object
+    guard: object = None
 
     def check(self, stopped=lambda: False):
         _check(self.tree, self.configuration, stopped)
+        if self.guard is not None:
+            self.guard()
+        if self.generation == 'fish':
+            from . import fish_speech
+            if fish_speech.status(self.tree, self.path.stem).get('cancelled'):
+                raise InterruptedError('Speech cancelled')
+            return
         ready = ipc.read(self.home / 'ready.json')
         if not ipc.generation(self.home, self.generation) or not _live(self.home, ready):
             raise InterruptedError('Speech service generation ended; no audio staged')
@@ -47,9 +56,9 @@ class Audio:
 
 def synthesize(text, tree: Path, output_dir: Path, *, configuration,
                stopped=lambda: False, format='ogg_opus', timeout=300,
-               selection=None) -> Audio:
+               selection=None, request_id=None) -> Audio:
     if not isinstance(text, str) or not text.strip() or len(text) > 4000:
-        raise ValueError('XTTS expects 1..4000 characters')
+        raise ValueError('Speech expects 1..4000 characters')
     if format not in ('wav', 'ogg_opus'):
         raise ValueError('Unsupported speech output format')
     tree, output_dir = Path(tree), Path(output_dir)
@@ -57,13 +66,49 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
     deadline = time.monotonic() + timeout
     _check(tree, configuration, stopped)
     # Snapshot the selected settings at admission, not MediaAudio's boot env.
-    chosen = dict(configuration().get('voice') or {})
+    admitted = configuration()
+    chosen = dict(admitted.get('voice') or {})
+    # Bind the full live configuration selection, even when preview overrides
+    # unsaved fields. A config revision also fences an ABA switch back.
+    def stamp(cfg):
+        return json.dumps({'voice': cfg.get('voice'), 'epoch': cfg.get('_speech_epoch')}, sort_keys=True)
+    initial = stamp(admitted)
+    def guard():
+        _check(tree, configuration, stopped)
+        if stamp(configuration()) != initial:
+            raise InterruptedError('Speech selection changed')
     if selection:
         chosen.update(selection)
+    provider = str(chosen.get('voice') or 'xtts')
+    if provider not in ('xtts', 'fish'):
+        raise ValueError('Unsupported speech provider')
+    if provider == 'fish':
+        from . import fish_speech
+        # A missing stable tool identity must never turn replay into a new bill.
+        if request_id is None:
+            raise ValueError('Fish requires a stable request identity')
+        key = fish_speech.key_path(tree)
+        try:key_stamp = key.stat()
+        except OSError:raise RuntimeError('fish_key_unavailable') from None
+        def fish_guard():
+            guard()
+            try:current = key.stat()
+            except OSError:raise InterruptedError('Fish key removed') from None
+            if (current.st_ino, current.st_mtime_ns, current.st_size) != (key_stamp.st_ino, key_stamp.st_mtime_ns, key_stamp.st_size):
+                raise InterruptedError('Fish key changed')
+        path = fish_speech.synthesize(text, tree, output_dir, chosen=chosen, check=fish_guard,
+            format=format, timeout=timeout, request_id=request_id)
+        audio = Audio(path, fish_speech.home(tree), tree, 'fish', configuration, fish_guard)
+        try:
+            audio.check(stopped)
+            return audio
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
     speaker = str(chosen.get('tts_speaker') or 'Ana Florence')
     language = str(chosen.get('tts_language') or 'ru')
     while True:
-        _check(tree, configuration, stopped)
+        guard()
         ready = ipc.read(home / 'ready.json')
         generation = ready.get('generation')
         if ready.get('ready') is True and ipc.identity(generation) and _live(home, ready):
@@ -81,8 +126,8 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
     if language not in (ready.get('languages') or []):
         raise ValueError('Язык отсутствует в установленной модели')
     if reference:
-        path = Path(reference).expanduser()
-        if not path.is_absolute():path=tree/path
+        from .component_store import reference_path
+        path = reference_path(tree,reference)
         if not path.is_file() or path.suffix.lower() != '.wav':
             raise ValueError('Свой образец должен быть существующим локальным WAV')
         reference = str(path.resolve())
@@ -97,7 +142,7 @@ def synthesize(text, tree: Path, output_dir: Path, *, configuration,
     source = output / (identity + suffix)
     final = output_dir / (identity + suffix)
     partial = final.with_suffix('.part')
-    audio = Audio(final, home, tree, generation, configuration)
+    audio = Audio(final, home, tree, generation, configuration, guard)
     succeeded = False
     try:
         audio.check(stopped)

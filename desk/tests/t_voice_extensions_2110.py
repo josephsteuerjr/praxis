@@ -11,10 +11,15 @@ import wave
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from localharness import voice
 from localharness import xtts_install
+from localharness import component_store
 from localharness.app_components import digest
 
 
 class VoiceExtensionsTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        mocked=patch.object(component_store,'root',return_value=Path(self.temp.name)/'store')
+        mocked.start();self.addCleanup(mocked.stop)
     def test_dead_ready_file_is_not_a_running_worker(self):
         import os
         self.assertFalse(voice.worker_live(Path('unused'),{'ready':True,'pid':0}))
@@ -30,10 +35,13 @@ class VoiceExtensionsTests(unittest.TestCase):
             model=tree/'models/xtts';model.mkdir(parents=True);(model/'model.pth').write_text('model/model.pth')
             xtts_install.install(tree,program=program)
             self.assertFalse((program/'voice-xtts').exists())
-            self.assertEqual(xtts_install.runtime_for(program),bundle/'runtime')
+            self.assertEqual(xtts_install.runtime_for(program),component_store.path(program,'voice-xtts'))
+            model=component_store.model_path(tree,'xtts')
             self.assertTrue((model/'voices.json').is_file())
             xtts_install.install(tree,program=program)
-            (model/'model.pth').write_text('authored different model')
+            # Replace the selected file rather than modifying its shared inode;
+            # arbitrary in-place tampering is rejected as bundle corruption.
+            (model/'model.pth').unlink();(model/'model.pth').write_text('authored different model')
             with self.assertRaises(FileExistsError):xtts_install.install(tree,program=program)
 
     def ready(self,root):

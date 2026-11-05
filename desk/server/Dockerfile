@@ -23,7 +23,9 @@ RUN groupadd -g 10000 helene-data \
     && git config --system --add safe.directory '*'
 WORKDIR /opt/helene
 COPY requirements.txt server/requirements-server.txt ./
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-server.txt
+COPY server/prepare_requirements.py ./server/
+RUN python server/prepare_requirements.py requirements.txt requirements-runtime.txt \
+    && pip install --no-cache-dir --only-binary=av -r requirements-runtime.txt -r requirements-server.txt
 
 # Код в образе — запасной: compose монтирует поверх `app/` и `tree/` с диска сервера
 # (там их правит агент, и правки переживают пересборку). Здесь он нужен, чтобы образ
@@ -33,8 +35,6 @@ COPY tree/ ./tree/
 COPY helene-build.json ./helene-build.json
 COPY server/serverboot.py server/supervisor_policy.py server/emergency_stop.py ./server/
 
-COPY helene-relay ./helene-relay
-RUN chmod +x /opt/helene/helene-relay
 
 ENV PYTHONUNBUFFERED=1 PYTHONUTF8=1 HELENE_HOST=0.0.0.0
 EXPOSE 8094

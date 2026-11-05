@@ -95,6 +95,8 @@ export type Redeem = "ok" | "spent" | "closed" | "broke" | "offline" | "foreign"
 
 export interface PhoneAuth {
   storageKey: string;
+  /** Telegram must validate this launch's signed owner, even with a cookie. */
+  requireCredential?: boolean;
   hasCredential(): boolean;
   redeem(): Promise<{ result: Redeem; key?: string; agent?: string }>;
   pairScreen(pair: Redeem | null): { title: string; text: string; retry: boolean };
@@ -1194,7 +1196,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     sheetBody.replaceChildren();
     const about = el("div", "more-row");
     about.append(el("h4", "", "Об этом телефоне"));
-    const kind = opts.platform === "telegram" ? "мини-апп Telegram" : "приложение на экране «Домой»";
+    const kind = opts.platform === "telegram" ? "мини-апп Telegram" : "телефонный интерфейс";
     about.append(el("p", "field-hint", `${agent} · ${kind} · ключ устройства ${key ? "есть" : "нет"} · канал ${base || location.host}. Тема — как в системе. Переписка, ходы и задачи читаются живьём с компьютера, где живёт агент; на телефоне ничего не хранится, кроме ключа.`));
     sheetBody.append(about);
     // Принудительное обновление руками — для iPhone, где WebView держит старую
@@ -1422,9 +1424,25 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   async function start() {
+    if (opts.auth.requireCredential) {
+      // A cookie/remembered device must never substitute for Telegram's
+      // current signed user (e.g. a different Telegram account on this phone).
+      key = '';
+      remember(opts.auth.storageKey, '');
+      const got = opts.auth.hasCredential() ? await opts.auth.redeem() : {result:'none' as Redeem};
+      if (got.result !== 'ok' || !got.key) {
+        const s = opts.auth.pairScreen(got.result);
+        showPair(s.title,s.text,s.retry ? {label:'Попробовать снова',onClick:()=>void start()} : undefined);
+        return;
+      }
+      key = got.key;
+      sendKey = true;
+      if (got.agent) agent = got.agent;
+      remember(opts.auth.storageKey,key);
+    }
     let pair: Redeem | null = null;
-    // Updating or reopening an authorized PWA must not redeem its old QR
-    // again. Keep enrollment for the initial connection/replacement only.
+    // Legacy renderer clients can reuse an existing device. Telegram above
+    // always validates the current launch before reaching this branch.
     if (key) {
       const current = await renderState();
       if (current === 'ok') { enter(); return; }
@@ -1434,7 +1452,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         return;
       }
     }
-    if (opts.auth.hasCredential()) {
+    if (opts.auth.hasCredential() && !opts.auth.requireCredential) {
       const got = await opts.auth.redeem();
       pair = got.result;
       if (pair === "ok" && got.key) {

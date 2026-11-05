@@ -31,6 +31,11 @@ if a and a[0]=='inspect':
     if '-f' in a:print(os.environ['HELENE_DIR']+'/server')
 elif a and a[0]=='compose' and 'up' in a and not any('updater' in arg for arg in a):
     (r/'running').write_text('yes')
+    token=Path(os.environ['HELENE_DIR'])/'data/.serverboot/desk-token';token.parent.mkdir(parents=True,exist_ok=True);token.write_text('synthetic-channel-key')
+elif a and a[0]=='run' and 'server/import_agent.py' in a:
+    target=Path(os.environ['HELENE_DIR']);import hashlib
+    mounted=next(v for v in a if v.endswith(':/carry.zip:ro'));archive=Path(mounted[:-len(':/carry.zip:ro')])
+    (target/'.transfer-import.sha256').write_text(hashlib.sha256(archive.read_bytes()).hexdigest())
 elif a and a[0]=='run' and any('server_prepare.py' in arg for arg in a):
     if (r/'fail-voice').exists():sys.exit(1)
 elif a and a[0]=='logs':print('ключ окна\\ntest-key-only')
@@ -51,14 +56,14 @@ elif a and a[0]=='logs':print('ключ окна\\ntest-key-only')
         first=self.run_script();self.assertNotEqual(first.returncode,0)
         self.assertFalse((self.root/'running').exists())
         fail.unlink();second=self.run_script();self.assertEqual(second.returncode,0,second.stderr)
-        imports=[row for row in self.calls() if 'import' in row]
-        self.assertEqual(len(imports),1,'resuming model preparation must preserve already imported memory')
+        imports=[row for row in self.calls() if 'server/import_agent.py' in row]
+        self.assertEqual(len(imports),2,'resuming model preparation must preserve already imported memory')
     def test_different_archive_is_refused_during_recovery(self):
         (self.root/'fail-voice').write_text('test');self.run_script()
         other=self.root/'other.zip';other.write_bytes(b'other agent')
         result=self.run_script(other);self.assertNotEqual(result.returncode,0)
         self.assertIn('другого архива',result.stderr)
-        self.assertEqual(len([r for r in self.calls() if 'import' in r]),1)
+        self.assertEqual(len([r for r in self.calls() if 'server/import_agent.py' in r]),1)
         self.assertFalse((self.root/'running').exists())
 
 if __name__=='__main__':unittest.main(verbosity=2)

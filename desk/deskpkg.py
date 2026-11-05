@@ -108,7 +108,7 @@ PARTS: tuple[Part, ...] = (
     Part("remote/dist", "static", (SERVER,), dist=True,
          why="окно Praxis: сборка Vite (npm --prefix remote run build)"),
     Part("mobile/dist", "mobile", FLAVORS, dist=True,
-         why="телефон: PWA на /m/"),
+         why="совместимость прежнего /m/: общий Mini App и удаление старого service worker"),
     Part("miniapp/dist", "miniapp", FLAVORS, dist=True,
          why="мини-апп Telegram: локальный канал отдаёт его через HTTPS-туннель"),
     Part("server/desk-recipe", "recipe", (SERVER,),

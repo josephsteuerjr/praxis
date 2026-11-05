@@ -1,3 +1,21 @@
+# 2.4.0
+
+Independent Fish synthesis for local agents, with private credentials, explicit
+model/voice selection and durable paid-preview identities. Whisper stays
+independent. Optional voice runtimes/models use a persistent content store;
+updates retain compatible pins without copying weights into every program
+folder. Personal audio samples survive legacy migration and cross-host carry.
+
+Telegram Mini App entry uses the bot's current tunnel address, signed launch
+authentication and fullscreen/safe-area handling. The temporary-address PWA
+installation flow is removed. The VPS transfer guide is restored with host-key
+verification, resumable import, persistent Stop and guarded local-return recovery.
+
+Clean/preserve update modes are explicit peer cards. Private configuration
+writes verify the actual Windows token's DACL; POSIX staging handles inherited
+setgid. Shared forms and connection cards align across light/dark and narrow
+layouts. See [changes, evidence boundaries and limits](docs/RELEASE-2.4.0.md).
+
 # 2.3.0
 
 The desktop and right panel use the reviewed Praxis-style layout, with calmer

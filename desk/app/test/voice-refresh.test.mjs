@@ -10,7 +10,8 @@ const factory=new Function('api','box','say','sayVoice','setTimeout','clearTimeo
   const model='draft-model',enabled=true,speakVoice='draft-voice',speak=true;
   const status={},speechStatus={},speechBtn={};
   const cudaOption={},deviceNote={},speakerSelect={dataset:{},append(){},replaceChildren(){}},speakerCount={};
-  const voice={},previewBtn={},previewNote={},previewing=false;
+  const voice={},previewBtn={},previewNote={},previewing=false,fishKeyNote={};
+  const cancelPreview=()=>{};
   const Option=function(text,value){this.text=text;this.value=value};
   const speechStatusText=()=> 'worker status';
   const humanError=e=>({text:String(e)});

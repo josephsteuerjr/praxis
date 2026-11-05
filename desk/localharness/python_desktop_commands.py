@@ -92,6 +92,9 @@ def invoke(owner, command, args):
                 return 'Остановлено. Наблюдаемая принадлежавшая группа очищена. ' + RESIDUAL
             return 'Остановлено. Очистка принадлежавших процессов подтверждена.'
         if args.get('action')=='resume':
+            from . import server_transfer
+            if server_transfer.saved_transfer(agent.config).get('phase') not in (None,'server-stopped'):
+                raise RuntimeError('Сначала останови серверную копию через восстановление переноса')
             if owner.transfer_lock.locked():raise RuntimeError('Server transfer is in progress')
             if not owner.resume_lock.acquire(blocking=False):raise RuntimeError('Возобновление уже выполняется')
             from . import owner_resume,startup_diagnostics
@@ -172,13 +175,13 @@ def invoke(owner, command, args):
         if action=='status':return server_transfer.status(agent.config)
         if action=='locate':return {'ok':True,'base':remote_locator.locate(cfg)}
         if action=='telegram-check':return server_transfer.check_telegram(cfg)
-        if action=='run':
+        if action in ('run','recover-local'):
             if Path(str(payload.get('expected_config',''))).resolve()!=agent.config.resolve():
                 raise ValueError('Selected agent changed; reload server transfer')
             if owner.status().get('agents',{}).get(agent.id,{}).get('roles'):
                 raise RuntimeError('Stop the local agent before server transfer')
             if not owner.transfer_lock.acquire(blocking=False):raise RuntimeError('Server transfer already in progress')
-            try:return server_transfer.run(payload,agent.config,owner.root)
+            try:return server_transfer.run(payload,agent.config,owner.root) if action=='run' else server_transfer.recover_local(payload,agent.config)
             finally:owner.transfer_lock.release()
         raise ValueError('Unknown transfer action')
     if command=='carry_export':

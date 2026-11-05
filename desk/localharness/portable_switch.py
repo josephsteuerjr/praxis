@@ -38,6 +38,8 @@ def payload(program,*,runtime=True):
         'settings':{p.relative_to(program).as_posix():measured_path(p) for p in configs(program) if p.is_file()},
         'upstream':measured_path(program/'code-upstream.zip'),
         'passport':measured_path(program/'python-package-files.json')}
+    pins=program/'.helene-component-pins.json'
+    if pins.exists():result['component_pins']=measured_path(pins)
     # The working generation can stay healthy after its immutable next-update
     # base is damaged. Bind that base before retiring every previous copy.
     metadata=read(plain(program/'python-app.json'))
@@ -101,8 +103,9 @@ def prepare(old,new,progress=None,*,verified=None,attached_data=None):
         legacy['retained'].append(old);legacy['protected'].append(old);legacy['all_roots'].append(old)
         legacy['receipts'][str(old)]=hashlib.sha256(receipt(old).read_bytes()).hexdigest()
         if not any(old.is_relative_to(p) for p in legacy['retained_roots']):legacy['retained_roots'].append(old)
-    before=update_profile.selection(old)
     code_transition.validate(new)
+    update_profile._component_references(old,new)
+    before=update_profile.selection(old)
     note=update_profile.prepare(old,new,progress,attached_data=attached_data)
     note['portable_folder_switch']=True
     for data in note['data_paths']:
