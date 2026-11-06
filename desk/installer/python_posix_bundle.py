@@ -81,11 +81,22 @@ def use_host_compiler_runtime(output):
     notice.write_text(json.dumps(record,indent=2),encoding='utf-8')
 
 
+def write_program_archive(output, archive):
+    """Preserve bytes/modes while clamping reproducible pre-1980 input dates."""
+    output, archive = Path(output).resolve(), Path(archive).resolve()
+    if archive.is_relative_to(output):raise ValueError('Archive must be outside its program')
+    with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED,strict_timestamps=False) as z:
+        for path in sorted(output.rglob('*')):
+            if path.is_symlink():raise ValueError('Distribution stage retained a symlink')
+            if path.is_file():z.write(path,'Helene/'+path.relative_to(output).as_posix())
+    return archive
+
+
 def assemble(runtime, edition, relay, relay_source, output, *, version, target, downloads=None, body=None, bridge=None, without_relay=False, verification=None, verification_tools=None, legal=None):
     runtime,edition,output=map(Path,(runtime,edition,output))
     relay=Path(relay) if relay else None
     relay_source=Path(relay_source) if relay_source else None
-    if target not in ('linux-x86_64','macos-arm64'):raise ValueError('Expected a POSIX target')
+    if target not in ('linux-x86_64','macos-arm64','macos-x86_64'):raise ValueError('Expected a POSIX target')
     if target!=python_platform.runtime_target():raise ValueError('Assembly must run on the selected native OS/architecture')
     if output.exists():raise FileExistsError(output)
     if not re.fullmatch(r'\d+\.\d+\.\d+(?:-rc\.\d+)?',version):raise ValueError('Expected release or numbered RC version')
@@ -217,11 +228,7 @@ def assemble(runtime, edition, relay, relay_source, output, *, version, target, 
     normalize_output_modes(output)
     archive=output.parent/python_platform.asset_name(version,target)
     if archive.exists():raise FileExistsError(archive)
-    with zipfile.ZipFile(archive,'x',zipfile.ZIP_DEFLATED) as z:
-        for path in sorted(output.rglob('*')):
-            if path.is_symlink():raise ValueError('Distribution stage retained a symlink')
-            if path.is_file():z.write(path,'Helene/'+path.relative_to(output).as_posix())
-    return archive
+    return write_program_archive(output, archive)
 
 
 if __name__=='__main__':

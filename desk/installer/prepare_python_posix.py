@@ -46,10 +46,12 @@ def runtime_recipe(target):
         expected=literal(here/'build_linux.py','PBS_SHA256')
         flavor=deskpkg.LINUX
         gui=['PySide6','qtpy']
-    elif target == 'macos-arm64':
-        suffix='aarch64-apple-darwin'
+    elif target in ('macos-arm64','macos-x86_64'):
+        suffix='aarch64-apple-darwin' if target=='macos-arm64' else 'x86_64-apple-darwin'
         # Existing publisher pin, independently rechecked 24 October 2026.
-        expected=named_digest(here/'build_mac.py','SHA256','PBS_URL')
+        expected=(named_digest(here/'build_mac.py','SHA256','PBS_URL') if target=='macos-arm64'
+                  else 'dd8841a2e8ef94bd1a02b52f92843120942140f112145d4e0199abab56f120b1')
+        # Intel pin: same publisher SHA256SUMS, release 20260901, verified 2026-11-06.
         flavor=deskpkg.MACOS
         gui=['pyobjc-core==12.2.2','pyobjc-framework-Cocoa==12.2.2',
              'pyobjc-framework-Quartz==12.2.2','pyobjc-framework-WebKit==12.2.2']
@@ -58,6 +60,10 @@ def runtime_recipe(target):
     name=f'cpython-{version}+{tag}-{suffix}-install_only.tar.gz'
     deps=list(literal(here/'build_dist.py','TREE_DEPS'))+deskpkg.requirements(flavor)
     deps+=['psutil','PySocks','PyYAML',*gui]
+    if target=='macos-x86_64':
+        pins=json.loads((here/'macos-runtime-pins.json').read_text(encoding='utf-8'))
+        if pins['python']!=version:raise ValueError('Intel runtime pins require a matching Python version')
+        deps=[name+'=='+value for name,value in pins['packages'].items()]
     return {'version':version,'name':name,'sha256':expected,
             'url':f'https://github.com/astral-sh/python-build-standalone/releases/download/{tag}/{name}',
             'dependencies':deps}
@@ -124,5 +130,5 @@ def prepare(output, cache, *, resume=False, target=None):
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--output',type=Path,required=True);p.add_argument('--cache',type=Path,required=True)
     p.add_argument('--resume',action='store_true',help='Continue one unfinished runtime, never a prepared one')
-    p.add_argument('--target',choices=('linux-x86_64','macos-arm64'))
+    p.add_argument('--target',choices=('linux-x86_64','macos-arm64','macos-x86_64'))
     a=p.parse_args();print(prepare(a.output,a.cache,resume=a.resume,target=a.target))

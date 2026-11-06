@@ -744,7 +744,7 @@ def _main(argv=None):
         args.migration = clean_pending['note']['id']
     if (sys.platform in ('darwin','linux') and not (args.session_job or args.migration or args.browser or args.migration_wizard or recovery_entry)
             and (root/'python-app.json').is_file()
-            and __import__('localharness.python_platform',fromlist=['target']).target(root)==('macos-arm64' if sys.platform=='darwin' else 'linux-x86_64')):
+            and __import__('localharness.python_platform',fromlist=['target']).target(root) in (('macos-arm64','macos-x86_64') if sys.platform=='darwin' else ('linux-x86_64',))):
         from localharness import posix_first_start as first
         places=first.Places.current(root)
         if not first.ready(root,places) or not first.agent_exists(places.data):

@@ -9,6 +9,7 @@ need Git, a compiler or a separate Python installation to start.
 | --- | --- | --- |
 | Windows x64 | `Helene-…zip` | `helene.exe` |
 | macOS on Apple silicon | `Helene-…-macos-arm64.zip` | `Helene.app` |
+| macOS on Intel | `Helene-…-macos-x86_64.zip` | `Helene.app` |
 | Debian/Ubuntu x86_64 | `Helene-…-linux-x86_64.zip` | `./helene` |
 | Fedora x86_64 | `Helene-…-fedora-x86_64.zip` | `./helene` |
 
@@ -21,6 +22,16 @@ material; download the application archive for your system.
 Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
+
+## Included in 2.5.2
+
+Scrolling and rubber-band return use the full elapsed frame time. The spring
+settings are preserved. Turn details open at their measured content height;
+fast reversals and delayed content continue from the visible position.
+Reduced-motion preferences remain respected. A separate Intel Mac package includes its own Python runtime;
+local Whisper and XTTS are unavailable in that package.
+
+Read the [2.5.2 changes](desk/docs/RELEASE-2.5.2.md).
 
 ## Included in 2.5.1
 

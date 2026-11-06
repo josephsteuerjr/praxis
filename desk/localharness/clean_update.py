@@ -105,6 +105,31 @@ def _outside(path,old,new):
     return path
 
 
+def _previous_preparation(new,*,refresh=False):
+    """A parent sidecar alone cannot bind a newly extracted directory."""
+    from .python_source_updater import prepared_install_path
+    from .essential_backup import configs
+    path=plain(prepared_install_path(new));previous=read(path)
+    if refresh or previous.get('format')!=FORMAT:return previous
+    markers=[*configs(new),new/'python-migration.json',new/'portable-program.json',
+             new/'data-relocation.json',new/'code-transition.json',new/'.helene/first-start.json']
+    if any(plain(marker).exists() for marker in markers):return previous
+    # Successful and interrupted preparation both leave selected settings in
+    # this directory before publishing its sidecar. With none present, retain
+    # the orphan bytes and prepare from the explicitly selected current owner.
+    import hashlib,json
+    from .program_state import directory
+    from .private_files import write_private
+    raw=path.read_bytes()
+    if json.loads(raw.decode('utf-8-sig'))!=previous:
+        raise ValueError('Previous preparation changed while selecting the fresh archive')
+    retained=plain(directory(new,'recovery')/('orphan-preparation-'+hashlib.sha256(raw).hexdigest()+'.json'))
+    if retained.exists():
+        if retained.read_bytes()!=raw:raise ValueError('Retained preparation differs')
+    else:write_private(retained,raw)
+    return {}
+
+
 def prepare(old,new,progress=None,*,attached_data=None,data_destination=None,refresh=False):
     """Bind configurations and permanent dependencies without reading programme bytes."""
     from .app_migration import discover
@@ -115,7 +140,7 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None,ref
     from .program_state import hidden
     from .python_source_updater import prepared_install_path
     old,new=roots(old,new);choose(old,new)
-    previous=read(prepared_install_path(new))
+    previous=_previous_preparation(new,refresh=refresh)
     prepared=identity(old,new,previous) if previous.get('format')==FORMAT else None
     if prepared and not refresh:return prepared
     if refresh and not prepared:raise ValueError('Settings refresh requires an existing clean preparation')

@@ -536,7 +536,11 @@ export class Scroller {
       if (!this.drag) this.mode = "idle";
     }
     this.write();
-    if (this.mode === "fling" || (this.mode !== "idle" && (this.pos !== this.target || this.vel))) this.kick();
+    // Keep the previous rAF timestamp while moving. kick() starts a new idle
+    // interval; calling it here would discard work spent processing this frame.
+    if (!this.raf && (this.mode === "fling" || (this.mode !== "idle" && (this.pos !== this.target || this.vel)))) {
+      this.raf = requestAnimationFrame(this.frame);
+    }
   };
   private advanceMotion(step: number, max: number) {
     if ((this.momentum || (this.wheelActive && this.impact)) && !this.drag) {

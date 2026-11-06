@@ -13,6 +13,7 @@
 //  - идущий ход — сверху, шаги появляются по одному и вырастают, а не перерисовываются.
 // Всё — ключевыми списками (ui-kit/feed/keyed): узлы создаются один раз и правятся.
 import { KeyedList } from "../feed/keyed";
+import { slide } from "../feed/disclosure";
 import type { Scroller } from "../feed/scroller";
 import { api, cfg } from "./api";
 import { workActivity, observeActivity } from './work-activity';
@@ -429,29 +430,35 @@ async function openTurn(el: HTMLElement, id: string, animate: boolean) {
     });
     openSteps.set(id, steps);
   }
-  body.hidden = false;
-  if (animate) slide(body, true);
   const cached = S.evCache.get(id) as RunDetail | undefined;
   const first = el.parentElement?.firstElementChild === el;
-  if (cached) steps.set(stepRows(cached, !first), { animate: false });
-  else body.classList.add("loading");
+  slide(body, true, { animate, mutate: () => {
+    if (cached) steps!.set(stepRows(cached, !first), { animate: false });
+    body.classList.toggle("loading", !cached);
+  } });
   const live = el.dataset.status === "live";
   const d = await runDetail(id, live || !cached);
-  body.classList.remove("loading");
   if (!el.isConnected || !S.evOpen.has(id)) return;
   if (!d) {
-    if (!cached) { openSteps.delete(id); body.innerHTML = `<div class="muted st-none">Шаги не прочитались.</div>`; }
+    slide(body, true, { animate, mutate: () => {
+      body.classList.remove("loading");
+      if (!cached) { openSteps.delete(id); body.innerHTML = `<div class="muted st-none">Шаги не прочитались.</div>`; }
+    } });
     return;
   }
   setMeta(el, d);
-  col?.scroller.preserve(() => steps!.set(stepRows(d, !first), { animate: !!cached }));
-  let full = body.querySelector<HTMLDetailsElement>(".turn-full");
-  if (!full) {
-    full = document.createElement("details"); full.className = "turn-full";
-    full.innerHTML = '<summary>Полный ход</summary><div class="turn-full-body"></div>';
-    body.append(full);
-    full.addEventListener("toggle", () => { if (full!.open) renderSteps(full!.querySelector<HTMLElement>(".turn-full-body")!, S.evCache.get(id) as RunDetail || d); });
-  }
+  col?.scroller.preserve(() => slide(body, true, { animate, mutate: () => {
+    body.classList.remove("loading");
+    // The parent owns this reveal; simultaneous row growth would change its target.
+    steps!.set(stepRows(d, !first), { animate: false });
+    let full = body.querySelector<HTMLDetailsElement>(".turn-full");
+    if (!full) {
+      full = document.createElement("details"); full.className = "turn-full";
+      full.innerHTML = '<summary>Полный ход</summary><div class="turn-full-body"></div>';
+      body.append(full);
+      full.addEventListener("toggle", () => { if (full!.open) renderSteps(full!.querySelector<HTMLElement>(".turn-full-body")!, S.evCache.get(id) as RunDetail || d); });
+    }
+  } }));
 }
 
 function closeTurn(el: HTMLElement, id: string) {
@@ -459,9 +466,9 @@ function closeTurn(el: HTMLElement, id: string) {
   el.classList.remove("open");
   el.querySelector(".turn-head")!.setAttribute("aria-expanded", "false");
   S.evOpen.delete(id);
-  slide(body, false, () => {
+  slide(body, false, { done: () => {
     if (!S.evOpen.has(id)) { body.hidden = true; body.innerHTML = ""; openSteps.delete(id); }
-  });
+  } });
 }
 
 function stepEl(s: StepRow): HTMLElement {
@@ -502,20 +509,6 @@ function restoreHand(node: HTMLElement, runId: string, key: string) {
   if (btn && det) { btn.setAttribute("aria-expanded", String(open)); det.hidden = !open; node.classList.toggle("open", open); }
 }
 
-/** Плавно раскрыть/свернуть по высоте (WAAPI); при reduced-motion — сразу. */
-function slide(el: HTMLElement, open: boolean, done?: () => void) {
-  const still = matchMedia("(prefers-reduced-motion: reduce)").matches || typeof el.animate !== "function";
-  if (still) { done?.(); return; }
-  const h = el.scrollHeight;
-  el.style.overflow = "clip";
-  const a = el.animate(
-    open ? [{ height: "0px", opacity: 0 }, { height: h + "px", opacity: 1 }] : [{ height: h + "px", opacity: 1 }, { height: "0px", opacity: 0 }],
-    { duration: open ? 380 : 260, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-  );
-  a.onfinish = () => { el.style.overflow = ""; done?.(); };
-  a.oncancel = () => { el.style.overflow = ""; };
-}
-
 function onClick(e: MouseEvent) {
   const t = e.target as HTMLElement;
   const go = t.closest<HTMLElement>("[data-go]");
@@ -531,11 +524,12 @@ function onClick(e: MouseEvent) {
     const runId = hand.closest<HTMLElement>(".turn")?.dataset.run || "";
     const key = node.dataset.key || "";
     if (!det) return;
-    const open = det.hidden === true;
+    // During closing it is still visible. Toggle the requested state, not hidden.
+    const open = !openedHands.has(runId + "/" + key);
     hand.setAttribute("aria-expanded", String(open));
     node.classList.toggle("open", open);
-    if (open) { det.hidden = false; slide(det, true); openedHands.add(runId + "/" + key); }
-    else { openedHands.delete(runId + "/" + key); slide(det, false, () => { if (!openedHands.has(runId + "/" + key)) det.hidden = true; }); }
+    if (open) { openedHands.add(runId + "/" + key); slide(det, true); }
+    else { openedHands.delete(runId + "/" + key); slide(det, false); }
     return;
   }
   const head = t.closest<HTMLElement>(".turn-head");

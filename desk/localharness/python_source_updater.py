@@ -149,9 +149,9 @@ def prepare_install(old, new, *, verified=None, progress=None, attached_data=Non
     """Prepare a mechanical overlay unless the caller selects a folder switch."""
     old, new = Path(old).resolve(), Path(new).resolve()
     from localharness import clean_update
+    if folder_switch:return clean_update.prepare(old,new,progress,attached_data=attached_data)
     prepared=json.loads(prepared_install_path(new).read_text(encoding='utf-8')) if prepared_install_path(new).is_file() else {}
     if prepared.get('format')==clean_update.FORMAT:return clean_update.identity(old,new,prepared)
-    if folder_switch:return clean_update.prepare(old,new,progress,attached_data=attached_data)
     from localharness.portable_app_publication import recover
     recover(new)
     from localharness import source_admission

@@ -35,8 +35,8 @@ class PublicIdentity(unittest.TestCase):
       self.assertIn(json.dumps(system),app.bridge())
    finally:app.server.server_close()
  def test_ui_metadata_does_not_grant_unsupported_runtime(self):
-  with patch.object(sys,'platform','darwin'),patch.object(python_platform.platform,'machine',return_value='x86_64'):
-   self.assertEqual(python_platform.desktop_identity()['arch'],'x86_64')
+  with patch.object(sys,'platform','darwin'),patch.object(python_platform.platform,'machine',return_value='i386'):
+   self.assertEqual(python_platform.desktop_identity()['arch'],'i386')
    with self.assertRaises(RuntimeError):python_platform.runtime_target()
 
 if __name__=='__main__':unittest.main()

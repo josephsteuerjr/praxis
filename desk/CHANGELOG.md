@@ -1,3 +1,18 @@
+# 2.5.2
+
+Scrolling and rubber-band return use the full elapsed frame time. The spring
+settings are preserved. Turn details open at their measured content height;
+fast reversals and delayed content continue from the visible position.
+Reduced-motion preferences remain respected.
+
+A separate Intel Mac package includes its own Python runtime and Finder app.
+Local Whisper and XTTS are unavailable in that package.
+
+A newly extracted folder also retains and replaces orphan preparation records
+from earlier uses of the same folder name.
+
+Read the [motion changes](docs/RELEASE-2.5.2.md).
+
 # 2.5.1
 
 Normal startup resumes a prepared clean update before claiming its data.
