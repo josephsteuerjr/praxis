@@ -41,7 +41,7 @@ fn launch() -> io::Result<bool> {
     // Readiness belongs to the real renderer/wizard. No retained files, Python
     // imports or second lifecycle owner are needed in this tiny entry point.
     let handles = [ready.0, failed.0, child.as_raw_handle() as isize];
-    match unsafe { WaitForMultipleObjects(3, handles.as_ptr(), 0, 90_000) } {
+    match unsafe { WaitForMultipleObjects(3, handles.as_ptr(), 0, 300_000) } {
         0 => Ok(true),
         1 => Ok(false), // Python has already presented the concrete error.
         2 => Err(io::Error::other(format!("Python exited before confirming its window ({}). Details: {}", child.wait()?, startup_log(root).display()))),

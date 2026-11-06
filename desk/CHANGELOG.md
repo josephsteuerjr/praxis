@@ -1,3 +1,17 @@
+# 2.5.1
+
+Normal startup resumes a prepared clean update before claiming its data.
+The selected previous installation exits gracefully, its process and data
+locks are released, and pending data moves finish before the new window
+opens. Concurrent startup and retry retain the selected update bindings.
+
+Windows clean-update retirement accepts successful COM shortcut results,
+including `S_FALSE`. A system shortcut without a filesystem target remains
+unowned and unchanged. Failed HRESULTs still propagate. This fixes an old-folder
+cleanup failure found during an actual Windows update from 2.5.0.
+
+Read the [correction and acceptance boundaries](docs/RELEASE-2.5.1.md).
+
 # 2.5.0
 
 Codex Fast mode is available through model-aware speed controls in desktop,

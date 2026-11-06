@@ -15,7 +15,7 @@ def _method(pointer,index,*types):
 
 
 def _check(status,operation):
-    if status!=0:
+    if status<0:
         raise OSError(f'Windows shortcut {operation} failed (HRESULT 0x{status & 0xffffffff:08x})')
 
 
@@ -47,6 +47,7 @@ def read(path):
         _check(_method(persist,5,w.LPCWSTR,w.DWORD)(persist,str(path),0),'load')
         target=c.create_unicode_buffer(32768);cwd=c.create_unicode_buffer(32768);args=c.create_unicode_buffer(32768)
         _check(_method(link,3,w.LPWSTR,c.c_int,c.c_void_p,w.DWORD)(link,target,len(target),None,4),'read target')
+        if not target.value:return None
         _check(_method(link,8,w.LPWSTR,c.c_int)(link,cwd,len(cwd)),'read directory')
         _check(_method(link,10,w.LPWSTR,c.c_int)(link,args,len(args)),'read arguments')
         return {'target':target.value,'cwd':cwd.value,'arguments':args.value}

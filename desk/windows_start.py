@@ -16,8 +16,11 @@ def main(argv=None,*,places=None):
     values=list(sys.argv[1:] if argv is None else argv)
     parser=argparse.ArgumentParser(add_help=False);parser.add_argument('--root',type=Path,required=True)
     known,arguments=parser.parse_known_args(values);root=known.root.resolve()
-    from localharness import clean_update
-    if clean_update.ready(root):
+    # Emergency Stop and admitted session observers retain their own entry.
+    if any(flag in arguments for flag in ('--panic','--session-job')):
+        return ordinary(root,arguments)
+    from localharness import clean_update,clean_startup
+    if clean_update.ready(root) or ('--migration' not in arguments and clean_startup.pending(root) is not None):
         from localharness.package_notice import read
         note=read(root/'python-migration.json')
         os.environ['HELENE_USER_DATA']=note['data_paths'][0]

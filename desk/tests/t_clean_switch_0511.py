@@ -130,8 +130,9 @@ class CleanSwitch(unittest.TestCase):
         self.assertEqual((self.data/'memory/history').read_bytes(),b'irreplaceable owner history')
     def test_stop_before_retirement_keeps_old_folder(self):
         value=self.prepare();clean.relocate(self.old,self.new,value)
+        before_retirement=list(self.events)
         with self.assertRaises(InterruptedError):clean.finish(self.old,self.new,self.acknowledge(value),stopped=lambda:True)
-        self.assertTrue(self.old.is_dir());self.assertEqual(self.events,[])
+        self.assertTrue(self.old.is_dir());self.assertEqual(self.events,before_retirement)
     def test_internal_data_and_unpinned_legacy_component_are_renamed_not_copied(self):
         internal=self.old/'profile';shutil.move(str(self.data),str(internal));self.data=internal
         cfg=read(self.old/'helene.json');cfg['tree']=str(internal);write(self.old/'helene.json',cfg)

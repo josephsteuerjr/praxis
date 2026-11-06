@@ -738,6 +738,10 @@ def _main(argv=None):
     pending_entry=root/'python-migration.json'
     recovery_entry=(pending_entry.is_file() and json.loads(pending_entry.read_text(encoding='utf-8')).get('state')
                     not in ('completed','new_app_started','retirement_incomplete'))
+    from localharness import clean_startup
+    clean_pending = None if args.session_job else clean_startup.pending(root, args.migration)
+    if clean_pending is not None:
+        args.migration = clean_pending['note']['id']
     if (sys.platform in ('darwin','linux') and not (args.session_job or args.migration or args.browser or args.migration_wizard or recovery_entry)
             and (root/'python-app.json').is_file()
             and __import__('localharness.python_platform',fromlist=['target']).target(root)==('macos-arm64' if sys.platform=='darwin' else 'linux-x86_64')):
@@ -786,20 +790,31 @@ def _main(argv=None):
     # A fresh/interrupted migrator has not yet selected a complete profile.
     # Require its ordinary recovery entry first; running the app still requires
     # the unchanged exact data-pointer/identity checks.
-    if (root/'helene.json').is_file() and not args.session_job:
-        from localharness.portable_profile import bind_program
-        bind_program(root)
-    if pending.is_file() and not args.migration:
-        migrated=json.loads(pending.read_text(encoding='utf-8'))
-        if migrated.get('state')=='prepared':args.migration=migrated['id']
-    app = Application(root, ui, None, program)
-    app.migration_id=args.migration
-    app.session_job=args.session_job
-    app.browser_mode=args.browser
-    from localharness.session_host import attach,attach_migration
-    host = (attach_migration(root,program,args.session_job,app.event,app.origin,args.agent,
-                            browser_mode=args.browser,tree=args.session_tree) if args.session_job else
-            attach(root, app.event, app.origin, args.agent, browser_mode=args.browser))
+    from contextlib import nullcontext
+    try:
+        with (nullcontext(False) if args.session_job else clean_startup.handoff(
+                root, args.migration, automatic=args.launch_intent == 'automatic')) as launch_locked:
+            if (root/'helene.json').is_file() and not args.session_job:
+                from localharness.portable_profile import bind_program
+                bind_program(root)
+            if pending.is_file() and not args.migration:
+                migrated=json.loads(pending.read_text(encoding='utf-8'))
+                if migrated.get('state')=='prepared':args.migration=migrated['id']
+            app = Application(root, ui, None, program)
+            app.migration_id=args.migration
+            app.session_job=args.session_job
+            app.browser_mode=args.browser
+            from localharness.session_host import attach,attach_migration
+            host = (attach_migration(root,program,args.session_job,app.event,app.origin,args.agent,
+                                    browser_mode=args.browser,tree=args.session_tree) if args.session_job else
+                    attach(root, app.event, app.origin, args.agent, browser_mode=args.browser,
+                           _launch_locked=launch_locked))
+    except clean_startup.Deferred as exc:
+        # The existing installation retains work/Stop intent. A prepared folder
+        # can be opened again after that boundary without a startup-error modal.
+        print(str(exc), file=sys.stderr)
+        bootstrap_ready.signal()
+        return 0
     try:
         if not args.session_job:host.start()
         from localharness import owner_stop

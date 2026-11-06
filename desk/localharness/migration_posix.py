@@ -160,8 +160,12 @@ def close_python(old):
     return stop(old)
 
 
-def quiescent(old):
-    if _processes(old):raise RuntimeError('Прежняя Hélène ещё использует папку; установка сохранена для повтора')
+def quiescent(old, *, exempt=None):
+    from .session_host import process_state
+    helper = exempt if exempt and process_state(exempt)=='alive' else {}
+    if any((process.pid,info['create_time'])!=(helper.get('pid'),helper.get('birth'))
+           for process,info in _processes(old)):
+        raise RuntimeError('Прежняя Hélène ещё использует папку; установка сохранена для повтора')
     from .app_migration import discover
     if (Path(old)/'helene.json').is_file():
         for row in discover(Path(old))['agents']:

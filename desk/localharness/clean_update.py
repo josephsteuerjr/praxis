@@ -105,22 +105,27 @@ def _outside(path,old,new):
     return path
 
 
-def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
+def prepare(old,new,progress=None,*,attached_data=None,data_destination=None,refresh=False):
     """Bind configurations and permanent dependencies without reading programme bytes."""
     from .app_migration import discover
     from .essential_backup import configs
     from .portable_profile import default_data
     from .component_store import PINS, export_references
+    from .private_files import write_private
+    from .program_state import hidden
     from .python_source_updater import prepared_install_path
     old,new=roots(old,new);choose(old,new)
     previous=read(prepared_install_path(new))
-    if previous.get('format')==FORMAT:return identity(old,new,previous)
+    prepared=identity(old,new,previous) if previous.get('format')==FORMAT else None
+    if prepared and not refresh:return prepared
+    if refresh and not prepared:raise ValueError('Settings refresh requires an existing clean preparation')
+    if prepared:previous={}
     if previous:
         if previous.get('folder_switch') is False:
             raise ValueError('Prepared in-place update already owns the candidate')
         if previous.get('note',{}).get('source_policy')=='clean':return adopt_legacy(old,new)
         raise ValueError('Another prepared update already owns the candidate')
-    found=discover(old);operation=uuid.uuid4().hex
+    found=discover(old);operation=prepared['note']['id'] if prepared else uuid.uuid4().hex
     home=plain(Path(data_destination) if data_destination else default_data().parent/('retained-'+operation))
     _outside(home,old,new)
     moves={}
@@ -129,7 +134,11 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
         if path==old:raise ValueError('Separate the agent data from the programme root before updating')
         if not path.is_relative_to(old):return _outside(path,old,new)
         if path.is_relative_to(new):raise ValueError('Incoming programme cannot be old agent data')
-        target=plain(home/(relative or path.relative_to(old)))
+        if prepared:
+            admitted=next((row for row in prepared['moves'] if path.is_relative_to(plain(row['source']))),None)
+            if admitted is None:raise ValueError('Changed settings require another retained-data destination')
+            target=plain(Path(admitted['target'])/path.relative_to(admitted['source']))
+        else:target=plain(home/(relative or path.relative_to(old)))
         _outside(target,old,new)
         moves[str(path)]=str(target)
         return target
@@ -144,7 +153,11 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
             value['tree']=str(tree)
         elif not remote:raise ValueError('Selected agent data is unavailable')
         else:
-            tree=_outside(home/'remote-cache'/str(len(rows)),old,new)
+            if prepared:
+                tree=plain(read(new/row['relative'])['tree'])
+                if str(tree) not in prepared.get('empty_data',[]):
+                    raise ValueError('Remote cache differs from the prepared empty-data selection')
+            else:tree=_outside(home/'remote-cache'/str(len(rows)),old,new)
             data_paths.append(str(tree));empty_data.append(str(tree));value['tree']=str(tree)
         if not remote:
             source_paths.append({'old':str(row['code']),'selected':str(new/'tree')})
@@ -187,7 +200,18 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
     if not data_paths:raise ValueError('Clean update requires an existing selected data folder')
     # Validate small pins/receipts only. Pinned payloads stay in their permanent
     # store: no hashing, import or copy of their many gigabytes.
-    old_pins=export_references(old);incoming_pins=export_references(new)
+    old_pins=export_references(old)
+    if prepared:
+        from .component_store import _pins
+        incoming_pins=copy.deepcopy(_pins(new))
+        # A staged pin may already name its admitted future store. Validate
+        # its still-present source receipt, then reuse the same remapping.
+        for ref in incoming_pins['pins'].values():
+            store=plain(ref['store'])
+            moved=next((row for row in prepared['moves'] if store.is_relative_to(row['target'])),None)
+            if moved and not store.exists():
+                ref['store']=str(Path(moved['source'])/store.relative_to(moved['target']))
+    else:incoming_pins=export_references(new)
     def independent_pins(value):
         value=copy.deepcopy(value)
         from .component_store import _reference
@@ -208,7 +232,6 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
             data_pin_updates.append({'path':str(target/PINS),'source_path':str(source/PINS),'before':previous,'after':revised})
     pins={'format':old_pins['format'],'pins':{name:ref for name,ref in old_pins['pins'].items() if not (new/name).exists()}}
     pins['pins'].update(incoming_pins['pins'])
-    if pins['pins']:write(new/PINS,pins)
     from .component_store import ROOTS
     legacy_components=[]
     for name in ROOTS:
@@ -216,13 +239,6 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
             legacy_components.append({'source':str(plain(old/name)),'target':str(plain(new/name))})
     for name in ('.helene/webview','.webview','.helene/settings-backups','backups'):
         if (old/name).is_dir():retain(old/name)
-    # Remove only shipped configuration stubs, then install the old selected
-    # settings with clean distribution entry points. Personal state is external.
-    for path in configs(new):
-        if path.is_file():path.unlink()
-    for path,value in rows:write(path,value)
-    for name in ('agent-default.json','window-preferences.json','owner-stop.json'):
-        if (old/name).is_file():shutil.copy2(old/name,new/name)
     # Reduce overlapping data moves to their outermost selected root.
     reduced=[]
     for source,target in sorted(moves.items(),key=lambda pair:len(Path(pair[0]).parts)):
@@ -238,10 +254,26 @@ def prepare(old,new,progress=None,*,attached_data=None,data_destination=None):
         'normal_python_update':True,'source_policy':'clean','source_layout':'shipped-tree',
         'installation_flow':'clean-folder-switch','clean_switch':FORMAT,'remove_old':True,
         'old_directory_identity':directory_identity(old)}
-    write(new/'python-migration.json',note)
     value={'format':FORMAT,'old':str(old),'new':str(new),'note':note,'moves':reduced,
         'legacy_components':legacy_components,'data_pin_updates':data_pin_updates,'empty_data':empty_data,
-        'progress':str(getattr(progress,'path','')) if progress else ''}
+        'progress':prepared.get('progress','') if prepared else str(getattr(progress,'path','')) if progress else ''}
+    if prepared:
+        for key in ('data_home','data_paths','old_data_paths','old_directory_identity'):
+            if note[key]!=prepared['note'][key]:raise ValueError('Selected profile binding changed since clean preparation')
+        for key in ('moves','legacy_components','empty_data'):
+            if value[key]!=prepared.get(key,[]):raise ValueError('Retained data binding changed since clean preparation')
+    # Only small selected settings are refreshed after the old owner is quiet.
+    # The startup caller retains the incoming preimages before requesting it.
+    if pins['pins']:write(new/PINS,pins)
+    if not prepared:
+        for path in configs(new):
+            if path.is_file():path.unlink()
+    for path,item in rows:write(path,item)
+    for name in ('agent-default.json','window-preferences.json','owner-stop.json'):
+        if (old/name).is_file():
+            write_private(new/name,(old/name).read_bytes())
+            hidden(new/name)
+    write(new/'python-migration.json',note)
     write(prepared_install_path(new),value)
     if progress:progress.phase('prepared',preparation_completed=True,clean_switch=True)
     return value
@@ -276,14 +308,40 @@ def identity(old,new,value):
     return value
 
 
+def relocation_binding(value):
+    """Only immutable operation/data metadata, independent of UI acknowledgements."""
+    return {'format':FORMAT,**{key:copy.deepcopy(value.get(key,[])) for key in
+            ('old','new','moves','legacy_components','empty_data','data_pin_updates')},
+            **{key:copy.deepcopy(value['note'][key]) for key in
+            ('id','data_paths','old_data_paths','old_directory_identity')}}
+
+
+def data_source(value,path):
+    path=plain(path)
+    moved=next((row for row in value['moves'] if path.is_relative_to(row['target'])),None)
+    return plain(Path(moved['source'])/path.relative_to(moved['target'])) if moved else path
+
+
 def relocate(old,new,value):
     """The old process has exited; rename internal state into permanent storage."""
     identity(old,new,value)
     from . import migration_lifecycle
+    migration_lifecycle.quiescent(old)
     for data in dict.fromkeys([*value['note']['old_data_paths'],*value['note']['data_paths']]):
         for relative in ('.desktop-owner.lock','memory/.control/desktop-session.lock'):
             if not migration_lifecycle.owner_lease_available(Path(data)/relative):
                 raise RuntimeError('Selected data still has a writer; previous programme retained')
+    from .first_start import FORMAT as FIRST_FORMAT,receipt
+    from .component_store import _pins,PINS
+    pins={str(new):_pins(new)}
+    for data in value['note']['data_paths']:
+        path=plain(data)
+        update=next((row for row in value.get('data_pin_updates',[]) if plain(row['path'])==path/PINS),None)
+        source=path if path.exists() else data_source(value,path)
+        pins[str(path)]=copy.deepcopy(update['after']) if update else _pins(source)
+    intent={'format':FIRST_FORMAT,'state':'handoff','data':value['note']['data_paths'][0],
+            'clean_handoff':relocation_binding(value),'clean_pins':pins}
+    write(receipt(new),intent)
     value['_relocation_started']=True
     for path in value.get('empty_data',[]):plain(path).mkdir(parents=True,exist_ok=True)
     for row in [*value.get('moves',[]),*value.get('legacy_components',[])]:
@@ -294,20 +352,37 @@ def relocate(old,new,value):
             shutil.move(str(source),str(target))
         elif not target.exists():raise ValueError('Retained data is missing from both locations')
     for row in value.get('data_pin_updates',[]):write(row['path'],row['after'])
-    from .first_start import FORMAT as FIRST_FORMAT,receipt
     write(new/'python-migration.json',value['note'])
-    write(receipt(new),{'format':FIRST_FORMAT,'state':'completed','completed_at':dt.datetime.now(dt.timezone.utc).isoformat(),
-        'data':value['note']['data_paths'][0]})
+    write(receipt(new),dict(intent,state='completed',completed_at=dt.datetime.now(dt.timezone.utc).isoformat()))
 
 
 def restore(value):
     """Before retirement, a failed launch returns renamed legacy state intact."""
     identity(value['old'],value['new'],value)
+    from .program_state import directory
+    journal=plain(directory(value['new'],'clean-settings',create=False)/value['note']['id']/'refresh.json')
+    if journal.exists():
+        snapshot=read(journal)
+        if any(snapshot.get(key)!=expected for key,expected in
+               (('id',value['note']['id']),('old',value['old']),('new',value['new']))):
+            raise ValueError('Settings restoration journal belongs to another operation')
+        write(journal,dict(snapshot,state='restored'))
+    from .first_start import FORMAT as FIRST_FORMAT,receipt
+    write(receipt(value['new']),{'format':FIRST_FORMAT,'state':'handoff_restored',
+          'data':value['note']['data_paths'][0],'clean_handoff':relocation_binding(value)})
     for row in reversed([*value.get('moves',[]),*value.get('legacy_components',[])]):
         source,target=plain(row['source']),plain(row['target'])
         if target.exists() and not source.exists():
             source.parent.mkdir(parents=True,exist_ok=True);shutil.move(str(target),str(source))
     for row in value.get('data_pin_updates',[]):write(row['source_path'],row['before'])
+
+
+def startup_helper(old,new,operation):
+    """Publish this helper's exact live entry before its child waits on UI."""
+    import sys,psutil
+    return {'pid':os.getpid(),'birth':psutil.Process().create_time(),
+        'runtime':str(Path(sys.executable).resolve()),'entry':str(Path(sys.argv[0]).resolve()),
+        'old':str(Path(old).resolve()),'new':str(Path(new).resolve()),'operation':operation}
 
 
 def rebind_job(args,value,*,reverse=False):
@@ -341,6 +416,10 @@ def finish(old,new,note,*,stopped=lambda:False):
         raise ValueError('Clean retirement lacks its selected new application startup')
     for data in note['data_paths']:
         if not _outside(data,old,new).is_dir():raise ValueError('Selected data is unavailable')
+    for data in note.get('old_data_paths',[]):
+        data=plain(data)
+        if data.is_relative_to(old) and data.exists():
+            raise ValueError('Previous agent data still exists inside the former programme; retirement retained it')
     from .component_store import export_references,_reference
     for owner in [new,*map(Path,note['data_paths'])]:
         for ref in export_references(owner)['pins'].values():
@@ -405,6 +484,9 @@ def run(args,value,report,stopped):
         rebind_job(args,value)
         if stopped():raise InterruptedError('Owner stopped before clean application startup')
         report('starting',label='Открываем новую версию')
+        value['note']['startup_helper']=startup_helper(old,new,value['note']['id'])
+        write(prepared_install_path(new),value)
+        write(new/'python-migration.json',value['note'])
         argv=desktop_argv(new,['--root',str(new),'--migration',value['note']['id'],*(['--browser'] if args.browser else [])])
         process=subprocess.Popen(argv,cwd=new,env=permanent_environment(),stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=background_flags(),start_new_session=os.name!='nt')

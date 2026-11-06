@@ -8,7 +8,20 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from localharness import migration_windows,python_windows
+from localharness import migration_windows,python_windows,windows_shortcuts
+
+
+class ShortcutStatusTests(unittest.TestCase):
+    def test_nonnegative_hresult_values_are_success(self):
+        for status in (0,1,2,0x7fffffff):
+            with self.subTest(status=status):
+                windows_shortcuts._check(status,'read target')
+
+    def test_negative_hresult_values_keep_the_operation_and_error_code(self):
+        for status in (-2147467259,-2147024891,-1):
+            with self.subTest(status=status),self.assertRaisesRegex(
+                    OSError,rf'read target failed \(HRESULT 0x{status & 0xffffffff:08x}\)'):
+                windows_shortcuts._check(status,'read target')
 
 
 @unittest.skipUnless(os.name=='nt','Windows shortcuts')
@@ -103,6 +116,37 @@ class AutostartTests(unittest.TestCase):
             with patch('localharness.windows_shortcuts.read',return_value=value):
                 with self.assertRaisesRegex(RuntimeError,'Invalid shortcut binding'):
                     self.invoke('autostart_get')
+
+    def test_native_empty_target_is_unowned_and_kept_during_shortcut_discovery(self):
+        folder=self.root/'namespace-links';folder.mkdir()
+        foreign=folder/'Namespace.lnk'
+        # A persisted shell link with no filesystem target is a real S_FALSE
+        # GetPath result. It must never acquire ownership from its arguments.
+        windows_shortcuts.write(foreign,'',self.install,
+            '--root '+str(self.install/'app/python_app.py'))
+        before=foreign.read_bytes()
+        statuses=[]
+        check=windows_shortcuts._check
+        def observe(status,operation):
+            statuses.append((operation,status))
+            return check(status,operation)
+        with patch.object(windows_shortcuts,'_check',side_effect=observe):
+            self.assertIsNone(python_windows.shortcut_binding(foreign))
+        self.assertIn(('read target',1),statuses)
+        self.assertEqual(list(migration_windows.owned_shortcuts(self.install,[folder])),[])
+        self.assertEqual(foreign.read_bytes(),before)
+
+    def test_failed_getpath_hresult_propagates_through_normal_binding(self):
+        python_windows.shortcut(self.startup,self.install/'helene.exe',self.install)
+        before=self.startup.read_bytes()
+        method=windows_shortcuts._method
+        def fail_getpath(pointer,index,*types):
+            if index==3:return lambda *args:-2147467259
+            return method(pointer,index,*types)
+        with patch.object(windows_shortcuts,'_method',side_effect=fail_getpath):
+            with self.assertRaisesRegex(OSError,'read target failed.*0x80004005'):
+                python_windows.shortcut_binding(self.startup)
+        self.assertEqual(self.startup.read_bytes(),before)
 
     def test_migration_retargets_only_old_root_and_retains_launch_intent(self):
         old=self.root/'old';old.mkdir();(old/'helene.exe').write_bytes(b'fixture')

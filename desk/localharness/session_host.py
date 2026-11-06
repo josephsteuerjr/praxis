@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 import os
 from pathlib import Path
@@ -232,7 +232,7 @@ def attach_migration(root, package, identity, event, origin='', agent='', browse
     return SessionClient(root,descriptor,event,origin,agent,browser_mode,session_job=identity)
 
 
-def attach(root, event, origin='', agent='', browser_mode=False, *, timeout=30):
+def attach(root, event, origin='', agent='', browser_mode=False, *, timeout=30, _launch_locked=False):
     """Rejoin exact owner or start once after proving the former birth absent."""
     from .config_transaction import transaction
     from .desktop_supervisor import JobChild
@@ -242,7 +242,9 @@ def attach(root, event, origin='', agent='', browser_mode=False, *, timeout=30):
     if os.environ.get('HELENE_RECOVERY_AUTOMATIC')=='1' and session_exit.requested(root):
         raise InterruptedError('Owner exited the programme; automatic recovery cancelled')
     target = control_path(root)
-    with transaction(target.with_name('desktop-session-launch')):
+    # A prepared clean startup keeps this exact fence from old-owner exit
+    # through profile binding and admission. Kernel file locks are not recursive.
+    with (nullcontext() if _launch_locked else transaction(target.with_name('desktop-session-launch'))):
         descriptor = read(target)
         state = process_state(descriptor) if descriptor else 'absent'
         if state == 'unknown':

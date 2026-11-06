@@ -366,11 +366,15 @@ def stop_owned_processes(old):
         stop_generation(row)
 
 
-def quiescent(old):
+def quiescent(old, *, exempt=None):
     """Prove no selected-root references remain, using native process APIs."""
     if os.name!='nt':return True
-    exempt={os.getpid(),os.getppid()}
-    if any(int(row['ProcessId']) not in exempt and references_root(row.get('CommandLine',''),str(Path(old).resolve()))
+    from .session_host import process_state
+    helper = exempt if exempt and process_state(exempt)=='alive' else {}
+    callers={os.getpid(),os.getppid()}
+    if any(int(row['ProcessId']) not in callers
+           and (row['ProcessId'],row.get('Birth'))!=(helper.get('pid'),helper.get('birth'))
+           and references_root(row.get('CommandLine',''),str(Path(old).resolve()))
            for row in process_snapshot()):
         raise RuntimeError('Old processes still reference the selected installation; new owner not admitted')
     return True

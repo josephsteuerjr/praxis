@@ -62,11 +62,11 @@ def replace_config(staged, target):
 
 
 @contextmanager
-def transaction(path):
+def transaction(path, *, timeout_sec=15):
     identity = os.path.normcase(str(Path(path).resolve()))
     name = 'helene-config-' + hashlib.sha256(identity.encode('utf-8')).hexdigest() + '.lock'
     try:
-        fd = acquire_file_lock(Path(tempfile.gettempdir()) / name, timeout_sec=15)
+        fd = acquire_file_lock(Path(tempfile.gettempdir()) / name, timeout_sec=timeout_sec)
     except PlatformSupportError as exc:
         raise OSError('Settings writer is busy or unavailable') from exc
     try:
