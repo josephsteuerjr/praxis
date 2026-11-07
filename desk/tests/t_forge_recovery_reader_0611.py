@@ -94,6 +94,8 @@ class RecoveredReader(unittest.TestCase):
 
     def test_changed_subject_invalidates_recovery(self):
         self.prove()
+        # Prime the reusable validator; its verdict must still use fresh inputs.
+        self.assertTrue(self.row()['custody_recovered'])
         path = self.unit/'request.json'
         request = json.loads(path.read_text(encoding='utf-8'))
         self.put(path,dict(request,supervisor_pid=222))
@@ -138,6 +140,8 @@ class RecoveredReader(unittest.TestCase):
         stock.write_bytes((ROOT/'praxis/forge_recovery.py').read_bytes())
         with mock.patch.object(reader,'__file__',str(self.base/'programme/app/deskd/forge_reader.py')):
             self.assertTrue(self.row()['custody_recovered'])
+            stock.write_text('def read_recovery(folder): return None\n',encoding='utf-8')
+            self.assertEqual(self.row()['status'],'stop_pending')
             stock.unlink()
             self.assertEqual(self.row()['status'],'stop_pending')
 

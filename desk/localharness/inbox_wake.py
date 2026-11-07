@@ -42,11 +42,14 @@ class InboxWake:
     consumer is busy, so it must not be interpreted as one particular message.
     """
 
-    def __init__(self, directory):
+    def __init__(self, directory, *, notes_only=False):
         self._lock = threading.Lock()
         self._closed = threading.Event()
         self._api = None
         self._handle = None
+        self._directory = Path(directory)
+        self._notes_only = notes_only
+        self._notes = self._note_stamp() if notes_only else None
         try:
             import ctypes
             api = _windows_api()
@@ -62,6 +65,18 @@ class InboxWake:
     @property
     def native(self):
         return self._handle is not None and not self._closed.is_set()
+
+    def _note_stamp(self):
+        # Status/heartbeat, attachment bookkeeping and atomic temp files share
+        # this directory. Only published notes can wake its consumer early.
+        try:
+            with os.scandir(self._directory) as entries:
+                return tuple(sorted((entry.name, info.st_ino, info.st_mtime_ns, info.st_size)
+                    for entry in entries
+                    if entry.name.endswith('.md') and not entry.name.startswith('.tmp-')
+                    for info in (entry.stat(),)))
+        except OSError:
+            return None  # Timed consumer retry retains its normal error policy.
 
     def _retire(self):
         handle, self._handle = self._handle, None
@@ -88,15 +103,29 @@ class InboxWake:
                 try:
                     # Avoid INFINITE (0xffffffff), even for a very large input.
                     milliseconds = min(0xFFFFFFFE, math.ceil(seconds * 1000))
-                    result = self._api.WaitForSingleObject(self._handle, milliseconds)
-                    if result == _SIGNALED:
+                    while True:
+                        result = self._api.WaitForSingleObject(self._handle, milliseconds)
+                        if result != _SIGNALED:
+                            break
                         try:
                             rearmed = self._api.FindNextChangeNotification(self._handle)
                         except (OSError, ValueError, AttributeError):
                             rearmed = False
                         if not rearmed:
                             self._retire()
-                        return True
+                        if not self._notes_only:
+                            return True
+                        stamp = self._note_stamp()
+                        changed = stamp is not None and stamp != self._notes
+                        self._notes = stamp
+                        if changed:
+                            return True
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return False
+                        if not rearmed:
+                            break
+                        milliseconds = min(0xFFFFFFFE, math.ceil(remaining * 1000))
                     if result == _TIMEOUT:
                         return False
                     self._retire()

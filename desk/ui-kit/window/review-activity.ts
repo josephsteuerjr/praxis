@@ -31,7 +31,7 @@ export function reviewActivity(
       publishActivity(current,{});
     }
     if (now - received > 15000) {badge.hidden = !visible(last);freeze();}
-    if (reading || now - attempted < 3000) return;
+    if (reading || now - attempted < (received && !visible(last) && !stale ? 10000 : 3000)) return;
     reading = true;
     attempted = now;
     try {

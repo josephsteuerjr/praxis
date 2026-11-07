@@ -1,3 +1,11 @@
+# 2.5.3
+
+Reduced idle CPU use by removing inbox self-wakeups, retiring foreign Forge
+update observations, avoiding unnecessary TLS setup for local RPC, and reducing
+idle/hidden Forge polling. Active work and owner controls remain responsive.
+
+Read the [idle CPU hotfix details](docs/RELEASE-2.5.3.md).
+
 # 2.5.2
 
 Scrolling and rubber-band return use the full elapsed frame time. The spring

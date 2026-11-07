@@ -16,7 +16,7 @@ now+=4000;failure=true;await poll();assert.equal(badge.hidden,false);assert.matc
 assert.equal(seen.at(-1)[1].reviewers[0].live,false);
 now+=4000;scope='b';failure=false;value={};await poll();assert.equal(badge.hidden,true);
 for(const state of ['cancelled','completed','superseded']) {
-  now+=4000;value={update:{id:'old',state},reviewers:[{id:'done',execution:'done',live:false}]};
+  now+=10000;value={update:{id:'old',state},reviewers:[{id:'done',execution:'done',live:false}]};
   await poll();assert.equal(badge.hidden,true,`terminal ${state} is history, not active work`);
   assert.equal(seen.at(-1)[1].update.state,state,'terminal receipt remains available to action history');
   now+=16000;failure=true;await poll();assert.equal(badge.hidden,true,'offline polling must not resurrect terminal badge');
@@ -27,3 +27,8 @@ await poll();assert.equal(badge.hidden,false);assert.equal(badge.textContent,'О
 now+=4000;value={running:1,update:{id:'old',state:'cancelled'}};
 await poll();assert.equal(badge.hidden,false);assert.equal(badge.textContent,'review · 1');
 console.log('Idle correction, actual tests/review, stale visibility and profile isolation PASS');
+
+now+=4000;value={};await poll();
+const idleReads=seen.length;
+now+=4000;await poll();assert.equal(seen.length,idleReads,'idle review history must not be polled every few seconds');
+now+=6000;await poll();assert.equal(seen.length,idleReads+1,'idle discovery remains bounded');

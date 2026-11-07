@@ -2188,6 +2188,11 @@ def _sleep_seed_once() -> None:
 
 
 def _set_busy(on: bool, run: str = "", *, chat_id: str = "") -> None:
+    state = bool(on), str(run or ""), str(chat_id) if on else ""
+    if state == (_busy.get("busy"), _busy.get("run"), _busy.get("chat_id")):
+        # Heartbeat owns freshness. Publishing an unchanged idle status here
+        # used to wake our own inbox watch and spin the entire consumer loop.
+        return
     # Тишина владельца для сна: начало любого хода и конец НАСТОЯЩЕГО хода. Холостое
     # `_set_busy(False)` (его зовёт `_resume_due` на каждом проходе) тишину не нарушает.
     if (on and str(run or "") != "sleep") or (
@@ -3771,7 +3776,7 @@ def main() -> None:
     update_at = 0.0
     sleep_at = time.time()
     from localharness.inbox_wake import InboxWake
-    inbox_wake = InboxWake(inbox)
+    inbox_wake = InboxWake(inbox, notes_only=True)
     atexit.register(inbox_wake.close)
     while True:
         if owner_stop.stopped():

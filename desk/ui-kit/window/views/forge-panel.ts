@@ -122,6 +122,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     const bytes = crypto.getRandomValues(new Uint8Array(16));
     const command: Command = { command_id: Array.from(bytes, value => value.toString(16).padStart(2, "0")).join(""), state: "queued", task_id: task.id, agent_id: unit?.id || "", action };
     pending.set(key, { command, feedback: target });
+    // A new owner action immediately leaves the slower idle-discovery cadence.
+    clearTimeout(timer);
+    if (!document.hidden) timer = setTimeout(() => void refresh(), pollMs);
     target.textContent = "Передаю просьбу…";
     try {
       const response = await request<Command>("/api/forge/control", { ...command, expected_generation: unit?.observation?.generation || "" });
@@ -411,6 +414,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   }
   async function refresh() {
     if (!running || !root.isConnected || busy) return;
+    if (document.hidden) { clearTimeout(timer); return; }
     if (scope !== getScope()) resetScope();
     clearTimeout(timer);
     const captured = epoch; busy = true;
@@ -445,12 +449,19 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     } catch (e) {
       if (valid(captured)) {forgeError = "Не удалось обновить Forge: " + errorText(e) + (tasks.size ? ". Предыдущие записи сохранены." : "");paintReviewers();}
     } finally {
-      if (captured === epoch) { busy = false; if (running && root.isConnected) timer = setTimeout(() => void refresh(), pollMs); }
+      if (captured === epoch) {
+        busy = false;
+        if (running && root.isConnected && !document.hidden) {
+          const interval = activeRows.length || pending.size || forgeError ? pollMs : Math.max(pollMs, 10000);
+          timer = setTimeout(() => void refresh(), interval);
+        }
+      }
     }
   }
+  const visibility = () => { clearTimeout(timer); if (!document.hidden) void refresh(); };
   return {
-    start() { if (scope !== getScope()) resetScope(); if (running) { void refresh(); return; } running = true; epoch++; busy = false; void refresh(); },
-    stop() { running = false; epoch++; clearTimeout(timer); for (const controller of controllers) controller.abort(); controllers.clear(); busy = false;
+    start() { if (scope !== getScope()) resetScope(); if (running) { void refresh(); return; } running = true; epoch++; busy = false; document.addEventListener('visibilitychange', visibility); void refresh(); },
+    stop() { running = false; epoch++; clearTimeout(timer); document.removeEventListener('visibilitychange', visibility); for (const controller of controllers) controller.abort(); controllers.clear(); busy = false;
       for(const task of tasks.values())for(const view of task.views.values()){
         view.eventBusy=false;view.more.disabled=false;
         for(const target of view.payloads)if(target.contentBusy){target.contentEpoch++;target.contentBusy=false;target.contentMore.disabled=false;target.contentMore.hidden=false;target.contentMeta.textContent='Чтение приостановлено. Продолжить с этой страницы.';}

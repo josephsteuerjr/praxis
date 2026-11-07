@@ -18,7 +18,10 @@ class Element {
   async emit(k) {for(const fn of this.listeners[k] || [])await fn();}
   async click() {if(!this.disabled)await this.emit('click');}
 }
-const document={createElement:tag=>new Element(tag)};
+const visibilityListeners=new Set();
+const document={createElement:tag=>new Element(tag),hidden:false,
+  addEventListener:(name,fn)=>{if(name==='visibilitychange')visibilityListeners.add(fn);},
+  removeEventListener:(name,fn)=>{if(name==='visibilitychange')visibilityListeners.delete(fn);}};
 const walk=node=>[node,...node.children.flatMap(walk)];
 const find=(root,text)=>walk(root).find(n=>n.tag==='button' && n.textContent===text);
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
@@ -30,7 +33,7 @@ const factory=new Function('document','crypto','ApiError','channelURL','setTimeo
 const sha='d'.repeat(64);
 function task() {return {id:'code-fixture',goal:'Implement a parser → independent review → repair',status:'active',agents:[{id:'agent-fixture',role:'worker',model:'fixture-model',subtask:'Preserve authored edits while fixing parser.py',status:'unknown',request_status:'running',custody:'unknown',observation:{generation:'g-one',phase:'tool',tool:'coding_verify',observed_at:'2026-10-26T02:20:00Z'},result_ref:{kind:'result',sha256:sha}}]};}
 function stand(options={}) {
-  const root=new Element('section'),calls=[],timers=new Map();let seq=0;
+  const root=new Element('section'),calls=[],timers=new Map(),delays=new Map();let seq=0;
   const state={tasks:[task()],recent:[],recentPage:[],nextCursor:null,scope:'one',eventPage:null,error:'',eventError:'',delay:null,payloadDelay:null,commandError:false,commandState:'queued',receiptDelay:null};
   const content='<script>inert output</script>\n'+'complete text 🐍\n'.repeat(900);
   const read=async(path,signal,body)=>{
@@ -58,9 +61,9 @@ function stand(options={}) {
     }
     throw Error(path);
   };
-  const impl=factory(document,{getRandomValues:array=>webcrypto.getRandomValues(array)},Error,path=>path,(fn)=>{const id=++seq;timers.set(id,fn);return id;},id=>timers.delete(id),{});
+  const impl=factory(document,{getRandomValues:array=>webcrypto.getRandomValues(array)},Error,path=>path,(fn,delay)=>{const id=++seq;timers.set(id,fn);delays.set(id,delay);return id;},id=>{timers.delete(id);delays.delete(id)},{});
   const panel=impl.forgePanel(root,read,10,{scope:()=>state.scope,...options});
-  return {root,calls,state,panel,timers,content};
+  return {root,calls,state,panel,timers,delays,content};
 }
 async function open(test) {
   const team=walk(test.root).find(n=>n.className==='fold forge-task');team.open=true;await team.emit('toggle');
@@ -252,6 +255,27 @@ assert.match(main,/if \(from === 'talk' && id !== 'talk'\) panel\.dispose\(\);/)
   assert.match(t.root.textContent,/1 участников/);t.panel.stop();
 }
 console.log('Forge production panel: pagination, inert content, stable expansion, failure preservation, abort/late-response fences, controls/generation/unknown delivery, one poll lifetime PASS');
+
+{
+  const t=stand();const ended=task();ended.agents[0].status='done';
+  t.state.tasks=[];t.state.recent=[ended];t.panel.start();await tick();
+  assert.deepEqual([...t.delays.values()],[10000],'only historical work uses slower discovery');
+  const {unit}=await open(t);await find(unit,'Остановить участника').click();await tick();
+  assert.deepEqual([...t.delays.values()],[10],'owner action immediately restores the active polling interval');
+  t.panel.stop();
+}
+
+{
+  const t=stand();t.panel.start();await tick();
+  const before=t.calls.length;
+  document.hidden=true;for(const fn of visibilityListeners)fn();
+  await t.panel.refresh();await tick();
+  assert.equal(t.calls.length,before,'hidden window must not reread Forge history');
+  assert.equal(t.timers.size,0,'hidden view has no polling timer');
+  document.hidden=false;for(const fn of visibilityListeners)fn();await tick();
+  assert.ok(t.calls.length>before,'returning to the visible window refreshes immediately');
+  t.panel.stop();assert.equal(visibilityListeners.size,0,'stopped panels release their visibility listener');
+}
 
 // Praxis drawer parity: team → participant, content stays beside its exact call.
 {

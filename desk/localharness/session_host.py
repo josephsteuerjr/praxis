@@ -109,7 +109,13 @@ def _rpc(descriptor, action, args=None, *, timeout=30):
                        'args': args or {}}, ensure_ascii=False).encode('utf-8')
     request = urllib.request.Request(descriptor['origin'] + '/session', data=body,
         headers={'Content-Type': 'application/json', 'X-Helene-Session': descriptor['token']})
-    http = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    # This endpoint is strictly loopback HTTP (validated above). build_opener
+    # also constructs HTTPSHandler, loading Windows' certificate store on every
+    # observer poll even though no TLS connection can ever be made here.
+    http = urllib.request.OpenerDirector()
+    for handler in (urllib.request.HTTPHandler(), urllib.request.HTTPDefaultErrorHandler(),
+                    NoRedirect(), urllib.request.HTTPErrorProcessor()):
+        http.add_handler(handler)
     try:
         with http.open(request, timeout=timeout) as response:
             value = json.load(response)
@@ -118,6 +124,8 @@ def _rpc(descriptor, action, args=None, *, timeout=30):
             value = json.load(exc)
         except (ValueError, OSError):
             raise RuntimeError('Session host refused the request') from exc
+        finally:
+            exc.close()
         raise RuntimeError(value.get('error') or 'Session host refused the request') from exc
     if value.get('generation') != descriptor['generation']:
         raise RuntimeError('Session host generation changed; reattach, do not replay effects')

@@ -23,6 +23,12 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.5.3
+
+Lower idle CPU use through corrected inbox wakeups, lighter local session
+observation, and adaptive Forge polling. Global hotkeys, voice and task controls
+are retained. Read the [2.5.3 hotfix details](desk/docs/RELEASE-2.5.3.md).
+
 ## Included in 2.5.2
 
 Scrolling and rubber-band return use the full elapsed frame time. The spring

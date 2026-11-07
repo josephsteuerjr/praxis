@@ -780,7 +780,7 @@ def _signature(target):
         return None
 
 
-def _observe(tree, paused, stopped):
+def _observe(tree, paused, stopped, *, coordinator=None):
     """Discover atomic request publications; do not poll retired history forever.
 
     A restart rebuilds this disposable cache in small batches. Only a changed
@@ -788,6 +788,8 @@ def _observe(tree, paused, stopped):
     Current owner controls are not queued behind that historical JSON backlog.
     """
     key = str(Path(tree).resolve())
+    if coordinator is not None:
+        key = (key, json.dumps(coordinator, sort_keys=True))
     cache = _OBSERVERS.setdefault(key, {'records': {}, 'watch': {}, 'pending': {}})
     signature = _signature(_requests(tree))
     if 'directory' not in cache or cache['directory'] != signature:
@@ -840,7 +842,7 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
     """Runner maintenance hook: current producers only after initial discovery."""
     with _LOCK:
         changed = []
-        cache = _observe(tree, paused, stopped)
+        cache = _observe(tree, paused, stopped, coordinator=coordinator)
         for identity, request in list(cache['watch'].items()):
             from .update_supersession import blocked
             if blocked(request,protocol='source',current_tree=tree):
@@ -854,6 +856,10 @@ def tick(tree, forge, review_service, paused=False, stopped=False, *, coordinato
             if operation.get('coordinator') != coordinator:
                 # Incoming-runtime review has a separate owner. An ordinary
                 # (possibly older) agent is not its producer or cancellation API.
+                # Request republication rediscovers transferred work. Keep each
+                # coordinator's discovery independent; don't reread all foreign
+                # completed/cancelled pipelines on every maintenance tick.
+                cache['watch'].pop(identity, None)
                 continue
             before = json.dumps(operation, sort_keys=True)
             current = identity == cache.get('current_id')

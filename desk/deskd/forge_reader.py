@@ -12,6 +12,7 @@ import codecs
 import base64
 import hashlib
 import importlib.util
+from functools import lru_cache
 import json
 import re
 from pathlib import Path
@@ -134,6 +135,17 @@ def _payload_refs(result: dict) -> dict:
     return out
 
 
+@lru_cache(maxsize=4)
+def _recovery_validator(path: Path, stamp: tuple):
+    """Cache code loading, never the custody verdict or its current inputs."""
+    spec = importlib.util.spec_from_file_location('_helene_forge_recovery_reader', path)
+    if spec is None or spec.loader is None:
+        return None
+    validator = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(validator)
+    return validator
+
+
 def _recovered_status(folder: Path, result: dict) -> str | None:
     if not (folder/'custody-recovery.json').is_file():
         return None
@@ -147,11 +159,10 @@ def _recovered_status(folder: Path, result: dict) -> str | None:
         return None
     try:
         path = _inside(root,path)
-        spec = importlib.util.spec_from_file_location('_helene_forge_recovery_reader',path)
-        if spec is None or spec.loader is None:
+        stat = path.stat()
+        validator = _recovery_validator(path, (stat.st_ino, stat.st_mtime_ns, stat.st_size))
+        if validator is None:
             return None
-        validator = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(validator)
         if validator.read_recovery(folder) is None:
             return None
         status = str(result.get('status') or 'lost')
@@ -247,7 +258,9 @@ def task_detail(tree: Path, task_id: str) -> dict:
     agents_path = _inside(folder, folder / "agents")
     try:
         folders = sorted(p for p in agents_path.iterdir() if p.is_dir()) if agents_path.exists() else []
-        agents = [_unit(unit_dir(tree, task_id, p.name), task_id) for p in folders]
+        # Parent/task/agents were validated above; _unit validates each request.
+        # Avoid rewalking those identical parents for every participant.
+        agents = [_unit(_inside(agents_path, agents_path / identity(p.name)), task_id) for p in folders]
     except OSError as exc:
         raise ReadError(f"Forge participants unreadable: {exc}", 503) from exc
     return {"id": task_id, "goal": task.get("goal") or "", "status": task.get("status") or "unknown",

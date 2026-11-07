@@ -15,7 +15,7 @@ class Custody(unittest.TestCase):
     @contextmanager
     def held(self,maintenance=False):
         entered=threading.Event();release=threading.Event();errors=[]
-        def observe(*args):
+        def observe(*args, **kwargs):
             entered.set()
             if not release.wait(5):raise TimeoutError('Fixture holder was not released')
             return {'watch':{},'current_id':None}
