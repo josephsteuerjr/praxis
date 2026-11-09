@@ -1,7 +1,10 @@
-/* ATLAS observatory service worker — offline shell, network-first for data. */
-const SHELL = "atlas-shell-v6";
-const ASSETS = ["/", "/s/atlas.css?v=6", "/s/atlas.js?v=6", "/manifest.webmanifest",
-  "/s/icon-192.png", "/s/icon-512.png"];
+/* Атланта: service worker. Оболочка работает без сети, данные всегда живые. */
+const SHELL = "atlanta-shell-v9";
+const ASSETS = ["/", "/s/atlanta.css?v=9", "/s/atlanta.js?v=9", "/manifest.webmanifest",
+  "/s/icon-192.png", "/s/icon-512.png",
+  "/s/unbounded-cyrillic.woff2", "/s/unbounded-latin.woff2",
+  "/s/spectral-cyrillic-500-italic.woff2", "/s/spectral-latin-500-italic.woff2",
+  "/s/jetbrains-mono-cyrillic.woff2", "/s/jetbrains-mono-latin.woff2"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil((async () => {
@@ -16,7 +19,7 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k.startsWith("atlas-shell-") && k !== SHELL).map(k => caches.delete(k)));
+    await Promise.all(keys.filter(k => (k.startsWith("atlas-shell-") || k.startsWith("atlanta-shell-")) && k !== SHELL).map(k => caches.delete(k)));
     await self.clients.claim();
   })());
 });
@@ -25,9 +28,10 @@ self.addEventListener("fetch", (e) => {
   const req = e.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  // never cache API or auth — always live
+  if (url.origin !== location.origin) return;
+  // API и вход никогда не кэшируем: только живые данные
   if (url.pathname.startsWith("/api/")) return;
-  // shell: network-first, fall back to cache (so an offline PWA still opens)
+  // оболочка: сначала сеть, без сети — кэш (установленная иконка всё равно откроется)
   e.respondWith((async () => {
     try {
       const r = await fetch(req);

@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import struct
 import sys
 import tempfile
@@ -389,9 +390,23 @@ class TestRootfsParsers(ProcFixture):
         self.assertEqual(base["password_auth"], "yes*")  # дефолт, в конфиге закомментен
         self._w("rootfs/etc/ssh/sshd_config.d/50-cloud.conf",
                 "PasswordAuthentication no\nPermitRootLogin prohibit-password\n")
+        # 09.11.2026: drop-in действует, только если на него есть Include
+        self.assertEqual(serverapp.parse_sshd(self.hostfs)["password_auth"], "yes*")
+        self._w("rootfs/etc/ssh/sshd_config",
+                "Include /etc/ssh/sshd_config.d/*.conf\nPort 22\nPermitRootLogin yes\n")
         over = serverapp.parse_sshd(self.hostfs)
         self.assertEqual(over["password_auth"], "no")
         self.assertEqual(over["permit_root_login"], "prohibit-password")
+
+    def test_sshd_match_block_is_not_global(self):
+        # 09.11.2026: на проде строки «yes» стояли внутри Match User, а Атланта показывала
+        # их как глобальные и пугала входом root по паролю, которого нет.
+        self._w("rootfs/etc/ssh/sshd_config",
+                "Port 22\nMatch User tunnel\nPasswordAuthentication no\nPermitRootLogin yes\n")
+        got = serverapp.parse_sshd(self.hostfs)
+        self.assertEqual(got["permit_root_login"], "prohibit-password*")
+        self.assertEqual(got["password_auth"], "yes*")
+        self.assertEqual(got["port"], "22")
 
     def test_authorized_keys(self):
         self.assertEqual(serverapp.authorized_keys_count(self.hostfs, "/root"), 2)
@@ -805,6 +820,38 @@ class TestPublicUrl(unittest.TestCase):
         self.assertEqual(serverapp.menu_button_url(cur), "https://a/")
         self.assertEqual(serverapp.menu_button_url({"type": "commands"}), "")
         self.assertEqual(serverapp.menu_button_url(None), "")
+
+
+class TestAtlantaShell(unittest.TestCase):
+    """09.11.2026: мини-апп называется Атланта, и оболочка не должна ссылаться на файлы,
+    которых нет: битый ассет здесь означает белый экран в Telegram."""
+
+    def _static(self, name):
+        return serverapp.BASE / "serverapp_static" / name
+
+    def test_every_asset_exists(self):
+        html = (serverapp.BASE / "serverapp.html").read_text(encoding="utf-8")
+        sw = self._static("sw.js").read_text(encoding="utf-8")
+        css = self._static("atlanta.css").read_text(encoding="utf-8")
+        names = set(re.findall(r"/s/([0-9A-Za-z._-]+)", html + sw + css))
+        self.assertIn("atlanta.js", names)
+        self.assertIn("atlanta.css", names)
+        for name in names:
+            self.assertTrue(self._static(name).is_file(), name)
+
+    def test_named_atlanta_everywhere_the_owner_sees(self):
+        html = (serverapp.BASE / "serverapp.html").read_text(encoding="utf-8")
+        self.assertIn("<title>Атланта</title>", html)
+        self.assertNotIn("ATLAS", html)
+        manifest = json.loads(self._static("manifest.webmanifest").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["short_name"], "Атланта")
+        self.assertEqual(serverapp.MENU_TEXT, os.getenv("PRAXIS_SERVERAPP_MENU_TEXT", "Атланта"))
+
+    def test_sessions_of_installed_icon_survive_the_rename(self):
+        # Соль подписи менять нельзя: иначе все установленные иконки разлогинятся.
+        self.assertEqual(os.getenv("PRAXIS_SERVERAPP_SESSION_SALT", "atlas.v3"), serverapp.SESSION_SALT)
+        js_text = self._static("atlanta.js").read_text(encoding="utf-8")
+        self.assertIn('"atlas.session"', js_text)
 
 
 class TestSyncMenuButton(unittest.IsolatedAsyncioTestCase):

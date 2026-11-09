@@ -1,89 +1,137 @@
 <!doctype html>
-<html lang="ru" data-theme="atlas">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
-<title>ATLAS // observatory</title>
-<meta name="theme-color" content="#07090d">
+<title>Атланта</title>
+<meta name="description" content="Сервер в разрезе: от неба до фундамента.">
+<meta name="theme-color" content="#0e1240">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="ATLAS">
+<meta name="apple-mobile-web-app-title" content="Атланта">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="referrer" content="no-referrer">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/s/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/s/icon-192.png">
-<link rel="stylesheet" href="/s/atlas.css?v=6">
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preload" href="/s/unbounded-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/s/atlanta.css?v=9">
+<script>/* Скрипт Telegram нужен только внутри Telegram: в установленной иконке он лишь задержал бы запуск. */
+if (/tgWebApp/.test(location.hash) || window.TelegramWebviewProxy) document.write('<script src="https://telegram.org/js/telegram-web-app.js"><\/script>');
+</script>
 </head>
 <body>
-<canvas id="bg" aria-hidden="true"></canvas>
-<div id="scan" aria-hidden="true"></div>
-<div id="vignette" aria-hidden="true"></div>
 
-<div id="boot">
-  <div class="boot-brand">ATLAS</div>
-  <div class="boot-sub">observatory · establishing owner link</div>
-  <div class="boot-bar"><i></i></div>
-  <pre class="boot-log" id="bootlog"></pre>
+<div id="boot" role="status">
+  <div class="boot-brand">Атланта</div>
+  <div class="boot-lights" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+  <div class="boot-line" id="bootLine">Зажигаем окна…</div>
 </div>
 
 <div id="gate" hidden>
   <div class="gate-card">
-    <div class="gate-mark">⛓ ATLAS</div>
-    <h1 id="gateTitle">Связать устройство</h1>
-    <p id="gateMsg">Вставь ссылку связи (она содержит ключ этого устройства) — или открой Обсерваторию кнопкой в Telegram.</p>
-    <input id="gateLink" class="gate-input" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://srv…/#s=…">
+    <svg class="gate-key" viewBox="0 0 64 28" aria-hidden="true"><circle cx="14" cy="14" r="11" fill="none" stroke="currentColor" stroke-width="4"/><path d="M25 14h36v8m-11-8v6" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="square"/></svg>
+    <h1 id="gateTitle">Ключ от города</h1>
+    <p id="gateMsg">Вставь ссылку связи: в ней лежит ключ этого устройства.</p>
+    <input id="gateLink" class="gate-input" type="text" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="https://srv…/#s=…" aria-label="Ссылка связи">
     <div class="gate-actions">
-      <button id="gateLinkBtn" class="btn">Связать</button>
+      <button id="gateLinkBtn" class="btn">Войти</button>
       <button id="gatePaste" class="btn ghost">Вставить из буфера</button>
     </div>
-    <div id="gateErr" class="gate-err" hidden></div>
+    <div id="gateErr" class="gate-err" role="alert" hidden></div>
   </div>
 </div>
 
 <div id="app" hidden>
-  <header id="topbar">
-    <div class="tb-left">
-      <span class="tb-mark">⛓ ATLAS</span>
-      <span class="tb-host" id="tbHost">—</span>
-    </div>
-    <div class="tb-mid">
-      <span class="mini" id="miniCpu"><b>CPU</b><em>—</em></span>
-      <span class="mini" id="miniMem"><b>MEM</b><em>—</em></span>
-      <span class="mini" id="miniLoad"><b>LD</b><em>—</em></span>
-    </div>
-    <div class="tb-right">
-      <span class="tb-clock" id="tbClock">--:--:--</span>
-      <span class="tb-sess" id="tbSess" title="статус линка">◇ LINK</span>
-    </div>
-  </header>
+  <main id="world" tabindex="-1">
 
-  <nav id="rail">
-    <a data-sec="vitals" class="on"><i>01</i><b>VITALS</b></a>
-    <a data-sec="containers"><i>02</i><b>CONTAINERS</b></a>
-    <a data-sec="topology"><i>03</i><b>TOPOLOGY</b></a>
-    <a data-sec="storage"><i>04</i><b>STORAGE</b></a>
-    <a data-sec="ports"><i>05</i><b>PORTS</b></a>
-    <a data-sec="proc"><i>06</i><b>PROCESS</b></a>
-    <a data-sec="stack"><i>07</i><b>STACK</b></a>
-    <a data-sec="access"><i>08</i><b>ACCESS</b></a>
-  </nav>
+    <section class="floor f-sky" id="f-sky" data-floor="sky" aria-label="Небо и город">
+      <canvas id="city" role="img" aria-label="Город. Каждый дом — работающий контейнер, высота — его память."></canvas>
+      <div class="sky-copy">
+        <header class="mast">
+          <h1 class="wordmark">Атланта</h1>
+          <p class="dateline"><span id="dl">&nbsp;</span></p>
+        </header>
+        <div class="forecast">
+          <div class="temp"><span id="tempV">—</span><sup>°</sup><small>процессор</small></div>
+          <div class="verdict">
+            <p class="headline" id="headline">&nbsp;</p>
+            <p class="subline" id="subline">&nbsp;</p>
+          </div>
+        </div>
+        <dl class="almanac">
+          <div><dt>Облачность</dt><dd id="aMem">—</dd><small id="aMemS">память</small></div>
+          <div><dt>Ветер</dt><dd id="aLoad">—</dd><small id="aLoadS">нагрузка</small></div>
+          <div><dt>Осадки</dt><dd id="aRain">—</dd><small>запись на диск</small></div>
+          <div><dt>Движение</dt><dd id="aNet">—</dd><small>сеть хоста</small></div>
+        </dl>
+      </div>
+      <div id="lost" role="status" hidden>Связь с городом пропала. Показываю то, что видела последним.</div>
+    </section>
 
-  <main id="stage">
-    <section data-sec="vitals" class="on"></section>
-    <section data-sec="containers"></section>
-    <section data-sec="topology"></section>
-    <section data-sec="storage"></section>
-    <section data-sec="ports"></section>
-    <section data-sec="proc"></section>
-    <section data-sec="stack"></section>
-    <section data-sec="access"></section>
+    <section class="floor f-houses" id="f-houses" data-floor="houses">
+      <header class="fh"><span class="fh-n">0</span><h2>Дома</h2>
+        <p class="lede">Каждый контейнер это отдельный дом. Высота — сколько он занимает памяти, окна горят от работы процессора, а цвет говорит, насколько дом отгорожен от хоста.</p></header>
+      <div class="fb" id="b-houses"><div class="wait">Обхожу улицы…</div></div>
+    </section>
+
+    <section class="floor f-people" id="f-people" data-floor="people">
+      <header class="fh"><span class="fh-n">−1</span><h2>Жители</h2>
+        <p class="lede">Каждая точка это один процесс на сервере. Здесь считают всех: и тех, кто живёт в домах, и тех, кто прямо на улице.</p></header>
+      <div class="fb" id="b-people"><div class="wait">Провожу перепись…</div></div>
+    </section>
+
+    <section class="floor f-gates" id="f-gates" data-floor="gates">
+      <header class="fh"><span class="fh-n">−2</span><h2>Ворота</h2>
+        <p class="lede">Порты, которые слушает сервер. Через ворота в стене может постучаться весь интернет, калитки открываются только изнутри.</p></header>
+      <div class="fb" id="b-gates"><div class="wait">Проверяю стену…</div></div>
+    </section>
+
+    <section class="floor f-metro" id="f-metro" data-floor="metro">
+      <header class="fh"><span class="fh-n">−3</span><h2>Метро</h2>
+        <p class="lede">Докер-сети это линии. Дома на одной линии видят друг друга, с других линий до них не доехать.</p></header>
+      <div class="fb" id="b-metro"><div class="wait">Сверяю схему линий…</div></div>
+    </section>
+
+    <section class="floor f-water" id="f-water" data-floor="water">
+      <header class="fh"><span class="fh-n">−4</span><h2>Водохрани&shy;лище</h2>
+        <p class="lede">Диски. Запись льётся дождём сверху, чтение забирают насосы, а уровень воды показывает, сколько места уже занято.</p></header>
+      <div class="fb" id="b-water"><div class="wait">Замеряю уровень…</div></div>
+    </section>
+
+    <section class="floor f-rock" id="f-rock" data-floor="rock">
+      <header class="fh"><span class="fh-n">−5</span><h2>Фундамент</h2>
+        <p class="lede">Что лежит под городом, от домов до железа. Контейнеры не виртуальные машины: ядро у всех домов одно на всех.</p></header>
+      <div class="fb" id="b-rock"><div class="wait">Бурю скважину…</div></div>
+    </section>
+
+    <section class="floor f-keys" id="f-keys" data-floor="keys">
+      <header class="fh"><span class="fh-n">−6</span><h2>Ключи</h2>
+        <p class="lede">Самый нижний этаж. Кто и какими способами может войти на сервер.</p></header>
+      <div class="fb" id="b-keys"><div class="wait">Открываю хранилище…</div></div>
+      <footer class="colophon">
+        <p class="colo-name">Атланта</p>
+        <p id="colophon">&nbsp;</p>
+        <p>Город только смотрят: отсюда ничего нельзя сломать.</p>
+        <p class="colo-ps">P.S. Нажми на солнце или луну.</p>
+      </footer>
+    </section>
+
   </main>
 
-  <footer id="ticker"><div class="tk-track" id="tkTrack"></div></footer>
+  <nav id="lift" aria-label="Этажи"><i class="cable" aria-hidden="true"></i><i class="cab" id="cab" aria-hidden="true"></i></nav>
 </div>
 
-<script src="/s/atlas.js?v=6"></script>
+<div id="sheet" hidden>
+  <div class="scrim" id="scrim"></div>
+  <article class="panel" id="panel" role="dialog" aria-modal="true" tabindex="-1">
+    <button class="p-x" id="sheetX" aria-label="Закрыть">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4l12 12M16 4L4 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    </button>
+    <div id="panelBody"></div>
+  </article>
+</div>
+
+<script src="/s/atlanta.js?v=9"></script>
 </body>
 </html>

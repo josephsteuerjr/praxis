@@ -79,7 +79,7 @@ HOSTFS = os.getenv("PRAXIS_HOSTFS", "/rootfs")    # корень хоста, ro
 # Тот же класс, что и заглушки 03.08 в mailroom_bot: хранимая копия разошлась с
 # правдой. Лечение — считать адрес из SERVER_HOST и сверять кнопку на каждом старте.
 SERVER_HOST = (os.getenv("SERVER_HOST") or "").strip()
-MENU_TEXT = os.getenv("PRAXIS_SERVERAPP_MENU_TEXT", "Обсерватория")
+MENU_TEXT = os.getenv("PRAXIS_SERVERAPP_MENU_TEXT", "Атланта")
 MENU_SYNC = (os.getenv("PRAXIS_SERVERAPP_MENU_SYNC", "1") or "").strip().lower() \
     not in ("0", "false", "no", "off")
 
@@ -635,22 +635,33 @@ def parse_groups(hostfs: str = HOSTFS, names=("sudo", "docker", "adm", "wheel"))
 
 
 def parse_sshd(hostfs: str = HOSTFS) -> dict:
-    """Ключевые «двери» из sshd_config (эффективные строки, без Include-глубины)."""
+    """Ключевые «двери» из sshd_config: то, что действует глобально.
+
+    Читаем как сам sshd: первое вхождение главнее, drop-in считается только если на него
+    есть Include, а блок Match относится к своим пользователям и файл дальше не читается.
+    Значение со звёздочкой — дефолт sshd, в конфиге его нет."""
     keys = {"permitrootlogin": None, "passwordauthentication": None,
             "pubkeyauthentication": None, "port": None}
-    text = _read(f"{hostfs}/etc/ssh/sshd_config")
-    for d in sorted(Path(f"{hostfs}/etc/ssh/sshd_config.d").glob("*.conf")
-                    if Path(f"{hostfs}/etc/ssh/sshd_config.d").is_dir() else []):
-        text = _read(str(d)) + "\n" + text  # .d-файлы главнее (первое вхождение)
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split(None, 1)
-        k = parts[0].lower()
-        if k in keys and keys[k] is None and len(parts) > 1:
-            keys[k] = parts[1].strip()
-    return {"permit_root_login": keys["permitrootlogin"] or "yes*",
+
+    def walk(path: str, depth: int = 0) -> None:
+        for raw in _read(path).splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            k = parts[0].lower()
+            if k == "match":
+                return                  # дальше условные блоки, а не глобальные настройки
+            if k == "include" and len(parts) > 1 and depth < 4:
+                for pat in parts[1].split():
+                    rel = pat.lstrip("/") if pat.startswith("/") else f"etc/ssh/{pat}"
+                    for inc in sorted(Path(hostfs).glob(rel)):
+                        walk(str(inc), depth + 1)
+            elif k in keys and keys[k] is None and len(parts) > 1:
+                keys[k] = parts[1].strip()
+
+    walk(f"{hostfs}/etc/ssh/sshd_config")
+    return {"permit_root_login": keys["permitrootlogin"] or "prohibit-password*",
             "password_auth": keys["passwordauthentication"] or "yes*",
             "pubkey_auth": keys["pubkeyauthentication"] or "yes*",
             "port": keys["port"] or "22"}

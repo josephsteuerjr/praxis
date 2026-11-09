@@ -1,19 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" fill="#07090d"/>
-  <g fill="none" stroke="#1a2130" stroke-width="2">
-    <path d="M0 128h512M0 256h512M0 384h512M128 0v512M256 0v512M384 0v512"/>
+  <defs>
+    <linearGradient id="s" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#14123f"/>
+      <stop offset=".55" stop-color="#a23a72"/>
+      <stop offset="1" stop-color="#ff9a4d"/>
+    </linearGradient>
+    <radialGradient id="g" cx=".5" cy=".5" r=".5">
+      <stop offset="0" stop-color="#ffd9a0" stop-opacity=".75"/>
+      <stop offset="1" stop-color="#ffd9a0" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#s)"/>
+  <circle cx="256" cy="282" r="182" fill="url(#g)"/>
+  <circle cx="256" cy="282" r="82" fill="#ffe2ad"/>
+  <!-- задний ряд -->
+  <path d="M60 512V338h34v-20l26-14 22 18v40h34v150zM336 512V344l28-22 24 16v-26h44v50h24v150z" fill="#6d2a66"/>
+  <!-- дома -->
+  <g fill="#1d1a4d">
+    <rect x="120" y="352" width="58" height="160"/>
+    <rect x="334" y="336" width="62" height="176"/>
+    <rect x="182" y="300" width="42" height="212"/>
+    <rect x="290" y="284" width="42" height="228"/>
   </g>
-  <g stroke="#ffb454" stroke-width="4" fill="none">
-    <path d="M40 40h60v6H46v54h-6z"/>
-    <path d="M472 472h-60v-6h54v-54h6z"/>
-    <path d="M472 40h-60v6h54v54h6z" opacity="0"/>
+  <!-- башня -->
+  <path d="M254 70h4v66h-4z" fill="#ffe2ad"/>
+  <path d="M238 196v-32l18-36 18 36v32h16v28h12v288h-92V224h12v-28z" fill="#0f0d33"/>
+  <circle cx="256" cy="68" r="9" fill="#ffe2ad"/>
+  <!-- окна -->
+  <g fill="#ffd27a">
+    <rect x="226" y="244" width="14" height="20"/><rect x="250" y="244" width="14" height="20"/><rect x="274" y="244" width="14" height="20"/>
+    <rect x="226" y="284" width="14" height="20"/><rect x="274" y="284" width="14" height="20"/>
+    <rect x="250" y="324" width="14" height="20"/><rect x="274" y="324" width="14" height="20"/>
+    <rect x="226" y="364" width="14" height="20"/><rect x="250" y="364" width="14" height="20"/>
+    <rect x="226" y="404" width="14" height="20"/><rect x="274" y="404" width="14" height="20"/>
+    <rect x="136" y="378" width="12" height="16"/><rect x="154" y="412" width="12" height="16"/>
+    <rect x="352" y="362" width="12" height="16"/><rect x="372" y="396" width="12" height="16"/>
+    <rect x="196" y="326" width="12" height="16"/><rect x="304" y="340" width="12" height="16"/>
   </g>
-  <!-- ATLAS glyph: chained A -->
-  <g transform="translate(256 262)">
-    <circle r="150" fill="none" stroke="#141a26" stroke-width="10"/>
-    <circle r="150" fill="none" stroke="#ffb454" stroke-width="10" stroke-dasharray="180 762" stroke-linecap="round" transform="rotate(-90)"/>
-    <path d="M-70 78 L0 -92 L70 78 M-40 20 L40 20" fill="none" stroke="#eef3fa" stroke-width="20" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle r="8" cy="-92" fill="#ffb454"/>
-  </g>
-  <text x="256" y="474" font-family="ui-monospace,monospace" font-size="34" letter-spacing="10" fill="#566175" text-anchor="middle">ATLAS</text>
 </svg>
