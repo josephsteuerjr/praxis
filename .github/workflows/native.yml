@@ -1,50 +1,59 @@
-name: Finish Beta Mac qualification on unchanged packages
+name: Upload exact qualified Beta archives
 on:
   push:
-    branches: [codex/helene260-beta-mac-retry]
+    branches: [codex/helene260-beta-upload-exact]
 permissions:
   contents: write
 jobs:
-  mac:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos
-            runner: macos-15
-          - target: macos-intel
-            runner: macos-26-intel
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+  publish-assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Read completed candidate and prepare isolated case-sensitive fixture
+      - name: Reconstruct exact Windows and Linux ZIP bytes
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release download v2.6.0 --pattern 'native-${{ matrix.target }}.tar.gz' --dir prior
-          hdiutil create -size 16g -type SPARSE -fs "Case-sensitive APFS" -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
-          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
           python3 - <<'PY'
           from pathlib import Path
-          import hashlib,json,os,tarfile
-          p=Path('inputs.tar.gz');n=json.loads(Path('PREPARED.json').read_bytes())
-          assert hashlib.sha256(p.read_bytes()).hexdigest()==n['archive_sha256']
-          with tarfile.open(p) as z:z.extractall(Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification',filter='data')
+          import hashlib,json,subprocess
+          def sha(p):
+              with p.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          receipts=[]
+          for folder in sorted(Path('exact-upload').iterdir()):
+              r=json.loads((folder/'RECIPE.json').read_bytes())
+              subprocess.run(['gh','release','download','v2.5.3','--pattern',r['donor'],'--dir',str(folder)],check=True)
+              donor=folder/r['donor'];delta=folder/'records.bin';assert sha(donor)==r['donor_sha256'] and sha(delta)==r['delta_sha256']
+              final=folder/r['archive']
+              with donor.open('rb') as df,delta.open('rb') as cf,final.open('xb') as out:
+                  for row in r['segments']:
+                      stream={'donor':df,'delta':cf}[row['source']];stream.seek(row['offset']);data=stream.read(row['length']);assert len(data)==row['length'];out.write(data)
+              assert final.stat().st_size==r['size'] and sha(final)==r['sha256']
+              assets=json.loads(subprocess.check_output(['gh','api','repos/'+__import__('os').environ['GH_REPO']+'/releases/441698658']))['assets']
+              present=[a for a in assets if a['name']==final.name]
+              if present:assert len(present)==1 and present[0]['digest']=='sha256:'+r['sha256'] and present[0]['size']==r['size']
+              else:subprocess.run(['gh','release','upload','v2.6.0',str(final)],check=True)
+              receipts.append({'name':final.name,'size':r['size'],'sha256':r['sha256'],'byte_exact_reconstruction':True})
+          Path('exact-upload-receipt.json').write_text(json.dumps(receipts,indent=2))
+          subprocess.run(['gh','release','upload','v2.6.0','exact-upload-receipt.json'],check=True)
           PY
-      - name: Retry failed rows and complete native checks
-        run: python3 -B mac_retry.py --target ${{ matrix.target }} --root "$RUNNER_TEMP/helene-case/qualification" --prior 'prior/native-${{ matrix.target }}.tar.gz' > retry-driver.log 2>&1
-      - name: Retain retry evidence and compact summary
-        if: always()
+      - name: Upload native Mac ZIPs already qualified by hash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          TARGET: ${{ matrix.target }}
         run: |
-          cp retry-driver.log "$RUNNER_TEMP/helene-case/qualification/retry-evidence/driver.log"
-          cp "$RUNNER_TEMP/helene-case/qualification/retry-evidence/summary.json" "retry-${TARGET}-summary.json"
-          tar -czf "retry-${TARGET}.tar.gz" -C "$RUNNER_TEMP/helene-case/qualification" retry-evidence
-          gh release upload v2.6.0 "retry-${TARGET}.tar.gz" "retry-${TARGET}-summary.json"
+          gh release download v2.6.0 --pattern 'native-macos*.tar.gz' --dir mac
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,subprocess,tarfile
+          for path in Path('mac').glob('*.tar.gz'):
+              with tarfile.open(path) as z:
+                  a=json.load(z.extractfile('evidence/package/artifacts.json'))['macos']
+                  names=[m.name for m in z if m.name.startswith('evidence/package/Helene-2.6.0-macos-') and m.name.endswith('.zip')];assert len(names)==1
+                  out=Path('mac')/Path(names[0]).name;out.write_bytes(z.extractfile(names[0]).read())
+                  assert hashlib.sha256(out.read_bytes()).hexdigest()==a['sha256']
+              subprocess.run(['gh','release','upload','v2.6.0',str(out)],check=True)
+          PY
