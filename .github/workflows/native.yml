@@ -1,91 +1,30 @@
-name: Helene 2.6.0 Beta native packages
+name: Inspect Beta Mac qualification records
 on:
   push:
-    branches: [codex/helene260-beta-native-b80ba9879517]
+    branches: [codex/helene260-beta-mac-diagnostics]
 permissions:
   contents: write
 jobs:
-  mac:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos
-            runner: macos-15
-            asset: Helene-2.5.3-macos-arm64.zip
-          - target: macos-intel
-            runner: macos-26-intel
-            asset: Helene-2.5.3-macos-x86_64.zip
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 80
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Download immutable qualified runtime donor
+      - name: Read both completed candidate records
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download v2.5.3 --repo josephsteuerjr/praxis --pattern '${{ matrix.asset }}' --dir donor
-      - name: Verify and extract exact inputs
+          GH_REPO: ${{ github.repository }}
         run: |
+          gh release download v2.6.0 --pattern 'native-macos*.tar.gz' --dir candidates
           python3 - <<'PY'
           from pathlib import Path
-          import hashlib,json,tarfile
-          p=Path('inputs.tar.gz');n=json.loads(Path('PREPARED.json').read_bytes())
-          assert hashlib.sha256(p.read_bytes()).hexdigest()==n['archive_sha256']
-          with tarfile.open(p) as z:z.extractall('qualification',filter='data')
+          import json,tarfile
+          result={}
+          for path in Path('candidates').glob('*.tar.gz'):
+              with tarfile.open(path) as z:
+                  rows=json.load(z.extractfile('evidence/native/regressions.json'))
+                  failed=[r for r in rows if r['exit']]
+                  result[path.name]={'failed':failed,'total_modules':len(rows),'logs':{r['module']:z.extractfile('evidence/native/'+r['module']+'.log').read().decode('utf8','replace')[-14000:] for r in failed}}
+          Path('mac-diagnostics.json').write_text(json.dumps(result,indent=2))
+          print(json.dumps({k:{'failed':v['failed'],'total_modules':v['total_modules']} for k,v in result.items()}))
           PY
-      - name: Build and qualify actual native package
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python3 -B qualification/equipment/mac_final.py --target ${{ matrix.target }} --donors donor > qualification/driver.log 2>&1
-      - name: Preserve private qualification evidence
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TARGET: ${{ matrix.target }}
-          CI_HEAD: ${{ github.sha }}
-          CI_REPO: ${{ github.repository }}
-        run: |
-          mkdir -p qualification/evidence
-          tar -czf "native-${TARGET}.tar.gz" -C qualification evidence driver.log
-          gh release upload v2.6.0 "native-${TARGET}.tar.gz" --repo "$CI_REPO"
-  server-arm:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 100
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          repository: josephsteuerjr/praxis-relay
-          ref: d5a5bfed9d12cf0b7d052d310edceb03b66a77b3
-          path: relay-source
-          persist-credentials: false
-      - name: Verify and extract exact inputs
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib,json,tarfile
-          p=Path('inputs.tar.gz');n=json.loads(Path('PREPARED.json').read_bytes())
-          assert hashlib.sha256(p.read_bytes()).hexdigest()==n['archive_sha256']
-          with tarfile.open(p) as z:z.extractall('qualification',filter='data')
-          PY
-      - name: Native ARM server, real install and repeat
-        run: python3 qualification/source/desk/installer/qualify_server_arm64.py --source qualification/source --relay-source relay-source --output server-result > server-build.log 2>&1
-      - name: Preserve private ARM package and evidence
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CI_HEAD: ${{ github.sha }}
-          CI_REPO: ${{ github.repository }}
-        run: |
-          mkdir -p server-result/evidence
-          cp server-build.log server-result/evidence/ 2>/dev/null || true
-          tail -60 server-build.log
-          tar --exclude='evidence/real-application-install/installed' --exclude='evidence/real-application-install/uploaded' --exclude='evidence/real-application-install/program.tar.gz' -czf server-evidence.tar.gz -C server-result evidence
-          gh release upload v2.6.0 server-evidence.tar.gz --repo "$CI_REPO"
-          for file in server-result/*.zip server-result/*.sha256; do
-            if [ -f "$file" ]; then gh release upload v2.6.0 "$file" --repo "$CI_REPO"; fi
-          done
+          gh release upload v2.6.0 mac-diagnostics.json
