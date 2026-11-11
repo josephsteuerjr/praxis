@@ -955,13 +955,17 @@ def prepare(root,*,places=None,backend=None,progress=None):
         primary=target if agent_exists(target) else max(preview_sources,key=lambda p:_score(p,configs),default=target)
         selected=next((row for row in configs if Path(row['tree'])==primary),None)
         snapshots={Path(row['directory'])/'helene.json':hashlib.sha256((Path(row['directory'])/'helene.json').read_bytes()).hexdigest() for row in configs}
+        # Capture old data identities before preparation creates the new profile.
+        # A first launch must not turn its own empty target into an old owner.
+        protected=list(dict.fromkeys(preview_sources))
+        target_existed=target.is_dir()
         config=prepare_configuration(root,target,primary,selected,report)
         from .first_start_assets import prepare as prepare_assets,retain as retain_assets
         prepare_assets(target,[*old_roots,*[p for p in siblings if p.is_dir() and not linked(p)],*retained],preview_sources,copy.deepcopy(configs),copy.deepcopy(config),selected)
         if any(not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=digest for path,digest in snapshots.items()):
             raise ValueError('Прежние настройки изменились во время подготовки. Повтори запуск.')
-        report({'stage':'stopping','label':'Завершаем прежнюю Hélène'})
-        protected=[target,*[Path(row['tree']) for row in configs if Path(row['tree']).is_dir()]]
+        report({'stage':'stopping' if all_roots or protected else 'preparing',
+                'label':'Завершаем прежнюю Hélène' if all_roots or protected else 'Подготавливаем новый профиль'})
         backend.stop(all_roots,protected)
         # Discover data after all previous supervisors/body/bridge have settled.
         sources=data_sources(old_roots,configs,places)
@@ -969,7 +973,8 @@ def prepare(root,*,places=None,backend=None,progress=None):
             path=plain(raw)
             if not _data_allowed(path,places):raise ValueError('Recorded data source leaves allowed roots')
             if path.is_dir() and path not in sources:sources.append(path)
-        if set(sources)-set(protected):backend.stop(all_roots,[target,*sources])
+        owner_sources=[p for p in sources if p!=target or target_existed]
+        if set(owner_sources)-set(protected):backend.stop(all_roots,owner_sources)
         else:backend.assert_quiet(all_roots,protected)
         sources=list(dict.fromkeys([*sources,*data_sources(old_roots,configs,places)]))
         guard_cleanup_data([*old_roots,*siblings],places,sources)

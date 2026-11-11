@@ -510,12 +510,12 @@ def run_privileged(script,env,*,cwd=None):
         raise RuntimeError('Windows не разрешил операцию со старой программой. Подтверди запрос администратора; данные сохранены.')
 
 
-def system_action(old,action,files=None,*,elevate=True):
+def system_action(old,action,files=None,*,elevate=False):
     """Bound SCM/registry/tasks or an exact verified program-file deletion list.
 
-    `elevate=False` (11.11, Yegor: cleanup of a previous installation must not ask for
-    administrator rights) runs the same bound script with the user's own token and raises
-    RuntimeError when Windows refuses; the caller reports what was left.
+    Always use the invoking user's token, including old services and tasks.
+    The compatibility argument cannot enable elevation. Permission refusals are
+    distinct from changed bindings or other failures so only refusals become leftovers.
     """
     if os.name!='nt':return
     if action not in ('stop_service','cleanup','custody','registration','remove_files','restore_service'):raise ValueError('Unknown privileged action')
@@ -540,7 +540,7 @@ switch($env:HELENE_SYSTEM_ACTION){
  'stop_service'{if($ours){$s=Get-Service Helene;if($s.Status -ne 'Stopped'){$s.Stop();$s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))}}}
  'restore_service'{if(!$ours){throw 'Previous service binding changed'};Start-Service Helene}
  {$_ -in @('cleanup','custody')}{
-  if($ours){if($service.State -ne 'Stopped'){throw 'Previous service restarted'};& "$env:SystemRoot\System32\sc.exe" delete Helene|Out-Null;if($LASTEXITCODE -notin @(0,1060)){throw 'Service removal failed'}}
+  if($ours){if($service.State -ne 'Stopped'){throw 'Previous service restarted'};& "$env:SystemRoot\System32\sc.exe" delete Helene|Out-Null;if($LASTEXITCODE -eq 5){throw [UnauthorizedAccessException]::new('Service removal denied')};if($LASTEXITCODE -notin @(0,1060)){throw 'Service removal failed'}}
   Get-ScheduledTask -ErrorAction SilentlyContinue|ForEach-Object {$t=$_;foreach($a in $t.Actions){if(Bound $a.Execute){Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false -ErrorAction Stop;break}}}
  }
  {$_ -in @('cleanup','registration')}{
@@ -568,14 +568,12 @@ switch($env:HELENE_SYSTEM_ACTION){
  }
 }
 '''
-    # Service elevation is explicit and narrow. Without a service, ordinary
-    # per-user cleanup/process shutdown does not trigger a password request.
     try:
-        if admin() or not elevate:return powershell(script,env)
-        if action in ('stop_service','restore_service') or (action in ('cleanup','custody') and service(old)):
-            return run_privileged(script,env)
-        try:return powershell(script,env)
-        except RuntimeError:return run_privileged(script,env)
+        wrapped="try{& {"+script+"}|Out-Null;ConvertTo-Json -Compress @{ok=$true}}catch{$failure=$_.Exception;while($failure.InnerException){$failure=$failure.InnerException};ConvertTo-Json -Compress @{ok=$false;code=$failure.HResult;message=$failure.Message}}"
+        result=json.loads(powershell(wrapped,env))
+        if not result.get('ok'):
+            if int(result.get('code',0))&0xFFFF==5:raise PermissionError(5,'Windows denied the previous installation operation')
+            raise RuntimeError(str(result.get('message') or 'Previous installation operation failed'))
     finally:
         if request:request.unlink(missing_ok=True)
 
@@ -692,6 +690,7 @@ def remove_empty_legacy_local():
     except ValueError:return {'state':'linked-retained'}
     try:target.rmdir()
     except FileNotFoundError:return {'state':'absent'}
+    except PermissionError:return {'state':'protected-retained'}
     except OSError as exc:
         if exc.errno in (errno.ENOTEMPTY,errno.EEXIST) or getattr(exc,'winerror',None)==145:
             return {'state':'nonempty-retained'}
@@ -705,6 +704,7 @@ def cleanup_installation(old,new):
     old,new=Path(old).resolve(),Path(new).resolve()
     # Per-user registry is always handled with the wizard user's identity.
     import winreg
+    retained=[]
     for view in (winreg.KEY_WOW64_64KEY,winreg.KEY_WOW64_32KEY):
         base=r'Software\Microsoft\Windows\CurrentVersion\Uninstall'
         try:
@@ -716,7 +716,8 @@ def cleanup_installation(old,new):
                     except FileNotFoundError:continue
                 if Path(location).resolve()==old:winreg.DeleteKeyEx(winreg.HKEY_CURRENT_USER,base+'\\'+name,view,0)
         except FileNotFoundError:pass
-    retained=[]
+        except PermissionError:
+            if REGISTRATION_LEFTOVER not in retained:retained.append(REGISTRATION_LEFTOVER)
     unhook(old,retained)
     return {'shortcuts_removed':remove_shortcuts(old,retained=retained),'legacy_uninstaller_used':False,
             'empty_local':remove_empty_legacy_local(),'retained':retained}
@@ -727,18 +728,19 @@ REGISTRATION_LEFTOVER=('Запись прежней программы в спи
 
 
 def unhook(old,retained):
-    """Detach the old programme from Windows without an administrator prompt for cleanup.
+    """Retire exact old registrations using current rights; report denied objects.
 
-    11.11 (Yegor): cleanup never asks for administrator rights. Only what could start the
-    old programme as a second data writer — its Windows service or a scheduled task bound
-    to it — is custody; an old system service already needed elevation to be stopped. The
-    machine-wide uninstall entry is cosmetic: removed with the user's rights or reported.
+    Callers must separately establish that old data writers have stopped.
+    Changed bindings and restarted services remain errors, never cleanup warnings.
     """
     found=system_registrations(old)
-    if service(old) or 'task' in found:system_action(old,'custody')
+    if service(old) or 'task' in found:
+        try:system_action(old,'custody',elevate=False)
+        except PermissionError:
+            retained.append('Windows не дала убрать прежнюю службу или задачу автозапуска без повышения прав. Запись оставлена без изменений.')
     if 'uninstall' in found:
         try:system_action(old,'registration',elevate=False)
-        except RuntimeError:retained.append(REGISTRATION_LEFTOVER)
+        except PermissionError:retained.append(REGISTRATION_LEFTOVER)
 
 
 def system_registrations(old):

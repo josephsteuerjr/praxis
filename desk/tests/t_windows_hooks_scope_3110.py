@@ -120,11 +120,8 @@ class HookScope(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError,'binding changed'):backend.hooks([old],[data])
                 elevated.assert_not_called()
             with patch.object(hooks,'retire',side_effect=PermissionError(5,'denied')),patch.object(backend,'privileged') as elevated:
-                backend.hooks([old],[data]);elevated.assert_called_once()
-                self.assertEqual(elevated.call_args.args,('hooks',))
-                captured=elevated.call_args.kwargs['_captured']
-                self.assertEqual(captured['scope']['roots'],[str(old)])
-                self.assertEqual(native._verify_custody(captured['scope'],captured),captured)
+                with self.assertRaises(PermissionError):backend.hooks([old],[data])
+                elevated.assert_not_called()
     def test_privileged_worker_rejects_empty_root_before_cwd_resolution(self):
         from localharness import windows_first_start as native,first_start
         request={'action':'hooks','incoming':self.current,'roots':[''],'protected':[self.data],'source':''}

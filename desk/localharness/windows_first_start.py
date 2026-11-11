@@ -317,6 +317,9 @@ class Backend:
                                 found.append(old);self._registrations.append((old,hive,view,prefix+'\\'+name))
                         except (FileNotFoundError,PermissionError):continue
                 except FileNotFoundError:continue
+                except PermissionError:
+                    note='Windows закрыла доступ к части записей прежних установок. Они оставлены без изменений.'
+                    if note not in self.notes:self.notes.append(note)
         return list(dict.fromkeys(found))
 
     def custody(self,path=None,*,roots=None,identities=None,entry=False,content=True):
@@ -384,16 +387,15 @@ class Backend:
             windows.run_privileged(r"$ErrorActionPreference='Stop';$p=Start-Process -FilePath $env:HELENE_FIRST_PYTHON -ArgumentList $env:HELENE_FIRST_ARGUMENTS -WindowStyle Hidden -Wait -PassThru;if($p.ExitCode -ne 0){throw 'Scoped first-start operation failed'}",env)
 
     def data_access(self,data):
-        # PF profiles can contain SYSTEM-created private files. Test access
-        # after shutdown; grant only the original interactive owner's SID.
-        captured=self.custody(data)
+        # Reading a previous profile must not change its ACL or ask for UAC.
+        # Writable destination and retained source cleanup are checked separately.
+        self.custody(data)
         try:
-            import tempfile
-            descriptor,name=tempfile.mkstemp(prefix='.helene-access-',dir=data);os.close(descriptor);os.unlink(name)
             for here,dirs,names in os.walk(data,followlinks=False):
                 for name in names:
                     with (Path(here)/name).open('rb') as stream:stream.read(1)
-        except PermissionError:self.privileged('data-access',data,_captured=captured,sid=user_sid())
+        except PermissionError as error:
+            raise PermissionError('Нет доступа к прежним данным: '+str(data)+'. Исходные файлы сохранены.') from error
 
     @contextmanager
     def exclusive(self,data):
@@ -416,24 +418,30 @@ class Backend:
         scope=windows_hooks.Scope.make(self.root,roots,protected)
         for item in (*scope.roots,*scope.data):plain(item)
         captured=self.custody(roots=roots,identities=protected)
-        native=windows_hooks.Windows()
+        native=windows_hooks.Windows();notes=self.notes
         class Guarded:
             def __getattr__(self,name):
                 method=getattr(native,name)
                 if name in ('remove_service','remove_task','remove_autorun'):
                     def guarded(row):
                         _verify_custody(captured['scope'],captured)
-                        return method(row)
+                        try:return method(row)
+                        except PermissionError:
+                            note='Windows не дала изменить запись прежнего автозапуска без повышения прав: '+str(row.get('name',''))
+                            if note not in notes:notes.append(note)
                     return guarded
                 return method
         try:return windows_hooks.retire(scope,Guarded())
-        except PermissionError:
-            if self._elevated:raise
-            self.privileged('hooks',_captured=captured)
+        finally:
+            if native.unreadable:
+                note=('Windows ограничила чтение части системного автозапуска. '
+                      'Недоступные записи оставлены без изменений; права администратора для их проверки не запрашивались.')
+                if note not in self.notes:self.notes.append(note)
 
     def stop(self,roots,protected=()):
         self.roots=list(roots);self.protected=list(protected)
         if getattr(self,'_admitted_custody',None) is None:self.keep=list(protected)
+        if not self.roots and not self.protected:return
         captured=self.custody()
         binding=(tuple(sorted(set(map(str,roots)))),tuple(sorted(set(map(str,protected)))))
         if self._hooks_cleared!=binding:self.hooks(roots,protected);self._hooks_cleared=binding
@@ -449,13 +457,14 @@ class Backend:
                 for row in processes:
                     _verify_custody(captured['scope'],captured)
                     try:terminate(row['pid'],row['create_time'])
-                    except PermissionError:
-                        if self._elevated:raise
-                        self.privileged('terminate',_captured=captured,pid=row['pid'],birth=row['create_time'])
+                    except PermissionError as error:
+                        raise PermissionError('Windows не дала завершить прежнюю Hélène с текущими правами. '
+                                              'Закрой её в прежнем окне и повтори запуск. Данные сохранены.') from error
             time.sleep(.2)
         raise RuntimeError('Прежний супервизор продолжает перезапускать body/bridge')
 
     def assert_quiet(self,roots,protected=()):
+        if not roots and not self.protected and not protected:return
         if owned(roots,[*self.protected,*protected]):raise RuntimeError('Прежняя Hélène ещё удерживает данные')
 
     def committed_data(self,target):self.keep=[Path(target)]
@@ -478,16 +487,14 @@ class Backend:
             # scanner overlap is retried by remove(); it cannot earn success.
             if row['kind'] in (3,1000):raise RuntimeError('Системная служба удерживает прежние файлы: '+row['service'])
             try:terminate(row['pid'],row['birth'])
-            except PermissionError:
-                if self._elevated:raise
-                self.privileged('terminate',path,_captured=captured,pid=row['pid'],birth=row['birth'])
+            except PermissionError as error:
+                raise PermissionError('Windows не дала освободить прежний файл с текущими правами: '+str(path)+'. Файл сохранён.') from error
             released+=1
         return released
 
     def retire(self,old):
         self.removable(old)
         import winreg
-        from .migration_windows import unhook
         for bound,hive,view,name in self._registrations:
             if bound!=old:continue
             try:
@@ -497,8 +504,8 @@ class Backend:
                 winreg.DeleteKeyEx(hive,name,view,0)
             except FileNotFoundError:pass
             except PermissionError:
-                notes=[];unhook(old,notes)
-                self.notes.extend(note for note in notes if note not in self.notes)
+                from .migration_windows import REGISTRATION_LEFTOVER
+                if REGISTRATION_LEFTOVER not in self.notes:self.notes.append(REGISTRATION_LEFTOVER)
 
     def prune(self,old,protected):
         self.removable(old)
@@ -508,7 +515,9 @@ class Backend:
             self._pruning=True
             try:
                 try:_prune_program(old,protected,self)
-                except PermissionError:self.leftovers.append(Path(old))
+                except PermissionError:
+                    _verify_custody(captured['scope'],captured)
+                    self.leftovers.append(Path(old))
             finally:self._pruning=False
 
     def remove(self,path):
@@ -532,11 +541,10 @@ class Backend:
                 return
             except OSError as exc:
                 failure=exc;_verify_custody(captured['scope'],captured)
-                self.stop(self.roots,self.protected);released=self.release(path,_captured=captured)
-                if isinstance(exc,PermissionError) and not released:
-                    if self._elevated:raise
-                    # Stopped, released and still refused: protected by Windows. Remove what
-                    # the user may, leave the rest in place and name it; no administrator prompt.
+                if isinstance(exc,PermissionError):
+                    # Owner shutdown is a separate, already checked boundary.
+                    # Cleanup must not try to kill/elevate a scanner or another
+                    # account's file holder merely to remove obsolete bytes.
                     _verify_custody(captured['scope'],captured)
                     for kept in self._remove_what_windows_allows(path) or [path]:
                         if kept not in self.leftovers:self.leftovers.append(kept)

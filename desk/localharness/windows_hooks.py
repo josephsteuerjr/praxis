@@ -148,14 +148,21 @@ def apply(selected,backend):
 TASK_SNAPSHOT=r'''
 $scheduler=New-Object -ComObject Schedule.Service;$scheduler.Connect()
 $rows=New-Object System.Collections.Generic.List[object]
+function Unreadable($failure,$kind){
+ while($failure.InnerException){$failure=$failure.InnerException}
+ if(($failure.HResult -band 65535) -ne 5){throw $failure}
+ $rows.Add([pscustomobject]@{unreadable=$kind})
+}
 function Visit($folder){
- foreach($task in $folder.GetTasks(1)){
+ try{$tasks=@($folder.GetTasks(1))}catch{Unreadable $_.Exception 'task folder';$tasks=@()}
+ foreach($task in $tasks){try{
   $actions=@(foreach($action in $task.Definition.Actions){
    if($action.Type -eq 0){[pscustomobject]@{executable=[string]$action.Path;arguments=[string]$action.Arguments;cwd=[string]$action.WorkingDirectory;kind=0}}
    else{[pscustomobject]@{executable='';arguments='';cwd='';kind=[int]$action.Type}}})
   $rows.Add([pscustomobject]@{name=$task.Name;folder=$folder.Path;actions=$actions})
- }
- foreach($child in $folder.GetFolders(0)){Visit $child}
+ }catch{Unreadable $_.Exception 'task'}}
+ try{$children=@($folder.GetFolders(0))}catch{Unreadable $_.Exception 'task subfolders';$children=@()}
+ foreach($child in $children){Visit $child}
 }
 Visit ($scheduler.GetFolder('\'))
 @($rows.ToArray())
@@ -210,18 +217,36 @@ def task_rows(result):
 
 
 class Windows:
+    def __init__(self):
+        self.unreadable=[]
+
+    def inaccessible(self,kind):
+        # Inventory is not a mutation. A corporate service/task/registry ACL
+        # cannot grant authority to elevate, delete or stop that unknown object.
+        if kind not in self.unreadable:self.unreadable.append(kind)
+
     def services(self):
         import psutil
         result=[]
-        for service in psutil.win_service_iter():
-            try:info={'name':service.name(),'command':service.binpath()}
-            except psutil.NoSuchProcess:continue
-            except psutil.AccessDenied as error:raise PermissionError(5,'Windows service inventory access denied') from error
-            result.append(info)
+        try:
+            for service in psutil.win_service_iter():
+                try:info={'name':service.name(),'command':service.binpath()}
+                except psutil.NoSuchProcess:continue
+                except psutil.AccessDenied:
+                    self.inaccessible('service');continue
+                result.append(info)
+        except psutil.AccessDenied:self.inaccessible('service inventory')
         return result
 
     def tasks(self):
-        return task_rows(task_call(TASK_SNAPSHOT))
+        try:rows=task_call(TASK_SNAPSHOT)
+        except PermissionError:
+            self.inaccessible('task inventory');return []
+        available=[]
+        for row in rows:
+            if row.get('unreadable'):self.inaccessible(str(row['unreadable']))
+            else:available.append(row)
+        return task_rows(available)
 
     def autoruns(self):
         import winreg
@@ -235,6 +260,7 @@ class Windows:
                             if kind in (winreg.REG_SZ,winreg.REG_EXPAND_SZ):
                                 result.append({'hive':hive_name,'view':view,'key':key_path,'name':name,'command':value,'kind':kind})
                 except FileNotFoundError:continue
+                except PermissionError:self.inaccessible('autorun registry')
         return result
 
     def remove_autorun(self,row):

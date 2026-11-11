@@ -94,7 +94,7 @@ class SystemHooks(unittest.TestCase):
         def action(old, name, files=None, *, elevate=True):
             calls.append((name, elevate))
             if name == 'registration':
-                raise RuntimeError('access denied')
+                raise PermissionError(5,'access denied')
         retained = []
         with patch.object(windows, 'system_registrations', return_value={'uninstall'}), \
                 patch.object(windows, 'service', return_value=None), \
@@ -103,14 +103,14 @@ class SystemHooks(unittest.TestCase):
         self.assertEqual(calls, [('registration', False)])
         self.assertEqual(retained, [windows.REGISTRATION_LEFTOVER])
 
-    def test_a_task_or_service_that_could_restart_the_old_program_is_still_custody(self):
+    def test_task_and_service_retirement_also_uses_current_rights(self):
         for found, svc in (({'task'}, None), (set(), {'state': 'Stopped'})):
             calls = []
             with patch.object(windows, 'system_registrations', return_value=found), \
                     patch.object(windows, 'service', return_value=svc), \
                     patch.object(windows, 'system_action', side_effect=lambda old, name, files=None, *, elevate=True: calls.append((name, elevate))):
                 windows.unhook(Path('C:/old'), [])
-            self.assertEqual(calls, [('custody', True)], (found, svc))
+            self.assertEqual(calls, [('custody', False)], (found, svc))
 
     def test_registration_action_without_elevation_never_reaches_uac(self):
         with patch.object(windows, 'os', type('nt', (), {**{k: getattr(os, k) for k in dir(os) if not k.startswith('__')}, 'name': 'nt'})), \
@@ -151,8 +151,8 @@ class FirstStartBackend(unittest.TestCase):
             self.assertNotIn("privileged('prune'", fragment, name)
             self.assertNotIn('run_privileged', fragment, name)
             self.assertNotIn("system_action(old,'cleanup')", fragment, name)
-        # Custody (stopping old processes, data access, hooks) keeps its helper.
-        self.assertTrue(callable(windows_first_start.Backend.privileged))
+        for name in ('stop','release','data_access','hooks'):
+            self.assertNotIn('self.privileged(',inspect.getsource(getattr(windows_first_start.Backend,name)),name)
 
 
 @unittest.skipUnless(os.name == 'posix' and hasattr(os, 'geteuid') and os.geteuid() != 0,
