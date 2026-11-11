@@ -12,10 +12,17 @@ class DataLinks(unittest.TestCase):
         self.base=Path(self.tmp.name);self.source=self.base/'old';self.source.mkdir()
         self.target=self.base/'new'
 
+    def link(self,alias,target,**kwargs):
+        try:alias.symlink_to(target,**kwargs)
+        except OSError as error:
+            if os.name=='nt' and getattr(error,'winerror',None)==1314:
+                self.skipTest('Fixture creation requires Windows symlink privilege; migration itself does not')
+            raise
+
     def cached(self,absolute=False):
         blob=self.source/'objects/payload';blob.parent.mkdir();blob.write_bytes(b'owner model bytes')
         alias=self.source/'snapshots/revision/value.json';alias.parent.mkdir(parents=True)
-        alias.symlink_to(blob if absolute else Path('../../objects/payload'))
+        self.link(alias,blob if absolute else Path('../../objects/payload'))
         return blob,alias
 
     def test_merge_internal_file_alias_without_copying_blob_twice(self):
@@ -55,7 +62,7 @@ class DataLinks(unittest.TestCase):
     def test_external_file_alias_is_rejected_before_any_data_move(self):
         outside=self.base/'outside';outside.write_bytes(b'outside owner data')
         normal=self.source/'keep';normal.write_bytes(b'keep source')
-        alias=self.source/'alias';alias.symlink_to(outside)
+        alias=self.source/'alias';self.link(alias,outside)
         self.target.mkdir()
         with self.assertRaises(ValueError):start._move(self.source,self.target)
         self.assertEqual(normal.read_bytes(),b'keep source')
@@ -65,7 +72,7 @@ class DataLinks(unittest.TestCase):
 
     def test_directory_alias_is_not_traversed_or_moved(self):
         outside=self.base/'outside';outside.mkdir();(outside/'keep').write_bytes(b'external')
-        (self.source/'directory').symlink_to(outside,target_is_directory=True)
+        self.link(self.source/'directory',outside,target_is_directory=True)
         self.target.mkdir()
         with self.assertRaises(ValueError):start._move(self.source,self.target)
         self.assertEqual((outside/'keep').read_bytes(),b'external')
@@ -73,7 +80,7 @@ class DataLinks(unittest.TestCase):
 
     def test_broken_file_alias_keeps_original_tree_intact(self):
         (self.source/'keep').write_bytes(b'keep source')
-        (self.source/'alias').symlink_to('missing')
+        self.link(self.source/'alias','missing')
         self.target.mkdir()
         with self.assertRaises(ValueError):start._move(self.source,self.target)
         self.assertEqual((self.source/'keep').read_bytes(),b'keep source')

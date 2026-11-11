@@ -45,6 +45,16 @@ class NativeFirstStart(unittest.TestCase):
         self.fail('fixture readiness not confirmed')
     def test_system_python_guardian_stops_before_its_respawning_bridge_and_body(self):
         self.guardian(data_only=False)
+    def test_restricted_inventory_without_drive_uses_kernel_image_identity(self):
+        import psutil
+        original=psutil.process_iter
+        def missing_drive(*args,**kwargs):
+            for process in original(*args,**kwargs):
+                value=process.info.get('exe')
+                if value and len(value)>2 and value[1]==':':process.info['exe']=value[2:]
+                yield process
+        with patch.object(psutil,'process_iter',side_effect=missing_drive):
+            self.guardian(data_only=False)
     def test_orphan_data_owner_stops_even_without_a_surviving_programme_folder(self):
         self.guardian(data_only=True)
     def guardian(self,*,data_only):

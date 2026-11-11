@@ -43,6 +43,7 @@ def kernel():
         'CreateMutexW':([w.LPVOID,w.BOOL,w.LPCWSTR],w.HANDLE),
         'ReleaseMutex':([w.HANDLE],w.BOOL),
         'IsProcessCritical':([w.HANDLE,c.POINTER(w.BOOL)],w.BOOL),
+        'QueryFullProcessImageNameW':([w.HANDLE,w.DWORD,w.LPWSTR,c.POINTER(w.DWORD)],w.BOOL),
     }
     for name,(arguments,result) in signatures.items():
         method=getattr(api,name);method.argtypes=arguments;method.restype=result
@@ -93,7 +94,7 @@ def _inside(value,roots):
 def owned(roots,protected=()):
     """Guardians first, then their captured descendants (including bridge/body)."""
     import psutil
-    from .windows_hooks import paths,Scope,INTERPRETERS,ORGANS
+    from .windows_hooks import path,paths,Scope,INTERPRETERS,ORGANS
     roots=paths(roots);protected=paths(protected)
     roots=tuple(Path(path).resolve() for path in roots);protected=tuple(Path(path).resolve() for path in protected);rows={};selected=set()
     scope=Scope(None,paths(roots),paths(protected))
@@ -101,6 +102,18 @@ def owned(roots,protected=()):
     for process in psutil.process_iter(['pid','ppid','exe','create_time'],ad_value=None):
         info=process.info;pid=info['pid']
         if pid==os.getpid():continue
+        try:path(info['exe'])
+        except ValueError:
+            # psutil's device-path conversion can omit the drive with a
+            # restricted token. Ask Windows for its Win32 path directly;
+            # never substitute the untrusted command-line executable.
+            api=kernel();handle=api.OpenProcess(0x1000,False,pid)
+            if handle:
+                try:
+                    size=w.DWORD(32768);buffer=c.create_unicode_buffer(size.value)
+                    if api.QueryFullProcessImageNameW(handle,0,buffer,c.byref(size)):
+                        info['exe']=buffer.value
+                finally:api.CloseHandle(handle)
         rows[pid]=info
         # All entry scripts and --root bindings count, not only runner.py.
         # This includes a system-Python session_host that used to respawn organs.
