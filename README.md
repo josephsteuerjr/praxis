@@ -1,0 +1,1 @@
+Build-only branch for the authorized Hélène 2.6.0 Beta release. The archive contains the exact reviewed product source, built web clients and native qualification equipment. Native output is retained in the unpublished release draft until all gates finish.
