@@ -1,0 +1,162 @@
+{
+  "passed": true,
+  "release_id": 441698658,
+  "tag": "v2.6.0",
+  "title": "H\u00e9l\u00e8ne 2.6.0 Beta",
+  "latest": true,
+  "prerelease": false,
+  "source_commit": "e749efa995e6db2bdf1d7d6adfc33ede83492762",
+  "raw_git_source_files": 2828,
+  "assets": [
+    {
+      "name": "FRONTENDS-2.6.0.json",
+      "size": 23074,
+      "sha256": "324113cc6a6ba7b32057078cbda5541812e0ae6ce4d3a5d58197e8b2ebf9fbc7",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0-fedora-x86_64.zip",
+      "size": 841892659,
+      "sha256": "fe43af6efea3b705b725cae1b54fe05b67880ede2900d2c957b9c6d767b1b33c",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 27802
+    },
+    {
+      "name": "Helene-2.6.0-fedora-x86_64.zip.sha256",
+      "size": 98,
+      "sha256": "bbc6e5f981d35700a9cdc15414dbdb5138267ef99508bc693214de3273d68b4a",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0-linux-x86_64.zip",
+      "size": 841892658,
+      "sha256": "796da6957541003a94cf672f2407b82f3d5bfe96e361819398eb676307c65db6",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 27802
+    },
+    {
+      "name": "Helene-2.6.0-linux-x86_64.zip.sha256",
+      "size": 97,
+      "sha256": "cc254f987666a103963ceee6b91712e90f4a70d92ff8c2e5cd8cc55429a4e460",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0-macos-arm64.zip",
+      "size": 260534294,
+      "sha256": "81ebedb314d11b1bdfb8af5b3862739fe2c9597de671e8c758a739f6dfedcc20",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 22689
+    },
+    {
+      "name": "Helene-2.6.0-macos-arm64.zip.sha256",
+      "size": 96,
+      "sha256": "bc66a03fc013f9756e56a7d7825e120eb8c87ededfc96cd80d27a4a4ba978343",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0-macos-x86_64.zip",
+      "size": 251815633,
+      "sha256": "c23efea97a0931f94fdc4309ccc7abee0bf1ae3740774f5f96365935d123d6fc",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 22042
+    },
+    {
+      "name": "Helene-2.6.0-macos-x86_64.zip.sha256",
+      "size": 97,
+      "sha256": "c815b9ffe5ceeb243a8c616ccd069dfb91215536cfc5ebd4dbc1f783a49da1fa",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0-server-linux-arm64.zip",
+      "size": 14631372,
+      "sha256": "f9af724037504950f9f84adaa128e18423130e30652af9260eab25afd42d31d6",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 1333
+    },
+    {
+      "name": "Helene-2.6.0-server-linux-arm64.zip.sha256",
+      "size": 103,
+      "sha256": "558b2ab9538defc3550e1b0518db9c8efadd907307105af7f0de3cb1a97bf091",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0-source.zip",
+      "size": 19205978,
+      "sha256": "edac39635e3861f669ca6be8a1b221ff230fba978b43749136dd6023b19bbfef",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 2828
+    },
+    {
+      "name": "Helene-2.6.0-source.zip.sha256",
+      "size": 91,
+      "sha256": "463df3b050eb3a737e69b4897b6cec5c7cddd7bde2b092e96ada31a433cdb776",
+      "public_download": true
+    },
+    {
+      "name": "Helene-2.6.0.zip",
+      "size": 515016985,
+      "sha256": "ea91a42eeb56342bfa5b44ced707f7fa5da40a072951647c10972040e3bc0f3f",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 20492
+    },
+    {
+      "name": "Helene-2.6.0.zip.sha256",
+      "size": 84,
+      "sha256": "1bbacc0588350b85a9c4564e24e76d8b42fbea28ba330e5c599c9889b809513e",
+      "public_download": true
+    },
+    {
+      "name": "RELEASE-EVIDENCE.json",
+      "size": 7143,
+      "sha256": "c7d75f3c66a194016746ae0440c3a89b37e5562a2511a4baafbf848b120003f8",
+      "public_download": true
+    },
+    {
+      "name": "RELEASE-NOTES.md",
+      "size": 4646,
+      "sha256": "b148d41a5461ae97badb369e9ef0f706c41d7183935af01b267486d3d95cc7ff",
+      "public_download": true
+    },
+    {
+      "name": "SOURCE-2.6.0.json",
+      "size": 517176,
+      "sha256": "8a7073fac1cb2a769651bc20b29b07e4a803671e2bd2027331f9b57900958890",
+      "public_download": true
+    },
+    {
+      "name": "START-HERE-2.6.0.txt",
+      "size": 458,
+      "sha256": "a2b3791e547c5fc81660179c4479d55063f6fab3eb6a11fd9f7675f5bf77e187",
+      "public_download": true
+    },
+    {
+      "name": "UI-EVIDENCE-2.6.0.zip",
+      "size": 13443403,
+      "sha256": "31497162c483382b1c7e6a348847fe055c93f0f09fecb460d39eede7fb48c050",
+      "public_download": true,
+      "full_crc_sha": true,
+      "zip_entries": 24
+    },
+    {
+      "name": "UI-EVIDENCE-2.6.0.zip.sha256",
+      "size": 89,
+      "sha256": "032b39d2989bbc940bc85f4e8a55bd33e09a3b080a48a5a039f64cd48960f5e7",
+      "public_download": true
+    },
+    {
+      "name": "SHA256SUMS",
+      "size": 2000,
+      "sha256": "122a8c284da60d25bad0793ddc91cc0257705308e68d549d5f83a8397f8a1734",
+      "public_download": true
+    }
+  ],
+  "no_authenticated_downloads": true,
+  "full_crc_sha_manifests_and_source": true
+}
