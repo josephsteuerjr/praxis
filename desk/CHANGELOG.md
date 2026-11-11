@@ -1,3 +1,10 @@
+# 2.6.1 Beta
+
+Fix Windows installation and updates requesting administrator rights. Clean installs
+no longer stop a nonexistent previous app; protected old files remain visible leftovers.
+
+Read the [changes and limits](docs/RELEASE-2.6.1.md).
+
 # 2.6.0 Beta
 
 Canonical hands, clearer action details and phone history, in-app server installation

@@ -23,6 +23,11 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.6.1 Beta
+
+Windows installation and updates no longer request administrator rights. Protected
+old files are retained and reported. See the [correction and limits](desk/docs/RELEASE-2.6.1.md).
+
 ## Included in 2.6.0 Beta
 
 Updated hands and action panels, complete phone history, in-app server installation
