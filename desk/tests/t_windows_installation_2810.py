@@ -136,22 +136,29 @@ class Installation(unittest.TestCase):
                 self.assertEqual(defaults['mode'],'fresh')
             finally:window.server.server_close()
 
-    def test_large_privileged_retirement_uses_bound_file_not_a_giant_command(self):
+    def test_large_retirement_uses_bound_file_and_current_rights(self):
         import base64
         from types import SimpleNamespace
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);old=root/'old';old.mkdir()
             files={f'runtime/lib/module-{n}.py':'a'*64 for n in range(5000)}
             seen=[]
-            def elevated(script,env):
+            def current_user(script,env):
                 self.assertNotIn('HELENE_RETIRE_FILES',env)
                 request=Path(env['HELENE_RETIRE_MANIFEST']);value=json.loads(request.read_text())
                 self.assertEqual(value['files'],files);self.assertEqual(Path(value['old']),old)
                 self.assertEqual(len(env['HELENE_RETIRE_SHA256']),64);seen.append(request)
+                return json.dumps({'ok':True})
             windows_os=SimpleNamespace(**{**vars(os),'name':'nt','environ':{**os.environ,'SYSTEMROOT':str(root/'Windows')}})
-            with patch.object(windows,'os',windows_os),patch.object(windows,'admin',return_value=False),patch.object(windows,'powershell',side_effect=RuntimeError('access denied')),patch.object(windows,'run_privileged',side_effect=elevated):
+            with patch.object(windows,'os',windows_os),patch.object(windows,'admin',return_value=False),patch.object(windows,'powershell',side_effect=current_user),patch.object(windows,'run_privileged',side_effect=AssertionError('No automatic elevation')):
                 windows.system_action(old,'remove_files',files)
             self.assertEqual(len(seen),1);self.assertFalse(seen[0].exists())
+            def denied(script,env):
+                current_user(script,env)
+                return json.dumps({'ok':False,'code':-2147024891})
+            with patch.object(windows,'os',windows_os),patch.object(windows,'powershell',side_effect=denied),patch.object(windows,'run_privileged',side_effect=AssertionError('No automatic elevation')):
+                with self.assertRaises(PermissionError):windows.system_action(old,'remove_files',files)
+            self.assertEqual(len(seen),2);self.assertFalse(seen[1].exists())
             with patch.object(windows,'os',windows_os),patch.object(windows.subprocess,'run',return_value=SimpleNamespace(returncode=0)) as run:
                 windows.run_privileged("$ErrorActionPreference='Stop'",{'HELENE_OLD_ROOT':str(old),'HELENE_PRIVATE_TOKEN':'fixture-secret-do-not-forward'})
                 script=base64.b64decode(run.call_args.kwargs['env']['HELENE_ADMIN_CODE']).decode('utf-16le')

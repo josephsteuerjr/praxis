@@ -534,8 +534,11 @@ $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath($env:HELENE_OLD_ROOT).TrimEnd('\')
 function FileDigest([string]$path){$stream=[IO.File]::OpenRead($path);$sha=[Security.Cryptography.SHA256]::Create();try{return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose();$stream.Dispose()}}
 function Bound([string]$cmd){return $cmd -and ($cmd.StartsWith('"'+$root+'\',[StringComparison]::OrdinalIgnoreCase) -or $cmd.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase))}
-$service=Get-CimInstance Win32_Service -Filter "Name='Helene'"
-$ours=$service -and (Bound $service.PathName)
+$service=$null;$ours=$false
+if($env:HELENE_SYSTEM_ACTION -in @('stop_service','restore_service','cleanup','custody')){
+ $service=Get-CimInstance Win32_Service -Filter "Name='Helene'"
+ $ours=$service -and (Bound $service.PathName)
+}
 switch($env:HELENE_SYSTEM_ACTION){
  'stop_service'{if($ours){$s=Get-Service Helene;if($s.Status -ne 'Stopped'){$s.Stop();$s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))}}}
  'restore_service'{if(!$ours){throw 'Previous service binding changed'};Start-Service Helene}
