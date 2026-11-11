@@ -26,7 +26,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release download v2.6.0 --pattern 'native-${{ matrix.target }}.tar.gz' --dir prior
-          hdiutil create -size 16g -type SPARSE -fs APFSX -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
+          hdiutil create -size 16g -type SPARSE -fs "Case-sensitive APFS" -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
           hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
           python3 - <<'PY'
           from pathlib import Path
