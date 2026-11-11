@@ -1,0 +1,22 @@
+name: Transfer exact qualified Mac artifacts
+on:
+  push:
+    branches: [codex/helene261-no-admin-mac-transfer]
+permissions:
+  contents: write
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos, macos-intel]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Transfer only changed compressed records and native evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: python3 export.py ${{ matrix.target }}
