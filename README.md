@@ -1,0 +1,1 @@
+Build-only branch for the authorized Helene 2.6.1 Beta correction. Public product source and a strict allowlist of native qualification tools. Outputs remain in an unpublished release draft until validation completes.
