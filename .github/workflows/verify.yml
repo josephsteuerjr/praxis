@@ -1,0 +1,31 @@
+name: Verify public Helene 2.6.0 Beta downloads
+on:
+  push:
+    branches: [codex/helene260-beta-public-verify]
+    paths: ['verify_public.py', 'expected.json', '.github/workflows/verify.yml']
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fresh unauthenticated public bytes and raw Git
+        run: python3 -u verify_public.py
+      - name: Retain small verification receipt in this evidence branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64,json,os,subprocess
+          raw=Path('PUBLIC-VERIFIED.json').read_bytes();assert json.loads(raw)['passed']
+          value={'message':'Record exact public Beta asset verification','branch':'codex/helene260-beta-public-verify','content':base64.b64encode(raw).decode()}
+          Path('receipt-request.json').write_text(json.dumps(value))
+          result=subprocess.check_output(['gh','api','--method','PUT','repos/'+os.environ['GH_REPO']+'/contents/PUBLIC-VERIFIED.json','--input','receipt-request.json'])
+          print('Receipt commit',json.loads(result)['commit']['sha'])
+          PY
