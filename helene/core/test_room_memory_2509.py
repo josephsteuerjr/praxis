@@ -441,47 +441,6 @@ def contextlib_all(patches):
     return stack
 
 
-class PrivateRecordFloor(unittest.TestCase):
-    RECORD = "- [private] развёлся в марте и просил никому не рассказывать об этом\n  и ещё строка"
-
-    def _with(self, records, text):
-        token = agent._PRIVATE_IN_FRAME.set(tuple(records))
-        try:
-            return agent.private_record_floor(text)
-        finally:
-            agent._PRIVATE_IN_FRAME.reset(token)
-
-    def test_verbatim_piece_of_a_private_record_is_held(self):
-        self.assertTrue(self._with([self.RECORD], "Он ведь развёлся в марте и просил никому не рассказывать!"))
-        self.assertTrue(self._with([self.RECORD], "…РАЗВЁЛСЯ   В МАРТЕ И ПРОСИЛ никому…"))
-
-    def test_paraphrase_and_owner_frame_pass(self):
-        self.assertEqual(self._with([self.RECORD], "у него был развод, не спрашивай"), "")
-        self.assertEqual(self._with([], "развёлся в марте и просил никому не рассказывать"), "")
-        self.assertEqual(self._with([self.RECORD], "короткое"), "")
-
-    def test_room_frame_remembers_its_private_records(self):
-        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
-        people_dir = Path(tmp.name) / "people"; people_dir.mkdir()
-        (people_dir / "guest.md").write_text(
-            "# Гость\n\ntelegram_id: 42\n\n- любит чай\n- [private] развёлся в марте и просил никому не говорить\n",
-            encoding="utf-8")
-        patches = [mock.patch.object(people, "PEOPLE_DIR", people_dir),
-                   mock.patch.object(agent, "_present_by_transport", return_value={"42"}),
-                   mock.patch.object(agent, "_mentioned_slugs", return_value=[])]
-        if hasattr(agent, "_epoch_lifted_dossier"):
-            patches.append(mock.patch.object(agent, "_epoch_lifted_dossier", return_value=None))
-        with contextlib_all(patches), mock.patch.dict(os.environ, {"PRAXIS_DOSSIER_PRIVATE_IN_ROOMS": "on"}):
-            frame_layout.begin()
-            self.addCleanup(frame_layout.reset)
-            agent._participant_memory_block("Кто-то", _room_ctx(owner=False, known=False))
-            self.assertTrue(agent.private_record_floor("да, развёлся в марте и просил никому не говорить"))
-            self.assertIn("приватной записи досье", agent.tool_send_message("42", "он развёлся в марте и просил никому не говорить"))
-            agent._participant_memory_block("Кто-то", agent.ChannelContext(
-                chat_id="42", is_dm=True, owner=True, known=True, principal_id="42"))
-            self.assertEqual(agent.private_record_floor("развёлся в марте и просил никому не говорить"), "")
-
-
 class OwnerDmTurnsAreLabelledInRecall(unittest.TestCase):
     HITS = [
         {"path": "memory/self/turns-2026-09.jsonl", "text": "вошло: «Егор: у меня диагноз»", "source": "Praxis"},

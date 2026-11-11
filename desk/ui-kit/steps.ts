@@ -43,7 +43,8 @@ export interface RunDetail {
     text_truncated?: boolean;
     usage?: { in?: number; cache_read?: number; out?: number };
     tools?: Array<{
-      call_id?: string; seq?: number; at?: string; status?: string; error?: string;
+      call_id?: string; seq?: number; at?: string; finished_at?: string; status?: string; error?: string;
+      outcome?: string; target?: string; nested?: unknown[]; nested_cut?: boolean;
       tool?: string; args?: unknown;
       definition?: { description?: string; input_schema?: unknown };
       model_request?: { tool?: string; args?: unknown };
@@ -56,7 +57,7 @@ export interface RunDetail {
   }>;
 }
 
-interface ExecutionReceipt {
+export interface ExecutionReceipt {
   handler?: string; kind?: string; command?: string; argv?: string[]; requested_argv?: string[];
   cwd?: string; pid?: number; status?: string; exit_code?: number; error?: string;
 }
@@ -131,7 +132,7 @@ export function suppliedCommand(args: unknown): string {
     typeof fields.cmd === "string" ? fields.cmd : "";
 }
 
-type ToolDetail = NonNullable<NonNullable<RunDetail['iterations']>[number]['tools']>[number];
+export type ToolDetail = NonNullable<NonNullable<RunDetail['iterations']>[number]['tools']>[number];
 
 /** A readable projection; the original input remains available below it. */
 export function toolParameters(args: unknown): Array<[string, unknown]> {
@@ -147,46 +148,127 @@ function traceBlock(key: string, label: string, content: string, kind: string, o
     textBox(key, content, opts) + `</section>`;
 }
 
-/** Request, observed dispatch and response have separate provenance and presentation. */
-export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string {
-  const command = suppliedCommand(t.args);
-  const parameters = toolParameters(t.args);
-  const parts: string[] = [];
-  const rewritten = !!t.model_request?.tool && t.model_request.tool !== t.tool;
-  if (rewritten) parts.push(`<div class="tool-call-route"><code>${esc(t.model_request!.tool!)}</code><span>→</span><code>${esc(t.tool || '')}</code><span>разбор харнессом</span></div>`);
-  if (command) parts.push(traceBlock(key + ':command', rewritten ? 'Команда после разбора вызова' : 'Запрос модели · команда', command, 'request'));
-  if (parameters.length) parts.push(`<section class="tool-trace-block tool-trace-parameters"><div class="tool-trace-heading">Параметры вызова</div><dl class="tool-parameters">` +
-    parameters.map(([name, value]) => `<div><dt>${esc(name)}</dt><dd>${typeof value === 'object' || String(value).includes('\n')
-      ? textBox(key + ':arg:' + name, pretty(value)) : esc(String(value))}</dd></div>`).join('') + `</dl></section>`);
-  if (!command && !parameters.length && t.args != null) parts.push(traceBlock(key + ':input', 'Запрос модели', pretty(t.args), 'request'));
-  const executions = [t.execution, ...(t.operations || [])].filter((row): row is ExecutionReceipt => !!row);
-  if (executions.length) {
-    const states: Record<string, string> = { entered: 'Обработчик вызван', returned: 'Процесс завершился', timed_out: 'Время ожидания истекло', launch_failed: 'Запуск не состоялся' };
-    for (const [index, execution] of executions.entries()) {
-      const labels = [execution.handler, states[execution.status || ''] || execution.status,
-        execution.exit_code != null ? `Код выхода: ${execution.exit_code}` : '', execution.error,
-        execution.pid != null ? `PID ${execution.pid}` : '', execution.cwd ? `Рабочая папка: ${execution.cwd}` : ''].filter(Boolean);
-      const invocation = execution.argv ? JSON.stringify(execution.argv, null, 2) : execution.requested_argv
-        ? 'Попытка запуска:\n' + JSON.stringify(execution.requested_argv, null, 2) : execution.command || '';
-      parts.push(traceBlock(key + ':execution:' + index, execution.kind === 'process' ? 'Запуск процесса · квитанция' : 'Исполнение харнесса', [...labels, invocation].filter(Boolean).join('\n'), 'execution'));
+/** Outcome comes from the journal. A received payload alone never proves success. */
+export function toolSummary(t: ToolDetail, live = false) {
+  const known = ['ok','confirmed','failed','refused','in_doubt','partial','unknown'];
+  const received = t.result != null || t.status === 'received' || !!t.finished_at;
+  const active = !received && t.status !== 'failed' && live;
+  const outcome = t.status === 'failed' ? 'failed' : known.includes(t.outcome || '') ? t.outcome! : 'unknown';
+  const labels: Record<string,string> = {ok:'успех',confirmed:'подтверждено',failed:'ошибка',refused:'отказ',in_doubt:'нужна проверка',partial:'частично',unknown:'исход неизвестен'};
+  const icons: Record<string,string> = {ok:'✓',confirmed:'✓',failed:'✗',refused:'⊘',in_doubt:'?',partial:'◐',unknown:'·'};
+  const receipt = [t.execution, ...(t.operations || [])].filter(r => r?.exit_code != null).at(-1);
+  const state = active ? 'выполняется' : receipt?.exit_code != null ? `exit ${receipt.exit_code}${['ok','confirmed','failed'].includes(outcome) ? '' : ' · '+labels[outcome]}` : ['ok','confirmed'].includes(outcome) ? '' : labels[outcome];
+  const elapsed = Date.parse(t.finished_at || '') - Date.parse(t.at || '');
+  const seconds = Number.isFinite(elapsed) && elapsed >= 0 ? elapsed/1000 : null;
+  const duration = seconds == null ? '' : seconds < 60 ? `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} с` : `${Math.floor(seconds/60)} мин ${Math.round(seconds%60)} с`;
+  return {outcome,active,state,icon:active ? '◌' : icons[outcome],label:active ? 'выполняется' : labels[outcome],duration,
+    target:t.target || subject(t.args),failed:['failed','refused'].includes(outcome),attention:['partial','in_doubt'].includes(outcome)};
+}
+
+const selectedTraceTabs = new Map<string,string>();
+export const traceTabNames = [['args','Аргументы'],['definition','Функция'],['execution','Исполнение'],['request','JSON-запрос'],['response','JSON-ответ']] as const;
+export function traceTabsHTML(key:string, panels: Record<string,string>): string {
+  const selected = selectedTraceTabs.get(key) || 'args';
+  const id = 'trace-' + encodeURIComponent(key);
+  return `<div class="tool-trace" data-trace-key="${esc(key)}"><div class="tool-tabs" role="tablist" aria-label="Детали вызова">` +
+    traceTabNames.map(([tab,label])=>`<button type="button" role="tab" id="${id}-${tab}" aria-controls="${id}-${tab}-panel" aria-selected="${tab===selected}" tabindex="${tab===selected?0:-1}" data-trace-tab="${tab}" aria-label="${label}">${label.startsWith('JSON-')?`<span class="tab-long">${label}</span><span class="tab-short">${label[5].toUpperCase()+label.slice(6)}</span>`:label}</button>`).join('') + '</div>' +
+    traceTabNames.map(([tab])=>`<section role="tabpanel" id="${id}-${tab}-panel" aria-labelledby="${id}-${tab}" data-trace-panel="${tab}" ${tab===selected?'':'hidden'}>${panels[tab] || '<p class="tool-trace-unrecorded">Не записано в журнале.</p>'}</section>`).join('') + '</div>';
+}
+function selectTraceTab(button:HTMLElement):void {
+  const trace=button.closest<HTMLElement>('[data-trace-key]');if(!trace)return;
+  const tab=button.dataset.traceTab!,key=trace.dataset.traceKey!;
+  selectedTraceTabs.delete(key);selectedTraceTabs.set(key,tab);
+  if(selectedTraceTabs.size>1000)selectedTraceTabs.delete(selectedTraceTabs.keys().next().value!);
+  for(const b of trace.querySelectorAll<HTMLElement>('[data-trace-tab]')) {const on=b===button;b.setAttribute('aria-selected',String(on));b.tabIndex=on?0:-1;}
+  for(const p of trace.querySelectorAll<HTMLElement>('[data-trace-panel]'))p.hidden=p.dataset.tracePanel!==tab;
+  trace.dispatchEvent(new CustomEvent('trace-tab-selected',{bubbles:true,detail:tab}));
+}
+
+/** Python literal for a JSON value: the handler receives exactly these keyword arguments. */
+export function pyLiteral(v: unknown, indent = ''): string {
+  if (v === null || v === undefined) return 'None';
+  if (v === true) return 'True';
+  if (v === false) return 'False';
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'None';
+  if (typeof v === 'string') {
+    const quote = v.includes("'") && !v.includes('"') ? '"' : "'";
+    return quote + v.replace(/\\/g, '\\\\').replace(new RegExp(quote, 'g'), '\\' + quote)
+      .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + quote;
+  }
+  const inner = indent + '    ';
+  if (Array.isArray(v)) return v.length ? '[\n' + v.map(x => inner + pyLiteral(x, inner)).join(',\n') + ',\n' + indent + ']' : '[]';
+  const entries = Object.entries(v as Record<string, unknown>);
+  return entries.length ? '{\n' + entries.map(([k, x]) => inner + pyLiteral(k) + ': ' + pyLiteral(x, inner)).join(',\n') + ',\n' + indent + '}' : '{}';
+}
+
+/** `handler(**args)` — what the harness actually calls for a Python hand. */
+export function pythonCall(handler: string, args: unknown): string {
+  const kwargs = args && typeof args === 'object' && !Array.isArray(args) ? Object.entries(args as Record<string, unknown>) : [];
+  const flat = kwargs.map(([k, v]) => `${k}=${pyLiteral(v)}`);
+  const oneLine = `${handler}(${flat.join(', ')})`;
+  if (oneLine.length <= 72 && !oneLine.includes('\n')) return oneLine;
+  return `${handler}(\n` + kwargs.map(([k, v]) => `    ${k}=${pyLiteral(v, '    ')},`).join('\n') + '\n)';
+}
+
+/** POSIX shell quoting, as shlex.quote does. */
+export function shellQuote(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : "'" + arg.replace(/'/g, `'"'"'`) + "'";
+}
+
+const RECEIPT_STATE: Record<string, string> = {
+  entered: 'обработчик вызван', returned: 'процесс завершился', timed_out: 'истекло время ожидания',
+  launch_failed: 'запуск не состоялся', running: 'выполняется', failed: 'ошибка', cancelled: 'отменено', started: 'запущен',
+};
+
+/** One receipt as the command it records: Python call, process line or bare harness note. */
+export function executionText(r: ExecutionReceipt, args: unknown): { title: string; code: string; meta: string } {
+  const meta = [r.exit_code != null ? '' : RECEIPT_STATE[r.status || ''] || r.status, r.exit_code != null ? `exit ${r.exit_code}` : '',
+    r.pid != null ? `PID ${r.pid}` : '', r.error || ''].filter(Boolean).join(' · ');
+  if (r.argv?.length || r.requested_argv?.length) {
+    const argv = r.argv?.length ? r.argv : r.requested_argv!;
+    const line = argv.map(shellQuote).join(' ');
+    return { title: r.argv?.length ? 'Процесс' : 'Попытка запуска (процесс не стартовал)',
+      code: (r.cwd ? `$ cd ${shellQuote(r.cwd)}\n` : '') + '$ ' + line, meta };
+  }
+  if (r.command) return { title: 'Команда', code: (r.cwd ? `$ cd ${shellQuote(r.cwd)}\n` : '') + '$ ' + r.command, meta };
+  if (r.handler && (r.kind || 'python') === 'python') return { title: 'Вызов Python', code: pythonCall(r.handler, args), meta };
+  return { title: 'Исполнение харнесса', code: pretty(r), meta };
+}
+
+/** metadata.operations rows: ["read", path], ["process", exe, argv], ["connect", addr]… */
+export function nestedText(rows: Record<string, unknown>[] | unknown[]): string {
+  return rows.map(row => {
+    if (Array.isArray(row)) {
+      const [op, ...rest] = row;
+      if (op === 'process' && Array.isArray(rest[1])) return '$ ' + (rest[1] as unknown[]).map(a => shellQuote(String(a))).join(' ');
+      return [String(op), ...rest.map(x => Array.isArray(x) ? x.join(' ') : String(x))].join('  ');
     }
-  } else {
-    parts.push(`<div class="tool-trace-unrecorded">Детали исполнения харнесса в этом ходе не записаны.</div>`);
-  }
-  const head = String(t.result?.head || t.result?.tail || '');
-  const result = t.result?.truncated ? [t.result.head, '… пропущена часть результата …', t.result.tail].filter(Boolean).join('\n') : head;
-  if (head) parts.push(traceBlock(key + ':result', 'Результат инструмента', resultText(result), 'response',
-    { truncated: t.result?.truncated, ref: t.result?.result_id, run: runId, size: t.result?.size }));
-  if (t.model_observation != null && t.model_observation !== result) {
-    parts.push(traceBlock(key + ':model-result', 'Текст для следующего шага модели', t.model_observation, 'model-response'));
-  }
-  if (t.model_response_image_count) parts.push(`<div class="tool-trace-unrecorded">К ответу приложено изображений: ${t.model_response_image_count}</div>`);
-  if (t.error) parts.push(traceBlock(key + ':error', 'Ошибка', t.error, 'error'));
-  const original: Array<[string, string]> = [['Инструмент', t.tool || ''], ['Исходные аргументы', t.args != null ? pretty(t.args) : '']];
-  if (t.model_request) original.unshift(['Сохранённый запрос модели', pretty(t.model_request)]);
-  if (t.definition) original.unshift(['Описание для модели', t.definition.description || ''], ['Схема параметров', t.definition.input_schema ? pretty(t.definition.input_schema) : '']);
-  parts.push(details(key, original, t.definition ? 'Описание инструмента и исходный JSON' : 'Исходный вызов · JSON'));
-  return `<div class="tool-trace">${parts.join('')}</div>`;
+    return typeof row === 'object' && row ? Object.entries(row).map(([k, v]) => `${k}: ${String(v)}`).join(' · ') : String(row);
+  }).join('\n');
+}
+
+/** Five mutually exclusive views, with saved request and actual execution kept separate. */
+export function toolTraceHTML(t: ToolDetail, key: string, runId: string): string {
+  const missing=(text:string)=>`<p class="tool-trace-unrecorded">${esc(text)}</p>`;
+  const panels:Record<string,string>={};
+  panels.args=t.args!=null ? traceBlock(key+':args','Аргументы',pretty(t.args),'request') : missing('Аргументы не записаны.');
+  panels.definition=t.definition ? traceBlock(key+':definition','Схема инструмента',pretty(t.definition),'definition') : missing('Схема инструмента в этом журнале не записана.');
+  panels.request=t.model_request ? traceBlock(key+':request','Сохранённый JSON-запрос модели',pretty(t.model_request),'request') : missing('Исходный JSON-запрос модели не записан. Аргументы доступны отдельно.');
+  const executions=[t.execution,...(t.operations||[])].filter((r):r is ExecutionReceipt=>!!r);
+  panels.execution=executions.length ? executions.map((r,i)=>{
+    const shown=executionText(r,t.args);
+    return traceBlock(key+':execution:'+i,shown.title+(shown.meta?' · '+shown.meta:''),shown.code,'execution');
+  }).join('') : missing('Фактическое исполнение в этом журнале не записано.');
+  if(t.nested?.length)panels.execution+=traceBlock(key+':nested','Что рука сделала внутри',nestedText(t.nested),'execution');
+  else if(executions.length && !executions.some(r=>r.argv||r.command||r.requested_argv))panels.execution+=missing('Внутренних процессов, файлов и соединений журнал за этим вызовом не записал.');
+  if(t.nested_cut)panels.execution+=missing('Список вложенных действий сокращён.');
+  if(executions.length)panels.execution+=details(key+':receipt',[['Квитанции исполнения',pretty(executions)]],'Квитанции · JSON');
+  const result=t.result?.truncated ? [t.result.head,'… пропущена часть результата …',t.result.tail].filter(Boolean).join('\n') : String(t.result?.head ?? t.result?.tail ?? '');
+  panels.response=t.result ? traceBlock(key+':result','Ответ инструмента',resultText(result),'response',{truncated:t.result.truncated,ref:t.result.result_id,run:runId,size:t.result.size,raw:true}) : missing('Ответ инструмента ещё не записан.');
+  if(t.model_observation!=null)panels.response+=!t.result?.truncated&&t.model_observation===result ? missing('Модель получила этот же ответ; отдельной приписки нет.') : traceBlock(key+':model-response','Ответ для модели с припиской харнесса',t.model_observation,'model-response');
+  if(t.model_response_image_count)panels.response+=missing(`К ответу приложено изображений: ${t.model_response_image_count}`);
+  if(t.error)panels.response+=traceBlock(key+':error','Ошибка',t.error,'error');
+  return traceTabsHTML(runId+'/'+key,panels);
 }
 
 function details(key: string, parts: Array<[string, string]>, label = "Подробности"): string {
@@ -252,25 +334,25 @@ const lineCount = (s: string) => s.split("\n").length;
 const needsClip = (text: string) => text.length > CLIP_CHARS || lineCount(text) > CLIP_LINES;
 
 /** Коробка текста: ключ сохраняет раскрытие при перерисовке; data-full — что дочитать. */
-export function textBox(key: string, text: string, opts: { truncated?: boolean; ref?: string; run?: string; size?: number | null } = {}): string {
-  const full = opts.ref && opts.run ? fetched.get(`${opts.run}/${opts.ref}`) : undefined;
+export function textBox(key: string, text: string, opts: { truncated?: boolean; ref?: string; run?: string; size?: number | null; raw?: boolean } = {}): string {
+  const full = opts.ref && opts.run ? fetched.get(`${opts.run}/${opts.ref}/${opts.raw ? "raw" : "model"}`) : undefined;
   const body = full ?? text;
   const truncated = !!opts.truncated && full === undefined;
   const folded = needsClip(body) || truncated;
   const more = truncated
     ? `Показать целиком${opts.size ? ` · ${fmtK(opts.size)} байт` : ""}`
     : `Показать целиком · ${lineCount(body)} строк`;
-  const fullAttr = truncated && opts.ref && opts.run ? ` data-full="${esc(opts.run)}/${esc(opts.ref)}"` : "";
+  const fullAttr = truncated && opts.ref && opts.run ? ` data-full="${esc(opts.run)}/${esc(opts.ref)}/${opts.raw ? "raw" : "model"}"` : "";
   return `<div class="run-text" data-text="${esc(key)}">` +
     `<pre class="run-text-body ${folded ? "clipped" : ""}">${esc(body)}</pre>` +
     (folded ? `<button type="button" class="run-text-more" data-more="${esc(key)}"${fullAttr}>${more}</button>` : "") +
     `</div>`;
 }
 
-function textOf(payload: { text?: string; model_text?: string } | null): string {
+function textOf(payload: { text?: string; model_text?: string } | null, rawResult=false): string {
   if (!payload) return "";
-  if (payload.model_text) return payload.model_text;
-  const raw = payload.text || "";
+  if(!rawResult && payload.model_text)return payload.model_text;
+  const raw = payload.text ?? payload.model_text ?? "";
   try {
     return pretty(JSON.parse(raw));
   } catch {
@@ -282,8 +364,17 @@ let bound = false;
 function bindMore(): void {
   if (bound || typeof document === "undefined") return;
   bound = true;
+  document.addEventListener('keydown',event=>{
+    const button=(event.target as HTMLElement)?.closest<HTMLElement>('[data-trace-tab]');
+    if(!button || !['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+    const buttons=[...button.parentElement!.querySelectorAll<HTMLElement>('[data-trace-tab]')];
+    const i=buttons.indexOf(button), next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(i+(event.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;
+    event.preventDefault();buttons[next].focus();selectTraceTab(buttons[next]);
+  });
   document.addEventListener("click", (e) => {
     const target = e.target as HTMLElement | null;
+    const tab = target?.closest<HTMLElement>('[data-trace-tab]');
+    if(tab){e.preventDefault();selectTraceTab(tab);return;}
     const copy = target?.closest<HTMLButtonElement>('button[data-copy-block]');
     if (copy) {
       e.preventDefault();
@@ -315,11 +406,11 @@ function bindMore(): void {
     if (!box || !pre) return;
     const full = btn.dataset.full;
     if (full && !fetched.has(full) && fetchResult) {
-      const [run, rid] = full.split("/");
+      const [run, rid, mode] = full.split("/");
       btn.disabled = true;
       btn.textContent = "читаю…";
       fetchResult(run, rid).then((payload) => {
-        const text = textOf(payload);
+        const text = textOf(payload, mode === "raw");
         if (text) {
           fetched.set(full, text);
           pre.textContent = text;

@@ -93,7 +93,9 @@ class PlanAndConfirm(unittest.TestCase):
     def test_без_исполнителя_план_не_ложится_и_сказано_как_поднять(self):
         got = control.update_plan(self.tree, "1.1.1")
         self.assertFalse(got["ok"])
-        self.assertIn(control.UPDATER_COMMAND, got["note"])
+        # 11.11 (Егор): человек не запускает скрипты — исполнителя ставит приложение по SSH.
+        self.assertIn(control.APP_PATH, got["note"])
+        self.assertNotIn(control.UPDATER_COMMAND, got["note"])
         self.assertFalse((ctl(self.tree) / control.UPDATE_PLAN).exists())
 
     def test_молчащий_и_больной_исполнитель(self):

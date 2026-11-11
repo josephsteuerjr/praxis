@@ -20,7 +20,7 @@ import { workActivity, observeActivity } from './work-activity';
 import './styles/work-activity.css';
 import { bindFail, esc, failHTML, fmtDur, fmtTime, q } from "./lib";
 import { fmtK } from "../text";
-import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, subject, toolTraceHTML, terminalLabel, textBox, type RunDetail } from "../steps";
+import { renderSteps, ACTIONS, clip, frameStripHTML, lastUsage, toolSummary, toolTraceHTML, terminalLabel, textBox, type RunDetail } from "../steps";
 export { stepsHTML, type RunDetail } from "../steps";
 import * as scroll from "./scroll";
 import { forgePanel } from './views/forge-panel';
@@ -78,23 +78,6 @@ const ICON: Record<string, string> = {
 function icon(kind: string): string {
   return `<svg class="ico" viewBox="0 0 20 20" aria-hidden="true">${ICON[kind] || ICON.hand}</svg>`;
 }
-function toolIcon(tool: string, args: unknown): string {
-  const t = tool || "";
-  if (t === "reply") return "reply";
-  if (t === "end_turn") return "end";
-  if (t === "computer") {
-    const a = (args || {}) as { action?: string };
-    return a.action === "run" || a.action === "poll" ? "shell" : "computer";
-  }
-  if (t === "shell" || t === "coding_process") return "shell";
-  if (/read|coding_read/.test(t)) return "file";
-  if (/write|edit|patch|write_skill/.test(t)) return "edit";
-  if (/web|fetch_url|read_url/.test(t)) return "web";
-  if (/search/.test(t)) return "search";
-  if (/recall|remember|memory|remind/.test(t)) return "memory";
-  return "hand";
-}
-
 // ---------------------------------------------------------------- подписи
 
 /** Скобки кадра (`[thread #898 …]`) и подпись «Имя: » — адрес, а не слова. */
@@ -189,35 +172,22 @@ function stepRows(d: RunDetail, withFrame = true): StepRow[] {
     const cut = complete && it.stop === "max_tokens";
     const meta = [it.ms != null ? `${(it.ms / 1000).toFixed(1)} с` : "", u.in != null ? `${fmtK(total)} → ${fmtK(u.out || 0)}` : ""].filter(Boolean).join(" · ");
     const state = it.status === "failed" ? "ошибка модели" : cut ? "оборван потолком" : thinking ? "думает…" : "";
-    rows.push({ key: "it:" + key, cls: `st st-think${thinking ? " is-live" : ""}${it.status === "failed" || cut ? " is-failed" : ""}`, html:
+    if(thinking || it.status === "failed" || cut) rows.push({ key: "it:" + key, cls: `st st-think${thinking ? " is-live" : ""}${it.status === "failed" || cut ? " is-failed" : ""}`, html:
       `<div class="st-line">${icon(it.status === "failed" ? "fail" : "think")}<span class="st-label">Шаг ${i + 1}</span>` +
       `<span class="st-meta">${esc(meta)}</span>${state ? `<span class="st-state">${esc(state)}</span>` : ""}</div>` +
       (it.error ? `<div class="st-err">${esc(clip(it.error, 400))}</div>` : "") });
     (it.tools || []).forEach((t, j) => {
       const tkey = "tool:" + (t.call_id || `${key}:${j}`);
-      const received = t.result != null || t.status === "received";
-      const failed = t.status === "failed";
-      const active = !received && !failed && live;
       const emptyDelivery = t.tool === "telegram.deliver" && (t.args as { text_chars?: number } | null)?.text_chars === 0;
       // Доставка ядра без единого знака — не её действие: слово ушло рукой reply. Не шум в ленте.
       if (emptyDelivery && !(t.args as { media_count?: number } | null)?.media_count) return;
-      const title = emptyDelivery ? "Доставка ядра" : ACTIONS[t.tool || ""] || t.tool || "Действие";
-      const what = t.tool === "reply" ? String((t.args as { text?: string } | null)?.text || "") : subject(t.args);
-      const mark = failed ? "ошибка" : active ? "выполняется…" : received ? "результат получен" : "результат неизвестен";
-      const kind = failed ? "fail" : toolIcon(t.tool || "", t.args);
-      const isWord = t.tool === "reply";
-      const receipts = [t.execution, ...(t.operations || [])].filter(Boolean);
-      const observed = receipts.at(-1);
-      const harness = observed ? [observed.command || observed.argv?.join(' ') || observed.handler, observed.status].filter(Boolean).join(' · ') : '';
-      const executable=observed?.argv?.[0]?.split(/[\\/]/).at(-1);
-      const observedStatus=({returned:'завершён',running:'выполняется',failed:'ошибка',cancelled:'отменён',started:'запущен'} as Record<string,string>)[observed?.status || ''] || observed?.status;
-      const harnessLabel=observed ? [executable ? `процесс ${executable}` : observed.handler || observed.kind || 'действие',observedStatus].filter(Boolean).join(' · ') : '';
-      rows.push({ key: tkey, cls: `st st-hand${isWord ? " st-word" : ""}${active ? " is-live" : ""}${failed ? " is-failed" : ""}`, html:
-        `<button type="button" class="st-line st-toggle" aria-expanded="false">` +
-        `${icon(kind)}<span class="st-label">${esc(title)}</span>` +
-        `<span class="st-what">${esc(clip(what.replace(/\s+/g, " "), isWord ? 400 : 160))}</span>` +
-        (mark ? `<span class="st-state">${esc(mark)}</span>` : "") +
-        `</button>${harness ? `<div class="st-harness" title="${esc(harness)}">Харнесс · ${esc(harnessLabel)}</div>` : ''}<div class="st-detail" hidden><code class="tool-name">${esc(t.tool || '')}</code>${toolTraceHTML(t, tkey, runId)}</div>` });
+      const summary=toolSummary(t,live);
+      rows.push({key:tkey,cls:`st st-hand tool-row${summary.active?' is-live':''}${summary.failed?' is-failed':''}${summary.attention?' is-attention':''}`,html:
+        `<button type="button" class="st-line st-toggle" aria-expanded="false">`+
+        `<span class="tool-outcome" title="${esc(summary.label)}" aria-label="${esc(summary.label)}">${summary.icon}</span>`+
+        `<code class="st-label">${esc(t.tool || 'инструмент')}</code><span class="st-what" title="${esc(summary.target)}">${esc(clip(summary.target.replace(/\s+/g,' '),180))}</span>`+
+        `<span class="st-state">${esc(summary.state)}</span><span class="st-duration">${esc(summary.duration)}</span></button>`+
+        `<div class="st-detail" hidden>${toolTraceHTML(t,tkey,runId)}<div class="tool-step-meta">Шаг ${i+1}${meta?' · '+esc(meta):''}</div></div>`});
     });
     if (it.text || it.text_ref) {
       rows.push({ key: "text:" + key, cls: "st st-word", html:

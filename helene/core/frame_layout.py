@@ -820,7 +820,7 @@ def _short_date(value) -> str:
 # PRAXIS_FRAME_HEAD_STABLE). Содержание — то же, что несли блоки `contract.unknown_authority`
 # и `contract.family_audience` в system; место другое, слово в слово про право не меняется.
 AUTHORITY = {
-    "owner": "полномочия владельца: admit и computer_access слушают его",
+    "owner": "полномочия владельца",
     "family": "роль FAMILY назначена владельцем; owner-руки не его",
     "known": "знакомый; полномочий владельца нет",
     "unknown": ("не в известном наборе; полномочий владельца нет: впустить в «свои» может "

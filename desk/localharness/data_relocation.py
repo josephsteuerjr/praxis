@@ -243,16 +243,17 @@ def retire_sources(transfer,*,startup_proof):
             path=_regular_path(source/name)
             if _signature(path)!=sig:raise RuntimeError('Original data changed before retirement')
             try:path.unlink()
-            except PermissionError:
-                with path.open('rb') as stream:remaining[name]=hashlib.file_digest(stream,'sha256').hexdigest()
-        if remaining:
-            from .migration_windows import system_action
-            system_action(source,'remove_files',remaining)
+            except PermissionError:remaining[name]=sig
+        # 11.11 (Yegor): no administrator prompt for cleanup. The verified copy already
+        # serves the new programme; files Windows protects stay and are reported below.
         for name in sorted(row['directories'],key=lambda name:len(Path(name).parts),reverse=True):
             try:(source/name).rmdir()
             except OSError:pass
         try:source.rmdir()
         except OSError:pass
-        if any(source.rglob('*')):errors.append('Не удалось полностью убрать исходную папку данных: '+str(source))
+        if remaining:
+            errors.append(f'Windows не дала удалить без прав администратора {len(remaining)} файл(ов) в прежней папке данных '
+                          f'{source}. Новая Hélène работает с перенесённой копией; прежнюю папку можно удалить вручную.')
+        elif any(source.rglob('*')):errors.append('Не удалось полностью убрать исходную папку данных: '+str(source))
         else:removed.append(str(source))
     return dict(transfer,state='retired' if not errors else 'source_retained',removed_sources=removed,errors=errors)

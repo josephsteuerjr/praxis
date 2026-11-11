@@ -9,6 +9,45 @@ import subprocess
 AUTOMATIC_ARGUMENTS='--launch-intent automatic'
 RUN_KEY=r'Software\Microsoft\Windows\CurrentVersion\Run'
 RUN_NAME='Helene'
+STARTUP_APPROVED_KEY=r'Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved'
+
+
+def startup_approval(location,name):
+    """Explorer can disable a registered Run entry or Startup shortcut."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,STARTUP_APPROVED_KEY+'\\'+location) as key:
+            value,kind=winreg.QueryValueEx(key,name)
+    except FileNotFoundError:return None
+    if kind!=winreg.REG_BINARY or not isinstance(value,bytes) or len(value)!=12:
+        raise RuntimeError('Invalid Windows startup approval for Hélène')
+    return value
+
+
+def startup_allowed(location,name):
+    value=startup_approval(location,name)
+    # Unknown shell states must not be presented as an enabled login entry.
+    return value is None or int.from_bytes(value[:4],'little') in (2,6)
+
+
+def enable_startup(location,name):
+    """Only an explicit Enable action resets Explorer's disabled preference.
+
+    Updates retarget Run without calling this, preserving the owner's choice.
+    Remove the known disabled record rather than manufacture shell metadata.
+    """
+    import winreg
+    value=startup_approval(location,name)
+    if value is None:return
+    state=int.from_bytes(value[:4],'little')
+    if state in (2,6):return
+    if state not in (3,7):raise RuntimeError('Unknown Windows startup approval for Hélène')
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER,STARTUP_APPROVED_KEY+'\\'+location,0,
+                        winreg.KEY_QUERY_VALUE|winreg.KEY_SET_VALUE) as key:
+        if winreg.QueryValueEx(key,name)!=(value,winreg.REG_BINARY):
+            raise RuntimeError('Windows startup approval changed; retry the explicit Enable action')
+        winreg.DeleteValue(key,name)
+    if not startup_allowed(location,name):raise RuntimeError('Windows did not enable Hélène at login')
 
 
 def run_binding():
@@ -117,7 +156,9 @@ def invoke(owner,command,args):
     startup=Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs/Startup/Helene.lnk'
     executable,automatic=launch_binding(owner.root,AUTOMATIC_ARGUMENTS)
     if command=='autostart_get':
-        return run_binding()==run_command(owner.root) or shortcut_matches(shortcut_binding(startup),executable,owner.root,automatic)
+        return (run_binding()==run_command(owner.root) and startup_allowed('Run',RUN_NAME) or
+                shortcut_matches(shortcut_binding(startup),executable,owner.root,automatic) and
+                startup_allowed('StartupFolder',startup.name))
     if command=='autostart_set':
         if type(args.get('on'))is not bool:raise ValueError('Autostart on must be a boolean')
         prior=shortcut_binding(startup)
@@ -139,6 +180,8 @@ def invoke(owner,command,args):
                 except OSError:
                     set_run(current)
                     raise
+            if prior is None or prior['arguments']!=automatic:enable_startup('Run',RUN_NAME)
+            else:enable_startup('StartupFolder',startup.name)
         else:
             startup.unlink(missing_ok=True)
             if startup.exists():raise RuntimeError('Autostart shortcut removal was not confirmed')

@@ -90,7 +90,6 @@ def consumer(profile, input_path, output_path):
         stack.enter_context(patch('socket.socket.connect', side_effect=AssertionError('network forbidden in offline consumer')))
         stack.enter_context(patch.object(agent, '_model_call_impl', observed))
         stack.enter_context(patch.object(agent, '_work_loop_continue', return_value=False))
-        stack.enter_context(patch.object(agent, '_arm_private_floor', return_value=0))
         if value.get('with_tool_iteration'):
             stack.enter_context(patch.dict(agent.TOOL_IMPL, {'synthetic_read_only_probe': lambda: 'synthetic observed result'}))
         stack.enter_context(fc.bind_source(source, lambda: copy.deepcopy(source)))

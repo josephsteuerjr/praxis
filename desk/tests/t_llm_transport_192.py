@@ -203,7 +203,6 @@ class TransportTests(unittest.TestCase):
         with ExitStack() as stack:
             for name, value in (("_run_status_gate", lambda **kwargs: None),
                                 ("_drain_owner_input", lambda *args, **kwargs: False),
-                                ("_arm_private_floor", lambda *args: 0),
                                 ("_notices_block", lambda **kwargs: ""),
                                 ("_work_loop_continue", lambda *args, **kwargs: False),
                                 ("_tool_has_side_effect", lambda *args: False),

@@ -60,7 +60,7 @@ details.forge-task, details.forge-unit {
 .forge-recent > summary { cursor: pointer; margin: 10px 0; font-size: .88em; }
 .forge-heading, .forge-teams, .forge-unit, .forge-task, .forge-payload { min-width: 0; max-width: 100%; box-sizing: border-box; }
 /* The side panel is a quiet roster, with no limit on participant count. */
-.forge-compact { max-height: min(34vh, 300px); overflow-y: auto; scrollbar-width: thin; }
+.forge-compact { max-height: none; overflow: visible; }
 .forge-compact .forge-heading { gap: 4px 10px; }
 .forge-compact .forge-heading .section-title { flex: 1; margin: 0; font: 500 13px/1.5 var(--sans); }
 .forge-compact .forge-heading .btn { min-height: 32px; padding: 4px 8px; border: 0; font-size: 12.5px; }
@@ -117,3 +117,15 @@ details.forge-task, details.forge-unit {
   .forge-actions { gap: 6px; }
   .forge-task .fold-body { padding-left: 10px; padding-right: 10px; }
 }
+
+.forge-compact .forge-unit > summary { display:grid; grid-template-columns:12px minmax(0,1fr) auto; gap:3px 7px; padding:9px 2px; }
+.forge-compact .forge-unit-goal { grid-column:2 / -1; white-space:normal; overflow:visible; font-size:12px; line-height:1.5; }
+.forge-compact .forge-unit-status { grid-column:2; max-width:none; white-space:normal; overflow:visible; }
+.forge-compact .forge-unit-time { grid-column:3; }
+.forge-compact .forge-unit > summary::before { grid-row:1; grid-column:1; }
+.forge-action > summary::before { display:none; }
+.forge-action.tool-row > summary { grid-template-columns:16px minmax(0,1fr) auto; }
+.forge-action.tool-row .st-duration { grid-column:3; }
+.forge-action.tool-row .st-state { grid-column:2 / -1; }
+.forge-action-body { padding:4px 0 8px; min-width:0; }
+.forge-action-payload { margin:6px 0; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; font:11px/1.6 var(--mono); max-height:none; }

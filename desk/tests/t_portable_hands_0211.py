@@ -67,15 +67,15 @@ class PortableHands(unittest.TestCase):
 
     def test_separate_home_read_access_keeps_program_write_and_secret_boundaries(self):
         agent=types.SimpleNamespace(subprocess=subprocess,BASE=self.tree,BASE_TOOLS=[],
-            TOOL_IMPL={'fs_read':lambda path:'READ_OK','fs_write':lambda path:'WRITE_OK'})
+            TOOL_IMPL={'fs_read':lambda path:'READ_OK','edit':lambda path:'WRITE_OK'})
         with mock.patch.object(fence,'Container'),mock.patch.object(fence,'Mounts') as mounts, mock.patch.object(fence,'_shim_workshop'),mock.patch.object(fence,'_open_home'):
             mounts.return_value.rows.return_value=[]
             mounts.return_value.roots.return_value=[]
             fence.install(agent,self.tree,{'sandbox':{'enabled':True}},config_path=self.program/'helene.json',program_root=self.program)
         self.assertEqual(agent.TOOL_IMPL['fs_read'](str(self.tree/'soul/note.md')),'READ_OK')
         self.assertEqual(agent.TOOL_IMPL['fs_read'](str(self.program/'tree/agent.py')),'READ_OK')
-        self.assertEqual(agent.TOOL_IMPL['fs_write'](str(self.tree/'workspace/note.md')),'WRITE_OK')
-        self.assertNotEqual(agent.TOOL_IMPL['fs_write'](str(self.program/'app/code.py')),'WRITE_OK')
+        self.assertEqual(agent.TOOL_IMPL['edit'](str(self.tree/'workspace/note.md')),'WRITE_OK')
+        self.assertNotEqual(agent.TOOL_IMPL['edit'](str(self.program/'app/code.py')),'WRITE_OK')
         self.assertNotEqual(agent.TOOL_IMPL['fs_read'](str(self.base/'unmounted/file')),'READ_OK')
         self.assertNotEqual(agent.TOOL_IMPL['fs_read'](str(self.tree/'memory/llm.json')),'READ_OK')
 

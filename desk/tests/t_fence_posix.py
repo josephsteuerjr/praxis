@@ -56,6 +56,15 @@ class CommandLine(unittest.TestCase):
         box.bwrap = "/usr/bin/bwrap"        # prepare() здесь не зовём: он про машину
         return box
 
+    def test_only_exact_invocation_socket_is_mounted_with_network_off(self):
+        endpoint = str(self.root / 'private-temp' / 'rpc')
+        line = self.make(network=False).argv(['true'], self.workspace, hand_socket=endpoint)
+        index = line.index('--ro-bind')
+        self.assertEqual(line[index:index+3], ['--ro-bind', endpoint, endpoint])
+        self.assertIn('--unshare-net', line)
+        self.assertNotIn(str(Path(endpoint).parent), line)
+        self.assertNotIn('--ro-bind', self.make().argv(['true'], self.workspace))
+
     def test_дом_на_запись_код_на_чтение(self):
         line = " ".join(self.make().argv(["bash", "-lc", "ls"], self.workspace))
         self.assertIn(f"--bind {self.workspace} {self.workspace}", line)

@@ -1,6 +1,6 @@
 // Owner Forge viewer. Persisted observations are not process-liveness probes.
 import { ApiError, channelURL, cfg } from "../api";
-import { ACTIONS } from "../../steps";
+import { ACTIONS, toolTraceHTML, toolSummary, type ToolDetail, type ExecutionReceipt } from "../../steps";
 import {workActivity,type WorkActivity,type Reviewer} from '../work-activity';
 
 export interface ForgeRef { kind: "payload" | "result" | "request"; sha256: string; size_bytes?: number }
@@ -14,7 +14,7 @@ export interface ForgeUnit {
   liveness?: {state: string; observed_at?: string; basis?: string}; process_liveness?: string;
 }
 export interface ForgeTask { id: string; kind?: string; goal?: string; status?: string; agents: ForgeUnit[]; max_active_workers?: number; control?: {action?: string} }
-interface EventRow { seq: number; kind: string; at?: string; tool?: string; generation?: string; iteration?: number; call_id?: string; input_ref?: ForgeRef; output_ref?: ForgeRef; receipt?: Record<string, unknown>; model?: string; model_requested?: string; summary?: boolean; reason?: string; error?: string; attempt?: number; retry?: boolean; partial_not_dispatched?: boolean }
+interface EventRow { seq: number; kind: string; at?: string; tool?: string; generation?: string; iteration?: number; call_id?: string; input_ref?: ForgeRef; output_ref?: ForgeRef; receipt?: ExecutionReceipt; outcome?: string; target?: string; model?: string; model_requested?: string; summary?: boolean; reason?: string; error?: string; attempt?: number; retry?: boolean; partial_not_dispatched?: boolean }
 interface EventPage { events: EventRow[]; next_offset: number; next_after_seq: number; has_more: boolean; pending_tail?: boolean; generation: string }
 interface PayloadPage { sha256: string; text: string; offset: number; total_chars: number; next_offset: number | null }
 interface ActivityPage { active: ForgeTask[]; recent: ForgeTask[]; next_cursor: string | null }
@@ -65,9 +65,12 @@ interface UnitView extends PayloadView {
   controls: HTMLElement; refs: HTMLElement; log: HTMLElement; logStatus: HTMLElement; more: HTMLButtonElement;
   unit: ForgeUnit; task: ForgeTask; generation: string; eventsLoaded: boolean; eventOffset: number;
   hasMore: boolean; eventBusy: boolean; eventSeq: Set<number>;
-  refsKey: string; lastSeq: number; actions: Map<string, ActionView>; payloads: Set<PayloadView>;
+  refsKey: string; lastSeq: number; actions: Map<string, ActionView>; modelActions: Map<string, ModelActionView>; payloads: Set<PayloadView>;
 }
-interface ActionView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; time: HTMLElement; refs: HTMLElement; harness: HTMLElement; identity: HTMLElement; payload: PayloadView; inputSha?: string; outputSha?: string }
+interface ModelActionView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; time: HTMLElement; refs: HTMLElement; harness: HTMLElement; identity: HTMLElement; payload: PayloadView; inputSha?: string; outputSha?: string }
+interface ActionView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; time: HTMLElement; mark:HTMLElement; body:HTMLElement; data:ToolDetail; key:string;
+  input?:ForgeRef; output?:ForgeRef; modelOutput?:ForgeRef; payloads:Map<string,{text:string;offset:number;total:number;more:boolean;busy:boolean;error?:string}> }
+
 interface TaskView { details: HTMLDetailsElement; title: HTMLElement; state: HTMLElement; goal: HTMLElement; controls: HTMLElement; commands: HTMLElement; units: HTMLElement; views: Map<string, UnitView>; task: ForgeTask }
 
 /** Exported controller is also the production-fragment test seam. */
@@ -78,7 +81,8 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   const activeReviews=el('div','forge-reviewers'),recentReviews=el('div','forge-reviewers');
   const renderActiveReviews=workActivity(activeReviews,{heading:false}),renderRecentReviews=workActivity(recentReviews,{heading:false});
   const recent = document.createElement('details'); recent.className = 'forge-recent';
-  recent.append(el('summary', '', 'Недавно завершены'), recentTeams,recentReviews);
+  const recentSummary=el('summary');recent.hidden=true;
+  recent.append(recentSummary, recentTeams,recentReviews);
   const next = button('Ещё завершённые', () => void loadRecent()); next.hidden = true; recent.append(next);
   const reviewNext=button('Ещё ревьюеры',()=>void loadReviewRecent());reviewNext.hidden=true;recent.append(reviewNext);
   const refreshButton = button("Обновить", () => void refresh());
@@ -92,7 +96,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   const getScope = options.scope || (() => JSON.stringify([cfg.base, cfg.key, cfg.agent]));
   let scope = getScope(), activeRows: ForgeTask[] = [], recentRows: ForgeTask[] = [], nextCursor: string | null = null, recentBusy = false;
   let reviewers:Reviewer[]=[],recentReviewers:Reviewer[]=[],reviewCursor:string|null=null,reviewHead:string|undefined,reviewBusy=false;
-  let forgeError='',recentError='',reviewError='';
+  let forgeError='',recentError='',reviewError='',forgeLoaded=false;
   const pending = new Map<string, { command: Command; feedback: HTMLElement }>();
   const valid = (captured: number) => running && captured === epoch && scope === getScope() && root.isConnected;
   function resetScope() {
@@ -100,8 +104,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     scope = getScope(); tasks.clear(); pending.clear(); teams.replaceChildren(); recentTeams.replaceChildren();
     activeRows = []; recentRows = []; nextCursor = null; next.hidden = true; recentBusy = false; busy = false;
     reviewers=[];recentReviewers=[];reviewCursor=null;reviewHead=undefined;reviewBusy=false;reviewNext.hidden=true;renderActiveReviews({});renderRecentReviews({});
-    forgeError='';recentError='';reviewError='';
+    forgeError='';recentError='';reviewError='';forgeLoaded=false;recent.hidden=true;recent.open=false;
     message.textContent = 'Читаю записи выбранного агента…';
+    message.hidden=false;
   }
   async function request<T>(path: string, body?: unknown): Promise<T> {
     const controller = new AbortController(); controllers.add(controller);
@@ -188,7 +193,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       contentMore:button('Следующие 8000 знаков',()=>void loadContent(view,payload)),contentOffset:0,contentBusy:false,contentEpoch:0};
     payload.contentMore.hidden=true;view.payloads.add(payload);return payload;
   }
-  function actionView(view: UnitView, model: boolean): ActionView {
+  function actionView(view: UnitView, model: boolean): ModelActionView {
     const details = document.createElement('details'); details.className = `forge-event forge-action st ${model ? 'st-think' : 'st-hand'}`;
     const summary = document.createElement('summary'); summary.className = 'st-line';
     const title = el('span','st-label'), state = el('span','st-state'), time = el('span','forge-event-time');
@@ -204,7 +209,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (!model && !tool) {
       const hasRefs=!!(row.input_ref?.sha256 || row.output_ref?.sha256);
       const item=el(hasRefs ? 'details' : 'div','forge-event st');
-      const title=row.kind==='completion_deferred' ? 'Продолжает работу' : row.kind==='model_transport_error' ? 'Ошибка связи с моделью' : row.kind;
+      // Сырое имя события («generation_started») — не подпись для человека.
+      const title=({completion_deferred:'Продолжает работу',model_transport_error:'Ошибка связи с моделью',
+        generation_started:'Запуск участника',control_stopped:'Остановлен по просьбе',result_published:'Итог опубликован'} as Record<string,string>)[row.kind] || row.kind;
       item.append(el(hasRefs ? 'summary' : 'div','st-line',title));
       if(row.reason)item.append(el('p','forge-brief',row.reason));
       if(row.error)item.append(el('p','forge-brief',row.error));
@@ -213,7 +220,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       if(hasRefs){
         const payload=payloadView(view),refs=el('div','forge-actions');
         if(row.input_ref?.sha256)refs.append(refButton(view,'Аргументы',{...row.input_ref,kind:'payload'},payload));
-        if(row.output_ref?.sha256)refs.append(refButton(view,'Результат вызова',{...row.output_ref,kind:'payload'},payload));
+        if(row.output_ref?.sha256)refs.append(refButton(view,'Содержимое',{...row.output_ref,kind:'payload'},payload));
         item.append(refs,payload.contentMeta,payload.content,payload.contentMore);
       }
       view.log.append(item);return;
@@ -222,9 +229,9 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     // Orphan receipts remain readable; absence of a start is not reconstructed.
     const key=model ? `model:${row.generation || generation}:${row.iteration ?? 'legacy'}:${!!row.summary}`
       : row.call_id ? `tool:${row.generation || generation}:${row.iteration ?? 'legacy'}:${row.call_id}` : `event:${row.seq}`;
-    let action=view.actions.get(key);
+    let action=view.modelActions.get(key);
     if(!action || row.kind==='tool_start' || row.kind==='model_start') {
-      action=actionView(view,model);view.actions.set(key,action);
+      action=actionView(view,model);view.modelActions.set(key,action);
     }
     const names: Record<string,string>={run:'Команда',edit:'Правка',inspect:'Просмотр',verify:'Проверка',process:'Процесс',delegate:'Субагент',signal:'Сообщение команде',checkpoint:'Контрольная точка'};
     action.title.textContent=model ? (row.summary ? 'Итог модели' : `Модель · шаг ${row.iteration ?? '—'}`)
@@ -250,6 +257,43 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       action.outputSha=row.output_ref.sha256;action.refs.append(refButton(view,model ? 'Ответ модели' : 'Результат вызова',{...row.output_ref,kind:'payload'},action.payload));
     }
   }
+  function paintAction(view:UnitView,action:ActionView) {
+    const focused=action.body.contains(document.activeElement) ? (document.activeElement as HTMLElement)?.dataset.traceTab : undefined;
+    const summary=toolSummary(action.data,view.unit.liveness?.state==='alive');
+    action.title.textContent=action.data.tool || 'инструмент';
+    action.state.textContent=summary.state;action.mark.textContent=summary.icon;action.mark.title=summary.label;
+    action.time.textContent=summary.duration;
+    action.details.classList.toggle('is-failed',summary.failed);action.details.classList.toggle('is-attention',summary.attention);
+    action.body.innerHTML=toolTraceHTML(action.data,action.key,view.task.id+'/'+view.unit.id);
+    const cleared=new Set<string>();
+    for(const [tab,ref,caption] of [['args',action.input,'Аргументы'],['response',action.output,'Ответ инструмента'],['response',action.modelOutput,'Ответ для модели с припиской харнесса']] as const) {
+      if(!ref)continue;
+      const panel=action.body.querySelector<HTMLElement>(`[data-trace-panel="${tab}"]`)!;
+      const state=action.payloads.get(ref.sha256);
+      if(!cleared.has(tab)){panel.replaceChildren();cleared.add(tab)}
+      const content=el('pre','forge-action-payload');content.textContent=state?.text || '';
+      const status=el('p','muted',state?.error || (state ? `Прочитано ${state.offset} из ${state.total} знаков` : 'Содержимое доступно из журнала участника.'));
+      const more=button(state?.busy?'Читаю…':state?.text?'Прочитать продолжение':'Прочитать '+(tab==='args'?'аргументы':'JSON-ответ'),()=>void loadActionPayload(view,action,ref));
+      more.disabled=!!state?.busy;more.hidden=!!state&&!state.more&&!state.error;
+      panel.append(el('h4','',caption),content,status,more);
+    }
+    if(!action.modelOutput)action.body.querySelector('[data-trace-panel="response"]')?.append(el('p','tool-trace-unrecorded','Приписка для модели отдельно в журнале участника не записана.'));
+    if(focused)action.body.querySelector<HTMLElement>(`[data-trace-tab="${focused}"]`)?.focus({preventScroll:true});
+  }
+  async function loadActionPayload(view:UnitView,action:ActionView,ref:ForgeRef) {
+    let state=action.payloads.get(ref.sha256);
+    if(state?.busy || (state&&!state.more&&!state.error))return;
+    if(!state){state={text:'',offset:0,total:0,more:true,busy:false};action.payloads.set(ref.sha256,state)}
+    const captured=epoch,generation=view.generation,offset=state.offset;state.busy=true;state.error='';paintAction(view,action);
+    try {
+      const page=await request<PayloadPage>(query('/api/forge/payload',{task_id:view.task.id,unit_id:view.unit.id,sha256:ref.sha256,kind:ref.kind||'payload',offset,limit:8000}));
+      if(!valid(captured)||generation!==view.generation||!action.details.isConnected)return;
+      const end=offset+Array.from(page.text).length;
+      if(page.sha256!==ref.sha256||page.offset!==offset||end>page.total_chars||(page.next_offset===null?end!==page.total_chars:page.next_offset!==end||end<=offset))throw Error('Страница результата не совпала');
+      state.text+=page.text;state.offset=end;state.total=page.total_chars;state.more=page.next_offset!==null;
+    }catch(e){if(valid(captured)&&generation===view.generation)state.error='Не прочиталось: '+errorText(e)}
+    finally{state.busy=false;if(valid(captured)&&generation===view.generation&&action.details.isConnected)paintAction(view,action)}
+  }
   async function loadEvents(view: UnitView) {
     if (view.eventBusy) return;
     const captured = epoch, generation = view.generation;
@@ -262,7 +306,42 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       for (const row of page.events) if (row.seq !== ++seq) throw Error('Нарушена последовательность истории');
       for (const row of page.events) {
         if (view.eventSeq.has(row.seq)) continue;
-        view.eventSeq.add(row.seq); paintEvent(view,row,generation);
+        view.eventSeq.add(row.seq);
+        if (['tool_start','tool_dispatch','tool_execution','tool_model_response','tool_result','tool_failed'].includes(row.kind)) {
+          const key=row.call_id ? `${row.generation||generation}:${row.iteration??'legacy'}:${row.call_id}` : `event:${row.seq}`;
+          let action=view.actions.get(key);
+          if(!action || row.kind==='tool_start') {
+            const details=document.createElement('details');details.className='forge-event forge-action st st-hand tool-row';
+            const summary=document.createElement('summary');summary.className='st-line';
+            const title=el('code','st-label'),state=el('span','st-state'),time=el('span','st-duration'),mark=el('span','tool-outcome');
+            const body=el('div','forge-action-body');summary.append(mark,title,state,time);details.append(summary,body);view.log.append(details);
+            action={details,title,state,time,mark,body,key,data:{at:row.at,tool:row.tool},payloads:new Map()};view.actions.set(key,action);
+            const own=action;
+            details.addEventListener('toggle',()=>{if(details.open&&own.input)void loadActionPayload(view,own,own.input)});
+            body.addEventListener('trace-tab-selected',event=>{
+              const tab=(event as CustomEvent<string>).detail;
+              const ref=tab==='args'?own.input:tab==='response'?own.output:undefined;
+              if(ref)void loadActionPayload(view,own,ref);
+              if(tab==='response'&&own.modelOutput)void loadActionPayload(view,own,own.modelOutput);
+            });
+          }
+          if(row.tool)action.data.tool=row.tool;
+          if(row.kind==='tool_start'){action.data.at=row.at;action.data.status='running'}
+          if(row.kind==='tool_dispatch'&&row.receipt)action.data.execution=row.receipt;
+          if(row.kind==='tool_execution'&&row.receipt)(action.data.operations??=[]).push(row.receipt);
+          if(['tool_result','tool_failed'].includes(row.kind)){
+            action.data.finished_at=row.at;action.data.status=row.kind==='tool_failed'?'failed':'received';
+            action.data.outcome=row.outcome||'unknown';action.data.target=row.target;action.data.error=row.error;
+          }
+          if(row.input_ref?.sha256)action.input={...row.input_ref,kind:'payload'};
+          if(row.output_ref?.sha256){
+            if(row.kind==='tool_model_response')action.modelOutput={...row.output_ref,kind:'payload'};
+            else action.output={...row.output_ref,kind:'payload'};
+          }
+          paintAction(view,action);
+          continue;
+        }
+        paintEvent(view,row,generation);
       }
       view.lastSeq=seq;view.eventOffset = page.next_offset; view.hasMore = page.has_more; view.eventsLoaded = true;
       view.logStatus.textContent = view.eventSeq.size ? `Записанных шагов: ${view.eventSeq.size}${page.has_more ? " · есть продолжение" : ""}` : "Записанных шагов пока нет. Это не проверка процесса.";
@@ -286,7 +365,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       more: button("Прочитать шаги", () => void loadEvents(view)), content, contentMeta,
       contentMore: button("Следующие 8000 знаков", () => void loadContent(view)),
       task, unit, generation: unit.observation?.generation || "", eventsLoaded: false, eventOffset: 0, hasMore: false,
-      eventBusy: false, eventSeq: new Set(), contentOffset: 0, contentBusy: false, contentEpoch: 0, refsKey: '', lastSeq: 0, actions: new Map(), payloads: new Set() };
+      eventBusy: false, eventSeq: new Set(), contentOffset: 0, contentBusy: false, contentEpoch: 0, refsKey: '', lastSeq: 0, actions: new Map(), modelActions: new Map(), payloads: new Set() };
     view.payloads.add(view);
     view.contentMore.hidden = true;
     if (options.compact) {
@@ -305,7 +384,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
     if (view.generation !== generation) {
       for(const target of view.payloads){target.contentEpoch++;target.contentRef=undefined;target.contentBusy=false;target.content.textContent='';target.contentMeta.textContent='';target.contentMore.hidden=true;target.contentMore.disabled=false;}
       view.payloads.clear();view.payloads.add(view);
-      view.log.replaceChildren(); view.eventSeq.clear(); view.actions.clear(); view.lastSeq=0;view.eventOffset = 0; view.eventsLoaded = false; view.hasMore = false;
+      view.log.replaceChildren(); view.eventSeq.clear(); view.actions.clear(); view.modelActions.clear(); view.lastSeq=0;view.eventOffset = 0; view.eventsLoaded = false; view.hasMore = false;
       // Event journal remains canonical across generations; reset its cursor.
       view.generation = generation;
     }
@@ -385,10 +464,14 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
   function paintReviewers() {
     const known=new Set([...activeRows,...recentRows].flatMap(task=>task.agents.map(unit=>task.id+'/'+unit.id)));
     const external=(rows:Reviewer[])=>rows.filter(row=>!row.task_id||!row.unit_id||!known.has(row.task_id+'/'+row.unit_id));
-    const current=external(reviewers);renderActiveReviews({reviewers:current});renderRecentReviews({reviewers:external(recentReviewers)});
+    const current=external(reviewers),finishedReviews=external(recentReviewers);renderActiveReviews({reviewers:current});renderRecentReviews({reviewers:finishedReviews});
     reviewNext.hidden=!reviewCursor;
     const participants=activeRows.reduce((n,task)=>n+task.agents.length,0)+current.length;
-    message.textContent=[forgeError,recentError,reviewError].filter(Boolean).join(' ') || (participants?`${participants} участников`:'Сейчас участников нет.');
+    const completed=recentRows.filter(task=>!activeRows.some(active=>active.id===task.id)).reduce((n,task)=>n+task.agents.length,0)+finishedReviews.length;
+    recent.hidden=completed===0;recentSummary.textContent=`Завершённые субагенты · ${completed}${nextCursor||reviewCursor?'+':''}`;
+    if(recent.hidden)recent.open=false;
+    message.textContent=[forgeError,recentError,reviewError].filter(Boolean).join(' ') || (!forgeLoaded?'Читаю записи Forge…':participants?`${participants} участников`:completed?'':'Субагентов пока нет.');
+    message.hidden=!message.textContent;
   }
   async function loadReviewRecent() {
     if(!running||reviewBusy||!reviewCursor)return;
@@ -422,7 +505,7 @@ export function forgePanel(root: HTMLElement, read: Read = readForge, pollMs = 2
       const page = await request<ActivityPage>('/api/forge/tasks?view=active');
       if (!valid(captured)) return;
       if (!Array.isArray(page.active) || !Array.isArray(page.recent)) throw Error("Некорректный список Forge");
-      forgeError='';
+      forgeError='';forgeLoaded=true;
       activeRows = page.active;
       const current = new Map(page.recent.map(t => [t.id, t]));
       recentRows = [...page.recent, ...recentRows.filter(t => !current.has(t.id) && !activeRows.some(a => a.id === t.id))];

@@ -45,6 +45,28 @@ def owner_supplied(path):
         expected = SANITIZED_TEMPLATE_HASHES[path.name]
     return bool(expected) and hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() == expected
 
+
+# 11.11.2026: the hands port renamed tools that five accepted skills named. Each listed
+# revision is bound to the exact accepted hash and to its own new bytes; the accepted text
+# must survive in the shipped history. Changed lines are scanned like any new kit text,
+# except exact tool-name substitutions written in the fixture.
+REVISIONS = json.loads((Path(__file__).parent / 'fixtures/owner-skill-revisions-2.6.json').read_text(encoding='utf8'))
+
+
+def owner_revised(path):
+    rev = REVISIONS['files'].get(path.name) if path.parent == RES/'soul/skills' else None
+    return (bool(rev) and rev['accepted'] == SUPPLIED['files'].get(path.name)
+            and hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest() == rev['revised'])
+
+
+def accepted_text(name):
+    import boot
+    expected = SUPPLIED['files'].get(name)
+    for prior in boot._kit_history().get('soul/skills/' + name, []):
+        if hashlib.sha256(prior.encode('utf-8').replace(b'\r\n', b'\n')).hexdigest() == expected:
+            return prior
+    return None
+
 #: Чужой дом. `/app` — путь, «докер/контейнер/сервер» — чужая машина, Praxis — чужое имя.
 FOREIGN = re.compile(r"(?i)praxis|праксис|контейнер|container|docker|докер|(?<![\w.])/app\b|"
                      r"сервер(?!ном издании)|\bserver\b")
@@ -66,6 +88,10 @@ ALLOW: dict[str, tuple[str, ...]] = {}
 
 def _lines(path: Path):
     accepted = Counter()
+    substitutions = []
+    if owner_revised(path):
+        accepted = Counter((accepted_text(path.name) or '').split('\n'))
+        substitutions = REVISIONS['files'][path.name].get('substitutions', [])
     if path == RES / 'soul' / 'skills' / 'INDEX.md':
         # The 1.5.9 INDEX is a byte-accepted owner document, but unlike the
         # 78 skills it is also factory navigation and grows with new skills.
@@ -79,8 +105,11 @@ def _lines(path: Path):
                 accepted = Counter(prior.split('\n'))
                 break
     for no, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
-        if accepted[line]:
-            accepted[line] -= 1
+        back = line
+        for old, new in substitutions:
+            back = back.replace(new, old)
+        if accepted[back]:
+            accepted[back] -= 1
             continue
         yield no, line
 
@@ -117,7 +146,12 @@ class KitIsNeutral(unittest.TestCase):
                     if name in SANITIZED_TEMPLATE_HASHES:
                         self.assertNotEqual(SUPPLIED['files'][name], SANITIZED_TEMPLATE_HASHES[name],
                                             'The owner-approved revision must not bless the former private value')
-                    self.assertTrue(owner_supplied(RES/'soul/skills'/name),
+                    path = RES/'soul/skills'/name
+                    if owner_revised(path):
+                        self.assertIsNotNone(accepted_text(name),
+                                             'Accepted text of a revised skill left the shipped history: ' + name)
+                        continue
+                    self.assertTrue(owner_supplied(path),
                                     'Owner-accepted factory skill changed: ' + name)
 
     def test_no_foreign_home_in_the_kit(self):

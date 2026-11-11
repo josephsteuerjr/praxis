@@ -550,6 +550,8 @@ UPDATE_TRIAL_DEFAULT = 30
 #: Как поднять исполнителя, если его нет: та же одна команда, что ставит и обновляет
 #: Hélène на сервере (из папки установки; повторный запуск ничего не ломает).
 UPDATER_COMMAND = "sh server/install.sh"
+# 11.11 (Yegor): no manual script for the person; the desktop application installs the updater over SSH.
+APP_PATH = "приложение Hélène на компьютере: «Подключения» → «Агент на сервере» → «Обновить сервер»"
 
 _VERSION_RE = re.compile(r"^\d{1,4}\.\d{1,4}\.\d{1,5}$")
 
@@ -636,11 +638,11 @@ def updater_state(tree: Path) -> dict:
         why = str(beat.get("why") or "исполнитель на связи, но говорит, что работать не может")
     elif beat:
         why = (f"исполнитель обновлений молчит {int(age or 0)} с — похоже, он остановлен. "
-               f"Поднимает его та же команда на сервере, из папки установки: {UPDATER_COMMAND} "
-               "(что с ним было — docker logs helene-updater)")
+               f"Поднимает его {APP_PATH} (или команда на сервере, из папки установки: "
+               f"{UPDATER_COMMAND}); что с ним было — docker logs helene-updater")
     else:
-        why = ("исполнителя обновлений рядом нет. Его поднимает одна команда на сервере, "
-               f"из папки установки: {UPDATER_COMMAND}")
+        why = (f"исполнителя обновлений рядом нет. Его поставит {APP_PATH} — нужны только "
+               "адрес и пароль сервера")
     latest = beat.get("latest") if isinstance(beat.get("latest"), dict) else {}
     return {
         "present": bool(beat),

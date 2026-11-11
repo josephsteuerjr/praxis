@@ -103,7 +103,8 @@ def run(args):
         path=evidence/(name+'.png');page.screenshot(path=str(path));shots.append(str(path))
     try:
         with sync_playwright() as pw:
-            browser=pw.chromium.launch(channel=args.channel,headless=True)
+            browser=pw.chromium.launch(channel=None if args.executable_path else args.channel,
+                                      executable_path=args.executable_path,headless=True)
             try:
                 def open_page(width,height,scenario=None,path='/tg/',denied=False):
                     context=browser.new_context(viewport={'width':width,'height':height},reduced_motion='reduce')
@@ -231,4 +232,5 @@ def run(args):
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--evidence',required=True);parser.add_argument('--channel',default='msedge')
+    parser.add_argument('--executable-path',default=None)
     run(parser.parse_args())

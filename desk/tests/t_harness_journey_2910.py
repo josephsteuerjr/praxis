@@ -16,12 +16,12 @@ def consumer(profile,output):
     sys.path[:0]=[str(ROOT/'helene/core'),str(ROOT/'praxis'),str(ROOT/'desk'),str(ROOT/'desk/localharness')]
     import copy,contextlib,types
     from unittest.mock import patch
-    import agent,run_context,run_manager
+    import agent,run_context,run_manager,command_execution
     from deskd import readers
     manager=run_manager.RunManager(profile);agent._RUN_MANAGER=manager
     context=run_context.RunContext.create(kind='test',goal='actual harness projection',principal_id='owner',scope='owner',origin_chat_id='1',delivery_chat_id='1')
     context=manager.create(context,'Synthetic offline context');manager.transition(context.run_id,'running')
-    provider=[];processes=[];native_run=subprocess.run
+    provider=[];processes=[];native_launch=command_execution.launch
     def chat(*args,**kwargs):
         provider.append(copy.deepcopy(kwargs['messages']))
         if len(provider)==1:
@@ -29,11 +29,11 @@ def consumer(profile,output):
                 'name':'shell','input':{'command':'harness <requested>'}}])
         return types.SimpleNamespace(stop_reason='end_turn',text='observed',blocks=[])
     def shell_adapter(argv,**kwargs):
-        assert argv[:2]==['bash','-lc'] and 'harness <requested>' in argv[-1]
+        assert 'harness <requested>' in argv[-1]
         actual=[sys.executable,'-I','-c',"print('REAL <observed> ' + 'x'*24000)"]
-        result=native_run(actual,cwd=profile,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=15)
-        processes.append({'argv':result.args,'stdout':result.stdout.decode('utf-8').replace('\r\n','\n'),'exit':result.returncode})
-        return result
+        proc=native_launch(actual,**kwargs)
+        processes.append({'argv':actual,'stdout':'REAL <observed> '+'x'*24000+'\n','proc':proc})
+        return proc
     with contextlib.ExitStack() as stack:
         stack.enter_context(run_context.bind_run(context))
         stack.enter_context(patch.object(agent.llm,'chat',side_effect=chat))
@@ -43,9 +43,10 @@ def consumer(profile,output):
             stack.enter_context(patch.object(target,name,return_value=value) if callable(getattr(target,name,None)) else patch.object(target,name,value))
         stack.enter_context(patch('socket.create_connection',side_effect=AssertionError('network forbidden')))
         stack.enter_context(patch('socket.socket.connect',side_effect=AssertionError('network forbidden')))
-        stack.enter_context(patch.object(agent.subprocess,'run',side_effect=shell_adapter))
+        stack.enter_context(patch.object(command_execution,'launch',side_effect=shell_adapter))
         answer=agent._terminal_tool_loop(system='synthetic',messages=[],tools=[{'name':'shell','description':'offered shell',
             'input_schema':{'type':'object','properties':{'command':{'type':'string'}}}}])
+    for row in processes:row['exit']=row.pop('proc').proc.returncode
     assert answer=='observed' and len(processes)==1 and processes[0]['exit']==0
     with patch.object(readers,'run_dir',return_value=manager.path(context.run_id)):
         detail=readers.run_detail(context.run_id)

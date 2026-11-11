@@ -126,32 +126,6 @@ class TheDoorIsCopiedWhole(unittest.TestCase):
 
 
 
-class TheStandTestsTheBodyTheImageShips(unittest.TestCase):
-    """Прививка не имеет права ТИХО отключать проверки.
-
-    03.08.2026 первая её редакция сняла PRAXIS_HANDS (эту переменную ставит Dockerfile,
-    а не .env) — и `setUpClass` пропустил весь класс про её файловый пол: двадцать пять
-    тестов про shrink-guard, побег из дома, креды, квитанции и отпечаток рельсов бинаря.
-    Прогон при этом сказал OK. Красноты нет, покрытия тоже — и заметить это можно было
-    только сравнив СОСТАВ прогона до и после.
-    """
-
-    def test_the_image_variable_stays_in_the_allowlist(self):
-        """Сторож решения: убрать её из списка снова — покраснеть здесь, а не молча."""
-        self.assertIn("PRAXIS_HANDS", _standenv.ENV_KEEP,
-                      "без неё класс про файловый пол пропустится, а гейт останется зелёным")
-
-    def test_the_rust_floor_is_actually_reachable(self):
-        """Сторож реальности: в контейнере пол обязан проверяться бинарём, а не питоном."""
-        if not os.environ.get("PRAXIS_HANDS"):
-            self.skipTest("PRAXIS_HANDS не задан образом — вне контейнера это нормально")
-        import hands
-
-        self.assertTrue(hands.available(),
-                        "бинарь praxis-hands недостижим: пол проверяется только питоном, "
-                        "и тесты про него пропускаются классом")
-
-
 class TheStandDoesNotReachOutside(unittest.TestCase):
     """Стенд не ходит наружу: ни к root-демону хоста, ни в её живую сессию.
 

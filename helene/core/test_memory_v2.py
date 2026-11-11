@@ -287,8 +287,9 @@ class TestSystemPrompt(Base):
                          "и при возврате прежнего досье не смеет быть системной властью")
 
     def test_owner_hint(self):
-        self.assertIn("shell", agent.build_system_prompt(speaker="Егор", owner=True))
-        self.assertNotIn("`shell`", agent.build_system_prompt(speaker="Егор", owner=False))
+        marker = agent._OWNER_TOOLS_CONTRACT.split("{trust_tool}")[0][:80]
+        self.assertIn(marker, agent.build_system_prompt(speaker="Егор", owner=True))
+        self.assertNotIn(marker, agent.build_system_prompt(speaker="Егор", owner=False))
 
     def test_room_context(self):
         (agent.ROOMS_DIR / "-100500.md").write_text("# Комната\nтусовка альпинистов\n", encoding="utf-8")
@@ -454,9 +455,8 @@ class TestOwnerGating(Base):
         with mock.patch.object(agent.mailer, "configured", lambda: False):
             guest, owner = self._tools_for(False), self._tools_for(True)
         self.assertIn("shell", guest, "её дом остаётся её домом в любом ходе")
-        self.assertEqual(set(owner) - set(guest),
-                         set(agent._HUMAN_OWNER_ONLY_TOOL_NAMES),
-                         "у Егора сверх её рук — только раздача его доверия")
+        # Егор 10.11: «у нее ВЕЗДЕ ВСЕ ПРАВА» — у Егора сверх её рук нет ничего.
+        self.assertEqual(set(owner), set(guest), "набор рук одинаков при любом говорящем")
 
     def test_mail_gate_gives_the_same_hand_to_both(self):
         """Вторая сторона гейта: при ЖИВОЙ почте разница наборов та же.
@@ -473,9 +473,8 @@ class TestOwnerGating(Base):
         """
         with mock.patch.object(agent.mailer, "configured", lambda: True):
             guest, owner = self._tools_for(False), self._tools_for(True)
-        self.assertEqual(set(owner) - set(guest),
-                         set(agent._HUMAN_OWNER_ONLY_TOOL_NAMES),
-                         "почтовый гейт не заводит owner-эксклюзивов мимо объявленного множества")
+        self.assertEqual(set(owner), set(guest),
+                         "почтовый гейт не заводит owner-эксклюзивов")
         for hand in ("mail_read", "mail_draft_reply", "send_email"):
             self.assertIn(hand, guest, "почтовые руки одинаковы в любом ходе")
 
@@ -491,10 +490,11 @@ class TestShell(Base):
         self.assertIn("hello", agent.tool_shell("echo hello"))
 
     def test_truncation(self):
-        # Shell builtins work in both the packaged BusyBox and ordinary Bash.
         out = agent.tool_shell('i=0; while [ "$i" -lt 5000 ]; do printf a; i=$((i+1)); done')
-        self.assertEqual(len(out), 5000, repr(out))
-        self.assertEqual(set(out), {"a"}, "в выводе оказалось не только то, что печатали")
+        self.assertEqual(out.partition('\n[command:')[0], 'a' * 5000)
+        self.assertIn('[command: ok]', out)
+        self.assertIn('[changes:', out)
+        self.assertTrue(out.endswith('[exit 0]'), out)
 
     def test_timeout(self):
         orig = agent.SHELL_TIMEOUT

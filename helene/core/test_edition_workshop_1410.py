@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ from unittest import mock
 
 import agent
 import forge
+import workshop
 
 
 class EditionWorkshop(unittest.TestCase):
@@ -43,10 +45,10 @@ class EditionWorkshop(unittest.TestCase):
 
     def test_model_schema_can_reach_dispatch_and_receipt(self):
         named = {t["name"]: t for t in agent.WORKSHOP_TOOLS + agent.FORGE_TOOLS}
-        self.assertIn("expected_sha256", named["fs_write"]["input_schema"]["properties"])
+        self.assertIn("expected_sha256", named["edit"]["input_schema"]["properties"])
         self.assertIn("max_active_workers", named["coding_session"]["input_schema"]["properties"])
         self.assertIn("disposition", named["coding_agent"]["input_schema"]["properties"])
-        self.assertIn("expected_sha256", named["coding_inspect"]["input_schema"]["properties"])
+        self.assertIn("expected_sha256", named["fs_read"]["input_schema"]["properties"])
         offered = {t["name"]: t for t in agent.catalog_tools_for(agent.ChannelContext(owner=True))}
         self.assertTrue(set(named) <= set(offered), "edition catalog must offer the same tools the dispatcher implements")
         with mock.patch.object(agent.stewardship, "check", return_value=None), \
@@ -54,11 +56,11 @@ class EditionWorkshop(unittest.TestCase):
              mock.patch.object(agent.workshop, "fs_write_result", return_value={
                  "status": "confirmed", "message": "saved", "after_sha256": "f" * 64}) as write, \
              mock.patch.object(agent, "_autocommit_self_edit") as commit:
-            receipt = agent.tool_fs_write("workspace/example", "hello", expected_sha256="a" * 64)
+            receipt = agent.tool_edit(action='write', path="workspace/example", content="hello", expected_sha256="a" * 64)
         write.assert_called_once()
-        self.assertEqual(write.call_args.kwargs["expected_sha256"], "a" * 64)
+        self.assertEqual(write.call_args.args[-1], "a" * 64)
         commit.assert_called_once()
-        self.assertEqual(json.loads(receipt.split("\n", 1)[1])["after_sha256"], "f" * 64)
+        self.assertEqual(json.loads(receipt.removeprefix('edit: '))["after_sha256"], "f" * 64)
         with mock.patch.object(agent.forge, "agent", return_value="receipt") as call:
             self.assertEqual(agent.tool_coding_agent(self.task_id, "disposition",
                               agent_id="agent-aaaaaaaa", result_sha256="a" * 64,
@@ -179,6 +181,47 @@ class EditionWorkshop(unittest.TestCase):
         refusal = forge._edit_unlocked(self.task_id, "patch", patch="not a diff",
                                        expected_sha256=full)
         self.assertIn("Patch не применён", refusal)
+
+    def publish(self, target, data, previous):
+        with mock.patch.object(workshop, "BASE", self.root), \
+             mock.patch.object(workshop, "_mutation_target", return_value=(target, "")):
+            return workshop._publish(target, data, previous, target.name, "", "saved")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes")
+    def test_new_file_gets_the_mode_of_ordinary_creation_under_any_umask(self):
+        for mask, expected in ((0o077, 0o600), (0o027, 0o640), (0o022, 0o644), (0o007, 0o660), (0o002, 0o664)):
+            with self.subTest(umask=oct(mask)):
+                folder = Path(tempfile.mkdtemp(dir=self.root))
+                folder.chmod(0o755)
+                previous_mask = os.umask(mask)
+                try:
+                    result = self.publish(folder / "new.txt", b"x", None)
+                    (folder / "plain.txt").open("x").close()
+                finally:
+                    os.umask(previous_mask)
+                self.assertEqual(result["status"], "confirmed", result)
+                self.assertEqual((folder / "new.txt").stat().st_mode & 0o777, expected)
+                self.assertEqual((folder / "new.txt").stat().st_mode & 0o777,
+                                 (folder / "plain.txt").stat().st_mode & 0o777)
+
+    def test_new_file_mode_does_not_touch_the_process_umask(self):
+        target = self.root / "new.txt"
+        with mock.patch("workshop.os.umask", side_effect=AssertionError("umask is process-wide")):
+            self.assertEqual(self.publish(target, b"x", None)["status"], "confirmed")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX file modes")
+    def test_replacement_keeps_a_private_mode(self):
+        target = self.root / "private.txt"
+        target.write_bytes(b"old")
+        target.chmod(0o600)
+        digest = hashlib.sha256(b"old").hexdigest()
+        previous_mask = os.umask(0)
+        try:
+            result = self.publish(target, b"new", digest)
+        finally:
+            os.umask(previous_mask)
+        self.assertEqual(result["status"], "confirmed", result)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
     def test_edition_dirty_tree_never_reuses_green_head(self):
         with mock.patch.object(forge, "_git_root", return_value=self.root), \

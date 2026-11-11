@@ -63,6 +63,32 @@ def _tree_inventory(package, prefix):
             if n.startswith(prefix) and not n.endswith('/')}
 
 
+def _macos_bootstrap(package, source, version):
+    """A source refresh must carry the current launcher, not a stale donor app."""
+    if sys.platform != 'darwin':
+        raise RuntimeError('Refresh the macOS launcher on a native macOS builder')
+    import platform as host_platform
+    from python_mac_bundles import build as build_bundle
+    target = package.value('python-app.json', {}).get('target')
+    if target != 'macos-' + host_platform.machine():
+        raise ValueError('macOS donor architecture differs from the native builder')
+    with tempfile.TemporaryDirectory(prefix='helene-refresh-app-') as temporary:
+        root = Path(temporary)
+        prior = package.get(PREFIX + 'Helene.app/Contents/Info.plist')
+        if prior:
+            info = root / 'Helene.app/Contents/Info.plist'
+            info.parent.mkdir(parents=True); info.write_bytes(prior.data)
+        build_bundle(root, version)
+        entries = scan(root / 'Helene.app', strict=True)
+        package.replace_tree(PREFIX + 'Helene.app/', entries)
+        package.put_value('macos-launcher-build.json', {
+            'format': 'helene-macos-launcher-build.v1', 'version': version, 'target': target,
+            'source_files': {name: digest(source / name) for name in (
+                'desk/installer/python_mac_launcher.c', 'desk/installer/python_mac_bundles.py',
+                'desk/shell/icons/python-app.png')},
+            'files': identities(entries), 'ad_hoc_signed': True, 'notarized': False})
+
+
 def _sealed_declared(root,sizes):
     """Exact manifest sizes bound this read; the512MiB artifact ceiling remains."""
     if not sizes or any(type(size) is not int or size<0 for size in sizes.values()):
@@ -381,6 +407,8 @@ def plan(donor, source, version, platform, *, expected_sha256, frontend_receipt,
             from windows_archive_entry import OBSOLETE_ENTRIES,OBSOLETE_INSTRUCTIONS,INSTRUCTION_FILES,instructions
             for name in (*OBSOLETE_ENTRIES,*OBSOLETE_INSTRUCTIONS):p.put(PREFIX+name,None)
             for name in INSTRUCTION_FILES:p.put(PREFIX+name,Entry(instructions().encode('utf-8')))
+        if platform=='macos':
+            _macos_bootstrap(p, source, version)
         optional = _metadata(p, source, core, origins, version, platform, expected_sha256,
                              front, verification_sha256, legacy_admission)
         if (identities(compose_core(source)[0]) != core_source_identity

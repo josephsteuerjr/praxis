@@ -332,9 +332,10 @@ export function updateCardHTML(
   const up = u?.updater;
   if (!up || !up.present) {
     if (!opts.inContainer) return "";
-    return section(`<p class="muted">Чтобы обновлять Hélène отсюда одной кнопкой, на сервере один раз нужна одна
-      команда — её выполняет тот, кто ставил Hélène (или его помощник), в папке установки:
-      <code>${esc(up?.command || "sh server/install.sh")}</code></p>`);
+    // 11.11 (Yegor): no manual script. The desktop application installs the updater over SSH.
+    return section(`<p class="muted">На сервере ещё нет исполнителя обновлений. Его поставит само приложение Hélène
+      на компьютере: «Подключения» → «Агент на сервере» → «Обновить сервер». Нужны только адрес и пароль сервера;
+      дальше обновления — кнопкой здесь.</p>`);
   }
   const r = u?.receipt || null;
   const latest = up.latest?.version || "";

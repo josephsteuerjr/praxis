@@ -68,6 +68,7 @@ class WindowsJob:
             _fields_ = [('times', c.c_int64 * 4), ('faults', w.DWORD), ('total', w.DWORD),
                         ('active', w.DWORD), ('terminated', w.DWORD)]
         self.Accounting = Accounting
+        self.Extended = Extended
         self.handle = k.CreateJobObjectW(None, None)
         if not self.handle:raise c.WinError(c.get_last_error())
         limits = Extended();limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE
@@ -105,6 +106,18 @@ class WindowsJob:
     def close(self):
         if self.handle:
             self.api.CloseHandle(self.handle);self.handle = None
+
+    def release_survivors(self):
+        """Home shell explicitly allows background jobs after its leader returns.
+
+        Forge never calls this: its command custody keeps KILL_ON_JOB_CLOSE until
+        the entire job is settled. Clearing this limit is only the ordinary
+        shell's documented background-launch boundary.
+        """
+        limits = self.Extended()
+        if not self.api.SetInformationJobObject(self.handle, 9, self.c.byref(limits), self.c.sizeof(limits)):
+            raise self.c.WinError(self.c.get_last_error())
+        self.close()
 
 
 class CommandProcess:

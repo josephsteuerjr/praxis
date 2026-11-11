@@ -69,7 +69,7 @@ def dispatch(ctx: agent.ChannelContext, tool_name: str, **arguments):
 class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
     def test_lever_off_keeps_the_old_frame_and_its_speaker_dependence(self):
         # Регрессия на умолчание: без рычага владелец и чужой по-прежнему дают РАЗНЫЕ system,
-        # и у чужого нет `admit` — ровно сегодняшний прод.
+        # а руки (Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА») у всех говорящих одни и те же.
         self.assertNotIn("PRAXIS_FRAME_HEAD_STABLE", os.environ)
         owner = frame_for(room_ctx(owner=True))
         guest = frame_for(room_ctx(owner=False, known=False))
@@ -77,8 +77,8 @@ class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
         self.assertIn("The human owner is the actor in this public room", owner[1])
         self.assertIn("Authority fact: this interlocutor is not in the known set", guest[1])
         self.assertIn("members=", owner[1])
-        self.assertIn("admit", names(room_ctx(owner=True)))
-        self.assertNotIn("admit", names(room_ctx(owner=False, known=False)))
+        self.assertEqual(names(room_ctx(owner=True)), names(room_ctx(owner=False, known=False)))
+        self.assertNotIn("admit", names(room_ctx(owner=True)))
 
     def test_lever_on_system_is_identical_for_owner_known_and_unknown(self):
         with mock.patch.dict(os.environ, LEVER):
@@ -91,7 +91,7 @@ class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
         self.assertEqual(owner[1], guest[1], "system[1] владельца и чужого расходится")
         dynamic = owner[1]
         self.assertIn("This is a public room; CURRENT_SITUATION names", dynamic)
-        self.assertIn("`admit` (owner-only at call time)", dynamic)
+        self.assertNotIn("`admit`", dynamic)
         self.assertIn("Appetite contract", dynamic)
         self.assertNotIn("members=", dynamic)
         self.assertNotIn("Authority fact", dynamic)
@@ -101,16 +101,12 @@ class HeadIsByteStableAcrossSpeakers(unittest.TestCase):
         self.assertEqual(llm.cache_address("gpt-5.6-terra", owner[0] + owner[1]),
                          f"praxis:gpt-5.6-terra:room:{ROOM_ID}")
 
-    def test_lever_on_tools_are_identical_for_every_speaker_and_gate_stays_at_call(self):
+    def test_lever_on_tools_are_identical_for_every_speaker(self):
         with mock.patch.dict(os.environ, LEVER):
             owner = names(room_ctx(owner=True))
             guest = names(room_ctx(owner=False, known=False))
         self.assertEqual(owner, guest)
-        self.assertIn("admit", guest)
-        self.assertIn("computer_access", guest)
-        # право — при вызове: не-владельцу `admit` отказывает словами, схема этого не решает
-        with mock.patch.object(agent, "_is_human_owner", return_value=False):
-            self.assertTrue(str(agent.tool_admit("Кто-то", id="123")).startswith("Отказ"))
+        self.assertFalse({"admit", "computer_access"} & set(guest))  # удалены 10.11
 
     def test_lever_on_state_block_moves_to_the_owner_evidence_tier(self):
         with mock.patch.dict(os.environ, LEVER):
@@ -217,7 +213,7 @@ class AuthorityTravelsInTheSituationLine(unittest.TestCase):
 
 
 class RuntimeAuthorizationDispatch(unittest.TestCase):
-    """Stable offering is broad; actual turn principals still gate delegation at runtime."""
+    """One offering for every speaker; the removed trust hands stay absent at dispatch too."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -235,43 +231,20 @@ class RuntimeAuthorizationDispatch(unittest.TestCase):
         self.owner = room_ctx(owner=True, principal="101")
         self.guest = room_ctx(owner=False, known=False, principal="202")
 
-    def test_admit_dispatch_uses_verified_turn_principal_not_catalog_presence(self):
-        self.assertIn("admit", names(self.owner))
-        self.assertIn("admit", names(self.guest))
-        self.assertIn("сам", dispatch(self.owner, "admit", name="Егор", id="101").lower())
-        self.assertIn("только владелец",
-                      dispatch(self.guest, "admit", name="Друг", id="303").lower())
-
-    def test_computer_access_list_grant_revoke_dispatch_owner_vs_guest(self):
-        self.assertIn("computer_access", names(self.owner))
-        self.assertIn("computer_access", names(self.guest))
-        self.assertIn("только владелец",
-                      dispatch(self.guest, "computer_access", action="list").lower())
-        self.assertIn("только владелец", dispatch(
-            self.guest, "computer_access", action="grant", telegram_id="303",
-            name="Друг", scopes=["computer.files"],
-        ).lower())
+    def test_removed_trust_hands_are_not_dispatchable_and_the_computer_is_hers(self):
+        # Егор 10.11: admit/computer_access — остатки старого мини-аппа, удалены; «управление
+        # ноутом должно быть и было у всех».
+        for ctx in (self.owner, self.guest):
+            self.assertFalse({"admit", "computer_access"} & set(names(ctx)))
+            self.assertIn("computer", names(ctx))
+            for removed in ("admit", "computer_access"):
+                self.assertNotIn("Впустила", dispatch(ctx, removed, name="Друг", id="303"))
         self.assertFalse(computer_access.allowed("303", "computer.files"))
-
-        with mock.patch.object(agent, "tool_journal"):
-            granted = dispatch(
-                self.owner, "computer_access", action="grant", telegram_id="303",
-                name="Друг", scopes=["computer.files"],
-            )
-        self.assertIn("grant: telegram:303", granted)
-        self.assertTrue(computer_access.allowed("303", "computer.files"))
-        self.assertIn("telegram:303", dispatch(self.owner, "computer_access", action="list"))
-
-        self.assertIn("только владелец", dispatch(
-            self.guest, "computer_access", action="revoke", telegram_id="303",
-        ).lower())
-        self.assertTrue(computer_access.allowed("303", "computer.files"))
-        with mock.patch.object(agent, "tool_journal"):
-            revoked = dispatch(
-                self.owner, "computer_access", action="revoke", telegram_id="303",
-            )
-        self.assertIn("revoke: telegram:303", revoked)
-        self.assertFalse(computer_access.allowed("303", "computer.files"))
+        turn = agent._TURN_CHANNEL.set(self.guest)
+        try:
+            self.assertTrue(agent._computer_allowed("computer.files"))
+        finally:
+            agent._TURN_CHANNEL.reset(turn)
 
 
 class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
@@ -340,6 +313,11 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         sentinel = "развёлся в марте"
         public = "любит чай"
         budget = "18200"
+        # This fixture measures dossier privacy/accounting, independently of
+        # evolving tool documentation (both pointer and full contract sections).
+        contract = mock.patch.object(agent, "_hands_contract_text", return_value="")
+        contract.start()
+        self.addCleanup(contract.stop)
         with (mock.patch.object(agent, "_persona_text", return_value="P" * 9000),
               mock.patch.object(agent, "hands_pointer_text", return_value=""),
               mock.patch.dict(os.environ, {"PRAXIS_CONTEXT_BUDGET": budget})):
@@ -374,6 +352,9 @@ class PrivateDossierLinesMoveToTheOwnerTier(unittest.TestCase):
         # до любого бюджетного решения.
         public = "PUBLIC-DOSSIER-SENTINEL"
         private = "PRIVATE-DOSSIER-SENTINEL-" + ("X" * 50000)
+        contract = mock.patch.object(agent, "_hands_contract_text", return_value="")
+        contract.start()
+        self.addCleanup(contract.stop)
         (self.people / "guest.md").write_text(
             f"# Гость\n\ntelegram_id: 42\n\n- {public}\n- [private] {private}\n",
             encoding="utf-8",

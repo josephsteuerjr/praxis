@@ -1272,7 +1272,7 @@ class Container:
             log.warning("задание для команды не создалось: %s", exc)
             return None
 
-    def run(self, argv: list[str], cwd: Path, timeout: float) -> tuple[str, int, bool]:
+    def run(self, argv: list[str], cwd: Path, timeout: float, *, stdin=None, env=None) -> tuple[str, int, bool]:
         """Запустить argv в контейнере; -> (вывод, код, прервано по таймауту)."""
         caps_arr = (_SID_AND_ATTRIBUTES * max(1, len(self.caps)))()
         for i, cap in enumerate(self.caps):
@@ -1305,7 +1305,13 @@ class Container:
         si.StartupInfo.dwFlags = _STARTF_USESTDHANDLES
         si.StartupInfo.hStdOutput = handle
         si.StartupInfo.hStdError = handle
-        si.StartupInfo.hStdInput = None
+        input_handle = None
+        if stdin is not None:
+            # Inherit a duplicate only; never change the caller's handle flags.
+            input_fd = os.dup(stdin.fileno())
+            input_handle = msvcrt.get_osfhandle(input_fd)
+            os.set_handle_inheritable(input_handle, True)
+        si.StartupInfo.hStdInput = input_handle
         si.lpAttributeList = ctypes.cast(attrs, ctypes.c_void_p)
         pi = _PROCESS_INFORMATION()
 
@@ -1316,7 +1322,10 @@ class Container:
         keep = ("SystemRoot", "windir", "SystemDrive", "ComSpec", "LOCALAPPDATA", "APPDATA",
                 "USERPROFILE", "ALLUSERSPROFILE", "ProgramData", "PUBLIC", "USERNAME",
                 "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE")
+        invocation_env = env or {}
         env = {k: os.environ[k] for k in keep if k in os.environ}
+        for key in ('PRAXIS_HAND_BRIDGE', 'PRAXIS_EDIT_CONTEXT', 'PRAXIS_HAND_FILE_POLICY', 'PRAXIS_BASE', 'PYTHONPATH'):
+            if key in invocation_env: env[key] = invocation_env[key]
         env.update({
             # runtime/shims в PATH не было смысла: сборщик кладёт busybox прямо
             # в runtime/bash.exe, а такой папки в поставке нет вовсе.
@@ -1349,6 +1358,7 @@ class Container:
             env_block, str(cwd), ctypes.byref(si), ctypes.byref(pi))
         err = ctypes.get_last_error()
         os.close(fd)
+        if input_handle is not None: os.close(input_fd)
         if not ok:
             if job:
                 self.kernel32.CloseHandle(job)
@@ -1374,6 +1384,7 @@ class Container:
             self.kernel32.CloseHandle(pi.hProcess)
             self.kernel32.CloseHandle(job)
             raise
+        _observe_launch(argv, cwd, pi.dwProcessId)
         timed_out = False
         wait = self.kernel32.WaitForSingleObject(pi.hProcess, int(timeout * 1000))
         if wait == _WAIT_TIMEOUT:
@@ -1413,6 +1424,18 @@ class Container:
                     stale.unlink()
             except OSError:
                 continue
+
+
+def _hand_socket(env):
+    module = sys.modules.get('hand_bridge')
+    endpoint = getattr(module, 'unix_endpoint', None)
+    return endpoint(env) if callable(endpoint) else None
+
+
+def _observe_launch(argv, cwd, pid=None):
+    module = sys.modules.get('command_execution')
+    observe = getattr(module, 'observe_launch', None)
+    if callable(observe): observe(argv, cwd, pid)
 
 
 class _SubprocessShim:
@@ -1463,7 +1486,7 @@ class _SubprocessShim:
             if Path(str(args[0])).stem.lower() not in ("bash", "sh"):
                 log.warning("shell-вызов незнакомым интерпретатором %s — веду его тем же "
                             "путём, что и bash (снимать ограду молча нельзя)", args[0])
-            return self._bash(str(args[2])), self._workspace
+            return self._bash(str(args[2])), Path(kwargs.get('cwd') or self._workspace)
         if not self._route_all:
             return None
         # Рабочая папка вызывающего сохраняется: `run` работает в папке проекта
@@ -1903,6 +1926,18 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
     # тело живёт снаружи контейнера. Здесь только строка правды в анатомию.
     STATE["windows"] = windows_truth()
 
+    # File helpers in Python inherit the same desktop address policy. This is
+    # convenience routing, not a sandbox: the child's OS token remains authority.
+    try:
+        import command_execution
+    except ImportError:
+        command_execution = None  # retained pre-port agent source
+    if command_execution is not None:
+        command_execution.home_file_policy = lambda: {
+            'open': not enabled, 'homes': [str(tree), str(install_root / 'tree')],
+            'read': [str(p) for p in mounts.roots(write=False)] if mounts else [],
+            'write': [str(p) for p in mounts.roots(write=True)] if mounts else [],
+        }
     if not enabled:
         return
 
@@ -1944,9 +1979,22 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
                 "`mount_request`, ограду он снимает в настройках.")
 
     def fenced(name, fn, write: bool):
+        def refused(message):
+            try:
+                import tool_report
+            except ImportError:
+                pass  # retained older source still gets the same refusal
+            else:
+                tool_report.note('refused')
+            return message
         def wrapper(*args, **kwargs):
+            # Task roots are governed by Forge's own scope/custody, not home.
+            if kwargs.get('task_id'):
+                return fn(*args, **kwargs)
             checked = [kwargs.get(key) for key in
                        ("path", "root", "directory", "glob_root")]
+            checked.extend(kwargs.get('paths') or [])
+            checked.extend(row.get('path') for row in (kwargs.get('files') or []) if isinstance(row, dict))
             if args and isinstance(args[0], str):
                 checked.append(args[0])
             roots = _live_roots(write)
@@ -1954,7 +2002,7 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
                 if not isinstance(value, str) or not value.strip():
                     continue        # пустой путь — не путь; проверять нечего
                 if _inside(value, secrets, base):
-                    return ("песочница: это секреты владельца (ключ модели, вход в "
+                    return refused("песочница: это секреты владельца (ключ модели, вход в "
                             "подписку, сессия Telegram) — руки туда не ходят.")
                 if not _inside(value, roots, base):
                     # Отдельный ответ на «папка смонтирована, но только на
@@ -1963,18 +2011,17 @@ def install(agent_mod, tree: Path, cfg: dict, config_path: Path | None = None,
                     # уже есть.
                     if write and mounts is not None \
                             and mounts.resolve(value, write=False) is not None:
-                        return ("песочница: папка смонтирована только на чтение. "
+                        return refused("песочница: папка смонтирована только на чтение. "
                                 "Нужна запись — попроси её рукой `mount_request` "
                                 "с access=\"write\".")
-                    return _refusal(value, roots)
+                    return refused(_refusal(value, roots))
             return fn(*args, **kwargs)
         wrapper.__name__ = getattr(fn, "__name__", name)
         wrapper.__doc__ = getattr(fn, "__doc__", "")
         wrapper._helene_fenced = True
         return wrapper
 
-    plan = {"fs_read": False, "fs_ls": False, "fs_search": False,
-            "fs_write": True, "fs_edit": True}
+    plan = {"fs_read": False, "fs_ls": False, "fs_search": False, "edit": True}
     fenced_names = []
     for name, write in plan.items():
         if name in impl and not getattr(impl[name], "_helene_fenced", False):
@@ -2018,10 +2065,10 @@ def state() -> dict:
 #: продолжал писать «в контейнере».
 MACHINE_HANDS: dict[str, tuple[str, tuple[str, ...] | None]] = {
     # Исполняют команды.
-    "shell": ("команды", ("agent",)),
-    "run": ("команды", ("workshop", "hands")),
-    "run_tests": ("команды", ("workshop", "hands")),
-    "pip_install": ("команды", ("workshop", "hands")),
+    "shell": ("команды", ("command_execution",)),
+    "python": ("команды", ("command_execution",)),
+    "project": ("файлы и команды", ("workshop", "hands", "command_execution")),
+    "proposal": ("файлы и команды", ("selfdev",)),
     # Forge — семейство из десяти рук, и машину трогают почти все. Исполняют они
     # не сами: `forge.run` поднимает ОТДЕЛЬНЫЙ процесс-надзиратель, и тот уже
     # делает Popen(shell=True). Подмена `subprocess` в этом процессе до него не
@@ -2038,15 +2085,15 @@ MACHINE_HANDS: dict[str, tuple[str, tuple[str, ...] | None]] = {
     "coding_swarm": ("команды", ("forge_process",)),
     "coding_checkpoint": ("команды", ("forge_process",)),
     "coding_session": ("файлы и команды", ("forge_process",)),
-    "coding_edit": ("файлы", None),
+    "coding_control": ("процессы задачи", ("forge_process",)),
+    "coding_review": ("файлы и команды", ("forge_process",)),
     "coding_inspect": ("файлы", None),
     "coding_learn": ("файлы", None),
     # Трогают файлы. Здесь ограда — обёртка пути, и её наличие видно по флагу.
     "fs_read": ("файлы", None),
     "fs_ls": ("файлы", None),
     "fs_search": ("файлы", None),
-    "fs_write": ("файлы", None),
-    "fs_edit": ("файлы", None),
+    "edit": ("файлы", None),
     # Водят окнами и процессами владельца. Тело живёт СНАРУЖИ контейнера по
     # устройству (у AppContainer нет доступа к чужим окнам), и это не дыра, а
     # граница: права здесь дают галочки владельца, а не ограда.
@@ -2065,7 +2112,7 @@ OUTSIDE_BY_DESIGN.update({
     name: "Forge работает в worktree задачи — он может лежать где угодно на диске"
     for name in ("coding_run", "coding_process", "coding_agent", "coding_verify",
                  "coding_swarm", "coding_checkpoint", "coding_session",
-                 "coding_edit", "coding_inspect", "coding_learn")
+                 "coding_review", "coding_control", "coding_inspect", "coding_learn")
 })
 
 #: Оговорки: рука накрыта НЕ ЦЕЛИКОМ. Приписываются к причине, и молчать о них
@@ -2077,8 +2124,12 @@ HAND_CAVEATS: dict[str, str] = {
     # предложения, а `.proposals` контейнеру на запись НЕ выдана (выданы memory,
     # soul, workspace и .git — см. `Container._grant`). Огородить эту ветку
     # значило бы сломать её саморазвитие, поэтому она честно названа.
-    "run_tests": ("аргумент \"self\" исполняет selfdev в worktree предложения — "
-                  "туда ограда не достаёт"),
+    "proposal": "операции предложения исполняются в его worktree, вне домашней ограды",
+    "python": "task_id выбирает собственную область Forge; обычный домашний запуск идёт через ограду",
+    "edit": "task_id выбирает собственную область Forge; домашние пути и каждый файл пакета проверяются",
+    "fs_read": "task_id выбирает собственную область Forge",
+    "fs_ls": "task_id выбирает собственную область Forge",
+    "fs_search": "task_id выбирает собственную область Forge",
 }
 
 
@@ -2175,6 +2226,8 @@ def container_word() -> str:
 def _shim_in(module_name: str) -> bool:
     """Стоит ли наш шим на месте `subprocess` в этом модуле — сейчас, не на старте."""
     mod = sys.modules.get(module_name)
+    if module_name == 'command_execution':
+        return callable(getattr(mod, 'home_runner', None))
     return isinstance(getattr(mod, "subprocess", None), _SubprocessShim)
 
 
@@ -2195,6 +2248,17 @@ def _shim_workshop(container: "Container | None", workspace: Path, install_root:
     ставится после него), а свой импорт поднял бы ВТОРУЮ копию модуля со своим
     `subprocess` — огорожена была бы она, а руки остались бы у первой.
     """
+    # run-only subprocess shims cannot contain the new Popen launcher.
+    try:
+        import command_execution
+    except ImportError:
+        command_execution = None
+    if command_execution is not None:
+        command_shim = _SubprocessShim(subprocess, container, workspace, install_root, route_all=True)
+        command_execution.home_prepare = lambda argv, cwd: command_shim._plan(argv, {'cwd': cwd})
+        command_execution.home_runner = container.run if container is not None else None
+        command_execution.home_pipe_sid = str(getattr(container, 'sid_text', '') or '')
+        command_execution.output_decoder = decode_output
     for name in EXECUTING_MODULES:
         mod = sys.modules.get(name)
         if mod is None:

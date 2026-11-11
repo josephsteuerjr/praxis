@@ -83,7 +83,9 @@ class Hand(unittest.TestCase):
     def test_без_исполнителя_сказано_как_поднять(self):
         _, hand = self.hand()
         text = hand(action="status")
-        self.assertIn(control.UPDATER_COMMAND, text)
+        self.assertIn('Подключения', text)
+        self.assertIn('Обновить сервер', text)
+        self.assertNotIn(control.UPDATER_COMMAND, text)
         self.assertIn("План не положен", hand(action="plan"))
 
     def test_план_от_агента_с_местом_просьбы(self):

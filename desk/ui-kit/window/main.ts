@@ -44,6 +44,7 @@ import { mountVoiceComposer, mountVoiceAttachment } from "./voice-composer";
 import * as learn from "../../ui-kit/window/views/learn";
 import * as settings from "../../ui-kit/window/views/settings-frame";
 import { releaseNotice, type ReleaseSummary } from './release-notice';
+import { cleanupNotice, type CleanupStatus } from './cleanup-notice';
 import './styles/release-notice.css';
 import './styles/interface-refresh.css';
 
@@ -1637,6 +1638,10 @@ export function start(opts: WindowOptions): void {
   // грузит, потому что подключаться пока не к чему.
   window.dispatchEvent(new Event('helene:ui-ready'));
   if (opts.firstRun?.(view)) return;
+  if (electron?.shell === 'python') {
+    const cleanup = document.createElement('section'); q<HTMLElement>('#head').after(cleanup);
+    cleanupNotice(cleanup, () => shell<CleanupStatus>('cleanup_status'));
+  }
   if (LOCAL_AGENT && electron?.shell === 'python') {
     const notice=document.createElement('section');q<HTMLElement>('#head').after(notice);
     releaseNotice(notice, async()=>{

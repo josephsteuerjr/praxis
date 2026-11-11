@@ -1568,7 +1568,7 @@ def workspace_inspect(root: str, action: str = "status", **kwargs) -> str:
     return f"[windows-body] {detail}"
 
 
-def workspace_edit(root: str, action: str, **kwargs) -> str:
+def workspace_edit_result(root: str, action: str, **kwargs) -> dict:
     path = ntpath.join(root, str(kwargs.get("path") or ""))
     expected = str(kwargs.get("expected_sha256") or "").strip()
     if action == "write":
@@ -1586,7 +1586,12 @@ def workspace_edit(root: str, action: str, **kwargs) -> str:
         result = call("fs.apply_patch", {"root": root,
                                           "patch": kwargs.get("patch") or kwargs.get("content") or ""})
     else:
-        return f"[windows-body] unsupported edit action {action}"
+        return {"ok":False,"code":"unsupported","error":f"unsupported edit action {action}"}
+    return result
+
+
+def workspace_edit(root: str, action: str, **kwargs) -> str:
+    result = workspace_edit_result(root, action, **kwargs)
     return json.dumps(result, ensure_ascii=False, indent=2) if result.get("ok") else f"[windows-body] {result.get('error')}"
 
 

@@ -4,7 +4,7 @@ import json
 import platform
 import sys
 
-TARGETS = {'windows-x86_64', 'linux-x86_64', 'macos-arm64', 'macos-x86_64'}
+TARGETS = {'windows-x86_64', 'linux-x86_64', 'linux-arm64', 'macos-arm64', 'macos-x86_64'}
 
 
 def _machine():
@@ -32,6 +32,8 @@ def runtime_target():
         return 'windows-x86_64'
     if sys.platform.startswith('linux') and machine in ('amd64','x86_64'):
         return 'linux-x86_64'
+    if sys.platform.startswith('linux') and machine in ('arm64','aarch64'):
+        return 'linux-arm64'
     if sys.platform == 'darwin' and machine in ('arm64','aarch64'):
         return 'macos-arm64'
     if sys.platform == 'darwin' and machine in ('x86_64','amd64'):

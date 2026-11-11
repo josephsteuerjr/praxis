@@ -94,6 +94,17 @@ class Profile(unittest.TestCase):
     def q(self, path) -> str:
         return fence_macos._q(fence_macos._abs(path))
 
+    def test_offline_invocation_only_opens_its_exact_parent_socket(self):
+        endpoint = self.g.workspace / 'rpc'
+        box = self.g.box(network=False)
+        text = box.profile(hand_socket=str(endpoint))
+        exact = f'(allow network-outbound (remote unix-socket (path-literal {self.q(endpoint)})))'
+        self.assertIn(exact, text)
+        self.assertGreater(text.index(exact), text.index('(deny network*)'))
+        self.assertNotIn('(allow network-outbound)', text)
+        self.assertNotIn('allow network-bind', text)
+        self.assertNotIn('path-literal', box.profile())
+
     def test_дом_на_запись_код_на_чтение(self):
         rules = _rules(self.g.box().profile())
         rw = [r for r in rules if r.startswith("(allow file-read* file-write*")]

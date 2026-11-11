@@ -80,18 +80,6 @@ export interface Run {
   created_at?: string;
 }
 
-interface Turn {
-  run_id: string;
-  kind?: string;
-  who?: string;
-  in?: string;
-  out?: string;
-  note?: string;
-  ts?: string | number;
-  delivery?: string;
-  held?: string;
-}
-
 /** Чем кончился обмен на ключ. */
 export type Redeem = "ok" | "spent" | "closed" | "broke" | "offline" | "foreign" | "none";
 
@@ -228,7 +216,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
         <div class="top-state" id="top-state"><span class="state-dot"></span><span id="top-phrase">Подключение…</span></div>
       </div>
       <div class="top-btns">
-        <button class="icon-btn" id="btn-actions" type="button" aria-label="Действия"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12M4 10h12M4 16h12M2 4h.1M2 10h.1M2 16h.1"/></svg></button>
         <button class="icon-btn" id="btn-more" type="button" aria-label="Ещё"><svg viewBox="0 0 20 20" aria-hidden="true">${ICON.more}</svg></button>
       </div>
     </header>
@@ -405,17 +392,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     const d = await scoped<RunDetail>("/api/run/" + encodeURIComponent(id), "run");
     if (d) evCache.set(id, d);
     return d || undefined;
-  }
-
-  /** Слова агента для подписей: chat-turns тех комнат, где были недавние ходы. */
-  async function loadWords(list: Run[]): Promise<void> {
-    const keys = [...new Set(list.filter((r) => r.chat_id != null).map(roomKey))].slice(0, 6);
-    await Promise.all(
-      keys.map(async (k) => {
-        const turns = await scoped<Turn[]>("/api/chat-turns/" + encodeURIComponent(k) + "?n=40", "turns");
-        for (const t of turns || []) if (t.run_id) words.set(t.run_id, { out: t.out || "", note: t.note || "", who: t.who || "" });
-      }),
-    );
   }
 
   function runLabel(r: Run): string {
@@ -644,7 +620,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       const usage=el('section','now-usage');usage.innerHTML=usageShell(true);
       screen.replaceChildren(usage,nowRoot);mountUsage(usage,api);
       nowView=phoneActions(nowRoot,settingsRequest,()=>base+'\n'+key,
-        undefined,{history:false});
+        undefined,{history:true});
     }
     if(!sheetKind&&!document.hidden)nowView!.start();
   }
@@ -1113,20 +1089,18 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   // ---------------------------------------------------------------- «Ещё»
-  let sheetKind: "" | "more" | "actions" | "settings" = "";
+  let sheetKind: "" | "more" | "settings" = "";
   let settingsRoot:HTMLElement|undefined;
-  let actionsRoot:HTMLElement|undefined;
-  let actionsView:ReturnType<typeof phoneActions>|undefined;
   let dialogFocus:HTMLElement|null=null;
   let sheetEpoch=0,sheetCloseTimer:ReturnType<typeof setTimeout>|undefined;
   async function settingsRequest<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T> {
     const response=await call(path,body===undefined?{signal,cache:'no-store'}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal,cache:'no-store'});
     return response.json();
   }
-  function openDialog(kind:'settings'|'actions',title:string) {
+  function openDialog(kind:'settings',title:string) {
     const opening=++sheetEpoch;clearTimeout(sheetCloseTimer);
     dialogFocus=document.activeElement instanceof HTMLElement?document.activeElement:null;
-    nowView?.stop();actionsView?.stop();sheetKind=kind;sheet.classList.add('phone-dialog');
+    nowView?.stop();sheetKind=kind;sheet.classList.add('phone-dialog');
     sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',title);
     sheetHead.replaceChildren(el('span','',title));
     const close=el('button','phone-dialog-close','×') as HTMLButtonElement;close.type='button';close.setAttribute('aria-label','Закрыть '+title.toLowerCase());close.addEventListener('click',closeSheet);sheetHead.append(close);
@@ -1137,16 +1111,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
     if(!settingsRoot){settingsRoot=el('div');phoneSettings(settingsRoot,settingsRequest)}
     sheetBody.replaceChildren(settingsRoot);
   }
-  function openActions() {
-    openDialog('actions','Действия');
-    void loadWords(runs.slice(0,12));
-    if(!actionsRoot){actionsRoot=el('div');actionsView=phoneActions(actionsRoot,settingsRequest,()=>base+'\n'+key,run=>words.get(run.id)?.out||noteLabel(words.get(run.id)?.note||''))}
-    sheetBody.replaceChildren(actionsRoot);actionsView!.start();
-  }
-  q('#btn-actions',root).addEventListener('click',openActions);
   function openSheet() {
     const opening=++sheetEpoch;clearTimeout(sheetCloseTimer);
-    nowView?.stop();actionsView?.stop();sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');
+    nowView?.stop();sheet.classList.remove('phone-dialog');sheet.removeAttribute('aria-modal');sheet.removeAttribute('role');
     sheetKind = "more";
     veil.hidden = false;
     sheet.hidden = false;
@@ -1161,7 +1128,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   function closeSheet() {
     if (!sheetKind) return;
     const closing=++sheetEpoch;clearTimeout(sheetCloseTimer);
-    actionsView?.stop();
+
     sheetKind = "";
     if(dialogFocus?.isConnected)dialogFocus.focus({preventScroll:true});dialogFocus=null;
     veil.classList.remove("show");
@@ -1180,7 +1147,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   veil.addEventListener("click", () => { if(sheetKind==='more')closeSheet(); });
   root.addEventListener('keydown',event=>{
     if(event.key==='Escape'&&sheetKind){event.preventDefault();closeSheet();return}
-    if(event.key==='Tab'&&['settings','actions'].includes(sheetKind)){
+    if(event.key==='Tab'&&sheetKind==='settings'){
       const items=[...sheet.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),a[href],[tabindex="0"]')].filter(node=>node.getClientRects().length>0);
       const first=items[0],last=items.at(-1);
       if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}
@@ -1196,7 +1163,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   let dragY = 0;
   sheet.addEventListener("touchstart", (e) => (dragY = e.touches[0].clientY), { passive: true });
   sheet.addEventListener("touchend", (e) => {
-    if(sheetKind==='settings'||sheetKind==='actions')return;
+    if(sheetKind==='settings')return;
     if (e.changedTouches[0].clientY - dragY > 70 && sheetBody.scrollTop <= 0) closeSheet();
   });
 
@@ -1401,7 +1368,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   }
 
   function accessLost() {
-    nowView?.stop();actionsView?.stop();
+    nowView?.stop();
     running = false;
     clearTimeout(feedTimer);
     clearTimeout(stateTimer);
@@ -1496,7 +1463,7 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
-      nowView?.stop();actionsView?.stop();
+      nowView?.stop();
       clearTimeout(feedTimer);
       clearTimeout(stateTimer);
       clearTimeout(runsTimer);
@@ -1505,7 +1472,6 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
       return;
     }
     if (!running) return;
-    if(sheetKind==='actions')actionsView?.start();
     openLive();
     bumpState();
     void tickRuns();

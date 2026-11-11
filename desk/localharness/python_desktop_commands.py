@@ -92,6 +92,9 @@ def invoke(owner, command, args):
         from .python_platform import desktop_identity
         return {'version':version(owner.root),'exe_dir':str(owner.root),'root':str(owner.root),
                 'log':str(agent.tree/'deskapp.log'),**desktop_identity()}
+    if command=='cleanup_status':
+        from .cleanup_notice import status
+        return status(owner.root)
     if command=='owner_state':
         from . import owner_stop
         try:state=owner.status().get('agents',{}).get(agent.id,{})
@@ -202,6 +205,44 @@ def invoke(owner, command, args):
             try:return server_transfer.run(payload,agent.config,owner.root) if action=='run' else server_transfer.recover_local(payload,agent.config)
             finally:owner.transfer_lock.release()
         raise ValueError('Unknown transfer action')
+    if command=='server_install':
+        # 11.11 (Yegor): install a new server agent and update an installed one from the
+        # window; no manual scripts. A new agent becomes its own remote profile; the local
+        # agent and its memory are not touched.
+        from . import server_install, server_transfer
+        payload=json.loads(args.get('request','{}'))
+        action=args['action']
+        if action=='probe':return server_transfer.probe(payload)
+        if action=='status':
+            row=server_install.saved(agent.config)
+            return {'pending':row.get('phase') in ('prepared','installing','installed'),'phase':row.get('phase'),
+                    'host':(row.get('destination') or [None])[0],'deployment':row.get('deployment'),'name':row.get('name','')}
+        if action in ('install','connect','update'):
+            if not owner.transfer_lock.acquire(blocking=False):raise RuntimeError('Server operation already in progress')
+            try:
+                if action=='update':return server_install.update(payload,owner.root)
+                if action=='install':
+                    result=server_install.install_new(payload,agent.config,owner.root)
+                    if result.get('trust_needed') or not result.get('ok'):return result
+                    row=server_install.saved(agent.config)
+                    row.update(key=result['key'],telegram=result['telegram'],name=result['name'])
+                    server_install.save(agent.config,row)
+                row=server_install.saved(agent.config)
+                if row.get('phase')!='installed' or not row.get('key'):raise ValueError('Нет установленного сервера, ожидающего подключения')
+                base=server_install.locate(row['key'],row['telegram'],cfg)
+                from . import agents
+                created=agents.create(owner.root,row.get('name') or 'Агент на сервере',brain_from_base=False)
+                remote=agents.read_config(created.config)
+                proxy=(cfg.get('telegram') or {}).get('proxy')
+                remote.update(mode='remote',base=base,key=row['key'],server_locator='telegram-menu',
+                              telegram={**row['telegram'],**({'proxy':proxy} if proxy else {})})
+                agents._write_config(created.config,remote)
+                owner.refresh()
+                row.update(phase='ready',agent_id=created.id);row.pop('key',None);row.pop('telegram',None)
+                server_install.save(agent.config,row)
+                return {'ok':True,'agent_id':created.id,'base':base,'version':row.get('version')}
+            finally:owner.transfer_lock.release()
+        raise ValueError('Unknown server install action')
     if command=='carry_export':
         from . import carry
         return carry.export(agent.config)['archive']

@@ -555,13 +555,15 @@ def finish(old,new,value,window,*,stopped=None):
         retirement=read(portable_retirement.path(new))
         if value['retirement']!={'id':retirement.get('id'),'sha256':portable_retirement.authority(retirement)}:
             raise ValueError('Retirement batch changed after preparation')
-        portable_retirement.commit(new,retirement,window)
+        committed=portable_retirement.commit(new,retirement,window)
         cleanup_work(new,value)
         from .first_start import receipt,_write
         completed=read(receipt(new));completed['update']={'id':value['note']['id'],
             'confirmed_at':dt.datetime.now(dt.timezone.utc).isoformat(),'healthy_seconds':TRIAL_SECONDS}
         _write(receipt(new),completed)
-        note=read(new/'python-migration.json');note.update(state='completed',healthy_seconds=TRIAL_SECONDS)
+        leftovers=list((committed or {}).get('cleanup_errors') or [])
+        note=read(new/'python-migration.json');note.update(state='retirement_incomplete' if leftovers else 'completed',
+                                                           healthy_seconds=TRIAL_SECONDS,cleanup_errors=leftovers)
         write(new/'python-migration.json',note)
         return
     from .windows_first_start import Backend
@@ -572,12 +574,14 @@ def finish(old,new,value,window,*,stopped=None):
     backend.shortcuts([old],new)
     cleanup_work(new,value)
     backend.remove(old)
-    if old.exists():raise RuntimeError('Former programme still exists')
-    from .first_start import receipt,_write
+    from .first_start import receipt,_write,cleanup_leftovers
+    # 11.11 (Yegor): protected files stay and are named instead of an administrator prompt.
+    leftovers=cleanup_leftovers(backend,[old]) if old.exists() else list(backend.notes)
     completed=read(receipt(new));completed['update']={'id':value['note']['id'],
         'confirmed_at':dt.datetime.now(dt.timezone.utc).isoformat(),'healthy_seconds':TRIAL_SECONDS}
     _write(receipt(new),completed)
-    note=read(new/'python-migration.json');note.update(state='completed',healthy_seconds=TRIAL_SECONDS)
+    note=read(new/'python-migration.json');note.update(state='retirement_incomplete' if leftovers else 'completed',
+                                                       healthy_seconds=TRIAL_SECONDS,cleanup_errors=leftovers)
     write(new/'python-migration.json',note)
 
 

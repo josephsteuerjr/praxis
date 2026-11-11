@@ -85,6 +85,9 @@ def finish(new, note, *, remove_old, progress):
         validate_retirement(old,new,note)
     progress('retiring_old')
     errors = []
+    # 11.11 (Yegor): what Windows protects from a non-administrator is a visible
+    # leftover, not a failure — it neither asks for elevation nor blocks the rest.
+    leftovers = list(note.get('cleanup_leftovers') or [])
     transfer=note.get('data_relocation')
     if transfer and transfer.get('state')=='verified':
         from .data_relocation import retire_sources
@@ -97,12 +100,15 @@ def finish(new, note, *, remove_old, progress):
     if old and not note.get('old_retired_before_attach'):
         # A stopped service must stay stopped even when the user keeps its old
         # program files. Otherwise Windows could start a second data writer.
-        try: note['integrations'] = migration_windows.cleanup_installation(old, new)
+        try:
+            note['integrations'] = migration_windows.cleanup_installation(old, new)
+            leftovers.extend(note['integrations'].get('retained') or [])
         except Exception as exc: errors.append(str(exc))
         if remove_old and old != new and not errors:
             try:
                 note['retirement'] = migration_windows.remove_program(old, new, note)
-                if not note['retirement'].get('ok'):errors.append('Некоторые файлы прежней программы защищены как данные и оставлены на месте.')
+                if note['retirement'].get('message'):leftovers.append(note['retirement']['message'])
+                elif not note['retirement'].get('ok'):errors.append('Некоторые файлы прежней программы защищены как данные и оставлены на месте.')
             except Exception as exc: errors.append(str(exc))
         else: note['retirement'] = {'ok':not errors,'old_program_retained':old != new,'purge':False}
     if old and note.get('normal_python_update') and not errors:
@@ -119,6 +125,7 @@ def finish(new, note, *, remove_old, progress):
         except (OSError,ValueError,RuntimeError) as exc:errors.append(str(exc))
     try: note['shortcuts'] = migration_windows.install_shortcuts(new, desktop_only=True)
     except Exception as exc: errors.append(str(exc))
+    errors.extend(leftovers)
     note.update(state='retirement_incomplete' if errors else 'completed', cleanup_errors=errors)
     app_migration.write_note(new, note); progress(note['state'])
     return note
@@ -195,7 +202,14 @@ def clean_attached(package,target,old,data,*,progress,cancelled=None,data_destin
             progress('removing_old')
             retirement=migration_windows.remove_program(old,target,note,before_start=True,progress=progress,cancelled=cancelled)
         note['retirement']=retirement
-        if not note['retirement'].get('ok'):raise RuntimeError('Old program removal is incomplete; new owner not started')
+        # The old programme is stopped and unhooked (service, tasks, autostart). Files
+        # Windows protects from a non-administrator stay as a visible leftover; any other
+        # incomplete retirement still keeps the new owner from starting.
+        if not note['retirement'].get('ok') and not note['retirement'].get('retained_count'):
+            raise RuntimeError('Old program removal is incomplete; new owner not started')
+        leftovers=[*(integrations.get('retained') or []),*(retirement.get('retained') or [])]
+        if retirement.get('message'):leftovers.append(retirement['message'])
+        if leftovers:note['cleanup_leftovers']=leftovers
         migration_windows.quiescent(old)
         note['old_retired_before_attach']=True;app_migration.write_note(target,note)
         if transfer:

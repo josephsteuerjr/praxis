@@ -52,7 +52,7 @@ class FsProbeImageTests(unittest.TestCase):
         text = self.base / "workspace" / "note.txt"
         text.write_text("привет", encoding="utf-8")
         with mock.patch.object(workshop, "BASE", self.base), \
-                mock.patch("hands.guard", return_value=None):
+                mock.patch.object(workshop, "_resolve_read", wraps=workshop._resolve_read):
             probe = workshop.fs_probe_image(str(image))
             self.assertIsNotNone(probe)
             resolved, mime, size = probe
@@ -68,7 +68,7 @@ class FsProbeImageTests(unittest.TestCase):
         image = self.base / "workspace" / "frame.png"
         image.write_bytes(PNG)
         with mock.patch.object(workshop, "BASE", self.base), \
-                mock.patch("hands.guard", return_value={"ok": False, "msg": "рельсы"}):
+                mock.patch.object(workshop, "_resolve_read", return_value=None):
             self.assertIsNone(workshop.fs_probe_image(str(image)))
 
     def test_fs_read_wrapper_returns_pixels_for_image_and_text_for_text(self):
@@ -83,7 +83,7 @@ class FsProbeImageTests(unittest.TestCase):
         with mock.patch.object(workshop, "BASE", self.base), \
                 mock.patch.object(agent, "MEM_DIR", memory), \
                 mock.patch.object(agent.llm, "can_see", return_value=True), \
-                mock.patch("hands.guard", return_value=None):
+                mock.patch.object(workshop, "_resolve_read", wraps=workshop._resolve_read):
             seen = agent.tool_fs_read(str(image))
             self.assertIsInstance(seen, agent.ToolObservation)
             self.assertEqual(seen.images[0]["origin"], "computer-observe")
@@ -104,7 +104,7 @@ class FsProbeImageTests(unittest.TestCase):
         image.write_bytes(JPG)
         with mock.patch.object(workshop, "BASE", self.base), \
                 mock.patch.object(agent, "MEM_DIR", self.base / "memory"), \
-                mock.patch("hands.guard", return_value=None), \
+                mock.patch.object(workshop, "_resolve_read", wraps=workshop._resolve_read), \
                 mock.patch("llm.accepts_images", return_value=False), \
                 mock.patch("llm.can_see", return_value=False), \
                 mock.patch("llm.role_model", return_value="glm-5.3"):
@@ -125,7 +125,7 @@ class FsProbeImageTests(unittest.TestCase):
         image = self.base / "workspace" / "huge.png"
         image.write_bytes(PNG)
         with mock.patch.object(workshop, "BASE", self.base), \
-                mock.patch("hands.guard", return_value=None), \
+                mock.patch.object(workshop, "_resolve_read", wraps=workshop._resolve_read), \
                 mock.patch.object(agent, "_OBSERVE_FILE_CAP", 4):
             answer = agent.tool_fs_read(str(image))
         self.assertIsInstance(answer, str)
@@ -288,7 +288,7 @@ class TransportStatusTests(unittest.TestCase):
 
         read = mock.Mock()
         with mock.patch.dict(agent._TELETHON, {
-                "read_chat": read,
+                "read_other_chat": read,
                 "transport_state": lambda: {"connected": False, "intentional_window": True},
         }):
             answer = agent.tool_read_chat("@somebody")
@@ -615,7 +615,7 @@ class PromiseWakeTests(unittest.TestCase):
         with mock.patch.object(agent.turns, "record"), \
                 mock.patch.object(agent.identity, "load_from_turn"), \
                 mock.patch.object(agent.notes, "append"), \
-                mock.patch.object(agent, "evaluate_reply", return_value=("deny", "x")), \
+                mock.patch.object(agent._core_secrets, "credential_floor", return_value="x"), \
                 mock.patch.object(agent, "tool_journal"), \
                 mock.patch.object(agent.promises, "note_outbound") as noted_held:
             group = agent.ChannelContext(chat_id="-100200", principal_id="202", is_dm=False)
@@ -642,78 +642,74 @@ class HeldSelfWakeTests(unittest.TestCase):
         self.env.stop()
         self.tmp.cleanup()
 
-    def test_privacy_rubric_grants_requesters_and_her_own_material(self):
-        import agent
-
-        self.assertIn("their own material where they asked for it", agent._OUTBOUND_PRIVACY_SYS)
-        self.assertIn("never cross-chat leakage", agent._OUTBOUND_PRIVACY_SYS)
-        self.assertIn("its own decisions, commitments, boundaries, plans, and actions",
-                      agent._OUTBOUND_PRIVACY_SYS)
-        self.assertIn("I am waiting for their PASS/FAIL", agent._OUTBOUND_PRIVACY_SYS)
-
-    def _hold(self, reply, reason, chat="-100200"):
+    def _hold(self, reply, floor, chat="-100200"):
+        """Придержать ход кред-полом — с 10.11 (Егор, «сними») другого стопа на выходе нет."""
         import agent
 
         group = agent.ChannelContext(chat_id=chat, principal_id="202", is_dm=False)
-        with mock.patch.object(agent, "evaluate_reply", return_value=("deny", reason)), \
+        with mock.patch.object(agent._core_secrets, "credential_floor", return_value=floor), \
                 mock.patch.object(agent, "tool_journal"), \
                 mock.patch.object(agent.turns, "record"), \
                 mock.patch.object(agent.identity, "load_from_turn"):
             return agent.guard_outbound_reply(reply, ctx=group, turn={"kind": "chat"})
 
-    def test_privacy_hold_wakes_her_not_the_owner(self):
-        import agent
+    def test_credential_hold_wakes_her_not_the_owner(self):
         import owner_delivery
         import tasks
 
         with mock.patch.object(owner_delivery, "LEDGER") as ledger:
-            out = self._hold("Точный размер кодовой базы сейчас не назову.",
-                             "privacy:cross-chat-private")
+            out = self._hold("вот ключ sk-abc123secret", "openai-key")
         self.assertEqual(out, "")
         ledger.emit.assert_not_called()  # никакого подтверждения, даже уведомлений
         opened = [t for t in tasks.list_open() if t.get("target") == "held:-100200"]
         self.assertEqual(len(opened), 1)
         goal = opened[0]["goal"]
-        self.assertIn("privacy:cross-chat-private", goal)
-        self.assertIn("кодовой базы", goal)
+        self.assertIn("privacy:credential:openai-key", goal)
+        self.assertIn("кред-пол", goal)
         self.assertIn("как сочтёшь нужным", goal)
         # напоминалка, не меню и не увещевание: без перечня опций и морали
         self.assertNotIn("send_message", goal)
         self.assertNotIn("нельзя", goal)
         # вторая придержка той же нити не молотит вторым окном
-        self._hold("ещё текст", "privacy:cross-chat-private")
+        self._hold("ещё текст", "openai-key")
         opened = [t for t in tasks.list_open() if t.get("target") == "held:-100200"]
         self.assertEqual(len(opened), 1)
 
     def test_credential_hold_keeps_gist_out_of_agenda(self):
         import tasks
 
-        self._hold("вот ключ sk-abc123secret", "privacy:credential", chat="-100300")
+        self._hold("вот ключ sk-abc123secret", "openai-key", chat="-100300")
         opened = [t for t in tasks.list_open() if t.get("target") == "held:-100300"]
         self.assertEqual(len(opened), 1)
         self.assertNotIn("sk-abc123secret", opened[0]["goal"])
         self.assertIn("privacy:credential", opened[0]["goal"])
+
+    def test_without_a_credential_her_word_goes_out_and_wakes_nobody(self):
+        import tasks
+
+        out = self._hold("Точный размер кодовой базы сейчас не назову.", "")
+        self.assertEqual(out, "Точный размер кодовой базы сейчас не назову.")
+        self.assertEqual(tasks.list_open(), [])
 
     def test_her_own_silence_choice_wakes_nobody(self):
         import agent
         import tasks
 
         group = agent.ChannelContext(chat_id="-100200", principal_id="202", is_dm=False)
-        with mock.patch.object(agent, "evaluate_reply") as evaluate, \
+        with mock.patch.object(agent._core_secrets, "credential_floor") as floor, \
                 mock.patch.object(agent.turns, "record"), \
                 mock.patch.object(agent.identity, "load_from_turn"), \
                 mock.patch.object(agent.notes, "append"):
             out = agent.guard_outbound_reply("[молчу]", ctx=group, turn={"kind": "chat"})
         self.assertEqual(out, "")
-        evaluate.assert_not_called()
+        floor.assert_not_called()
         self.assertEqual(tasks.list_open(), [])
 
     def test_wake_failure_never_breaks_the_hold(self):
-        import agent
         import tasks
 
         with mock.patch.object(tasks, "add", side_effect=RuntimeError("disk full")):
-            out = self._hold("текст", "privacy:cross-chat-private")
+            out = self._hold("текст", "openai-key")
         self.assertEqual(out, "")
 
 

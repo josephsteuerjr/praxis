@@ -632,13 +632,10 @@ class Platform(unittest.TestCase):
         self.assertIn("Owner-only root of trust for computer access", said)
         self.assertNotIn("Windows", said)
         self.assertEqual(body.mac_access_tool_text(said), said, "не идемпотентно")
-        # Словарь не мёртвый: каждой паре есть что заменить в ЖИВОМ описании дерева.
-        agent_src = (Path(__file__).resolve().parents[2] / "helene" / "core" / "agent.py")
-        if agent_src.is_file():
-            live = agent_src.read_text(encoding="utf-8")
-            for old_text, _ in body.MAC_ACCESS_TOOL_TEXT:
-                self.assertIn(old_text, live,
-                              f"замена мёртвая — в дереве такой подстроки нет: {old_text!r}")
+        # Retained pre-port agent source can still carry this schema. New Hélène
+        # no longer offers computer_access; translation alone must not add it.
+        agent_src = Path(__file__).resolve().parents[2] / 'helene/core/agent.py'
+        self.assertNotIn('"name": "computer_access"', agent_src.read_text(encoding='utf8'))
 
         tool = {"name": "computer_access", "description": _ACCESS_TOOL_TEXT}
         other = {"name": "shell", "description": "Windows shell"}

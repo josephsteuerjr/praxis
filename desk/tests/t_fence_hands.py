@@ -74,11 +74,12 @@ class Ground(unittest.TestCase):
     же процессе, а прогон у продукта общий.
     """
 
-    TOUCHED = ("agent", "workshop", "hands", "forge_process")
+    TOUCHED = ("agent", "workshop", "hands", "forge_process", "command_execution")
 
     def setUp(self):
         self._state = dict(fence.STATE)
         self._modules = {n: sys.modules.get(n) for n in self.TOUCHED}
+        sys.modules["command_execution"] = types.SimpleNamespace(home_runner=lambda *a: None)
 
     def tearDown(self):
         fence.STATE.clear()
@@ -109,11 +110,11 @@ class Report(Ground):
         """Приговор снимается с ОБЁРТКИ, а не с имени руки."""
         agent = agent_with()
         rows = fence.hands_report(agent)
-        self.assertEqual(verdict(rows, "fs_write"), "outside")
+        self.assertEqual(verdict(rows, "edit"), "outside")
 
-        agent.TOOL_IMPL["fs_write"]._helene_fenced = True
+        agent.TOOL_IMPL["edit"]._helene_fenced = True
         rows = fence.hands_report(agent)
-        self.assertEqual(verdict(rows, "fs_write"), "path")
+        self.assertEqual(verdict(rows, "edit"), "path")
 
     def test_shell_is_named_fenced_only_when_the_shim_and_the_container_are_both_up(self):
         """Два условия, и оба настоящие: шим в модуле руки И поднятый контейнер.
@@ -125,12 +126,11 @@ class Report(Ground):
         agent = agent_with()
         sys.modules["agent"] = agent
 
-        agent.subprocess = object()
+        sys.modules["command_execution"] = types.SimpleNamespace(home_runner=None)
         fence.STATE["container"] = True
         self.assertEqual(verdict(fence.hands_report(agent), "shell"), "outside")
 
-        agent.subprocess = fence._SubprocessShim(
-            __import__("subprocess"), None, Path("."), Path("."))
+        sys.modules["command_execution"].home_runner = lambda *a: None
         fence.STATE["container"] = True
         self.assertEqual(verdict(fence.hands_report(agent), "shell"), "container")
 
@@ -153,7 +153,7 @@ class Report(Ground):
         sys.modules["workshop"] = types.SimpleNamespace(subprocess=object())
         sys.modules.pop("hands", None)
         rows = fence.hands_report(agent_with())
-        for name in ("run", "run_tests", "pip_install"):
+        for name in ("project",):
             self.assertEqual(verdict(rows, name), "outside", name)
             self.assertIn("workshop", why(rows, name), name)
 
@@ -168,12 +168,12 @@ class Report(Ground):
         sys.modules["hands"] = types.SimpleNamespace(subprocess=object())
         fence.STATE["container"] = True
         rows = fence.hands_report(agent_with())
-        self.assertEqual(verdict(rows, "run"), "outside")
-        self.assertIn("hands", why(rows, "run"))
+        self.assertEqual(verdict(rows, "project"), "outside")
+        self.assertIn("hands", why(rows, "project"))
 
         sys.modules["hands"] = types.SimpleNamespace(subprocess=shim)
         rows = fence.hands_report(agent_with())
-        self.assertEqual(verdict(rows, "run"), "container")
+        self.assertEqual(verdict(rows, "project"), "container")
 
     def test_the_body_hand_is_outside_by_design_and_says_so(self):
         """`computer` вне ограды НЕ по недосмотру: тело живёт снаружи контейнера.
@@ -204,9 +204,9 @@ class Report(Ground):
         Молча вычёркивать нельзя: тогда переименованная ею рука тихо исчезнет из
         отчёта, и «вне ограды» про неё никто больше не скажет.
         """
-        rows = fence.hands_report(agent_with(without=("run",)))
-        self.assertEqual(verdict(rows, "run"), "unknown")
-        self.assertIn("нет", why(rows, "run"))
+        rows = fence.hands_report(agent_with(without=("project",)))
+        self.assertEqual(verdict(rows, "project"), "unknown")
+        self.assertIn("нет", why(rows, "project"))
 
     def test_no_agent_module_means_an_empty_report_not_a_crash(self):
         """Снимок устройства пишется и до загрузки дерева — падать здесь нельзя."""
@@ -233,9 +233,9 @@ class Map(Ground):
                    if "команд" in touches}
         self.assertEqual(
             running,
-            {"shell", "run", "run_tests", "pip_install",
+            {"shell", "python", "project", "proposal",
              "coding_run", "coding_process", "coding_agent", "coding_verify",
-             "coding_swarm", "coding_checkpoint", "coding_session"})
+             "coding_swarm", "coding_checkpoint", "coding_session", "coding_review"})
 
     def test_the_whole_forge_family_is_accounted_for(self):
         """Forge — десять рук, и почти все трогают машину.
@@ -250,7 +250,7 @@ class Map(Ground):
             family,
             {"coding_run", "coding_process", "coding_agent", "coding_verify",
              "coding_swarm", "coding_checkpoint", "coding_session",
-             "coding_edit", "coding_inspect", "coding_learn"})
+             "coding_control", "coding_review", "coding_inspect", "coding_learn"})
         for name in family:
             self.assertIn(name, fence.OUTSIDE_BY_DESIGN, name)
             self.assertIn("worktree", fence.OUTSIDE_BY_DESIGN[name], name)

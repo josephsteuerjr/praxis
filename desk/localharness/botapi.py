@@ -53,6 +53,21 @@ from transport import _append_jsonl, _registry, _write_json, is_room
 
 log = logging.getLogger("frame.botapi")
 
+
+def _replace_archive(path: Path, rows) -> None:
+    """Flush archive bytes before publishing its new file generation."""
+    temporary = path.with_name('.telegram-' + uuid.uuid4().hex + '.tmp')
+    try:
+        with temporary.open('x', encoding='utf-8', newline='\n') as output:
+            for row in rows:
+                output.write(json.dumps(row, ensure_ascii=False) + '\n')
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 _MSG_LIMIT = 4096          # потолок sendMessage; длиннее — режем по абзацам
 _CAPTION_LIMIT = 1024
 _POLL_TIMEOUT = 25         # long-poll: столько держит сервер, +10 наш сокет
@@ -409,20 +424,14 @@ class Rooms:
                 existing.update(row)
                 if edited:
                     existing["edited"] = True
-                tmp = archive.with_name(".telegram-" + uuid.uuid4().hex + ".tmp")
-                tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
-                               encoding="utf-8", newline="\n")
-                os.replace(tmp, archive)
+                _replace_archive(archive, rows)
             else:
                 published = capture(dict(row)) if capture is not None else None
                 if historical and rows:
                     rows.append(row)
                     rows.sort(key=lambda r: (str(r.get("timestamp") or ""),
                                              int(r.get("source_message_id") or 0) if str(r.get("source_message_id") or '').lstrip('-').isdigit() else 0))
-                    tmp = archive.with_name(".telegram-" + uuid.uuid4().hex + ".tmp")
-                    tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
-                                   encoding="utf-8", newline="\n")
-                    os.replace(tmp, archive)
+                    _replace_archive(archive, rows)
                 else:
                     _append_jsonl(archive, row)
                 if published is not None:
@@ -472,9 +481,7 @@ class Rooms:
             published = (self.pending_inputs.media_update(chat_id, source_id, expected, media)
                          if self.pending_inputs is not None else None)
             row.pop('media_error',None);row.update(media)
-            temporary=archive.with_name('.telegram-'+uuid.uuid4().hex+'.tmp')
-            temporary.write_text(''.join(json.dumps(r,ensure_ascii=False)+'\n' for r in rows),encoding='utf-8')
-            os.replace(temporary,archive)
+            _replace_archive(archive, rows)
             if published is not None:
                 published()
         return True
@@ -520,9 +527,7 @@ class Rooms:
                         row['deleted'] = True
                         changed = True
                 if changed:
-                    tmp = path.with_name('.telegram-' + uuid.uuid4().hex + '.tmp')
-                    tmp.write_text(''.join(json.dumps(row, ensure_ascii=False) + '\n' for row in rows), encoding='utf-8')
-                    os.replace(tmp, path)
+                    _replace_archive(path, rows)
                     self._registry(path.stem, path)
 
     def dm_archives(self) -> list[str]:

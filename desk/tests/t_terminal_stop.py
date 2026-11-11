@@ -299,8 +299,11 @@ class Wiring(unittest.TestCase):
         self.assertIn("not isinstance(exc, RunStopped)", src,
                       "стоп владельца снова пишется в WAL как сбой модели")
         # Внутриходовые вызовы вне голосовой ноги — тоже под сторожем.
-        self.assertIn('_chat_cancellable("evaluator", max_tokens=_GUARD_VERDICT_MAX_TOKENS',
-                      src, "судья приватности снова пережидает стоп в своей сети")
+        # Судью приватности второй моделью сняли по слову владельца (11.11, «Снять обе,
+        # как у Пракс»): ждать стоп в его сети больше некому. Возврат судьи — отдельное
+        # решение, и тогда он обязан снова идти через сторожа.
+        self.assertNotIn('_chat_cancellable("evaluator"', src,
+                         "судья приватности вернулся — проверь, что он под сторожем стопа")
         self.assertIn('_chat_cancellable("voice", system=_SCOUT_FRAME',
                       src, "разведчик снова пережидает стоп в своей сети")
 

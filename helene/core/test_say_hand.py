@@ -1,8 +1,8 @@
-"""`say` — её собственный взгляд на реплику, и он засчитывается как рука.
+"""`preview_reply` — её собственный взгляд на реплику, и он засчитывается как рука.
 
 СМЫСЛ РУКИ НЕ В ТОМ, ЧТО ОНА ДЕЛАЕТ, А В ТОМ, ЧТО ОНА СЧИТАЕТСЯ.
 
-Система и так покажет зеркало, если рук не было. Но тогда это НАШ укол. Позвала `say`
+Система и так покажет зеркало, если рук не было. Но тогда это НАШ укол. Позвала `preview_reply`
 сама — счётчик рук больше нуля, продолжение не включается, и второй взгляд оказывается
 её ходом. Цена одинаковая, разница в том, чей ход.
 
@@ -25,11 +25,11 @@ import work_loop  # noqa: E402
 
 class TheHandIsOffered(unittest.TestCase):
     def test_it_is_registered_and_visible_in_every_room(self):
-        self.assertIs(agent.TOOL_IMPL["say"], agent.tool_say)
-        self.assertIn("say", {t["name"] for t in agent.BASE_TOOLS})
+        self.assertIs(agent.TOOL_IMPL["preview_reply"], agent.tool_say)
+        self.assertIn("preview_reply", {t["name"] for t in agent.BASE_TOOLS})
 
     def test_its_description_says_it_sends_nothing(self):
-        spec = next(t for t in agent.BASE_TOOLS if t["name"] == "say")
+        spec = next(t for t in agent.BASE_TOOLS if t["name"] == "preview_reply")
         self.assertIn("Ничего не отправляет", spec["description"])
 
 
@@ -75,7 +75,7 @@ class ItMirrorsAndStagesNothingElse(unittest.TestCase):
 
 class CallingItSatisfiesTheLook(unittest.TestCase):
     def test_a_turn_that_used_say_is_not_nudged_again(self):
-        """`say` увеличивает счёт рук — значит система молчит."""
+        """`preview_reply` увеличивает счёт рук — значит система молчит."""
         with mock.patch.dict("os.environ", {"PRAXIS_CHAT_FOLLOW_THROUGH": "on"}):
             keep, note = work_loop.chat_decide(
                 "Голос — terra.", kind="chat_turn", hands=1, spent=0)

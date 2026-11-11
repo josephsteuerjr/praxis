@@ -131,7 +131,7 @@ new file mode 100644
         task_id = self.start()
         out = forge.run(task_id, f'"{sys.executable}" -c "print(6*7)"', timeout=20)
         self.assertIn("42", out)
-        self.assertIn("[forge: ok", out)
+        self.assertIn("[command: ok", out)
         history = forge.inspect(task_id, "history", end=10)
         self.assertIn('"kind": "command"', history)
 
@@ -476,7 +476,7 @@ class ForgeAgentSurfaceCase(unittest.TestCase):
     def test_owner_surface_contains_complete_forge_control_plane(self):
         import agent
         names = {tool["name"] for tool in agent.OWNER_TOOLS}
-        expected = {"coding_session", "coding_inspect", "coding_edit", "coding_run",
+        expected = {"coding_session", "coding_inspect", "edit", "coding_run",
                     "coding_process", "coding_agent", "coding_checkpoint"}
         self.assertTrue(expected <= names)
         self.assertTrue(expected <= set(agent.TOOL_IMPL))

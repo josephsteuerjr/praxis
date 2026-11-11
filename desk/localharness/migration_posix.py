@@ -203,12 +203,13 @@ def cleanup_installation(old,new):
         if row['running']:raise RuntimeError('Old service restarted; retirement refused')
         if row['kind']=='systemd':_run([*row['command'],'disable',row['unit']],elevated=row['elevated'])
         else:_run(['launchctl','disable',row['target']],elevated=row['elevated'])
-    removed=[]
+    removed=[];retained=[]
     for folder in (Path.home()/'Desktop',Path.home()/'.local/share/applications',Path.home()/'.config/autostart'):
         for path in folder.glob('*.desktop'):
             if path.is_symlink():continue
             if desktop_binding(path,old):
-                path.unlink();removed.append(str(path))
+                try:path.unlink();removed.append(str(path))
+                except PermissionError:retained.append('Ярлык прежней программы остался (нет прав на удаление): '+str(path))
         for path in folder.glob('*.app'):
             if path.is_symlink():
                 if _inside(path.resolve(),Path(old).resolve()):path.unlink();removed.append(str(path))
@@ -218,7 +219,7 @@ def cleanup_installation(old,new):
                     try:(path/relative).rmdir()
                     except OSError:pass
                 removed.append(str(path))
-    return {'shortcuts_removed':removed,'services_disabled':bool(before),'legacy_uninstaller_used':False}
+    return {'shortcuts_removed':removed,'services_disabled':bool(before),'legacy_uninstaller_used':False,'retained':retained}
 
 
 def desktop_binding(path,root):
@@ -333,6 +334,7 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
     # Resolve each parent through held directory descriptors. A directory
     # exchanged for a link after inventory must never redirect deletion.
     root_fd=os.open(old,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    protected_files=[]
     try:
         for number,(name,digest) in enumerate(files.items(),1):
             check();parent=os.dup(root_fd)
@@ -350,12 +352,22 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
                     if (current.st_dev,current.st_ino)!=(opened.st_dev,opened.st_ino):
                         raise RuntimeError('Old program changed')
                     check();os.unlink(parts[-1],dir_fd=parent)
+            except PermissionError:
+                # 11.11 (Yegor): no administrator prompt for cleanup; the file stays and is named.
+                protected_files.append(name)
             except OSError as exc:
                 raise RuntimeError('Old program path changed or became linked') from exc
             finally:os.close(parent)
             if progress and number==len(files):progress({'stage':'removing_old','files':number,'total_files':len(files)})
     finally:os.close(root_fd)
-    return {'ok':True,'removed_files':len(files),'purge':False,'data_retained':True}
+    result={'ok':not protected_files,'removed_files':len(files)-len(protected_files),'purge':False,'data_retained':True}
+    if protected_files:
+        launchers=[n for n in protected_files if Path(n).name.lower() in ('helene','helene.app','python_app.py','helene-desktop')]
+        text=(f'Система не дала удалить без прав администратора {len(protected_files)} файл(ов) прежней программы в {old}. '
+              'Новая Hélène работает с твоими данными; эти файлы можно удалить вручную.')
+        if launchers:text+=' Прежнюю программу оттуда не запускай: данные теперь у новой.'
+        result.update(retained_files=sorted(protected_files)[:200],retained_count=len(protected_files),message=text)
+    return result
 
 
 

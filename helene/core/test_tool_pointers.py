@@ -73,7 +73,7 @@ class TestOffered(PointerBase):
         for n in names:
             self.assertTrue(n in agent.NATIVE_HAND_NAMES or n in ("describe", "call")
                             or "web_search" in str(n), n)
-        self.assertLess(len(json.dumps(offered, ensure_ascii=False)), 30000,
+        self.assertLess(len(json.dumps(offered, ensure_ascii=False)), 38000,
                         "родные руки со схемами — ~24 тыс. знаков против 70 тыс. манифеста")
         # 22.09: PRAXIS_TEST прячет от песочницы reply(721)+end_turn(990)+web_search(68),
         # и бюджет дважды «чинили» по зелёному тесту при красном бое. Мерим и боевой состав.
@@ -90,8 +90,11 @@ class TestOffered(PointerBase):
                 os.environ.pop("PRAXIS_CHAT_REPLY_HAND", None)
             live = list(offered) + [by_name[n] for n in ("reply", "end_turn")]
             live.append({"type": "web_search"})
-            self.assertLess(len(json.dumps(live, ensure_ascii=False)), 30000,
-                            "боевой состав (с reply/end_turn/web_search) — тоже под 30000")
+            # 22.10: по прямому решению Егора #8044 бюджет поднят до 32k;
+            # измерение реальной сериализованной схемы остаётся обязательным.
+            # 10.11: пакетные вложенные схемы files/edits и их договор добавлены по слову Егора; бюджет 38k.
+            self.assertLess(len(json.dumps(live, ensure_ascii=False)), 38000,
+                            "боевой состав (с reply/end_turn/web_search) — тоже под 38000")
 
     def test_catalog_keeps_the_full_hand_set(self):
         owner = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True, known=True, scope="owner")
@@ -99,11 +102,13 @@ class TestOffered(PointerBase):
         owner_names = _names(agent.catalog_tools_for(owner))
         self_names = _names(agent.catalog_tools_for(own))
         self.assertIn("shell", owner_names)
-        self.assertIn("admit", owner_names)
-        self.assertNotIn("admit", self_names, "admit — только человеческому владельцу")
+        # Егор 10.11: «ВЕЗДЕ ВСЕ ПРАВА» — её набор равен набору хода владельца (кроме reply,
+        # которому в её собственном ходе некому отвечать); пары владельца больше нет.
+        self.assertEqual(set(owner_names) - {"reply"}, set(self_names) - {"reply"})
+        self.assertFalse({"admit", "computer_access"} & set(owner_names))
         self.assertGreater(len(owner_names), 60)
 
-    def test_lever_off_restores_the_full_manifest(self):
+    def test_lever_off_offers_every_schema_natively(self):
         os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
         ctx = agent.ChannelContext.from_legacy("777", is_dm=True, owner=True, known=True, scope="owner")
         self.assertEqual(_names(agent.offered_tools_for(ctx)), _names(agent.catalog_tools_for(ctx)))
@@ -201,11 +206,12 @@ class TestDispatch(PointerBase):
 
     def test_authority_is_the_turn_catalog_not_tool_impl(self):
         own = agent.ChannelContext.from_legacy(None, is_dm=True, owner=False, known=True, scope="owner")
+        self.assertIn("reply", agent.TOOL_IMPL)
         with agent._bind_tool_catalog(own):
             block = {"type": "tool_use", "id": "t1", "name": "call",
-                     "input": {"name": "admit", "args_json": "{}"}}
+                     "input": {"name": "reply", "args_json": "{}"}}
             _out, dispatched, note = agent._unwrap_dispatch(block)
-        self.assertFalse(dispatched, "admit не в каталоге её собственного хода — call не расширяет власть")
+        self.assertFalse(dispatched, "reply не в каталоге её собственного хода — call не расширяет каталог")
         self.assertIn("нет", note)
 
     def test_lever_off_is_a_passthrough(self):

@@ -34,7 +34,9 @@ class FirstStartWindow(Application):
             if result['agent']:
                 from localharness.standalone_relay import ensure_configured
                 ensure_configured(self.root,config,self.publish)
-            self.publish({'stage':'ready' if result['agent'] else 'create','label':'Готово'})
+            # Leftovers Windows protected from a non-administrator stay visible here.
+            self.publish({'stage':'ready' if result['agent'] else 'create','label':'Готово',
+                          'cleanup_errors':list(result.get('cleanup_errors') or [])})
         except Exception as error:
             try:
                 from localharness.startup_diagnostics import record

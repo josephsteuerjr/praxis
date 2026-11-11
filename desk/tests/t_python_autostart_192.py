@@ -43,7 +43,8 @@ class AutostartTests(unittest.TestCase):
         self.registration=None
         def save(value):self.registration=value
         for stub in (patch.object(python_windows,'run_binding',side_effect=lambda:self.registration),
-                     patch.object(python_windows,'set_run',side_effect=save)):
+                     patch.object(python_windows,'set_run',side_effect=save),
+                     patch.object(python_windows,'startup_approval',return_value=None)):
             stub.start();self.addCleanup(stub.stop)
 
     def invoke(self,command,**args):

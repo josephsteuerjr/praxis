@@ -463,6 +463,8 @@ def main() -> int:
     config = Path(args.config).resolve()
     cfg = _read_config(config)
     base = config.parent
+    from check_target import check as check_server_target
+    check_server_target(base)
     tree = _tree(config, cfg)
     tree.mkdir(parents=True, exist_ok=True)
     import emergency_stop

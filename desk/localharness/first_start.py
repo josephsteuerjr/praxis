@@ -804,8 +804,25 @@ def retire_legacy(root,target,places,backend,plan,sources,primary,report,*,moder
             else:backend.remove(path)
     backend.shortcuts(roots,root if shortcuts else None)
     backend.assert_quiet(roots)
-    for path in [*old_roots,*siblings]:
-        if os.path.lexists(path):raise RuntimeError('Прежние файлы ещё не удалены: '+str(path))
+    return cleanup_leftovers(backend,[*old_roots,*siblings])
+
+
+def cleanup_leftovers(backend,roots,*,notes=True):
+    """11.11 (Yegor): what Windows protects from a non-administrator is named, not elevated.
+
+    A former folder may remain only because of paths the backend recorded as protected; any
+    other remainder is still a failure. Returns messages for the person.
+    """
+    kept=[Path(p) for p in getattr(backend,'leftovers',[]) if os.path.lexists(p)]
+    messages=list(getattr(backend,'notes',[])) if notes else []
+    for path in roots:
+        if not os.path.lexists(path):continue
+        inside=[k for k in kept if k==Path(path) or k.is_relative_to(path)]
+        if not inside:raise RuntimeError('Прежние файлы ещё не удалены: '+str(path))
+        messages.append(f'Windows не дала удалить без прав администратора {len(inside)} элемент(ов) прежней программы в {path}. '
+                        'Новая Hélène работает с твоими данными; эти файлы можно удалить вручную. '
+                        'Прежнюю программу оттуда не запускай: данные теперь у новой.')
+    return messages
 
 
 def sweep_legacy(root,*,places=None,backend=None,progress=None):
@@ -866,12 +883,15 @@ def sweep_legacy(root,*,places=None,backend=None,progress=None):
                 sources=[path for path in sources if path!=original]
                 if extracted not in sources:sources.append(extracted)
         archive_profiles(configs,target)
-        retire_legacy(root,target,places,backend,plan,sources,target,report,modern=True,shortcuts=False)
+        leftovers=retire_legacy(root,target,places,backend,plan,sources,target,report,modern=True,shortcuts=False)
         backend.assert_quiet(stop_roots)
         _write(target/'memory/.state/legacy-cleanup.json',{'format':'helene-legacy-cleanup.v1',
             'completed_at':dt.datetime.now(dt.timezone.utc).isoformat(),'program':str(root),
-            'retired':[str(p) for p in [*plan['old_roots'],*plan['siblings']]]},private=True)
-        return {'state':'completed','data':str(target),'retired':len(plan['old_roots'])+len(plan['siblings'])}
+            'retired':[str(p) for p in [*plan['old_roots'],*plan['siblings']] if not os.path.lexists(p)],
+            'leftovers':leftovers},private=True)
+        if leftovers:report({'stage':'cleanup','label':'Программа готова · остались прежние файлы','cleanup_errors':leftovers})
+        return {'state':'completed','data':str(target),'retired':len(plan['old_roots'])+len(plan['siblings']),
+                'cleanup_errors':leftovers}
 
 
 def prepare(root,*,places=None,backend=None,progress=None):
@@ -1005,9 +1025,11 @@ def prepare(root,*,places=None,backend=None,progress=None):
         _write(root/'helene.json',relative_config(config,root/'helene.json',root),private=True)
         _write(receipt(root),{'format':FORMAT,'state':'preparing','data':str(target),
             'sources':[str(path) for path in sources]})
-        retire_legacy(root,target,places,backend,plan,sources,primary,report,modern=modern_adoption)
+        leftovers=retire_legacy(root,target,places,backend,plan,sources,primary,report,modern=modern_adoption) or []
         for _row,_original,extracted in transfers if mixed else []:
             if extracted.parent.exists():backend.remove(extracted.parent)
+            if extracted.parent.exists():
+                leftovers.append('Временная копия разделённых данных осталась (Windows защитила файлы): '+str(extracted.parent))
         report({'stage':'reset','label':'Освобождаем данные от прежних запусков'})
         # A modern Python folder is another version of the same application,
         # not legacy migration debris. Preserve its durable work queues.
@@ -1033,10 +1055,11 @@ def prepare(root,*,places=None,backend=None,progress=None):
         from .portable_retirement import capture,seal
         retirement=capture(root,plan,places,assets,mode='archive')
         _write(receipt(root),{'format':FORMAT,'state':'completed','completed_at':dt.datetime.now(dt.timezone.utc).isoformat(),
-                             'data':str(target)})
+                             'data':str(target),**({'cleanup_errors':leftovers} if leftovers else {})})
         seal(root,retirement)
-        report({'stage':'completed','label':'Готово'})
-        return {'state':'completed','data':str(target),'agent':agent_exists(target)}
+        report({'stage':'completed','label':'Готово · остались прежние файлы' if leftovers else 'Готово',
+                **({'cleanup_errors':leftovers} if leftovers else {})})
+        return {'state':'completed','data':str(target),'agent':agent_exists(target),'cleanup_errors':leftovers}
 
 
 def handover(root,*,places=None):

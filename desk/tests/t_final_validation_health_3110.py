@@ -50,7 +50,7 @@ class MonitoredReads(unittest.TestCase):
         self.clock=0.;self.samples=[];self.sampled=threading.Condition()
         self.window=switch.HealthWindow(since=-switch.TRIAL_SECONDS,previous=0.,identity='generation')
         self.path=self.fx.root/'read-only-payload.bin';self.path.write_bytes(b'actual read bytes\n')
-        self.effects=[];self.backend=Mock()
+        self.effects=[];self.backend=Mock();self.backend.notes=[]
         self.backend.assert_quiet=Mock()
         self.backend.remove.side_effect=lambda root:(self.effects.append(('remove',root)),root.rmdir())
         self.enterContext(patch.object(windows_first_start,'Backend',return_value=self.backend))

@@ -988,6 +988,29 @@ def _read_lock(path: Path) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def _torn_lock_is_abandoned(path: Path) -> bool:
+    """Reclaim only a stable, old empty/zero-filled record left by a crash.
+
+    Fresh reservations, unreadable files and unknown nonzero contents keep
+    ownership protection. An ordinary heartbeat updates at least every10s.
+    """
+    try:
+        before = path.stat()
+        if time.time() - before.st_mtime <= _LOCK_FRESH_SEC:
+            return False
+        with path.open('rb') as source:
+            raw = source.read(16385)
+        after = path.stat()
+    except OSError:
+        return False
+    if (len(raw) > 16384 or raw.strip(b'\0') or
+            (before.st_ino, before.st_size, before.st_mtime_ns) !=
+            (after.st_ino, after.st_size, after.st_mtime_ns)):
+        return False
+    log.warning('замок дерева пуст или заполнен нулями и давно не обновлялся — восстанавливаю запуск')
+    return True
+
+
 def _lock_is_live(holder: dict) -> bool:
     """Владелец замка жив? Сомнение — в пользу ЖИВОГО: два агента хуже, чем один."""
     if not holder:
@@ -1076,7 +1099,7 @@ def claim_tree(tree: Path, *, agent: str = "", role: str = "", reclaim_stale: bo
             # A creator may have just reserved this name but not written its
             # JSON yet. Unknown is not a dead process. Explicit first birth
             # also never reclaims a pre-existing record, including stale ones.
-            if not holder or not reclaim_stale:
+            if not reclaim_stale or (not holder and not _torn_lock_is_abandoned(path)):
                 return holder or {"pid": 0, "state": "identity-unknown"}
             if _lock_is_live(holder):
                 return holder
@@ -1114,11 +1137,29 @@ def refresh_tree_lock() -> None:
         _LOCK["path"] = None
         return
     holder.update({"pid": os.getpid(), "at": time.time(), "token": token})
+    # Never truncate the live ownership record. Persist the complete heartbeat
+    # before atomic replacement so a crash leaves the preceding record intact.
+    import tempfile
+    spare = None
     try:
-        path.write_text(json.dumps(holder, ensure_ascii=False), encoding="utf-8",
-                        newline="\n")
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', newline='\n',
+                prefix=path.name+'.', suffix='.tmp', dir=path.parent, delete=False) as sink:
+            spare = Path(sink.name)
+            json.dump(holder, sink, ensure_ascii=False)
+            sink.flush()
+            os.fsync(sink.fileno())
+        current = _read_lock(path)
+        if current and current.get('token') != token:
+            _LOCK['path'] = None
+            log.warning('замок дерева сменил владельца во время пульса; чужую запись не меняю')
+            return
+        os.replace(spare, path)
     except OSError as exc:
         log.warning("замок дерева не подтверждён: %s", exc)
+    finally:
+        if spare is not None:
+            try:spare.unlink(missing_ok=True)
+            except OSError:pass
 
 
 def release_tree() -> None:

@@ -53,7 +53,7 @@ NAME = re.compile(r"Yegor|Егор|Egor")
 KNOWN_REMAINING = frozenset({
     "my_sends_today_digest", "tool_freeze_contact", "tool_recent_turns",
     "tool_mail_draft_reply", "tool_rest", "tool_send_message", "tool_narrate",
-    "tool_manage_identity", "tool_home_note", "_who", "outbound_privacy_frame",
+    "tool_manage_identity", "tool_home_note", "_who",
     "_mailbox_frame_block", "task_window", "_repl",
 })
 #: Единственный литерал в сборке промпта вне меток: заголовок домашнего слоя памяти.

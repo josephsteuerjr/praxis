@@ -154,9 +154,10 @@ def uninstall_before_attach(old,command,data_paths,*,progress=None,cancelled=Non
             # Older native uninstallers remove only normal product/agent
             # shortcut names and leave their emergency-stop variants behind.
             # Remove remaining links by exact old target, never by display name.
-            shortcuts=remove_shortcuts(old)
+            kept=[]
+            shortcuts=remove_shortcuts(old,retained=kept)
             return dict(receipt,method='native_uninstaller',old_processes_confirmed_dead=True,
-                        shortcuts_unpinned=unpinned,shortcuts_removed=shortcuts,
+                        shortcuts_unpinned=unpinned,shortcuts_removed=shortcuts,retained=kept,
                         empty_local=remove_empty_legacy_local())
         except RuntimeError:
             if time.monotonic()>=deadline:raise
@@ -509,10 +510,15 @@ def run_privileged(script,env,*,cwd=None):
         raise RuntimeError('Windows не разрешил операцию со старой программой. Подтверди запрос администратора; данные сохранены.')
 
 
-def system_action(old,action,files=None):
-    """Bound SCM/registry/tasks or an exact verified program-file deletion list."""
+def system_action(old,action,files=None,*,elevate=True):
+    """Bound SCM/registry/tasks or an exact verified program-file deletion list.
+
+    `elevate=False` (11.11, Yegor: cleanup of a previous installation must not ask for
+    administrator rights) runs the same bound script with the user's own token and raises
+    RuntimeError when Windows refuses; the caller reports what was left.
+    """
     if os.name!='nt':return
-    if action not in ('stop_service','cleanup','remove_files','restore_service'):raise ValueError('Unknown privileged action')
+    if action not in ('stop_service','cleanup','custody','registration','remove_files','restore_service'):raise ValueError('Unknown privileged action')
     import hashlib,uuid
     request=None
     env=dict(os.environ,HELENE_OLD_ROOT=str(Path(old).resolve()),HELENE_SYSTEM_ACTION=action)
@@ -533,8 +539,11 @@ $ours=$service -and (Bound $service.PathName)
 switch($env:HELENE_SYSTEM_ACTION){
  'stop_service'{if($ours){$s=Get-Service Helene;if($s.Status -ne 'Stopped'){$s.Stop();$s.WaitForStatus('Stopped',[TimeSpan]::FromSeconds(30))}}}
  'restore_service'{if(!$ours){throw 'Previous service binding changed'};Start-Service Helene}
- 'cleanup'{
+ {$_ -in @('cleanup','custody')}{
   if($ours){if($service.State -ne 'Stopped'){throw 'Previous service restarted'};& "$env:SystemRoot\System32\sc.exe" delete Helene|Out-Null;if($LASTEXITCODE -notin @(0,1060)){throw 'Service removal failed'}}
+  Get-ScheduledTask -ErrorAction SilentlyContinue|ForEach-Object {$t=$_;foreach($a in $t.Actions){if(Bound $a.Execute){Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false -ErrorAction Stop;break}}}
+ }
+ {$_ -in @('cleanup','registration')}{
   foreach($h in @([Microsoft.Win32.Registry]::LocalMachine)){
    foreach($view in @([Microsoft.Win32.RegistryView]::Registry64,[Microsoft.Win32.RegistryView]::Registry32)){
     $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,$view)
@@ -542,7 +551,6 @@ switch($env:HELENE_SYSTEM_ACTION){
     if($parent){foreach($name in $parent.GetSubKeyNames()){$key=$parent.OpenSubKey($name);$location=$key.GetValue('InstallLocation');$key.Close();if($location -and [IO.Path]::GetFullPath($location).TrimEnd('\').Equals($root,[StringComparison]::OrdinalIgnoreCase)){$parent.DeleteSubKeyTree($name)}};$parent.Close()};$base.Close()
    }
   }
-  Get-ScheduledTask -ErrorAction SilentlyContinue|ForEach-Object {$t=$_;foreach($a in $t.Actions){if(Bound $a.Execute){Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false -ErrorAction Stop;break}}}
  }
  'remove_files'{
   if((FileDigest $env:HELENE_RETIRE_MANIFEST) -ne $env:HELENE_RETIRE_SHA256){throw 'Retirement manifest changed'}
@@ -563,8 +571,8 @@ switch($env:HELENE_SYSTEM_ACTION){
     # Service elevation is explicit and narrow. Without a service, ordinary
     # per-user cleanup/process shutdown does not trigger a password request.
     try:
-        if admin():return powershell(script,env)
-        if action in ('stop_service','restore_service') or (action=='cleanup' and service(old)):
+        if admin() or not elevate:return powershell(script,env)
+        if action in ('stop_service','restore_service') or (action in ('cleanup','custody') and service(old)):
             return run_privileged(script,env)
         try:return powershell(script,env)
         except RuntimeError:return run_privileged(script,env)
@@ -642,16 +650,30 @@ def unpin_shortcuts(old,folders=None):
     return unpinned
 
 
-def remove_shortcuts(old,folders=None):
+def remove_shortcuts(old,folders=None,retained=None):
+    """Remove the old programme's links with the user's own rights.
+
+    A link Windows protects (an all-users Start menu entry) is never removed through an
+    administrator prompt; it lands in `retained` as a message for the person.
+    """
     removed=[]
     for path in owned_shortcuts(old,folders):
         unpin_shortcut(path)  # failure keeps the identity and is reported
         try:path.unlink()
         except PermissionError:
-            env=dict(os.environ,HELENE_LINK=str(path))
-            run_privileged("$ErrorActionPreference='Stop';Remove-Item -LiteralPath $env:HELENE_LINK -Force",env)
+            if retained is not None:
+                retained.append('Ярлык прежней программы остался: удалить его можно только с правами администратора — '+str(path))
+            continue
         removed.append(str(path))
     return removed
+
+
+def retained_program_message(old,count,launchers):
+    text=(f'Windows не дала удалить без прав администратора {count} файл(ов) прежней программы в {old}. '
+          'Новая Hélène работает с твоими данными; эти файлы можно удалить вручную.')
+    if launchers:
+        text+=' Прежнюю программу оттуда не запускай: данные теперь у новой.'
+    return text
 
 
 def remove_empty_legacy_local():
@@ -694,17 +716,41 @@ def cleanup_installation(old,new):
                     except FileNotFoundError:continue
                 if Path(location).resolve()==old:winreg.DeleteKeyEx(winreg.HKEY_CURRENT_USER,base+'\\'+name,view,0)
         except FileNotFoundError:pass
-    # Avoid asking for admin just to enumerate empty HKLM/task registrations.
-    if service(old) or has_system_registration(old):system_action(old,'cleanup')
-    return {'shortcuts_removed':remove_shortcuts(old),'legacy_uninstaller_used':False,
-            'empty_local':remove_empty_legacy_local()}
+    retained=[]
+    unhook(old,retained)
+    return {'shortcuts_removed':remove_shortcuts(old,retained=retained),'legacy_uninstaller_used':False,
+            'empty_local':remove_empty_legacy_local(),'retained':retained}
+
+
+REGISTRATION_LEFTOVER=('Запись прежней программы в списке «Приложения» Windows осталась: её удаление '
+                       'требует прав администратора. На работу новой Hélène это не влияет.')
+
+
+def unhook(old,retained):
+    """Detach the old programme from Windows without an administrator prompt for cleanup.
+
+    11.11 (Yegor): cleanup never asks for administrator rights. Only what could start the
+    old programme as a second data writer — its Windows service or a scheduled task bound
+    to it — is custody; an old system service already needed elevation to be stopped. The
+    machine-wide uninstall entry is cosmetic: removed with the user's rights or reported.
+    """
+    found=system_registrations(old)
+    if service(old) or 'task' in found:system_action(old,'custody')
+    if 'uninstall' in found:
+        try:system_action(old,'registration',elevate=False)
+        except RuntimeError:retained.append(REGISTRATION_LEFTOVER)
+
+
+def system_registrations(old):
+    """Read-only discovery of HKLM uninstall entries and scheduled tasks bound to `old`."""
+    env=dict(os.environ,HELENE_OLD_ROOT=str(Path(old).resolve()))
+    raw=powershell(r'''$r=$env:HELENE_OLD_ROOT;$found=@();foreach($p in @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')){foreach($v in Get-ItemProperty $p -ErrorAction SilentlyContinue){if($v.InstallLocation -and $v.InstallLocation.TrimEnd('\').Equals($r,[StringComparison]::OrdinalIgnoreCase)){$found+='uninstall'}}};foreach($t in Get-ScheduledTask -ErrorAction SilentlyContinue){foreach($a in $t.Actions){if($a.Execute -and $a.Execute.Trim('"').StartsWith($r+'\',[StringComparison]::OrdinalIgnoreCase)){$found+='task'}}};($found|Sort-Object -Unique) -join ';' ''',env)
+    return {part for part in str(raw or '').strip().split(';') if part}
 
 
 def has_system_registration(old):
     """Read-only discovery; no elevation for installations with no system hooks."""
-    env=dict(os.environ,HELENE_OLD_ROOT=str(Path(old).resolve()))
-    raw=powershell(r'''$r=$env:HELENE_OLD_ROOT;$found=$false;foreach($p in @('HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')){foreach($v in Get-ItemProperty $p -ErrorAction SilentlyContinue){if($v.InstallLocation -and $v.InstallLocation.TrimEnd('\').Equals($r,[StringComparison]::OrdinalIgnoreCase)){$found=$true}}};foreach($t in Get-ScheduledTask -ErrorAction SilentlyContinue){foreach($a in $t.Actions){if($a.Execute -and $a.Execute.Trim('"').StartsWith($r+'\',[StringComparison]::OrdinalIgnoreCase)){$found=$true}}};if($found){'yes'}''',env)
-    return raw=='yes'
+    return bool(system_registrations(old))
 
 
 def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=None):
@@ -805,12 +851,18 @@ def remove_program(old,new,note,*,before_start=False,progress=None,cancelled=Non
                     path.unlink();removed+=1;removed_bytes+=expected['size']
                     publish(files=removed,total_files=len(files),bytes=removed_bytes);continue
                 except PermissionError:pass
-            # Elevated deletion still receives an exact digest-bound list;
-            # ordinary per-user retirement need not read gigabytes twice.
-            with path.open('rb') as stream:remaining[name]=hashlib.file_digest(stream,'sha256').hexdigest()
+            # 11.11 (Yegor): cleaning up the previous installation never asks for
+            # administrator rights. A file Windows protects stays where it is and is
+            # named in the result; the old programme is already stopped and unhooked.
+            remaining[name]=expected
         publish(files=removed,total_files=len(files),bytes=removed_bytes)
-    if remaining:system_action(old,'remove_files',remaining)
-    if any((old/name).exists() for name in files):raise RuntimeError('Some old program files remain')
-    publish(files=len(files),total_files=len(files),bytes=sum(v['size'] for v in files.values()),force=True)
+    if any((old/name).exists() for name in files if name not in remaining):raise RuntimeError('Some old program files remain')
+    publish(files=removed,total_files=len(files),bytes=removed_bytes,force=True)
     launchers=[name for name in ('helene.exe','Helene.exe','helene-setup.exe','app/python_app.py') if (old/name).is_file()]
-    return {'ok':not launchers,'removed_files':len(files),'retained_program_entries':launchers,'purge':False,'data_retained':True}
+    retained=sorted(remaining)
+    result={'ok':not launchers and not retained,'removed_files':removed,'retained_program_entries':launchers,
+            'purge':False,'data_retained':True}
+    if retained:
+        result.update(retained_files=retained[:200],retained_count=len(retained),
+                      message=retained_program_message(old,len(retained),launchers))
+    return result

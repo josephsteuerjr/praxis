@@ -310,7 +310,7 @@ class Container:
 
     # --- профиль -------------------------------------------------------------
 
-    def profile(self) -> str:
+    def profile(self, *, hand_socket=None) -> str:
         """Профиль SBPL для этой установки. Отдельным методом ради стендов."""
         root, tree, home = _abs(self.root), _abs(self.tree), _abs(self.workspace)
         tmp = home / ".tmp"
@@ -424,6 +424,12 @@ class Container:
         else:
             lines.append(";; Сети нет: ни наружу, ни к локальным сокетам (в том числе DNS).")
             lines.append("(deny network*)")
+        if hand_socket:
+            endpoint = _q(_abs(hand_socket))
+            lines.append(";; Only this live invocation's parent IPC endpoint.")
+            lines.append("(allow system-socket (socket-domain AF_UNIX))")
+            lines.append(f"(allow file-read* file-write-data (literal {endpoint}))")
+            lines.append(f"(allow network-outbound (remote unix-socket (path-literal {endpoint})))")
         return "\n".join(lines) + "\n"
 
     # --- запуск --------------------------------------------------------------
@@ -479,17 +485,17 @@ class Container:
         out.setdefault("LANG", "en_US.UTF-8")
         return out
 
-    def argv(self, argv: list[str], cwd: Path) -> list[str]:
+    def argv(self, argv: list[str], cwd: Path, *, hand_socket=None) -> list[str]:
         """Полная командная строка sandbox-exec. Отдельным методом ради стендов.
 
         `cwd` здесь не участвует: рабочую папку ставит `subprocess` (см. `run`),
         как и у bubblewrap `--chdir`; параметр оставлен ради одного контракта
         с ним.
         """
-        return [self.sandbox_exec or SANDBOX_EXEC, "-p", self.profile(), "--"] \
+        return [self.sandbox_exec or SANDBOX_EXEC, "-p", self.profile(hand_socket=hand_socket), "--"] \
             + self._runtime_first(list(argv))
 
-    def run(self, argv: list[str], cwd: Path, timeout: float) -> tuple[str, int, bool]:
+    def run(self, argv: list[str], cwd: Path, timeout: float, *, stdin=None, env=None) -> tuple[str, int, bool]:
         """Запустить argv в ограде; -> (вывод, код, прервано по таймауту).
 
         Тот же кортеж, что у виндовой ограды: шим (`fence._SubprocessShim`) о
@@ -507,13 +513,19 @@ class Container:
             # ограды. OSError здесь снял бы ограду до конца сессии (шим читает
             # его как «контейнер не запустил команду»).
             return (f"рабочая папка не существует: {where}", 1, False)
-        line = self.argv(argv, where)
+        from fence import _hand_socket, _observe_launch
+        line = self.argv(argv, where, hand_socket=_hand_socket(env))
         limit = max(1.0, float(timeout))
         _ensure_soft_exit_hook()
-        proc = subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, cwd=str(where), env=self.env(),
+        child_env = self.env()
+        for key in ('PRAXIS_HAND_BRIDGE', 'PRAXIS_EDIT_CONTEXT', 'PRAXIS_HAND_FILE_POLICY', 'PRAXIS_BASE', 'PYTHONPATH'):
+            if env and key in env: child_env[key] = env[key]
+        import process_scope
+        proc = process_scope.spawn(line, stdin=stdin if stdin is not None else subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, cwd=str(where), env=child_env,
                                 start_new_session=True)
         _register_pgid(proc.pid)        # pgid == pid: своя сессия
+        _observe_launch(line, where, proc.pid)
         try:
             raw, _ = proc.communicate(timeout=limit)
         except subprocess.TimeoutExpired as expired:
@@ -524,6 +536,7 @@ class Container:
             # несёт третий элемент кортежа (timed=True).
             return (_decode(raw), 124, True)
         finally:
+            process_scope.release(proc)
             # Прямой ребёнок вышел, но фоновый внук (`server &`) мог остаться в
             # группе: пустую — забываем, живую — держим, чтобы снять при выходе
             # движка (killpg в atexit/мягком выходе), как job-объект на Windows.

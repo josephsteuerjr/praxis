@@ -159,7 +159,12 @@ class PortableRefreshTests(unittest.TestCase):
         old_records = record_hashes(f.donor, preserved)
         for platform in refresh.PLATFORMS:
             with self.subTest(platform=platform):
-                plan, replacements, removed = f.plan(platform)
+                # This fixture contains text placeholders for native binaries.
+                # Exercise native rebuild dispatch here; actual clang/signing
+                # and resulting launcher are qualified on both macOS builders.
+                with unittest.mock.patch.object(refresh, '_macos_bootstrap') as native_build:
+                    plan, replacements, removed = f.plan(platform)
+                self.assertEqual(native_build.call_count, int(platform == 'macos'))
                 target = self.root / (platform + '.zip')
                 receipt = refresh.build(f.donor, target, plan, replacements, removed, expected_plan=plan['sha256'])
                 self.assertFalse(receipt['native_qualified'])

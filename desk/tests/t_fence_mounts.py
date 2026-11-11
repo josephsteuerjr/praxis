@@ -428,6 +428,9 @@ class Fenced(unittest.TestCase):
 
             def sync_mounts(self, rows):
                 pass
+
+            def run(self, *args, **kwargs):
+                raise AssertionError('Mount-only fixture must not execute commands')
         return Fake
 
     def agent_with(self, cfg):
@@ -435,7 +438,7 @@ class Fenced(unittest.TestCase):
         seen = []
         agent = types.SimpleNamespace(
             TOOL_IMPL={"fs_read": lambda path="": seen.append(("read", path)) or "ок",
-                       "fs_write": lambda path="", content="":
+                       "edit": lambda path="", content="", **kwargs:
                            seen.append(("write", path)) or "ок"},
             BASE_TOOLS=[], BASE=str(self.g.tree), subprocess=__import__("subprocess"))
         fence.install(agent, self.g.tree, cfg, config_path=self.g.config)
@@ -445,7 +448,7 @@ class Fenced(unittest.TestCase):
         agent, seen = self.agent_with(_cfg([str(self.g.outside)]))
         target = str(self.g.outside / "а.txt")
         self.assertEqual(agent.TOOL_IMPL["fs_read"](path=target), "ок")
-        said = agent.TOOL_IMPL["fs_write"](path=target, content="x")
+        said = agent.TOOL_IMPL["edit"](path=target, content="x")
         self.assertIn("только на чтение", said)
         self.assertIn("mount_request", said)
         self.assertEqual(seen, [("read", target)])
@@ -462,7 +465,15 @@ class Fenced(unittest.TestCase):
         self.assertIn("вне разрешённого", agent.TOOL_IMPL["fs_read"](path=target))
         self.g.write(_cfg([{"path": str(self.g.other), "access": "write"}]))
         self.assertEqual(agent.TOOL_IMPL["fs_read"](path=target), "ок")
-        self.assertEqual(agent.TOOL_IMPL["fs_write"](path=target, content="x"), "ок")
+        self.assertEqual(agent.TOOL_IMPL["edit"](path=target, content="x"), "ок")
+
+    def test_batch_refuses_an_unmounted_member_before_any_write(self):
+        agent, seen = self.agent_with(_cfg([{'path':str(self.g.outside),'access':'write'}]))
+        answer=agent.TOOL_IMPL['edit'](action='batch',files=[
+            {'path':str(self.g.outside/'allowed.txt'),'old':'a','new':'b'},
+            {'path':str(self.g.other/'unmounted.txt'),'old':'a','new':'b'}])
+        self.assertIn('вне разрешённого',answer)
+        self.assertEqual(seen,[])
 
 
 class Windows(unittest.TestCase):

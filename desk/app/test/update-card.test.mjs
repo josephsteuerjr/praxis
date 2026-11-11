@@ -29,11 +29,13 @@ const visible = (html) => html.replace(/<details[\s\S]*?<\/details>/g, "");
 assert.equal(updateCardHTML(null, { inContainer: false }), "");
 assert.equal(updateCardHTML({ updater: { present: false }, receipt: null }, { inContainer: false }), "");
 
-// Сервер без исполнителя — одна команда словами, без кнопок.
+// Сервер без исполнителя — 11.11 (Егор): никаких ручных скриптов. Исполнителя ставит само
+// приложение на компьютере по SSH; карточка называет, где эта кнопка.
 {
   const html = updateCardHTML({ updater: { present: false, command: "sh server/install.sh" }, receipt: null }, { inContainer: true });
-  assert.match(html, /sh server\/install\.sh/);
-  assert.match(html, /одной кнопкой/);
+  assert.doesNotMatch(html, /install\.sh/, "no manual script for the person");
+  assert.match(html, /«Обновить сервер»/);
+  assert.match(html, /приложение Hélène/);
   assert.doesNotMatch(html, /<button/);
   assert.doesNotMatch(html, /docker compose/);
 }

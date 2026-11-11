@@ -71,7 +71,10 @@ class Findings(unittest.TestCase):
         self.patch('_remote_client', lambda _: None)
         self.patch('_stop_foreground', lambda _: (False, 'group census unavailable'))
         self.patch('_RUNNERS', {})
-        with mock.patch('command_process.CommandProcess', return_value=proc) as constructor:
+        # This custody fixture forbids all real subprocesses, including the new
+        # read-only Git workspace witnesses. Their native tests run separately.
+        with mock.patch('command_process.CommandProcess', return_value=proc) as constructor, \
+             mock.patch('command_execution.workspace_snapshot', return_value=None):
             result = forge.run(self.tid, 'echo test', timeout=1, _parent_request_path=str(parent/'request.json'))
         self.assertTrue(constructor.call_args.kwargs['defer_start'])
         proc.admit.assert_called_once_with()

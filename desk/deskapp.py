@@ -188,6 +188,7 @@ _DEVICE_PATHS = {"/api/state", "/api/chats", "/api/say", "/api/health", "/api/me
                  "/api/phone/settings", "/api/phone/settings/receipt",
                  "/api/phone/subscription",
                  "/api/phone/activity", "/api/phone/forge/tasks", "/api/phone/forge/events",
+                 "/api/phone/forge/payload",
                  "/api/rooms", "/api/runs", "/api/pulse", "/api/usage", "/api/allowances", "/tunnel", "/events",
                  "/api/containers", "/api/containers/restart", "/api/brain", "/api/brain-models",
                  "/api/interrupt", "/api/interrupt-step", "/api/panic", "/api/autonomy", "/api/voice/attachment"}
@@ -966,8 +967,8 @@ async def _r_phone_activity(c: Call):
 
 
 async def _r_phone_forge_tasks(c: Call):
-    from deskd import phone_activity
-    try:return await asyncio.to_thread(phone_activity.activity,readers.tree(),_int_arg(c.query,'limit',20,1,100),c.query.get('cursor',''))
+    from deskd import forge_snapshot
+    try:return await asyncio.to_thread(forge_snapshot.phone_activity,readers.tree(),_int_arg(c.query,'limit',20,1,100),c.query.get('cursor',''))
     except forge_reader.ReadError as error:return Fail(error.status,str(error))
 
 
@@ -976,6 +977,18 @@ async def _r_phone_forge_events(c: Call):
     try:return await asyncio.to_thread(phone_activity.events,readers.tree(),c.query.get('task_id',''),c.query.get('unit_id',''),
         _int_arg(c.query,'offset',0,0,2**53-1),_int_arg(c.query,'limit',50,1,100),c.query.get('generation',''),_int_arg(c.query,'after_seq',0,0,2**53-1))
     except forge_reader.ReadError as error:return Fail(error.status,str(error))
+
+
+async def _r_phone_forge_payload(c: Call):
+    if c.role not in ('owner', 'device'):
+        raise web.HTTPForbidden(text='Paired device required')
+    try:
+        return await asyncio.to_thread(forge_reader.payload, readers.tree(),
+            c.query.get('task_id', ''), c.query.get('unit_id', ''), c.query.get('sha256', ''),
+            c.query.get('kind', 'payload'), _int_arg(c.query, 'offset', 0, 0, 2**53-1),
+            _int_arg(c.query, 'limit', 8000, 1, 8000))
+    except forge_reader.ReadError as error:
+        return Fail(error.status, str(error))
 
 
 async def _forge_owner(c: Call, fn, *args, **kwargs):
@@ -991,7 +1004,8 @@ async def _forge_owner(c: Call, fn, *args, **kwargs):
 
 async def _r_forge_tasks(c: Call):
     if c.query.get('view') == 'active':
-        return await _forge_owner(c, forge_reader.activity,
+        from deskd import forge_snapshot
+        return await _forge_owner(c, forge_snapshot.activity,
                                   _int_arg(c.query, 'limit', 20, 1, 100), c.query.get('cursor') or '')
     return await _forge_owner(c, forge_reader.tasks, _int_arg(c.query, "limit", 30, 1, 100))
 
@@ -1021,9 +1035,12 @@ async def _r_forge_control(c: Call):
     if not isinstance(c.body, dict):
         raise web.HTTPBadRequest(text="Expected a Forge control object")
     value = c.body
-    return await _forge_owner(c, forge_control.enqueue, value.get("task_id") or "",
+    result = await _forge_owner(c, forge_control.enqueue, value.get("task_id") or "",
                               value.get("action") or "", value.get("agent_id") or "",
                               value.get("expected_generation") or "", value.get("command_id") or "")
+    from deskd import forge_snapshot
+    forge_snapshot.invalidate()
+    return result
 
 
 async def _r_forge_receipt(c: Call):
@@ -1711,6 +1728,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/phone/activity", _r_phone_activity),
     Route("GET", "/api/phone/forge/tasks", _r_phone_forge_tasks),
     Route("GET", "/api/phone/forge/events", _r_phone_forge_events),
+    Route("GET", "/api/phone/forge/payload", _r_phone_forge_payload),
     Route("GET", "/api/forge/tasks", _r_forge_tasks),
     Route("GET", "/api/forge/task", _r_forge_task),
     Route("GET", "/api/forge/events", _r_forge_events),

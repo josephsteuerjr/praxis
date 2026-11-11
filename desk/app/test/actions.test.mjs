@@ -30,8 +30,8 @@ const long = "echo " + "x".repeat(500) + "<script>alert(1)</script>";
 const html = show({ ms: 10, tools: [{ call_id: "a", tool: "shell", args: { cmd: long }, result: { head: "head", tail: "tail", truncated: true } }] });
 assert.match(html, /Команда/);
 assert.ok(html.includes("x".repeat(500)), "полная команда остаётся в подробностях");
-assert.match(html, /Запрос модели · команда/);
-assert.match(html, /Детали исполнения харнесса в этом ходе не записаны/);
+assert.match(html, /data-trace-tab="request"/);
+assert.match(html, /Фактическое исполнение в этом журнале не записано/);
 assert.doesNotMatch(html, /Исполнение харнесса<\/span>/);
 assert.equal(suppliedCommand({command:long}), long);
 assert.equal(suppliedCommand({cmd:long}), long);
@@ -40,10 +40,10 @@ const args = { command: long, cwd: 'workspace', timeout: 30, enabled: false, inp
 assert.deepEqual(toolParameters(args), [['cwd', 'workspace'], ['timeout', 30], ['enabled', false], ['input', null]]);
 assert.equal(args.command, long, 'readable projection must preserve original arguments');
 const trace = toolTraceHTML({tool: 'shell', args, execution: {handler: 'agent.tool_shell', argv: ['bash','-lc','cd /home && echo changed']}, model_observation: 'exact model result'}, 't', 'r');
-assert.ok(trace.indexOf('Запрос модели') < trace.indexOf('Исполнение харнесса'));
+assert.deepEqual([...trace.matchAll(/data-trace-tab="([^"]+)"/g)].map(m=>m[1]),['args','definition','execution','request','response']);
 assert.match(trace, /cd \/home &amp;&amp; echo changed/);
 assert.match(trace, /exact model result/);
-assert.doesNotMatch(trace, /не записаны/);
+assert.match(trace, /agent.tool_shell/);
 // Обрезанный результат: обе половины на месте, а между ними сказано, что
 // пропущено. Прежняя подпись «Сохранённый фрагмент результата» исчезла вместе
 // с переделкой ленты — теперь длинный текст раскрывается кнопкой.
@@ -51,7 +51,7 @@ assert.match(html, /пропущена часть результата/);
 assert.match(html, /head/);
 assert.match(html, /tail/);
 assert.match(html, /Показать целиком/);
-assert.match(html, /data-detail="tool:a"/);
+assert.match(html, /data-trace-key="\/tool:a"/);
 assert.doesNotMatch(html, /<script>/);
 assert.match(html, /&lt;script&gt;/);
 assert.match(show({ tools: [{ tool: "new_custom_tool" }] }), /new_custom_tool/);

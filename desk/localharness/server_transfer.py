@@ -177,7 +177,8 @@ def probe(raw,config_path=None):
         compose=docker and execute(client,'docker compose version --short',check=False)[0]==0
         exists=execute(client,f'test -e {directory}/helene.json',check=False)[0]==0
         nonempty=execute(client,f'test -d {directory} && test -n "$(ls -A {directory})"',check=False)[0]==0
-        supported=bool(re.search(r'(?m)^ID=(?:"?ubuntu"?|"?debian"?)$',os_info)) and arch=='x86_64'
+        # 11.11: ARM64 servers (aarch64) are a supported target, like x64.
+        supported=bool(re.search(r'(?m)^ID=(?:"?ubuntu"?|"?debian"?)$',os_info)) and arch in SERVER_ARCHES
         occupied=execute(client,'docker inspect '+container,check=False)[0]==0
         resumable=False
         if config_path:
@@ -190,8 +191,8 @@ def probe(raw,config_path=None):
         if port_busy[0]!=0:raise TransferError('Не удалось проверить занятость порта: на сервере нужен ss (iproute2)')
         port_busy=bool(port_busy[1].strip())
 
-    okay=root and arch=='x86_64' and (supported or docker and compose)
-    message='Сервер готов к переносу.' if okay else 'Для автоматической установки нужен администратор сервера Ubuntu/Debian x64.'
+    okay=root and arch in SERVER_ARCHES and (supported or docker and compose)
+    message='Сервер готов к переносу.' if okay else 'Для автоматической установки нужен администратор сервера Ubuntu/Debian x64 или ARM64.'
     if (nonempty or occupied or port_busy) and not resumable:
         okay=False;message='Папка, контейнер или порт уже заняты. Укажи отдельные параметры установки; существующие данные не изменены.'
     if port_busy and not resumable and not exists:
@@ -199,7 +200,8 @@ def probe(raw,config_path=None):
     if occupied and not exists and not resumable:
         okay=False;message='Имя контейнера Hélène уже занято другой установкой. Она не изменена; выбери другой сервер.'
     return {'ok':okay,'fingerprint':seen,'trusted':trusted,'root':root,'docker':docker and compose,
-            'supported':supported,'existing':exists,'resumable':resumable,'message':message}
+            'supported':supported,'existing':exists,'resumable':resumable,'message':message,'arch':arch,
+            'occupied':bool(nonempty or occupied or port_busy)}
 
 def digest(path):
     value=hashlib.sha256()
@@ -207,7 +209,10 @@ def digest(path):
         for block in iter(lambda:data.read(1024*1024),b''):value.update(block)
     return value.hexdigest()
 
-def make_program(root:Path,path:Path):
+SERVER_ARCHES=('x86_64','aarch64')
+
+
+def make_program(root:Path,path:Path,*,arch:str='x86_64'):
     allowed=('app','tree','server','requirements.txt','helene-build.json')
     if any(not (root/name).exists() for name in allowed):raise TransferError('В поставке нет полного комплекта для сервера. Скачай полную Windows-поставку Hélène')
     def include(info):
@@ -216,7 +221,10 @@ def make_program(root:Path,path:Path):
     with tarfile.open(path,'w:gz') as target:
         for name in allowed:target.add(root/name,arcname=name,filter=include)
         legacy=root/'helene-relay'
-        if legacy.is_file() and legacy.read_bytes()[:4]==b'\x7fELF':target.add(legacy,arcname='helene-relay',filter=include)
+        # The legacy relay binary in a desktop delivery is x86-64 Linux. An ARM64 server
+        # gets no foreign binary: the server image builds natively; only the ChatGPT
+        # subscription relay needs a native ARM build (server-linux-arm64 delivery).
+        if arch=='x86_64' and legacy.is_file() and legacy.read_bytes()[:4]==b'\x7fELF':target.add(legacy,arcname='helene-relay',filter=include)
 
 def kit_signature(path):
     rows=[]
@@ -290,6 +298,9 @@ def _run(raw,config_path:Path,program:Path):
     if checked.get('existing') and not checked.get('resumable'):raise TransferError('На сервере уже есть Hélène. Подключись к ней кнопкой «Сервер уже работает»; существующий агент не заменён')
     if not checked.get('docker') and not raw.get('install_docker'):raise TransferError('Для переноса требуется подготовить Docker. Разреши приложению сделать это в шаге подключения')
     expected=json.loads((program/'helene-build.json').read_text(encoding='utf-8-sig')).get('version')
+    if checked.get('arch')!='x86_64' and ((config.get('relay') or {}).get('enabled') or str((config.get('model') or {}).get('framework') or '')=='chatgpt'):
+        raise TransferError('Агент работает через подписку ChatGPT, а её реле в этой поставке собрано только для x64. '
+                            'На ARM-сервер его можно перенести с ключом API или выбрать x64-сервер; местная память не тронута')
     row=saved_transfer(config_path)
     if row.get('phase')=='server-stopped':
         if same_destination(row,{**raw,'fingerprint':checked['fingerprint']}):
@@ -315,7 +326,7 @@ def _run(raw,config_path:Path,program:Path):
             save_transfer(config_path,row)
     stage=directory+'.transfer-'+row['id']
     with tempfile.TemporaryDirectory(prefix='helene-server-kit-') as temporary:
-        kit=Path(temporary)/'program.tar.gz';make_program(program,kit)
+        kit=Path(temporary)/'program.tar.gz';make_program(program,kit,arch=checked.get('arch') or 'x86_64')
         signature=kit_signature(kit)
         if row.get('program_sha') and row['program_sha']!=signature:
             raise TransferError('Исходники программы изменились после начала переноса. Сохранённая серверная установка не заменена')

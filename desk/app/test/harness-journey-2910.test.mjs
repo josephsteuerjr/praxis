@@ -23,14 +23,14 @@ try {
   const source=stripTypeScriptTypes(readFileSync(new URL('window/panel.ts',kit),'utf8'));
   const fragment=source.slice(source.indexOf('function stepRows('),source.indexOf('\nfunction openLink('));
   const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;');
-  const render=new Function('clean','icon','esc','clip','fmtK','toolIcon','ACTIONS','toolTraceHTML','frameStripHTML','terminalLabel','textBox','subject','openLink',
-    fragment+';return stepRows;')(s=>s,()=>'',esc,steps.clip,String,()=>'',steps.ACTIONS,steps.toolTraceHTML,()=>'',steps.terminalLabel,steps.textBox,steps.subject,()=>'');
+  const render=new Function('clean','icon','esc','clip','fmtK','toolIcon','ACTIONS','toolTraceHTML','toolSummary','frameStripHTML','terminalLabel','textBox','subject','openLink',
+    fragment+';return stepRows;')(s=>s,()=>'',esc,steps.clip,String,()=>'',steps.ACTIONS,steps.toolTraceHTML,steps.toolSummary,()=>'',steps.terminalLabel,steps.textBox,steps.subject,()=>'');
   const row=render(detail,false).find(row=>row.key==='tool:real-call');
   assert(row,'actual durable call reaches production side-panel renderer');
-  assert.match(row.html,/Харнесс ·/);assert.match(row.html,/Запуск процесса · квитанция/);
-  assert.match(row.html,/REAL &lt;observed>/);assert.match(row.html,/harness &lt;requested>/);
-  assert.match(row.html,/Текст для следующего шага модели/);
-  assert(row.html.includes(esc(actual_process.argv[0])),'actual native executable is available in the trace');
+  assert.match(row.html,/data-trace-tab="execution"/);assert.match(row.html,/Вызов Python/);assert.match(row.html,/agent\.tool_shell\(/,'the Python hand is shown as the call the harness made');assert.match(row.html,/Процесс · exit 0/);
+  assert.match(row.html,/REAL &lt;observed&gt;/);assert.match(row.html,/harness &lt;requested&gt;/);
+  assert.match(row.html,/Ответ для модели/);
+  assert(row.html.includes(esc(JSON.stringify(actual_process.argv[0]).slice(1,-1))),'actual native executable is available in the JSON trace');
   assert.doesNotMatch(row.html,/<observed>|<requested>/,'recorded source/output remain inert');
   assert(!row.cls.includes(' open'),'new actions remain compact');
   console.log('Actual native process -> durable receipts -> desktop reader -> production panel PASS');

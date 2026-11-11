@@ -1,0 +1,44 @@
+{
+  "schema": "helene.owner-skill-revisions.v1",
+  "reason": "11.11.2026: Yegor asked to port Praxis hands to Helene. Five owner-supplied 1.5.9 skills named tools that no longer exist (start_proposal, project_create, the old coding_* hands). Each revision keeps the accepted 1.5.9 text in .shipped-history.json; existing agents receive it as a kit proposal, never as an overwrite. Lines that differ from the accepted text are held to the neutral-language contract, except exact tool-name substitutions listed here.",
+  "files": {
+    "code_proposals.md": {
+      "accepted": "fb701bc0a4398ecc446fef8d59c32441b0f9bd8db1e609fc109b51182ed01cf7",
+      "revised": "12c30245ce277a73e2641f55cefa935f4661f7d8ab38448f1e8d586398a0a709",
+      "substitutions": [
+        [
+          "`list_proposals`",
+          "`proposal(action=\"list\")`"
+        ]
+      ]
+    },
+    "coding_hands.md": {
+      "accepted": "c8d34966e4c8d819d23e16c54a6b3d9686eb48b278c0e080b702c0f41b7293e1",
+      "revised": "48cc44e00f13af1130e80df8c82c0658187f7e327215b90e8cde681453b7e832"
+    },
+    "file_compass.md": {
+      "accepted": "0c8106e80b9e289a1f9830b776d89270b260a2dfaf397923bbc8559c7fac51cc",
+      "revised": "ce84a5b3f9b23803588bfcca911b1f52b13fa9919dffcab11aec65eefe80e0f7",
+      "substitutions": [
+        [
+          "`project_create`",
+          "`project(action=\"create\")`"
+        ]
+      ]
+    },
+    "merge-gates-gnome-review.md": {
+      "accepted": "fcf78e61720bac4e4889f63bc443dee92c6e638646b255ba78f3355afc5b78cf",
+      "revised": "0067ad8d85e7094e809406b1a2a9560a34907d5ac381771fb730ebfb9df7a31d",
+      "substitutions": [
+        [
+          "submit_proposal",
+          "proposal(action=\"submit\")"
+        ]
+      ]
+    },
+    "working_with_hands.md": {
+      "accepted": "f190ecf0126e0cda68ef63001b6313a3cce90146a34e5de169e235d5a884f383",
+      "revised": "656a1163d911f6744585c91818a50fa1b41a76c4ef8379dfa1a2c65a0dced79b"
+    }
+  }
+}

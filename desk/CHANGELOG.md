@@ -1,3 +1,10 @@
+# 2.6.0 Beta
+
+Canonical hands, clearer action details and phone history, in-app server installation
+and updates, Linux ARM64 server delivery, non-admin cleanup and macOS launch recovery.
+
+Read the [beta changes and qualification limits](docs/RELEASE-2.6.0.md).
+
 # 2.5.3
 
 Reduced idle CPU use by removing inbox self-wakeups, retiring foreign Forge

@@ -22,6 +22,9 @@ RUN groupadd -g 10000 helene-data \
     && useradd -u 10002 -g 10000 -m -d /home/desk -s /usr/sbin/nologin desk \
     && git config --system --add safe.directory '*'
 WORKDIR /opt/helene
+COPY helene-build.json ./
+COPY server/check_target.py ./server/
+RUN python server/check_target.py /opt/helene
 COPY requirements.txt server/requirements-server.txt ./
 COPY server/prepare_requirements.py ./server/
 RUN python server/prepare_requirements.py requirements.txt requirements-runtime.txt \

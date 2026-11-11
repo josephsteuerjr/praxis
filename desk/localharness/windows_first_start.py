@@ -283,6 +283,9 @@ def _verify_custody(request,captured=None):
 class Backend:
     def __init__(self,root):
         self.root=Path(root).resolve();self.roots=[];self.protected=[];self.keep=[];self.excluded=[];self.process_excluded=[self.root];self._hooks_cleared=None;self._registrations=[];self._pruning=False;self._elevated=False
+        # 11.11 (Yegor): cleanup of a previous installation never asks for administrator
+        # rights. Paths Windows protects and other leftovers are collected for the person.
+        self.leftovers=[];self.notes=[]
 
     def removable(self,path):
         path=Path(path).resolve()
@@ -484,7 +487,7 @@ class Backend:
     def retire(self,old):
         self.removable(old)
         import winreg
-        from .migration_windows import system_action
+        from .migration_windows import unhook
         for bound,hive,view,name in self._registrations:
             if bound!=old:continue
             try:
@@ -493,7 +496,9 @@ class Backend:
                 if current!=old:raise RuntimeError('Previous installation registration changed')
                 winreg.DeleteKeyEx(hive,name,view,0)
             except FileNotFoundError:pass
-            except PermissionError:system_action(old,'cleanup')
+            except PermissionError:
+                notes=[];unhook(old,notes)
+                self.notes.extend(note for note in notes if note not in self.notes)
 
     def prune(self,old,protected):
         self.removable(old)
@@ -503,7 +508,7 @@ class Backend:
             self._pruning=True
             try:
                 try:_prune_program(old,protected,self)
-                except PermissionError:self.privileged('prune',old,_captured=captured,keep=[str(p) for p in protected])
+                except PermissionError:self.leftovers.append(Path(old))
             finally:self._pruning=False
 
     def remove(self,path):
@@ -529,15 +534,40 @@ class Backend:
                 failure=exc;_verify_custody(captured['scope'],captured)
                 self.stop(self.roots,self.protected);released=self.release(path,_captured=captured)
                 if isinstance(exc,PermissionError) and not released:
-                    if self._pruning or self._elevated:raise
-                    self.privileged('remove',path,_captured=captured);self._confirmed_removed(path);return
+                    if self._elevated:raise
+                    # Stopped, released and still refused: protected by Windows. Remove what
+                    # the user may, leave the rest in place and name it; no administrator prompt.
+                    _verify_custody(captured['scope'],captured)
+                    for kept in self._remove_what_windows_allows(path) or [path]:
+                        if kept not in self.leftovers:self.leftovers.append(kept)
+                    return
                 time.sleep(.1)
         raise RuntimeError('Windows не освободила прежнюю папку: '+str(path)) from failure
+
+    @staticmethod
+    def _remove_what_windows_allows(path):
+        """Best-effort removal with the user's rights; returns the protected paths left."""
+        kept=[]
+        def tolerant(function,name,_error):
+            try:
+                os.chmod(name,stat.S_IWRITE|stat.S_IREAD);function(name)
+            except PermissionError:
+                kept.append(Path(name))
+            except OSError:
+                # A directory that still holds a protected file cannot be empty.
+                if not any(k==Path(name) or k.is_relative_to(name) for k in kept):raise
+        try:
+            if path.is_symlink() or (hasattr(path,'is_junction') and path.is_junction()):path.unlink()
+            elif path.is_dir():shutil.rmtree(path,onerror=tolerant)
+            elif path.exists():path.unlink()
+        except PermissionError:
+            kept.append(Path(path))
+        return [k for k in kept if os.path.lexists(k)]
 
     def shortcuts(self,roots,current):
         from .python_windows import retarget_run
         retarget_run(roots,current)
-        from .migration_windows import shortcut_folders,powershell,link_belongs,unpin_shortcut,install_shortcuts,run_privileged
+        from .migration_windows import shortcut_folders,powershell,link_belongs,unpin_shortcut,install_shortcuts
         # Resolve every shortcut in one COM session, not one PowerShell per
         # link per former installation (which used to take minutes).
         folders=[str(p) for p in shortcut_folders() if Path(p).is_dir()]
@@ -555,7 +585,7 @@ ConvertTo-Json -InputObject @($result) -Compress -Depth 3
             path=Path(row['path']);unpin_shortcut(path)
             try:path.unlink()
             except PermissionError:
-                run_privileged("$ErrorActionPreference='Stop';Remove-Item -LiteralPath $env:HELENE_LINK -Force",dict(os.environ,HELENE_LINK=str(path)))
+                self.notes.append('Ярлык прежней программы остался: удалить его можно только с правами администратора — '+str(path))
         if current is not None:install_shortcuts(current,desktop_only=True)
 
 

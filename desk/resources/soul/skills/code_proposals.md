@@ -8,8 +8,8 @@ human veto. Use it for serious changes because it lets you move boldly without l
 
 - Serious = multi-file, architectural, touching the perception loop / scope isolation / rails,
   or anything you're not sure survives a restart.
-- Flow: `start_proposal(reason)` → a working copy (worktree on a branch; live code untouched) →
-  edit files there via shell (full paths) → `submit_proposal(id, title, why, override_reason?)`.
+- Flow: `proposal(action="start", reason=...)` → a working copy (worktree on a branch; live code untouched) →
+  `edit(proposal_id=..., action=...)` → `proposal(action="submit", id=..., title=..., why=...)`.
   The test suite runs automatically in a sandbox, and a successful proposal self-merges.
 - Zones classify risk and shape the checks; they do not assign ownership. `soul/`, runtime code,
   rails, docker and infrastructure are all mine to change. A high-risk zone asks for more careful
@@ -21,4 +21,4 @@ human veto. Use it for serious changes because it lets you move boldly without l
   the concrete evidence, recover or adjust, and try differently.
 - Write `why` so the future me and Yegor can audit it: what hurts, what changes, how I'll know it
   worked, and how to recover.
-- Don't stack proposals for the same thing; check `list_proposals` first.
+- Don't stack proposals for the same thing; check `proposal(action="list")` first.

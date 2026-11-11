@@ -140,6 +140,8 @@ function drawServer(host:HTMLElement,session:Session) {
   const buttons=el("div","actions");const body=el("div","server-move-guide");
   if(!session.remote)buttons.append(button("Новый сервер","primary",()=>{if(!transferBusy)drawNewServer(body);}));
   buttons.append(button("Сервер уже работает","quiet",()=>{if(!transferBusy)drawExistingServer(body);}));
+  buttons.append(button("Новый агент на сервере","quiet",()=>{if(!transferBusy)drawFreshServer(body);}));
+  buttons.append(button("Обновить сервер","quiet",()=>{if(!transferBusy)drawServerUpdate(body);}));
   if(session.remote)buttons.append(button("Открыть местную копию","quiet",async()=>{
     const out=el("p","receipt");body.replaceChildren(out);
     try{
@@ -270,7 +272,7 @@ function drawNewServer(host:HTMLElement) {
   }
   const preparation=el("div","server-preparation");preparation.append(docker,check);
   const actions=el("div","server-actions");actions.append(start,recover);
-  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем канал управления будет доступен на сервере. Агент останется остановленным; возобновление — отдельная команда владельца на сервере. Приложение подготовит Ubuntu/Debian x64 и проверит подключение."),grid,advanced,preparation,trust,actions,out);
+  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем канал управления будет доступен на сервере. Агент останется остановленным; возобновление — отдельная команда владельца на сервере. Приложение подготовит Ubuntu/Debian x64 или ARM64 и проверит подключение."),grid,advanced,preparation,trust,actions,out);
   void shell<{pending:boolean;message:string;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
     if(result.pending&&host.isConnected){
       receipt(out,result.message+(result.host?" Сервер: "+result.host+".":""));
@@ -282,4 +284,136 @@ function drawNewServer(host:HTMLElement) {
       }
     }
   }).catch(error=>receipt(out,humanError(error).text,true));
+}
+
+// 11.11 (Yegor): install a new server agent and update an installed one from the window;
+// no manual scripts. Same SSH discipline as the transfer: the host key is shown and confirmed
+// before any password is sent; passwords and keys are cleared from the form after use.
+type ServerProbe={ok:boolean;message:string;trust_needed?:boolean;fingerprint?:string;existing?:boolean;arch?:string;docker?:boolean};
+function sshForm(data:Record<string,unknown>,changed:()=>void,out:HTMLElement) {
+  const deployment=data.deployment as Record<string,unknown>;
+  const grid=el("div","form-grid two");
+  grid.append(field("Адрес сервера",String(data.host||""),value=>{data.host=value;changed();},{placeholder:"IP или имя из панели сервера"}),
+    field("Логин",String(data.login||"root"),value=>{data.login=value;changed();}),
+    field("Пароль сервера","",value=>{data.password=value;changed();},{type:"password",hint:"Только для SSH из приложения. В чат и в журналы пароль не попадает."}));
+  const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","","Параметры установки и SSH-ключ"),inner);
+  inner.append(field("Папка установки",String(deployment.directory),value=>{deployment.directory=value;changed();}),
+    field("Проект Compose",String(deployment.project),value=>{deployment.project=value;deployment.container=value;changed();}),
+    field("Порт канала на сервере",String(deployment.port),value=>{deployment.port=Number(value);changed();}),
+    field("Порт SSH",String(data.port||22),value=>{data.port=Number(value);changed();}),
+    field("Пароль SSH-ключа","",value=>{data.key_password=value;changed();},{type:"password"}));
+  const keyLabel=el("span","receipt");
+  inner.append(button("Выбрать SSH-ключ","quiet",async()=>{
+    try{const files=await pickPaperFiles(true,1,32768);if(files[0]){data.key_text=await files[0].text();keyLabel.textContent=files[0].name;changed();}}
+    catch(error){receipt(out,humanError(error).text,true);}
+  }),keyLabel);
+  return {grid,advanced};
+}
+function forgetSecrets(host:HTMLElement,data:Record<string,unknown>) {
+  host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");
+  delete data.password;delete data.key_text;delete data.key_password;
+}
+function trustBlock(trust:HTMLElement,data:Record<string,unknown>,result:ServerProbe,again:()=>void) {
+  if(result.fingerprint)data.fingerprint=result.fingerprint;
+  if(!result.trust_needed){trust.hidden=true;return;}
+  trust.hidden=false;
+  trust.replaceChildren(el("p","field-hint",result.message),el("p","mono server-fingerprint",result.fingerprint||""),
+    button("Это мой сервер — проверить вход","quiet",()=>{data.confirmed_host=true;again();}));
+}
+
+function drawFreshServer(host:HTMLElement) {
+  const data:Record<string,unknown>={login:"root",port:22,install_docker:false,telegram:{},agent_name:"",
+    deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
+  const telegram=data.telegram as Record<string,unknown>;
+  let ready=false,busy=false;
+  const out=el("p","receipt");const trust=el("div");trust.hidden=true;
+  const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
+  const {grid,advanced}=sshForm(data,changed,out);
+  const agent=el("div","form-grid two");
+  agent.append(field("Имя агента","",value=>{data.agent_name=value;}),
+    field("Токен бота агента","",value=>{telegram.bot_token=value.trim();},{type:"password",hint:"Новый бот от @BotFather. Через его кнопку окно находит сервер после перезапуска."}),
+    field("Твой Telegram ID","",value=>{telegram.owner_id=value.trim();},{hint:"Число из @userinfobot. Бот слушается только тебя."}));
+  const docker=toggle("Подготовить Docker, если его ещё нет",false,value=>data.install_docker=value);
+  const check=button("Проверить сервер","quiet",()=>void probe());
+  const start=button("Установить агента на сервер","primary",async()=>{
+    if(!ready||busy||transferBusy)return;busy=true;transferBusy=true;
+    host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=true);
+    try{
+      receipt(out,"Ставлю Hélène на сервер: сборка образа и подготовка займут несколько минут. Местный агент не останавливается.");
+      const result=await shell<{ok:boolean;message?:string;agent_id?:string;trust_needed?:boolean}>("server_install",{action:"install",request:JSON.stringify(data)});
+      forgetSecrets(host,data);
+      if(result.trust_needed)throw new Error(result.message||"Подтверди ключ сервера и повтори.");
+      if(!result.ok||!result.agent_id)throw new Error(result.message||"Установка ещё не подтверждена.");
+      receipt(out,"Агент на сервере установлен и подключён. Открываю его…");
+      await shell("switch_agent",{id:result.agent_id});
+    }catch(error){
+      receipt(out,humanError(error).text,true);
+      void offerConnect();
+    }finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);start.disabled=!ready;}
+  });start.disabled=true;
+  const connect=button("Подключить установленного агента","quiet",async()=>{
+    if(busy||transferBusy)return;busy=true;transferBusy=true;connect.disabled=true;
+    try{
+      receipt(out,"Ищу адрес агента через его бота…");
+      const result=await shell<{ok:boolean;agent_id?:string;message?:string}>("server_install",{action:"connect",request:"{}"});
+      if(!result.ok||!result.agent_id)throw new Error(result.message||"Адрес ещё не найден.");
+      await shell("switch_agent",{id:result.agent_id});
+    }catch(error){receipt(out,humanError(error).text,true);}finally{busy=false;transferBusy=false;connect.disabled=false;}
+  });connect.hidden=true;
+  async function offerConnect() {
+    try{const state=await shell<{pending:boolean;phase?:string}>("server_install",{action:"status",request:"{}"});connect.hidden=!(state.pending&&state.phase==="installed");}
+    catch{connect.hidden=true;}
+  }
+  async function probe() {
+    if(busy)return;busy=true;check.disabled=true;receipt(out,"Проверяю сервер…");
+    try{
+      const result=await shell<ServerProbe>("server_install",{action:"probe",request:JSON.stringify(data)});
+      trustBlock(trust,data,result,()=>void probe());
+      ready=result.ok&&!result.trust_needed&&!result.existing;
+      const where=result.arch==="aarch64"?" Сервер ARM64.":result.arch==="x86_64"?" Сервер x64.":"";
+      receipt(out,result.existing?"На сервере уже стоит Hélène. Подключи её кнопкой «Сервер уже работает» или обнови кнопкой «Обновить сервер».":result.trust_needed?result.message:ready?"Сервер готов к установке."+where:result.message+where,!ready&&!result.trust_needed);
+      start.disabled=!ready;
+    }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
+  }
+  const preparation=el("div","server-preparation");preparation.append(docker,check);
+  const actions=el("div","server-actions");actions.append(start,connect);
+  host.replaceChildren(el("h4","","Новый агент на сервере"),
+    el("p","field-hint","Приложение само поставит Hélène на твой сервер Ubuntu/Debian (x64 или ARM64) и откроет нового агента отдельной строкой. Агент на этом компьютере продолжает работать и не переносится."),
+    grid,agent,advanced,preparation,trust,actions,out);
+  void offerConnect();
+}
+
+function drawServerUpdate(host:HTMLElement) {
+  const data:Record<string,unknown>={login:"root",port:22,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
+  let ready=false,busy=false;
+  const out=el("p","receipt");const trust=el("div");trust.hidden=true;
+  const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
+  const {grid,advanced}=sshForm(data,changed,out);
+  const check=button("Проверить сервер","quiet",()=>void probe());
+  const start=button("Обновить сервер","primary",async()=>{
+    if(!ready||busy||transferBusy)return;busy=true;transferBusy=true;
+    host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=true);
+    try{
+      receipt(out,"Передаю серверу эту версию. Его исполнитель сделает копию, обновит и проверит агента; если что-то пойдёт не так — вернёт прежнюю версию. Это займёт несколько минут.");
+      const result=await shell<{ok:boolean;message?:string;trust_needed?:boolean}>("server_install",{action:"update",request:JSON.stringify(data)});
+      forgetSecrets(host,data);
+      if(result.trust_needed)throw new Error(result.message||"Подтверди ключ сервера и повтори.");
+      receipt(out,result.message||"Готово.",!result.ok);
+    }catch(error){receipt(out,humanError(error).text,true);}
+    finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);start.disabled=!ready;}
+  });start.disabled=true;
+  async function probe() {
+    if(busy)return;busy=true;check.disabled=true;receipt(out,"Проверяю сервер…");
+    try{
+      const result=await shell<ServerProbe>("server_install",{action:"probe",request:JSON.stringify(data)});
+      trustBlock(trust,data,result,()=>void probe());
+      ready=!result.trust_needed&&!!result.existing;
+      receipt(out,result.trust_needed?result.message:result.existing?"Hélène на сервере найдена. Можно обновить её до версии этого приложения.":"В этой папке Hélène не найдена. Проверь папку установки в параметрах.",!ready&&!result.trust_needed);
+      start.disabled=!ready;
+    }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
+  }
+  const actions=el("div","server-actions");actions.append(check,start);
+  host.replaceChildren(el("h4","","Обновить сервер из приложения"),
+    el("p","field-hint","Нужно, когда на сервере ещё нет исполнителя обновлений или он не отвечает. Приложение по SSH передаст свою версию; дальше обновления — кнопкой «Обновить» в окне."),
+    grid,advanced,trust,actions,out);
 }

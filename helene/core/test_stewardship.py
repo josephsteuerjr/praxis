@@ -189,11 +189,11 @@ class TestItIsVisible(Base):
     def test_the_shell_hand_actually_consults_it(self):
         """Не декларация: рука обязана спрашивать рельс до запуска."""
         self._enter(STRANGER)
-        with mock.patch.object(st, "log"), mock.patch("subprocess.run") as run:
+        with mock.patch.object(st, "log"), mock.patch("hands.execute_argv") as run:
             out = agent.tool_shell("rm " + HARDBOT_DB)
         run.assert_not_called()
         self.assertIn("Отказ", out)
-        with mock.patch.object(st, "log"), mock.patch("subprocess.run") as run:
+        with mock.patch.object(st, "log"), mock.patch("hands.execute_argv") as run:
             out = agent.tool_shell("docker stop hardbot2-routing")
         run.assert_not_called()
         self.assertIn("хранител", out, "про изменение отказ называет хранителя")
@@ -228,10 +228,10 @@ class TestEveryRootPathAsksTheRail(Base):
         self._enter(STRANGER)
         with mock.patch.object(st, "log"), \
                 mock.patch("workshop.fs_write") as write, \
-                mock.patch("workshop.fs_edit") as edit:
+                mock.patch("editor.edit") as edit:
             self.assertIn("хранител", agent.tool_fs_write("/opt/hardbot2/app/main.py", "x"))
             self.assertIn("хранител",
-                          agent.tool_fs_edit("/opt/hardbot2/app/main.py", "a", "b"))
+                          agent.tool_edit("replace", "/opt/hardbot2/app/main.py", old="a", new="b"))
         write.assert_not_called()
         edit.assert_not_called()
 
@@ -379,7 +379,7 @@ class TestHisDataNeverLeaves(Base):
     def test_the_database_is_not_even_read(self):
         """Первый рубеж — не выход, а вход: она туда просто не ходит."""
         self._enter(STRANGER)
-        with mock.patch.object(st, "log"),                 mock.patch("subprocess.run") as run,                 mock.patch.object(agent, "_autocommit_self_edit"),                 mock.patch.object(agent, "selfgit"):
+        with mock.patch.object(st, "log"),                 mock.patch("hands.execute_argv") as run,                 mock.patch.object(agent, "_autocommit_self_edit"),                 mock.patch.object(agent, "selfgit"):
             out = agent.tool_shell(
                 "sqlite3 /opt/hardbot2/data/x.sqlite3 'select * from visits'")
         run.assert_not_called()
@@ -388,12 +388,20 @@ class TestHisDataNeverLeaves(Base):
     def test_looking_at_the_state_still_works(self):
         """А состояние — ровно то, ради чего рука и нужна."""
         self._enter(STRANGER)
-        with mock.patch.object(st, "log"),                 mock.patch("subprocess.run") as run,                 mock.patch.object(agent, "_autocommit_self_edit"),                 mock.patch.object(agent, "selfgit"):
-            run.return_value = subprocess.CompletedProcess(
-                args=["bash", "-lc", "docker ps --filter name=hardbot2"],
-                returncode=0, stdout=b"hardbot2-bot-1  Up 44 hours", stderr=b"")
+        with mock.patch.object(st, "log"),                 mock.patch("hands.execute_argv") as run,                 mock.patch.object(agent, "_autocommit_self_edit"),                 mock.patch.object(agent, "selfgit"):
+            run.return_value = {"ok": True, "out": "hardbot2-bot-1  Up 44 hours", "code": 0, "killed": False}
             out = agent.tool_shell("docker ps --filter name=hardbot2")
         run.assert_called_once()
+        argv = run.call_args.args[0]
+        if os.name == "nt":
+            # Windows: Git Bash by its full path (never the System32 WSL launcher) and the
+            # task folder as the explicit cd; the command itself goes through unchanged.
+            self.assertEqual(pathlib.Path(argv[0]).name.lower(), "bash.exe")
+            self.assertNotIn("system32", argv[0].lower())
+            self.assertEqual(argv[1], "-lc")
+            self.assertTrue(argv[2].endswith(" && docker ps --filter name=hardbot2"), argv[2])
+        else:
+            self.assertEqual(argv, ["bash", "-lc", "docker ps --filter name=hardbot2"])
         self.assertIn("Up 44 hours", out)
 
 

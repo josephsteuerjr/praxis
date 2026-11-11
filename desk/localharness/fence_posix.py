@@ -110,7 +110,7 @@ class Container:
 
     # --- запуск --------------------------------------------------------------
 
-    def argv(self, argv: list[str], cwd: Path) -> list[str]:
+    def argv(self, argv: list[str], cwd: Path, *, hand_socket=None) -> list[str]:
         """Полная командная строка bwrap. Отдельным методом ради стендов:
         проверять то, что уйдёт ядру, надёжнее, чем то, что вернул запуск."""
         home = self.workspace
@@ -149,6 +149,10 @@ class Container:
             # "write" даёт запись, всё остальное — только чтение.
             flag = "--bind-try" if str(row.get("access")) == "write" else "--ro-bind-try"
             out += [flag, target, link]
+        # /tmp is private: expose only this invocation's live socket, never its
+        # parent directory or arbitrary paths supplied by a child environment.
+        if hand_socket:
+            out += ["--ro-bind", hand_socket, hand_socket]
         out += ["--setenv", "HOME", str(home),
                 "--setenv", "TMPDIR", str(tmp),
                 "--setenv", "TMP", str(tmp),
@@ -157,7 +161,7 @@ class Container:
                 "--chdir", str(cwd if cwd else home), "--"]
         return out + list(argv)
 
-    def run(self, argv: list[str], cwd: Path, timeout: float) -> tuple[str, int, bool]:
+    def run(self, argv: list[str], cwd: Path, timeout: float, *, stdin=None, env=None) -> tuple[str, int, bool]:
         """Запустить argv в ограде; -> (вывод, код, прервано по таймауту).
 
         Тот же кортеж, что у виндовой ограды: шим (`fence._SubprocessShim`) о
@@ -165,9 +169,13 @@ class Container:
         """
         if not self.bwrap:
             raise FenceUnavailable("ограда не подготовлена: prepare() не звали")
-        line = self.argv(argv, Path(cwd) if cwd else self.workspace)
+        from fence import _hand_socket, _observe_launch
+        line = self.argv(argv, Path(cwd) if cwd else self.workspace, hand_socket=_hand_socket(env))
+        _observe_launch(line, cwd or self.workspace)
         try:
-            done = subprocess.run(line, capture_output=True, timeout=max(1.0, float(timeout)))
+            import process_scope
+            done = process_scope.run(line, capture_output=True, stdin=stdin,
+                                     env=env, timeout=max(1.0, float(timeout)))
         except subprocess.TimeoutExpired as expired:
             # bwrap — первый процесс в своём пространстве, и его смерть уносит
             # всё дерево: отдельного job-объекта, как на Windows, не нужно.

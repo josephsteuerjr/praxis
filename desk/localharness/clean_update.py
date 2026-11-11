@@ -459,12 +459,27 @@ def finish(old,new,note,*,stopped=lambda:False):
     note['integrations']=migration_lifecycle.cleanup_installation(old,new)
     # rmtree never follows directory symlinks/junctions. Only the resolved,
     # independent programme chosen in the update request can be removed.
+    # 11.11 (Yegor): what the user's own rights cannot remove stays and is named;
+    # no administrator prompt, and the rest of the old folder is still removed.
+    protected=[]
     def readonly(function,path,error):
-        if function is not os.unlink or not isinstance(error[1],PermissionError):raise error[1]
-        from .update_io import remove_created_file
-        remove_created_file(path)
+        if function is os.unlink and isinstance(error[1],PermissionError):
+            from .update_io import remove_created_file
+            try:remove_created_file(path);return
+            except PermissionError:protected.append(path);return
+        if function in (os.rmdir,os.scandir,os.open) and any(Path(p)==Path(path) or Path(p).is_relative_to(path) for p in protected):return
+        if isinstance(error[1],PermissionError):protected.append(path);return
+        raise error[1]
     if old.exists():shutil.rmtree(old,onerror=readonly)
-    note.update(state='completed',retirement={'ok':True,'old_folder_removed':not old.exists(),'clean_switch':True},cleanup_errors=[])
+    leftovers=list(note['integrations'].get('retained') or []) if isinstance(note['integrations'],dict) else []
+    if protected:
+        leftovers.append(f'Не удалось без прав администратора удалить {len(protected)} элемент(ов) прежней программы в {old}. '
+                         'Новая Hélène работает с твоими данными; эти файлы можно удалить вручную. '
+                         'Прежнюю программу оттуда не запускай: данные теперь у новой.')
+    note.update(state='retirement_incomplete' if leftovers else 'completed',
+                retirement={'ok':not protected,'old_folder_removed':not old.exists(),'clean_switch':True,
+                            **({'retained_files':[str(p) for p in protected[:200]]} if protected else {})},
+                cleanup_errors=leftovers)
     try:note['shortcuts']=migration_lifecycle.install_shortcuts(new,desktop_only=True)
     except (OSError,RuntimeError) as exc:note['cleanup_errors'].append(str(exc))
     write(new/'python-migration.json',note)

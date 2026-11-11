@@ -1,5 +1,5 @@
 """Paired-device HTTP boundaries for the real PWA settings and monitoring."""
-import copy,json,secrets,sys,tempfile,unittest,uuid
+import copy,hashlib,json,secrets,sys,tempfile,unittest,uuid
 from pathlib import Path
 from unittest.mock import patch
 sys.path[:0]=[str(Path(__file__).resolve().parents[1]),str(Path(__file__).resolve().parents[1]/'localharness')]
@@ -66,8 +66,8 @@ class Surface(unittest.IsolatedAsyncioTestCase):
             response=await getattr(self.client,method)(path,headers=self.headers())
             self.assertEqual(response.status,403)
 
-    async def test_phone_event_projection_preserves_cursor_without_payload_references(self):
-        raw={'events':[{'seq':1,'kind':'tool_dispatch','tool':'inspect','input_ref':{'sha256':self.secret},
+    async def test_phone_event_projection_preserves_cursor_and_exact_refs_without_inline_payload(self):
+        raw={'events':[{'seq':1,'kind':'tool_dispatch','tool':'inspect','input_ref':{'sha256':'a'*64,'private':self.secret},
             'receipt':{'handler':'python.inspect','status':'returned','secret':self.secret},'arbitrary':self.secret}],
             'next_offset':37,'next_after_seq':1,'generation':'fixture','has_more':False}
         with patch.object(phone_activity.forge_reader,'events',return_value=raw):
@@ -75,6 +75,22 @@ class Surface(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status,200);result=await response.json()
         self.assertNotIn(self.secret,json.dumps(result));self.assertEqual(result['next_offset'],raw['next_offset'])
         self.assertEqual(result['events'][0]['receipt'],{'handler':'python.inspect','status':'returned'})
+        self.assertEqual(result['events'][0]['input_ref'],{'sha256':'a'*64,'kind':'payload'})
+
+    async def test_paired_payload_reads_verify_identity_hash_and_auth(self):
+        unit=self.tree/'memory/.forge/tasks/code-fixture/agents/unit-fixture';unit.mkdir(parents=True)
+        (unit/'request.json').write_text(json.dumps({'id':'unit-fixture','task_id':'code-fixture'}))
+        raw='Observed result 🐍'.encode('utf8');(unit/'result.json').write_bytes(raw)
+        query={'task_id':'code-fixture','unit_id':'unit-fixture','kind':'result','sha256':hashlib.sha256(raw).hexdigest()}
+        url='/api/phone/forge/payload'
+        response=await self.client.get(url,params=query,headers=self.headers())
+        self.assertEqual(response.status,200);self.assertEqual((await response.json())['text'],raw.decode('utf8'))
+        response=await self.client.get(url,params={**query,'sha256':'0'*64},headers=self.headers())
+        self.assertEqual(response.status,409)
+        response=await self.client.get(url,params={**query,'task_id':'../outside'},headers=self.headers())
+        self.assertEqual(response.status,400)
+        response=await self.client.get(url,params=query)
+        self.assertEqual(response.status,403)
 
     async def test_subscription_rejects_arbitrary_commands_without_touching_a_relay(self):
         response=await self.client.post('/api/phone/subscription',headers=self.headers(),json={'action':'shell','command':'untrusted'})

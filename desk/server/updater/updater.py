@@ -81,6 +81,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -97,6 +98,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import protocol  # noqa: E402 — своя копия протокола, рядом с этим файлом
 
+APP_PATH = "приложение Hélène на компьютере: «Подключения» → «Агент на сервере» → «Обновить сервер»"  # 11.11: the updater is installed from the desktop app, no manual script
 SCHEMA = "helene.updater.v1"
 DEFAULT_RELEASES = "https://api.github.com/repos/josephsteuerjr/praxis/releases"
 PRODUCT = "Hélène"
@@ -468,7 +470,14 @@ def sha_in_text(text: str, name: str = "") -> str:
     return found.group(0).lower() if found else ""
 
 
-def pick_release(rel: dict, asset_prefix: str) -> dict:
+def server_arch(machine=None):
+    value = str(machine if machine is not None else platform.machine()).lower()
+    if value in ('aarch64', 'arm64'):return 'arm64'
+    if value in ('x86_64', 'amd64'):return 'x86_64'
+    raise UpdateError('Unsupported server architecture: '+value)
+
+
+def pick_release(rel: dict, asset_prefix: str, *, machine=None) -> dict:
     """Ответ GitHub Releases -> то, что нужно исполнителю. Без суммы — отказ."""
     tag = str(rel.get("tag_name") or "")
     version = tag.strip().lstrip("vV")
@@ -476,11 +485,16 @@ def pick_release(rel: dict, asset_prefix: str) -> dict:
         raise UpdateError(f"выпуск назван «{tag}» — это не номер версии")
     if rel.get("draft") or rel.get("prerelease"):
         raise UpdateError(f"{tag} — черновик или предварительный выпуск, такие я не ставлю")
-    name = f"{asset_prefix}-{version}.zip"
+    arch=server_arch(machine)
     assets = [a for a in rel.get("assets") or [] if isinstance(a, dict)]
-    asset = next((a for a in assets if str(a.get("name") or "") == name), None)
+    names=[f"{asset_prefix}-{version}-server-linux-{arch}.zip"]
+    # Older x64 server updates consumed the general Windows archive's Python
+    # sources. ARM must never fall back to that archive's native x64 components.
+    if arch=='x86_64':names.append(f"{asset_prefix}-{version}.zip")
+    asset=next((a for name in names for a in assets if str(a.get('name') or '')==name),None)
     if asset is None:
-        raise UpdateError(f"в выпуске {tag} нет архива {name}")
+        raise UpdateError(f"в выпуске {tag} нет архива {names[0]}")
+    name=str(asset['name'])
     url = str(asset.get("browser_download_url") or "")
     digest = str(asset.get("digest") or "").strip().lower()
     sha = digest[7:] if digest.startswith("sha256:") else ""
@@ -791,6 +805,9 @@ def check_layout(root: Path, version: str) -> dict:
         raise UpdateError(f"паспорт поставки не читается: {exc}") from exc
     if passport.get("product") != PRODUCT:
         raise UpdateError(f"поставка не {PRODUCT}: {passport.get('product')!r}")
+    target=passport.get('server_target')
+    if target is not None and target!='linux-'+server_arch():
+        raise UpdateError('Server archive is for another architecture: '+str(target))
     if str(passport.get("version")) != version or str(desk.get("version")) != version:
         raise UpdateError(f"паспорт говорит {passport.get('version')} (канал {desk.get('version')}), "
                           f"а ставим {version}")
@@ -1403,8 +1420,8 @@ class Updater:
         self.check_self()
         if not self.health["ok"]:
             self.finish("refused", f"исполнитель не может работать: {self.health['why']}",
-                        "Исполнитель обновлений настроен неверно — обновить не могу. Помогает одна "
-                        "команда на сервере, из папки установки: sh server/install.sh")
+                        "Исполнитель обновлений настроен неверно — обновить не могу. Его поправит "
+                        f"{APP_PATH}.")
             return
         try:
             self.compose_files(self.health["info"])
@@ -1421,7 +1438,7 @@ class Updater:
                                    "установки нет или он не читается. Без него «только новее» не "
                                    "проверить — обнови командой на сервере (README-СЕРВЕР)",
                         "Не могу понять, какая версия стоит сейчас, — обновить отсюда не выйдет. "
-                        "Помогает одна команда на сервере: sh Helene/server/install.sh из свежей поставки.")
+                        f"Поможет {APP_PATH}.")
             return
         self.step("проверяю, есть ли такая версия")
         try:

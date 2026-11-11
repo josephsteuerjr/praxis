@@ -696,6 +696,41 @@ def _title_for(chat_id, titles: dict[str, str]) -> str:
     return name
 
 
+_OUTCOMES = {"ok", "confirmed", "refused", "in_doubt", "partial", "failed", "unknown"}
+
+
+def _tool_outcome(metadata) -> dict:
+    """Исход руки из `tool_result.metadata` (её tool_report): outcome, цель, вложенные вызовы.
+
+    Незнакомое значение исхода не выдумывается в «успех»: оно уходит как `unknown`.
+    Размеры ограничены — экран шага не место для полного дампа.
+    """
+    meta = metadata if isinstance(metadata, dict) else {}
+    out: dict = {}
+    if "outcome" in meta:
+        value = str(meta.get("outcome") or "").strip().lower()
+        out["outcome"] = value if value in _OUTCOMES else "unknown"
+    target = meta.get("target")
+    if isinstance(target, str) and target.strip():
+        out["target"] = target.strip()[:300]
+    ops = meta.get("operations")
+    if isinstance(ops, list) and ops:
+        nested = []
+        for op in ops[:20]:
+            if isinstance(op, dict):
+                nested.append({str(k)[:40]: (v if isinstance(v, (int, float, bool)) or v is None
+                                             else str(v)[:300]) for k, v in list(op.items())[:12]})
+            elif isinstance(op, list):
+                # tool_report пишет строки списком: ["read", path], ["process", exe, argv].
+                nested.append([[str(a)[:200] for a in x[:12]] if isinstance(x, list) else str(x)[:300]
+                               for x in op[:4]])
+        if nested:
+            out["nested"] = nested
+    if meta.get("operations_cut"):
+        out["nested_cut"] = True
+    return out
+
+
 def _inline_preview(result: dict) -> dict:
     ref = result if isinstance(result, dict) else {}
     inline = ref.get("inline") or {}
@@ -984,6 +1019,9 @@ def run_detail(run_id: str, *, max_events: int = 4000) -> dict:
                         "status": "received", "result": preview}
                 current["tools"].append(card)
                 tools_by_call[str(row.get("call_id") or row.get("seq"))] = card
+            # 10.11: исход руки пишет её журнал (tool_report → metadata). Без этих полей экран
+            # говорил «результат получен» и про успех, и про отказ — исход есть, его не несли.
+            card.update(_tool_outcome(row.get("metadata")))
         elif kind in ("tool_failed", "tool_completed", "tool_reconciled"):
             card = tools_by_call.get(str(row.get("call_id") or ""))
             if card is None:

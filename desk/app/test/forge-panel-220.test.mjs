@@ -4,32 +4,29 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import {webcrypto} from 'node:crypto';
 
-class Element {
-  constructor(tag) { this.tag=tag;this.className='';this.children=[];this.listeners={};this.attrs={};this.style={};this._text='';this.isConnected=true;this.parentNode=null;this.disabled=false;this.hidden=false;this.open=false; }
-  set textContent(text) { this.children=[];this._text=String(text); }
-  get textContent() { return this._text+this.children.map(c=>c.textContent).join(''); }
-  get firstChild() {return this.children[0] || null;}
-  get classList() {return {add:(...names)=>{this.className=[...new Set([...this.className.split(' ').filter(Boolean),...names])].join(' ');}};}
-  append(...children) { for(const child of children){if(child.parentNode)child.remove();child.parentNode=this;this.children.push(child);} }
-  replaceChildren(...children) {for(const c of this.children)c.parentNode=null;this.children=[];this._text='';this.append(...children);}
-  remove() {if(this.parentNode)this.parentNode.children=this.parentNode.children.filter(c=>c!==this);this.parentNode=null;}
-  setAttribute(k,v) {this.attrs[k]=String(v);}
-  addEventListener(k,fn) {(this.listeners[k] ||= []).push(fn);}
-  async emit(k) {for(const fn of this.listeners[k] || [])await fn();}
-  async click() {if(!this.disabled)await this.emit('click');}
-}
+import {parseHTML} from 'linkedom';
+const {document,HTMLElement,Event:DOMEvent}=parseHTML('<html><body></body></html>');
+Object.defineProperty(HTMLElement.prototype,'tag',{get(){return this.localName;}});
+Object.defineProperty(HTMLElement.prototype,'open',{get(){return this.hasAttribute('open');},set(v){this.toggleAttribute('open',v);}});
+HTMLElement.prototype.emit=async function(name){this.dispatchEvent(new DOMEvent(name));};
+function Element(tag){return document.createElement(tag);}
 const visibilityListeners=new Set();
-const document={createElement:tag=>new Element(tag),hidden:false,
-  addEventListener:(name,fn)=>{if(name==='visibilitychange')visibilityListeners.add(fn);},
-  removeEventListener:(name,fn)=>{if(name==='visibilitychange')visibilityListeners.delete(fn);}};
-const walk=node=>[node,...node.children.flatMap(walk)];
+const add=document.addEventListener.bind(document),remove=document.removeEventListener.bind(document);
+document.addEventListener=(name,fn)=>{if(name==='visibilitychange')visibilityListeners.add(fn);add(name,fn);};
+document.removeEventListener=(name,fn)=>{if(name==='visibilitychange')visibilityListeners.delete(fn);remove(name,fn);};
+const moduleURL=source=>'data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(source)).toString('base64');
+const kit=new URL('../../ui-kit/',import.meta.url);
+const txt=moduleURL(readFileSync(new URL('text.ts',kit),'utf8'));
+const dom=moduleURL(readFileSync(new URL('dom.ts',kit),'utf8').replace('"./text"',JSON.stringify(txt)));
+const {toolSummary,toolTraceHTML}=await import(moduleURL(readFileSync(new URL('steps.ts',kit),'utf8').replace('"./text"',JSON.stringify(txt)).replace('"./dom"',JSON.stringify(dom))));
+const walk=node=>[node,...[...node.children].flatMap(walk)];
 const find=(root,text)=>walk(root).find(n=>n.tag==='button' && n.textContent===text);
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const source=readFileSync(new URL('../../ui-kit/window/views/forge-panel.ts',import.meta.url),'utf8');
 const code=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
 const workSource=readFileSync(new URL('../../ui-kit/window/work-activity.ts',import.meta.url),'utf8');
 const workCode=stripTypeScriptTypes(workSource.replace(/^import .*;\r?\n/gm,'')).replace(/export /g,'');
-const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg','ACTIONS = {}',workCode+'\n'+code+';return {forgePanel};');
+const factory=new Function('document','crypto','ApiError','channelURL','setTimeout','clearTimeout','cfg','ACTIONS = {}','toolSummary','toolTraceHTML',workCode+'\n'+code+';return {forgePanel};');
 const sha='d'.repeat(64);
 function task() {return {id:'code-fixture',goal:'Implement a parser → independent review → repair',status:'active',agents:[{id:'agent-fixture',role:'worker',model:'fixture-model',subtask:'Preserve authored edits while fixing parser.py',status:'unknown',request_status:'running',custody:'unknown',observation:{generation:'g-one',phase:'tool',tool:'coding_verify',observed_at:'2026-10-26T02:20:00Z'},result_ref:{kind:'result',sha256:sha}}]};}
 function stand(options={}) {
@@ -52,7 +49,7 @@ function stand(options={}) {
       if(state.eventError)throw Error(state.eventError);
       if(state.eventPage)return state.eventPage;
       const offset=Number(url.searchParams.get('offset'));
-      return {events:offset?[]:[{seq:1,kind:'tool_result',tool:'coding_verify',at:'2026-10-26T02:20:00Z',output_ref:{sha256:sha}}],next_offset:100,has_more:false,generation:'g-one'};
+      return {events:offset?[]:[{seq:1,kind:'model_result',tool:'coding_verify',at:'2026-10-26T02:20:00Z',output_ref:{sha256:sha}}],next_offset:100,has_more:false,generation:'g-one'};
     }
     if(url.pathname==='/api/forge/payload'){
       if(state.payloadDelay)return await state.payloadDelay;
@@ -61,7 +58,8 @@ function stand(options={}) {
     }
     throw Error(path);
   };
-  const impl=factory(document,{getRandomValues:array=>webcrypto.getRandomValues(array)},Error,path=>path,(fn,delay)=>{const id=++seq;timers.set(id,fn);delays.set(id,delay);return id;},id=>{timers.delete(id);delays.delete(id)},{});
+  const impl=factory(document,{getRandomValues:array=>webcrypto.getRandomValues(array)},Error,path=>path,(fn,delay)=>{const id=++seq;timers.set(id,fn);delays.set(id,delay);return id;},id=>{timers.delete(id);delays.delete(id)},{},{},toolSummary,toolTraceHTML);
+  document.body.append(root);
   const panel=impl.forgePanel(root,read,10,{scope:()=>state.scope,...options});
   return {root,calls,state,panel,timers,delays,content};
 }
@@ -75,7 +73,7 @@ async function open(test) {
   assert.match(t.root.textContent,/fixture-model/);assert.match(t.root.textContent,/состояние не подтверждено/);
   assert.match(t.root.textContent,/инструмент: coding_verify/);assert.match(t.root.textContent,/живость процесса неизвестна/);
   const {team,unit}=await open(t);
-  await find(unit,'Результат вызова').click();await tick();
+  await find(unit,'Ответ модели').click();await tick();
   const payload=walk(unit).find(n=>n.tag==='pre');
   assert.equal(payload.textContent,Array.from(t.content).slice(0,8000).join(''));
   await find(unit,'Следующие 8000 знаков').click();await tick();
@@ -185,8 +183,8 @@ const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'
   t.panel.start();await tick();const {unit}=await open(t);
   const action=walk(unit).find(n=>n.className.includes('forge-action st'));
   assert(action,'a real worker call is a folded action');assert.equal(action.open,false);
-  assert.match(action.textContent,/запрос записан/);
-  action.open=true;const args=find(action,'Аргументы');
+  assert.match(action.textContent,/неизвестен/);
+  action.open=true;const args=action.querySelector('[data-trace-tab="args"]');
   t.state.eventPage={generation:'g-one',events:[
     {seq:2,kind:'tool_dispatch',call_id:'same',iteration:1,tool:'run',receipt:{handler:'forge_worker._dispatch',status:'entered'}},
     {seq:3,kind:'tool_result',call_id:'same',iteration:1,tool:'run',input_ref:{sha256:sha},output_ref:{sha256:sha}},
@@ -198,8 +196,8 @@ const main=readFileSync(new URL('../../ui-kit/window/main.ts',import.meta.url),'
   const actions=walk(unit).filter(n=>n.className.includes('forge-action st'));
   assert.equal(actions.length,3,'repeated provider IDs and iterations remain distinct calls');
   assert.equal(actions[0],action);assert.equal(action.open,true,'receipts update the existing expanded action');
-  assert.equal(find(action,'Аргументы'),args,'arrival of a result preserves argument control focus');
-  assert.match(action.textContent,/результат получен/);assert.match(action.textContent,/Харнесс · forge_worker\._dispatch/);
+  assert.equal(action.querySelector('[data-trace-tab="args"]').getAttribute('aria-selected'),'true','receipt keeps the selected argument tab');
+  assert.match(action.textContent,/исход неизвестен/);assert.match(action.textContent,/forge_worker\._dispatch/);
   assert(t.calls.some(c=>c.path.includes('after_seq=1')),'continuation uses the exact journal cursor');
   t.panel.stop();
 }
@@ -301,15 +299,15 @@ console.log('Forge production panel: pagination, inert content, stable expansion
   await find(actions[0],'Ответ модели').click();await tick();
   const firstOutput=walk(actions[0]).find(n=>n.tag==='pre');
   assert.equal(firstOutput.textContent,Array.from(t.content).slice(0,8000).join(''));
-  assert.equal(walk(actions[1]).filter(n=>n.className==='forge-payload').at(-1).textContent,'','reading a model response does not paint another call');
-  await find(actions[1],'Результат вызова').click();await tick();
+  assert.equal(actions[1].querySelector('[data-trace-panel="response"] pre').textContent,'','reading a model response does not paint another call');
+  await find(actions[1],'Прочитать JSON-ответ').click();await tick();
   assert.equal(firstOutput.textContent,Array.from(t.content).slice(0,8000).join(''),'each action retains its own read position');
   t.panel.stop();
 }
 {
   const t=stand({compact:true});t.panel.start();await tick();const {unit}=await open(t);
   let release;t.state.payloadDelay=new Promise(resolve=>release=resolve);
-  await find(unit,'Результат вызова').click();await tick();t.panel.stop();
+  await find(unit,'Ответ модели').click();await tick();t.panel.stop();
   release({sha256:sha,offset:0,text:'LATE_STOPPED_PAYLOAD',total_chars:20,next_offset:null});await tick();
   assert.doesNotMatch(t.root.textContent,/LATE_STOPPED_PAYLOAD/);
   t.state.payloadDelay=null;t.panel.start();await tick();
@@ -345,14 +343,14 @@ console.log('Praxis-style Forge task nesting, observed model identity, complete 
   assert.match(partial.textContent,/Попытка 1 · без повтора/);
   assert.match(partial.textContent,/Частичный ответ сохранён; его действия не исполнялись/);
   assert.doesNotMatch(partial.textContent,/ответ записан|Ответила модель/,'transport error must not become model success');
-  await find(partial,'Результат вызова').click();await tick();
+  await find(partial,'Содержимое').click();await tick();
   const output=walk(partial).find(n=>n.tag==='pre');
   assert.equal(output.textContent,Array.from(t.content).slice(0,8000).join(''));
   assert.match(output.textContent,/<script>inert output<\/script>/,'payload stays inert text');
   await find(partial,'Следующие 8000 знаков').click();await tick();assert.equal(output.textContent,t.content);
   await find(future,'Аргументы').click();await tick();
   assert.equal(output.textContent,t.content,'future generic event keeps its own payload/cursor');
-  assert(find(future,'Результат вызова'),'generic events retain both reference kinds');
+  assert(find(future,'Содержимое'),'generic events retain both reference kinds');
   t.panel.stop();
 }
 console.log('Generic producer transport errors retain inert, Unicode-paged, event-local partial outputs PASS');

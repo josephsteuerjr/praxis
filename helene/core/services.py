@@ -132,14 +132,14 @@ def request_restart(unit: str, reason: str = "") -> tuple[bool, str]:
     if svc.kind == "foreign":
         return False, (f"{svc.name} — чужой процесс ({svc.what}); он мой файл-сигнал не читает. "
                        "Перезапустить его может только Егор с хоста. Могу посмотреть его логи "
-                       "(server_logs) и сказать, что там.")
+                       "(read_log с unit) и сказать, что там.")
     if panicked():
         return False, "Стоп-кран поднят (.panic) — руками к сервисам не тянусь."
     used = _recent_restarts(unit)
     if used >= RESTARTS_PER_HOUR:
         receipt("restart", unit, False, f"квота {used}/{RESTARTS_PER_HOUR}")
         return False, (f"Уже перезапускала {unit} {used} раза за час — это петля, а не починка. "
-                       "Разберись в причине (server_logs) или позови Егора.")
+                       "Разберись в причине (read_log с unit) или позови Егора.")
     try:
         svc.flag.parent.mkdir(parents=True, exist_ok=True)
         svc.flag.write_text(f"{_now()} — {(reason or 'без причины').strip()}", encoding="utf-8")

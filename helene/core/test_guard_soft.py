@@ -2,10 +2,9 @@
 
 Диагностика 23.07: LLM-судья дважды ложно клеймил 'credential' на SHA/receipt и на
 философском тексте Егора. Фикс: текстовый кред держит точный механический пол
-(core.secrets); судья флагует CREDENTIAL ТОЛЬКО для staged-ИЗОБРАЖЕНИЯ (пиксели пол
-не видит — адверсарка поймала утечку ключа на скриншоте); лёгший судья держит
-(fail-closed, придержка будит её окно). Часть «обучение прецедентами» вынесена в
-отдельный пасс (адверсарка второго круга показала инъекционную поверхность).
+(core.secrets) и тот же пол по байтам staged-документа. 10.11 Егор снял LLM-судью
+целиком («сними»): судьи на выходе нет ни для текста, ни для картинок, держит только
+механический пол. Тесты судьи удалены вместе с ним (история в git).
 
 Запуск:  python praxis_test.py test_guard_soft -v
 """
@@ -119,7 +118,7 @@ class DocumentFloorTests(unittest.TestCase):
                          "хвост за капом — задокументированный остаток, не чтение в память")
 
 
-class EvaluateReplyTests(unittest.TestCase):
+class TraceTests(unittest.TestCase):
     def setUp(self):
         os.environ.setdefault("TELEGRAM_API_ID", "1")
         os.environ.setdefault("TELEGRAM_API_HASH", "x")
@@ -128,73 +127,9 @@ class EvaluateReplyTests(unittest.TestCase):
         import agent
         self.agent = agent
 
-    def test_credential_scoped_to_images_in_judge(self):
-        self.assertIn("PRIVACY_HOLD_CREDENTIAL", self.agent._PRIVATE_DM_PRIVACY_HOLDS)
-        sys = self.agent._OUTBOUND_PRIVACY_SYS
-        self.assertIn("staged outbound image", sys.lower())
-        self.assertIn("not your concern", sys.lower())  # текстовый кред — не судье
-
-    def test_image_credential_held(self):
-        class FakeResp:
-            text = "PRIVACY_HOLD_CREDENTIAL"
-        with mock.patch.object(self.agent.llm, "configured", return_value=True), \
-             mock.patch.object(self.agent.llm, "chat", return_value=FakeResp()):
-            v, r = self.agent.evaluate_reply(
-                "вот скрин", audience_accepts_private=False,
-                outbound_images=({"type": "image", "path": "/x.png", "mime": "image/png"},))
-        self.assertEqual(v, "deny")
-        self.assertEqual(r, "privacy:credential")
-
-    def test_reports_unavailable_text_when_evaluator_down(self):
-        with mock.patch.object(self.agent.llm, "configured", return_value=False):
-            v, r = self.agent.evaluate_reply("публичный статус",
-                                             audience_accepts_private=False)
-        self.assertEqual(v, "unavailable")
-
-    def test_reports_unavailable_media_when_evaluator_down(self):
-        with mock.patch.object(self.agent.llm, "configured", return_value=False):
-            v, r = self.agent.evaluate_reply("текст", audience_accepts_private=False,
-                                             outbound_context="[непроверяемое медиа]")
-        self.assertEqual(v, "unavailable")
-
     def test_no_guidance_precedent_wiring(self):
         # Часть B (прецеденты) снята из этого деплоя — тула нет
         self.assertNotIn("guard_verdict", self.agent.TOOL_IMPL)
-
-    def test_shared_work_thread_grounding_09_50(self):
-        # реконструкция мисфайра 09:50: судья ДОЛЖЕН получить полный тул-трейс
-        # (её чтение общего треда про свой коммит) + промпт про доклад-о-себе
-        captured = {}
-
-        class FakeResp:
-            text = "PRIVACY_OK"
-
-        def fake_chat(channel, **kw):
-            captured["system"] = kw.get("system", "")
-            msgs = kw.get("messages", [])
-            captured["content"] = msgs[0]["content"] if msgs else ""
-            return FakeResp()
-
-        long_trace = ("group_context(topic_id=93381) → [общий рабочий тред аудит-демо; "
-                      + "мой коммит 779729d, baseline-пакет READY; " * 60 + "]")
-        with mock.patch.object(self.agent.llm, "configured", return_value=True), \
-             mock.patch.object(self.agent.llm, "chat", side_effect=fake_chat):
-            v, r = self.agent.evaluate_reply(
-                "Да, свою часть запушила: commit 779729d, baseline готов",
-                tool_trace=long_trace, audience_accepts_private=False)
-        self.assertEqual(v, "ok")
-        sysp = self.agent._OUTBOUND_PRIVACY_SYS
-        # минимальная безопасная версия (round 2): только перенаправление внимания
-        # на базовое правило, БЕЗ нового разрешения на защитном слое
-        self.assertIn("consulted such a thread is NOT itself leakage", sysp)
-        self.assertIn("what the DRAFT actually discloses", sysp)
-        # база сохранена (её сводка своей работы разрешена ею же, не новым абзацем)
-        self.assertIn("may also state or summarize its own decisions", sysp)
-        # НЕТ рискованного «commit/hash OK» permit (адверсарка: embargoed-хеш проскользнёт)
-        self.assertNotIn("honest engineering material)", sysp)
-        # реальный trace-budget поднят — КОРЕНЬ фикса 09:50 (контекст-голодание)
-        self.assertGreaterEqual(self.agent._TRACE_BUDGET, 3000)
-        self.assertGreaterEqual(self.agent._TRACE_RESULT_CHARS, 600)
 
     def test_clip_tool_trace_surfaces_full_result(self):
         # 09:50: результат group_context резался на 220 → судья не видел «это её тред».
@@ -221,25 +156,20 @@ class GuardPathTests(unittest.TestCase):
             chat_id=chat, principal_id="x", is_dm=True, owner=False, known=True,
             _scope_override="private")
 
+    def _no_llm(self):
+        return mock.patch.object(self.agent.llm, "chat",
+                                 side_effect=AssertionError("на выходе нет судьи-модели"))
+
     def test_real_token_held_by_floor_no_llm(self):
-        called = {"n": 0}
-
-        def fake_eval(*a, **k):
-            called["n"] += 1
-            return ("ok", "")
-
-        with mock.patch.object(self.agent, "evaluate_reply", side_effect=fake_eval), \
+        with self._no_llm(), \
              mock.patch.object(self.agent, "_held_self_wake"), \
              mock.patch.object(self.agent.turns, "record"):
             out = self.agent._guard_outbound("вот ключ ghp_" + "c" * 36,
                                              ctx=self._ctx(), turn={})
         self.assertEqual(out, "", "реальный токен держится механическим полом")
-        self.assertEqual(called["n"], 0, "LLM-судья не звался — пол сработал раньше")
 
-    def test_sha_receipt_passes_floor_to_llm(self):
-        with mock.patch.object(self.agent, "evaluate_reply",
-                               side_effect=lambda *a, **k: ("ok", "")), \
-             mock.patch.object(self.agent.turns, "record"):
+    def test_sha_receipt_passes_the_floor(self):
+        with self._no_llm(), mock.patch.object(self.agent.turns, "record"):
             out = self.agent._guard_outbound(
                 "запушила 305fb998e656d1792c48d2046a7f1f3bef39e1c7, SHA-256 50874d312186b",
                 ctx=self._ctx(), turn={})
@@ -253,20 +183,13 @@ class GuardPathTests(unittest.TestCase):
                          "telegram bot token — praxis.env")
         self.assertEqual(self.agent._staged_document_floor(
             "#1 document report.md; text/markdown (5 bytes); sha256=cd34"), "")
-        called = {"n": 0}
-
-        def fake_eval(*a, **k):
-            called["n"] += 1
-            return ("ok", "")
-
-        with mock.patch.object(self.agent, "evaluate_reply", side_effect=fake_eval), \
+        with self._no_llm(), \
              mock.patch.object(self.agent, "_held_self_wake"), \
              mock.patch.object(self.agent.turns, "record"):
             out = self.agent._guard_outbound(
                 "вот файл конфига", ctx=self._ctx(), turn={},
                 outbound_context=marked)
         self.assertEqual(out, "", "секрет в БАЙТАХ документа держится, как в тексте")
-        self.assertEqual(called["n"], 0, "держит пол, не LLM")
 
     def test_prepare_outbound_guard_scans_document_bytes_for_non_owner(self):
         """D1-шов: ветка document читает байты и рождает метку; owner-аудитория — нет."""

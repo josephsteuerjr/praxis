@@ -1,7 +1,7 @@
 """
 Тесты «Прожитого хода»: turns.py (кольцо, урезка на записи, тиры приватности)
-и интеграция — voice_turn/guard пишут исход хода, outbound data advisor получает свежие
-ходы scope-честно, STATE и [missed]-фрейм отвечают фактом, тул recent_turns, сон сводит
+и интеграция — voice_turn/guard пишут исход хода (на выходе держит только кред-пол,
+советника приватности с 10.11 нет), STATE и [missed]-фрейм отвечают фактом, тул recent_turns, сон сводит
 день кодом. Изоляция .state/turns.jsonl per-test — та же готча, что _dialog_name_cache.
 
 Запуск:  python praxis_test.py test_turns -v
@@ -563,32 +563,31 @@ class TestLiveRecording(TurnsBase):
         self.assertEqual(r["held"], "voice")
         self.assertEqual(r["why"], "")
 
-    def test_data_authority_hold_recorded(self):
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: ("deny", "чужой секрет")
-        self._client("вот тебе секрет Маши")
+    def test_credential_floor_hold_recorded(self):
+        # Кред-пол — единственное, что держит слово на выходе (Егор 10.11, «сними»).
+        self._orig.append((agent._core_secrets, "credential_floor",
+                           agent._core_secrets.credential_floor))
+        agent._core_secrets.credential_floor = lambda text, context="": "api-token"
+        self._client("вот тебе токен")
         out = agent.voice_turn("888", "вася: расскажи", speaker="вася", is_owner=False)
         self.assertEqual(out, "")
         r = turns.recent()[-1]
         self.assertEqual((r["held"], r["verdict"]), ("privacy", "deny"))
         self.assertEqual((r["advisor"], r["praxis_decision"]),
-                         ("privacy", "hold_for_data_authority"))
+                         ("credential-floor", "hold_for_data_authority"))
         self.assertEqual(r["advisor_verdict"], "deny")
-        self.assertIn("секрет", r["why"])
+        self.assertIn("credential", r["why"])
 
-    def test_data_authority_ok_records_advice_and_praxis_decision(self):
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: ("ok", "")
-        self._client("ответ по делу")
+    def test_guest_turn_records_that_no_advisor_ran(self):
+        self._client("ответ по делу про Машу")
         out = agent.voice_turn("888", "вася: привет", speaker="вася", is_owner=False)
-        self.assertEqual(out, "ответ по делу")
+        self.assertEqual(out, "ответ по делу про Машу")
         r = turns.recent()[-1]
-        self.assertEqual((r["advisor"], r["advisor_verdict"], r["praxis_decision"]),
-                         ("privacy", "ok", "send_authored"))
+        self.assertEqual((r["advisor"], r["praxis_decision"]), ("none", "send_authored"))
+        self.assertFalse(r.get("advisor_verdict"))
+        self.assertEqual(r["held"], "")
 
     def test_owner_dm_records_exact_unmediated_output(self):
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: ("молчи", "перебор с лестью")
         self._client("Мне повезло с архитектором. Тесты зелёные.")
         out = agent.voice_turn("777", "Егор: как тесты?", speaker="Егор", is_owner=True)
         self.assertEqual(out, "Мне повезло с архитектором. Тесты зелёные.")
@@ -600,8 +599,6 @@ class TestLiveRecording(TurnsBase):
         self.assertEqual(r["out"], out)
 
     def test_authored_repeat_is_recorded_as_delivery(self):
-        self._orig.append((agent, "evaluate_reply", agent.evaluate_reply))
-        agent.evaluate_reply = lambda text, context="", **kw: ("ok", "")
         self._client("повторяюсь")
         agent.voice_turn("-100", "вася: ну?", speaker="вася", is_dm=False)
         self._client("повторяюсь")
@@ -643,23 +640,15 @@ class TestLiveRecording(TurnsBase):
 # --------------------------------------------------------------------------- #
 
 class TestConsumers(TurnsBase):
-    def test_group_data_advisor_gets_only_group_prior_turns(self):
-        self._mk(chat_id="777", scope="owner", out="MARKER_OWNER сделала grep")
+    def test_group_turn_makes_one_model_call_and_no_judge_call(self):
+        # Раньше вторым вызовом шёл outbound-советник приватности со свежими ходами канала.
+        # Егор 10.11 («сними»): советника нет — ход группы стоит ровно одного вызова мозга.
         self._mk(chat_id="-100", scope="group", who="вася", out="MARKER_GRP ответила в группе")
-        sc2 = ScriptedClient(["ответ в группу", "PRIVACY_OK"])
-        llm.use_test_client(sc2)
-        agent.voice_turn("-100", "вася: а помнишь?", speaker="вася", is_dm=False)
-        eval2 = sc2.calls[1]["messages"][0]["content"]
-        self.assertIn("lived turns", eval2)
-        self.assertIn("MARKER_GRP", eval2, "свои ходы канала — видны")
-        self.assertNotIn("MARKER_OWNER", eval2, "owner-DM не утекает в групповой оценщик")
-
-    def test_no_prior_turns_no_block(self):
-        sc = ScriptedClient(["первый ответ", "PRIVACY_OK"])
+        sc = ScriptedClient(["ответ в группу"])
         llm.use_test_client(sc)
-        agent.voice_turn("-777", "Гость: привет", speaker="Гость", is_dm=False)
-        eval_content = sc.calls[1]["messages"][0]["content"]
-        self.assertNotIn("lived turns", eval_content, "пустое кольцо — блок не добавляется")
+        out = agent.voice_turn("-100", "вася: а помнишь?", speaker="вася", is_dm=False)
+        self.assertEqual(out, "ответ в группу")
+        self.assertEqual(len(sc.calls), 1, "на выходе не должно быть второй модели")
 
     def test_state_block_names_last_turn(self):
         self._mk(out="MARKER_STATE закончила ревью")

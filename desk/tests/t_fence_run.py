@@ -65,8 +65,12 @@ class Ground(unittest.TestCase):
     def setUp(self):
         self._state = dict(fence.STATE)
         self._workshop = sys.modules.get("workshop")
+        import command_execution
+        self._command = {n:getattr(command_execution,n) for n in ("home_prepare","home_runner","home_pipe_sid","output_decoder")}
 
     def tearDown(self):
+        import command_execution
+        for name,value in self._command.items():setattr(command_execution,name,value)
         fence.STATE.clear()
         fence.STATE.update(self._state)
         if self._workshop is None:
@@ -234,12 +238,12 @@ class Installed(Ground):
         sys.modules["workshop"] = types.SimpleNamespace(subprocess=real_subprocess)
         fence.STATE["container"] = True
         before = {r["name"]: r["fence"] for r in fence.hands_report(agent)}
-        self.assertEqual(before["run"], "outside")
+        self.assertEqual(before["project"], "outside")
 
         fence._shim_workshop(FakeContainer(), Path("C:/H/data/workspace"), Path("C:/H"))
         after = {r["name"]: r["fence"] for r in fence.hands_report(agent)}
-        self.assertEqual(after["run"], "container")
-        self.assertEqual(after["pip_install"], "container")
+        self.assertEqual(after["project"], "container")
+        self.assertEqual(after["python"], "container")
 
     def test_run_tests_carries_the_half_that_is_still_outside(self):
         """`run_tests("self")` идёт через selfdev в worktree предложения, а он
@@ -249,7 +253,7 @@ class Installed(Ground):
         sys.modules["workshop"] = types.SimpleNamespace(subprocess=real_subprocess)
         fence._shim_workshop(FakeContainer(), Path("C:/H/data/workspace"), Path("C:/H"))
         fence.STATE["container"] = True
-        why = {r["name"]: r["why"] for r in fence.hands_report(agent)}["run_tests"]
+        why = {r["name"]: r["why"] for r in fence.hands_report(agent)}["proposal"]
         self.assertIn("selfdev", why)
 
 

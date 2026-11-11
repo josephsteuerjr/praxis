@@ -267,13 +267,22 @@ def commit(program,value,window,*,places=None,backend=None):
                 if owner_stop.stopped() or session_exit.requested(program) or retirement_update.cancelled(value):
                     raise InterruptedError('Owner stopped before programme deletion')
                 backend.remove(root)
-            if root.exists():raise RuntimeError('Former programme remains')
+            if root.exists():
+                # 11.11 (Yegor): files Windows protects from a non-administrator stay and are
+                # named; anything the backend did not record as protected is still a failure.
+                from .first_start import cleanup_leftovers
+                value.setdefault('cleanup_errors',[]).extend(cleanup_leftovers(backend,[root],notes=False))
+                value.setdefault('retained',[]).append(str(root));value.pop('deleting',None)
+                _write(path(program),value,private=True)
+                continue
             value['removed'].append(str(root));value.pop('deleting',None);_write(path(program),value,private=True)
         if stopped():raise InterruptedError('Owner stopped before final retirement shortcuts')
         for gone in value['removed']:
             if not missing(gone):raise ValueError('A retired path has been reused; it is retained')
         # Retarget captured old links even if their programme was already gone.
         backend.shortcuts([plain(row['root']) for row in value['targets']],program)
+        for note in getattr(backend,'notes',[]):
+            if note not in value.setdefault('cleanup_errors',[]):value['cleanup_errors'].append(note)
         value.pop('error',None)
         value.update(state='completed',completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
         _write(path(program),value,private=True)

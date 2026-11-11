@@ -1,5 +1,6 @@
 """Slot management through the Python desktop command, using isolated credentials."""
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -14,11 +15,30 @@ from localharness import relay_network
 
 class SlotTests(unittest.TestCase):
     def test_proxy_modes_and_credentials_are_private_child_inputs(self):
-        self.assertEqual(relay_network.environment({'proxy':{'mode':'direct'}}),{'RELAY_NETWORK_MODE':'direct','RELAY_PROXY_URL':''})
+        direct=relay_network.environment({'proxy':{'mode':'direct'}})
+        self.assertEqual(direct['RELAY_NETWORK_MODE'],'direct')
+        self.assertEqual(direct['RELAY_PROXY_URL'],'')
+        self.assertEqual(direct['NO_PROXY'],'*')
         value=relay_network.environment({'proxy':{'mode':'proxy','protocol':'socks5h','host':'::1','port':'1080','username':'a@b','password':'p:/?'}})
         self.assertEqual(value['RELAY_PROXY_URL'],'socks5h://a%40b:p%3A%2F%3F@[::1]:1080')
+        for name in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'):
+            self.assertEqual(value[name],value['RELAY_PROXY_URL'])
+            self.assertEqual(direct[name],'')
         for config in ({'mode':'proxy','host':'host/path','port':'1080'}, {'mode':'proxy','host':'host','port':0}, {'mode':'proxy','host':'host','port':1080,'password':'secret'}, {'mode':'invented'}):
             with self.assertRaises(ValueError):relay_network.environment({'proxy':config})
+
+    def test_standard_proxy_overrides_ambient_bypass_only_for_relay_child(self):
+        ambient={'http_proxy':'http://unselected.invalid:1','HTTPS_PROXY':'http://unselected.invalid:2',
+                 'ALL_PROXY':'http://unselected.invalid:3','NO_PROXY':'*','no_proxy':'chatgpt.com'}
+        before=dict(os.environ)
+        selected=dict(ambient,**relay_network.environment({'proxy':{'mode':'proxy','host':'127.0.0.1','port':18888}}))
+        self.assertEqual(selected['HTTPS_PROXY'],'http://127.0.0.1:18888')
+        self.assertEqual(selected['http_proxy'],'http://127.0.0.1:18888')
+        self.assertEqual(selected['NO_PROXY'],'localhost,127.0.0.1,::1')
+        self.assertEqual(selected['no_proxy'],selected['NO_PROXY'])
+        system=dict(ambient,**relay_network.environment({}))
+        for name,value in ambient.items():self.assertEqual(system[name],value)
+        self.assertEqual(dict(os.environ),before)
 
     def test_manual_proxy_check_uses_saved_relay_api_not_model_generation(self):
         with tempfile.TemporaryDirectory() as tmp:

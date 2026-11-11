@@ -13,7 +13,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
-import host_broker
+if sys.platform.startswith('linux'):
+    import host_broker
 import host_access
 
 

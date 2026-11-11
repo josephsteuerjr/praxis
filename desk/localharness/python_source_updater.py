@@ -619,7 +619,7 @@ os.execv(entry,command)
         if getattr(args,'discard_preimages',''):
             # Resolve these before deleting the staging app's module sources.
             from localharness import package_notice,program_state
-            from localharness import clean_code_retirement
+            from localharness import clean_code_retirement,validation_read
         def remove_readonly_file(function, path, failure):
             if function is not os.unlink or not isinstance(failure[1], PermissionError):
                 raise failure[1]

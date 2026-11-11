@@ -1,9 +1,7 @@
 """
 Тесты PASS 12.
 
-12.0.a — семья одной командой владельца:
-  * tool_admit(role="family") пишет И known_ids, И role: family в шапку досье за один шаг
-    (обе дыры: без known роль вообще не читается; панель роль не ставила никак);
+12.0.a — семья одной командой владельца (рука admit удалена 10.11 по слову Егора):
   * role: family переживает консолидацию (parse/render round-trip — раньше преамбульная
     строка выпадала при первой же правке досье, и family молча слетал);
   * неизвестная роль — честный отказ, без мусора в файле и без впуска;
@@ -46,58 +44,6 @@ def _patch_social_to_tmp(test, mem: Path):
 # --------------------------------------------------------------------------- #
 #  12.0.a — семья одной командой
 # --------------------------------------------------------------------------- #
-
-class AdmitRoleBase(Base):
-    def setUp(self):
-        super().setUp()
-        _patch_social_to_tmp(self, self.tmp / "memory")
-        self._owner_env = os.environ.get("PRAXIS_OWNER_ID")
-        os.environ["PRAXIS_OWNER_ID"] = "606060"
-        self._owner_token = agent._TURN_CHANNEL.set(agent.ChannelContext(
-            chat_id="606060", principal_id=606060, is_dm=True, owner=True, known=True,
-        ))
-
-    def tearDown(self):
-        agent._TURN_CHANNEL.reset(self._owner_token)
-        if self._owner_env is None:
-            os.environ.pop("PRAXIS_OWNER_ID", None)
-        else:
-            os.environ["PRAXIS_OWNER_ID"] = self._owner_env
-        super().tearDown()
-
-
-class TestAdmitFamily(AdmitRoleBase):
-    def test_family_in_one_call(self):
-        out = agent.tool_admit("Виктор", id="700700", role="family")
-        self.assertIn("семь", out.lower())
-        self.assertIn("700700", social.known_ids(), "family-впуск обязан писать known_ids")
-        self.assertEqual(social.role_of("700700"), "family")
-
-    def test_role_survives_consolidation(self):
-        agent.tool_admit("Виктор", id="700700", role="family")
-        slug = people._slug("Виктор")
-        # так консолидация правит досье — через parse/render; роль слетать не должна
-        people.append_fact(slug, "Виктор", "любит горы")
-        people.set_prose(slug, "Виктор", now="сейчас в отпуске")
-        self.assertEqual(people.role(slug), "family", "role: family обязан пережить round-trip")
-        self.assertEqual(social.role_of("700700"), "family")
-
-    def test_unknown_role_refused_no_side_effects(self):
-        out = agent.tool_admit("Икс", id="800800", role="босс")
-        self.assertIn("не знаю", out.lower())
-        self.assertNotIn("800800", social.known_ids(), "мусорная роль — ни впуска, ни файла")
-        self.assertFalse(people.path_for(people._slug("Икс")).exists())
-
-    def test_plain_admit_unchanged(self):
-        agent.tool_admit("Гость", id="900900")
-        self.assertEqual(social.role_of("900900"), "known")
-
-    def test_role_is_owner_only_by_construction(self):
-        # tool_admit — owner-тул (в OWNER_TOOLS, не в BASE_TOOLS): чужой путь до параметра не доходит
-        self.assertIn(agent.ADMIT_TOOL, agent.OWNER_TOOLS)
-        self.assertNotIn(agent.ADMIT_TOOL, agent.BASE_TOOLS)
-        self.assertIn("role", agent.ADMIT_TOOL["input_schema"]["properties"])
-
 
 class TestRoleRoundTrip(Base):
     """Точечно про people.parse/render: header-строки (role, Алиасы) round-trip-safe."""
@@ -161,10 +107,10 @@ class TaskResolveBase(Base):
         _patch_social_to_tmp(self, self.tmp / "memory")
         self._orig.append((tasks_mod, "TASKS", tasks_mod.TASKS))
         tasks_mod.TASKS = self.tmp / "memory" / "tasks.json"
-        for key in ("resolve_entity", "get_id"):
+        for key in ("resolve_entity", "find_telegram_id"):
             agent._TELETHON.pop(key, None)
         self.addCleanup(lambda: [agent._TELETHON.pop(k, None)
-                                 for k in ("resolve_entity", "get_id")])
+                                 for k in ("resolve_entity", "find_telegram_id")])
 
 
 class TestUnifiedResolver(TaskResolveBase):
@@ -180,7 +126,7 @@ class TestUnifiedResolver(TaskResolveBase):
 
     def test_get_id_fallback_when_no_resolve_entity(self):
         # обратная совместимость: если мост зарегистрировал только get_id — работаем через него
-        agent._TELETHON["get_id"] = lambda ref: 555
+        agent._TELETHON["find_telegram_id"] = lambda ref: 555
         self._orig.append((social, "category", social.category))
         social.category = lambda sid: "known"
         out = agent.tool_remind_self("message", "привет", "in 1h", "@vasya")
@@ -294,7 +240,7 @@ class TestAbsenceNarrowVoice(Base):
         self.assertTrue(out)
         # 06.07 ревизия: не 0 тулов (звучало вестником) — именованный safe read-only набор.
         names = {t["name"] for t in (captured.get("tools") or [])}
-        self.assertEqual(names, {"recall", "connections"}, "safe read-only, не пусто и не всё")
+        self.assertEqual(names, {"recall", "memory_graph"}, "safe read-only, не пусто и не всё")
         for dangerous in ("shell", "send_message", "remember", "journal", "admit", "restart_self"):
             self.assertNotIn(dangerous, names, f"{dangerous} не должен быть в узком проходе")
 
@@ -396,7 +342,8 @@ class TestRestartMailbotSignal(Base):
 
     def test_owner_only(self):
         names = {t["name"] for t in agent.OWNER_TOOLS}
-        self.assertIn("restart_mailbot", names)
+        self.assertNotIn("restart_mailbot", names)
+        self.assertIn("manage_service", names)
         base_names = {t["name"] for t in agent.BASE_TOOLS}
         self.assertNotIn("restart_mailbot", base_names, "не должен быть доступен не-владельцу")
 
