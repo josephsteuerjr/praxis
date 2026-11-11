@@ -1,30 +1,50 @@
-name: Inspect Beta Mac qualification records
+name: Finish Beta Mac qualification on unchanged packages
 on:
   push:
-    branches: [codex/helene260-beta-mac-diagnostics]
+    branches: [codex/helene260-beta-mac-retry]
 permissions:
   contents: write
 jobs:
-  inspect:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 12
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            runner: macos-15
+          - target: macos-intel
+            runner: macos-26-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
     steps:
-      - name: Read both completed candidate records
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read completed candidate and prepare isolated case-sensitive fixture
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release download v2.6.0 --pattern 'native-macos*.tar.gz' --dir candidates
+          gh release download v2.6.0 --pattern 'native-${{ matrix.target }}.tar.gz' --dir prior
+          hdiutil create -size 16g -type SPARSE -fs APFSX -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
           python3 - <<'PY'
           from pathlib import Path
-          import json,tarfile
-          result={}
-          for path in Path('candidates').glob('*.tar.gz'):
-              with tarfile.open(path) as z:
-                  rows=json.load(z.extractfile('evidence/native/regressions.json'))
-                  failed=[r for r in rows if r['exit']]
-                  result[path.name]={'failed':failed,'total_modules':len(rows),'logs':{r['module']:z.extractfile('evidence/native/'+r['module']+'.log').read().decode('utf8','replace')[-14000:] for r in failed}}
-          Path('mac-diagnostics.json').write_text(json.dumps(result,indent=2))
-          print(json.dumps({k:{'failed':v['failed'],'total_modules':v['total_modules']} for k,v in result.items()}))
+          import hashlib,json,os,tarfile
+          p=Path('inputs.tar.gz');n=json.loads(Path('PREPARED.json').read_bytes())
+          assert hashlib.sha256(p.read_bytes()).hexdigest()==n['archive_sha256']
+          with tarfile.open(p) as z:z.extractall(Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification',filter='data')
           PY
-          gh release upload v2.6.0 mac-diagnostics.json
+      - name: Retry failed rows and complete native checks
+        run: python3 -B mac_retry.py --target ${{ matrix.target }} --root "$RUNNER_TEMP/helene-case/qualification" --prior 'prior/native-${{ matrix.target }}.tar.gz' > retry-driver.log 2>&1
+      - name: Retain retry evidence and compact summary
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          cp retry-driver.log "$RUNNER_TEMP/helene-case/qualification/retry-evidence/driver.log"
+          cp "$RUNNER_TEMP/helene-case/qualification/retry-evidence/summary.json" "retry-${TARGET}-summary.json"
+          tar -czf "retry-${TARGET}.tar.gz" -C "$RUNNER_TEMP/helene-case/qualification" retry-evidence
+          gh release upload v2.6.0 "retry-${TARGET}.tar.gz" "retry-${TARGET}-summary.json"
