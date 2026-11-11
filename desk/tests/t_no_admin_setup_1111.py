@@ -70,6 +70,7 @@ function New-Object {param([string]$TypeName,[string]$ComObject)
         self.assertTrue(backend.unreadable)
 
 
+@unittest.skipUnless(os.name=='nt','Windows first-start backend')
 class Cleanup(unittest.TestCase):
     def test_locked_old_file_is_named_without_stopping_or_elevating_its_holder(self):
         with tempfile.TemporaryDirectory(prefix='helene-no-admin-') as temporary:
