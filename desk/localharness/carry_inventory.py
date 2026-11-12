@@ -60,6 +60,14 @@ def members(archive, *, windows=None):
     return list(result.values())
 
 
+def file_sha256(stream):
+    """hashlib.file_digest is 3.11+; server hosts may run 3.9/3.10."""
+    digest = hashlib.sha256()
+    while block := stream.read(1024 * 1024):
+        digest.update(block)
+    return digest.hexdigest()
+
+
 def record(archive, info):
     digest = hashlib.sha256(); size = 0
     with archive.open(info) as source:

@@ -17,34 +17,62 @@ def command(args):
     return subprocess.check_output(['docker',*args],text=True,timeout=90)
 
 
-def recover(row):
+def canonical(row):
     root=Path(row['deployment']['directory'])
     if root.resolve()!=root or root.is_symlink():raise ValueError('noncanonical target')
+    return root
+
+
+def claimed(row,root):
+    """The installation was created by exactly this transfer and archive."""
+    try:claim=json.loads((root/'.window-transfer.json').read_text())
+    except FileNotFoundError:claim={}
+    return claim.get('id')==row['id'] and claim.get('archive_sha')==row['archive_sha']
+
+
+def owned(row,root):
+    """Immutable IDs of this deployment's containers, after label/mount checks."""
+    target=row['deployment'];result=[]
+    for name,project in ((target['container']+'-updater',target['project']+'-updater'),(target['container'],target['project'])):
+        present=command(['container','ls','-a','--filter','name=^/'+name+'$','--format','{{.ID}}'])
+        if not present.strip():continue
+        info=json.loads(command(['inspect',name]))[0]
+        if (info.get('Config',{}).get('Labels') or {}).get('com.docker.compose.project')!=project:
+            raise ValueError('foreign compose project')
+        if not any(m.get('Source') in (str(root),str(root/'data')) for m in info.get('Mounts',[])):
+            raise ValueError('foreign data mount')
+        if not re.fullmatch('[a-f0-9]{64}',info.get('Id','')):raise ValueError('missing immutable identity')
+        result.append(info['Id'])
+    return result
+
+
+def stopped(identities):
+    for identity in identities:
+        info=json.loads(command(['inspect',identity]))[0]
+        if info['State']['Running'] is not False:return False
+    return True
+
+
+def fenced(row,root):
+    try:value=json.loads((root/'.window-transfer-stopped').read_text())
+    except FileNotFoundError:return False
+    return value.get('id')==row['id'] and value.get('archive_sha')==row['archive_sha']
+
+
+def recover(row):
+    root=canonical(row)
     if not root.exists():
         if row['phase']!='archive':raise ValueError('missing installation ownership')
         return {'ok':True,'never_installed':True}
     fd=os.open(root/'.install.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
     try:
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        marker=root/'.window-transfer.json'
-        try:claim=json.loads(marker.read_text())
-        except FileNotFoundError:claim={}
-        if claim.get('id')!=row['id'] or claim.get('archive_sha')!=row['archive_sha']:
+        if not claimed(row,root):
             if row['phase']=='archive' and not (root/'helene.json').exists():
                 # No install command can precede the durable installing phase.
                 return {'ok':True,'never_installed':True}
             raise ValueError('installation ownership mismatch')
-        target=row['deployment'];owned=[]
-        for name,project in ((target['container']+'-updater',target['project']+'-updater'),(target['container'],target['project'])):
-            present=command(['container','ls','-a','--filter','name=^/'+name+'$','--format','{{.ID}}'])
-            if not present.strip():continue
-            info=json.loads(command(['inspect',name]))[0]
-            if (info.get('Config',{}).get('Labels') or {}).get('com.docker.compose.project')!=project:
-                raise ValueError('foreign compose project')
-            if not any(m.get('Source') in (str(root),str(root/'data')) for m in info.get('Mounts',[])):
-                raise ValueError('foreign data mount')
-            if not re.fullmatch('[a-f0-9]{64}',info.get('Id','')):raise ValueError('missing immutable identity')
-            owned.append(info['Id'])
+        owned_ids=owned(row,root)
         fence=root/'.window-transfer-stopped'
         if not fence.exists():
             with fence.open('x',encoding='utf-8') as out:
@@ -52,11 +80,10 @@ def recover(row):
             parent=os.open(root,os.O_RDONLY|os.O_DIRECTORY)
             try:os.fsync(parent)
             finally:os.close(parent)
-        for identity in owned:
+        for identity in owned_ids:
             command(['stop','--time','30',identity])
-            info=json.loads(command(['inspect',identity]))[0]
-            if info['State']['Running'] is not False:raise ValueError('stop not confirmed')
-        return {'ok':True,'stopped':owned,'data_kept':True}
+        if not stopped(owned_ids):raise ValueError('stop not confirmed')
+        return {'ok':True,'stopped':owned_ids,'data_kept':True}
     finally:os.close(fd)
 
 

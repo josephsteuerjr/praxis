@@ -117,7 +117,7 @@ def create(destination,raw_roots,*,exclusions=(),metadata=None):
         signature=lambda values:[(name,rel,kind,_fingerprint(info)) for name,_,rel,_,info,kind in values]
         if signature(rows)!=signature(now):raise ValueError('Содержимое папок изменилось во время снимка. Архив не завершён.')
         with zipfile.ZipFile(temporary,'a',compression=zipfile.ZIP_DEFLATED) as archive:integrity=checks.seal(archive)
-        with temporary.open('r+b') as stream:os.fsync(stream.fileno());digest=hashlib.file_digest(stream,'sha256').hexdigest()
+        with temporary.open('r+b') as stream:os.fsync(stream.fileno());digest=checks.file_sha256(stream)
         os.replace(temporary,destination)
         return {'archive':str(destination),'sha256':digest,'integrity':integrity,'roots':list(roots),'links':len(links)}
     except BaseException:
@@ -180,7 +180,7 @@ def stage(archive_path,destination,*,expected_sha256):
     if destination.parent.resolve()!=destination.parent:
         raise ValueError('Родитель папки подготовки должен быть настоящей папкой без ссылок.')
     with Path(archive_path).open('rb') as source:
-        if hashlib.file_digest(source,'sha256').hexdigest()!=expected_sha256:
+        if checks.file_sha256(source)!=expected_sha256:
             raise ValueError('Архив не совпадает с квитанцией переноса.')
         source.seek(0);meta=inspect(source)
         source.seek(0)

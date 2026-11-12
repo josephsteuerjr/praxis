@@ -65,16 +65,31 @@ def inventory(root):
     return result
 
 
+def read_config(config_path):
+    """Same encodings as carry._read_config; standard library only for server helpers."""
+    raw=Path(config_path).read_bytes()
+    text=raw[3:].decode('utf-8') if raw[:3]==b'\xef\xbb\xbf' else raw.decode('utf-16') if raw[:2] in (b'\xff\xfe',b'\xfe\xff') else raw.decode('utf-8')
+    value=json.loads(text)
+    if not isinstance(value,dict):raise ValueError('Настройки агента должны быть объектом.')
+    return value
+
+
+def configured_roots(config_path,cfg):
+    """Actual data/code/application folders of one configured agent."""
+    program=Path(config_path).resolve().parent
+    def at(raw):
+        path=Path(raw);return (path if path.is_absolute() else program/path).resolve()
+    return {'data':at(str(cfg.get('tree') or 'data')),'code':at(str(cfg.get('code') or 'tree')),
+            'application':at(str(cfg.get('app') or 'app/deskapp.py')).parent}
+
+
 def discover(config_path):
     """Find actual configured roots plus local project candidates, without copying."""
-    from . import carry
-    config_path=Path(config_path).resolve();cfg=carry._read_config(config_path)
-    home=carry.tree_of(config_path,cfg).resolve();program=config_path.parent
-    code=Path(str(cfg.get('code') or 'tree'));code=code if code.is_absolute() else program/code
-    roots=[{'kind':'data','path':str(home)},{'kind':'code','path':str(code.resolve())}]
-    app=Path(str(cfg.get('app') or 'app/deskapp.py'));app=app if app.is_absolute() else program/app
-    app=app.resolve().parent
-    if app.is_dir():roots.append({'kind':'application','path':str(app)})
+    config_path=Path(config_path).resolve();cfg=read_config(config_path)
+    standard=configured_roots(config_path,cfg)
+    home=standard["data"]
+    roots=[{'kind':'data','path':str(home)},{'kind':'code','path':str(standard['code'])}]
+    if standard['application'].is_dir():roots.append({'kind':'application','path':str(standard['application'])})
     candidates={};unavailable=[]
     def candidate(raw,via):
         if not isinstance(raw,str) or not raw.strip():return
@@ -86,7 +101,8 @@ def discover(config_path):
             unavailable.append({'path':raw,'via':via,'reason':'project_unavailable'});return
         if not resolved.is_dir():
             unavailable.append({'path':raw,'via':via,'reason':'project_not_directory'});return
-        if resolved.is_relative_to(home):return
+        # Paths inside the agent's own data/code/application are already captured.
+        if any(resolved.is_relative_to(path) for path in standard.values()):return
         key=os.path.normcase(str(resolved))
         value=candidates.setdefault(key,{'path':str(resolved),'via':[]})
         if via not in value['via']:value['via'].append(via)
