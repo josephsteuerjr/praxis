@@ -220,7 +220,11 @@ class SignedOwnerHttp(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers['Cache-Control'],'no-store')
         self.assertIn('Secure',response.headers['Set-Cookie'])
         key=(await response.json())['key'];headers={'Authorization':'Bearer '+key}
-        self.assertEqual((await self.client.get('/api/md',headers=headers)).status,403)
+        from deskd import program
+        with patch.object(program,'invoke',return_value={'same_program':True}):
+            response=await self.client.post('/api/program/invoke',json={'command':'app_info'},headers=headers)
+            self.assertEqual(response.status,200)
+            self.assertTrue((await response.json())['same_program'])
         self.assertTrue(deskapp._device_ok(key))
         for data in [_init_data({'id':124},token='fixture:token'),_init_data({'id':123},token='other-bot'),
                      _init_data({'id':123},token='fixture:token',auth_date=int(time.time()-8*86400))]:

@@ -431,6 +431,14 @@ class Host:
         if agents.find(self.root, selected) is None:
             raise ValueError('Selected agent is unavailable')
         with self.owner.selection(selected):
+            if action == 'program_channel':
+                target = self.owner.current()
+                if not target.enabled or target.conflict:
+                    raise ValueError('Agent unavailable')
+                # A phone observer never changes the native window selection.
+                if args.get('ready') is True:
+                    self.owner.readiness(agent=target)
+                return self.owner.channel()
             if action == 'attach':
                 origin = _origin(args['origin']) if args.get('origin') else ''
                 identity = str(args['observer'])
@@ -474,6 +482,20 @@ class Host:
                 command, arguments = args.get('command'), args.get('arguments')
                 if not isinstance(command, str) or not isinstance(arguments, dict):
                     raise ValueError('Expected a desktop command and object arguments')
+                browser_program = args.get('presentation') == 'miniapp'
+                if browser_program:
+                    from . import program_commands
+                    result = program_commands.invoke(self.root, self.root, command, arguments)
+                    if result is not program_commands.UNHANDLED:
+                        return result
+                    if command == 'switch_agent':
+                        raise ValueError('Select the MiniApp channel without replacing native windows')
+                    if command == 'component_install' and arguments.get('name') == 'relay':
+                        from . import standalone_relay
+                        return standalone_relay.install(self.root)
+                    if command == 'components_start':
+                        self.owner.start()
+                        return {'ok': True}
                 durable_restore=False
                 if command=='restore_upstream':
                     from .upstream_recovery import modern
@@ -481,10 +503,10 @@ class Host:
                 if command in ('update_install','update_start') or durable_restore:
                     from .desktop_update_request import admit_install,admit_download,admit_restore
                     observer = self.observers.get(args.get('observer'))
-                    if ((command=='restore_upstream' and not observer)
+                    if ((command=='restore_upstream' and not observer and not browser_program)
                             or args.get('observer') and (not observer or observer['agent']!=selected)):
                         raise ValueError('Update observer is no longer registered for this agent')
-                    presentation = bool(observer and observer.get('browser_mode'))
+                    presentation = browser_program or bool(observer and observer.get('browser_mode'))
                     arguments = {**arguments,'browser_mode':presentation}
                     admission = (admit_restore if command=='restore_upstream' else
                                  admit_install if command=='update_install' else admit_download)

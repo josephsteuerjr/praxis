@@ -486,6 +486,12 @@ def _role(request: web.Request) -> str:
             # авария трубы.
             pass
     if _device_ok(supplied):
+        digest = _key_hash(supplied)
+        # Only a fresh, signed owner Telegram enrollment grants the full program.
+        # QR devices and pre-upgrade sessions retain their existing scope.
+        if any(row.get('scope') == 'program' and row.get('pair') == 'tg:' + _tg_owner_id()
+               and secrets.compare_digest(digest, str(row.get('hash') or '')) for row in _devices()):
+            return 'owner'
         return "device"
     if not TOKEN and _is_loopback(request) and os.environ.get("HELENE_LOOPBACK_OWNER") == "1":
         # ⚠ 1.2.5 (отчёт Йоны 29.09): «петля без токена = владелец» отдавала роль владельца
@@ -818,7 +824,7 @@ def _tg_login(user: dict, addr: str) -> dict:
     stamp = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
     with _DEVICES_LOCK:
         rows = [d for d in _devices() if str(d.get("pair") or "") != pair]
-        rows.append({"id": secrets.token_hex(6), "pair": pair, "name": name,
+        rows.append({"id": secrets.token_hex(6), "pair": pair, "name": name, "scope": "program",
                      "hash": _key_hash(key), "addr": addr, "created": stamp,
                      "last_seen": stamp})
         _save_devices(rows)
@@ -937,6 +943,19 @@ async def _r_forge(c: Call):
     # or worker metadata. Authorization alone cannot sanitize the response.
     reader = readers.forge_device_tasks if c.role == "device" else readers.forge_tasks
     return await asyncio.to_thread(reader)
+
+
+async def _r_program_invoke(c: Call):
+    from deskd import program
+    from deskd.phone_settings import SettingsError
+    if c.role != 'owner':
+        return Fail(403, 'Открой программу через меню своего Telegram-бота заново.')
+    try:
+        return await asyncio.to_thread(program.invoke, c.body)
+    except SettingsError as error:
+        return Fail(error.status, str(error))
+    except (OSError, ValueError, RuntimeError) as error:
+        return Fail(400, str(error))
 
 
 async def _r_phone_settings(c: Call):
@@ -1725,6 +1744,7 @@ ROUTES: tuple[Route, ...] = (
     Route("GET", "/api/board", _reader(lambda: readers.board())),
     Route("GET", "/api/agenda", _reader(lambda: readers.agenda())),
     Route("GET", "/api/forge", _r_forge),
+    Route("POST", "/api/program/invoke", _r_program_invoke),
     Route("GET", "/api/phone/settings", _r_phone_settings),
     Route("POST", "/api/phone/settings", _r_phone_settings_save),
     Route("GET", "/api/phone/settings/receipt", _r_phone_settings_receipt),
@@ -2492,6 +2512,8 @@ def build_app(*, port: int | None = None) -> web.Application:
     app.router.add_route('*', _remote_computer.PREFIX + '/bridge/{tail:.*}', _remote_bridge)
     app.on_shutdown.append(remote.close)
     app.router.add_get("/", index)
+    from deskd.program import gateway as program_gateway
+    app.router.add_route('*', '/program/{agent}/{tail:.*}', program_gateway)
     # Все ручки API — из одной таблицы (та же, что у канала).
     for route in ROUTES:
         app.router.add_route(route.method, route.path, _http_handler(route))

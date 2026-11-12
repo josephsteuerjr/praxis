@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
 import { devOverride } from "../ui-kit/vite-dev";
 
 // Мини-апп Telegram. Хостится своим сайтом (Caddy: статика + прокси /api,
@@ -7,7 +8,12 @@ import { devOverride } from "../ui-kit/vite-dev";
 export default defineConfig({
   base: "./",
   clearScreen: false,
-  plugins: [devOverride()],
+  plugins: [devOverride(), {name:'shared-program-shell', transformIndexHtml: {order:'pre', handler(html) {
+    const desktop=readFileSync(new URL('../app/index.html',import.meta.url),'utf8');
+    const body=desktop.match(/<body>([\s\S]*?)<\/body>/)?.[1];
+    if(!body)throw Error('Desktop shell markup missing');
+    return html.replace(/<body>[\s\S]*?<\/body>/,'<body>'+body+'</body>');
+  }}}],
   server: {
     port: 5176,
     strictPort: true,

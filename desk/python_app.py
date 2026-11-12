@@ -158,6 +158,10 @@ class Application:
     def invoke(self, command, args):
         if not isinstance(command, str) or command.startswith("host_"):
             raise ValueError("Недоступный вызов оболочки")
+        from localharness import program_commands
+        shared = program_commands.invoke(self.root, self.program, command, args)
+        if shared is not program_commands.UNHANDLED:
+            return shared
         if command == 'voice_shortcuts':
             if self.browser_mode:return {'active':False,'error':'В браузере сочетание работает только внутри окна.'}
             if self.voice_keys is None:
@@ -167,15 +171,6 @@ class Application:
         if command == 'voice_status':
             if self.voice_keys:self.voice_keys.show(args)
             return {'ok':True}
-        if command in ('window_preferences','appearance_read','appearance_patch','appearance_reset'):
-            from localharness import window_preferences as preferences
-            if command == 'appearance_read':return preferences.read(self.root)
-            if command == 'appearance_reset':return preferences.reset(self.root,args.get('seen'))
-            if command == 'appearance_patch':return preferences.change(self.root,args.get('patch'),args.get('seen'),appearance_only=True)
-            return preferences.change(self.root,{args.get('key'):args.get('value')},args.get('seen'))
-        if command == "components_status":
-            from localharness import standalone_relay, component_downloads
-            return [standalone_relay.status(self.program)]+component_downloads.status(self.program)
         if command == 'python_ready':
             result=self.confirm_ui()
             from localharness.bootstrap_ready import signal
@@ -229,12 +224,6 @@ class Application:
                     raise
                 self.host, self.channel = host, channel
             return {"ok": True}
-        if command == "backup_now":
-            from localharness import essential_backup
-            return essential_backup.snapshot(self.root, essential_backup.destination(self.root))
-        if command == "backup_list":
-            from localharness import essential_backup
-            return essential_backup.listing(self.root)
         if command == "python_window":
             action = args.get("action")
             if action == 'close':close_without_tray(self)

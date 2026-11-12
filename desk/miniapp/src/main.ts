@@ -1,103 +1,67 @@
-// Мини-апп Telegram: то же приложение, что телефон (ui-kit/phone.ts), со
-// входом по initData Telegram. Открывается из старого служебного бота
-// владельца; подпись initData проверяет канал (`POST /pair/telegram`,
-// КОНТРАКТ-B→A §6) и выдаёт ключ устройства той же природы, что у QR.
-import "./styles.css";
-import { setAudioPlayer } from '../../ui-kit/paper-audio';
-setAudioPlayer(() => import('wavesurfer.js').then(module => module.default));
-import { setAnimationPlayer } from '../../ui-kit/paper-media';
-setAnimationPlayer(() => import('lottie-web/build/player/lottie_light').then(module => module.default));
-import { mountPhone, remember, type Redeem } from "../../ui-kit/phone";
+// Authenticate first, then load the exact desktop program and its settings.
+import './styles.css';
 import { mountTelegramShell, type TelegramWebApp } from './telegram-shell';
-import { applyTheme, type Theme } from "../../ui-kit/dom";
-import { watchShellVersion } from "../../ui-kit/version";
 
-declare global {
-  interface Window {
-    Telegram?: { WebApp?: TelegramWebApp };
-    DESK_CONFIG_OVERRIDE?: import('../../ui-kit/window/api').Cfg;
-    DESK_CONFIG?: import('../../ui-kit/window/api').Cfg | null;
-  }
-}
-
-const tg = window.Telegram?.WebApp;
-// Приоритет: подстановка dev-сервера, потом config.js хостинга.
-const override = window.DESK_CONFIG_OVERRIDE || window.DESK_CONFIG || undefined;
-const base = override?.base || "";
-const STORAGE = "frame.tg.device";
-if (!tg?.initData) remember(STORAGE, '');
-
-// initData is the only enrollment path. Strip legacy URL credentials before
-// any API traffic; public bot URLs never carry channel/device credentials.
-if (location.search || location.hash) history.replaceState(null, '', location.pathname);
-
-// WKWebView Telegram держит старую сборку по адресу кнопки — страница сама
-// сверяет сборку с сервером и перезагружается на новую.
-watchShellVersion();
-
+declare global { interface Window { Telegram?: {WebApp?:TelegramWebApp} } }
+const tg=window.Telegram?.WebApp;
+const base=(window.DESK_CONFIG_OVERRIDE||window.DESK_CONFIG)?.base||'';
+if(location.search||location.hash)history.replaceState(null,'',location.pathname);
 mountTelegramShell(tg);
-
-// Тема — от Telegram: пользователь выбирает её там, а не у нас.
-const theme = (): Theme => (tg ? (tg.colorScheme === "dark" ? "dark" : "light") : "system");
-tg?.onEvent("themeChanged", () => applyTheme(theme()));
-
-async function redeem(): Promise<{ result: Redeem; key?: string; agent?: string }> {
-  const initData = tg?.initData || "";
-  if (!initData) return { result: "none" };
-  let r: Response;
+const app=document.querySelector<HTMLElement>('#app')!;
+app.hidden=true;
+const login=document.createElement('section');login.className='program-login';
+const title=document.createElement('h1');title.textContent='Hélène';
+const note=document.createElement('p');
+const retry=document.createElement('button');retry.type='button';retry.textContent='Повторить вход';
+login.append(title,note,retry);document.body.append(login);
+let starting=false;
+async function start() {
+  if(starting)return;starting=true;retry.disabled=true;
   try {
-    r = await fetch(base + "/pair/telegram", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ initData }) });
-  } catch {
-    return { result: "offline" };
-  }
-  if (r.status === 404 || r.status === 405) return { result: "foreign" }; // канал ещё не умеет
-  if (r.status === 403) return { result: "closed" };
-  if (!r.ok) return { result: "broke" };
-  let d: { key?: string; agent?: string };
-  try {
-    d = (await r.json()) as { key?: string; agent?: string };
-  } catch {
-    return { result: "broke" };
-  }
-  if (!d.key) return { result: "broke" };
-  return { result: "ok", key: d.key, agent: d.agent };
+    if(!tg?.initData)throw Error('Открой меню своего Telegram-бота или отправь /app.');
+    note.textContent='Подключаю программу…';
+    const response=await fetch(base+'/pair/telegram',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+    if(!response.ok)throw Error(response.status===403?'Вход не подтверждён. Открой меню своего бота заново.':'Программа пока не отвечает. Проверь подключение и повтори вход.');
+    const paired=await response.json() as {key?:string;agent?:string};
+    if(!paired.key)throw Error('Ключ сеанса не получен. Открой меню бота заново.');
+    let selected=sessionStorage.getItem('helene.program.agent')||'';
+    async function invoke(command:string,args:Record<string,unknown>={}) {
+      // Window and browser actions belong to the device showing the program.
+      if(command==='restart_self'){location.reload();return null}
+      if(command==='voice_shortcuts')return {active:false,error:'В миниаппе сочетания работают внутри открытого окна.'};
+      if(command==='voice_status'||command==='python_ready')return {ok:true};
+      if(command==='open_path'&&/^https?:\/\//i.test(String(args.path||''))){window.open(String(args.path),'_blank','noopener,noreferrer');return null}
+      if(command==='open_login_page') {
+        const url=await invoke('relay_login_url',args);
+        if(typeof url!=='string'||!url.startsWith('https://'))throw Error('Ссылка входа ещё не готова');
+        window.open(url,'_blank','noopener,noreferrer');return null;
+      }
+      const result=await fetch(base+'/api/program/invoke',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+paired.key},body:JSON.stringify({command,arguments:args,...(selected?{agent:selected}:{})})});
+      if(!result.ok)throw Error(await result.text());
+      const value=await result.json();
+      if(command==='switch_agent'){
+        sessionStorage.setItem('helene.program.agent',value.agent_id);location.reload();
+      }
+      return value;
+    }
+    let channel;
+    try{channel=await invoke('program_bootstrap')}
+    catch(error){if(!selected)throw error;selected='';sessionStorage.removeItem('helene.program.agent');channel=await invoke('program_bootstrap')}
+    selected=channel.agent_id;
+    window.DESK_CONFIG_OVERRIDE={...channel,base:base+channel.base,key:paired.key,product:'Hélène'};
+    const appearance=await invoke('appearance_read') as {values:Record<string,string>};
+    for(const [key,value] of Object.entries(appearance.values||{}))localStorage.setItem(key,value);
+    const info=await invoke('app_info') as {platform?:string};
+    Object.assign(window,{__HELENE__:{shell:'python',platform:info.platform||'',invoke,
+      win(){/* Telegram owns this window. */}}});
+    app.hidden=false;
+    await import('../../app/src/main');
+    login.remove();
+    tg.BackButton.onClick(()=>{
+      app.classList.remove('narrow-navigation','narrow-activity');
+      history.back();
+    });
+  }catch(error){app.hidden=true;note.textContent=error instanceof Error?error.message:String(error);starting=false;retry.disabled=false}
 }
-
-function pairScreen(pair: Redeem | null): { title: string; text: string; retry: boolean } {
-  switch (pair) {
-    case "foreign":
-      return { title: "Открой свежую кнопку", text: "Вернись в своего бота и отправь /app или открой его меню. Hélène обновляет вход при смене адреса; кнопки в старых сообщениях сохраняют прежний адрес.", retry: true };
-    case "closed":
-      return { title: "Это не твой агент", text: "Мини-апп открывает переписку только владельцу: канал сверил подпись Telegram и id — и не совпало.", retry: false };
-    case "offline":
-      return { title: "Нет связи", text: "Проверь, что Hélène запущена и подключена к интернету. Затем вернись в своего бота и открой меню или отправь /app для свежей кнопки.", retry: true };
-    case "broke":
-      return { title: "Канал ответил ошибкой", text: "Вход не удался на стороне канала. Попробуй ещё раз; если повторится — смотри журнал канала.", retry: true };
-    case "none":
-      return { title: "Открой из Telegram", text: "Эта страница ждёт данных Telegram Web App: открой её кнопкой в боте, а не по ссылке в браузере.", retry: true };
-    default:
-      return { title: "Нужен ключ", text: "Открой мини-апп из бота: Telegram подпишет вход, канал выдаст ключ.", retry: true };
-  }
-}
-
-const app = mountPhone(document.getElementById("app")!, {
-  platform: "telegram",
-  base,
-  agentFallback: override?.agent || "",
-  sign: "Hélène",
-  theme: tg ? theme : undefined,
-  onSheet: (open) => {
-    if (!tg) return;
-    if (open) tg.BackButton.show();
-    else tg.BackButton.hide();
-  },
-  auth: {
-    storageKey: STORAGE,
-    requireCredential: true,
-    hasCredential: () => !!tg?.initData,
-    redeem,
-    pairScreen,
-  },
-});
-
-tg?.BackButton.onClick(() => app.back());
+retry.addEventListener('click',()=>void start());
+void start();
