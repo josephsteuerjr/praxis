@@ -440,7 +440,7 @@ def _strip_hand_lines(text: str) -> str:
         return text
     out.insert(len(out) - 1,
                f"[описания {cut} рук сняты кодом ради потолка эпохи: −{saved} зн.; "
-               "имена целиком, тела схем — по требованию; это НЕ мой отбор]")
+               "имена целиком, схемы переданы отдельно в tools; это НЕ мой отбор]")
     return "\n".join(out)
 
 
@@ -628,7 +628,7 @@ def _block_hands(tools, meta: dict | None = None) -> str:
         pairs.append([name, line])
 
     def assemble(rows: list[list[str]], note: str = "") -> str:
-        body = ("руки (тела схем: не загружены — по требованию):\n"
+        body = ("руки (указатель; полные схемы переданы отдельно в tools):\n"
                 + "\n".join(f"- {n}" + (f" — {d}" if d else "") for n, d in rows)
                 if rows else "руки: в этом ходе не предложены")
         return (body + (f"\n{note}" if note else "")
@@ -645,8 +645,8 @@ def _block_hands(tools, meta: dict | None = None) -> str:
                if trim_at else
                "ужаты кодом до головной фразы ради камерного набора")
         return assemble(rows, f"[описания {cut} рук {how} ≤{HANDS_MAX} зн.: "
-                              f"−{saved} зн.; имена целиком, тела схем — по "
-                              f"требованию; это НЕ мой отбор]")
+                              f"−{saved} зн.; имена целиком, схемы переданы отдельно "
+                              f"в tools; это НЕ мой отбор]")
 
     rows, stage, trim_at = pairs, "полный", 0
     text = render(rows, stage, trim_at)
@@ -2126,8 +2126,34 @@ def _rotate(stream_dir: Path) -> None:
     for stale in shadows[:-KEEP_SHADOWS] if len(shadows) > KEEP_SHADOWS else ():
         try:
             stale.unlink()
+            stale.with_suffix(".json").unlink(missing_ok=True)
         except OSError:
             pass
+    # Schema bodies are content-addressed and shared between snapshots. Keep
+    # only schemas referenced by retained snapshots, so context inspection does
+    # not add another unbounded per-turn archive.
+    referenced = set()
+    for capture in stream_dir.glob("*.md"):
+        try:
+            referenced.add(json.loads(capture.with_suffix(".json").read_text(encoding="utf-8"))["schemas"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    for schema in (stream_dir / "schemas").glob("*.json"):
+        if schema.name not in referenced:
+            schema.unlink(missing_ok=True)
+
+
+def _capture_tools(stream_dir: Path, name: str, tools, run_id: str) -> None:
+    """Persist the actual offered schemas separately from the shadow's prose."""
+    raw = json.dumps(list(tools or ()), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    folder = stream_dir / "schemas"
+    folder.mkdir(exist_ok=True)
+    path = folder / (digest + ".json")
+    if not path.exists():
+        _write_atomic(path, raw)
+    _write_atomic((stream_dir / name).with_suffix(".json"), json.dumps(
+        {"schema": 1, "schemas": path.name, "run_id": run_id}, ensure_ascii=False))
 
 
 def _fold_plan(history, saved: dict, now: datetime, *,
@@ -2375,6 +2401,7 @@ def capture(*, ctx, history, speaker, user_msg, tools,
     fname = (f"{now.astimezone(timezone.utc):%Y%m%dT%H%M%S}-"
              f"{(run.run_id[-8:] if run is not None else uuid.uuid4().hex[:8])}.md")
     (stream_dir / fname).write_text(frame.text, encoding="utf-8", newline="\n")
+    _capture_tools(stream_dir, fname, tools, run.run_id if run is not None else "")
     stable_bytes = len(frame.stable_text.encode("utf-8"))
     _write_atomic(_last_path(stream_dir), json.dumps(
         {"file": fname, "stable_bytes": stable_bytes}, ensure_ascii=False))

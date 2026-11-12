@@ -1,148 +1,153 @@
-// Кадр: живые слепки того, что видит модель, по потокам; чтение целиком,
-// дифф соседних захватов (где порвался префикс кэша) и метрики.
+// Shadow reconstruction and the actual offered tool schemas saved with it.
 import { api } from "../api";
 import { esc, fmtN, md, q, safeRender } from "../lib";
 import { S, isWindowRoom } from "../state";
 
-interface Stream {
-  stream: string;
-  captures: number;
-  latest?: string;
+interface Stream { stream: string; captures: number; latest?: string }
+interface Capture { text?: string; tools?: Record<string, unknown>[] | null; tools_status?: string; run_id?: string }
+const versions = new WeakMap<HTMLElement, number>();
+
+export function captureTime(name: string): string {
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/.exec(name);
+  if (!m) return name.replace(/\.md$/, "");
+  const date = new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+  return Number.isNaN(date.getTime()) ? name : date.toLocaleString("ru-RU", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" });
 }
 
 function streamTitle(stream: string): string {
-  const peer = stream.replace(/^chat-/, "");
+  const peer = stream.replace(/^(chat|dm)-/, "");
+  if (isWindowRoom(peer)) return `Основной чат · ${S.agent}`;
   return S.rooms.find(r => r.key === stream || r.key === peer)?.name
-    || (isWindowRoom(stream) ? S.agent : stream);
+    || (stream.startsWith("no-chat") ? `Самостоятельная работа · ${stream.slice(8)}` : stream);
 }
 
 export async function render(container: HTMLElement): Promise<void> {
+  const version = (versions.get(container) || 0) + 1;
+  versions.set(container, version);
   const streams = await api<Stream[]>("/api/shadow");
+  if (versions.get(container) !== version) return;
   if (!streams.length) {
     container.innerHTML = '<div class="empty"><b>Захватов кадра нет</b>Они появятся после первых ходов.</div>';
     return;
   }
-  if (!S.stream || !streams.some((s) => s.stream === S.stream)) {
-    S.stream = streams.slice().sort((a, b) => (b.latest || "").localeCompare(a.latest || ""))[0].stream;
-  }
+  streams.sort((a, b) => (b.latest || "").localeCompare(a.latest || ""));
+  if (!streams.some(s => s.stream === S.stream)) S.stream = streams[0].stream;
   container.innerHTML = `<div class="split wide">
-    <div class="list">${streams
-      .map(
-        (s) => `<div class="item" role="button" tabindex="0" aria-current="${s.stream === S.stream}" data-stream="${esc(s.stream)}">
-          <span title="${esc(s.stream)}">${esc(streamTitle(s.stream))}</span><span class="n">${s.captures}</span></div>`,
-      )
-      .join("")}
-      <p class="field-hint" style="margin:14px 10px">Здесь сохранена теневая сборка контекста. Выбери чат и нужный момент; это не точная запись запроса провайдеру.</p>
-    </div>
-    <div class="reading" id="frame-main"><div class="empty">…</div></div>
-  </div>`;
-  for (const el of container.querySelectorAll<HTMLElement>(".item[data-stream]")) {
-    el.addEventListener("keydown", e => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); }
-    });
-    el.addEventListener("click", () => {
-      S.stream = el.dataset.stream!;
-      safeRender(container, () => render(container));
-    });
-  }
-  await renderStream(container);
-}
-
-async function renderStream(container: HTMLElement) {
-  const main = q<HTMLElement>("#frame-main", container);
-  main.innerHTML = '<div class="empty">читаю захваты…</div>';
-  const captures = await api<string[]>(`/api/shadow/${encodeURIComponent(S.stream)}/captures`);
-  S.captures = captures;
-  if (!captures.length) {
-    main.innerHTML = '<div class="empty">захватов нет</div>';
-    return;
-  }
-  // Имя захвата — таймстамп: показываем его человеком-читаемо, как в doView.
-  const fmtCapture = (c: string) => {
-    const raw = c.split("-")[0];
-    return raw.length >= 13 ? `${raw.slice(6, 8)}.${raw.slice(4, 6)} ${raw.slice(9, 11)}:${raw.slice(11, 13)}${raw.length >= 15 ? ':' + raw.slice(13, 15) : ''}` : c.replace(".md", "");
+    <div class="list"><label class="field-hint" for="frame-search">Чат или работа</label>
+      <input id="frame-search" class="field-input" type="search" placeholder="Найти чат" aria-label="Найти чат">
+      ${streams.map(s => `<div class="item" role="button" tabindex="0" aria-current="${s.stream === S.stream}" data-stream="${esc(s.stream)}">
+        <span title="${esc(s.stream)}">${esc(streamTitle(s.stream))}<small class="muted" style="display:block">${esc(captureTime(s.latest || ""))}</small></span><span class="n">${s.captures}</span></div>`).join("")}
+      <p class="field-hint">Снимки по времени. Теневая сборка контекста может отличаться от входа модели; схемы tools сохранены отдельно.</p>
+    </div><div class="reading" id="frame-main"></div></div>`;
+  const open = (stream: string) => {
+    S.stream = stream;
+    for (const el of container.querySelectorAll<HTMLElement>("[data-stream]")) el.setAttribute("aria-current", String(el.dataset.stream === stream));
+    const main = q<HTMLElement>("#frame-main", container);
+    safeRender(main, () => renderStream(main, stream));
   };
-  const opts = captures.map((c) => `<option value="${esc(c)}">${esc(fmtCapture(c))}</option>`).join("");
-  main.innerHTML = `<div class="tools-row">
-      <label class="muted" for="cap-new">момент</label>
-      <select id="cap-new" class="field-input">${opts}</select>
-      <button class="btn btn-primary" id="do-view" type="button">Читать кадр</button>
-      <label class="muted" for="cap-old">сравнить с</label>
-      <select id="cap-old" class="field-input">${opts}</select>
-      <button class="btn btn-quiet" id="do-diff" type="button">Дифф: где порвался префикс</button>
-      <button class="btn btn-quiet" id="do-metrics" type="button">Метрики</button>
-    </div>
+  q<HTMLInputElement>("#frame-search", container).addEventListener("input", e => {
+    const value = (e.target as HTMLInputElement).value.toLocaleLowerCase();
+    for (const el of container.querySelectorAll<HTMLElement>("[data-stream]")) el.hidden = !`${el.textContent} ${el.dataset.stream}`.toLocaleLowerCase().includes(value);
+  });
+  for (const el of container.querySelectorAll<HTMLElement>("[data-stream]")) {
+    el.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); } });
+    el.addEventListener("click", () => open(el.dataset.stream!));
+  }
+  await renderStream(q<HTMLElement>("#frame-main", container), S.stream);
+}
+
+async function renderStream(main: HTMLElement, stream: string): Promise<void> {
+  const version = (versions.get(main) || 0) + 1;
+  versions.set(main, version);
+  const active = () => versions.get(main) === version && main.isConnected;
+  main.innerHTML = '<div class="empty">читаю захваты…</div>';
+  const base = `/api/shadow/${encodeURIComponent(stream)}`;
+  let captures: string[];
+  try { captures = await api<string[]>(`${base}/captures`); }
+  catch (error) { if (active()) throw error; else return; }
+  if (!active()) return;
+  if (!captures.length) { main.innerHTML = '<div class="empty">захватов нет</div>'; return; }
+  const option = (name: string) => `<option value="${esc(name)}">${esc(captureTime(name))} · ${esc(name.replace(/\.md$/, "").split("-").pop() || "")}</option>`;
+  main.innerHTML = `<h2>${esc(streamTitle(stream))}</h2><div class="tools-row">
+    <button class="btn btn-quiet" id="cap-prev" type="button" aria-label="Предыдущий снимок">← Раньше</button>
+    <label class="muted" for="cap-new">Снимок</label><select id="cap-new" class="field-input">${captures.map(option).join("")}</select>
+    <button class="btn btn-quiet" id="cap-next" type="button" aria-label="Следующий снимок">Позже →</button>
+    <button class="btn btn-quiet" id="cap-more" type="button">Ещё снимки</button>
+    <button class="btn btn-quiet" id="cap-refresh" type="button">Обновить</button></div>
+    <details class="fold"><summary>Сравнение и метрики</summary><div class="fold-body tools-row">
+    <label class="muted" for="cap-old">Сравнить с</label><select id="cap-old" class="field-input">${captures.map(option).join("")}</select>
+    <button class="btn btn-quiet" id="do-diff" type="button">Сравнить</button><button class="btn btn-quiet" id="do-metrics" type="button">Метрики этого чата</button></div></details>
     <div id="frame-out"></div>`;
-  if (captures.length > 1) q<HTMLSelectElement>("#cap-old", main).selectedIndex = 1;
-  // Раньше все четыре были голым `void`: при отказе кнопки навсегда оставляли
-  // «читаю кадр…», «считаю дифф…», «читаю метрики…» — без ошибки и без выхода.
-  const out = () => q<HTMLElement>("#frame-out", main);
-  q("#do-diff", main).addEventListener("click", () => safeRender(out(), () => doDiff(main)));
-  q("#do-view", main).addEventListener("click", () => safeRender(out(), () => doView(main)));
-  q("#do-metrics", main).addEventListener("click", () => safeRender(out(), () => doMetrics(main)));
-  q("#cap-new", main).addEventListener("change", () => safeRender(out(), () => doView(main)));
-  await doView(main);
+  const selected = q<HTMLSelectElement>("#cap-new", main), old = q<HTMLSelectElement>("#cap-old", main);
+  old.selectedIndex = captures.length > 1 ? 1 : 0;
+  let request = 0;
+  const out = q<HTMLElement>("#frame-out", main);
+  const update = () => {
+    q<HTMLButtonElement>("#cap-prev", main).disabled = selected.selectedIndex >= captures.length - 1;
+    q<HTMLButtonElement>("#cap-next", main).disabled = selected.selectedIndex <= 0;
+  };
+  const show = (mode: "view" | "diff" | "metrics" = "view") => {
+    const ticket = ++request, name = selected.value, oldName = old.value;
+    update();
+    out.innerHTML = '<div class="empty">читаю…</div>';
+    safeRender(out, async () => {
+      const current = () => active() && ticket === request;
+      try {
+        const data = await api(mode === "view" ? `${base}/capture?name=${encodeURIComponent(name)}` : mode === "diff" ? `${base}/diff?old=${encodeURIComponent(oldName)}&new=${encodeURIComponent(name)}` : `${base}/metrics`);
+        if (!current()) return;
+        if (mode === "view") renderCapture(out, data, name);
+        else if (mode === "diff") renderDiff(out, data);
+        else renderMetrics(out, data);
+      } catch (error) { if (current()) throw error; }
+    });
+  };
+  selected.addEventListener("change", () => show());
+  q("#cap-prev", main).addEventListener("click", () => { selected.selectedIndex++; show(); });
+  q("#cap-next", main).addEventListener("click", () => { selected.selectedIndex--; show(); });
+  q("#do-diff", main).addEventListener("click", () => show("diff"));
+  q("#do-metrics", main).addEventListener("click", () => show("metrics"));
+  q("#cap-refresh", main).addEventListener("click", () => { safeRender(main, () => renderStream(main, stream)); });
+  const more = q<HTMLButtonElement>("#cap-more", main);
+  more.hidden = captures.length < 30;
+  more.addEventListener("click", () => safeRender(more, async () => {
+    more.disabled = true;
+    try {
+      const page = await api<string[]>(`${base}/captures?before=${encodeURIComponent(captures[captures.length - 1])}`);
+      if (!active()) return;
+      const fresh = page.filter(name => !captures.includes(name));
+      captures.push(...fresh);
+      for (const name of fresh) { selected.insertAdjacentHTML("beforeend", option(name)); old.insertAdjacentHTML("beforeend", option(name)); }
+      more.hidden = page.length < 30 || !fresh.length;
+      update();
+    } catch (error) { if (active()) throw error; }
+    finally { if (active()) more.disabled = false; }
+  }));
+  show();
 }
 
-async function doView(main: HTMLElement) {
-  const out = q<HTMLElement>("#frame-out", main);
-  out.innerHTML = '<div class="empty">читаю кадр…</div>';
-  const name = q<HTMLSelectElement>("#cap-new", main).value;
-  const c = await api<{ text?: string }>(`/api/shadow/${encodeURIComponent(S.stream)}/capture?name=${encodeURIComponent(name)}`);
-  const raw = (name || "").split("-")[0];
-  const stamp = raw.length >= 13 ? `${raw.slice(6, 8)}.${raw.slice(4, 6)} ${raw.slice(9, 11)}:${raw.slice(11, 13)}${raw.length >= 15 ? ':' + raw.slice(13, 15) : ''}` : name;
-  out.innerHTML = `<p class="muted">Захват <b class="mono">${esc(stamp)}</b> · поток <span class="mono">${esc(S.stream)}</span> ·
-      ${fmtN((c.text || "").length)} знаков. Сохранённая теневая сборка; фактический вход модели может отличаться.</p>
-    <div class="card md">${md(c.text || "")}</div>`;
+function renderCapture(out: HTMLElement, c: Capture, name: string): void {
+  out.innerHTML = `<p class="muted">${esc(captureTime(name))} · ${fmtN((c.text || "").length)} знаков${c.run_id ? ` · <span class="mono">${esc(c.run_id)}</span>` : ""}</p>
+    <div class="card"><h3>Схемы инструментов${Array.isArray(c.tools) ? ` · ${c.tools.length}` : ""}</h3>
+    ${Array.isArray(c.tools) ? `<p class="field-hint">Набор tools, зафиксированный перед вызовом модели. Полные схемы, переданные отдельно от текста контекста.</p><input id="schema-search" class="field-input" type="search" placeholder="Найти инструмент" aria-label="Найти инструмент">
+      ${c.tools.map(tool => `<details class="fold" data-tool="${esc(String(tool.name || tool.type || ""))}"><summary>${esc(String(tool.name || tool.type || "инструмент"))}</summary><pre class="fold-body">${esc(JSON.stringify(tool, null, 2))}</pre></details>`).join("")}`
+      : `<p class="field-hint">${c.tools_status === "unavailable" ? "Не удалось проверить сохранённые схемы этого снимка." : "У этого старого снимка схемы не сохранены. Это не означает, что модель их не получила."}</p>`}</div>
+    <p class="field-hint">Ниже — теневая сборка контекста; фактический вход модели может отличаться.</p><div class="card md">${md(c.text || "")}</div>`;
+  out.querySelector<HTMLInputElement>("#schema-search")?.addEventListener("input", e => {
+    const value = (e.target as HTMLInputElement).value.toLocaleLowerCase();
+    for (const row of out.querySelectorAll<HTMLElement>("[data-tool]")) row.hidden = !row.dataset.tool!.toLocaleLowerCase().includes(value);
+  });
 }
 
-async function doDiff(main: HTMLElement) {
-  const out = q<HTMLElement>("#frame-out", main);
-  out.innerHTML = '<div class="empty">считаю дифф…</div>';
-  const oldName = q<HTMLSelectElement>("#cap-old", main).value;
-  const newName = q<HTMLSelectElement>("#cap-new", main).value;
-  const d = await api(`/api/shadow/${encodeURIComponent(S.stream)}/diff?old=${encodeURIComponent(oldName)}&new=${encodeURIComponent(newName)}`);
-  if (!d.zones) {
-    out.innerHTML = '<div class="empty">дифф не собрался</div>';
-    return;
-  }
-  const label: Record<string, string> = { same: "байт в байт", changed: "разошлась", new: "новая" };
-  const zones = d.zones
-    .map(
-      (z: { zone: string; state: string; chars: number; was_chars?: number; prefix?: number }) => `<tr>
-      <td>${esc(z.zone)}</td>
-      <td><span class="zstate ${z.state}">${label[z.state] || z.state}</span></td>
-      <td class="mono">${fmtN(z.chars)}${z.was_chars != null && z.was_chars !== z.chars ? " ← " + fmtN(z.was_chars) : ""}</td>
-      <td class="mono">${z.prefix != null ? "цел до " + fmtN(z.prefix) : ""}</td>
-    </tr>`,
-    )
-    .join("");
-  const diffHtml = (d.diff || [])
-    .map((l: string) => {
-      const cls = l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@@") ? "hunk" : "";
-      return `<span class="${cls}">${esc(l)}</span>`;
-    })
-    .join("\n");
-  out.innerHTML = `<p class="muted">Общий префикс: <b class="mono">${fmtN(d.prefix_bytes)}</b> из ${fmtN(d.new_len)} знаков
-      (${d.new_len ? Math.round((100 * d.prefix_bytes) / d.new_len) : 0}%)${d.gone?.length ? " · исчезли зоны: " + esc(d.gone.join(", ")) : ""}</p>
-    <table class="grid"><tr><th>зона</th><th>состояние</th><th>знаков</th><th>префикс</th></tr>${zones}</table>
-    <details class="fold" style="margin-top:14px"><summary>подробный дифф (${(d.diff || []).length} строк)</summary>
-      <div class="fold-body"><div class="diff">${diffHtml}</div></div></details>`;
+function renderDiff(out: HTMLElement, d: any): void {
+  if (!d.zones) { out.innerHTML = '<div class="empty">Сравнение недоступно: один из снимков отсутствует.</div>'; return; }
+  const labels: Record<string, string> = { same: "байт в байт", changed: "разошлась", new: "новая" };
+  out.innerHTML = `<p class="muted">Общий префикс: ${fmtN(d.prefix_bytes)} из ${fmtN(d.new_len)} знаков</p>
+    <table class="grid"><tr><th>Зона</th><th>Состояние</th><th>Знаков</th></tr>${d.zones.map((z: any) => `<tr><td>${esc(z.zone)}</td><td>${esc(labels[z.state] || z.state)}</td><td>${fmtN(z.chars)}</td></tr>`).join("")}</table>
+    <details class="fold"><summary>Подробный дифф</summary><pre class="fold-body diff">${esc((d.diff || []).join("\n"))}</pre></details>`;
 }
 
-async function doMetrics(main: HTMLElement) {
-  const out = q<HTMLElement>("#frame-out", main);
-  out.innerHTML = '<div class="empty">читаю метрики…</div>';
-  const rows = await api<Array<Record<string, unknown>>>("/api/shadow-metrics");
-  if (!rows.length) {
-    out.innerHTML = '<div class="empty">метрик нет</div>';
-    return;
-  }
-  const keys = [...new Set(rows.flatMap((r) => Object.keys(r)))].slice(0, 10);
-  out.innerHTML = `<table class="grid"><tr>${keys.map((k) => `<th>${esc(k)}</th>`).join("")}</tr>
-    ${rows
-      .slice(-60)
-      .reverse()
-      .map((r) => `<tr>${keys.map((k) => `<td class="mono">${esc(JSON.stringify(r[k]) ?? "")}</td>`).join("")}</tr>`)
-      .join("")}</table>`;
+function renderMetrics(out: HTMLElement, rows: Array<Record<string, unknown>>): void {
+  if (!rows.length) { out.innerHTML = '<div class="empty">Метрик этого чата нет.</div>'; return; }
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))].slice(0, 10);
+  out.innerHTML = `<table class="grid"><tr>${keys.map(k => `<th>${esc(k)}</th>`).join("")}</tr>${rows.slice(-60).reverse().map(r => `<tr>${keys.map(k => `<td class="mono">${esc(JSON.stringify(r[k]) ?? "")}</td>`).join("")}</tr>`).join("")}</table>`;
 }

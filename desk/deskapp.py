@@ -1113,13 +1113,13 @@ async def _r_run_result(c: Call):
 
 
 async def _r_shadow_captures(c: Call):
-    return await asyncio.to_thread(readers.shadow_captures, c.match["stream"])
+    return await asyncio.to_thread(readers.shadow_captures, c.match["stream"], 30,
+                                   c.query.get("before") or "")
 
 
 async def _r_shadow_capture(c: Call):
     name = c.query.get("name") or ""
-    text = await asyncio.to_thread(readers.shadow_capture, c.match["stream"], name)
-    return {"stream": c.match["stream"], "name": name, "text": text}
+    return await asyncio.to_thread(readers.shadow_capture_details, c.match["stream"], name)
 
 
 async def _r_shadow_diff(c: Call):

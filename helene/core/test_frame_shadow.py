@@ -191,6 +191,21 @@ class TheCaptureIsGated(ShadowCase):
 
 
 class TheShadowLivesOnDisk(ShadowCase):
+    def test_tool_snapshots_are_shared_and_rotated_with_captures(self):
+        tools = [{"name": "computer", "input_schema": {"properties": {"timeout_ms": {"type": "integer"}}}}]
+        with patch.object(frame_shadow, "KEEP_SHADOWS", 2):
+            first = self._shadow(0, tools=tools)
+            second = self._shadow(1, tools=tools)
+            entry = self._stream_dir()
+            meta = json.loads((entry / first["file"]).with_suffix(".json").read_bytes())
+            self.assertEqual(json.loads((entry / "schemas" / meta["schemas"]).read_bytes()), tools)
+            self.assertEqual(len(list((entry / "schemas").glob("*.json"))), 1)
+            self._shadow(2, tools=[{"name": "python"}])
+            self.assertFalse((entry / first["file"]).with_suffix(".json").exists())
+            self.assertTrue((entry / second["file"]).with_suffix(".json").exists())
+            self._shadow(3, tools=[{"name": "python"}])
+            self.assertEqual(len(list((entry / "schemas").glob("*.json"))), 1)
+
 
     def _capture(self, i=0, history=None):
         return self._shadow(i, history=history)
@@ -308,8 +323,8 @@ class TheEpochV2IsHerWord(ShadowCase):
         """Её №8: наличие имени не читается как чтение — метка на указателях."""
         self._capture(0)
         e_text = self._frozen_e()
-        self.assertIn("тела схем: не загружены", e_text)
-        self.assertIn("тела: не загружены", e_text)
+        self.assertIn("полные схемы переданы отдельно в tools", e_text)
+        self.assertNotIn("тела схем: не загружены", e_text)
 
     def test_address_book_defaults_and_order(self):
         """Её №2: словарь `учитывать`/`только источник`; умолчание помечено умолчанием.
@@ -1031,7 +1046,7 @@ class TheHandPointerFitsHerChamberSet(ShadowCase):
         self.assertIn("это НЕ мой отбор", marks[0])
         self.assertIn(str(frame_shadow.HANDS_MAX), marks[0])
         self.assertRegex(marks[0], r"−\d+ зн\.")
-        self.assertIn("тела схем — по требованию", marks[0])
+        self.assertIn("схемы переданы отдельно в tools", marks[0])
 
     def test_a_set_that_fits_keeps_its_full_lines_untouched(self):
         """Потолок не переписывает то, что и так влезает: иначе каждый маленький

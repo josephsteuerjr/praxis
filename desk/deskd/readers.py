@@ -1360,13 +1360,17 @@ def shadow_streams() -> list[dict]:
 _CAPTURE_RE = re.compile(r"^[0-9TZ-]+-[0-9a-f]{8}\.md$")
 
 
-def shadow_captures(stream: str, limit: int = 30) -> list[str]:
+def shadow_captures(stream: str, limit: int = 30, before: str = "") -> list[str]:
     entry = shadow_root() / os.path.basename(stream)
     if not entry.is_dir():
         return []
     names = sorted((p.name for p in entry.iterdir()
                     if p.suffix == ".md" and _CAPTURE_RE.match(p.name)), reverse=True)
-    return names[:limit]
+    if before:
+        if not _CAPTURE_RE.fullmatch(before):
+            return []
+        names = [name for name in names if name < before]
+    return names[:max(1, min(int(limit), 200))]
 
 
 def shadow_capture(stream: str, name: str) -> str:
@@ -1377,6 +1381,40 @@ def shadow_capture(stream: str, name: str) -> str:
         return path.read_text(encoding="utf-8", errors="replace")[:600_000]
     except OSError:
         return ""
+
+
+def shadow_capture_details(stream: str, name: str) -> dict:
+    """Shadow prose and independently saved offered schemas; never today's catalog."""
+    result = {"stream": stream, "name": name, "text": shadow_capture(stream, name),
+              "tools": None, "run_id": "", "tools_status": "not_recorded"}
+    if not result["text"] or not _CAPTURE_RE.fullmatch(name):
+        return result
+    entry = shadow_root() / os.path.basename(stream)
+    try:
+        if not entry.resolve().is_relative_to(shadow_root().resolve()):
+            return result
+        meta = json.loads((entry / name).with_suffix(".json").read_text(encoding="utf-8"))
+        schema_name = str(meta.get("schemas") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}\.json", schema_name):
+            raise ValueError("invalid schema reference")
+        path = entry / "schemas" / schema_name
+        if not path.resolve().is_relative_to(entry.resolve()):
+            raise ValueError("schema outside snapshot")
+        with path.open("rb") as source:
+            raw = source.read(2_000_001)
+        if len(raw) > 2_000_000 or hashlib.sha256(raw).hexdigest() != schema_name[:-5]:
+            raise ValueError("schema snapshot failed verification")
+        tools = json.loads(raw)
+        if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
+            raise ValueError("invalid schema snapshot")
+        run_id = str(meta.get("run_id") or "")
+        result.update(tools=tools, tools_status="recorded",
+                      run_id=run_id if _RUN_ID_RE.fullmatch(run_id) else "")
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError, AttributeError):
+        result["tools_status"] = "unavailable"
+    return result
 
 
 def _sections(text: str) -> list[tuple[str, str]]:
