@@ -3,6 +3,8 @@
 All available tool schemas are native by default. Context snapshots have chat
 search, local times, older/newer navigation, paging and recorded schema inspection.
 Saved call-based turns remain resumable; existing authored skills are preserved.
+Bundled praxis-relay 1.2.0 adds device-code sign-in for both account slots on
+desktop, phone and headless server. Account changes refresh the model catalogue.
 
 Read the [changes and limits](docs/RELEASE-2.7.1.md).
 

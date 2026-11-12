@@ -11,10 +11,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Read the bundled relay source pin
+        id: relay
+        run: python3 -c "import json,os; p=json.load(open('desk/localharness/relay-release.json')); open(os.environ['GITHUB_OUTPUT'],'a').write('commit='+p['source_commit']+'\n')"
       - uses: actions/checkout@v4
         with:
           repository: josephsteuerjr/praxis-relay
-          ref: d5a5bfed9d12cf0b7d052d310edceb03b66a77b3
+          ref: ${{ steps.relay.outputs.commit }}
           path: relay-source
           persist-credentials: false
       - uses: actions/setup-node@v4

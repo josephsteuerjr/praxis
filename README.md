@@ -27,6 +27,8 @@ a paired phone and web interface while the host is online. Powered by Praxis.
 
 All tool schemas are offered natively. The Context screen adds searchable chats,
 local timestamps, snapshot navigation and inspection of recorded tool schemas.
+ChatGPT sign-in uses a device code with bundled praxis-relay 1.2.0, including
+headless servers. Confirm the code on your phone or computer.
 See the [patch and limits](desk/docs/RELEASE-2.7.1.md).
 
 ## Included in 2.7.0 Beta

@@ -16,7 +16,8 @@ def qualify(source,relay_source,output):
         if p.returncode:raise RuntimeError(name+' failed; original log retained')
     def capture(args):return subprocess.check_output(list(map(str,args)),text=True).strip()
     commit=capture(['git','-C',relay_source,'rev-parse','HEAD'])
-    if commit!='d5a5bfed9d12cf0b7d052d310edceb03b66a77b3':raise ValueError('Unexpected relay source')
+    pin=json.loads((source/'desk/localharness/relay-release.json').read_text())
+    if commit!=pin['source_commit']:raise ValueError('Unexpected relay source')
     if capture(['git','-C',relay_source,'status','--porcelain']):raise ValueError('Relay source is modified')
     try:
         native_image=prefix+'-relay'
@@ -26,7 +27,7 @@ def qualify(source,relay_source,output):
         for name in ('praxis-relay-headless','LICENSE','LICENSE-APACHE','NOTICE'):
             run('relay-export-'+name,['docker','cp',container+':/'+name,relay/name])
         binary=relay/'praxis-relay-headless';binary.chmod(0o755)
-        (relay/'BUILD-PASSPORT.json').write_text(json.dumps(dict(format='helene-server-relay.v1',target='linux-arm64',source_commit=commit,version='1.1.3',sha256=hashlib.sha256(binary.read_bytes()).hexdigest()),indent=2))
+        (relay/'BUILD-PASSPORT.json').write_text(json.dumps(dict(format='helene-server-relay.v1',target='linux-arm64',source_commit=commit,version=pin['version'],sha256=hashlib.sha256(binary.read_bytes()).hexdigest()),indent=2))
         sys.path[:0]=[str(source/'desk'),str(source/'desk/installer')]
         import deskpkg
         from build_server_bundle import build
@@ -45,14 +46,22 @@ def qualify(source,relay_source,output):
                 '-e','PRAXIS_TEST=1','-e','PRAXIS_BASE=/tmp/helene-import','--entrypoint','python',image]
         run('actual-runtime-imports',[*common,'-c',"import platform,agent,faster_whisper,av,psutil,telethon; assert platform.machine()=='aarch64'"],timeout=180)
         run('actual-relay',[*common,'-c',"import subprocess;subprocess.run(['/opt/helene/relay-product/praxis-relay-headless','--help'],check=True)"],timeout=120)
+        run('actual-relay-device',['docker','run','--rm','--network','none',
+            '-v',str(source)+':/review-source:ro','-v',str(evidence)+':/evidence',
+            '-v',str(relay)+':/opt/helene/relay-product:ro','--entrypoint','python',image,
+            '/review-source/desk/installer/qualify_relay_device.py','--binary','/opt/helene/relay-product/praxis-relay-headless',
+            '--output','/evidence/native-relay-device'],timeout=120)
         # Use the package's composed core and its hermetic entrypoint, never an owner.
         test=['docker','run','--rm','-w','/opt/helene/tree','-e','PYTHONPATH=/opt/helene/tree:/opt/helene/app:/opt/helene/app/localharness','-e','PRAXIS_TEST=1','--entrypoint','python',image]
         run('native-python-hands',[*test,'praxis_test.py','-q','test_hand_bridge_1011','test_python_hand_1011','test_python_tail_1011','test_read_outcomes_1011'],timeout=600)
         run('native-host-broker',['docker','run','--rm','-v',str(source)+':/review-source:ro',
             '--entrypoint','python',image,'/review-source/desk/tests/t_server_host_broker.py'],timeout=180)
+        run('native-subscription-boundary',['docker','run','--rm','--network','none','-v',str(source)+':/review-source:ro',
+            '--entrypoint','python',image,'/review-source/desk/tests/t_relay_device_1311.py'],timeout=180)
         # Start a separate paused, credential-free profile and verify the real
         # channel. This container owns only task data; no Telegram/provider login.
-        config=json.loads((program/'helene.json').read_text());config.update(autonomy={'paused':True},phone={'enabled':False},relay={'enabled':False})
+        config=json.loads((program/'helene.json').read_text());config.update(autonomy={'paused':True},phone={'enabled':False},
+            relay={'enabled':True,'key':'synthetic-arm-loopback','proxy':{'mode':'proxy','host':'127.0.0.1','port':9,'protocol':'http'}})
         config_file=output/'fixture-config.json';config_file.write_text(json.dumps(config));config_file.chmod(0o644)
         data=output/'fixture-data';data.mkdir()
         name=prefix+'-live'
@@ -86,6 +95,8 @@ def qualify(source,relay_source,output):
         if anonymous not in (401,403):raise RuntimeError(f'Channel answered health without its key: {anonymous}')
         (evidence/'HTTP.json').write_text(json.dumps(dict(ok=True,anonymous_status=anonymous,health=health),indent=2))
         run('native-target-check',['docker','exec',container,'python','server/check_target.py','/opt/helene'])
+        from server_subscription_check import check as check_subscription
+        check_subscription(url,key,container,evidence/'server-subscription')
         from server_install_check import check as check_install
         check_install(program,image,evidence/'real-application-install')
         (evidence/'COMPLETE.json').write_text(json.dumps(dict(ok=True,version=version,arch=platform.machine(),archive=archive.name,sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),checks=rows,scope='Native ARM Docker runtime, relay, hands, paused channel; no owner/provider acceptance'),indent=2))
