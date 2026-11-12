@@ -3,8 +3,10 @@ import { button, el, field, toggle } from "../dom";
 import { humanError } from "./lib";
 import { phoneCard, type Config, type Loaded } from "./views/settings-frame";
 import { collectConnection } from "./server-connection";
-import { pickPaperFiles } from "./paper-files";
 import { SERVER_TRANSFER_AVAILABLE, SERVER_TRANSFER_NOTICE } from './feature-availability';
+import { sshAccessForm } from './server-access-form';
+import { serverBridgeCard } from './server-settings';
+import { useBridge } from './server-bridge-config';
 
 let qrRenderer: (value:string)=>Promise<string> = async()=>{throw new Error("Не удалось подготовить QR. Обнови приложение.");};
 let transferBusy=false;
@@ -50,6 +52,7 @@ export function mountConnectionGuide(host:HTMLElement) {
   const goals=[
     ["phone","Mini App Telegram","Меню твоего бота открывает агента по текущему адресу. Вручную переносить ссылку не нужно."],
     ["telegram","Telegram без VPN","Прокси помогает агенту подключиться к Telegram. Это отдельная настройка связи."],
+    ["bridge","Серверный мост","Настрой прокси и постоянный HTTPS. Агент остаётся на этом компьютере."],
     ["server","Агент на сервере","Перенеси агента, чтобы он работал и при выключенном компьютере."],
   ];
   const tabs=el("div","choice images-options connection-goals"); tabs.setAttribute("role","group"); tabs.setAttribute("aria-label","Что подключить");
@@ -61,12 +64,13 @@ export function mountConnectionGuide(host:HTMLElement) {
     tabs.querySelectorAll("button").forEach(node=>node.setAttribute("aria-pressed",String(node.dataset.goal===kind)));
     content.replaceChildren(el("p","field-hint","Проверяю текущие настройки…"));
     try {
-      const native=kind==="server"&&inTauri?await shell<Loaded>("config_load"):null;
+      const native=(kind==="server"||kind==="bridge")&&inTauri?await shell<Loaded>("config_load"):null;
       const session:Session=native?{config:native.config,stamp:String(native.mtime_ns||""),remote:native.config.mode==="remote"}:await load();
       if(current!==serial||!host.isConnected)return;
       content.replaceChildren();
       if(kind==="phone")drawPhone(content,session,()=>void pick(kind));
       else if(kind==="telegram")drawTelegram(content,session);
+      else if(kind==="bridge")drawBridge(content);
       else drawServer(content,session);
     } catch(error) {
       if(current!==serial||!host.isConnected)return;
@@ -80,6 +84,27 @@ export function mountConnectionGuide(host:HTMLElement) {
   }
   void pick("phone");
 }
+function drawBridge(host:HTMLElement) {
+  if(!inTauri){host.append(el('p','field-hint','Настрой серверный мост из программы Hélène.'));return;}
+  const note=el('p','receipt');const restartButton=button('Перезапустить движок','quiet',async()=>{
+    try{await restart(note);restartButton.hidden=true;}catch(error){receipt(note,humanError(error).text,true);}
+  });restartButton.hidden=true;
+  host.append(serverBridgeCard(async bridge=>{
+    const session=await load();
+    if(session.remote)throw new Error('Выбери местного агента: этот мост подключает программу на твоём компьютере.');
+    const next=structuredClone(session.config);useBridge(next,bridge);
+    const patch:Partial<Config>={};if(bridge.external)patch.phone=next.phone;
+    if(bridge.ports.local_proxy_port)patch.network=next.network;
+    await save(patch,session);restartButton.hidden=!bridge.ports.local_proxy_port;
+    return restartButton.hidden?'Подключение сохранено. Hélène подготавливает вход с телефона.':'Подключение сохранено. Перезапусти движок кнопкой ниже, когда текущая работа закончится.';
+  }),note,restartButton);
+}
+/** Daily server operations stay available after onboarding has finished. */
+export async function mountServerManagement(host:HTMLElement) {
+  const source=await shell<Loaded>('config_load');
+  if(!host.isConnected)return;
+  host.replaceChildren();drawServer(host,{config:source.config,stamp:String(source.mtime_ns||''),remote:source.config.mode==='remote'});
+}
 function drawPhone(host:HTMLElement,session:Session,reload:()=>void) {
   host.append(steps(["Подключи своего бота и укажи id владельца в карточке Telegram. Для каждого локального агента используй отдельного бота.",session.remote?"Mini App подключится к тому же агенту на сервере.":"Включи Mini App: Hélène подготовит подключение и обновит меню бота.","Открой меню бота или отправь /app. Бот выдаст свежую кнопку. Кнопки в старых сообщениях сохраняют прежний адрес.",session.remote?"Сервер должен оставаться включённым.":"Компьютер должен оставаться включённым и подключённым к интернету."]));
   const config=structuredClone(session.config);
@@ -88,7 +113,11 @@ function drawPhone(host:HTMLElement,session:Session,reload:()=>void) {
   if(!session.remote) {
     const apply=button(config.phone?.enabled?"Переподготовить подключение":"Подключить телефон","primary",async()=>{
       apply.disabled=true;receipt(out,"Подготавливаю подключение…");
-      try{await save({phone:{...config.phone,enabled:true,mode:"automatic"}},session);reload();}
+      try{
+        const patch:Partial<Config>={phone:{...config.phone,enabled:true,mode:config.phone?.mode||'automatic'}};
+        if(config.network?.bridge_profile)patch.network=config.network;
+        await save(patch,session);reload();
+      }
       catch(error){receipt(out,humanError(error).text,true);apply.disabled=false;}
     });
     host.append(apply,out);
@@ -207,18 +236,9 @@ function drawNewServer(host:HTMLElement) {
   const data:Record<string,unknown>={login:"root",port:22,install_docker:false,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
   let ready=false,busy=false;
   const out=el("p","receipt");const trust=el("div");trust.hidden=true;
-  const grid=el("div","form-grid two");
   const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
-  grid.append(field("Адрес сервера","",value=>{data.host=value;changed();},{placeholder:"IP или имя из панели сервера"}),field("Логин","root",value=>{data.login=value;changed();}),field("Пароль сервера","",value=>{data.password=value;changed();},{type:"password",hint:"Приложение использует его для SSH. В чат пароль не отправляется."}));
-  const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","","Параметры установки и SSH-ключ"),inner);
+  const {grid,advanced}=sshForm(data,changed,out);const inner=advanced.querySelector<HTMLElement>('.fold-body')!;
   const deployment=data.deployment as Record<string,unknown>;
-  inner.append(field("Папка установки","/opt/helene",value=>{deployment.directory=value;changed();}),field("Проект Compose","helene",value=>{deployment.project=value;deployment.container=value;changed();}),field("Порт канала на сервере","8094",value=>{deployment.port=Number(value);changed();}));
-  inner.append(field("Порт SSH","22",value=>{data.port=Number(value);changed();}),field("Пароль SSH-ключа","",value=>{data.key_password=value;changed();},{type:"password"}));
-  const keyLabel=el("span","receipt");
-  inner.append(button("Выбрать SSH-ключ","quiet",async()=>{
-    try{const files=await pickPaperFiles(true,1,32768);if(files[0]){data.key_text=await files[0].text();keyLabel.textContent=files[0].name;changed();}}
-    catch(error){receipt(out,humanError(error).text,true);}
-  }),keyLabel);
   const docker=toggle("Подготовить Docker, если его ещё нет",false,value=>data.install_docker=value);
   const check=button("Проверить сервер","quiet",()=>void probe());
   const start=button("Перенести и подключить","primary",async()=>{
@@ -278,9 +298,9 @@ function drawNewServer(host:HTMLElement) {
       receipt(out,result.message+(result.host?" Сервер: "+result.host+".":""));
       if(!data.host){
         data.host=result.host;data.login=result.login||"root";data.port=result.ssh_port||22;
-        const inputs=grid.querySelectorAll<HTMLInputElement>("input");if(inputs[0])inputs[0].value=String(data.host||"");if(inputs[1])inputs[1].value=String(data.login);
+        grid.dispatchEvent(new Event('ssh-fields-updated'));
         if(result.deployment)Object.assign(deployment,result.deployment);
-        const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port,data.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
+        const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
       }
     }
   }).catch(error=>receipt(out,humanError(error).text,true));
@@ -290,23 +310,13 @@ function drawNewServer(host:HTMLElement) {
 // no manual scripts. Same SSH discipline as the transfer: the host key is shown and confirmed
 // before any password is sent; passwords and keys are cleared from the form after use.
 type ServerProbe={ok:boolean;message:string;trust_needed?:boolean;fingerprint?:string;existing?:boolean;arch?:string;docker?:boolean};
-function sshForm(data:Record<string,unknown>,changed:()=>void,out:HTMLElement) {
+function sshForm(data:Record<string,unknown>,changed:()=>void,_out:HTMLElement) {
   const deployment=data.deployment as Record<string,unknown>;
-  const grid=el("div","form-grid two");
-  grid.append(field("Адрес сервера",String(data.host||""),value=>{data.host=value;changed();},{placeholder:"IP или имя из панели сервера"}),
-    field("Логин",String(data.login||"root"),value=>{data.login=value;changed();}),
-    field("Пароль сервера","",value=>{data.password=value;changed();},{type:"password",hint:"Только для SSH из приложения. В чат и в журналы пароль не попадает."}));
+  const grid=sshAccessForm(data,changed);
   const advanced=el("details","fold");const inner=el("div","fold-body");advanced.append(el("summary","","Параметры установки и SSH-ключ"),inner);
   inner.append(field("Папка установки",String(deployment.directory),value=>{deployment.directory=value;changed();}),
     field("Проект Compose",String(deployment.project),value=>{deployment.project=value;deployment.container=value;changed();}),
-    field("Порт канала на сервере",String(deployment.port),value=>{deployment.port=Number(value);changed();}),
-    field("Порт SSH",String(data.port||22),value=>{data.port=Number(value);changed();}),
-    field("Пароль SSH-ключа","",value=>{data.key_password=value;changed();},{type:"password"}));
-  const keyLabel=el("span","receipt");
-  inner.append(button("Выбрать SSH-ключ","quiet",async()=>{
-    try{const files=await pickPaperFiles(true,1,32768);if(files[0]){data.key_text=await files[0].text();keyLabel.textContent=files[0].name;changed();}}
-    catch(error){receipt(out,humanError(error).text,true);}
-  }),keyLabel);
+    field("Порт канала на сервере",String(deployment.port),value=>{deployment.port=Number(value);changed();}));
   return {grid,advanced};
 }
 function forgetSecrets(host:HTMLElement,data:Record<string,unknown>) {

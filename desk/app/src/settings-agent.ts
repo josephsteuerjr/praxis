@@ -759,6 +759,12 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
 
   return {
     cards,
+    useServerBridge(bridge) {
+      if(bridge.ports.local_proxy_port){
+        applicationConnection.set({mode:'proxy',protocol:'http',host:'127.0.0.1',port:String(bridge.ports.local_proxy_port),username:'',password:''});
+        bridgeRoute=JSON.stringify(applicationConnection.collect());
+      }
+    },
     // Четыре карточки, которые вместе решают, что агенту разрешено на этом
     // компьютере, впервые оказываются рядом: режим ограды, песочница,
     // смонтированные папки и управление компьютером. До этого они лежали в

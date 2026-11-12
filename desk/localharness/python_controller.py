@@ -204,6 +204,9 @@ class Controller:
 
     def sync_publishers(self):
         """Remote desktop export is Python-owned too, without a local brain."""
+        from .server_bridge import Manager
+        if not hasattr(self,'server_bridges'):self.server_bridges=Manager(self)
+        self.server_bridges.sync()
         import sys
         desired={}
         for agent in agents.roster(self.root):
@@ -287,6 +290,13 @@ class Controller:
         with self.lock:
             self.stop.set()  # also wakes the primary supervisor's own fanout
             failures = []
+            if hasattr(self,'server_setup_jobs'):
+                from .server_bridge_install import close as close_server_setup
+                try:close_server_setup(self)
+                except RuntimeError as exc:failures.append(str(exc))
+            if hasattr(self,'server_bridges'):
+                try:self.server_bridges.close()
+                except RuntimeError as exc:failures.append(str(exc))
             def stop_helpers():
                 snapshot = tuple(self.helpers)
                 try:

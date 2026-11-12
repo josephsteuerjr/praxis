@@ -22,6 +22,8 @@
 // не там.
 import { api, cfg, electron, inTauri, post, shell } from "../api";
 import { componentsCard } from "../components-card";
+import { serverBridgeCard } from '../server-settings';
+import { useBridge, type ServerBridge } from '../server-bridge-config';
 import { updateError } from "../../update-error";
 import { requestAgentUpdate } from '../update-admission';
 import { keepBlock } from "../config";
@@ -224,6 +226,7 @@ export interface Edition {
   collect(out: Config): string;
   /** Refresh route-specific controls only after a confirmed config write. */
   didSave?(config: Config): void;
+  useServerBridge?(bridge:ServerBridge):void;
   /** Подпись под карточкой «Имена»: у изданий она разная. */
   namesHint: string;
   /**
@@ -343,7 +346,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
 
   center.append(inGroup(selfReviewCard({ draft, freshness }), GROUP.agent));
 
-  center.append(inGroup(phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg), GROUP.brain));
+  const chooseBridge=(bridge:ServerBridge)=>{
+    if(draft.mode==='remote')throw new Error('Этот мост подключает местного агента. Выбери его в программе перед настройкой.');
+    useBridge(draft,bridge);built.useServerBridge?.(bridge);
+    phoneSettings.dispatchEvent(new CustomEvent('bridge-selected',{detail:bridge}));
+    phoneSettings.dispatchEvent(new Event('input',{bubbles:true}));
+  };
+  const phoneSettings=phoneCard(draft, !!c.phone?.enabled, String(c.phone?.mode || ""), built.phoneBase, built.qrSvg,{onBridge:chooseBridge});
+  center.append(inGroup(phoneSettings, GROUP.brain));
 
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(inGroup(transferCard(draft, posix), GROUP.app));
@@ -351,7 +361,18 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     center.append(inGroup(relayAuthCard(String(c.base)), GROUP.app));
   }
 
-  if (electron?.shell === "python") center.append(inGroup(componentsCard(), GROUP.app));
+  if (electron?.shell === "python") {
+    center.append(inGroup(componentsCard(), GROUP.app),inGroup(serverBridgeCard(chooseBridge),GROUP.app));
+    const serverBody=el('div');
+    const openServer=button('Открыть управление сервером','quiet',async()=>{
+      openServer.disabled=true;
+      try{await (await import('../connection-guide')).mountServerManagement(serverBody);}
+      catch(error){serverBody.textContent=humanError(error).text;}
+      finally{openServer.disabled=false;}
+    });
+    const placement=el('div');placement.append(openServer,serverBody);
+    center.append(inGroup(card('Размещение агента',placement),GROUP.app));
+  }
 
   // --- копии памяти (1.2): расписание, «сейчас», последние снимки
   center.append(inGroup(backupCard(draft), GROUP.app));
@@ -881,6 +902,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // миллисекундная гонка, — один лишний хвост у расписки.
       });
       if (revision === container.dataset.settingsRevision) built.didSave?.(saved);
+      phoneSettings.dispatchEvent(new CustomEvent('configuration-saved',{detail:saved}));
       // 25.09: оболочка применила настройки реле сразу и сказала, что сделала.
       return r && typeof r === "object" && typeof r.relay === "string" ? r.relay : "";
     } catch (e) {
@@ -1320,17 +1342,20 @@ function transferCard(draft: Config, posix = false): HTMLElement {
  * Mini App entry belongs to the configured bot, locally and on a VPS.
  * The origin is diagnostic; users never copy it or enroll through a QR.
  */
-interface PhoneState { state: string; message: string; url?: string; telegram?: string; bot_url?: string }
+interface PhoneState { state: string; message: string; url?: string; telegram?: string; bot_url?: string;
+  checks?: Record<string, {state:string;message:string;last_attempt?:number;retry_at?:number}> }
 
 export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: string,
-                   remoteBase: string, _qrSvg: (text: string) => Promise<string>, opts:{showToggle?:boolean}={}): HTMLElement {
+                   remoteBase: string, _qrSvg: (text: string) => Promise<string>, opts:{showToggle?:boolean;onBridge?:(bridge:ServerBridge)=>void}={}): HTMLElement {
   draft.phone = draft.phone || {};
+  let savedExternal=draft.phone.external||'',savedBridge=draft.phone.bridge_profile||'';
   if(!['automatic','stable'].includes(draft.phone.mode || ''))draft.phone.mode = "automatic";
   const remote = !!remoteBase;
   const phone = el("div");
   const hint = el("p", "field-hint", "Открывай Mini App через своего Telegram-бота: меню или /app каждый раз ведут к текущему подключению. У каждого локального агента должен быть свой бот. Компьютер или сервер с агентом должен оставаться включённым.");
   const receipt = el("p", "receipt");
   receipt.setAttribute("aria-live", "polite");
+  const checks = el("div", "phone-checks");
   let status: PhoneState = {state:"waiting",message:"Проверяю вход через бота…"};
   const devicesBox = el("div", "devices");
   const drawDevices = async () => {
@@ -1359,7 +1384,8 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
   botLink.rel = "noopener noreferrer";
   botLink.hidden = true;
   function sync() {
-    const saved = remote || (savedEnabled && ['automatic','stable'].includes(savedMode) && savedMode===draft.phone?.mode);
+    const saved = remote || (savedEnabled && ['automatic','stable'].includes(savedMode) && savedMode===draft.phone?.mode &&
+      (savedMode!=='stable'||(savedExternal===(draft.phone?.external||'')&&savedBridge===(draft.phone?.bridge_profile||''))));
     const on = remote || !!draft.phone?.enabled;
     receipt.textContent = !on ? "Подключение выключено. Нажми «Сохранить», чтобы применить." : !saved
       ? "Нажми «Сохранить» — Hélène подготовит вход через бота." : status.message;
@@ -1368,6 +1394,14 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     const validBot = /^https:\/\/t\.me\/[A-Za-z0-9_]+(?:\?start=helene)?$/.test(status.bot_url || '');
     botLink.hidden = !on || !saved || status.telegram !== "ready" || !validBot;
     if (validBot) botLink.href = status.bot_url!;
+    checks.replaceChildren();
+    if (on && saved) for (const [key,label] of [['bot','Telegram-бот'],['https','Публичный HTTPS'],['menu','Кнопка бота'],['authorization','Вход владельца']]) {
+      const check=status.checks?.[key]; if(!check)continue;
+      const row=el('p','receipt');row.classList.toggle('err',['error','retry'].includes(check.state));
+      const at=check.last_attempt ? ` Проверка: ${new Date(check.last_attempt*1000).toLocaleTimeString('ru-RU')}.` : '';
+      const retryAt=check.retry_at && check.retry_at*1000>Date.now() ? ` Повтор: ${new Date(check.retry_at*1000).toLocaleTimeString('ru-RU')}.` : '';
+      row.textContent=`${label}: ${check.message}${at}${retryAt}`;checks.append(row);
+    }
   }
   async function refresh() {
     if (!remote && (!savedEnabled || !['automatic','stable'].includes(savedMode))) { sync(); return; }
@@ -1375,22 +1409,60 @@ export function phoneCard(draft: Config, savedEnabled: boolean, savedMode: strin
     catch (e) { const error=humanError(e); status={state:"error",message:error.detail || error.text}; }
     sync();
   }
-  if (!remote && opts.showToggle!==false) phone.append(toggle("Подключать Mini App Telegram", !!draft.phone.enabled, v => { draft.phone!.enabled=v;sync(); }));
+  const enabled=toggle("Подключать Mini App Telegram", !!draft.phone.enabled, v => { draft.phone!.enabled=v;sync(); });
+  if (!remote && opts.showToggle!==false) phone.append(enabled);
   if(!remote) {
     const route=document.createElement('select');route.setAttribute('aria-label','Подключение Mini App');
     for(const [value,label] of [['automatic','Автоматически через Hélène'],['stable','Постоянный HTTPS-сервер']]) {
       const option=document.createElement('option');option.value=value;option.textContent=label;route.append(option);
     }
     route.value=draft.phone.mode || 'automatic';
-    const fixed=field('Постоянный HTTPS-адрес',draft.phone.external || '',value=>{draft.phone!.external=value.trim()},
+    const profiles=el('select','field-input');profiles.setAttribute('aria-label','Подключение сервера для HTTPS');
+    profiles.append(new Option('Свой HTTPS-адрес без встроенного моста',''));
+    const profileNote=el('p','receipt');
+    const fixed=field('Постоянный HTTPS-адрес',draft.phone.external || '',value=>{draft.phone!.external=value.trim();delete draft.phone!.bridge_profile;profiles.value='';sync()},
       {placeholder:'https://…',hint:'Адрес уже настроенного сервера. Hélène проверяет его и обновляет вход в боте автоматически.'});
-    fixed.hidden=route.value!=='stable';
-    route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;fixed.hidden=route.value!=='stable';sync()});
-    phone.append(route,fixed);
+    const stable=el('div');stable.append(profiles,fixed,profileNote);stable.hidden=route.value!=='stable';
+    route.addEventListener('change',()=>{draft.phone!.mode=route.value;if(route.value==='stable')draft.phone!.local_port=draft.phone?.local_port || draft.port;else delete draft.phone!.bridge_profile;stable.hidden=route.value!=='stable';sync()});
+    let bridges:ServerBridge[]=[];
+    profiles.addEventListener('change',async()=>{
+      const selected=bridges.find(value=>value.id===profiles.value);
+      if(!selected){delete draft.phone!.bridge_profile;return;}
+      profiles.disabled=true;profileNote.textContent='Проверяю HTTPS и подключение сервера…';
+      try{
+        const checked=await shell<{ok:boolean}>('server_bridge',{action:'check',request:JSON.stringify({id:selected.id})});
+        if(!checked.ok)throw new Error('Подключение не подтверждено. Проверь сервер в разделе программы.');
+        if(opts.onBridge)opts.onBridge(selected);else{useBridge(draft,selected);cardNode.dispatchEvent(new CustomEvent('bridge-selected',{detail:selected}));}
+        profileNote.textContent='Подключение выбрано. Сохрани настройки.';
+        profiles.dispatchEvent(new Event('input',{bubbles:true}));
+      }catch(error){profiles.value=draft.phone?.bridge_profile||'';profileNote.textContent=humanError(error).text;}
+      finally{profiles.disabled=false;}
+    });
+    if(electron?.shell==='python')void shell<{bridges:ServerBridge[]}>('server_bridge',{action:'list'}).then(result=>{
+      bridges=result.bridges.filter(value=>value.external&&value.phase!=='error');
+      profiles.append(...bridges.map(value=>new Option(value.name+' · '+value.external,value.id)));
+      profiles.value=draft.phone?.bridge_profile||'';
+    }).catch(error=>{profileNote.textContent=humanError(error).text;});else profiles.hidden=true;
+    phone.append(route,stable);
+    // Update the existing card: its identity is retained by the settings index.
+    queueMicrotask(()=>cardNode.addEventListener('bridge-selected',event=>{
+      const bridge=(event as CustomEvent<ServerBridge>).detail;
+      if(bridge.external&&!bridges.some(value=>value.id===bridge.id)){
+        bridges.push(bridge);profiles.append(new Option(bridge.name+' · '+bridge.external,bridge.id));
+      }
+      route.value=draft.phone?.mode||'automatic';route.dispatchEvent(new Event('change'));
+      fixed.querySelector('input')!.value=draft.phone?.external||'';
+      profiles.value=draft.phone?.bridge_profile||'';enabled.setAttribute('aria-checked',String(!!draft.phone?.enabled));sync();
+    }));
   }
-  phone.append(hint,receipt);
+  phone.append(hint,receipt,checks);
   const actions=el('div','actions');actions.append(botLink,retry);phone.append(actions,devicesBox);
   const cardNode=card('Mini App Telegram',phone);
+  cardNode.addEventListener('configuration-saved',event=>{
+    const saved=(event as CustomEvent<Config>).detail.phone;
+    savedEnabled=!!saved?.enabled;savedMode=saved?.mode||'';
+    savedExternal=saved?.external||'';savedBridge=saved?.bridge_profile||'';void refresh();
+  });
   void refresh();void drawDevices();
   const poll=()=>{if(!cardNode.isConnected)return;void refresh();setTimeout(poll,2000)};
   setTimeout(poll,2000);

@@ -188,9 +188,21 @@ def invoke(owner, command, args):
         result=config_cli.save(agent.config,json.dumps(cfg),seen)
         if result.get('ok'):owner.sync_publishers()
         return dict(result,id=remote.get('id'),path=str(agent.config),before_mtime_ns=seen)
+    if command=='server_bridge':
+        from . import server_bridge
+        return server_bridge.invoke(owner,args.get('action'),json.loads(args.get('request','{}')))
+    if command=='server_connection':
+        from . import server_connections
+        action=args.get('action')
+        payload=json.loads(args.get('request','{}'))
+        if action=='list':return server_connections.profiles()
+        if action=='inspect':return server_connections.inspect(payload)
+        if action=='save':return server_connections.save(payload)
+        raise ValueError('Unknown server connection action')
     if command=='server_transfer':
         from . import server_transfer, remote_locator
-        payload=json.loads(args.get('request','{}'))
+        from .server_connections import resolve
+        payload=resolve(json.loads(args.get('request','{}')))
         action=args['action']
         if action=='probe':return server_transfer.probe(payload,agent.config)
         if action=='status':return server_transfer.status(agent.config)
@@ -210,7 +222,8 @@ def invoke(owner, command, args):
         # window; no manual scripts. A new agent becomes its own remote profile; the local
         # agent and its memory are not touched.
         from . import server_install, server_transfer
-        payload=json.loads(args.get('request','{}'))
+        from .server_connections import resolve
+        payload=resolve(json.loads(args.get('request','{}')))
         action=args['action']
         if action=='probe':return server_transfer.probe(payload)
         if action=='status':
@@ -267,6 +280,9 @@ def invoke(owner, command, args):
         return owner.helper([sys.executable,str(owner.root/'app/localharness/mtproto_login.py'),
             '--session',str(agent.tree/'telegram/account'),'--config',str(agent.config),args['step']],env=env,timeout=90)
     if command=='component_install':
+        if args.get('name')=='server-bridge':
+            from .server_bridge import install
+            return install()
         from .component_install_job import start
         return start(owner,str(args.get('name') or ''))
     if command=='voice_fetch':

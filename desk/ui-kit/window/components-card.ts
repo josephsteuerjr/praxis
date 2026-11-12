@@ -2,7 +2,7 @@ import { shell } from './api';
 import { button, card, el } from '../dom';
 
 type Progress = { active?: boolean; state?: string; stage?: string; bytes?: number; total_bytes?: number; files?: number; files_done?: number; total_files?: number; error?: string };
-type Component = { id: string; ready: boolean; installed: boolean; error?: string; source?: string; toolchain?: string; download_bytes?: number; progress?: Progress };
+type Component = { id: string; ready: boolean; installed: boolean; restart_required?:boolean; error?: string; source?: string; toolchain?: string; download_bytes?: number; progress?: Progress };
 
 export function componentProgress(value: Progress): { label: string; fraction?: number } {
   const labels: Record<string, string> = { starting: 'Подготовка', preparing: 'Проверка комплекта', downloading: 'Скачивание', unpacking: 'Распаковка', extracting: 'Распаковка', installing: 'Установка', completed: 'Установлено' };
@@ -52,11 +52,11 @@ export function componentsCard(): HTMLElement {
           row.append(label, detail, bar, install, error); rows.append(row);
           entry = { row, label, detail, bar, install, error }; entries.set(item.id, entry);
         }
-        const names: Record<string, string> = {relay:'praxis-relay · MIT', xtts:'XTTS · CPML, некоммерческая лицензия', whisper:'Whisper · распознавание речи'};
+        const names: Record<string, string> = {relay:'praxis-relay · MIT', xtts:'XTTS · CPML, некоммерческая лицензия', whisper:'Whisper · распознавание речи','server-bridge':'Серверный мост'};
         const active = starting.has(item.id) || item.progress?.active === true;
         const caption = componentProgress(item.progress || {});
         entry.label.textContent = `${names[item.id] || item.id} · ${active ? 'устанавливается' : item.installed ? 'установлено' : item.ready ? 'можно установить' : 'комплект недоступен'}`;
-        entry.detail.textContent = active ? caption.label : item.installed ? 'Готово. Для применения перезапусти приложение.' : item.download_bytes ? `${(item.download_bytes / 1048576).toFixed(0)} МБ · проверенный кеш используется повторно` : '';
+        entry.detail.textContent = active ? caption.label : item.installed ? item.restart_required===false ? 'Готово. Перезапуск не нужен.' : 'Готово. Для применения перезапусти приложение.' : item.download_bytes ? `${(item.download_bytes / 1048576).toFixed(0)} МБ · проверенный кеш используется повторно` : '';
         entry.bar.hidden = !active;
         if (caption.fraction === undefined) entry.bar.removeAttribute('value'); else entry.bar.value = caption.fraction;
         entry.install.hidden = item.installed || !item.ready;

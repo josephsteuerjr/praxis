@@ -256,6 +256,9 @@ def _host_ok(request: web.Request) -> bool:
         return True
     if _PHONE_ACCESS is not None and name and name == _PHONE_ACCESS.host():
         return True
+    if request.path == '/api/phone/probe':
+        from localharness.server_probe import permitted
+        if permitted(readers.tree(),request,name):return True
     try:
         import ipaddress
         ipaddress.ip_address(name)

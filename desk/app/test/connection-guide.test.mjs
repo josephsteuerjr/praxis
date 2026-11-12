@@ -7,7 +7,7 @@ const availabilitySource=readFileSync(new URL('../../ui-kit/window/feature-avail
 const {SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE}=await import('data:text/javascript;base64,'+Buffer.from(stripTypeScriptTypes(availabilitySource)).toString('base64'));
 const calls=[];
 const nodes=[];
-function node(tag,text=''){const item={tag,text,children:[],attributes:{},isConnected:true,setAttribute(key,value){this.attributes[key]=value;},append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},querySelectorAll(){return [];}};nodes.push(item);return item;}
+function node(tag,text=''){const item={tag,text,children:[],attributes:{},isConnected:true,setAttribute(key,value){this.attributes[key]=value;},append(...items){this.children.push(...items);},replaceChildren(...items){this.children=items;},querySelectorAll(){return [];},querySelector(){return this.children.find(child=>child.tag==='div');}};nodes.push(item);return item;}
 let current={path:'owner-config',mtime_ns:'100',config:{mode:'local',telegram:{bot_token:'private-token',owner_id:'1'},phone:{enabled:false},model:{name:'owned-model'}}};
 globalThis.__guideTest={
   SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE,
@@ -15,6 +15,9 @@ globalThis.__guideTest={
   button:(text,cls,action)=>Object.assign(node('button',text),{action}),
   field:(label,value,change)=>Object.assign(node('field'),{label,value,change}),toggle:()=>node('toggle'),
   humanError:error=>({text:error.message}),collectConnection:()=>null,
+  sshAccessForm:(data,changed)=>{
+    const grid=node('div');grid.append(Object.assign(node('field'),{label:'Адрес сервера',change:value=>{data.host=value;changed();}}));return grid;
+  },
   api:async()=>({ok:true,config:current.config,mtime_ns:current.mtime_ns}),
   post:async(path,body)=>{calls.push({path,body});return {ok:true};},
   shell:async(command,args)=>{
@@ -31,7 +34,7 @@ globalThis.__guideTest={
     return null;
   },
 };
-const stub=`const {api,post,shell,el,button,field,toggle,humanError,collectConnection,SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE}=globalThis.__guideTest;const cfg={base:''};const inTauri=true;`;
+const stub=`const {api,post,shell,el,button,field,toggle,humanError,collectConnection,sshAccessForm,SERVER_TRANSFER_AVAILABLE,SERVER_TRANSFER_NOTICE}=globalThis.__guideTest;const cfg={base:''};const inTauri=true;`;
 const stripped=stripTypeScriptTypes(source.replace(/^import .*;\r?\n/gm,'')+'\nexport {save,stopForTransfer,drawExistingServer,drawNewServer};');
 const {save,stopForTransfer,drawExistingServer,drawNewServer}=await import('data:text/javascript;base64,'+Buffer.from(stub+stripped).toString('base64'));
 
@@ -92,6 +95,6 @@ assert.equal(calls.at(-1).command,'restart_self');
 
 const rpc=readFileSync(new URL('../../shell/src/host_rpc.rs',import.meta.url),'utf8');
 assert.match(rpc,/"server_transfer"\s*=>\s*server_transfer\(/,'Electron must expose the same migration helper as Tauri');
-assert.match(source,/kind==="server"&&inTauri\?await shell<Loaded>\("config_load"\)/,'server setup must stay accessible while remote API is down');
+assert.match(source,/\(kind==="server"\|\|kind==="bridge"\)&&inTauri\?await shell<Loaded>\("config_load"\)/,'server setup must stay accessible while remote API is down');
 assert.match(source,/action:"telegram-check"/,'resuming a transfer must check Telegram without requiring the already stopped local channel');
 console.log('connection-guide: ok');

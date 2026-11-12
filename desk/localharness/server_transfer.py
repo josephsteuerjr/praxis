@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 import shlex
+import socket
 import sys
 import tarfile
 import tempfile
@@ -110,7 +111,8 @@ class Pin(paramiko.MissingHostKeyPolicy):
     def missing_host_key(self,client,hostname,key):
         if fingerprint(key)!=self.expected:raise TransferError('Ключ сервера изменился. Сначала проверь подключение заново')
 
-def connect(raw):
+def connect(raw,*,on_client=None):
+    from localharness.server_connections import authentication
     host,port,login=parameters(raw)
     expected=str(raw.get('fingerprint') or '')
     client=paramiko.SSHClient()
@@ -118,21 +120,39 @@ def connect(raw):
     else:
         with contextlib.suppress(OSError):client.load_system_host_keys(str(Path.home()/'.ssh/known_hosts'))
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
-    key=None
-    if raw.get('key_text'):
-        for kind in (paramiko.Ed25519Key,paramiko.RSAKey,paramiko.ECDSAKey):
-            try:key=kind.from_private_key(io.StringIO(str(raw['key_text'])),password=str(raw.get('key_password') or '') or None);break
-            except (paramiko.SSHException,ValueError):pass
-        if key is None:raise TransferError('Файл SSH-ключа не прочитался. Проверь его пароль или выбери другой файл')
+    try:auth=authentication(raw)
+    except ValueError as error:
+        client.close();raise TransferError(str(error)) from None
     try:
-        client.connect(host,port=port,username=login,password=str(raw.get('password') or '') or None,pkey=key,
-                       timeout=15,auth_timeout=20,banner_timeout=15,allow_agent=False,look_for_keys=False)
+        if on_client:on_client(client)
+        def transport_factory(sock,**options):
+            class Pending:
+                def close(self):
+                    # SSHClient has not assigned _transport yet. Closing only
+                    # that client here loses cancellation before the banner.
+                    with contextlib.suppress(OSError):sock.shutdown(socket.SHUT_RDWR)
+                    sock.close();client.close()
+            pending=Pending()
+            try:
+                if on_client:on_client(pending)
+                return paramiko.Transport(sock,**options)
+            except BaseException:
+                pending.close();raise
+        client.connect(host,port=port,username=login,**auth,
+                       timeout=15,auth_timeout=20,banner_timeout=15,allow_agent=False,look_for_keys=False,
+                       **({'transport_factory':transport_factory} if on_client else {}))
+        if on_client:on_client(client)
+        client.get_transport().set_keepalive(15)
         return client
+    except TransferError:
+        client.close();raise
     except Exception:
         client.close();raise TransferError('Войти на сервер не удалось. Проверь адрес, логин, пароль или SSH-ключ') from None
 
-def execute(client,command,timeout=30,check=True):
-    _,out,_=client.exec_command(command,timeout=timeout)
+def execute(client,command,timeout=30,check=True,input_data=None):
+    stdin,out,_=client.exec_command(command,timeout=timeout)
+    if input_data is not None:
+        stdin.write(input_data);stdin.flush();stdin.channel.shutdown_write()
     channel=out.channel;values=[];errors=[];total=0;deadline=time.monotonic()+timeout
     while not channel.exit_status_ready() or channel.recv_ready() or channel.recv_stderr_ready():
         if time.monotonic()>deadline:
@@ -158,6 +178,8 @@ def probe(raw,config_path=None):
     except Exception:raise TransferError('Сервер не отвечает по SSH. Проверь адрес и порт') from None
     finally:
         if transport:transport.close()
+    if raw.get('fingerprint') and raw['fingerprint']!=seen:
+        raise TransferError('Отпечаток SSH-сервера изменился. Проверь сервер; прежнее подключение не использовано')
     trusted=False
     known=paramiko.HostKeys()
     with contextlib.suppress(OSError):known.load(str(Path.home()/'.ssh/known_hosts'))
