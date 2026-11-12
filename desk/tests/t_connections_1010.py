@@ -74,7 +74,8 @@ class Discovery(unittest.TestCase):
                 self.assertIsNone(req.get_header('Authorization'))
                 self.assertNotIn('owner-test-key',req.full_url)
                 return {'instance':'real-instance','challenge':challenge,'proof':locator.signature('owner-test-key',challenge,'real-instance')}
-            with mock.patch.object(locator,'read',side_effect=read):self.assertEqual(locator.locate(self.config()),origin)
+            with mock.patch.object(locator.Route,'open',side_effect=lambda request,**kw:contextlib.closing(io.BytesIO(json.dumps(read(request)).encode()))):
+                self.assertEqual(locator.locate(self.config()),origin)
             self.assertEqual(len(requests),2)
 
     def test_wrong_agent_or_replayed_challenge_never_gets_the_key(self):
@@ -85,12 +86,12 @@ class Discovery(unittest.TestCase):
                 if len(requests)==1:return {'ok':True,'result':{'type':'web_app','web_app':{'url':'https://wrong.test/tg/'}}}
                 challenge='old' if wrong_challenge else req.full_url.split('challenge=')[1]
                 return {'challenge':challenge,'instance':'other','proof':locator.signature('someone-elses-key',challenge,'other')}
-            with mock.patch.object(locator,'read',side_effect=read),self.assertRaises(ValueError):locator.locate(self.config())
+            with mock.patch.object(locator.Route,'open',side_effect=lambda request,**kw:contextlib.closing(io.BytesIO(json.dumps(read(request)).encode()))),self.assertRaises(ValueError):locator.locate(self.config())
             self.assertTrue(all(r.get_header('Authorization') is None for r in requests))
 
     def test_wrong_menu_url_does_not_receive_a_probe(self):
         for target in ('http://unsafe.test/tg/','https://user:pass@unsafe.test/tg/','https://safe.test/tg/?key=x','https://safe.test/other'):
-            with mock.patch.object(locator,'read',return_value={'ok':True,'result':{'type':'web_app','web_app':{'url':target}}}) as read,self.assertRaises(ValueError):locator.locate(self.config())
+            with mock.patch.object(locator.Route,'open',side_effect=lambda *a,**kw:contextlib.closing(io.BytesIO(json.dumps({'ok':True,'result':{'type':'web_app','web_app':{'url':target}}}).encode()))) as read,self.assertRaises(ValueError):locator.locate(self.config())
             self.assertEqual(read.call_count,1)
 
 class Transfer(unittest.TestCase):

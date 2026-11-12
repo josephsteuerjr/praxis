@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from contextvars import ContextVar
 import hashlib
 import math
 import os
@@ -53,6 +54,7 @@ CLOUDFLARED_BUILD = "2026-07-15-13:30 UTC"
 DOWNLOAD_DEADLINE_SEC = 300  # whole-download bound (see _download_asset)
 MAX_ASSET_BYTES = 70 * 1024 * 1024
 MAX_LOG_BYTES = 64 * 1024
+_DOWNLOAD_ROUTE = ContextVar('helene_cloudflared_download_route',default=None)
 _DOWNLOAD_HOSTS = frozenset({"github.com", "release-assets.githubusercontent.com"})
 _URL_CANDIDATE_RE = re.compile(r"https://[^\s\"'<>\\]+")
 _LOG_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s\"'<>\\]+", re.IGNORECASE)
@@ -263,7 +265,8 @@ class _StrictRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def _download_asset(spec: _AssetSpec, destination: Path) -> None:
     _validate_download_url(spec.url)
-    opener = urllib.request.build_opener(
+    route = _DOWNLOAD_ROUTE.get()
+    opener = route.opener(_StrictRedirectHandler()) if route is not None else urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _StrictRedirectHandler(),
     )
@@ -481,10 +484,15 @@ def _ensure_cloudflared_sync(state_dir: Path) -> Path:
             candidate.unlink(missing_ok=True)
 
 
-async def ensure_cloudflared(state_dir: Path) -> Path:
+async def ensure_cloudflared(state_dir: Path, *, network_config=None) -> Path:
     """Install or re-verify cloudflared 2026.7.2 in private skill state."""
 
-    return await asyncio.to_thread(_ensure_cloudflared_sync, Path(state_dir))
+    from deskd.network_route import Route
+    token = _DOWNLOAD_ROUTE.set(Route(network_config) if network_config is not None else None)
+    try:
+        return await asyncio.to_thread(_ensure_cloudflared_sync, Path(state_dir))
+    finally:
+        _DOWNLOAD_ROUTE.reset(token)
 
 
 def _quick_tunnel_url(text: str) -> str | None:
@@ -550,7 +558,7 @@ class _BoundedLog:
 class QuickTunnel:
     """Lifecycle wrapper for one Quick Tunnel to a loopback-only sidecar port."""
 
-    def __init__(self, binary: Path, state_dir: Path, sidecar_port: int) -> None:
+    def __init__(self, binary: Path, state_dir: Path, sidecar_port: int, *, network_config=None) -> None:
         if isinstance(sidecar_port, bool) or not isinstance(sidecar_port, int):
             raise CloudflaredError("Sidecar port must be an integer.")
         if not 1 <= sidecar_port <= 65535:
@@ -558,6 +566,8 @@ class QuickTunnel:
         self.binary = Path(binary)
         self.state_dir = Path(state_dir)
         self.sidecar_port = sidecar_port
+        self.network_config = network_config
+        self._proxy_bridge = None
         self._process: asyncio.subprocess.Process | None = None
         self._stdout_log = _BoundedLog()
         self._stderr_log = _BoundedLog()
@@ -595,7 +605,7 @@ class QuickTunnel:
             "--protocol", "http2",
             "--url",
             f"http://127.0.0.1:{self.sidecar_port}",
-        ]
+        ] + (self._proxy_bridge.arguments if self._proxy_bridge else [])
 
     def _watchdog_script(self) -> Path:
         path = Path(__file__).with_name("tunnel_watchdog.py")
@@ -719,6 +729,13 @@ class QuickTunnel:
         self.binary = canonical
         env = _version_environment(self._home)
         try:
+            if self.network_config is not None:
+                from deskd.network_route import Route
+                from .proxy_bridge import CloudflareProxy,QUICK_SERVICE,EDGES
+                route=Route(self.network_config)
+                if any(route.proxy_for(url) for url in [QUICK_SERVICE,*('https://'+host+':7844' for host in EDGES)]):
+                    self._proxy_bridge=CloudflareProxy(route)
+                    await self._proxy_bridge.start()
             if IS_WINDOWS:
                 self._windows_job = WindowsKillJob()
             else:
@@ -742,6 +759,7 @@ class QuickTunnel:
             if self._windows_job is not None:
                 self._windows_job.assign(self._process.pid)
         except BaseException as exc:
+            if self._proxy_bridge: await self._proxy_bridge.stop()
             if self._process is not None and self._process.returncode is None:
                 with contextlib.suppress(ProcessLookupError):
                     self._process.terminate()
@@ -753,6 +771,7 @@ class QuickTunnel:
                 raise CloudflaredError("Could not start the pinned cloudflared process.") from exc
             raise
         if not IS_WINDOWS and self._watchdog_failed:
+            if self._proxy_bridge: await self._proxy_bridge.stop()
             if self._process.returncode is None:
                 self._process.terminate()
                 await self._process.wait()
@@ -779,6 +798,7 @@ class QuickTunnel:
         assert self._process is not None
         returncode = await self._process.wait()
         await asyncio.gather(*self._reader_tasks, return_exceptions=True)
+        if self._proxy_bridge: await self._proxy_bridge.stop()
         await self._disarm_watchdog()
         if self._url_future is not None and not self._url_future.done():
             detail = _safe_log_detail(self.stderr_tail) or _safe_log_detail(self.stdout_tail)
@@ -829,7 +849,12 @@ class QuickTunnel:
         try:
             return await asyncio.wait_for(asyncio.shield(self._url_future), float(timeout_sec))
         except asyncio.TimeoutError as exc:
+            if self.connection_error: raise ValueError(self.connection_error) from None
             raise CloudflaredError("Timed out waiting for the Cloudflare Quick Tunnel URL.") from exc
+
+    @property
+    def connection_error(self) -> str:
+        return self._proxy_bridge.error if self._proxy_bridge else ''
 
     async def wait(self) -> int:
         """Wait for cloudflared to exit and return its process exit code."""
@@ -869,6 +894,7 @@ class QuickTunnel:
 
         process = self._process
         if process is None:
+            if self._proxy_bridge: await self._proxy_bridge.stop()
             return
         if process.returncode is None:
             process.terminate()

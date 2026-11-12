@@ -149,7 +149,7 @@ class Channel(unittest.IsolatedAsyncioTestCase):
              patch.object(access,'QuickTunnel',return_value=tunnel), patch.object(access.os,'getpgrp',side_effect=os.getpid,create=True), \
              patch.object(runtime,'clock',side_effect=advance), patch.object(runtime,'public_ready',new=AsyncMock(return_value=False)) as probe, \
              patch.object(runtime,'delay',new=AsyncMock()):
-            with self.assertRaisesRegex(access.CloudflaredError,'Public origin'):await runtime.cycle(config)
+            with self.assertRaisesRegex(ValueError,'Публичный HTTPS-адрес'):await runtime.cycle(config)
         self.assertEqual(probe.await_count,3)
         tunnel.stop.assert_awaited_once();self.assertEqual(runtime.url,'')
     async def test_panic_requires_a_key_and_does_not_offer_remote_resume(self):

@@ -845,6 +845,8 @@ async def api_pair_telegram(request):
     response.set_cookie(COOKIE, got["key"], max_age=365 * 24 * 3600,
                         httponly=True, samesite="Lax",
                         secure=request.scheme=='https' or request.headers.get('X-Forwarded-Proto')=='https')
+    if _PHONE_ACCESS is not None:
+        _PHONE_ACCESS.authorized()
     return response
 
 

@@ -98,18 +98,7 @@ def _catchup_update(update: dict, wake_not_before: float) -> dict:
 #  HTTP: stdlib, без зависимостей — продукт обязан подниматься на голой машине
 # --------------------------------------------------------------------------- #
 
-class BotApiError(RuntimeError):
-    def __init__(self, method: str, code: int, description: str,
-                 retry_after: float = 0.0):
-        super().__init__(f"{method}: [{code}] {description}")
-        self.method, self.code = method, int(code)
-        self.description = str(description)
-        self.retry_after = float(retry_after)
-
-    @property
-    def permanent(self) -> bool:
-        """4xx, кроме 429, — переспрашивать бессмысленно (нет прав/чата/формы)."""
-        return 400 <= self.code < 500 and self.code != 429
+from deskd.telegram_http import Client as HttpClient, BotApiError
 
 
 def _multipart(fields: dict[str, str], file_field: str, path: Path,
@@ -127,24 +116,8 @@ def _multipart(fields: dict[str, str], file_field: str, path: Path,
     return b"".join(chunks), boundary
 
 
-class BotClient:
+class BotClient(HttpClient):
     """Тонкий клиент Bot API. Ошибка метода — BotApiError, сеть — URLError."""
-
-    def __init__(self, token: str, *, proxy_url: str = "", proxy_key: str = ""):
-        self._base = f"https://api.telegram.org/bot{token}/"
-        self._proxy_url, self._proxy_key = proxy_url, proxy_key
-
-    def call(self, method: str, _http_timeout: float = 30.0, **params) -> dict | list:
-        # `_http_timeout` с подчёркиванием: у самого API есть параметр `timeout`
-        # (long-poll getUpdates), и имена не должны сталкиваться.
-        data = {k: (json.dumps(v, ensure_ascii=False)
-                    if isinstance(v, (dict, list, bool)) else str(v))
-                for k, v in params.items() if v is not None}
-        req = urllib.request.Request(
-            self._base + method,
-            data=urllib.parse.urlencode(data).encode("utf-8"),
-            headers={"Content-Type": "application/x-www-form-urlencoded"})
-        return self._read(method, req, _http_timeout)
 
     def upload(self, method: str, file_field: str, path: Path, *,
                mime: str = "", timeout: float = 300.0, **params) -> dict | list:
@@ -157,25 +130,6 @@ class BotClient:
             self._base + method, data=body,
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
         return self._read(method, req, timeout)
-
-    def _read(self, method: str, req: urllib.request.Request, timeout: float):
-        if self._proxy_url:
-            req = telegram_proxy.bot_request(req, self._proxy_url, self._proxy_key)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            try:
-                payload = json.loads(exc.read().decode("utf-8"))
-            except Exception:
-                raise BotApiError(method, exc.code, str(exc)) from exc
-            retry = float((payload.get("parameters") or {}).get("retry_after") or 0)
-            raise BotApiError(method, int(payload.get("error_code") or exc.code),
-                              str(payload.get("description") or exc), retry) from exc
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            raise BotApiError(method, int(payload.get("error_code") or 0),
-                              str(payload.get("description") or "not ok"))
-        return payload.get("result")
 
     def download_file(self, file_id: str, destination: Path):
         if self._proxy_url:
@@ -202,9 +156,8 @@ class BotClient:
         url = self._base.replace('/bot', '/file/bot', 1).rstrip('/') + '/' + urllib.parse.quote(relative, safe='/')
         self._download(url,destination)
 
-    @staticmethod
-    def _download(url, destination):
-        with urllib.request.urlopen(url, timeout=30) as response:
+    def _download(self, url, destination):
+        with self._open(url, timeout=30) as response:
             with Path(destination).open('wb') as target:
                 total = 0
                 while chunk := response.read(65536):
@@ -619,8 +572,7 @@ class BotTransport:
         self.agent = agent_mod
         self._cfg = cfg
         self.tree = Path(tree)
-        proxy_url, proxy_key = telegram_proxy.settings(cfg)
-        self.client = BotClient(str(tg.get("bot_token") or ""), proxy_url=proxy_url, proxy_key=proxy_key)
+        self.client = BotClient.from_config(cfg)
         # Пульс хода (turn_pulse): последний входящий id по комнате — чтобы правка
         # поста «думаю» не перебивала человека, написавшего следом; крючок перед
         # первой отправкой наружу — снять пост до ответа.
@@ -726,7 +678,12 @@ class BotTransport:
 
     def proxy_line(self) -> str:
         url=str(getattr(self.client,'_proxy_url','') or '')
-        if not url: return 'Telegram: прямое соединение с этого компьютера; серверный прокси выключен.'
+        if not url:
+            route=getattr(self.client,'route',None)
+            mode=getattr(route,'mode','system')
+            return 'Telegram: '+{'system':'системные настройки сети приложения.',
+                'direct':'прямое соединение без прокси.',
+                'proxy':'выбранный HTTP/HTTPS-прокси приложения; тот же маршрут у проверки бота и кнопки Mini App.'}.get(mode,'маршрут приложения.')
         status=getattr(self.client,'_proxy_media_status','unknown')
         media={'upgrade_required':'Прокси ещё не умеет передавать файлы: требуется обновление шлюза на сервере.',
                'ready':'Загрузка файлов через этот прокси проверена.',
@@ -848,12 +805,41 @@ class BotTransport:
     def _save_offset(self, offset: int) -> None:
         _write_json(self._offset_path, {"offset": int(offset)})
 
+    def _record_connection(self, state, *, error='', retry_after=0):
+        from deskd.telegram_http import connection_identity
+        from localharness.package_notice import write
+        try:
+            import psutil
+            now=time.time()
+            write(self.tree/'memory/.state/telegram-connection.json',{
+                'identity':connection_identity(self._cfg),'pid':os.getpid(),'state':state,
+                'process_started':psutil.Process().create_time(),
+                'at':now,'last_attempt':getattr(self,'_last_attempt',now),
+                'last_success':getattr(self,'_last_poll_ok',0),'error':error,
+                'retry_at':now+retry_after if retry_after else 0})
+        except Exception:
+            log.debug('Telegram connection status could not be saved',exc_info=True)
+
+    def _wait_connection_retry(self, seconds):
+        deadline=time.monotonic()+seconds
+        while not self._stop.is_set():
+            try:
+                revision=(self.tree/'memory/.state/telegram-retry.json').stat().st_mtime_ns
+                if revision!=getattr(self,'_retry_revision',0):
+                    self._retry_revision=revision
+                    return
+            except OSError: pass
+            remaining=deadline-time.monotonic()
+            if remaining<=0 or self._stop.wait(min(remaining,1)):return
+
     def _poll_forever(self) -> None:
         offset = self._load_offset()
         wake_not_before = 0.0
         while not self._stop.is_set():
             try:
+                self._last_attempt=time.time()
                 if not self._ready:
+                    self._record_connection('connecting')
                     self._connect()
                     wake_not_before = int(time.time()) - _RECONNECT_WAKE_GRACE
                 elif time.monotonic() - self._last_profile_ok >= 60:
@@ -872,11 +858,13 @@ class BotTransport:
                     log.error("getUpdates 409: этот токен уже поллит кто-то ещё — "
                               "жду 30 с (%s)", exc.description)
                     self._connection_state = "conflict"
-                    self._stop.wait(30)
+                    self._record_connection('error',error='Этот бот уже принимает сообщения в другой запущенной копии (409).',retry_after=30)
+                    self._wait_connection_retry(30)
                     continue
                 log.warning("getUpdates упал: %s — пауза %d c", exc,
                             max(3, int(exc.retry_after or 3)))
-                self._stop.wait(max(3, exc.retry_after or 3))
+                self._record_connection('error',error=f'Telegram отказал в подключении (HTTP {exc.code}).',retry_after=max(3,exc.retry_after or 3))
+                self._wait_connection_retry(max(3, exc.retry_after or 3))
                 continue
             except Exception as exc:
                 self._last_poll_ok = 0.0
@@ -885,10 +873,12 @@ class BotTransport:
                 # Exception strings may contain credential-bearing request URLs.
                 log.warning("Telegram: подключение не удалось (%s) — повтор через 5 с",
                             type(exc).__name__)
-                self._stop.wait(5)
+                self._record_connection('error',error='Не удалось подключиться к Telegram: '+type(exc).__name__,retry_after=5)
+                self._wait_connection_retry(5)
                 continue
             self._last_poll_ok = time.time()
             self._connection_state = "connected"
+            self._record_connection('ready')
             stalled = False
             for update in updates or []:
                 update_id = int(update.get("update_id") or 0)

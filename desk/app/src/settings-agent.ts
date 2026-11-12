@@ -246,12 +246,15 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
 
   const subscriptions = relayAccounts();
   const relayConnection = relayProxy(draft.relay?.proxy);
+  const applicationConnection = relayProxy(draft.network?.proxy, { application: true });
+  let bridgeRoute=draft.network?.bridge_profile ? JSON.stringify(applicationConnection.collect()) : '';
   const relayRefresh = subscriptions.refresh;
   let relayExecutable=String(draft.relay?.executable||'');
   const relayExecutableField=field('Путь к отдельному praxis-relay',relayExecutable,v=>{relayExecutable=v;},{placeholder:'Автоматически после установки компонента'});
   const chatgptDraft = { model: provider === "chatgpt" ? String(draft.model.model || "gpt-5.6-sol") : "gpt-5.6-sol" };
   let codexModels: ModelDetails[] = [];
   let catalogLoading = false;
+  let catalogGeneration = 0;
   const chatgptGrid = el("div", "form-grid two");
   chatgptGrid.style.marginTop = "14px";
   const chatgptModelField = field("Модель", chatgptDraft.model, (v) => {chatgptDraft.model = v;syncEffort();syncFastMode();}, { mono: true });
@@ -623,6 +626,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   syncTg();
   if (tgMode === "account" && draft.telegram.api_id) void accCall("status");
   cards.push(inGroup(card("Telegram", tgBox), GROUP.brain));
+  cards.push(inGroup(card("Сеть Telegram и Mini App", applicationConnection.element), GROUP.brain));
 
   // --- ограда рук (песочница | интерактивный) и ОТДЕЛЬНО от неё служба
   //
@@ -848,6 +852,12 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
         const proxyError = relayConnection.error();
         if (proxyError) return proxyError;
         out.relay = keepBlock(out.relay, { proxy: relayConnection.collect(), executable: relayExecutable.trim() || undefined });
+        const networkError = applicationConnection.error();
+        if (networkError) return networkError;
+        const networkDraft = applicationConnection.collect();
+        if (draft.network?.proxy || networkDraft.mode !== 'system')
+          out.network = keepBlock(out.network, { proxy: networkDraft });
+        if(out.network?.bridge_profile && bridgeRoute!==JSON.stringify(networkDraft))delete out.network.bridge_profile;
         const imageError = images.collect(out);
         if (imageError) return imageError;
         if (provider === "chatgpt") out.relay = keepBlock(out.relay, { key: out.model.key });

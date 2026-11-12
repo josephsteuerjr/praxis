@@ -37,12 +37,16 @@ def save(path: Path, document: str, seen: str | None) -> dict:
     # down the working supervisor on its next roster refresh.
     relay=value.get('relay')
     environment({} if relay is None else relay)
+    from deskd.network_route import settings as network_settings
+    network_settings(value)
     if 'self_review' in value:
         if __package__:
             from .self_review import settings
         else:
             from self_review import settings
         value['self_review'] = settings({'self_review': value['self_review']})
+    if isinstance(value.get('model'), dict):
+        value['model'].pop('pinned', None)
     pretty = json.dumps(value, ensure_ascii=False, indent=2)
     if __package__:
         from .config_transaction import transaction
