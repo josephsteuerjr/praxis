@@ -16,15 +16,18 @@ export function captureTime(name: string): string {
 
 function streamTitle(stream: string): string {
   const peer = stream.replace(/^(chat|dm)-/, "");
+  const name = S.rooms.find(r => r.key === stream || r.key === peer)?.name;
+  if (name) return name;
   if (isWindowRoom(peer)) return `Основной чат · ${S.agent}`;
-  return S.rooms.find(r => r.key === stream || r.key === peer)?.name
-    || (stream.startsWith("no-chat") ? `Самостоятельная работа · ${stream.slice(8)}` : stream);
+  return stream.startsWith("no-chat") ? `Самостоятельная работа · ${stream.slice(8)}` : stream;
 }
 
 export async function render(container: HTMLElement): Promise<void> {
   const version = (versions.get(container) || 0) + 1;
   versions.set(container, version);
-  const streams = await api<Stream[]>("/api/shadow");
+  let streams: Stream[];
+  try { streams = await api<Stream[]>("/api/shadow"); }
+  catch (error) { if (versions.get(container) === version) throw error; else return; }
   if (versions.get(container) !== version) return;
   if (!streams.length) {
     container.innerHTML = '<div class="empty"><b>Захватов кадра нет</b>Они появятся после первых ходов.</div>';
@@ -75,7 +78,7 @@ async function renderStream(main: HTMLElement, stream: string): Promise<void> {
     <label class="muted" for="cap-new">Снимок</label><select id="cap-new" class="field-input">${captures.map(option).join("")}</select>
     <button class="btn btn-quiet" id="cap-next" type="button" aria-label="Следующий снимок">Позже →</button>
     <button class="btn btn-quiet" id="cap-more" type="button">Ещё снимки</button>
-    <button class="btn btn-quiet" id="cap-refresh" type="button">Обновить</button></div>
+    <button class="btn btn-quiet" id="cap-refresh" type="button">Обновить</button><span id="cap-status" role="status"></span></div>
     <details class="fold"><summary>Сравнение и метрики</summary><div class="fold-body tools-row">
     <label class="muted" for="cap-old">Сравнить с</label><select id="cap-old" class="field-input">${captures.map(option).join("")}</select>
     <button class="btn btn-quiet" id="do-diff" type="button">Сравнить</button><button class="btn btn-quiet" id="do-metrics" type="button">Метрики этого чата</button></div></details>
@@ -111,7 +114,9 @@ async function renderStream(main: HTMLElement, stream: string): Promise<void> {
   q("#cap-refresh", main).addEventListener("click", () => { safeRender(main, () => renderStream(main, stream)); });
   const more = q<HTMLButtonElement>("#cap-more", main);
   more.hidden = captures.length < 30;
-  more.addEventListener("click", () => safeRender(more, async () => {
+  const status = q<HTMLElement>("#cap-status", main);
+  more.addEventListener("click", () => safeRender(status, async () => {
+    status.textContent = "";
     more.disabled = true;
     try {
       const page = await api<string[]>(`${base}/captures?before=${encodeURIComponent(captures[captures.length - 1])}`);
@@ -128,6 +133,10 @@ async function renderStream(main: HTMLElement, stream: string): Promise<void> {
 }
 
 function renderCapture(out: HTMLElement, c: Capture, name: string): void {
+  if (!c.text) {
+    out.innerHTML = '<div class="empty">Снимок недоступен. Обнови список снимков.</div>';
+    return;
+  }
   out.innerHTML = `<p class="muted">${esc(captureTime(name))} · ${fmtN((c.text || "").length)} знаков${c.run_id ? ` · <span class="mono">${esc(c.run_id)}</span>` : ""}</p>
     <div class="card"><h3>Схемы инструментов${Array.isArray(c.tools) ? ` · ${c.tools.length}` : ""}</h3>
     ${Array.isArray(c.tools) ? `<p class="field-hint">Набор tools, зафиксированный перед вызовом модели. Полные схемы, переданные отдельно от текста контекста.</p><input id="schema-search" class="field-input" type="search" placeholder="Найти инструмент" aria-label="Найти инструмент">

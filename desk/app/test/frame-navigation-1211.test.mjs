@@ -13,20 +13,25 @@ Object.defineProperties(window.HTMLSelectElement.prototype,{
 });
 const esc=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const captures=Array.from({length:65},(_,i)=>new Date(Date.UTC(2026,10,12,12,0,64-i)).toISOString().replaceAll('-','').replaceAll(':','').replace('.000Z','')+'-12345678.md');
-const requests=[],errors=[],pending=new Map();
+const requests=[],errors=[],pending=new Map();let failPage=false;
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const box=document.querySelector('main');
+const safeRender=(target,fn)=>{void fn().catch(e=>{
+ if(e.message!=='paging offline'){errors.push(e);return}
+ target.innerHTML='<button id="retry-page">retry</button>';
+ target.querySelector('button').onclick=()=>safeRender(target,fn);
+})};
 globalThis.__frameStand={
- S:{rooms:[{key:'other',name:'Другой чат'}],agent:'Jarvis',stream:'dm-window'},
- isWindowRoom:x=>x==='window',esc,fmtN:String,md:esc,
+ S:{rooms:[{key:'other',name:'Другой чат'},{key:'window-abcdef12',name:'Проект Rocket'}],agent:'Jarvis',stream:'dm-window'},
+ isWindowRoom:x=>x==='window'||x.startsWith('window-'),esc,fmtN:String,md:esc,
  q:(selector,root)=>root.querySelector(selector),
- safeRender:(_box,fn)=>{void fn().catch(e=>errors.push(e))},
+ safeRender,
  api:async path=>{
   requests.push(path);
   if(pending.has(path))return pending.get(path).promise;
   const u=new URL(path,'http://fixture');
-  if(u.pathname==='/api/shadow')return [{stream:'dm-window',captures:65,latest:captures[0]},{stream:'dm-other',captures:1,latest:captures[1]}];
-  if(u.pathname.endsWith('/captures')){const index=u.searchParams.has('before')?captures.indexOf(u.searchParams.get('before'))+1:0;return captures.slice(index,index+30)}
+  if(u.pathname==='/api/shadow')return [{stream:'dm-window',captures:65,latest:captures[0]},{stream:'dm-other',captures:1,latest:captures[1]},{stream:'dm-window-abcdef12',captures:1,latest:captures[2]}];
+  if(u.pathname.endsWith('/captures')){if(failPage&&u.searchParams.has('before'))throw new Error('paging offline');const index=u.searchParams.has('before')?captures.indexOf(u.searchParams.get('before'))+1:0;return captures.slice(index,index+30)}
   if(u.pathname.endsWith('/capture'))return {text:u.searchParams.get('name'),tools:[{name:'computer',description:'<script>secret()</script>',input_schema:{properties:{timeout_ms:{type:'integer'}}}}]};
   if(u.pathname.endsWith('/metrics'))return [{stream:u.pathname,ts:'synthetic'}];
   if(u.pathname.endsWith('/diff'))return {zones:[],diff:['<script>diff()</script>']};
@@ -41,6 +46,7 @@ try{
  const {render,captureTime}=await import(pathToFileURL(file));
  await render(box);await tick();
  assert.match(box.textContent,/Основной чат · Jarvis/);
+ assert.equal(box.querySelector('[data-stream="dm-window-abcdef12"] span').firstChild.textContent,'Проект Rocket');
  assert.equal(box.querySelector('#cap-new').options.length,30);
  assert.match(box.querySelector('[data-tool="computer"]').textContent,/timeout_ms/);
  assert.equal(box.querySelectorAll('script').length,0,'schema JSON must be escaped');
@@ -64,5 +70,25 @@ try{
  stale=deferred();pending.set(stalePath,stale);box.querySelector('#cap-prev').click();await tick();
  box.querySelector('[data-stream="dm-other"]').click();await tick();stale.reject(new Error('old request failed'));await tick();
  assert.equal(errors.length,0);
- console.log('frame-navigation: selection, paging, local time, schemas, escaping, stream metrics and racing success/failure PASS');
+ // A superseded top-level request must not replace the current screen with an error.
+ const staleList=deferred();pending.set('/api/shadow',staleList);
+ const initial=render(box);pending.delete('/api/shadow');await render(box);await tick();
+ staleList.reject(new Error('old list failed'));await initial;
+ assert.ok(box.querySelector('#frame-main'));
+ // A missing capture is unavailable, not evidence of an old schema format.
+ const currentPath='/api/shadow/dm-other/capture?name='+encodeURIComponent(captures[0]);
+ pending.set(currentPath,{promise:Promise.resolve({text:'',tools:null,tools_status:'unavailable'})});
+ box.querySelector('#cap-refresh').click();await tick();
+ assert.match(box.querySelector('#frame-out').textContent,/Снимок недоступен/);
+ pending.delete(currentPath);
+ // The paging error belongs beside the unchanged action, and retry clears it.
+ box.querySelector('[data-stream="dm-window"]').click();await tick();failPage=true;
+ box.querySelector('#cap-more').click();await tick();
+ assert.equal(box.querySelector('#cap-more').textContent,'Ещё снимки');
+ assert.ok(box.querySelector('#cap-status #retry-page'));
+ assert.equal(box.querySelector('#cap-new').options.length,30);
+ failPage=false;box.querySelector('#retry-page').click();await tick();
+ assert.equal(box.querySelector('#cap-new').options.length,60);
+ assert.equal(box.querySelector('#cap-status').textContent,'');assert.equal(errors.length,0);
+ console.log('frame-navigation: names, selection, paging, local time, schemas, unavailable captures, escaping, stream metrics and racing success/failure PASS');
 }finally{delete globalThis.__frameStand;rmSync(temp,{recursive:true,force:true})}
