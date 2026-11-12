@@ -927,7 +927,7 @@ export async function render(container: HTMLElement): Promise<void> {
       <h3 class="lrn-h">Где тебе удобнее быть с агентом</h3>
       <p class="lrn-sub">Выбери нужное — введём данные, проверим связь и покажем следующий шаг здесь.</p>
       <div id="connection-guide"></div>
-      ${local ? '<p class="lrn-connection-note">При первом подключении Telegram сохрани настройки и нажми «Перезапустить сейчас». Новое подключение запускается вместе с агентом.</p>' : ''}
+      ${local ? '<p class="lrn-connection-note">При первом подключении Telegram сохрани настройки и нажми кнопку перезапуска под ними — обычно «Перезапустить движок». Новое подключение запускается вместе с агентом.</p>' : ''}
     </section>
 
     <section class="lrn-sec reveal" id="lrn-map">

@@ -1009,7 +1009,8 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     }),
   );
   conflictBox.append(conflictRow);
-  const restartBtn = button("Перезапустить сейчас", "quiet", () => {
+  // configureRestart names the exact scope on every save; this is only the initial label.
+  const restartBtn = button("Перезапустить движок", "quiet", () => {
     // 05.10: кнопка обязана уходить с экрана в момент нажатия — иначе владелец
     // жмёт её снова и снова, не зная, взялся ли перезапуск. Движок выйдет на
     // границе хода и поднимется с новыми настройками; ошибки придут тостом.
