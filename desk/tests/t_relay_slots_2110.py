@@ -84,7 +84,7 @@ class SlotTests(unittest.TestCase):
                 result=python_relay.invoke(owner,'relay_logout',{'slot':'primary'})
             self.assertEqual(result['phase'],'applied')
             self.assertEqual(control.call_args.args[1], 'logout')
-            self.assertEqual(control.call_args.kwargs, {'slot':'primary'})
+            self.assertEqual(control.call_args.kwargs, {'slot':'primary','timeout_sec':20})
             self.assertTrue(primary.exists());self.assertTrue(legacy.exists());self.assertTrue(secondary.exists())
 
     def test_secondary_logout_does_not_touch_primary_or_legacy(self):
@@ -93,7 +93,7 @@ class SlotTests(unittest.TestCase):
             primary=self.credential(root,'primary');legacy=self.credential(root,'primary',True);secondary=self.credential(root,'secondary')
             with patch.object(python_relay,'control',return_value={}) as control:
                 python_relay.invoke(owner,'relay_logout',{'slot':'secondary'})
-            self.assertEqual(control.call_args.kwargs, {'slot':'secondary'})
+            self.assertEqual(control.call_args.kwargs, {'slot':'secondary','timeout_sec':20})
             self.assertTrue(primary.exists());self.assertTrue(legacy.exists());self.assertTrue(secondary.exists())
 
     def test_switch_waits_for_backend_receipt_and_uses_explicit_slot(self):
@@ -103,7 +103,7 @@ class SlotTests(unittest.TestCase):
                 result=python_relay.invoke(owner,'relay_switch',{'slot':'secondary'})
                 self.assertEqual(result['active_slot'],'secondary')
                 self.assertEqual(request.call_args.args[1:],('switch',))
-                self.assertEqual(request.call_args.kwargs,{'slot':'secondary'})
+                self.assertEqual(request.call_args.kwargs,{'slot':'secondary','timeout_sec':20})
             with patch.object(python_relay,'control',return_value={'accounts':[{'slot':'primary','active':True}]}):
                 with self.assertRaisesRegex(ValueError,'did not confirm'):python_relay.invoke(owner,'relay_switch',{'slot':'secondary'})
 

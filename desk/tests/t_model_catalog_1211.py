@@ -7,6 +7,29 @@ from localharness import model_catalog
 from deskd import control, readers
 
 class Catalog(unittest.TestCase):
+    def test_server_catalog_uses_saved_relay_key_without_exposing_it(self):
+        from localharness import python_desktop_commands as commands
+        with tempfile.TemporaryDirectory() as tmp:
+            tree=Path(tmp);config=tree/'helene.json'
+            config.write_text(json.dumps({'relay':{'enabled':True,'port':18999,'key':'private-relay-key'},
+                                         'model':{'provider':'chatgpt','key':'different-provider-key'}}))
+            with patch.object(readers,'tree',return_value=tree),patch.object(readers,'config_path',return_value=config), \
+                 patch.object(commands,'probe_model',return_value={'ok':True,'models':['sol']}) as fetch:
+                value=control.brain_models(refresh=True)
+                self.assertTrue(value['ok']);self.assertNotIn('private-relay-key',json.dumps(value))
+                self.assertEqual(fetch.call_args.args,('http://127.0.0.1:18999','private-relay-key','openai'))
+
+    def test_desk_revision_uses_owner_socket_when_auth_is_root_private(self):
+        import os
+        from deskd import relay_control
+        with patch.object(model_catalog,'local_relay_revision',side_effect=PermissionError), \
+             patch.dict(os.environ,{'HELENE_SUPERVISOR':'serverboot'}), \
+             patch.object(relay_control,'request',return_value={'catalog_revision':'a'*64}) as request:
+            self.assertEqual(model_catalog.relay_revision(Path('/fixture')),'a'*64)
+            self.assertEqual(request.call_args.args,(Path('/fixture'),{'action':'status'}))
+            request.return_value={}
+            with self.assertRaises(ValueError):model_catalog.relay_revision(Path('/fixture'))
+
     def test_actual_window_v1_url_is_account_scoped_and_shares_root_catalog(self):
         from localharness import python_desktop_commands as commands
         with tempfile.TemporaryDirectory() as tmp:

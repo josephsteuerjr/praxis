@@ -619,8 +619,11 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    from deskd import relay_auth
+    from deskd import relay_auth, relay_control
     relay_auth.prepare(tree, who["desk"] if who else None, who["gid"] if who else None)
+    subscription_control = relay_control.start(tree, config,
+        uid=who['desk'] if who else None, gid=who['gid'] if who else None,
+        stopped=lambda: emergency_stop.stopped(tree))
     was_stopped = emergency_stop.stopped(tree)
     for child in children:
         if not was_stopped or child.key == "channel": child.spawn()
@@ -711,6 +714,8 @@ def main() -> int:
                     print(f"[serverboot] {child.name} не поднялся: {exc}", flush=True)
     for child in children:
         child.stop()
+    subscription_control.shutdown()
+    subscription_control.server_close()
     print("[serverboot] остановлен", flush=True)
     return 0
 

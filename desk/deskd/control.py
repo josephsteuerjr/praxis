@@ -458,11 +458,16 @@ def brain_models(*, refresh=False) -> dict:
     model = config.get('model') or {}
     codex = provider(config) == 'chatgpt'
     base = ('http://127.0.0.1:' + str((config.get('relay') or {}).get('port') or readers.RELAY_PORT_DEFAULT)) if codex else str(model.get('base_url') or '')
-    key = '' if codex else str(model.get('key') or model.get('api_key') or '')
+    key = str(((config.get('relay') or {}).get('key') or model.get('key') or '') if codex
+              else (model.get('key') or model.get('api_key') or ''))
     framework = 'anthropic' if model.get('framework') == 'anthropic' else 'openai'
+    try: revision=relay_revision(readers.tree()) if codex else ''
+    except (OSError, ValueError):
+        return {'ok':False,'by_framework':{'primary':{'ok':False,'codex':codex,
+                'note':'Состояние подписки недоступно. Перечитай каталог после запуска реле.'}}}
     result = read(readers.tree()/'memory/.state/model-catalog.json', base, key, framework,
                   lambda: probe_model(base, key, framework), refresh=refresh,
-                  revision=relay_revision(readers.tree()) if codex else '')
+                  revision=revision)
     return {'ok': result.get('ok', False), 'by_framework': {'primary': {**result, 'codex': codex}}}
 
 

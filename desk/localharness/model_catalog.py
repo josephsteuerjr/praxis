@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import threading
 import time
 from pathlib import Path
@@ -21,13 +22,28 @@ def _saved(value):
             and isinstance(value.get('model_details', []), list))
 
 
-def relay_revision(tree):
+def local_relay_revision(tree):
     """Private account changes invalidate capabilities without storing credentials."""
     from .python_relay import signature
     home = Path(tree) / 'relay'
     try: generation = (home/'local_auth/login-generation').read_text(encoding='ascii')
     except FileNotFoundError: generation = ''
     return hashlib.sha256(json.dumps([generation, signature(home), signature(home, 'secondary')]).encode()).hexdigest()
+
+
+def relay_revision(tree):
+    try:
+        return local_relay_revision(tree)
+    except PermissionError:
+        if os.environ.get('HELENE_SUPERVISOR') != 'serverboot':
+            raise
+        # Server desk cannot read root-owned account files. Ask for an opaque
+        # revision through the same owner-only socket, never relax file modes.
+        from deskd.relay_control import request
+        value=request(tree, {'action':'status'}).get('catalog_revision')
+        if not isinstance(value,str) or len(value)!=64 or any(c not in '0123456789abcdef' for c in value):
+            raise ValueError('Не удалось подтвердить смену аккаунта реле')
+        return value
 
 
 def read(path: Path, base: str, key: str, framework: str, fetch, *, refresh=False, revision=''):

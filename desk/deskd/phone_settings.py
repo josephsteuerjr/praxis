@@ -4,7 +4,7 @@ Reads never return stored secrets. Writes address declared settings only and
 use the live desktop's normal optimistic config writer and model projection.
 """
 from __future__ import annotations
-import copy,json,secrets
+import copy,json,os,secrets
 from pathlib import Path
 from urllib.parse import urlsplit
 from . import readers
@@ -232,13 +232,22 @@ def _desktop_commit(path,tree,value,seen,operation):
 
 def subscription(body=None):
     from types import SimpleNamespace
-    from localharness import standalone_relay,python_relay,session_host
+    from localharness import standalone_relay,python_relay,session_host,relay_login
     path=readers.config_path()
     if path is None:raise SettingsError('Настройки агента недоступны',503)
     path=Path(path).resolve();config,_=read_snapshot(path)
     root=path.parent.parent.parent if path.parent.parent.name=='agents' else path.parent
     tree=readers.tree();agent=SimpleNamespace(config=path,tree=tree)
     installed=standalone_relay.executable(root,config).is_file()
+    if os.environ.get('HELENE_SUPERVISOR') == 'serverboot':
+        from . import relay_control
+        try:
+            return relay_control.request(tree, body if body is not None else {'action':'status'})
+        except (OSError, ValueError) as exc:
+            if body is not None:
+                raise SettingsError(str(exc) if isinstance(exc,ValueError) else 'Сервер не подтвердил действие. Обнови состояние перед повтором.',409) from None
+            return {'available':False,'installed':installed,'browser_login':False,
+                    'note':str(exc) if isinstance(exc,ValueError) else 'Управление подпиской недоступно. Проверь, что сервер обновлён и реле запущено.'}
     if body is not None:
         if not isinstance(body,dict) or body.get('action') not in ('login','logout','switch','cancel_login','install'):
             raise SettingsError('Недоступное действие подписки')
@@ -251,18 +260,16 @@ def subscription(body=None):
             installed=True
         elif not ((config.get('relay') or {}).get('enabled') or (config.get('images') or {}).get('enabled')):
             raise SettingsError('Сначала сохрани выбор подписки ChatGPT')
-        else:python_relay.control(agent,action,slot=slot)
+        else:
+            try:return relay_login.action(agent,body)
+            except ValueError as exc:raise SettingsError(str(exc),409) from None
     component=standalone_relay.status(root)
     if not installed:return {'available':False,'component_ready':component['ready'],'installed':False,'note':'Для подписки нужен компонент praxis-relay.'}
     if not ((config.get('relay') or {}).get('enabled') or (config.get('images') or {}).get('enabled')):
         return {'available':False,'installed':True,'note':'Сохрани выбор подписки ChatGPT, затем войди в аккаунт.'}
     try:state=python_relay.control(agent,'status')
     except (OSError,ValueError):return {'available':False,'installed':True,'note':'Реле ещё не подтвердило запуск. Обнови состояние через несколько секунд.'}
-    login=state.get('login') or {}
-    return {'available':True,'installed':True,'slots':[{'slot':row.get('slot'),'stored':bool(row.get('configured')),
-        'active':bool(row.get('active'))} for row in state.get('accounts',[])],
-        'login':{'pending':bool(login.get('pending')),'slot':login.get('slot'),'error':login.get('error'),
-                 'url':state.get('login_url') if login.get('pending') else None}}
+    return relay_login.public_state(state)
 
 def save(body):
     if not isinstance(body,dict):raise SettingsError('Нужен объект настроек')

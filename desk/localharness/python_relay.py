@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import urllib.error
 
 from .essential_backup import load
 
@@ -79,9 +80,21 @@ def control(agent,op,*,timeout_sec=20,**arguments):
         headers={'X-Relay-Control':address['token'],'Content-Type':'application/json'})
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self,*args,**kwargs):return None
-    with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(request,timeout=timeout_sec) as response:
-        result = json.load(response)
-    if op in ('login', 'logout', 'switch'):
+    try:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(request,timeout=timeout_sec) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409:
+            raw = exc.read(4097)
+            try: note = str(json.loads(raw).get('error', '')) if len(raw) <= 4096 else ''
+            except (ValueError, AttributeError): note = ''
+            if 'already in progress' in note:
+                raise ValueError('Вход уже выполняется. Заверши или отмени текущую попытку.') from None
+            if op in ('login_device', 'cancel_login_id') and ('Unknown' in note or 'unknown' in note):
+                raise ValueError('Эта версия praxis-relay не поддерживает вход по коду. Обнови компонент до 1.2.0 или выбери вход в браузере на компьютере.') from None
+            raise ValueError('Реле отклонило действие. Перечитай состояние подписки.') from None
+        raise
+    if op in ('login', 'login_device', 'logout', 'switch'):
         changed(agent.tree/'relay')
     return result
 
@@ -95,34 +108,40 @@ def hot_settings(agent):
 
 
 def invoke(owner,command,args):
+    from . import relay_login
     agent=owner.current();home=agent.tree/'relay';home.mkdir(parents=True,exist_ok=True)
     slot=selected_slot(args)
     if command in ('relay_login','relay_logout','relay_switch','relay_cancel_login'):
         operation={'relay_login':'login','relay_logout':'logout','relay_switch':'switch','relay_cancel_login':'cancel_login'}[command]
-        result=control(agent,operation,slot=slot)
-        if command=='relay_login':return 'Открываю страницу входа ChatGPT. Ссылка доступна ниже, пока вход выполняется.'
+        result=relay_login.action(agent,dict(args,action=operation))
+        if command=='relay_login':return result
         if command=='relay_switch':
-            active=next((a['slot'] for a in result.get('accounts',[]) if a['active']),None)
+            active=next((a['slot'] for a in result.get('slots',[]) if a['active']),None)
             if active!=slot:raise ValueError('Relay did not confirm the selected subscription')
             return {'active_slot':active}
         return {'slot':slot,'stored':False,'phase':'applied'}
     if command in ('relay_status','relay_login_url','open_login_page','relay_account'):
-        if command=='open_login_page':control(agent,'open_login');return None
+        if command=='open_login_page':
+            state=relay_login.public_state(control(agent,'status'))
+            if not state['login']['pending'] or state['login']['slot']!=slot or not state['login']['url']:
+                raise ValueError('Страница этого входа ещё не готова; перечитай состояние')
+            # Native caller opens its local browser; MiniApp intercepts this command.
+            import webbrowser
+            if not webbrowser.open(state['login']['url']):
+                raise ValueError('Браузер не открылся. Скопируй ссылку и открой её вручную.')
+            return None
         from .model_catalog import relay_revision
         try:result=control(agent,'status')
         except OSError:
             if command!='relay_account':raise
             return {'slots':[{'slot':name,'stored':signature(home,name) is not None,'pending':False} for name in SLOTS],
                     'reachable':False, 'catalog_revision':relay_revision(agent.tree)}
-        login=result.get('login') or {}
-        if command=='relay_login_url':return result.get('login_url')
+        public=relay_login.public_state(result);login=public['login']
+        if command=='relay_login_url':return login['url'] if login['pending'] and login['slot']==slot else None
         accounts=result.get('accounts',[])
         if command=='relay_status':
             return 'pending' if login.get('pending') and login.get('slot')==slot else 'authorized' if any(a['slot']==slot and a['configured'] for a in accounts) else 'no-auth'
-        return {'slots':[dict(slot=a['slot'],stored=a['configured'],serving=a['active'],loaded=True,
-            pending=bool(login.get('pending') and login.get('slot')==a['slot']),login_error=login.get('error')) for a in accounts],
-            'reachable':True,'port':result['port'],'catalog_revision':relay_revision(agent.tree),
-            'active_slot':next((a['slot'] for a in accounts if a['active']),None)}
+        return dict(relay_login.account_view(public),catalog_revision=relay_revision(agent.tree))
     if command=='relay_network_status':return control(agent,'network')
     if command=='relay_network_check':return control(agent,'network_check')
     if command=='relay_auth_transfer':
