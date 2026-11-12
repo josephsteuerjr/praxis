@@ -138,11 +138,15 @@ class Move(unittest.TestCase):
         with zipfile.ZipFile(self.tmp / "yona.zip") as zin, \
                 zipfile.ZipFile(self.tmp / "old.zip", "w") as zout:
             for info in zin.infolist():
-                if not info.filename.startswith("code/"):
-                    zout.writestr(info, zin.read(info))
+                if info.filename.startswith("code/") or info.filename=='helene-inventory.json':continue
+                blob=zin.read(info)
+                if info.filename==carry.PASSPORT:
+                    passport=json.loads(blob);passport.pop('inventory',None);blob=json.dumps(passport).encode()
+                zout.writestr(info,blob)
         dst = install(self.tmp / "srv", "1.1.0", V2)
         receipt = quiet(carry.import_, dst, self.tmp / "old.zip")
         self.assertEqual(receipt["code"], {})
+        self.assertEqual(receipt['integrity'],{'verified':False,'legacy':True})
         self.assertTrue((self.tmp / "srv" / "data" / "soul" / "SOUL.md").is_file())
 
 

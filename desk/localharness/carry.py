@@ -379,6 +379,7 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
         "skipped": list(SKIP_PATHS),
         "files": 0,
         "bytes": 0,
+        "inventory": "helene-inventory.json",
     }
     exported_cfg = {k: v for k, v in cfg.items()}
     files = 0
@@ -414,6 +415,11 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
             passport["code"] = _export_code(zf, config_path.parent, cfg)
             zf.writestr(CONFIG_NAME, json.dumps(exported_cfg, ensure_ascii=False, indent=2) + "\n")
             zf.writestr(PASSPORT, json.dumps(passport, ensure_ascii=False, indent=2) + "\n")
+        # Reopen the persisted central directory: Windows ZipInfo.from_file
+        # retains an OS-spelled orig_filename until the archive is reopened.
+        from localharness.carry_inventory import seal
+        with zipfile.ZipFile(tmp, 'a', compression=zipfile.ZIP_DEFLATED) as zf:
+            passport['integrity'] = seal(zf)
         os.replace(tmp, out)
     except Exception:
         tmp.unlink(missing_ok=True)
@@ -463,6 +469,8 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
     # Validate the complete archive before moving the current agent aside.
     # A CRC error or an invalid path must leave the existing installation usable.
     with zipfile.ZipFile(archive) as zf:
+        from localharness.carry_inventory import verify
+        integrity = verify(zf, required=bool(passport.get('inventory')))
         names = zf.namelist()
         if len(names) != len(set(names)) or any(not _safe_member(name) for name in names):
             raise ValueError('Архив переноса содержит повторяющиеся или недопустимые пути.')
@@ -475,7 +483,7 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
     else:
         local = {"mode": "local", "tree": "data", "code": "tree", "port": 8094}
     data = tree_of(config_path, local)
-    receipt = {"passport": passport, "data": str(data), "backup": "", "config": str(config_path)}
+    receipt = {"passport": passport, "data": str(data), "backup": "", "config": str(config_path), "integrity": integrity}
     if data.exists() and any(data.iterdir()):
         backup = data.with_name(f"{data.name}.before-{_stamp()}")
         os.rename(data, backup)
