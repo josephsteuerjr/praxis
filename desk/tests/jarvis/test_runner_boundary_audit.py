@@ -66,7 +66,7 @@ class BoundaryAudit(unittest.TestCase):
                  rooms=NS(meta=lambda c: {"is_dm": True}, lines=lambda c, n: []),
                  wake_sender=lambda c: ("Owner", "owner"), is_allowed=lambda s: True,
                  take_priorities=lambda c: [], restore_priorities=lambda *a: None,
-                 deliver_text=lambda c, text: deliveries.append((text, {})))
+                 deliver_text=lambda c, text, **kw: deliveries.append((text, {})))
         envelope = NS(text=text, run_id="run", outbound=(), failed=False, deferred=False)
 
         def run_turn(*args, **kwargs):
@@ -77,9 +77,10 @@ class BoundaryAudit(unittest.TestCase):
 
         noop = lambda *a, **kw: None
         self.env.update(_room=lambda r: desk, _conversation=lambda *a: "incoming",
-                        _last_n=lambda r: 10, _agent=NS(ChannelContext=lambda **kw: NS(**kw)),
+                        _last_n=lambda r: 10, _agent=NS(ChannelContext=lambda **kw: NS(**kw),
+                            DirectSendRefusal=type('Refusal',(str,),{})), _continuity=None,
                         _deliver_unspoken=True, _set_busy=noop, _run_turn=run_turn,
-                        _deliver_outbound=lambda *a: 0, _turn_record=lambda r: row,
+                        _deliver_outbound=lambda *a, **kw: 0, _turn_record=lambda r: row,
                         _close_run=lambda *a, **kw: closed.append(kw), _compact=noop,
                         _agent_name="Agent", _bot=bot, _room_title=lambda c: "room",
                         _telegram_media_refs=lambda *a: ([], []), _status_message=False,

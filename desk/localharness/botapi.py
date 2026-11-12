@@ -1248,7 +1248,17 @@ class BotTransport:
         result, retries = self._cooldown.call(str(peer), method, confirmed_operation)
         return result, retries
 
-    def deliver_text(self, chat_id: str, text: str, reply_to: str = "", *, reply_evidence=False, run_id='') -> str:
+    def _once(self, key, method, identity, operation):
+        if not key:
+            return operation()
+        import hashlib
+        from telegram_receipts import once
+        base = getattr(self.client,'_base','')
+        identity_source = [type(self.client).__name__,str(base),str((self.me or {}).get('id') or '')]
+        who = hashlib.sha256(json.dumps(identity_source).encode()).hexdigest()
+        return once(self.tree, key, {**identity,'method':method,'bot':who}, operation)
+
+    def deliver_text(self, chat_id: str, text: str, reply_to: str = "", *, reply_evidence=False, run_id='', delivery_key='', receipt_id=False) -> str:
         self._before_send(chat_id)
         peer, thread = peer_thread(chat_id)
         parts = _chunks(text)
@@ -1263,7 +1273,12 @@ class BotTransport:
                 params["reply_parameters"] = {"message_id": int(target),
                                               "allow_sending_without_reply": True}
             try:
-                sent, retries = self._retry_send(peer, 'sendMessage', lambda: self.client.call("sendMessage", **params))
+                import hashlib
+                sent, retries = self._retry_send(peer, 'sendMessage', lambda: self._once(
+                    f'{delivery_key}:part:{i}' if delivery_key else '', 'sendMessage',
+                    {'peer':str(peer),'thread':thread,'reply_to':target if i==0 else '',
+                     'sha256':hashlib.sha256(part.encode()).hexdigest()},
+                    lambda:self.client.call('sendMessage',**params)))
                 cooldown_retries += retries
             except BotApiError as exc:
                 if exc.permanent:
@@ -1288,13 +1303,15 @@ class BotTransport:
         if reply_evidence and observation is not None:
             observation.safe_accepted(self.tree, observed_run, chat_id, first_id,
                                       delivery_key='telegram:' + str(chat_id) + ':' + str(first_id))
+        if receipt_id:
+            return str(first_id)
         label = str(self.rooms.meta(chat_id).get("title") or "") \
             or self.contacts.label(peer)
         extra = (f", частей {len(parts)}" if len(parts) > 1 else "") + (", после ожидания Telegram" if cooldown_retries else "")
         return f"Отправлено → {label} (Telegram, id {first_id}{extra})"
 
     def deliver_file(self, path: Path, *, chat_id: str, caption: str = "",
-                     media_kind: str = "document", voice_note: bool = False) -> str:
+                     media_kind: str = "document", voice_note: bool = False, delivery_key='') -> str:
         self._before_send(chat_id)
         peer, thread = peer_thread(chat_id)
         method, field = {"photo": ("sendPhoto", "photo"),
@@ -1304,9 +1321,16 @@ class BotTransport:
         if voice_note:
             method, field = "sendVoice", "voice"
         try:
-            sent, retries = self._retry_send(peer, method, lambda: self.client.upload(method, field, Path(path),
-                                      chat_id=peer, message_thread_id=thread,
-                                      caption=(caption or "")[:_CAPTION_LIMIT] or None))
+            import hashlib
+            identity = {}
+            if delivery_key:
+                with Path(path).open('rb') as content:
+                    digest = hashlib.file_digest(content,'sha256').hexdigest()
+                identity = {'peer':str(peer),'thread':thread,'caption':hashlib.sha256(caption.encode()).hexdigest(),
+                            'sha256':digest}
+            sent, retries = self._retry_send(peer, method, lambda: self._once(delivery_key, method, identity,
+                lambda: self.client.upload(method, field, Path(path), chat_id=peer, message_thread_id=thread,
+                                           caption=(caption or "")[:_CAPTION_LIMIT] or None)))
         except BotApiError as exc:
             if exc.permanent:
                 return self.agent.DirectSendRefusal(

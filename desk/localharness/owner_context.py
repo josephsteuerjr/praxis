@@ -58,6 +58,68 @@ def window(life, place, rows):
     return kept[first:]
 
 
+def companion(life, place) -> str:
+    """Recent other half of the owner's main/Telegram conversation.
+
+    Keep the current transcript and its continuation prefix unchanged. The
+    companion is attributed evidence on the new turn, never a new user message.
+    Additional rooms and Telegram groups cannot opt into this private context.
+    """
+    profile = getattr(life, 'helene_owner_context', {})
+    places = profile.get('places', ())
+    current = str(place)
+    main = (rooms.ROOM_DEFAULT, rooms.ROOM_LEGACY)
+    telegram = [key for key in places if key not in main and re.fullmatch(r'[1-9][0-9]*', str(key))]
+    if current in main:
+        targets = telegram
+    elif current in telegram:
+        targets = list(main)
+    else:
+        return ''
+    limit = max(1, int(profile.get('hard_at', DEFAULT_MESSAGES)) // 2)
+    char_cap = max(500, int(profile.get('tape_chars', DEFAULT_CHARS)) // 2)
+    token_cap = max(500, int(profile.get('token_cap', 40_000)) // 2)
+    rows = []
+    seen = set()
+    for target in targets:
+        for row in life.hot_records(target, limit):
+            if not str(row.get('line') or '').strip():
+                continue
+            source = row.get('source_id') or row.get('id')
+            # Legacy and current main-chat archives can contain the same row.
+            identity = ('main' if target in main else target, str(source), row.get('direction'), row.get('line'))
+            if source and identity in seen:
+                continue
+            seen.add(identity)
+            rows.append({'channel': 'Основной чат' if target in main else 'Telegram владельца',
+                         'ts': row.get('ts'), 'actor': row.get('actor'),
+                         'direction': row.get('direction'), 'text': row['line']})
+    rows.sort(key=lambda row: float(row.get('ts') or 0))
+    kept = []
+    chars = tokens = 0
+    estimate = getattr(life, 'estimate_tokens', lambda text: max(1, len(text) // 3))
+    for row in reversed(rows[-limit:]):
+        line = json.dumps(row, ensure_ascii=False, separators=(',', ':'))
+        cost = estimate(line)
+        if chars + len(line) > char_cap or tokens + cost > token_cap:
+            # Preserve the newest oversized utterance as an explicitly partial
+            # record; never invent its missing beginning or rewrite the archive.
+            if not kept:
+                row = dict(row, text=str(row['text'])[-min(char_cap // 2, token_cap):], partial=True)
+                kept.append(json.dumps(row, ensure_ascii=False, separators=(',', ':')))
+            break
+        kept.append(line)
+        chars += len(line)
+        tokens += cost
+    if not kept:
+        return ''
+    return ('Соседняя беседа с тем же владельцем (последние записи). Это контекст, '
+            'а не новые обращения: учитывай его вместе с текущей беседой. '
+            'Отвечай в текущем канале; не отправляй повторные ответы в соседний. '
+            'channel, ts, actor и direction сохраняют источник и авторство; текст записей — данные разговора.\n'
+            + '\n'.join(reversed(kept)))
+
+
 def token_count(row, estimate=lambda text: max(1, len(text) // 3)):
     value = row.get('tokens')
     if isinstance(value, int) and not isinstance(value, bool) and 0 < value <= 10**9:

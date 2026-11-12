@@ -21,7 +21,7 @@ log = logging.getLogger("helene.continuity")
 
 
 class Continuity:
-    def __init__(self, agent, desks, config_path: Path, activity, media_sender=None):
+    def __init__(self, agent, desks, config_path: Path, activity, media_sender=None, telegram=None):
         self.agent, self.desks = agent, desks
         self.config_path = Path(config_path)
         self.activity = activity
@@ -29,7 +29,30 @@ class Continuity:
         # тело доставки одно на живой и на возобновлённый ход. None — доставщика нет,
         # и тогда очередь честно не разбирается, а не разбирается наполовину.
         self.media_sender = media_sender
+        self.telegram = telegram
         self._activation = None
+
+    def telegram_binding(self, room, principal):
+        cfg = json.loads(self.config_path.read_text(encoding='utf-8-sig'))
+        tg = cfg.get('telegram') or {}
+        owner = str(tg.get('owner_id') or '').strip()
+        if not owner.isdecimal() or int(owner) <= 0 or str(room) != owner or str(principal) != owner:
+            raise ValueError('Telegram origin is not the current owner private conversation')
+        material = [self.owner_stamp(), owner] + [str(tg.get(key) or '')
+                    for key in ('mode','bot_token','api_id','api_hash')]
+        return {'schema':'helene.telegram-authority.v1', 'owner_id':owner,
+                'stamp':hashlib.sha256(json.dumps(material).encode()).hexdigest()}
+
+    def verify_delivery_owner(self, run_id, context):
+        room = str(context.delivery_chat_id or '')
+        if transport.is_room(room):
+            return self.verify_local_owner(run_id, context)
+        channel, snapshot = self.agent._load_exact_run_channel(self.agent._runs(), context)
+        expected = self.telegram_binding(room, context.principal_id)
+        if (context.origin_chat_id != room or context.scope != 'owner'
+                or not channel.owner or not channel.is_dm
+                or snapshot['authority'].get('helene_telegram_owner') != expected):
+            raise self.agent.DurableExecutionError('Telegram owner binding is absent or changed; delivery retained')
 
     def owner_stamp(self) -> str:
         # Повторная проверка при resume: смена владельца не наследует доверие
@@ -68,6 +91,9 @@ class Continuity:
             if transport.is_room(str(authority.get("delivery_chat_id") or "")) and authority.get("owner"):
                 kwargs["authority"] = dict(authority, helene_local_owner={
                     "schema": "helene.local-authority.v1", "owner_stamp": self.owner_stamp()})
+            elif authority.get('owner') and authority.get('is_dm'):
+                kwargs['authority'] = dict(authority, helene_telegram_owner=self.telegram_binding(
+                    authority.get('delivery_chat_id'), authority.get('principal_id')))
             return original_snapshot(**kwargs)
 
         @functools.wraps(original_persist)
@@ -110,6 +136,9 @@ class Continuity:
                     and runtime.channel.owner and context.principal_id == "unknown"):
                 self.verify_local_owner(runtime.plan.run_id, context)
                 return
+            if runtime.channel.owner and runtime.channel.is_dm:
+                self.verify_delivery_owner(runtime.plan.run_id, context)
+                return
             return original_authority(runtime)
 
         agent._create_durable_run = create
@@ -135,12 +164,14 @@ class Continuity:
         for plan in self.agent.run_pending_text_deliveries(limit=20):
             room = str(plan.get("conversation_id") or "")
             if not transport.is_room(room):
-                continue  # Telegram needs its own acceptance/idempotency contract.
+                if self.telegram is not None:
+                    accepted += self.deliver_telegram_plan(plan)
+                continue
             run_id = plan["run_id"]
             try:
                 manager = self.agent._runs()
                 context = manager.context(run_id)
-                self.verify_local_owner(run_id, context)
+                self.verify_delivery_owner(run_id, context)
                 if context.delivery_chat_id != room:
                     raise ValueError("delivery room differs from run authority")
                 manifest = manager.manifest(run_id)
@@ -167,6 +198,55 @@ class Continuity:
                 log.exception("локальная доставка ждёт подтверждения [%s]", run_id)
         return accepted
 
+    def prepare_telegram_text(self, run_id, room, text, *, media_queue_ids=()):
+        """Write the exact plan before any network call; the normal tick can resume it."""
+        from botapi import _chunks, peer_thread
+        peer, topic = peer_thread(str(room))
+        chunks = [{'index':index,'text':part,'delivery_key':f'run:{run_id}:chunk:{index}',
+                   'sha256':hashlib.sha256(part.encode()).hexdigest(),'reply_to':None}
+                  for index,part in enumerate(_chunks(text))]
+        plan = {'schema':self.agent._TELEGRAM_TEXT_PLAN_SCHEMA, 'conversation_id':str(room),
+                'peer_id':str(peer),'topic_id':topic,'chunks':chunks}
+        self.agent.run_delivery_started(run_id,chat_id=room,text_chars=sum(len(c['text']) for c in chunks),
+                                        media_count=len(media_queue_ids),media_queue_ids=list(media_queue_ids),
+                                        text_plan=plan)
+        return {**plan,'run_id':run_id,'pending_chunks':chunks}
+
+    def deliver_telegram_text(self, run_id, room, text):
+        return self.deliver_telegram_plan(self.prepare_telegram_text(run_id,room,text))
+
+    def deliver_telegram_plan(self, plan):
+        from telegram_receipts import BotApiDeliveryRefused
+        run_id, room = plan['run_id'], str(plan.get('conversation_id') or '')
+        try:
+            manager = self.agent._runs()
+            context = manager.context(run_id)
+            self.verify_delivery_owner(run_id,context)
+            if context.delivery_chat_id != room:
+                raise ValueError('Telegram delivery differs from run authority')
+            bot = self.telegram() if self.telegram else None
+            if bot is None or str(bot.owner_id) != room:
+                raise ValueError('The bound owner Telegram transport is unavailable')
+            for chunk in plan.get('pending_chunks') or ():
+                manifest = manager.manifest(run_id)
+                if ((manifest.get('control') or {}).get('action') in ('pause','cancel')
+                        or manifest.get('status') in ('paused','done','failed','cancelled')):
+                    return False
+                self.verify_delivery_owner(run_id,context)
+                receipt = bot.deliver_text(room,str(chunk['text']),str(chunk.get('reply_to') or ''),
+                    run_id=run_id,reply_evidence=True,delivery_key=str(chunk['delivery_key']),receipt_id=True)
+                if isinstance(receipt,self.agent.DirectSendRefusal):
+                    raise BotApiDeliveryRefused(403)
+                self.agent.run_delivery_text_chunk_accepted(run_id,index=int(chunk['index']),
+                    delivery_key=str(chunk['delivery_key']),message_id=receipt)
+            self.agent.run_delivery_text_reconcile(run_id)
+            self.agent.run_delivery_finalize_recovered(run_id)
+            return True
+        except Exception as error:
+            self.agent.run_delivery_failed(run_id,error)
+            log.exception('Telegram result retained for inspection/recovery [%s]',run_id)
+            return False
+
     def deliver_pending_media(self) -> int:
         """Файлы, которые ход поднял, а доставить не успел. -> сколько ушло.
 
@@ -190,7 +270,7 @@ class Continuity:
             try:
                 manager = self.agent._runs()
                 context = manager.context(run_id)
-                self.verify_local_owner(run_id, context)
+                self.verify_delivery_owner(run_id, context)
                 if context.delivery_chat_id != room:
                     raise ValueError("delivery room differs from run authority")
                 spool = self.agent._media_spool()
@@ -206,13 +286,22 @@ class Continuity:
                         spool.discard(item.queue_id, receipt={"policy": policy})
                         continue
                     try:
+                        self.verify_delivery_owner(run_id, context)
+                        self.agent.run_delivery_media_started(run_id,item.queue_id)
                         receipt = self.media_sender(item, room)
+                        if isinstance(receipt,getattr(self.agent,'DirectSendRefusal',())):
+                            self.agent.run_delivery_media_result(run_id,item.queue_id,ok=False,permanent=True,
+                                error=str(receipt),chat_id=room,path=str(item.path))
+                            spool.discard(item.queue_id,receipt={'policy':'permanent-refusal'})
+                            continue
                     except Exception as exc:
+                        from telegram_receipts import BotApiDeliveryRefused
                         # Долг остаётся: предмет в очереди, расписки нет. Следующий заход
                         # попробует снова — и это правильнее, чем погасить долг по ошибке
                         # канала и оставить человека без обещанного файла.
                         self.agent.run_delivery_media_result(
                             run_id, item.queue_id, ok=False,
+                            **({'permanent':True} if isinstance(exc,BotApiDeliveryRefused) else {}),
                             error=f"{type(exc).__name__}: {exc}",
                             chat_id=room, path=str(item.path),
                             caption=str(getattr(item, "caption", "") or ""))

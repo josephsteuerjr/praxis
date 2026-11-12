@@ -14174,6 +14174,7 @@ def run_delivery_finalize_recovered(run_id: str, *, media_count: int = 0) -> boo
 # route and a deliverable message is never silently dropped.  Matched by class-name
 # across the exception's MRO to stay robust to the telethon version.
 _PERMANENT_TELEGRAM_DELIVERY_ERRORS = frozenset({
+    "BotApiDeliveryRefused",
     # ⚠ Перечислять имена по одному оказалось проигранной игрой. 27.07 в 17:57 два её хода
     # ушли в вечный повтор каждые 16с (412 трейсбеков за час) на
     # ChatGuestSendForbiddenError — «сначала вступи в обсуждение». Его в списке не было,

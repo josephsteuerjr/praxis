@@ -73,6 +73,9 @@ class _Agent:
         )
 
     # — то, что доставщик записывает —
+    def run_delivery_media_started(self, run_id, queue_id):
+        pass
+
     def run_delivery_media_result(self, run_id, queue_id, *, ok, message_id=None,
                                   error="", chat_id="", path="", caption=""):
         self.calls.append(("result", str(queue_id), bool(ok)))

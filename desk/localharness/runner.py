@@ -723,6 +723,11 @@ def _run_turn(chat_id: str, convo: str, speaker: str, ctx, media_refs: tuple = (
         history, current = (_dialogue(chat_id, sidecar) if sidecar is not None
                             else _dialogue(chat_id))
     orient = _orient(chat_id)
+    if getattr(ctx, 'owner', False) and getattr(ctx, 'is_dm', False):
+        import owner_context
+        companion = owner_context.companion(_life, chat_id)
+        if companion:
+            orient += '\n\n' + companion
     if getattr(ctx, "owner", False) and getattr(ctx, "is_dm", False) and _tree is not None:
         # Distribution text is a candidate, never persona. Only the owner's
         # addressed turn shows the pointer; public rooms see no skill names.
@@ -875,11 +880,12 @@ def deliver_one_media(item, chat_id: str) -> str:
     target = str(getattr(item, "target_chat_id", "") or chat_id)
     if (_bot is not None and target != STREAM
             and botapi.is_telegram_key(target)):
-        return str(_bot.deliver_file(
+        return _bot.deliver_file(
             Path(item.path), chat_id=target,
             caption=str(getattr(item, "caption", "") or ""),
             media_kind=str(getattr(item, "kind", "document") or "document"),
-            voice_note=bool(getattr(item, "voice_note", False))))
+            voice_note=bool(getattr(item, "voice_note", False)),
+            delivery_key='media:'+str(item.queue_id) if getattr(item,'queue_id','') else '')
     caption = str(getattr(item, "caption", "") or "").strip()
     room = _room(target)
     try:
@@ -941,7 +947,7 @@ def _media_receipt_message_id(receipt: str) -> str:
     return match.group(1) if match else ""
 
 
-def _deliver_outbound(envelope, chat_id: str) -> int:
+def _deliver_outbound(envelope, chat_id: str, *, intent_prepared=False) -> int:
     """Медиа, спуленное ходом (`send_media`): документы/фото/аудио этого чата.
 
     В живом раннере это делает mtproto на исходящей границе; здесь — мы, тем же
@@ -967,7 +973,7 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
         return 0
     run_id = str(getattr(envelope, "run_id", "") or "")
     queue_ids = [str(getattr(item, "queue_id", "") or "") for item in items]
-    if (run_id and all(queue_ids)
+    if (run_id and all(queue_ids) and not intent_prepared
             and not getattr(envelope, "deferred", False)
             and not getattr(envelope, "failed", False)):
         try:
@@ -1043,13 +1049,16 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
                     delivered += 1  # доставлено прошлым заходом; drop — не доставка
                 continue
         try:
+            if run_id and queue_id:
+                _agent.run_delivery_media_started(run_id,queue_id)
             receipt = deliver_one_media(item, chat_id)
         except Exception as exc:
             # Канал не принял файл: долг живёт. Прогон не терминализуется —
             # `resume_due` вернётся к предмету, владелец видит честный статус
             # («в очереди на повтор»), а не «отправлено».
             if run_id and queue_id:
-                permanent = bool(
+                from telegram_receipts import BotApiDeliveryRefused
+                permanent = isinstance(exc,BotApiDeliveryRefused) or bool(
                     isinstance(exc, botapi.BotApiError) and exc.permanent)
                 try:
                     _agent.run_delivery_media_result(
@@ -1097,6 +1106,7 @@ def _deliver_outbound(envelope, chat_id: str) -> int:
                     caption=str(getattr(item, "caption", "") or ""))
             except Exception:
                 log.exception("расписка приёма медиа не записалась [%s]", queue_id)
+                continue  # Retain the spool until the core has its durable acceptance.
         if spool is not None and queue_id:
             try:
                 spool.discard(queue_id, receipt={"message_id": message_id})
@@ -1445,7 +1455,7 @@ def _telegram_media_refs(chat_id: str, ctx) -> tuple[list, list[str]]:
     return refs,notes
 
 
-def handle_bot(chat_id: str, *, sender_override=None) -> None:
+def handle_bot(chat_id: str, *, sender_override=None, origin_text='', wake_source='') -> None:
     """Ход в бот-чате: сообщение уже в памяти (его записал поток приёма)."""
     pending_batch = []
     if sender_override is None:
@@ -1479,6 +1489,7 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
                                 principal_id=str(sender_id or "") or None,
                                 known=bool(owner or _bot.is_allowed(sender_id)),
                                 addressed=True,
+                                origin_text=origin_text,
                                 title=_room_title(chat_id) or str(chat_id))
     _bot.sent_now.clear()
     import addressing as _addressing
@@ -1525,6 +1536,8 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
             except Exception:
                 log.exception("не доложила владельцу о падении хода")
         return
+    if wake_source:
+        run_trigger.record_wake(_tree,str(getattr(envelope,'run_id','') or ''),chat_id,wake_source)
     import control_watch
     with control_watch.delivery(lambda: _agent._runs(), str(getattr(envelope, "run_id", "") or "")) as permitted:
         if not permitted:
@@ -1533,7 +1546,21 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
         spoken = [t for c, t in _bot.sent_now if c == str(chat_id)]
         text = str(getattr(envelope, "text", "") or "").strip()
         run_id = str(getattr(envelope, "run_id", "") or "")
-        media_count = _deliver_outbound(envelope, chat_id)
+        ending = None
+        if not spoken and not text:
+            ending, word = boundary_word(_turn_record(chat_id))
+            if ending == WORD and _deliver_unspoken:
+                text = word
+        plan = None
+        if (not spoken and text and run_id and _continuity is not None and is_dm and owner
+                and not getattr(envelope,'deferred',False) and not getattr(envelope,'failed',False)):
+            try:
+                plan = _continuity.prepare_telegram_text(run_id,chat_id,text,
+                    media_queue_ids=[str(item.queue_id) for item in (getattr(envelope,'outbound',()) or ())])
+            except Exception:
+                log.exception('Telegram result plan could not be saved [%s]',run_id)
+                return
+        media_count = _deliver_outbound(envelope, chat_id, intent_prepared=plan is not None)
         _pending_media = len(getattr(envelope, "outbound", ()) or ()) - media_count
         if _pending_media > 0:
             # ⚑ 10.10: сбой канала больше не молчит — тот же инцидент #113214.
@@ -1576,11 +1603,20 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
         delivered_boundary = ""
         if not spoken and text:
             try:
-                receipt = _bot.deliver_text(chat_id, text, reply_evidence=True, run_id=run_id)
-                if not isinstance(receipt, _agent.DirectSendRefusal):
+                if plan is not None:
+                    if not _continuity.deliver_telegram_plan(plan):
+                        return  # A failed send is an undelivered result, never a silence decision.
+                    delivered_boundary = text
+                else:
+                    receipt = _bot.deliver_text(chat_id, text, reply_evidence=True, run_id=run_id)
+                    if isinstance(receipt, _agent.DirectSendRefusal):
+                        _agent.run_delivery_failed(run_id,str(receipt))
+                        return
                     delivered_boundary = text
             except Exception:
                 log.exception("возврат хода не доставился [%s]", chat_id)
+                _agent.run_delivery_blocked(run_id,reason='Telegram result was not delivered')
+                return
         elif not spoken and not text and not media_count:
             if ending == SILENCE:
                 log.info("ход %s [бот %s]: она промолчала (это её решение, не сбой)",
@@ -1588,8 +1624,9 @@ def handle_bot(chat_id: str, *, sender_override=None) -> None:
             else:
                 log.info("ход %s [бот %s]: закрыт без реплики; явного решения молчать нет",
                          run_id, chat_id)
-        _close_run(envelope, chat_id, delivered_text=delivered_boundary,
-                   spoken_by_hand=len(spoken), media_count=media_count)
+        if plan is None:
+            _close_run(envelope, chat_id, delivered_text=delivered_boundary,
+                       spoken_by_hand=len(spoken), media_count=media_count)
     log.info("ход %s [бот %s]: %.1f с, реплик рукой %d%s", run_id or "—", chat_id,
              time.time() - started, len(spoken),
              "" if not media_count else f", медиа {media_count}")
@@ -2661,8 +2698,16 @@ def _fire_due_tasks() -> None:
 
         def invoke(room):
             now = _now()
-            source_id = f"alarm-{task['id']}-{int(now.timestamp() * 1000)}"
+            import hashlib
+            occurrence = str(task.get('when') or task.get('created') or '')
+            source_id = f"alarm-{task['id']}-" + hashlib.sha256(occurrence.encode()).hexdigest()[:16]
             note = _alarm_note(task)
+            if not transport.is_room(room):
+                if _bot is None or str(_bot.owner_id) != room:
+                    raise ValueError('Alarm waits for its owner Telegram transport')
+                _bot.rooms.record(room,note,outgoing=False,sender='Hélène',source_id=source_id,source='alarm')
+                handle_bot(room,sender_override=('Hélène',room),origin_text=note,wake_source=source_id)
+                return
             desk = _room(room)
             desk.archive(note, outgoing=False, now=now, sender="Hélène")
             desk.life(note, direction="in", actor="Hélène", source_id=source_id, now=now)
@@ -3572,7 +3617,7 @@ def main() -> None:
     _continuity = continuity.Continuity(
         agent, _desks, config_path,
         lambda run, chat: _set_busy(True, run, chat_id=chat),
-        media_sender=deliver_one_media)
+        media_sender=deliver_one_media,telegram=lambda:_bot)
     _continuity.install()
     import turn_inbox
     agent.OWNER_INPUT_DRAIN = _drain_owner_inputs

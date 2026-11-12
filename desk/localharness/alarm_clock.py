@@ -27,6 +27,10 @@ class AlarmClock:
             origin = None
             if transport.is_room(room) and (getattr(channel, "owner", False) or getattr(channel, "praxis_self", False)):
                 origin = {"room": room, "owner_stamp": self.continuity.owner_stamp()}
+            elif getattr(channel, 'owner', False) and getattr(channel, 'is_dm', False):
+                binding = self.continuity.telegram_binding(room, getattr(channel, 'principal_id', ''))
+                origin = {'room':room, 'transport':'telegram', 'binding':binding,
+                          'owner_stamp':self.continuity.owner_stamp()}
             token = self._adding.set((origin, {t.get("id") for t in self.tasks._load()}))
             try:
                 return original_add(*args, **kwargs)
@@ -36,11 +40,12 @@ class AlarmClock:
         @functools.wraps(original_save)
         def save(items):
             adding = self._adding.get()
-            if adding is not None and adding[0] is not None:
-                for item in items:
-                    if item.get("id") not in adding[1]:
-                        # Same atomic tasks.json replacement as the intent itself.
-                        item["helene_origin"] = dict(adding[0])
+            if adding is not None and adding[0] is not None and items:
+                # tasks.add appends its own object last, immediately before _save.
+                # Other additions since our initial read must not inherit this origin.
+                item = items[-1]
+                if item.get('id') not in adding[1]:
+                    item['helene_origin'] = dict(adding[0])
             return original_save(items)
 
         self.tasks.add, self.tasks._save = add, save
@@ -51,6 +56,11 @@ class AlarmClock:
             log.warning("будильник #%s без старой привязки: прежняя комната window", task["id"])
             return transport.ROOM_DEFAULT
         room = str(origin.get("room") or "")
+        if origin.get('transport') == 'telegram':
+            expected = self.continuity.telegram_binding(room, (origin.get('binding') or {}).get('owner_id'))
+            if origin.get('binding') != expected or origin.get('owner_stamp') != self.continuity.owner_stamp():
+                raise ValueError('alarm Telegram owner binding changed')
+            return room
         if not transport.is_room(room) or origin.get("owner_stamp") != self.continuity.owner_stamp():
             raise ValueError("alarm origin is invalid or its local owner changed")
         return room
@@ -80,7 +90,7 @@ class AlarmClock:
                     self._change_claim(task["id"], lambda item: item.pop("claim", None))
                     continue
                 context = manager.context(run_id)
-                self.continuity.verify_local_owner(run_id, context)
+                self.continuity.verify_delivery_owner(run_id, context)
                 if (context.delivery_chat_id != claim.get("helene_room")
                         or claim.get("helene_owner_stamp") != self.continuity.owner_stamp()):
                     raise ValueError("alarm claim differs from durable run authority")
@@ -112,7 +122,7 @@ class AlarmClock:
                 raise ValueError("alarm claim was cancelled before run creation")
 
         def after(context):
-            self.continuity.verify_local_owner(context.run_id, context)
+            self.continuity.verify_delivery_owner(context.run_id, context)
 
         try:
             with self.continuity.activation(before, after):

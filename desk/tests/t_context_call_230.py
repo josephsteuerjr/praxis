@@ -104,6 +104,14 @@ def consumer(profile, input_path, output_path):
             if value.get('runner'):
                 import runner
                 import memory_life
+                if 'companion_rows' in value:
+                    import owner_context
+                    memory_life.helene_owner_context = owner_context.policy({'telegram':{'owner_id':42}},None)
+                    for room, records in value['companion_rows'].items():
+                        for item in records:
+                            memory_life.record_message(room,item['line'],actor=item['actor'],direction=item['direction'],
+                                source='fixture',source_id=item['source_id'],is_dm=not room.startswith('-'),
+                                ts=item['ts'],dedupe_key='fixture-other:'+room+':'+item['source_id'])
                 for item in value['rows']:
                     memory_life.record_message(value['chat'], item['line'], actor=item['actor'],
                         direction=item['direction'], source='window', source_id=item['source_id'],
@@ -180,6 +188,28 @@ class ActualCalls(unittest.TestCase):
         second = self.call(runner=True)
         self.assertEqual(second['calls'][0]['messages'][:len(first['calls'][0]['messages'])], first['calls'][0]['messages'])
         self.assertGreater(second['receipts'][0]['reused_messages'], 0)
+
+    def test_companion_reaches_actual_model_both_ways_without_rebuilding_prefix(self):
+        other={'42':[row(10,'TELEGRAM-OWNER-COMPANION')],
+               '-100':[row(11,'FOREIGN-GROUP-EXCLUDED')],
+               'window-abcdef12':[row(12,'OTHER-ROOM-EXCLUDED')]}
+        first=self.call(runner=True,full_builder=True,companion_rows=other)
+        wire=json.dumps(first['calls'],ensure_ascii=False)
+        self.assertIn('TELEGRAM-OWNER-COMPANION',wire)
+        self.assertNotIn('FOREIGN-GROUP-EXCLUDED',wire)
+        self.assertNotIn('OTHER-ROOM-EXCLUDED',wire)
+        self.rows += [row(2,'MAIN-ACCEPTED-ANSWER',True),row(3,'next owner question')]
+        other['42'].append(row(13,'NEW-TELEGRAM-COMPANION'))
+        second=self.call(runner=True,full_builder=True,companion_rows=other)
+        previous=first['calls'][0]['messages']
+        self.assertEqual(second['calls'][0]['messages'][:len(previous)],previous)
+        self.assertIn('NEW-TELEGRAM-COMPANION',json.dumps(second['calls'],ensure_ascii=False))
+        third=self.call(runner=True,full_builder=True,chat='42',rows=[row(14,'Telegram current question')],
+                        companion_rows={'window':self.rows})
+        wire=json.dumps(third['calls'],ensure_ascii=False)
+        self.assertIn('MAIN-ACCEPTED-ANSWER',wire)
+        self.assertNotIn('FOREIGN-GROUP-EXCLUDED',wire)
+        self.assertNotIn('OTHER-ROOM-EXCLUDED',wire)
 
     def test_actual_envelope_keeps_the_first_turn_and_re_admits_durable_origin(self):
         self.rows[0]['line'] = 'PRIVATE-ORIGIN /private/origin-ref'
