@@ -56,13 +56,17 @@ class StableCycle(unittest.IsolatedAsyncioTestCase):
             class Client:
                 async def __aenter__(self):return self
                 async def __aexit__(self,*args):pass
-                def get(self,url):responses.append(url);return Response()
+                # Item 5: the probe goes through the shared network route (None = no proxy).
+                def get(self,url,proxy=None):responses.append((url,proxy));return Response()
             async def done(_):config['phone']['enabled']=False
             runtime.delay=done
             with patch('aiohttp.ClientSession',return_value=Client()),patch.object(phone_access,'ensure_cloudflared',new_callable=AsyncMock) as download,patch.object(phone_access,'QuickTunnel') as quick:
                 await runtime.cycle(copy.deepcopy(config))
             download.assert_not_awaited();quick.assert_not_called()
-            self.assertEqual(responses,['https://stable.example/api/phone/probe'])
+            # Whatever the shared route chooses here (the default follows the system proxy).
+            from deskd.network_route import Route
+            expected=Route(config).proxy_for('https://stable.example/') or None
+            self.assertEqual(responses,[('https://stable.example/api/phone/probe',expected)])
 
 
 if __name__=='__main__':unittest.main()

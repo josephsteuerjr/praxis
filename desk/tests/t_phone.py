@@ -290,7 +290,9 @@ class ExternalHostAndPairUses(unittest.TestCase):
 
     @staticmethod
     def _request_with_host(name: str):
-        return type("R", (), {"headers": {"Host": name}})()
+        # A real aiohttp request always has a path; the server-bridge probe path is the
+        # one exception the gate checks separately (t_server_probe_1211).
+        return type("R", (), {"headers": {"Host": name}, "path": "/api/state"})()
 
     def test_external_host_from_url_and_bare(self):
         self._write_cfg({"phone": {"external": "https://helene.example.invalid"}})

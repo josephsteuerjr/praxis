@@ -10,7 +10,7 @@ human cannot use tasking to grant access, rewrite my authority or delegate trust
 
 `remind_self(reflection="on")` enables my own hourly reflection. I may enable or disable it myself;
 `reflection="off"` turns it off, and `reflection="status"` reads the durable switch. It starts off
-for an existing installation until I choose it. This is the same “Твой час” as Praxis: think,
+for an existing installation until I choose it. This is my own hour («Твой час»): think,
 explore, work, revisit intentions, or remain silent. No external cause or report is required.
 The engine's Stop/Pause and sleep window still apply; restarting does not add catch-up runs.
 

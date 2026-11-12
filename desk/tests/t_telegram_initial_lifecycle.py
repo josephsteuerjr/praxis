@@ -151,11 +151,11 @@ class InitialTelegramLifecycle(unittest.TestCase):
         # Real transport ingress creates the actual outstanding record.
         bot._ingest({"message": {
             "message_id": 1, "date": time.time(),
-            "chat": {"id": 123, "type": "private"},
+            "chat": {"id": 11, "type": "private"},  # a Telegram private chat id is the user id
             "from": {"id": 11, "first_name": "Fixture owner"},
             "voice": {"file_id": "synthetic-voice", "duration": 1},
         }})
-        original = bot.inputs.get("123:1")
+        original = bot.inputs.get("11:1")
         self.assertIsNotNone(original)
         self.assertEqual(original["run_id"], "")
 
@@ -166,7 +166,7 @@ class InitialTelegramLifecycle(unittest.TestCase):
         attachment.parent.mkdir(parents=True, exist_ok=True)
         attachment.write_bytes(b"synthetic owner attachment")
         initial_binding = runner._INITIAL_FILES.set({
-            "room": "123", "source_id": "local-note",
+            "room": "11", "source_id": "local-note",
             "paths": ["attachments/local-note/readme.txt"],
         })
         self.addCleanup(runner._INITIAL_FILES.reset, initial_binding)
@@ -183,7 +183,7 @@ class InitialTelegramLifecycle(unittest.TestCase):
         def acknowledge(key, nonce, run_id):
             # Read the real persisted, hash-checked checkpoint BEFORE ACK.
             record = bot.inputs.get(key)
-            self.assertEqual(key, "123:1")
+            self.assertEqual(key, "11:1")
             self.assertEqual(record["run_id"], run_id)
             self.assertEqual(record["nonce"], original["nonce"])
             checkpoint = next(
@@ -212,8 +212,8 @@ class InitialTelegramLifecycle(unittest.TestCase):
             self.assertIsNotNone(current)
             self.assertEqual(current.kind, "chat_turn")
             self.assertEqual(str(current.principal_id), "11")
-            self.assertEqual(str(current.origin_chat_id), "123")
-            self.assertEqual(str(current.delivery_chat_id), "123")
+            self.assertEqual(str(current.origin_chat_id), "11")
+            self.assertEqual(str(current.delivery_chat_id), "11")
 
             persisted = manager.context(current.run_id)
             self.assertEqual(persisted.principal_id, current.principal_id)
@@ -227,12 +227,12 @@ class InitialTelegramLifecycle(unittest.TestCase):
 
             text = '\n'.join(m['content'] if isinstance(m.get('content'), str) else json.dumps(m.get('content'), ensure_ascii=False) for m in messages)
             self.assertIn("FIRST-VOICE-TRANSCRIPT", text)
-            self.assertIn("[Telegram input 123:1;", text)
+            self.assertIn("[Telegram input 11:1;", text)
             target = manager.path(current.run_id) / "files/readme.txt"
             self.assertEqual(target.read_bytes(), attachment.read_bytes())
             self.assertIn(str(target), text)
             self.assertTrue(attachment.is_file())
-            self.assertIsNone(bot.inputs.get("123:1"))
+            self.assertIsNone(bot.inputs.get("11:1"))
             self.assertLess(trace.index("checkpoint"), trace.index("ack"))
             seen["run_id"] = current.run_id
             trace.append("provider")
@@ -246,13 +246,13 @@ class InitialTelegramLifecycle(unittest.TestCase):
         # durable creation, checkpoint implementation, or activation mock.
         try:
             with self.assertRaises(AtFirstProvider):
-                runner.handle_bot("123")
+                runner.handle_bot("11")
         finally:
             if not seen:
                 print('INITIAL TELEGRAM DIAGNOSTIC',json.dumps({
                     'trace':trace,'recognition_calls':recognition.call_count,
-                    'provider_calls':provider.call_count,'input':bot.inputs.get('123:1'),
-                    'archive':bot.rooms.lines('123',20)},ensure_ascii=False,default=str),file=sys.stderr)
+                    'provider_calls':provider.call_count,'input':bot.inputs.get('11:1'),
+                    'archive':bot.rooms.lines('11',20)},ensure_ascii=False,default=str),file=sys.stderr)
 
         self.assertTrue(seen, "the actual first provider boundary was not reached")
         provider.assert_called_once()

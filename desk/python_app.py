@@ -165,7 +165,8 @@ class Application:
         if not isinstance(command, str) or command.startswith("host_"):
             raise ValueError("Недоступный вызов оболочки")
         from localharness import program_commands
-        shared = program_commands.invoke(self.root, self.program, command, args)
+        # Same default as __init__ (program or root) for partially built instances.
+        shared = program_commands.invoke(self.root, getattr(self, 'program', self.root), command, args)
         if shared is not program_commands.UNHANDLED:
             return shared
         if command == 'voice_shortcuts':

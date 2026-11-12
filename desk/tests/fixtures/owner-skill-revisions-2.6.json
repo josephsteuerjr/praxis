@@ -39,6 +39,11 @@
     "working_with_hands.md": {
       "accepted": "f190ecf0126e0cda68ef63001b6313a3cce90146a34e5de169e235d5a884f383",
       "revised": "656a1163d911f6744585c91818a50fa1b41a76c4ef8379dfa1a2c65a0dced79b"
+    },
+    "tasking.md": {
+      "accepted": "7f327bd3998b67af8503d4b82f39323bdaeb8a9c043882bb2828ca00910789d7",
+      "revised": "97514627a4aff357ec4a52c0f18f29752f6351fd1f36d9d5a1020b7cc0b49b7e",
+      "note": "12.11.2026: Yegor asked for self-driven reflection and several alarms in one call, with descriptions and skills updated consistently (session requests, section 4). The accepted 1.5.9 text stays in .shipped-history.json; existing agents receive a kit proposal."
     }
   }
 }

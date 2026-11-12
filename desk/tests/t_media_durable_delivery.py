@@ -212,6 +212,7 @@ class _Agent:
         self.policy = policy
         self.calls = []
         self.started = {}
+        self.media_started = []
 
     def run_delivery_started(self, run_id, **kw):
         self.started[run_id] = dict(kw)
@@ -219,6 +220,11 @@ class _Agent:
 
     def _media_spool(self):
         return self.spool
+
+    def run_delivery_media_started(self, run_id, queue_id):
+        # 12.11 (item 4): each file is marked as started before its network send,
+        # so an unknown outcome after a crash is never mistaken for "not sent".
+        self.media_started.append((run_id, str(queue_id), len(self.calls)))
 
     def run_delivery_media_retry_policy(self, run_id, queue_id):
         return self.policy
@@ -269,6 +275,8 @@ class TheIntentIsDurableBeforeTheFirstSend(_AgentPatchMixin, unittest.TestCase):
         kinds = [c[0] for c in agent.calls]
         self.assertEqual(kinds, ["started", "result", "finalize"],
                          "успех: started → result(ok) → finalize")
+        self.assertEqual(agent.media_started, [("run-1", "q-1", 1)],
+                         "отправка файла отмечена после намерения и до результата")
         result = agent.calls[1]
         self.assertEqual(result[2], True)
         self.assertEqual(result[4], "77", "успех — только по принятому message_id")
