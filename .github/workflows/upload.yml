@@ -1,0 +1,73 @@
+name: Upload exact qualified Beta archives
+on:
+  push:
+    branches: [codex/helene270-final-upload-exact-1211]
+permissions:
+  contents: write
+jobs:
+  publish-assets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reconstruct exact Windows and Linux ZIP bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,subprocess
+          def sha(p):
+              with p.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
+          receipts=[]
+          for folder in sorted(Path('exact-upload').iterdir()):
+              r=json.loads((folder/'RECIPE.json').read_bytes())
+              subprocess.run(['gh','release','download','v2.6.1','--pattern',r['donor'],'--dir',str(folder)],check=True)
+              donor=folder/r['donor'];delta=folder/'records.bin';assert sha(donor)==r['donor_sha256'] and sha(delta)==r['delta_sha256']
+              final=folder/r['archive']
+              with donor.open('rb') as df,delta.open('rb') as cf,final.open('xb') as out:
+                  for row in r['segments']:
+                      stream={'donor':df,'delta':cf}[row['source']];stream.seek(row['offset']);data=stream.read(row['length']);assert len(data)==row['length'];out.write(data)
+              assert final.stat().st_size==r['size'] and sha(final)==r['sha256']
+              assets=json.loads(subprocess.check_output(['gh','api','repos/'+__import__('os').environ['GH_REPO']+'/releases/443161064']))['assets']
+              present=[a for a in assets if a['name']==final.name]
+              if present:assert len(present)==1 and present[0]['digest']=='sha256:'+r['sha256'] and present[0]['size']==r['size']
+              else:subprocess.run(['gh','release','upload','v2.7.0',str(final)],check=True)
+              receipts.append({'name':final.name,'size':r['size'],'sha256':r['sha256'],'byte_exact_reconstruction':True})
+          Path('exact-upload-receipt.json').write_text(json.dumps(receipts,indent=2))
+          subprocess.run(['gh','release','upload','v2.7.0','exact-upload-receipt.json'],check=True)
+          PY
+      - name: Upload native Mac ZIPs already qualified by hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download v2.7.0 --pattern 'r3-native-macos*.tar.gz' --dir mac
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,subprocess,tarfile
+          for path in Path('mac').glob('*.tar.gz'):
+              with tarfile.open(path) as z:
+                  a=json.load(z.extractfile('evidence/package/artifacts.json'))['macos']
+                  names=[m.name for m in z if m.name.startswith('evidence/package/Helene-2.7.0-macos-') and m.name.endswith('.zip')];assert len(names)==1
+                  out=Path('mac')/Path(names[0]).name;out.write_bytes(z.extractfile(names[0]).read())
+                  assert hashlib.sha256(out.read_bytes()).hexdigest()==a['sha256']==json.loads(Path('expected-artifacts.json').read_bytes())[out.name]['sha256']
+              subprocess.run(['gh','release','upload','v2.7.0',str(out)],check=True)
+          PY
+      - name: Copy the exact qualified ARM server package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download v2.7.0 --pattern 'r3-Helene-2.7.0-server-linux-arm64.zip' --dir arm
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,json,subprocess
+          p=Path('arm/r3-Helene-2.7.0-server-linux-arm64.zip');q=p.with_name(p.name.removeprefix('r3-'));p.rename(q)
+          e=json.loads(Path('expected-artifacts.json').read_bytes())[q.name]
+          assert q.stat().st_size==e['size'] and hashlib.sha256(q.read_bytes()).hexdigest()==e['sha256']
+          subprocess.run(['gh','release','upload','v2.7.0',str(q)],check=True)
+          PY
