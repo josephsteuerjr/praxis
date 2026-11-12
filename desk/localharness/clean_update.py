@@ -457,6 +457,8 @@ def finish(old,new,note,*,stopped=lambda:False):
     migration_lifecycle.quiescent(old)
     note['state']='retiring_old';write(new/'python-migration.json',note)
     note['integrations']=migration_lifecycle.cleanup_installation(old,new)
+    from .login_migration import commit
+    note['login_migration']=commit(new)
     # rmtree never follows directory symlinks/junctions. Only the resolved,
     # independent programme chosen in the update request can be removed.
     # 11.11 (Yegor): what the user's own rights cannot remove stays and is named;

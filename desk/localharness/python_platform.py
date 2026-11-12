@@ -74,11 +74,11 @@ def require_runtime(program, current=None):
 
 
 def desktop_argv(program, arguments=()):
-    """GUI re-entry keeps Cocoa bundle identity; helpers keep raw Python."""
+    """GUI re-entry keeps Cocoa identity and the Windows windowed interpreter."""
     program=Path(program).resolve()
     arguments=list(map(str,arguments))
     bundle=program/'Helene.app/Contents/MacOS/Helene'
     if sys.platform=='darwin' and '--browser' not in arguments and bundle.is_file():
         return [str(bundle),*arguments]
-    python=program/('runtime/python.exe' if sys.platform=='win32' else 'runtime/bin/python3')
+    python=program/('runtime/pythonw.exe' if sys.platform=='win32' else 'runtime/bin/python3')
     return [str(python),str(program/'app/python_app.py'),*arguments]

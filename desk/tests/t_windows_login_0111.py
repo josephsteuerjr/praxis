@@ -127,4 +127,40 @@ class Login(unittest.TestCase):
  def test_removing_captured_program_drops_its_login_registration(self):
   windows.set_run(windows.run_command(self.root));windows.retarget_run([self.root],None);self.assertIsNone(windows.run_binding())
 
+ def test_update_restores_captured_run_after_old_hooks_removed_and_is_one_shot(self):
+  from localharness import login_migration as migration
+  old=self.base/'Old';old.mkdir();(old/'helene.exe').write_bytes(b'not executed')
+  for state in (2,3):
+   with self.subTest(state=state):
+    windows.set_run(windows.run_command(old));approval=self.approval('Run',windows.RUN_NAME,state)
+    migration.capture(self.root,[old]);windows.set_run(None)
+    migration.capture(self.root,[old])  # resumed cleanup must not lose the captured preference
+    result=migration.commit(self.root)
+    self.assertEqual(result['outcomes']['run'],'retargeted')
+    self.assertEqual(windows.run_binding(),windows.run_command(self.root))
+    self.assertEqual(windows.startup_approval('Run',windows.RUN_NAME),approval)
+    self.assertEqual(windows.invoke(self.owner,'autostart_get',{}),state==2)
+    windows.invoke(self.owner,'autostart_set',{'on':False});migration.commit(self.root)
+    self.assertIsNone(windows.run_binding(),'later reads must not undo an explicit disable')
+
+ def test_update_restores_legacy_startup_shortcut_and_preserves_disabled_state(self):
+  from localharness import login_migration as migration
+  old=self.base/'Old';old.mkdir();(old/'helene.exe').write_bytes(b'not executed')
+  link=Path(os.environ['APPDATA'])/'Microsoft/Windows/Start Menu/Programs/Startup/Helene.lnk'
+  windows.shortcut(link,old/'helene.exe',old,'')
+  approval=self.approval('StartupFolder',link.name,3)
+  migration.capture(self.root,[old]);link.unlink();migration.commit(self.root)
+  self.assertTrue(windows.shortcut_matches(windows.shortcut_binding(link),self.root/'helene.exe',self.root,windows.AUTOMATIC_ARGUMENTS))
+  self.assertEqual(windows.startup_approval('StartupFolder',link.name),approval)
+  self.assertFalse(windows.invoke(self.owner,'autostart_get',{}))
+
+ def test_update_does_not_enable_absent_or_overwrite_replaced_login(self):
+  from localharness import login_migration as migration
+  old=self.base/'Old';migration.capture(self.root,[old]);migration.commit(self.root)
+  self.assertIsNone(windows.run_binding())
+  windows.set_run(windows.run_command(old));migration.capture(self.root,[old])
+  foreign='"C:\\Other\\app.exe"';windows.set_run(foreign)
+  self.assertEqual(migration.commit(self.root)['outcomes']['run'],'changed-elsewhere')
+  self.assertEqual(windows.run_binding(),foreign)
+
 if __name__=='__main__':unittest.main()

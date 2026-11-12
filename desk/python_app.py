@@ -94,6 +94,7 @@ class Application:
         self.window = None
         self.window_maximized = False
         self.relaunch = False
+        self.restart_session = False
         self.migration_wizard = False
         self.migration_id = ''
         self.confirm_lock = threading.Lock()
@@ -191,6 +192,10 @@ class Application:
             self.event('exit', {})
             return None
         if command == "restart_self":
+            self.restart_session = args.get('full') is True
+            if self.restart_session:
+                self.exit_session = True
+                self.session_exit_intent = False
             self.relaunch = True
             self.event("exit", {})
             return None
@@ -231,8 +236,8 @@ class Application:
                 self.exiting = True
                 if args.get('relaunch') is False:
                     self.relaunch = False
-                self.exit_session = not args.get('observer_only', False) and not self.relaunch
-                self.session_exit_intent = args.get('owner_exit') is not False
+                self.exit_session = self.restart_session or (not args.get('observer_only', False) and not self.relaunch)
+                self.session_exit_intent = not self.restart_session and args.get('owner_exit') is not False
                 if self.window is None:
                     self.stopping.set()
                 else:
@@ -264,7 +269,11 @@ class Application:
             from localharness.portable_retirement import start
             start(self.root,self.host)
             self.retirement_started=True
-        if not self.migration_id:return {'confirmed':False}
+        if not self.migration_id:
+            if sys.platform=='win32':
+                from localharness.login_migration import commit
+                commit(self.root)
+            return {'confirmed':False}
         with self.confirm_lock:
             if not self.confirmed_ui:
                 from localharness import app_migration, owner_stop

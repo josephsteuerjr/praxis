@@ -19,7 +19,7 @@ export function stand(config, draft, options = {}) {
   let c = structuredClone(config), disk = structuredClone(config), seenMtime = '100';
   let saves=0; const container={dataset:{settingsRevision:'1',settingsDirty:'true'}};
   const cfg={needs_local_setup:options.first}; const S={agent:'Agent'};
-  const built={collect:()=>'',note:()=>'',didSave:options.didSave}, saveOut={className:'',textContent:''}, restartBtn={hidden:true}, conflictBox={hidden:true};
+  const built={collect:()=>'',note:()=>'',didSave:options.didSave}, saveOut={className:'',textContent:''}, restartBtn={hidden:true,dataset:{}}, conflictBox={hidden:true};
   const keepBlock=(a,b)=>({...a,...b}), collectConnection=()=>'', validateOwnerContext=()=>{};
   const humanError=e=>({text:e.message});
   const shell=async(name,args)=>{

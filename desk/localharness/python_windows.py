@@ -161,6 +161,8 @@ def invoke(owner,command,args):
                 startup_allowed('StartupFolder',startup.name))
     if command=='autostart_set':
         if type(args.get('on'))is not bool:raise ValueError('Autostart on must be a boolean')
+        from .login_migration import owner_changed
+        owner_changed(owner.root)
         prior=shortcut_binding(startup)
         if prior and (not same_path(prior['target'],executable) or
                       prior['cwd'] and not same_path(prior['cwd'],owner.root) or

@@ -23,7 +23,8 @@ for (const m of frame.matchAll(/shell(?:<[^>]*>)?\("(\w+)",\s*\{([^}]*)\}/g)) {
 
 // A7 F2: расписка «Сохранено» отличает блоки, которые движок читает только на старте.
 assert.match(frame, /blocksNeedingRestart\(before, out\)/, "расписка не сверяет блоки перезапуска по состоянию до записи");
-assert.match(frame, /restartBtn\.hidden = !\(modeNote \|\| restartNote \|\| cfg\.needs_local_setup\)/, "перезапуск нужен при смене блоков и первом запуске");
+// Concrete restart/no-restart and scope behavior is executed by settings-restart-1211.
+// Informational edition warnings no longer imply a restart.
 assert.match(frame, /\["telegram", "Telegram"\]/);
 assert.match(frame, /\["sandbox", "ограда"\]/);
 

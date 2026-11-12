@@ -1112,9 +1112,9 @@ export function start(opts: WindowOptions): void {
    * Перезапуск честно: если агента держит служба Windows, оболочка своих детей не
    * поднимала, и перезапуск окна — нулевое действие.
    */
-  async function restartHarness() {
-    if (cfg.needs_local_setup) {
-      await shell("restart_self").catch((e) => toast(humanError(e).text));
+  async function restartHarness(scope = 'engine') {
+    if (scope==='application' || scope==='window' || cfg.needs_local_setup) {
+      await shell("restart_self", {full:scope==='application'}).catch((e) => toast(humanError(e).text));
       return;
     }
     await controlEngine("restart");
@@ -1579,7 +1579,7 @@ export function start(opts: WindowOptions): void {
     return show(typeof target === 'string' ? target : target.view,
       {openAgents: typeof target !== 'string' && target.view === 'now' && target.openAgents});
   });
-  addEventListener("frame-restart", () => void restartHarness());
+  addEventListener("frame-restart", (event) => void restartHarness((event as CustomEvent).detail?.scope));
   addEventListener("frame-open-room", (e) => {
     const d = (e as CustomEvent<{ key: string; name: string }>).detail;
     const room = S.rooms.find((r) => r.key === d.key) ?? { key: d.key, name: d.name, kind: isWindowRoom(d.key) ? "window" : "telegram", live: false, count: 0, mtime: 0 } as Room;

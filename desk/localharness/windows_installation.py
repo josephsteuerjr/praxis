@@ -123,7 +123,10 @@ def finish(new, note, *, remove_old, progress):
             if not note['portable_retirement']['old_folder_removed']:
                 errors.append('В прежней папке остались неизвестные или изменённые файлы: '+', '.join(note['portable_retirement']['remaining_entries']))
         except (OSError,ValueError,RuntimeError) as exc:errors.append(str(exc))
-    try: note['shortcuts'] = migration_windows.install_shortcuts(new, desktop_only=True)
+    try:
+        from .login_migration import commit
+        note['login_migration']=commit(new)
+        note['shortcuts'] = migration_windows.install_shortcuts(new, desktop_only=True)
     except Exception as exc: errors.append(str(exc))
     errors.extend(leftovers)
     note.update(state='retirement_incomplete' if errors else 'completed', cleanup_errors=errors)
@@ -153,6 +156,8 @@ def clean_attached(package,target,old,data,*,progress,cancelled=None,data_destin
     with python_migrate.installation_lock(target):
         prior=python_migrate.transaction(old,target,prepared=target==package)
         if target!=package:python_migrate.copy_program(package,target,progress)
+        from .login_migration import capture
+        capture(target,[old])
         from .source_admission import activate
         activate(target,lease_held=True)
         migration_source.verify(target)

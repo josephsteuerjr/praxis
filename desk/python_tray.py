@@ -95,6 +95,28 @@ def _enable_taskbar_minimize(native):
     return after & 0xffffffff
 
 
+def restore_window(native):
+    """A tray gesture restores placement, Z order and foreground activation.
+
+    Run on the window's UI thread. Never attach another application's input
+    queue or leave the window topmost; those tricks can hang unrelated windows.
+    """
+    import ctypes
+    api=ctypes.WinDLL('user32',use_last_error=True)
+    api.ShowWindow.argtypes=[ctypes.c_void_p,ctypes.c_int]
+    api.ShowWindow.restype=ctypes.c_int
+    api.SetForegroundWindow.argtypes=[ctypes.c_void_p]
+    api.SetForegroundWindow.restype=ctypes.c_int
+    native.Show()
+    handle=native.Handle.ToInt64()
+    if native.WindowState.ToString()=='Minimized':
+        api.ShowWindow(handle,9)  # SW_RESTORE retains maximized placement.
+    native.BringToFront()
+    accepted=bool(api.SetForegroundWindow(handle))
+    native.Activate()
+    return accepted
+
+
 def install(app):
     if app.tray is not None or sys.platform != 'win32':
         return
@@ -126,15 +148,9 @@ def install(app):
         image = None
 
         def restore(sender, event):
-            native.Show()
-            if native.WindowState.ToString() == 'Minimized':
-                # pywebview.restore() forces Normal, losing a maximized placement.
-                import ctypes
-                show = ctypes.WinDLL('user32', use_last_error=True).ShowWindow
-                show.argtypes = [ctypes.c_void_p, ctypes.c_int]
-                show.restype = ctypes.c_int
-                show(native.Handle.ToInt64(), 9)  # SW_RESTORE honors native placement.
-            native.Activate()
+            if menu is not None:menu.Hide()
+            if not restore_window(native):
+                app.event('tray-error',{'error':'Windows did not grant foreground activation'})
 
         def exit_app(sender, event):
             app.relaunch = False

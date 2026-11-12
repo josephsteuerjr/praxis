@@ -431,6 +431,8 @@ class Backend:
         scope=windows_hooks.Scope.make(self.root,roots,protected)
         for item in (*scope.roots,*scope.data):plain(item)
         captured=self.custody(roots=roots,identities=protected)
+        from . import login_migration
+        login_migration.capture(self.root,roots)
         native=windows_hooks.Windows();notes=self.notes
         class Guarded:
             def __getattr__(self,name):
@@ -586,6 +588,8 @@ class Backend:
         return [k for k in kept if os.path.lexists(k)]
 
     def shortcuts(self,roots,current):
+        from . import login_migration
+        login_migration.capture(self.root,roots)
         from .python_windows import retarget_run
         retarget_run(roots,current)
         from .migration_windows import shortcut_folders,powershell,link_belongs,unpin_shortcut,install_shortcuts
@@ -607,7 +611,8 @@ ConvertTo-Json -InputObject @($result) -Compress -Depth 3
             try:path.unlink()
             except PermissionError:
                 self.notes.append('Ярлык прежней программы остался: удалить его можно только с правами администратора — '+str(path))
-        if current is not None:install_shortcuts(current,desktop_only=True)
+        if current is not None:
+            install_shortcuts(current,desktop_only=True)
 
 
 def privileged_action(request):

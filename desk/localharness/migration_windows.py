@@ -705,6 +705,8 @@ def cleanup_installation(old,new):
     """Our own cleanup, independent of the legacy uninstaller's bugs."""
     if os.name!='nt':return {}
     old,new=Path(old).resolve(),Path(new).resolve()
+    from . import login_migration
+    login_migration.capture(new,[old])
     # Per-user registry is always handled with the wizard user's identity.
     import winreg
     retained=[]

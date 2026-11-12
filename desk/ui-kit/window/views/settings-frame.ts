@@ -48,38 +48,66 @@ import '../styles/source-mode-cards.css';
 
 /** Блоки конфига, которые движок читает только на старте, — по имени для расписки. */
 export const RESTART_BLOCKS: Array<[string, string]> = [
+  ["network", "сеть Telegram"],
   ["telegram", "Telegram"],
   ["computer", "тело"],
-  ["voice", "голос"],
   ["agents", "агенты"],
   ["sandbox", "ограда"],
+  ["agent_mode", "режим работы"],
   ["owner_context", "контекст владельца"],
 ];
 
 /** Какие из RESTART_BLOCKS изменились между сохранённым и новым конфигом (стабильный JSON). */
 export function blocksNeedingRestart(before: unknown, after: unknown): string[] {
-  const stable = (v: unknown): string => JSON.stringify(v ?? null, Object.keys((v && typeof v === "object") ? (v as object) : {}).sort());
   const deep = (v: unknown): string => {
     if (!v || typeof v !== "object") return JSON.stringify(v ?? null);
     if (Array.isArray(v)) return "[" + v.map(deep).join(",") + "]";
     const o = v as Record<string, unknown>;
     return "{" + Object.keys(o).sort().map((k) => JSON.stringify(k) + ":" + deep(o[k])).join(",") + "}";
   };
-  void stable;
   const b = (before && typeof before === "object") ? (before as Record<string, unknown>) : {};
   const a = (after && typeof after === "object") ? (after as Record<string, unknown>) : {};
   const out: string[] = [];
   for (const [key, title] of RESTART_BLOCKS) {
-    if (deep(b[key]) !== deep(a[key])) out.push(title);
+    // Admission switches and folder/scopes grants are re-read by the running tools.
+    const startup = (value: unknown): unknown => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      const hot: Record<string, string[]> = {telegram:['status_message','allow_from','allowed_ids'],
+        sandbox:['mounts','mounts_denied'],computer:['scopes']};
+      return Object.fromEntries(Object.entries(value).filter(([name])=>!hot[key]?.includes(name)));
+    };
+    if (deep(startup(b[key])) !== deep(startup(a[key]))) out.push(title);
   }
   return out;
 }
 
+export type SettingsRestart = '' | 'engine' | 'window' | 'application';
+export function restartForSettings(before: unknown, after: unknown, first = false): SettingsRestart {
+  const b=(before || {}) as Record<string,unknown>, a=(after || {}) as Record<string,unknown>;
+  // These bind the session owner itself. A worker restart cannot rebind its data/runtime.
+  if (['tree','code','python','app','runner'].some(key=>a[key]!==b[key])) return 'application';
+  // The session refreshes transport children, but the viewing window needs its new channel.
+  if (first || (a.mode || 'local')!==(b.mode || 'local') || a.port!==b.port
+      || (a.mode==='remote' && (a.base!==b.base || a.key!==b.key))) return 'window';
+  return blocksNeedingRestart(before,after).length ? 'engine' : '';
+}
+
+export function configureRestart(button: HTMLButtonElement, scope: SettingsRestart, blocks: string[]): string {
+  button.dataset.scope=scope;
+  button.hidden=!scope;
+  button.textContent=scope==='application' ? 'Перезапустить программу' : scope==='window'
+    ? 'Переподключить окно' : 'Перезапустить движок';
+  if(scope==='application')return ' Изменилось расположение или исполнение агента — перезапусти программу кнопкой ниже.';
+  if(scope==='window')return ' Подключение изменилось — переподключи окно кнопкой ниже.';
+  return scope ? ` ${blocks.join(', ')} — применится перезапуском движка (кнопка ниже).` : '';
+}
+
 export interface Config {
+  network?: { proxy?: Record<string, unknown>; bridge_profile?:string; [k: string]: unknown };
   agent?: { name?: string };
   // `external` — внешний адрес канала (06.10): сервер с белым IP, под которым
   // этот компьютер виден из любой сети. QR по нему работает и вне этой Wi-Fi.
-  phone?: { enabled?: boolean; mode?: string; external?: string; local_port?: number };
+  phone?: { enabled?: boolean; mode?: string; external?: string; local_port?: number; bridge_profile?:string };
   port?: number;
   update?: { url?: string };
   // 1.2: копии памяти по расписанию (common/backup.rs): раз в `every_days` дней (0 —
@@ -803,9 +831,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         // Telegram, тело, голос, агентов и ограду он читает один раз на старте. Если эти
         // блоки изменились, расписка обязана сказать «перезапуском» и показать кнопку.
         const restartBlocks = blocksNeedingRestart(before, out);
-        const restartNote = restartBlocks.length
-          ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
-          : "";
+        const restartNote = configureRestart(restartBtn,restartForSettings(before,out,!!cfg.needs_local_setup),restartBlocks);
         saveOut.textContent =
           "Сохранено. Модель и ключ движок перечитает перед следующим запросом." +
           relayWords + restartNote + modeNote;
@@ -820,7 +846,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
             "Вставь ключ в карточке «Модель», сохрани снова и перезапусти окно.";
           restartBtn.hidden = true;
         } else {
-          restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
+          restartBtn.hidden = !restartNote;
         }
         S.agent = String(out.agent?.name || S.agent);
       } catch (e) {
@@ -963,16 +989,14 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
         saveOut.className = "receipt ok";
         const modeNote = built.note();
         const restartBlocks = blocksNeedingRestart(before, out);
-        const restartNote = restartBlocks.length
-          ? ` ${restartBlocks.join(", ")} — применится перезапуском движка (кнопка ниже).`
-          : "";
+        const restartNote = configureRestart(restartBtn,restartForSettings(before,out,!!cfg.needs_local_setup),restartBlocks);
         saveOut.textContent =
           "Перезаписано. Модель и ключ движок применит сам через несколько секунд, реле — сразу." +
           (relayNote ? ` ${relayNote}.` : "") + restartNote + modeNote;
         // Первый запуск — те же слова, что у «Сохранить»: кнопка ниже зовёт
         // restart_self и поднимает агента впервые (симметрия, ревью 06.10).
         if (cfg.needs_local_setup) saveOut.textContent = "Настройки перезаписаны. Перезапусти окно кнопкой ниже, чтобы впервые запустить агента.";
-        restartBtn.hidden = !(modeNote || restartNote || cfg.needs_local_setup);
+        restartBtn.hidden = !restartNote;
         if (cfg.needs_local_setup && !String(out.model?.key || "").trim()) {
           saveOut.className = "receipt err";
           saveOut.textContent = "Перезаписано, но ключ модели пуст — агент не сможет думать и отвечать. Вставь ключ в карточке «Модель», сохрани снова и перезапусти окно.";
@@ -991,8 +1015,10 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
     // границе хода и поднимется с новыми настройками; ошибки придут тостом.
     restartBtn.hidden = true;
     saveOut.className = "receipt";
-    saveOut.textContent = "Перезапускаю движок — настройки применятся на его старте.";
-    dispatchEvent(new Event("frame-restart"));
+    const scope=restartBtn.dataset.scope || 'engine';
+    saveOut.textContent = scope==='application' ? 'Перезапускаю программу.' : scope==='window'
+      ? 'Переподключаю окно.' : 'Перезапускаю движок — настройки применятся на его старте.';
+    dispatchEvent(new CustomEvent("frame-restart",{detail:{scope}}));
   });
   restartBtn.hidden = true;
   save.append(restartBtn);
