@@ -1,5 +1,6 @@
 import { el } from './dom';
 import { relayAccounts } from '../app/src/relay-accounts';
+import { subscriptionTransport } from './relay-subscription';
 import { lookCard } from './window/look';
 import { serviceTierReceipt } from './service-tier';
 import { effortPlan, fastModeAvailability, type ModelDetails, type ProviderKind } from './providers';
@@ -50,33 +51,12 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
   const subscription=el('section','phone-subscription');
   const subscriptionNote=el('p','field-hint'),install=el('button','btn btn-quiet','Установить praxis-relay') as HTMLButtonElement;
   install.type='button';install.hidden=true;
-  type AccountState={available?:boolean;installed?:boolean;component_ready?:boolean;note?:string;slots?:Array<{slot:string;stored:boolean;active:boolean}>;login?:{pending?:boolean;slot?:string;url?:string;error?:string}};
-  let accountState:AccountState={};
-  async function readAccount() {
-    accountState=await request<AccountState>('/api/phone/subscription');
+  const accounts=relayAccounts(subscriptionTransport(request, accountState=>{
     subscriptionNote.textContent=accountState.note||'';
     install.hidden=accountState.installed!==false||!accountState.component_ready;
     accounts.element.hidden=accountState.installed===false;
-    return accountState;
-  }
-  const accounts=relayAccounts(async<T>(command:string,args:Record<string,unknown>={})=>{
-    if(command==='relay_account') {
-      const value=await readAccount();
-      return {reachable:!!value.available,active_slot:value.slots?.find(row=>row.active)?.slot,
-        slots:['primary','secondary'].map(slot=>{const row=value.slots?.find(row=>row.slot===slot);return {
-          slot,stored:!!row?.stored,loaded:!!row?.stored,serving:!!row?.active,
-          pending:value.login?.pending&&value.login.slot===slot,login_error:value.login?.error||(!value.available?value.note:undefined)}})} as T;
-    }
-    if(command==='relay_login_url')return (accountState.login?.url||null) as T;
-    if(command==='open_login_page') {
-      const value=await readAccount();const url=new URL(value.login?.url||'');
-      if(url.protocol!=='https:')throw Error('Страница входа ещё не готова');
-      window.open(url.href,'_blank','noopener,noreferrer');return undefined as T;
-    }
-    const action=({relay_login:'login',relay_logout:'logout',relay_switch:'switch',relay_cancel_login:'cancel_login'} as Record<string,string>)[command];
-    if(!action)throw Error('Недоступное действие подписки');
-    return await request('/api/phone/subscription',{action,slot:args.slot||'primary'}) as T;
-  });
+  }));
+  accounts.element.addEventListener('relay-account-change',()=>void loadModels(true));
   install.addEventListener('click',async()=>{
     install.disabled=true;subscriptionNote.textContent='Устанавливаем praxis-relay…';
     try{await request('/api/phone/subscription',{action:'install'});await accounts.refresh()}

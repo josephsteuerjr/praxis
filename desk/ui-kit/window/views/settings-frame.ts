@@ -386,7 +386,7 @@ export async function render(container: HTMLElement, edition: EditionFactory): P
   // --- перенос: экспорт агента одним архивом и окно к харнессу на сервере
   center.append(inGroup(transferCard(draft, posix), GROUP.app));
   if (c.mode === "remote" && c.base) {
-    center.append(inGroup(relayAuthCard(String(c.base)), GROUP.app));
+    center.append(inGroup(relayAuthCard(String(c.base)), GROUP.brain));
   }
 
   if (electron?.shell === "python") {

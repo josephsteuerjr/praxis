@@ -1,13 +1,19 @@
-import { api, shell } from "./api";
+import { api, post, shell } from "./api";
 import { el, humanError } from "./lib";
 import { button, card } from "../dom";
+import { relayAccounts } from '../../app/src/relay-accounts';
+import { subscriptionTransport } from '../relay-subscription';
 
 export function relayAuthCard(base: string): HTMLElement {
   const body = el("div");
   const out = el("p", "receipt");
   let host = base;
   try { host = new URL(base).host; } catch { /* native validates destination */ }
-  body.append(el("p", "field-hint", `Передать вход ChatGPT из этого приложения на ${host}. Сервер получит доступ к подписке. Сначала войди в ChatGPT на этом компьютере; передача идёт по защищённому подключению.`));
+  body.append(el("p", "field-hint", `Вход на сервере ${host}: запроси код и подтверди его на телефоне или ПК. Сервер сам получит и сохранит вход; браузер и SSH-туннель на сервере не нужны.`));
+  const accounts = relayAccounts(subscriptionTransport(<T>(path: string, payload?: unknown) => payload === undefined ? api<T>(path) : post<T>(path, payload)));
+  body.append(accounts.element);
+  const transfer = el('details'); transfer.append(el('summary', '', 'Передать уже сохранённый вход с этого компьютера'));
+  transfer.append(el('p', 'field-hint', 'Сервер получит доступ к подписке из слота 1 этого приложения. Передача идёт по защищённому подключению.'));
   const replace = button("Заменить существующий вход на сервере", "quiet", () => void send(true));
   replace.hidden = true;
   const send = async (overwrite: boolean) => {
@@ -24,12 +30,13 @@ export function relayAuthCard(base: string): HTMLElement {
       }
       out.textContent = receipt.note;
       replace.hidden = receipt.phase !== "conflict";
+      await accounts.refresh();
     } catch (e) {
       out.textContent = humanError(e).text;
     } finally { start.disabled = replace.disabled = false; }
   };
   const start = button("Передать вход ChatGPT на сервер", "quiet", () => void send(false));
-  body.append(start, replace, out);
+  transfer.append(start, replace, out); body.append(transfer);
   body.append(el("p", "field-hint", "После входа SSH-туннель не нужен. Для обновлений контейнера сохрани папку данных сервера в постоянном томе. Доктор покажет результат приёма и состояние хранения входа."));
   return card("ChatGPT на сервере", body);
 }
