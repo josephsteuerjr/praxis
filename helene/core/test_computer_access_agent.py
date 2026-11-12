@@ -80,7 +80,7 @@ class AgentComputerAccessTests(unittest.TestCase):
                 )
             self.assertIn("system-op", result)
             start.assert_called_once_with(
-                command="whoami.exe", shell="power_shell", cwd="", execution="system",
+                command="whoami.exe", shell="power_shell", cwd="", execution="system", timeout=0,
             )
         finally:
             agent._TURN_CHANNEL.reset(token)

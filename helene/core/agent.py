@@ -4979,7 +4979,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                   steps: int = 0, direction: str = "", horizontal: bool = False,
                   relative: bool = False,
                   expected_foreground: str = "", expected_pid: int = 0,
-                  restore: bool = True, timeout_ms: int = 1500,
+                  restore: bool = True, timeout_ms: int | None = None,
                   inter_event_delay_ms: int = 0, offset: int = 0, limit: int = 2048,
                   visible_only: bool = True, pid: int = 0, title_contains: str = "",
                   name_contains: str = "", session_id: int = -1,
@@ -4989,13 +4989,17 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                   start: int = 1, end: int = 0, content: str = "", old: str = "",
                   new: str = "", expected_sha256: str = "", backup: bool = False,
                   shape: str = "", text_contains: str = "", max_nodes: int = 0,
-                  max_depth: int = 0,
+                  max_depth: int = 0, max_text_chars: int = 0,
                   automation_id: str = "", role: str = "", nth: int = -1,
                   element_action: str = "", element_limit: int = 0,
                   idempotency_key: str = "") -> str:
     """Caller-authorized body actions; the Windows client still makes no decisions."""
     import computer_inventory
     action = str(action or "").strip().lower()
+    # Process lifetime and UI wait are different contracts. An omitted run
+    # deadline keeps async jobs unbounded; desktop actions retain their UI default.
+    process_timeout_ms = timeout_ms
+    timeout_ms = 1500 if timeout_ms is None else timeout_ms
     required = _COMPUTER_ACTION_SCOPES.get(action)
     if action == "observe" and path:
         # PASS 30.0.c: файл читается тем же fs.export, что и у send — то же право.
@@ -5098,8 +5102,12 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
                       "note": "расписка без result-фрейма — запись не подтверждена; сверь fs.hash"}
         return json.dumps(result, ensure_ascii=False, indent=2)
     if action == "run":
+        if process_timeout_ms is not None and (type(process_timeout_ms) is not int or process_timeout_ms < 0):
+            return "run: timeout_ms должен быть целым числом >= 0; 0 или отсутствие — без срока. Команда не запускалась."
+        seconds = ((process_timeout_ms or 0) + 999) // 1000
         result = body_client.process_start(command=command, shell="power_shell", cwd=cwd,
-                                           execution=execution)
+                                           execution=execution, timeout=seconds)
+        result = {**result, "process_timeout_ms": seconds * 1000}
         return json.dumps(result, ensure_ascii=False, indent=2)
     if action == "poll":
         return json.dumps(body_client.process_status(operation_id, execution=execution), ensure_ascii=False, indent=2)
@@ -5127,6 +5135,7 @@ def tool_computer(action: str, path: str = "", caption: str = "", command: str =
             max_depth=(int(max_depth) if max_depth else None),
             timeout_ms=(int(timeout_ms) if timeout_ms else None),
             execution=execution,
+            **({'max_text_chars': int(max_text_chars)} if max_text_chars else {}),
         )
         return body_client.format_window_read(result)
     elif action == "find_elements":
@@ -7934,7 +7943,12 @@ COMPUTER_TOOL = {
     "description": (
         "Use the connected Windows computer from any Telegram chat where this caller has an owner-issued grant. "
         "status/inventory/list/stat are eyes; send exports an exact local path and sends the verified file to the "
-        "CURRENT chat; run/poll/stop manage PowerShell processes. desktop_status/windows/read_window/activate/input/"
+        "CURRENT chat; run/poll/stop manage PowerShell processes. run returns an operation_id immediately; "
+        "timeout_ms for run is the process lifetime from process start, rounded UP to a whole second by Body, "
+        "not the RPC wait. Omit it or use 0 for no deadline. Poll the SAME operation to its final state; "
+        "a deadline ends as timed_out, an explicit stop as cancelled. Body terminates its owned process tree; "
+        "inspect job_note for a containment failure and verify cleanup. Never restart a command just because "
+        "a call timed out or the outcome is unknown. desktop_status/windows/read_window/activate/input/"
         "screenshot/observe/clipboard_read/clipboard_write/processes are native interactive-desktop hands (no Office COM). "
         "find_elements looks for elements by the SAME selector without touching anything: automation_id, role, name, "
         "name_contains or value_contains, and it answers with every match (element_limit caps how many are shown), "
@@ -7998,6 +8012,7 @@ COMPUTER_TOOL = {
                           "description": "read_window: keep nodes whose name/value contains this text"},
         "max_nodes": {"type": "integer", "description": "read_window: cap on nodes read (body clamps)"},
         "max_depth": {"type": "integer", "description": "read_window/act_element/find_elements: cap on tree depth (body clamps)"},
+        "max_text_chars": {"type": "integer", "description": "read_window: cap on returned text characters (body clamps); also available inside step.read"},
         "idempotency_key": {"type": "string",
             "description": "act_element: your own stable key; a retry of the SAME intent MUST reuse it, a new intent needs a new key"},
         "element_limit": {"type": "integer",
@@ -8049,7 +8064,8 @@ COMPUTER_TOOL = {
         "horizontal": {"type": "boolean"}, "relative": {"type": "boolean"},
         "expected_foreground": {"type": "string", "description": "input focus guard: expected hwnd"},
         "expected_pid": {"type": "integer", "description": "activate/input target process guard"},
-        "restore": {"type": "boolean"}, "timeout_ms": {"type": "integer"},
+        "restore": {"type": "boolean"}, "timeout_ms": {"type": "integer", "minimum": 0,
+            "description": "run: process lifetime, rounded up to whole seconds; 0/omitted means no deadline. UI actions: their existing element/read/activation wait budget, not a process deadline."},
         "inter_event_delay_ms": {"type": "integer"},
         "offset": {"type": "integer"}, "limit": {"type": "integer"},
         "visible_only": {"type": "boolean"}, "pid": {"type": "integer"},
