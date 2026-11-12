@@ -1,3 +1,11 @@
+# 2.7.0 Beta
+
+Full agent transfer and return, server bridge setup, the complete programme in the
+Telegram Mini App, shared owner context, reflection, connection fixes and bounded
+window memory. Computer run deadlines now reach Body.
+
+Read the [changes and limits](docs/RELEASE-2.7.0.md).
+
 # 2.6.1 Beta
 
 Fix Windows installation and updates requesting administrator rights. Clean installs
