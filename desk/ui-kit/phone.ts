@@ -14,6 +14,7 @@ import "./version";
 import { esc, fmtDay, fmtTime, md } from "./text";
 import { setResultFetcher, stepsHTML, type RunDetail } from "./steps";
 import contract from "./contract.json";
+import { RecentMap } from "./recent-map";
 import { mountUsage, usageShell } from "./usage";
 import { artifactCaption, mediaDescriptor, paperMediaHTML, mountPaperMedia } from "./paper-media";
 import { artifactBytes, browserSave } from "./paper-transfer";
@@ -267,9 +268,9 @@ export function mountPhone(root: HTMLElement, opts: PhoneOptions): PhoneApp {
   let sendKey = true;
   let cookieWorks = true;
   const evOpen = new Set<string>();
-  const evCache = new Map<string, RunDetail>();
+  const evCache = new RecentMap<string, RunDetail>(16);
   /** run_id -> слово агента, заметка границы и собеседник (из chat-turns комнат). */
-  const words = new Map<string, { out: string; note: string; who: string }>();
+  const words = new RecentMap<string, { out: string; note: string; who: string }>(400);
   /** Ручки, которые канал телефону не отдаёт (403). */
   const closed = new Set<string>();
   let gen = 0;

@@ -1,5 +1,6 @@
 // Состояние окна. Один объект, без магии; экраны читают его и дёргают bus.
 import contract from "../contract.json";
+import { RecentMap } from "../recent-map";
 
 export interface AgentState {
   agent: string;
@@ -113,7 +114,8 @@ export const S = {
   runs: [] as Run[],
   rooms: [] as Room[],
   evOpen: new Set<string>(),
-  evCache: new Map<string, unknown>(),
+  // Bounded: run details are refetched on demand (12.11: a day of runs grew to GBs).
+  evCache: new RecentMap<string, unknown>(16),
   mdSel: "" as string,
   stream: "" as string,
   captures: [] as string[],

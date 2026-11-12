@@ -664,6 +664,7 @@ html.electron #chrome a {
 
 .dot.live {
   background: var(--accent);
+  will-change: opacity;
   animation: pulse 1.2s ease-in-out infinite;
 }
 
@@ -905,6 +906,7 @@ html.electron #chrome a {
 
 .state-pill[data-level="live"] .state-dot {
   background: var(--accent);
+  will-change: opacity;
   animation: pulse 1.2s ease-in-out infinite;
 }
 

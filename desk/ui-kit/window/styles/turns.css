@@ -156,11 +156,23 @@
 .turn[data-status="live"] .turn-dot {
   background: var(--terra);
   border-color: var(--line-ink);
+}
+/* 12.11: the same 9px ring, drawn by transform/opacity on a pseudo-element. An
+   animated box-shadow restyled and repainted the window on every frame for as long
+   as the agent worked (~60 style recalcs/s, a measurable share of a core all day). */
+.turn[data-status="live"] .turn-dot::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--lw));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--terra) 70%, transparent);
+  pointer-events: none;
+  will-change: transform, opacity;
   animation: turn-pulse 1.6s var(--ease-out) infinite;
 }
 @keyframes turn-pulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--terra) 70%, transparent); }
-  100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--terra) 0%, transparent); }
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(2.6); opacity: 0; }
 }
 
 .turn-text {
@@ -346,6 +358,7 @@ button.st-line:hover {
 
 .st.is-live .ico {
   color: var(--terra);
+  will-change: opacity; /* its own layer: the breath runs on the compositor */
   animation: st-breathe 1.4s ease-in-out infinite;
 }
 @keyframes st-breathe {
@@ -406,10 +419,11 @@ button.st-line:hover {
 .st-harness { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (prefers-reduced-motion: reduce) {
-  .turn[data-status="live"] .turn-dot,
+  .turn[data-status="live"] .turn-dot::after,
   .st.is-live .ico {
     animation: none;
   }
+  .turn[data-status="live"] .turn-dot::after { display: none; }
 }
 
 /* Compact tool rows and one trace panel at a time, shared by phone and desktop. */
