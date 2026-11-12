@@ -32,7 +32,7 @@ class ProgramFixture(Fixture):
         if command in ('program_bootstrap','switch_agent'):
             identity=args.get('id') or body.get('agent') or 'base'
             return self.reply({'agent':'Мира','agent_id':identity,'base':'/program/'+identity,'agents':[], 'local_agent':True})
-        if command=='app_info':return self.reply({'platform':'win32','version':'2.6.1','root':'C:/Fixture'})
+        if command=='app_info':return self.reply({'platform':'win32','version':json.loads((Path(__file__).resolve().parents[1]/'app/package.json').read_bytes())['version'],'root':'C:/Fixture'})
         if command=='appearance_read':return self.reply({'values':{},'seen':'1'})
         if command=='config_load':return self.reply({'config':self.config,'mtime_ns':'1','tree':'C:/Fixture/data','path':'C:/Fixture/helene.json','exe_dir':'C:/Fixture'})
         if command=='config_save':

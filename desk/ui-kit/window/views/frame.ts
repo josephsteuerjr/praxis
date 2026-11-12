@@ -33,14 +33,16 @@ export async function render(container: HTMLElement): Promise<void> {
   streams.sort((a, b) => (b.latest || "").localeCompare(a.latest || ""));
   if (!streams.some(s => s.stream === S.stream)) S.stream = streams[0].stream;
   container.innerHTML = `<div class="split wide">
-    <div class="list"><label class="field-hint" for="frame-search">Чат или работа</label>
+    <details class="list" id="frame-streams" ${container.clientWidth >= 760 ? "open" : ""}><summary class="field-hint" id="frame-stream-title">Выбрать чат · ${esc(streamTitle(S.stream))}</summary><label class="field-hint" for="frame-search">Чат или работа</label>
       <input id="frame-search" class="field-input" type="search" placeholder="Найти чат" aria-label="Найти чат">
       ${streams.map(s => `<div class="item" role="button" tabindex="0" aria-current="${s.stream === S.stream}" data-stream="${esc(s.stream)}">
         <span title="${esc(s.stream)}">${esc(streamTitle(s.stream))}<small class="muted" style="display:block">${esc(captureTime(s.latest || ""))}</small></span><span class="n">${s.captures}</span></div>`).join("")}
       <p class="field-hint">Снимки по времени. Теневая сборка контекста может отличаться от входа модели; схемы tools сохранены отдельно.</p>
-    </div><div class="reading" id="frame-main"></div></div>`;
+    </details><div class="reading" id="frame-main"></div></div>`;
   const open = (stream: string) => {
     S.stream = stream;
+    q("#frame-stream-title", container).textContent = `Выбрать чат · ${streamTitle(stream)}`;
+    if (container.clientWidth < 760) q<HTMLDetailsElement>("#frame-streams", container).open = false;
     for (const el of container.querySelectorAll<HTMLElement>("[data-stream]")) el.setAttribute("aria-current", String(el.dataset.stream === stream));
     const main = q<HTMLElement>("#frame-main", container);
     safeRender(main, () => renderStream(main, stream));
@@ -129,7 +131,7 @@ function renderCapture(out: HTMLElement, c: Capture, name: string): void {
   out.innerHTML = `<p class="muted">${esc(captureTime(name))} · ${fmtN((c.text || "").length)} знаков${c.run_id ? ` · <span class="mono">${esc(c.run_id)}</span>` : ""}</p>
     <div class="card"><h3>Схемы инструментов${Array.isArray(c.tools) ? ` · ${c.tools.length}` : ""}</h3>
     ${Array.isArray(c.tools) ? `<p class="field-hint">Набор tools, зафиксированный перед вызовом модели. Полные схемы, переданные отдельно от текста контекста.</p><input id="schema-search" class="field-input" type="search" placeholder="Найти инструмент" aria-label="Найти инструмент">
-      ${c.tools.map(tool => `<details class="fold" data-tool="${esc(String(tool.name || tool.type || ""))}"><summary>${esc(String(tool.name || tool.type || "инструмент"))}</summary><pre class="fold-body">${esc(JSON.stringify(tool, null, 2))}</pre></details>`).join("")}`
+      ${c.tools.map(tool => `<details class="fold" data-tool="${esc(String(tool.name || tool.type || ""))}"><summary>${esc(String(tool.name || tool.type || "инструмент"))}</summary><pre class="fold-body" style="overflow:auto">${esc(JSON.stringify(tool, null, 2))}</pre></details>`).join("")}`
       : `<p class="field-hint">${c.tools_status === "unavailable" ? "Не удалось проверить сохранённые схемы этого снимка." : "У этого старого снимка схемы не сохранены. Это не означает, что модель их не получила."}</p>`}</div>
     <p class="field-hint">Ниже — теневая сборка контекста; фактический вход модели может отличаться.</p><div class="card md">${md(c.text || "")}</div>`;
   out.querySelector<HTMLInputElement>("#schema-search")?.addEventListener("input", e => {
