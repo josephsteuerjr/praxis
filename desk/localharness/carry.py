@@ -182,7 +182,10 @@ def _scan(data: Path, projects=()) -> dict:
     chosen = {}
     taken = {p.name.casefold() for p in (data / PROJECTS_DIR).iterdir()} if (data / PROJECTS_DIR).is_dir() else set()
     for raw in projects:
-        path = Path(raw).resolve(strict=True)
+        try:
+            path = Path(raw).resolve(strict=True)
+        except (OSError, RuntimeError):
+            raise ValueError(f"Выбранной папки проекта больше нет: {raw}. Открой перенос заново.") from None
         if not path.is_dir() or path.is_relative_to(home) or home.is_relative_to(path):
             raise ValueError(f"Проект для переноса должен быть отдельной папкой вне данных агента: {raw}")
         chosen[path] = _project_slug(path, taken)

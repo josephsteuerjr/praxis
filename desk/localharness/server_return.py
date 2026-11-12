@@ -194,7 +194,9 @@ def download(client, remote, size, digest, folder, *, progress=None):
             target.seek(offset)
             source.seek(offset)
             if offset < size:
-                source.prefetch(size)
+                # Bounded read-ahead: an unbounded prefetch queues every 32 KiB
+                # request of a multi-gigabyte archive at once.
+                source.prefetch(size, max_concurrent_requests=64)
             while offset < size:
                 block = source.read(min(4 * 1024 * 1024, size - offset))
                 if not block:

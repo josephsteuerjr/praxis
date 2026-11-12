@@ -411,8 +411,8 @@ class Download(unittest.TestCase):
                 def seek(self, offset):
                     self.position = offset
 
-                def prefetch(self, size):
-                    pass
+                def prefetch(self, size, max_concurrent_requests=None):
+                    assert max_concurrent_requests, 'read-ahead must be bounded'
 
                 def read(self, size):
                     if remote.fail_after is not None and self.position >= remote.fail_after:
