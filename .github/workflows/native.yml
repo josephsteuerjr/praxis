@@ -1,53 +1,10 @@
 name: Helene 2.7.1 Beta native qualification
 on:
   push:
-    branches: [codex/helene271-device-native-1311]
+    branches: [codex/helene271-device-arm-evidence-1311]
 permissions:
   contents: write
 jobs:
-  mac:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos
-            runner: macos-15
-            asset: Helene-2.7.0-macos-arm64.zip
-          - target: macos-intel
-            runner: macos-26-intel
-            asset: Helene-2.7.0-macos-x86_64.zip
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 70
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Download immutable qualified runtime and prepare case-sensitive workspace
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download v2.7.0 --repo josephsteuerjr/praxis --pattern '${{ matrix.asset }}' --dir donor
-          hdiutil create -size 20g -type SPARSE -fs "Case-sensitive APFS" -volname HeleneCase "$RUNNER_TEMP/helene-case.sparseimage"
-          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/helene-case" "$RUNNER_TEMP/helene-case.sparseimage"
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib,json,os,tarfile
-          p=Path('inputs.tar.gz');n=json.loads(Path('PREPARED.json').read_bytes())
-          assert hashlib.sha256(p.read_bytes()).hexdigest()==n['archive_sha256']
-          with tarfile.open(p) as z:z.extractall(Path(os.environ['RUNNER_TEMP'])/'helene-case/qualification',filter='data')
-          PY
-      - name: Build and qualify native package
-        run: python3 -B "$RUNNER_TEMP/helene-case/qualification/equipment/mac_final.py" --target ${{ matrix.target }} --donors "$PWD/donor" > driver.log 2>&1
-      - name: Preserve qualification in unpublished draft
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/helene-case/qualification/evidence"
-          cp driver.log "$RUNNER_TEMP/helene-case/qualification/evidence/driver.log" || true
-          tar -czf 'r6-native-${{ matrix.target }}.tar.gz' -C "$RUNNER_TEMP/helene-case/qualification" evidence
-          gh release upload v2.7.1 'r6-native-${{ matrix.target }}.tar.gz'
   server-arm:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -81,8 +38,8 @@ jobs:
           mkdir -p server-result/evidence
           cp server-build.log server-result/evidence/
           tail -50 server-build.log
-          tar --exclude='evidence/real-application-install/installed' --exclude='evidence/real-application-install/uploaded' --exclude='evidence/real-application-install/program.tar.gz' -czf r6-server-evidence.tar.gz -C server-result evidence
-          gh release upload v2.7.1 r6-server-evidence.tar.gz
+          tar --exclude='evidence/native-relay-device/tree' --exclude='evidence/real-application-install/installed' --exclude='evidence/real-application-install/uploaded' --exclude='evidence/real-application-install/program.tar.gz' -czf r7-server-evidence.tar.gz -C server-result evidence
+          gh release upload v2.7.1 r7-server-evidence.tar.gz
           for file in server-result/*.zip server-result/*.sha256; do
-            if [ -f "$file" ]; then cp "$file" "r6-$(basename "$file")"; gh release upload v2.7.1 "r6-$(basename "$file")"; fi
+            if [ -f "$file" ]; then cp "$file" "r7-$(basename "$file")"; gh release upload v2.7.1 "r7-$(basename "$file")"; fi
           done
