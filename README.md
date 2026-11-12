@@ -23,6 +23,12 @@ Hélène is a desktop home for agents with their own character, lasting memory,
 settings and working files. Talk in the desktop window, connect Telegram, or use
 a paired phone and web interface while the host is online. Powered by Praxis.
 
+## Included in 2.7.1 Beta
+
+All tool schemas are offered natively. The Context screen adds searchable chats,
+local timestamps, snapshot navigation and inspection of recorded tool schemas.
+See the [patch and limits](desk/docs/RELEASE-2.7.1.md).
+
 ## Included in 2.7.0 Beta
 
 Full server transfer and return, a built-in server bridge, the whole programme in

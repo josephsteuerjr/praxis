@@ -1,3 +1,11 @@
+# 2.7.1 Beta
+
+All available tool schemas are native by default. Context snapshots have chat
+search, local times, older/newer navigation, paging and recorded schema inspection.
+Saved call-based turns remain resumable; existing authored skills are preserved.
+
+Read the [changes and limits](docs/RELEASE-2.7.1.md).
+
 # 2.7.0 Beta
 
 Full agent transfer and return, server bridge setup, the complete programme in the
