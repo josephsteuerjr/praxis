@@ -68,6 +68,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -82,6 +83,7 @@ import self_model
 import tool_offerings
 
 log = logging.getLogger("praxis.frame_shadow")
+_SCHEMA_LOCK = threading.RLock()
 
 BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 
@@ -2122,6 +2124,11 @@ def _last_path(stream_dir: Path) -> Path:
 
 
 def _rotate(stream_dir: Path) -> None:
+    with _SCHEMA_LOCK:
+        _rotate_locked(stream_dir)
+
+
+def _rotate_locked(stream_dir: Path) -> None:
     shadows = sorted(stream_dir.glob("*.md"))
     for stale in shadows[:-KEEP_SHADOWS] if len(shadows) > KEEP_SHADOWS else ():
         try:
@@ -2145,6 +2152,11 @@ def _rotate(stream_dir: Path) -> None:
 
 def _capture_tools(stream_dir: Path, name: str, tools, run_id: str) -> None:
     """Persist the actual offered schemas separately from the shadow's prose."""
+    with _SCHEMA_LOCK:
+        _capture_tools_locked(stream_dir, name, tools, run_id)
+
+
+def _capture_tools_locked(stream_dir: Path, name: str, tools, run_id: str) -> None:
     raw = json.dumps(list(tools or ()), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     folder = stream_dir / "schemas"

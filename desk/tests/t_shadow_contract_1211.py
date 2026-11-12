@@ -55,6 +55,8 @@ class ShadowContract(unittest.TestCase):
         got = readers.shadow_capture_details('dm-window', self.name)
         self.assertEqual(got['tools_status'], 'unavailable')
         self.assertIsNone(got['tools'])
+        path.unlink()
+        self.assertEqual(readers.shadow_capture_details('dm-window', self.name)['tools_status'], 'unavailable')
 
     def test_schema_reference_cannot_escape_snapshot(self):
         (self.entry / self.name).with_suffix('.json').write_text('{"schemas":"../../secret.json"}', encoding='utf-8')

@@ -1385,15 +1385,21 @@ def shadow_capture(stream: str, name: str) -> str:
 
 def shadow_capture_details(stream: str, name: str) -> dict:
     """Shadow prose and independently saved offered schemas; never today's catalog."""
-    result = {"stream": stream, "name": name, "text": shadow_capture(stream, name),
+    result = {"stream": stream, "name": name, "text": "",
               "tools": None, "run_id": "", "tools_status": "not_recorded"}
-    if not result["text"] or not _CAPTURE_RE.fullmatch(name):
+    if not _CAPTURE_RE.fullmatch(name):
         return result
     entry = shadow_root() / os.path.basename(stream)
+    meta_path = (entry / name).with_suffix(".json")
     try:
-        if not entry.resolve().is_relative_to(shadow_root().resolve()):
+        if stream in (".", "..") or os.path.basename(stream) != stream or not entry.resolve().is_relative_to(shadow_root().resolve()):
             return result
-        meta = json.loads((entry / name).with_suffix(".json").read_text(encoding="utf-8"))
+        if not (entry / name).resolve().is_relative_to(entry.resolve()):
+            return result
+        result["text"] = shadow_capture(stream, name)
+        if not result["text"]:
+            return result
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
         schema_name = str(meta.get("schemas") or "")
         if not re.fullmatch(r"[0-9a-f]{64}\.json", schema_name):
             raise ValueError("invalid schema reference")
@@ -1411,7 +1417,8 @@ def shadow_capture_details(stream: str, name: str) -> dict:
         result.update(tools=tools, tools_status="recorded",
                       run_id=run_id if _RUN_ID_RE.fullmatch(run_id) else "")
     except FileNotFoundError:
-        pass
+        if meta_path.is_file():
+            result["tools_status"] = "unavailable"
     except (OSError, ValueError, TypeError, AttributeError):
         result["tools_status"] = "unavailable"
     return result

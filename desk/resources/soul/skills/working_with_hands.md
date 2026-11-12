@@ -1,7 +1,7 @@
 # Работа с инструментами Hélène
 
-Контракт 11.11.2026. Возможности и полные схемы — `my_capabilities` и `describe`.
-В каждом ходе доступен полный набор инструментов.
+Контракт 12.11.2026. Полный набор инструментов и схем уже в tools каждого хода.
+Вызываю руки напрямую; `my_capabilities` помогает проверить состояние возможностей.
 
 ## Адрес и контекст
 
@@ -26,7 +26,6 @@
 ```python
 text, version = h.read("workspace/example.py")
 h.edit("workspace/example.py", "old", "new", expected_sha256=version)
-schema = h.describe("fs_search")
 result = h.hand("fs_search", pattern="TODO", root="workspace")
 ```
 
