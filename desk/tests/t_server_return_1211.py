@@ -212,9 +212,28 @@ class ServerSnapshot(unittest.TestCase):
                                 if name.startswith('roots/project-') and name.count('/') == 2 and not name.endswith('/')),
                          ['notes.md', 'secret.md'])
 
+    def departure_kit(self):
+        """The programme kit uploaded at the move: local code with its pre-move edits."""
+        import tarfile
+        stage = Path(str(self.install) + '.transfer-' + self.row['id'])
+        stage.mkdir()
+        with tarfile.open(stage / 'program.tar.gz', 'w:gz') as kit:
+            for name in ('tree', 'app'):
+                kit.add(self.scene.program / name, arcname=name)
+        self.row['program_sha'] = self.helper.kit_signature(stage / 'program.tar.gz')
+        self.scene.row['program_sha'] = self.row['program_sha']
+
+    def test_tampered_kit_is_not_a_merge_base(self):
+        self.departure_kit()
+        self.row['program_sha'] = '0' * 64
+        snap = self.helper.snapshot(self.row, self.plan())
+        self.assertNotIn('departure', snap['roots'])
+
     @unittest.skipUnless(GIT, 'git is required for the worktree fixture')
     def test_round_trip_returns_fresh_life_code_projects_and_git(self):
+        self.departure_kit()
         snap = self.helper.snapshot(self.row, self.plan())
+        self.assertIn('departure', snap['roots'])
         scene = self.scene
         state = {'id': '1234567890abcdef', 'phase': 'downloaded', 'projects': self.plan()['projects'],
                  'remote': {k: snap[k] for k in ('archive', 'sha256', 'bytes', 'version', 'exclusions')}}
@@ -244,7 +263,7 @@ class ServerSnapshot(unittest.TestCase):
         self.assertEqual((tree / 'c.py').read_text(), 'c clean\n')
         self.assertEqual((tree / 'new_tool.py').read_text(), 'added on the server\n')
         self.assertEqual((scene.program / 'app/deskapp.py').read_text(), 'app edited on the server\n')
-        self.assertEqual(result['code']['base'], 'pristine+departure')
+        self.assertEqual(result['code']['base'], 'departure')
         backup = Path(result['code']['local_before'])
         self.assertEqual((backup / 'tree/c.py').read_text(), 'c edited before move\n')
         # Config, receipts and the retained previous copy.
@@ -305,6 +324,7 @@ class LocalActivation(unittest.TestCase):
         self.assertTrue(returned.is_relative_to(self.scene.data.parent))
         self.assertEqual((self.scene.program / 'tree/b.py').read_text(), 'b edited on the server\n')
         self.assertEqual((self.scene.program / 'tree/c.py').read_text(), 'c clean\n')
+        self.assertEqual(result['code']['base'], 'pristine+departure')
         self.assertEqual((self.scene.data / 'memory/story.md').read_text(), 'before the move\n')
         config = json.loads(self.scene.config.read_text())
         self.assertEqual(Path(config['tree']), returned)

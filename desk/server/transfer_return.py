@@ -17,10 +17,13 @@ A repeated snapshot returns the existing receipt while the fence still holds.
 """
 from pathlib import Path
 import fcntl
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
+import tarfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from localharness import carry_git, carry_payload, carry_scope  # noqa: E402
@@ -77,11 +80,54 @@ def scope(row):
             'host_exclusions': [{'path': path, 'reason': reason} for path, reason in HOST_DATA]}
 
 
+def kit_signature(path):
+    """Same digest as server_transfer.kit_signature, recorded as program_sha."""
+    rows = []
+    with tarfile.open(path) as kit:
+        for info in kit:
+            if info.isfile():
+                with kit.extractfile(info) as stream:
+                    rows.append((info.name, info.mode, carry_payload.checks.file_sha256(stream)))
+    return hashlib.sha256(json.dumps(sorted(rows)).encode()).hexdigest()
+
+
+def departure(root, row, stage):
+    """The exact code that left the computer: the transfer kit, verified by its digest.
+
+    It is the best merge base for the agent's server edits: reverts count, and
+    the local edits made before the move are not mistaken for new ones.
+    """
+    kit = Path(str(root) + '.transfer-' + str(row.get('id') or '')) / 'program.tar.gz'
+    expected = str(row.get('program_sha') or '')
+    target = stage / 'departure'
+    marker = target / '.kit-signature'
+    if target.is_dir() and marker.is_file() and marker.read_text().strip() == expected:
+        return target
+    if not expected or not kit.is_file() or kit.is_symlink() or kit_signature(kit) != expected:
+        return None
+    temporary = stage / ('departure.part-' + os.urandom(4).hex())
+    temporary.mkdir(mode=0o700)
+    with tarfile.open(kit) as archive:
+        for info in archive:
+            parts = info.name.split('/')
+            if not info.isfile() or parts[0] not in ('tree', 'app') or not carry_payload.checks.safe_name(info.name):
+                continue
+            path = temporary / info.name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(info) as source, open(path, 'wb') as out:
+                shutil.copyfileobj(source, out)
+    write_private(temporary / '.kit-signature', expected.encode())
+    if target.exists():
+        shutil.rmtree(target)
+    os.replace(temporary, target)
+    return target
+
+
 def _project_name(index):
     return 'project-' + str(index)
 
 
-def _plan_roots(root, plan, found):
+def _plan_roots(root, plan, found, row=None, stage=None):
     config = carry_scope.read_config(root / 'helene.json')
     standard = carry_scope.configured_roots(root / 'helene.json', config)
     roots = {'data': standard['data'], 'code': standard['code']}
@@ -95,6 +141,9 @@ def _plan_roots(root, plan, found):
     pristine = root / 'pristine'
     if pristine.is_dir() and not pristine.is_symlink():
         roots['pristine'] = pristine
+    left = departure(root, row, stage) if row is not None and stage is not None else None
+    if left is not None:
+        roots['departure'] = left
     known = {os.path.normcase(str(Path(item['path']).resolve())): item for item in found['projects']}
     chosen = {}
     decisions = plan.get('projects') or []
@@ -183,7 +232,7 @@ def snapshot(row, plan):
                     if carry_payload.checks.file_sha256(stream) == receipt['sha256']:
                         return {**receipt, 'ok': True, 'reused': True}
         found = carry_scope.discover(root / 'helene.json')
-        config, roots, current = _plan_roots(root, plan, found)
+        config, roots, current = _plan_roots(root, plan, found, row, stage)
         exclusions = _exclusions(roots)
         git = carry_git.plan(roots)
         metadata = {'format': FORMAT, 'transfer_id': row['id'], 'return_id': plan['return_id'],

@@ -281,6 +281,11 @@ def _base(cc, home, meta, row, program, work):
     """
     version = str(meta.get('version') or '')
     roots = home / 'roots'
+    if (roots / 'departure' / 'tree').is_dir():
+        # The verified transfer kit: exactly the code that left this computer.
+        base = work / 'base'
+        shutil.copytree(roots / 'departure', base, ignore=shutil.ignore_patterns('__pycache__', '.kit-signature'))
+        return base, None, 'departure'
     base = None
     if (roots / 'base' / 'tree').is_dir():
         base = work / 'base'
@@ -469,7 +474,7 @@ def scope(raw, config_path, program):
 
 
 def _row_for_server(row):
-    return {key: row[key] for key in ('id', 'archive_sha', 'phase', 'deployment') if key in row}
+    return {key: row[key] for key in ('id', 'archive_sha', 'phase', 'deployment', 'program_sha') if key in row}
 
 
 def run(raw, config_path, program, *, projects=(), progress=None):
