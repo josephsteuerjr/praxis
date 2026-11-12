@@ -254,5 +254,11 @@ export function humanError(e: unknown): HumanError {
   if (/^[A-Za-z_][A-Za-z_0-9]*(Error|Exception):/.test(raw)) {
     return { text: "Агент не смог это прочитать.", detail: raw };
   }
+  // 12.11: our own replies are already written for a person («Сначала включи Stop…»,
+  // «На компьютере: …»). Flattening them to «Не получилось.» hid the actual reason.
+  // OS errors and tracebacks still go to the fold.
+  if (/[А-Яа-яЁё]/.test(raw) && !/^\[(Errno|WinError) -?\d+\]|Traceback|File "|^\{/.test(raw)) {
+    return { text: raw, detail: "" };
+  }
   return { text: "Не получилось.", detail: raw };
 }

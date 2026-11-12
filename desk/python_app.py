@@ -148,6 +148,11 @@ class Application:
                 # also closes hidden observers without browser timer polling.
                 threading.Thread(target=self.window.destroy,name='helene-observer-exit',daemon=True).start()
             return
+        if name == 'program-restart':
+            # The owner asked from the MiniApp; this window is the addressed one.
+            if data.get('observer') and data.get('observer') == getattr(self.host, 'observer', None):
+                self.invoke('restart_self', {'full': True})
+            return
         if name == "relaunch":
             self.relaunch = True
             name = "exit"
@@ -236,8 +241,9 @@ class Application:
                 self.exiting = True
                 if args.get('relaunch') is False:
                     self.relaunch = False
-                self.exit_session = self.restart_session or (not args.get('observer_only', False) and not self.relaunch)
-                self.session_exit_intent = not self.restart_session and args.get('owner_exit') is not False
+                restart = getattr(self, 'restart_session', False)
+                self.exit_session = restart or (not args.get('observer_only', False) and not self.relaunch)
+                self.session_exit_intent = not restart and args.get('owner_exit') is not False
                 if self.window is None:
                     self.stopping.set()
                 else:

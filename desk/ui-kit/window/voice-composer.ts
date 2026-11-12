@@ -38,8 +38,11 @@ export function mountVoiceComposer(options: { mic: HTMLButtonElement; composer: 
   const bar=document.createElement('section');bar.className='voice-draft';bar.hidden=true;bar.setAttribute('aria-label','Голосовое сообщение');
   bar.innerHTML='<button type="button" class="voice-round" data-preview aria-label="Прослушать">▶</button><div class="voice-draft-main"><div class="voice-draft-heading"><span data-state role="status"></span><span data-time>0:00</span></div><canvas width="384" height="36" aria-label="Звуковая волна"></canvas><span class="voice-recipient" data-target></span></div><button type="button" data-resume class="voice-round" aria-label="Продолжить запись">●</button><button type="button" data-send class="voice-round voice-send" aria-label="Отправить голосовое">↑</button><button type="button" data-cancel class="voice-round" aria-label="Удалить запись">×</button>';
   options.composer.before(bar);
-  const hint=document.createElement('p');hint.className='voice-hint';hint.innerHTML='Для записи голосом нажмите на значок микрофона или используйте <button type="button">горячие клавиши</button>.';
-  options.composer.after(hint);hint.querySelector('button')!.onclick=voiceHelp;
+  const hint=document.createElement('p');hint.className='voice-hint';
+  // A phone in the MiniApp has no keyboard shortcuts; the microphone is the phone's own.
+  if(electron?.presentation==='miniapp')hint.textContent='Для записи голосом нажмите на значок микрофона.';
+  else{hint.innerHTML='Для записи голосом нажмите на значок микрофона или используйте <button type="button">горячие клавиши</button>.';hint.querySelector('button')!.onclick=voiceHelp;}
+  options.composer.after(hint);
   const canvas=bar.querySelector<HTMLCanvasElement>('canvas')!, preview=new Audio();
   let previewUrl='', previewBlob: Blob | null=null, native=false, held=false, heldCode='', disposed=false;
   let analyser: AnalyserNode | null=null, context: AudioContext | null=null, stream: MediaStream | null=null, previousState='idle';

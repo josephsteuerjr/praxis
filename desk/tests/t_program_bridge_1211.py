@@ -44,6 +44,98 @@ class Scope(unittest.TestCase):
             self.assertFalse(conflict['ok'])
 
 
+class Presentation(unittest.TestCase):
+    """The phone shows the whole programme but never acts on the computer's desktop."""
+
+    def host(self, root, config):
+        import contextlib, threading
+        invoked = []
+
+        class Owner:
+            selected = 'base'
+            def __init__(self): self.root = root
+            def _default(self): return 'base'
+            @contextlib.contextmanager
+            def selection(self, identity): yield
+            def current(self): return SimpleNamespace(config=config, enabled=True, conflict=False)
+            def invoke(self, command, arguments):
+                invoked.append((command, arguments))
+                if command == 'config_load':
+                    return {'config': json.loads(config.read_text(encoding='utf-8')), 'path': str(config)}
+                return {'ok': True}
+        host = object.__new__(session_host.Host)
+        host.root = root
+        host.owner = Owner()
+        host.stop = threading.Event()
+        host.migration_request = None
+        host.lock = threading.RLock()
+        host.observers = {}
+        host.sequence = 0
+        host.events = []
+        return host, invoked
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.config = self.root / 'helene.json'
+        self.config.write_text(json.dumps({'mode': 'remote', 'base': 'https://agent.example', 'key': 'window-key',
+                                           'model': {'key': 'owner-model-key'}}), encoding='utf-8')
+        patcher = patch.object(session_host.agents, 'find', return_value=SimpleNamespace(id='base'))
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def call(self, host, command, arguments):
+        return host.dispatch('invoke', {'agent': 'base', 'command': command, 'arguments': arguments, 'presentation': 'miniapp'})
+
+    def test_computer_desktop_actions_are_refused_with_a_reason_and_never_reach_the_controller(self):
+        host, invoked = self.host(self.root, self.config)
+        for command, arguments in (('reveal_path', {'path': 'C:/x'}), ('install_service', {}),
+                                   ('open_privacy_pane', {'kind': 'screen'}), ('open_path', {'path': 'C:/Users/me/x.log'}),
+                                   ('tray_exit', {})):
+            with self.assertRaisesRegex(ValueError, '^На компьютере: '):
+                self.call(host, command, arguments)
+        self.assertEqual(invoked, [])
+        self.call(host, 'open_path', {'path': 'https://example.org/'})
+        self.assertEqual(invoked[-1][0], 'open_path')
+        # The native window keeps every desktop action.
+        host.dispatch('invoke', {'agent': 'base', 'command': 'reveal_path', 'arguments': {'path': 'C:/x'}})
+        self.assertEqual(invoked[-1][0], 'reveal_path')
+
+    def test_channel_key_stays_on_the_computer_and_survives_a_phone_save(self):
+        host, invoked = self.host(self.root, self.config)
+        loaded = self.call(host, 'config_load', {})
+        self.assertNotIn('window-key', json.dumps(loaded))
+        self.assertEqual(loaded['config']['model']['key'], 'owner-model-key')  # the owner's own setting
+        self.call(host, 'config_save', {'config': json.dumps(loaded['config']), 'mtimeNs': '1'})
+        self.assertEqual(json.loads(invoked[-1][1]['config'])['key'], 'window-key')
+        typed = {**loaded['config'], 'key': 'new-window-key'}
+        self.call(host, 'config_save', {'config': json.dumps(typed), 'mtimeNs': '1'})
+        self.assertEqual(json.loads(invoked[-1][1]['config'])['key'], 'new-window-key')
+        native = host.dispatch('invoke', {'agent': 'base', 'command': 'config_load', 'arguments': {}})
+        self.assertEqual(native['config']['key'], 'window-key')
+
+    def test_full_restart_is_one_addressed_window_or_an_honest_refusal(self):
+        host, invoked = self.host(self.root, self.config)
+        with self.assertRaisesRegex(ValueError, 'Окно программы на компьютере закрыто'):
+            self.call(host, 'restart_self', {'full': True})
+        host.observers = {'b' * 32: {}, 'a' * 32: {}}
+        self.assertEqual(self.call(host, 'restart_self', {'full': True}), {'ok': True, 'restarting': True})
+        self.assertEqual(host.events[-1]['name'], 'program-restart')
+        self.assertEqual(host.events[-1]['data'], {'observer': 'a' * 32})
+        self.assertEqual(host.events[-1]['agent'], '')
+        self.assertEqual(invoked, [])
+
+    def test_the_addressed_window_restarts_the_whole_programme(self):
+        import python_app
+        app = object.__new__(python_app.Application)
+        calls = []
+        app.host = SimpleNamespace(observer='a' * 32)
+        app.invoke = lambda command, args: calls.append((command, args))
+        python_app.Application.event(app, 'program-restart', {'observer': 'b' * 32})
+        self.assertEqual(calls, [])
+        python_app.Application.event(app, 'program-restart', {'observer': 'a' * 32})
+        self.assertEqual(calls, [('restart_self', {'full': True})])
+
+
 class Gateway(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.seen=[]

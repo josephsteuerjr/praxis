@@ -201,11 +201,16 @@ def run(evidence):
                             page.screenshot(path=str(evidence / f'interrupted-{width}.png'))
                             screen.get_by_role('button', name='Продолжить возврат', exact=True).click()
                         screen.get_by_text('правок агента в коде: 3', exact=False).wait_for()
-                        # MiniApp presentation: the phone cannot restart the computer's programme.
-                        screen.get_by_text('Перезапусти программу на компьютере', exact=False).wait_for()
-                        assert not screen.get_by_role('button', name='Перезапустить программу', exact=True).is_visible()
+                        # MiniApp presentation: the computer's programme window performs the restart.
+                        restart = screen.get_by_role('button', name='Перезапустить программу на компьютере', exact=True)
+                        restart.wait_for()
                         page.screenshot(path=str(evidence / f'done-{width}.png'))
-                        assert restarts == []
+                        restart.click()
+                        for _ in range(50):
+                            if restarts:
+                                break
+                            page.wait_for_timeout(100)
+                        assert restarts == [{'full': True}], restarts
                         assert not screen.get_by_text('Не получилось.', exact=True).count()
                         assert not page.evaluate('document.documentElement.scrollWidth>innerWidth')
                         assert not errors, errors

@@ -339,6 +339,26 @@ class Host:
             self.events.append({'seq': self.sequence, 'name': name, 'data': data,
                                 'agent': self.owner.selected if hasattr(self, 'owner') else ''})
 
+    def _program_restart(self, arguments):
+        """MiniApp asks the computer's programme window to restart the whole programme.
+
+        A window-only reconnect is the phone's own reload and never reaches here.
+        Exactly one attached window performs it; with none open nobody can.
+        """
+        if arguments.get('full') is not True:
+            return {'ok': True, 'restarting': False}
+        from .program_presentation import restart_target
+        with self.lock:
+            target = restart_target(self.observers)
+            if target is None:
+                raise ValueError('Окно программы на компьютере закрыто: перезапусти программу там, '
+                                 'с телефона её некому перезапустить.')
+            self.sequence += 1
+            # Every agent's observer reads it; only the addressed window acts.
+            self.events.append({'seq': self.sequence, 'name': 'program-restart',
+                                'data': {'observer': target}, 'agent': ''})
+        return {'ok': True, 'restarting': True}
+
     def _latch_exit(self):
         self.stop.set()
         # start() replaces its stop Event under this lock. Latch the current
@@ -484,7 +504,14 @@ class Host:
                     raise ValueError('Expected a desktop command and object arguments')
                 browser_program = args.get('presentation') == 'miniapp'
                 if browser_program:
-                    from . import program_commands
+                    from . import program_commands, program_presentation as phone
+                    refused = phone.refusal(command, arguments)
+                    if refused:
+                        raise ValueError(refused)
+                    if command == 'restart_self':
+                        return self._program_restart(arguments)
+                    if command == 'config_save':
+                        arguments = {**arguments, 'config': phone.restore(arguments.get('config'), self.owner.current().config)}
                     result = program_commands.invoke(self.root, self.root, command, arguments)
                     if result is not program_commands.UNHANDLED:
                         return result
@@ -511,7 +538,12 @@ class Host:
                     admission = (admit_restore if command=='restore_upstream' else
                                  admit_install if command=='update_install' else admit_download)
                     return admission(self.owner, **arguments)
-                try:return self.owner.invoke(command, arguments)
+                try:
+                    result = self.owner.invoke(command, arguments)
+                    if browser_program and command == 'config_load':
+                        from . import program_presentation as phone
+                        result = phone.redact(result)
+                    return result
                 finally:
                     if command=='owner_control' and not self.stop.is_set():
                         self.publish('owner-stopped' if owner_stop.stopped() else 'running')
