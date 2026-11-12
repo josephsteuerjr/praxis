@@ -21,6 +21,7 @@ export function stand(config, draft, options = {}) {
   const cfg={needs_local_setup:options.first}; const S={agent:'Agent'};
   const built={collect:()=>'',note:()=>'',didSave:options.didSave}, saveOut={className:'',textContent:''}, restartBtn={hidden:true,dataset:{}}, conflictBox={hidden:true};
   const keepBlock=(a,b)=>({...a,...b}), collectConnection=()=>'', validateOwnerContext=()=>{};
+  const phoneSettings={dispatchEvent:()=>true}; // the phone card hears confirmed saves (item 6)
   const humanError=e=>({text:e.message});
   const shell=async(name,args)=>{
     if(name==='config_load') return {config:structuredClone(disk),mtime_ns:seenMtime};

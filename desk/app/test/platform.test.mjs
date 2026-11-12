@@ -105,8 +105,11 @@ assert.match(chrome, /e\.ctrlKey \|\| e\.metaKey/, "сочетания пере�
 // or a service reinstall being described as an engine restart.
 assert.match(chrome, /"\/api\/supervisor\/restart"/);
 assert.match(chrome, /shell\("engine_restart"\)/);
-assert.equal((chrome.match(/shell\("restart_self"\)/g) || []).length, 1, "перезапуск окна разрешён только для первого запуска");
-assert.match(chrome, /if \(cfg\.needs_local_setup\) \{\s*await shell\("restart_self"\)[\s\S]*?return;\s*\}\s*await controlEngine\("restart"\)/, "обычный перезапуск должен идти через надзор движка");
+// 12.11 (item 9): the restart has the scope the settings need. The ordinary path is the
+// engine supervisor; the window reconnects for a new channel/first start; the whole
+// programme restarts only when data/code/runtime bindings changed (full:true).
+assert.equal((chrome.match(/shell\("restart_self"/g) || []).length, 1, "перезапуск окна вызывается из одного места");
+assert.match(chrome, /if \(scope==='application' \|\| scope==='window' \|\| cfg\.needs_local_setup\) \{\s*await shell\("restart_self", \{full:scope==='application'\}\)[\s\S]*?return;\s*\}\s*await controlEngine\("restart"\)/, "обычный перезапуск должен идти через надзор движка");
 
 // Каркас настроек: система идёт изданию, автозапуск без слова «Windows», брандмауэр и служба за затвором.
 // 06.10: рядом с системой изданию уходит и коробка свежести (своя запись верхней

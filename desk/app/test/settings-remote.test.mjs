@@ -122,7 +122,8 @@ assert.match(frame, /card\("Имена", names, built\.namesHint\)/,
 // СИСТЕМЫ, а не изданий, и каркас берёт её у оболочки, не у издания. Шестым
 // (06.10) едет сохранённый внешний адрес телефона — тоже реальность файла,
 // а не решение издания.
-assert.match(frame, /phoneCard\(draft, !!c\.phone\?\.enabled, String\(c\.phone\?\.mode \|\| ""\), built\.phoneBase, built\.qrSvg\)/,
+// 12.11 (item 6): the settings frame also tells the card how to select a server bridge.
+assert.match(frame, /phoneCard\(draft, !!c\.phone\?\.enabled, String\(c\.phone\?\.mode \|\| ""\), built\.phoneBase, built\.qrSvg(?:,\{onBridge:chooseBridge\})?\)/,
   "адрес для телефона снова решает каркас, а не издание");
 assert.match(frame, /const modeNote = built\.note\(\);/,
   "хвост расписки снова берётся из карточки режима, которой у издания к серверу нет");

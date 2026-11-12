@@ -154,6 +154,19 @@ class Login(unittest.TestCase):
   self.assertEqual(windows.startup_approval('StartupFolder',link.name),approval)
   self.assertFalse(windows.invoke(self.owner,'autostart_get',{}))
 
+ def test_refused_explicit_change_keeps_the_captured_update_preference(self):
+  from localharness import login_migration as migration
+  old=self.base/'Old';old.mkdir();(old/'helene.exe').write_bytes(b'not executed')
+  windows.set_run(windows.run_command(old));migration.capture(self.root,[old])
+  foreign='"C:\\Other\\app.exe"';windows.set_run(foreign)
+  with self.assertRaisesRegex(RuntimeError,'another launch binding'):
+   windows.invoke(self.owner,'autostart_set',{'on':False})
+  self.assertEqual(migration._record(self.root)['state'],'pending')
+  windows.set_run(None)
+  self.assertEqual(migration.commit(self.root)['outcomes']['run'],'retargeted')
+  windows.invoke(self.owner,'autostart_set',{'on':False})
+  self.assertEqual(migration._record(self.root)['state'],'applied')
+
  def test_update_does_not_enable_absent_or_overwrite_replaced_login(self):
   from localharness import login_migration as migration
   old=self.base/'Old';migration.capture(self.root,[old]);migration.commit(self.root)

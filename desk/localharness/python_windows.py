@@ -161,8 +161,6 @@ def invoke(owner,command,args):
                 startup_allowed('StartupFolder',startup.name))
     if command=='autostart_set':
         if type(args.get('on'))is not bool:raise ValueError('Autostart on must be a boolean')
-        from .login_migration import owner_changed
-        owner_changed(owner.root)
         prior=shortcut_binding(startup)
         if prior and (not same_path(prior['target'],executable) or
                       prior['cwd'] and not same_path(prior['cwd'],owner.root) or
@@ -188,6 +186,10 @@ def invoke(owner,command,args):
             startup.unlink(missing_ok=True)
             if startup.exists():raise RuntimeError('Autostart shortcut removal was not confirmed')
             if current is not None:set_run(None)
+        # Only an APPLIED explicit choice supersedes the preference captured before
+        # an update; a refused change (foreign binding) leaves it to be restored.
+        from .login_migration import owner_changed
+        owner_changed(owner.root)
         return None
     if command in ('firewall_allow','firewall_clear'):
         port=args['port']
