@@ -130,7 +130,12 @@ class Export(unittest.TestCase):
         passport = carry.export(self.src / "helene.json")
         with zipfile.ZipFile(passport["archive"]) as zf:
             names = zf.namelist()
-        self.assertFalse(any("mnt/" in n for n in names), names)
+        # 12.11: the (now empty) mnt folder itself is kept; the junction is never followed
+        # and the passport names the owner's folder as left on this computer.
+        self.assertFalse(any(n.startswith("data/workspace/mnt/docs") for n in names), names)
+        self.assertNotIn("data/workspace/mnt/docs/секрет.txt", names)
+        left = {row["path"]: row["reason"] for row in passport["not_carried"]}
+        self.assertEqual(left["workspace/mnt/docs"], "проект остался на этом компьютере")
 
 
 class Import(unittest.TestCase):

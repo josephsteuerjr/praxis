@@ -72,7 +72,7 @@ HOST_KEYS = ("mode", "python", "app", "runner", "tree", "code", "port", "agent_m
 
 #: Что в `data/` не едет: относительные пути (с завершающим `/` — папка целиком)
 #: и маски имён.
-SKIP_PATHS = ("body/", "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
+SKIP_PATHS = ("body/", "workspace/.fence/", "workspace/.tmp/",
               # 1.2.5, сервер: ключ окна надзора и папка канала (устройства, журнал записок) —
               # принадлежат этому хосту и каналу, не агенту.
               ".serverboot/", ".channel/",
@@ -87,7 +87,14 @@ SKIP_PATHS = ("body/", "workspace/mnt/", "workspace/.fence/", "workspace/.tmp/",
               # архиве превратили бы перенос памяти в перенос гигабайтов.
               "models/", ".helene-component-pins.json")
 SKIP_NAMES = ("__pycache__", ".pytest_cache")
-SKIP_SUFFIXES = (".log", ".log.1", ".pyc")
+#: 12.11: journals are the agent's own work and travel too («память, код, проекты — всё»).
+SKIP_SUFFIXES = (".pyc",)
+HOST_LOGS = (".log", ".log.1")
+#: Links and junctions inside data/, recreated on import; what stays behind and why.
+LINKS = "helene-links.json"
+#: Chosen external projects travel inside the agent's own folder.
+PROJECTS_DIR = "workspace/projects"
+MOUNTS_DIR = "workspace/mnt"
 
 #: Где в архиве лежат секреты — паспорт называет их поимённо.
 SECRET_SPOTS = (
@@ -147,27 +154,118 @@ def _skip(rel: str, name: str) -> bool:
             return True
     if name in SKIP_NAMES:
         return True
+    # Process journals in the data root (runner.log, deskapp.log …) diagnose this
+    # computer; journals inside the agent's work and projects travel with it.
+    if "/" not in posix and name.endswith(HOST_LOGS):
+        return True
     return any(name.endswith(s) for s in SKIP_SUFFIXES)
 
 
-def _walk(data: Path):
-    """Файлы data/ для архива: (абсолютный путь, путь внутри архива)."""
-    for root, dirs, files in os.walk(data):
-        root_p = Path(root)
-        rel_root = root_p.relative_to(data).as_posix()
-        rel_root = "" if rel_root == "." else rel_root
-        keep = []
-        for d in dirs:
-            rel = f"{rel_root}/{d}" if rel_root else d
-            if _skip(rel + "/", d) or _is_reparse(root_p / d):
+def _project_slug(path: Path, taken: set) -> str:
+    base = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in path.name).strip("-.") or "project"
+    name, n = base, 2
+    while name.casefold() in taken:
+        name, n = f"{base}-{n}", n + 1
+    taken.add(name.casefold())
+    return name
+
+
+def _scan(data: Path, projects=()) -> dict:
+    """Everything of data/ for the archive, plus chosen external projects. Nothing silently.
+
+    -> files [(source, arcname)], empty directories (arcnames), links recreated on
+    import, projects {original: folder}, and `left` — what stays here, with reasons.
+    Host-owned paths (SKIP_PATHS) remain the named exclusions of the passport.
+    """
+    data = Path(data)
+    home = data.resolve()
+    chosen = {}
+    taken = {p.name.casefold() for p in (data / PROJECTS_DIR).iterdir()} if (data / PROJECTS_DIR).is_dir() else set()
+    for raw in projects:
+        path = Path(raw).resolve(strict=True)
+        if not path.is_dir() or path.is_relative_to(home) or home.is_relative_to(path):
+            raise ValueError(f"Проект для переноса должен быть отдельной папкой вне данных агента: {raw}")
+        chosen[path] = _project_slug(path, taken)
+    result = {"files": [], "empty": [], "links": [], "left": [], "projects": {}}
+
+    def walk(top: Path, prefix: str, host_rules: bool):
+        for root, dirs, files in os.walk(top):
+            root_p = Path(root)
+            rel_root = root_p.relative_to(top).as_posix()
+            rel_root = "" if rel_root == "." else rel_root
+            at = lambda name: f"{rel_root}/{name}" if rel_root else name  # noqa: E731
+            keep, kept = [], 0
+            for d in dirs:
+                rel = at(d)
+                if host_rules and _skip(rel + "/", d):
+                    continue
+                if _is_reparse(root_p / d):
+                    result["links"].append((prefix + rel, root_p / d))
+                    continue
+                if host_rules and rel_root == MOUNTS_DIR:
+                    # A mounted folder that is not a link (a bind mount): the owner's, not the agent's.
+                    result["left"].append({"path": rel, "target": "", "reason": "подключённая папка остаётся на этом компьютере"})
+                    continue
+                keep.append(d)
+            dirs[:] = keep
+            for f in files:
+                rel = at(f)
+                if host_rules and _skip(rel, f):
+                    continue
+                if _is_reparse(root_p / f):
+                    result["links"].append((prefix + rel, root_p / f))
+                    continue
+                result["files"].append((root_p / f, "data/" + prefix + rel))
+                kept += 1
+            if rel_root and not keep and not kept:
+                result["empty"].append("data/" + prefix + rel_root + "/")
+    walk(data, "", True)
+    for path, slug in chosen.items():
+        prefix = f"{PROJECTS_DIR}/{slug}/"
+        result["projects"][str(path)] = prefix.rstrip("/")
+        walk(path, prefix, False)
+    links, left = [], list(result["left"])
+    for rel, path in result["links"]:
+        try:
+            target = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            left.append({"path": rel, "target": "", "reason": "ссылка никуда не ведёт"})
+            continue
+        place = None
+        if target.is_relative_to(home):
+            inner = target.relative_to(home).as_posix()
+            if inner == "." or _skip(inner + ("/" if target.is_dir() else ""), target.name):
+                left.append({"path": rel, "target": str(target), "reason": "ведёт в служебную папку этого компьютера"})
                 continue
-            keep.append(d)
-        dirs[:] = keep
-        for f in files:
-            rel = f"{rel_root}/{f}" if rel_root else f
-            if _skip(rel, f) or _is_reparse(root_p / f):
-                continue
-            yield root_p / f, f"data/{rel}"
+            place = inner
+        else:
+            for project, slug in chosen.items():
+                if target == project or target.is_relative_to(project):
+                    tail = target.relative_to(project).as_posix()
+                    place = f"{PROJECTS_DIR}/{slug}" + ("" if tail == "." else "/" + tail)
+                    break
+        if place is None:
+            left.append({"path": rel, "target": str(target),
+                         "reason": "проект остался на этом компьютере" if target.is_dir() else "файл вне папки агента"})
+            continue
+        if rel == place or rel.startswith(place + "/"):
+            left.append({"path": rel, "target": str(target), "reason": "ссылка указывает сама на себя"})
+            continue
+        links.append({"path": rel, "target": place, "directory": target.is_dir()})
+    result["links"], result["left"] = links, left
+    return result
+
+
+def _make_link(path: Path, target: Path, directory: bool) -> None:
+    """Directory: junction on Windows, relative symlink elsewhere. Never follow an existing path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if directory:
+        target.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt" and directory:
+        import _winapi
+        _winapi.CreateJunction(str(target), str(path))
+    else:
+        path.symlink_to(os.path.relpath(target, path.parent), target_is_directory=directory)
 
 
 def _git_head(data: Path) -> str:
@@ -349,8 +447,25 @@ def _import_code(zf: zipfile.ZipFile, root: Path, data: Path) -> dict:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: bool = False) -> dict:
-    """Собрать архив переноса. -> паспорт (он же лежит в архиве)."""
+def _code_git(config_path: Path, cfg: dict):
+    """The agent's own code repository (config.code/.git), when it is a plain directory."""
+    from localharness.carry_scope import configured_roots, inventory
+    git = configured_roots(config_path, cfg)["code"] / ".git"
+    if not git.is_dir() or _is_reparse(git):
+        return None, ("указатель worktree кода не переносится" if git.is_file() else "")
+    found = inventory(git)
+    if found["errors"] or found["special"] or found["links"]:
+        return None, "история кода содержит недоступные файлы или ссылки — не перенесена"
+    return git, ""
+
+
+def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: bool = False,
+           projects=()) -> dict:
+    """Собрать архив переноса. -> паспорт (он же лежит в архиве).
+
+    `projects` — внешние папки, которые владелец решил взять с агентом: они едут внутрь
+    его данных (`workspace/projects/<имя>`), ссылки на них переписываются туда же.
+    """
     config_path = Path(config_path).resolve()
     cfg = _read_config(config_path)
     data = tree_of(config_path, cfg)
@@ -376,11 +491,15 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
         "agent_mode": str(cfg.get("agent_mode") or ""),
         "data_git_head": _git_head(data),
         "secrets": secrets,
-        "skipped": list(SKIP_PATHS),
+        "skipped": list(SKIP_PATHS) + ["*.log в корне данных (журналы процессов этого компьютера)"],
         "files": 0,
         "bytes": 0,
         "inventory": "helene-inventory.json",
     }
+    scan = _scan(data, projects)
+    passport.update({"links": len(scan["links"]), "empty_dirs": len(scan["empty"]),
+                     "not_carried": scan["left"], "projects": scan["projects"]})
+    code_git, code_git_note = _code_git(config_path, cfg)
     exported_cfg = {k: v for k, v in cfg.items()}
     files = 0
     total = 0
@@ -389,10 +508,35 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
         from private_files import write_private
         write_private(tmp,b'')  # protection is verified BEFORE the ZIP receives secrets
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-            for src, arc in _walk(data):
+            for src, arc in scan["files"]:
                 zf.write(src, arc)
                 files += 1
                 total += src.stat().st_size
+            for arc in scan["empty"]:
+                zf.writestr(arc, b"")
+            if scan["links"] or scan["left"]:
+                zf.writestr(LINKS, json.dumps({"links": scan["links"], "left": scan["left"]},
+                                              ensure_ascii=False, indent=1) + "\n")
+            if scan["projects"]:
+                arcs = {arc for _, arc in scan["files"]}
+                note = f"data/{PROJECTS_DIR}/ПРОЕКТЫ-ПЕРЕНОСА.md"
+                while note in arcs:
+                    note = note[:-3] + "-1.md"
+                lines = ["# Проекты, взятые с собой при переезде", "",
+                         "Владелец выбрал эти папки; здесь их полные копии. Прежние пути на том "
+                         "компьютере остались нетронутыми.", ""]
+                lines += [f"- `{origin}` → `{place}`" for origin, place in scan["projects"].items()]
+                zf.writestr(note, "\n".join(lines) + "\n")
+            if code_git is not None:
+                count = 0
+                for current, _dirs, names in os.walk(code_git):
+                    for name in names:
+                        path = Path(current) / name
+                        zf.write(path, "code/git/" + path.relative_to(code_git).as_posix())
+                        count += 1
+                passport["code_git"] = count
+            elif code_git_note:
+                passport["code_git_note"] = code_git_note
             # Only the cold, GUI-owned VPS transfer may hand over menu custody.
             # Ordinary Export deliberately excludes all live tunnel state.
             lease=data/'memory/.state/phone-access/telegram-menu.json'
@@ -461,6 +605,47 @@ def _safe_member(name: str) -> bool:
     return bool(parts) and ".." not in parts and not name.startswith("/") and ":" not in parts[0]
 
 
+def _import_links(data: Path, document: dict) -> dict:
+    """Recreate links inside data/ after its files; a failure is named, never hidden."""
+    created, failed = 0, []
+    home = data.resolve()
+    for row in document.get("links") or []:
+        rel, target = str(row.get("path") or ""), str(row.get("target") or "")
+        if not rel or not target or not _safe_member(rel) or not _safe_member(target):
+            failed.append({"path": rel, "reason": "недопустимая ссылка в описи"})
+            continue
+        path, aim = data / rel, data / target
+        try:
+            if not path.parent.resolve().is_relative_to(home) or not aim.parent.resolve().is_relative_to(home):
+                raise ValueError("ссылка выходит за пределы данных")
+            if path.exists() or path.is_symlink():
+                raise ValueError("на месте ссылки уже есть файл")
+            _make_link(path, aim, bool(row.get("directory")))
+            created += 1
+        except (OSError, ValueError) as exc:
+            failed.append({"path": rel, "target": target, "reason": str(exc)})
+    return {"created": created, "failed": failed}
+
+
+def _import_code_git(zf: zipfile.ZipFile, config_path: Path, local: dict, data: Path) -> dict:
+    """The agent's code history: into the destination code folder if it has none."""
+    names = [info for info in zf.infolist() if info.filename.startswith("code/git/") and not info.is_dir()]
+    if not names:
+        return {}
+    from localharness.carry_scope import configured_roots
+    code = configured_roots(config_path, local)["code"]
+    target, note = code / ".git", "история кода восстановлена"
+    if target.exists() or target.is_symlink() or not code.is_dir():
+        target = data / "workspace" / f"code-git-{_stamp()}"
+        note = "у кода здесь уже своя история — прежняя сохранена в workspace/" + target.name
+    for info in names:
+        out = target / info.filename[len("code/git/"):]
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(info) as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+    return {"files": len(names), "place": str(target), "note": note}
+
+
 def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> dict:
     """Развернуть архив в место, на которое указывает `config_path`."""
     config_path = Path(config_path).resolve()
@@ -491,6 +676,7 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
     data.mkdir(parents=True, exist_ok=True)
     carried_cfg: dict = {}
     written = 0
+    links_doc: dict = {}
     with zipfile.ZipFile(archive) as zf:
         for info in zf.infolist():
             name = info.filename
@@ -499,7 +685,14 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
             if name == CONFIG_NAME:
                 carried_cfg = json.loads(zf.read(info).decode("utf-8"))
                 continue
-            if name == PASSPORT or info.is_dir():
+            if name == LINKS:
+                links_doc = json.loads(zf.read(info).decode("utf-8"))
+                continue
+            if name == PASSPORT:
+                continue
+            if info.is_dir():
+                if name.startswith("data/") and name != "data/":
+                    (data / name[len("data/"):]).mkdir(parents=True, exist_ok=True)
                 continue
             if not name.startswith("data/"):
                 continue
@@ -515,7 +708,11 @@ def import_(config_path: Path, archive: Path, *, keep_config: bool = False) -> d
             receipt["code"] = _import_code(zf, config_path.parent, data)
         except Exception as exc:                  # данные уже на месте — не отказ всего переноса
             receipt["code"] = {"note": f"правки кода не легли: {type(exc).__name__}: {exc}"}
+        receipt["code_git"] = _import_code_git(zf, config_path, local, data)
     receipt["files"] = written
+    receipt["links"] = _import_links(data, links_doc)
+    receipt["not_carried"] = list(links_doc.get("left") or passport.get("not_carried") or [])
+    receipt["projects"] = dict(passport.get("projects") or {})
     if not keep_config and carried_cfg:
         merged = merge_config(local, carried_cfg)
         _write_config(config_path, merged)

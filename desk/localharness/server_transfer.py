@@ -95,6 +95,30 @@ def status(config_path):
             'archive':row.get('archive'),'message':('Серверная копия остановлена. Местный Stop сохраняется до отдельной команды владельца.' if row.get('phase')=='server-stopped' else 'Предыдущий перенос сохранён. Укажи тот же сервер и нажми «Продолжить перенос»; память повторно импортирована не будет.') if row else '',
             **({'deployment':row.get('deployment',destination({})),'ssh_port':row['destination'][1],'login':row['destination'][2]} if row else {})}
 
+def transfer_scope(config_path):
+    """Read-only review before the move: what travels, external projects, what stays."""
+    from localharness.carry_scope import discover
+    found=discover(config_path)
+    for item in found['roots']:
+        item['links']=[{'path':link['path'],'target':link['target'],'error':link['error']} for link in item['links']]
+        item['empty_directories']=len(item['empty_directories'])
+    host=[{'path':path.rstrip('/'),'reason':'принадлежит этому компьютеру'} for path in carry.SKIP_PATHS]
+    host.append({'path':'*.log в корне данных','reason':'журналы процессов этого компьютера'})
+    return {'ok':True,'scope':found,'host_exclusions':host}
+
+def chosen_projects(config_path,decisions):
+    """Owner decisions for external projects; only reviewed candidates may travel."""
+    if not decisions:return []
+    from localharness.carry_scope import discover
+    known={os.path.normcase(str(Path(item['path']).resolve())):item['path'] for item in discover(config_path)['projects']}
+    chosen=[]
+    for row in decisions:
+        if not isinstance(row,dict) or not isinstance(row.get('path'),str):raise TransferError('Решение о проекте не прочиталось. Открой перенос заново')
+        key=os.path.normcase(str(Path(row['path']).resolve()))
+        if key not in known:raise TransferError('Проект не из проверенного списка: '+row['path']+'. Открой перенос заново')
+        if row.get('bring') is True:chosen.append(known[key])
+    return chosen
+
 def fingerprint(key):return 'SHA256:'+base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip('=')
 def parameters(raw):
     host=str(raw.get('host') or '').strip().strip('[]')
@@ -342,7 +366,8 @@ def _run(raw,config_path:Path,program:Path):
         with snapshot_custody(config_path,config):
             archive_root=receipt_path(config_path).parent/'server-transfer-archives'/secrets.token_hex(12)
             archive_root.mkdir(parents=True,mode=0o700)
-            archive=Path(carry.export(config_path,archive_root/('agent-'+secrets.token_hex(12)+'.zip'),preserve_phone_lease=True)['archive'])
+            projects=chosen_projects(config_path,raw.get('projects') or [])
+            archive=Path(carry.export(config_path,archive_root/('agent-'+secrets.token_hex(12)+'.zip'),preserve_phone_lease=True,projects=projects)['archive'])
             row={'id':secrets.token_hex(12),'destination':list(parameters(raw)),'fingerprint':checked['fingerprint'],
                  'archive':str(archive),'archive_sha':digest(archive),'version':expected,'phase':'archive','deployment':target}
             save_transfer(config_path,row)

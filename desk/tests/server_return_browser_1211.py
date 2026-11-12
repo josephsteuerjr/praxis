@@ -30,6 +30,68 @@ DONE = {'ok': True, 'phase': 'done', 'restart': 'application', 'previous_data': 
         'code': {'summary': 'правок агента в коде: 3; перенесено 2, слито 1, не легло 0', 'folder': 'workspace/return-2.7.0'}}
 
 
+LOCAL = {**SCOPE, 'scope': {**SCOPE['scope'], 'projects': [{'path': 'C:/Users/owner/site', 'via': ['sandbox.mounts']}]}}
+
+
+def forward(browser, origin, evidence, results):
+    """The move to a server shows the same review; owner folders stay unless chosen."""
+    config = copy.deepcopy(ProgramFixture.config)
+    context = browser.new_context(viewport={'width': 390, 'height': 960}, reduced_motion='reduce')
+    page = context.new_page()
+    page.set_default_timeout(10000)
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+
+    def route(request):
+        url = request.request.url
+        if not url.startswith(origin):
+            return request.abort()
+        if urlsplit(url).path != '/api/program/invoke':
+            return request.continue_()
+        body = request.request.post_data_json
+        command, args = body['command'], body.get('arguments', {})
+        if command == 'config_load':
+            return request.fulfill(json={'config': config, 'mtime_ns': '1', 'tree': 'C:/Fixture/data',
+                                         'path': 'C:/Fixture/helene.json', 'exe_dir': 'C:/Fixture'})
+        if command == 'server_connection':
+            return request.fulfill(json=[])
+        if command == 'server_transfer':
+            action = args['action']
+            if action == 'transfer-scope':
+                return request.fulfill(json=LOCAL)
+            if action == 'status':
+                return request.fulfill(json={'ok': True, 'pending': False, 'message': '', 'return': {'returned': False, 'phase': None}})
+            raise AssertionError(action)
+        return request.continue_()
+    page.route('**/*', route)
+    try:
+        page.goto(origin + '/tg/', wait_until='networkidle')
+        page.wait_for_selector('#app:not([hidden])')
+        page.locator('#toggle-rail').click()
+        page.locator('[data-view="settings"]').click()
+        page.get_by_role('heading', name='Имена', exact=True).first.wait_for()
+        tab = page.get_by_role('tab', name='Программа', exact=True)
+        if tab.count():
+            tab.click()
+        placement = page.get_by_role('heading', name='Размещение агента', exact=True).locator('..')
+        placement.get_by_role('button', name='Открыть управление сервером', exact=True).click()
+        heading = placement.get_by_role('heading', name='Поедет на сервер', exact=True)
+        heading.wait_for()
+        switch = placement.get_by_role('switch', name='C:/Users/owner/site', exact=True)
+        assert switch.get_attribute('aria-checked') == 'false'
+        assert not placement.get_by_role('button', name='Вернуть агента с сервера', exact=True).is_visible()
+        heading.scroll_into_view_if_needed()
+        page.screenshot(path=str(evidence / 'forward-review-390.png'))
+        assert not page.evaluate('document.documentElement.scrollWidth>innerWidth')
+        assert not errors, errors
+        results.append({'width': 390, 'forward_review': True, 'owner_folders_default_left': True, 'errors': errors})
+    except BaseException:
+        page.screenshot(path=str(evidence / 'failure-forward-390.png'))
+        raise
+    finally:
+        context.close()
+
+
 def run(evidence):
     from playwright.sync_api import sync_playwright
     evidence = Path(evidence)
@@ -42,6 +104,7 @@ def run(evidence):
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel='msedge', headless=True)
             try:
+                forward(browser, origin, evidence, results)
                 for width, unfinished in ((390, False), (820, True)):
                     config = copy.deepcopy(ProgramFixture.config)
                     config.update(mode='remote', base='https://agent.example.org', key='window-key')
@@ -100,6 +163,7 @@ def run(evidence):
                             page.locator('#toggle-rail').click()
                         page.locator('[data-view="settings"]').click()
                         # A window watching a server agent lists every card without the Programme tab.
+                        page.get_by_role('heading', name='Имена', exact=True).first.wait_for()
                         tab = page.get_by_role('tab', name='Программа', exact=True)
                         if tab.count():
                             tab.click()

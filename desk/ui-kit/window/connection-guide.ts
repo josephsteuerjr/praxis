@@ -247,6 +247,8 @@ function drawNewServer(host:HTMLElement) {
   const data:Record<string,unknown>={login:"root",port:22,install_docker:false,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
   let ready=false,busy=false;
   const out=el("p","receipt");const trust=el("div");trust.hidden=true;
+  // Owner's mounted folders stay here unless chosen: a copy on the server is a deliberate decision.
+  const review=el("div","return-review");let decisions:Array<{path:string;bring:boolean}>=[];
   const changed=()=>{ready=false;trust.hidden=true;delete data.fingerprint;delete data.confirmed_host;start.disabled=true;};
   const {grid,advanced}=sshForm(data,changed,out);const inner=advanced.querySelector<HTMLElement>('.fold-body')!;
   const deployment=data.deployment as Record<string,unknown>;
@@ -266,7 +268,7 @@ function drawNewServer(host:HTMLElement) {
       if(blockers.length)throw new Error(blockers.map(row=>row.message).join(" "));
       await stopForTransfer(out);
       receipt(out,"Собираю архив и переношу агента. Подготовка сервера и голоса может занять несколько минут; дождись результата.");
-      const result=await shell<{ok:boolean;message?:string;base?:string;key?:string;server_locator?:string}>("server_transfer",{action:"run",request:JSON.stringify({...data,expected_config:source.path})});
+      const result=await shell<{ok:boolean;message?:string;base?:string;key?:string;server_locator?:string}>("server_transfer",{action:"run",request:JSON.stringify({...data,projects:decisions,expected_config:source.path})});
       if(!result.ok||!result.base||!result.key)throw new Error(result.message||"Перенос ещё не подтверждён. Местные данные сохранены.");
       receipt(out,"Перенос и канал проверены. Stop сохранён; открываю серверную установку…");
       host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
@@ -303,7 +305,14 @@ function drawNewServer(host:HTMLElement) {
   }
   const preparation=el("div","server-preparation");preparation.append(docker,check);
   const actions=el("div","server-actions");actions.append(start,recover);
-  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем канал управления будет доступен на сервере. Агент останется остановленным; возобновление — отдельная команда владельца на сервере. Приложение подготовит Ubuntu/Debian x64 или ARM64 и проверит подключение."),grid,advanced,preparation,trust,actions,out);
+  host.replaceChildren(el("h4","","Перенести на новый сервер"),el("p","field-hint","Укажи данные сервера из его панели. Во время переноса Hélène на этом компьютере будет остановлена, затем канал управления будет доступен на сервере. Агент останется остановленным; возобновление — отдельная команда владельца на сервере. Приложение подготовит Ubuntu/Debian x64 или ARM64 и проверит подключение."),grid,advanced,review,preparation,trust,actions,out);
+  void shell<ReturnScope>("server_transfer",{action:"transfer-scope",request:"{}"}).then(result=>{
+    if(!host.isConnected||!result.ok||!result.scope)return;
+    decisions=result.scope.projects.map(item=>({path:item.path,bring:false}));
+    review.replaceChildren(el("h5","","Поедет на сервер"),...scopeReview(result,decisions,
+      "Внешние папки агента на этом компьютере. Отмеченные поедут с ним в workspace/projects; остальные останутся здесь, и это будет записано в паспорте переноса.",
+      "Что останется на этом компьютере и почему"));
+  }).catch(error=>receipt(out,reason(error),true));
   void shell<{pending:boolean;message:string;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
     if(result.pending&&host.isConnected){
       receipt(out,result.message+(result.host?" Сервер: "+result.host+".":""));
@@ -333,6 +342,26 @@ const ROOT_TITLES:Record<string,string>={data:"Память, навыки и р�
 const UNAVAILABLE:Record<string,string>={bound_project_requires_mapping:"проект привязан к другому устройству",
   project_unavailable:"папки нет на сервере",relative_project_path:"путь записан относительно",project_not_directory:"это не папка"};
 function megabytes(bytes:number){return (bytes/1048576).toFixed(bytes<10485760?1:0)+" МБ";}
+// One review for both directions: what travels, external projects to bring or leave,
+// and what stays behind with its reason. Nothing is decided silently.
+function scopeReview(result:ReturnScope,decisions:Array<{path:string;bring:boolean}>,projectsHint:string,staysTitle:string):HTMLElement[] {
+  const scope=result.scope!;
+  const roots=el("ul","field-hint");
+  for(const root of scope.roots){
+    const extra=[root.git.length?"Git: "+root.git.length:"",root.links.length?"ссылок: "+root.links.length:"",root.empty_directories?"пустых папок: "+root.empty_directories:""].filter(Boolean).join(", ");
+    roots.append(el("li","",(ROOT_TITLES[root.kind]||root.kind)+" — файлов "+root.files+", "+megabytes(root.bytes)+(extra?" ("+extra+")":"")));
+  }
+  const projects=el("div","return-projects");
+  if(scope.projects.length){
+    projects.append(el("p","field-hint",projectsHint));
+    scope.projects.forEach((item,index)=>projects.append(toggle(item.path,decisions[index]?.bring!==false,value=>{decisions[index].bring=value;})));
+  }
+  const stays=el("details","fold");stays.append(el("summary","",staysTitle));
+  const list=el("ul","field-hint");(result.host_exclusions||[]).forEach(row=>list.append(el("li","",row.path+" — "+row.reason)));
+  scope.unavailable.forEach(item=>list.append(el("li","",(item.path||item.via||"проект")+" — "+(UNAVAILABLE[item.reason]||item.reason))));
+  stays.append(list);
+  return [roots,projects,stays];
+}
 function drawReturn(host:HTMLElement) {
   const data:Record<string,unknown>={login:"root",port:22,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
   let decisions:Array<{path:string;bring:boolean}>=[];let reviewed=false;let busy=false;let continuing=false;
@@ -365,24 +394,11 @@ function drawReturn(host:HTMLElement) {
       const result=await shell<ReturnScope>("server_transfer",{action:"return-scope",request:JSON.stringify({...data,expected_config:source.path})});
       if(!result.ok||!result.scope)throw new Error(result.message||"Состав агента не прочитан.");
       decisions=result.scope.projects.map(item=>({path:item.path,bring:true}));
-      const roots=el("ul","field-hint");
-      for(const root of result.scope.roots){
-        const extra=[root.git.length?"Git: "+root.git.length:"",root.links.length?"ссылок: "+root.links.length:"",root.empty_directories?"пустых папок: "+root.empty_directories:""].filter(Boolean).join(", ");
-        roots.append(el("li","",(ROOT_TITLES[root.kind]||root.kind)+" — файлов "+root.files+", "+megabytes(root.bytes)+(extra?" ("+extra+")":"")));
-      }
-      const projects=el("div","return-projects");
-      if(result.scope.projects.length){
-        projects.append(el("p","field-hint","Внешние проекты агента на сервере. Отмеченные приедут вместе с ним; остальные останутся на сервере, и это будет записано в отчёте."));
-        result.scope.projects.forEach((item,index)=>projects.append(toggle(item.path,true,value=>{decisions[index].bring=value;})));
-      }
-      const unavailable=result.scope.unavailable.map(item=>el("li","",(item.path||item.via||"проект")+" — "+(UNAVAILABLE[item.reason]||item.reason)));
-      const hostOnly=el("details","fold");hostOnly.append(el("summary","","Что останется на сервере и почему"));
-      const hostList=el("ul","field-hint");(result.host_exclusions||[]).forEach(row=>hostList.append(el("li","",row.path+" — "+row.reason)));
-      if(unavailable.length){hostList.append(...unavailable);}
-      hostOnly.append(hostList);
       const version=el("p","field-hint","Версия на сервере "+(result.version||"неизвестна")+", здесь "+(result.local_version||"неизвестна")+"."
         +(result.compatible===false?" Сервер новее: возврат скачается и подождёт, пока программа на этом компьютере обновится.":""));
-      review.replaceChildren(el("h5","","Вернётся"),roots,projects,version,hostOnly);
+      review.replaceChildren(el("h5","","Вернётся"),...scopeReview(result,decisions,
+        "Внешние проекты агента на сервере. Отмеченные приедут вместе с ним; остальные останутся на сервере, и это будет записано в отчёте.",
+        "Что останется на сервере и почему"),version);
       reviewed=true;start.disabled=false;out.textContent="";
     }catch(error){reviewed=false;receipt(out,reason(error),true);}finally{busy=false;check.disabled=false;}
   }

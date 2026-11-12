@@ -211,6 +211,7 @@ def invoke(owner, command, args):
             return {**server_transfer.status(agent.config),'return':server_return.status(agent.config)}
         if action=='locate':return {'ok':True,'base':remote_locator.locate(cfg)}
         if action=='telegram-check':return server_transfer.check_telegram(cfg)
+        if action=='transfer-scope':return server_transfer.transfer_scope(agent.config)
         if action in ('run','recover-local','return-scope','return','return-cancel'):
             from . import server_return
             if Path(str(payload.get('expected_config',''))).resolve()!=agent.config.resolve():
