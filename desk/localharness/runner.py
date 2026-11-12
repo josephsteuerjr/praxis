@@ -1767,7 +1767,6 @@ def _config_watch_forever(config_path: Path, tree: Path, code_dir: Path) -> None
             continue
         if now == seen:
             continue
-        seen = now
         try:
             cfg = json.loads(boot.read_config_text(config_path))
             if not isinstance(cfg, dict):
@@ -1784,6 +1783,8 @@ def _config_watch_forever(config_path: Path, tree: Path, code_dir: Path) -> None
                          lambda selected_tree, selected_cfg: boot.project_brain(selected_tree, selected_cfg, code_dir=code_dir)))
         except Exception:
             log.exception("мозг из изменённого helene.json не спроецировался")
+            continue
+        seen = now
         _deliver_unspoken = bool((cfg.get("agent") or {}).get("deliver_unspoken", True))
         if _bot is not None:
             _bot.set_agent_name(boot.agent_name(cfg))
@@ -3605,13 +3606,6 @@ def main() -> None:
     if window_root:
         from localharness import window_preferences
         window_preferences.install(agent, Path(window_root))
-    # Модель, закреплённая владельцем (1.2.4): пока стоит галочка, switch_brain агента
-    # отказывает словами — агент Дмитрия трижды уходил на мёртвый мозг «по просьбе хозяина».
-    try:
-        import brain_pin
-        brain_pin.install(config_path)
-    except Exception:
-        log.exception("закрепление модели не подключилось")
     # Имя владельца в текстах дерева: дерево говорит с Егором, издание — с тем, кого
     # назвал мастер. Правятся только авторские тексты (схемы, указатели, окна,
     # контракты кадра); память и реплики не трогаются.

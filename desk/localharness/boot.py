@@ -2010,25 +2010,6 @@ def _merge_brain(current: dict, built: dict, previously_projected: dict | None =
     return merged
 
 
-def _pin_holds(target: Path, cfg: dict, built: dict) -> bool:
-    """Закрепление владельца (1.2.4) соблюдено: модели голоса в llm.json и в helene.json совпадают.
-
-    Без галочки — всегда да: её выбор рукой switch_brain проекция не трогает (см. ниже).
-    С галочкой — нет, если голос в llm.json ушёл от выбора владельца: тогда проекция идёт
-    заново и возвращает его модель, даже когда сам helene.json не менялся.
-    """
-    model = cfg.get("model") if isinstance(cfg, dict) else None
-    if not (isinstance(model, dict) and model.get("pinned")):
-        return True
-    try:
-        current = json.loads(target.read_text(encoding="utf-8"))
-        voice = (current.get("roles") or {}).get("voice") or {}
-    except (OSError, ValueError, AttributeError):
-        return False
-    want = built["roles"]["voice"]
-    return (voice.get("framework"), voice.get("model")) == (want.get("framework"), want.get("model"))
-
-
 def _consumer_brain_config(built, code_dir):
     """Preserved pre-alias code keeps its two-protocol role contract."""
     if code_dir is None:
@@ -2114,7 +2095,7 @@ def project_brain(tree: Path, cfg: dict, *, code_dir: Path | None = None) -> str
                 previously_projected = loaded["projected"]
         except (OSError, ValueError):
             seen = None
-        if seen == fingerprint and _pin_holds(target, cfg, built):
+        if seen == fingerprint:
             if previously_projected is None:
                 # 25.09 (ревью V3 F3): расписка от 0.8.5–0.8.7 без `projected` — при неизменном
                 # helene.json она никогда бы не дописалась, и убранный позже ключ запасного

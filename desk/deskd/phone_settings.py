@@ -32,7 +32,7 @@ FIELDS=[
     field('model.reasoning_effort','Усилие рассуждения',kind='select',choices=[[v,v or 'Автоматически'] for v in ('','low','medium','high','xhigh','max')]),
     field('model.service_tier','Скорость обработки',kind='select',choices=[['','По настройке провайдера'],['default','Обычный'],['priority','Fast mode']],
           hint='Fast mode увеличивает расход лимитов подписки или кредитов. Доступность ускорения определяет Codex. Выбор относится к ответам и шагам управления компьютером.'),
-    field('model.pinned','Закрепить модель',kind='boolean'),
+
     field('model.fallback_model','Запасная модель'),field('model.fallback_framework','Протокол запасной',kind='select',choices=[['','Тот же провайдер'],['openai','OpenAI'],['anthropic','Anthropic']]),
     field('model.fallback_base_url','Адрес запасной'),field('model.fallback_key','Ключ запасной',kind='password'),
     field('model.vision_model','Зрячая модель'),

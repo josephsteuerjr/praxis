@@ -446,9 +446,24 @@ def brain() -> dict:
     return deskctl_call("/brain")
 
 
-def brain_models() -> dict:
-    """Живой список моделей у мозга — не наш список, а его собственный ответ."""
-    return deskctl_call("/brain/models")
+def brain_models(*, refresh=False) -> dict:
+    """Desktop catalog uses the selected local profile, without a container service."""
+    from . import readers
+    if readers.config_path() is None:
+        return deskctl_call("/brain/models")
+    from .phone_settings import read_snapshot, provider
+    from localharness.python_desktop_commands import probe_model
+    from localharness.model_catalog import read, relay_revision
+    config, _ = read_snapshot(readers.config_path())
+    model = config.get('model') or {}
+    codex = provider(config) == 'chatgpt'
+    base = ('http://127.0.0.1:' + str((config.get('relay') or {}).get('port') or readers.RELAY_PORT_DEFAULT)) if codex else str(model.get('base_url') or '')
+    key = '' if codex else str(model.get('key') or model.get('api_key') or '')
+    framework = 'anthropic' if model.get('framework') == 'anthropic' else 'openai'
+    result = read(readers.tree()/'memory/.state/model-catalog.json', base, key, framework,
+                  lambda: probe_model(base, key, framework), refresh=refresh,
+                  revision=relay_revision(readers.tree()) if codex else '')
+    return {'ok': result.get('ok', False), 'by_framework': {'primary': {**result, 'codex': codex}}}
 
 
 def brain_set(role: str, fields: dict) -> dict:

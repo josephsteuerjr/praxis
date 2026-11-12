@@ -247,7 +247,13 @@ def invoke(owner, command, args):
         from . import carry
         return carry.export(agent.config)['archive']
     if command=='probe_model':
-        return probe_model(args['baseUrl'], args.get('key', ''), args.get('framework', 'openai'))
+        from .model_catalog import read, relay_revision
+        base, key, framework = args['baseUrl'], args.get('key', ''), args.get('framework', 'openai')
+        relay_base = 'http://127.0.0.1:' + str((cfg.get('relay') or {}).get('port') or 5011)
+        is_relay = str(base).rstrip('/') in (relay_base, relay_base + '/v1')
+        return read(agent.tree/'memory/.state/model-catalog.json', relay_base if is_relay else base, key, framework,
+                    lambda: probe_model(base, key, framework), refresh=args.get('refresh') is True,
+                    revision=relay_revision(agent.tree) if is_relay else '')
     if command in ('autostart_get','autostart_set','service_state','admin_state','install_service','remove_service','firewall_allow','firewall_clear','notify','open_privacy_pane'):
         if os.name == 'nt':
             from . import python_windows

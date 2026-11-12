@@ -80,7 +80,10 @@ def control(agent,op,*,timeout_sec=20,**arguments):
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self,*args,**kwargs):return None
     with urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()).open(request,timeout=timeout_sec) as response:
-        return json.load(response)
+        result = json.load(response)
+    if op in ('login', 'logout', 'switch'):
+        changed(agent.tree/'relay')
+    return result
 
 
 def hot_settings(agent):
@@ -105,11 +108,12 @@ def invoke(owner,command,args):
         return {'slot':slot,'stored':False,'phase':'applied'}
     if command in ('relay_status','relay_login_url','open_login_page','relay_account'):
         if command=='open_login_page':control(agent,'open_login');return None
+        from .model_catalog import relay_revision
         try:result=control(agent,'status')
         except OSError:
             if command!='relay_account':raise
             return {'slots':[{'slot':name,'stored':signature(home,name) is not None,'pending':False} for name in SLOTS],
-                    'reachable':False}
+                    'reachable':False, 'catalog_revision':relay_revision(agent.tree)}
         login=result.get('login') or {}
         if command=='relay_login_url':return result.get('login_url')
         accounts=result.get('accounts',[])
@@ -117,7 +121,8 @@ def invoke(owner,command,args):
             return 'pending' if login.get('pending') and login.get('slot')==slot else 'authorized' if any(a['slot']==slot and a['configured'] for a in accounts) else 'no-auth'
         return {'slots':[dict(slot=a['slot'],stored=a['configured'],serving=a['active'],loaded=True,
             pending=bool(login.get('pending') and login.get('slot')==a['slot']),login_error=login.get('error')) for a in accounts],
-            'reachable':True,'port':result['port'],'active_slot':next((a['slot'] for a in accounts if a['active']),None)}
+            'reachable':True,'port':result['port'],'catalog_revision':relay_revision(agent.tree),
+            'active_slot':next((a['slot'] for a in accounts if a['active']),None)}
     if command=='relay_network_status':return control(agent,'network')
     if command=='relay_network_check':return control(agent,'network_check')
     if command=='relay_auth_transfer':

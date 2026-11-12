@@ -23,6 +23,28 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
   footer.append(save,reload,restart,note);root.append(nav,body,footer);
   let snapshot:Snapshot|undefined,group='',busy=false,revision=0;
   let codexModels:ModelDetails[]=[];
+  let catalogGeneration=0;
+  const modelRefresh=el('button','btn btn-quiet','Обновить модели') as HTMLButtonElement;
+  modelRefresh.type='button';
+  const modelNote=el('p','receipt');
+  const modelList=document.createElement('datalist');modelList.id='phone-model-catalog';
+  async function loadModels(refresh=false) {
+    const generation=++catalogGeneration,scope=snapshot?.scope_id;
+    modelRefresh.disabled=true;modelNote.textContent='Читаю каталог моделей…';
+    try {
+      const value=await request<{by_framework?:Record<string,ModelCatalog & {note?:string;ok?:boolean}>}>('/api/brain-models'+(refresh?'?refresh=1':''));
+      if(generation!==catalogGeneration||snapshot?.scope_id!==scope)return;
+      const catalogs=Object.values(value.by_framework||{});
+      const rows=catalogs.filter(item=>item.codex===true).flatMap(item=>item.model_details||[]);
+      if(rows.length)codexModels=rows;
+      const ids=[...new Set(catalogs.flatMap(item=>(item.model_details||[]).map(row=>row.id)))];
+      if(ids.length){modelList.replaceChildren();for(const id of ids){const option=document.createElement('option');option.value=id;modelList.append(option)}}
+      modelNote.textContent=catalogs.map(item=>item.note||'').filter(Boolean).join(' ')||'Каталог пока недоступен.';
+      visibility();
+    }catch{if(generation===catalogGeneration)modelNote.textContent='Не удалось обновить каталог. Сохранённый выбор оставлен.'}
+    finally{if(generation===catalogGeneration)modelRefresh.disabled=false}
+  }
+  modelRefresh.addEventListener('click',()=>void loadModels(true));
   const changes=new Map<string,unknown>(),controls=new Map<string,HTMLElement>();
   const tierObservation=el('p','receipt');tierObservation.dataset.serviceTierActual='';
   const subscription=el('section','phone-subscription');
@@ -183,6 +205,10 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
       }
       const localNotes:Record<string,string>={agent:'Создание агентов, конституция и расширения — в настройках на компьютере.',voice:'Модели Whisper и XTTS устанавливаются на компьютере. Здесь меняются настройки того же агента.',rights:'Папки песочницы и системные разрешения изменяются на компьютере.',app:'Автозапуск, установка компонентов и перенос данных доступны на компьютере. Пустая папка копий — расположение по умолчанию.'};
       if(localNotes[id])section.append(el('p','phone-settings-local-note',localNotes[id]));
+      if(id==='brain') {
+        section.append(modelRefresh,modelNote,modelList);
+        (controls.get('model.model') as HTMLInputElement|undefined)?.setAttribute('list',modelList.id);
+      }
       body.append(section);
     }
     pick(value.groups.some(([id])=>id===group)?group:value.groups[0][0]);visibility();
@@ -191,17 +217,13 @@ export function phoneSettings(root:HTMLElement,request:SettingsRequest) {
   async function load() {
     if(busy)return;busy=true;save.disabled=reload.disabled=true;note.textContent='Читаю настройки агента…';
     try{
-      const value=await request<Snapshot>('/api/phone/settings');codexModels=[];draw(value);note.textContent='';
+      const value=await request<Snapshot>('/api/phone/settings');draw(value);note.textContent='';
       tierObservation.textContent=serviceTierReceipt(null);
       const scope=snapshot?.scope_id;
       void request<{brain?:{service_tier_actual?:string|null}}>('/api/state').then(value=>{
         if(snapshot?.scope_id===scope)tierObservation.textContent=serviceTierReceipt(value.brain?.service_tier_actual);
       }).catch(()=>{});
-      void request<{by_framework?:Record<string,ModelCatalog>}>('/api/brain-models').then(value=>{
-        if(snapshot?.scope_id!==scope)return;
-        codexModels=Object.values(value.by_framework || {}).filter(catalog=>catalog.codex===true).flatMap(catalog=>catalog.model_details || []);
-        visibility();
-      }).catch(()=>{});
+      void loadModels();
     }
     catch(error){note.textContent=String(error instanceof Error?error.message:error);note.className='receipt err';}
     finally{busy=false;reload.disabled=false;save.disabled=changes.size===0;}

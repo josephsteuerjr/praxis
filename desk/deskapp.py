@@ -1619,7 +1619,7 @@ async def _r_brain(c: Call):
 
 async def _r_brain_models(c: Call):
     """Что мозг отдаёт СЕЙЧАС: список у него, не у нас (каталог реле сжимается)."""
-    return await asyncio.to_thread(control.brain_models)
+    return await asyncio.to_thread(control.brain_models, refresh=c.query.get('refresh') == '1')
 
 
 async def _r_brain_set(c: Call):

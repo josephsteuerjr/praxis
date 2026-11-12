@@ -2661,6 +2661,10 @@ def _pick_replacement(model: str, avail: list[str]) -> str:
 
 def _resolve_model(framework: str, model: str) -> str:
     """Имя модели с учётом ротации: заданное живо — оставить; пропало — ближайшее живое."""
+    # Discovery is not consent to silently replace a selected relay model.
+    spec = (_config().get('frameworks') or {}).get(framework) or {}
+    if str(spec.get('provider') or '').casefold() == 'relay':
+        return model
     avail = _available_models(framework)
     if not avail:
         return model

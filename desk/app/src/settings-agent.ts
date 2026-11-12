@@ -146,6 +146,8 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     b.dataset.value = value;
     b.append(el("span", "choice-title", title), el("span", "choice-text", text));
     b.addEventListener("click", () => {
+      ++catalogGeneration;
+      catalogLoading = false;
       provider = value;
       syncPick();
       syncEffort();
@@ -176,7 +178,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       probeOut.className = "receipt";
       probeOut.textContent = "проверяю…";
       try {
-        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: apiDraft.base_url, key: apiDraft.key, framework: "openai" });
+        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: apiDraft.base_url, key: apiDraft.key, framework: "openai", refresh: true });
         probeOut.className = "receipt " + (r.ok ? "ok" : "err");
         probeOut.textContent = r.note;
         renderModels(apiModels, r.models || [], apiDraft.model, (id) => {
@@ -229,7 +231,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       anthOut.className = "receipt";
       anthOut.textContent = "проверяю…";
       try {
-        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: anthDraft.base_url, key: anthDraft.key, framework: "anthropic" });
+        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: anthDraft.base_url, key: anthDraft.key, framework: "anthropic", refresh: true });
         anthOut.className = "receipt " + (r.ok ? "ok" : "err");
         anthOut.textContent = r.note;
         renderModels(anthModels, r.models || [], anthDraft.model, (id) => { anthDraft.model = id; setField(anthModelField, id); syncEffort(); });
@@ -259,45 +261,9 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
   const chatgptProbeRow = el("div", "actions");
   const chatgptProbeOut = el("span", "receipt");
   chatgptProbeRow.append(
-    button("Показать модели подписки", "quiet", async () => {
-      chatgptProbeOut.className = "receipt";
-      chatgptProbeOut.textContent = "спрашиваю реле…";
-      try {
-        // Ключ сюда не отдаём: /v1/models у реле авторизацию не проверяет вовсе,
-        // а порт 5011 в этот момент может держать не наше реле — и боевой ключ
-        // OpenAI уехал бы чужому процессу заголовком Authorization.
-        const r = await shell<{ ok: boolean; note: string; models?: string[]; model_details?:ModelDetails[] }>("probe_model", { baseUrl: relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT), key: "", framework: "openai" });
-        codexModels = r.model_details || [];
-        syncEffort();
-        syncFastMode();
-        // Ответ /v1/models доказывает только то, что процесс реле жив: ни вход в
-        // аккаунт, ни остаток лимита он не проверяет. Зелёное «моделей 6» при
-        // невыполненном входе и было механизмом «всё зелёное, агент молчит».
-        await relayRefresh();
-        // Реле не ответило. 27.09 здесь стоял сырой «Connection Failed … конечный
-        // компьютер отверг» красным — у человека, который просто ещё не сохранил выбор
-        // подписки: реле поднимается ТОЛЬКО когда подписка — сохранённый провайдер
-        // (служба и окно применяют это сами, без перезапуска). Сырой текст — в подсказке.
-        const relayDown = savedProvider !== "chatgpt"
-          ? "Реле подписки ещё не запущено — сейчас агент работает через другого провайдера. Войди в ChatGPT и нажми «Сохранить»: реле поднимется само, перезапуск не нужен, и список моделей появится здесь."
-          : `Реле подписки не отвечает на порту ${Number(draft.relay?.port) || RELAY_PORT}. Оно поднимается само — подожди несколько секунд и нажми ещё раз; если не поднялось, причина — в «Журнале».`;
-        chatgptProbeOut.className = "receipt " + (r.ok && subscriptions.authorized() ? "ok" : r.ok || savedProvider !== "chatgpt" ? "" : "err");
-        chatgptProbeOut.title = r.ok ? "" : r.note;
-        chatgptProbeOut.textContent = r.ok
-          ? subscriptions.authorized()
-            ? `Реле живо, вход в ChatGPT выполнен. ${r.note}`
-            : `Реле живо, но вход в ChatGPT НЕ выполнен — агент будет молчать. Нажми «Войти в ChatGPT» выше. (${r.note})`
-          : relayDown;
-        renderModels(chatgptModels, r.models || [], chatgptDraft.model, (id) => {
-          chatgptDraft.model = id;
-          setField(chatgptModelField, id);
-          syncEffort();
-          syncFastMode();
-        });
-      } catch (e) {
-        chatgptProbeOut.className = "receipt err";
-        chatgptProbeOut.textContent = humanError(e).text;
-      }
+    button("Обновить модели", "quiet", async () => {
+      await relayRefresh();
+      await loadCodexModels(true);
     }),
     chatgptProbeOut,
   );
@@ -319,7 +285,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
       localProbeOut.className = "receipt";
       localProbeOut.textContent = "спрашиваю…";
       try {
-        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: localDraft.base_url, key: localDraft.key === "local" ? "" : localDraft.key, framework: "openai" });
+        const r = await shell<{ ok: boolean; note: string; models?: string[] }>("probe_model", { baseUrl: localDraft.base_url, key: localDraft.key === "local" ? "" : localDraft.key, framework: "openai", refresh: true });
         localProbeOut.className = "receipt " + (r.ok ? "ok" : "err");
         localProbeOut.textContent = r.note;
         renderModels(localModels, r.models || [], localDraft.model, (id) => {
@@ -344,19 +310,41 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     provider === "anthropic" ? anthDraft.model : provider === "api" ? apiDraft.model : provider === "local" ? localDraft.model : chatgptDraft.model;
   const urlForEffort = () => provider === "anthropic" ? anthDraft.base_url : provider === "api" ? apiDraft.base_url : provider === "local" ? localDraft.base_url : "";
   const codexEfforts = () => codexModels.find(model => model.id === chatgptDraft.model.trim())?.reasoning_efforts;
-  async function loadCodexModels() {
-    if (catalogLoading || provider !== 'chatgpt') return;
+  async function loadCodexModels(refresh = false) {
+    if (catalogLoading && !refresh || provider !== 'chatgpt') return;
+    const generation = ++catalogGeneration;
+    const baseUrl = relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT);
+    const current = () => generation === catalogGeneration && provider === 'chatgpt'
+      && baseUrl === relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT);
     catalogLoading = true;
+    if (refresh) { chatgptProbeOut.className = 'receipt'; chatgptProbeOut.textContent = 'спрашиваю реле…'; }
     try {
-      const response = await shell<{model_details?:ModelDetails[]}>('probe_model', {
-        baseUrl:relayProbeUrl(Number(draft.relay?.port) || RELAY_PORT),key:'',framework:'openai',
+      // The public relay catalog needs no key; the port may belong to another process.
+      const response = await shell<{ok:boolean; note:string; cached?:boolean; models?:string[]; model_details?:ModelDetails[]}>('probe_model', {
+        baseUrl, key:'', framework:'openai', refresh,
       });
-      codexModels = response.model_details || [];
-      syncEffort();
-      syncFastMode();
-    } catch { /* Keep the stored choice while the catalog is unavailable. */ }
-    finally { catalogLoading = false; }
+      if (!current()) return;
+      if (response.ok && response.models?.length) {
+        codexModels = response.model_details || [];
+        renderModels(chatgptModels, response.models, chatgptDraft.model, id => {
+          chatgptDraft.model = id; setField(chatgptModelField, id); syncEffort(); syncFastMode();
+        });
+        syncEffort(); syncFastMode();
+      }
+      chatgptProbeOut.className = 'receipt' + (!response.ok && savedProvider === 'chatgpt' ? ' err' : '');
+      chatgptProbeOut.textContent = response.cached ? response.note : response.ok
+        ? response.note + (subscriptions.authorized() ? ' Вход сохранён; доступ к модели проверяется при запросе.' : ' Вход в ChatGPT не подтверждён.')
+        : savedProvider !== 'chatgpt' ? 'Сначала войди в ChatGPT и сохрани выбор подписки: реле запустится автоматически.' : response.note;
+    } catch (error) {
+      if (current()) { chatgptProbeOut.className = 'receipt err'; chatgptProbeOut.textContent = humanError(error).text; }
+    } finally { if (generation === catalogGeneration) catalogLoading = false; }
   }
+  subscriptions.element.addEventListener('relay-account-change', () => {
+    ++catalogGeneration; catalogLoading = false; codexModels = [];
+    chatgptModels.replaceChildren(); chatgptModels.hidden = true;
+    syncEffort(); syncFastMode();
+    void loadCodexModels();
+  });
   const syncEffort = () => {
     const plan = effortPlan(provider, modelForEffort(), urlForEffort(), codexEfforts());
     effortRow.replaceChildren(el("span", "models-label", "Усилие рассуждения"));
@@ -481,18 +469,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     "Зрячая модель получает ход, в котором есть картинка, если основная её не видит; без поля берётся зрячая из каталога " +
     "того же провайдера. Переключение происходит до вызова, роль и усилие не меняются.");
   spareHint.style.marginTop = "8px";
-  // Закрепление модели владельцем (1.2.4): агент Дмитрия трижды сам уходил на gpt-6-sol
-  // «по просьбе хозяина», которой не было. Пока галочка стоит, его switch_brain отказывает
-  // словами (localharness/brain_pin.py), а на старте движка модель голоса возвращается к
-  // этой. Ступень рассуждения — по-прежнему его.
-  let pinnedModel = !!draft.model.pinned;
-  const pinRow = el("div", "actions");
-  pinRow.style.marginTop = "14px";
-  pinRow.append(
-    toggle("Закрепить модель", pinnedModel, (v) => (pinnedModel = v)),
-    el("span", "field-hint", "агент не сменит модель сам — только ты, здесь"),
-  );
-  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, fastMode, pinRow, spareBox, visionGrid, spareHint);
+  model.append(pick, panes.api, panes.anthropic, panes.chatgpt, panes.local, effortRow, effortHint, fastMode, spareBox, visionGrid, spareHint);
   syncSpare();
   syncPick();
   syncEffort();
@@ -817,8 +794,7 @@ export async function agentEdition(context: EditionContext): Promise<Edition> {
     collect(out: Config): string {
         out.model = keepBlock(out.model, { framework: "openai" });
         out.model.provider = provider;
-        if (pinnedModel) out.model.pinned = true;
-        else delete out.model.pinned;
+        delete out.model.pinned;
         // Блок relay СЛИВАЕТСЯ, а не пересобирается: кроме enabled/port в нём
         // живут ручки, которых этот экран не знает (relay.instructions), и
         // `delete out.relay` стирал их при первом же «Сохранить».

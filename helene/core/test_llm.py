@@ -1088,6 +1088,16 @@ class TestOpenAIStreaming(Base):
 
 
 class TestModelRotation(Base):
+    def test_selected_relay_model_reaches_provider_even_when_catalog_differs(self):
+        cfg=self._write_cfg(voice={'framework':'openai','model':'gpt-6.1-sol','fallback_model':''})
+        cfg['frameworks']['openai']['provider']='relay'
+        llm.save_config(cfg)
+        client=FakeOpenAI()
+        llm.use_test_client(client,'openai')
+        with mock.patch.object(llm,'_available_models',return_value=['gpt-6-astra']):
+            llm.chat('voice',messages=[{'role':'user','content':'fixture'}],system='fixture')
+        self.assertEqual(client.calls[-1]['model'],'gpt-6.1-sol')
+
     def test_models_url_variants(self):
         self.assertEqual(llm._models_url("http://host.docker.internal:5011"),
                          "http://host.docker.internal:5011/v1/models")

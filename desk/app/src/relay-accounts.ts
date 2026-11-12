@@ -4,7 +4,7 @@ import { el, humanError, toast } from "../../ui-kit/window/lib";
 
 type Slot = "primary" | "secondary";
 type SlotView = { slot: Slot; stored?: boolean; pending?: boolean; serving?: boolean; loaded?: boolean; cooldown_seconds_left?: number; login_error?: string };
-type AccountView = { reachable?: boolean; active_slot?: Slot; port?: number; slots?: SlotView[] };
+type AccountView = { reachable?: boolean; active_slot?: Slot; port?: number; slots?: SlotView[]; catalog_revision?: string };
 type Surface = HTMLElement & { onMount?: () => void; onDispose?: () => void };
 
 /** Two persistent identities, never two labels for the same login command. */
@@ -20,6 +20,7 @@ export function relayAccounts(transport:typeof shell=shell) {
   const overview = el("p", "field-hint", "Проверяю сохранённые входы…");
   const rows = new Map<Slot, { status: HTMLElement; login: HTMLButtonElement; logout: HTMLButtonElement; use: HTMLButtonElement; links: HTMLElement; url: string }>();
   let timer = 0, epoch = 0, inflight = false, changing = false, authorized = false;
+  let catalogIdentity: string | undefined;
   const stop = () => { ++epoch; window.clearTimeout(timer); timer = 0; };
   element.onDispose = stop;
   const schedule = () => {
@@ -33,6 +34,10 @@ export function relayAccounts(transport:typeof shell=shell) {
     try {
       const view = await transport<AccountView>("relay_account");
       if (generation !== epoch) return;
+      const identity = JSON.stringify([view.catalog_revision, view.active_slot]);
+      const changed = catalogIdentity !== undefined && catalogIdentity !== identity;
+      catalogIdentity = identity;
+      if (changed) element.dispatchEvent(new CustomEvent("relay-account-change"));
       authorized = !!view.slots?.some(row => row.stored);
       overview.textContent = view.reachable
         ? `Реле отвечает · работает ${view.active_slot === "secondary" ? "слот 2" : "слот 1"}. Выбор применяется сразу и сохраняется реле.`
