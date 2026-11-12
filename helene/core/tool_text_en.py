@@ -569,7 +569,7 @@ EN: dict[str, dict] = {
                        "horizontal": "scroll horizontally instead of vertically",
                        "relative": "treat coordinates as relative",
                        "restore": "restore the previous foreground window afterwards",
-                       "timeout_ms": "milliseconds before giving up",
+                       "timeout_ms": "run: process lifetime rounded UP to whole seconds; 0/omitted means no deadline. UI actions: element/read/activation wait budget, not a process deadline",
                        "inter_event_delay_ms": "milliseconds between input events",
                        "offset": "byte or line offset to start from",
                        "limit": "how much to read",
