@@ -17,6 +17,67 @@ from .carry_scope import inventory
 from .private_files import write_private
 
 
+def standalone(repository, destination, *, git=None):
+    """Copy Git metadata into a portable .git, without modifying the source repo.
+
+    Used by the legacy forward archive as well as full payloads: a .git file
+    alone cannot survive the move away from its external common object store.
+    """
+    repository = Path(repository).resolve(strict=True)
+    pointer = repository / '.git'
+    if pointer.is_symlink():
+        raise ValueError('Метаданные Git являются ссылкой: ' + str(pointer))
+    admin = pointer
+    if pointer.is_file():
+        if pointer.stat().st_size > 4096:
+            raise ValueError('Слишком длинный указатель Git: ' + str(pointer))
+        raw = pointer.read_text(encoding='utf-8').strip()
+        if not raw.startswith('gitdir: '):
+            raise ValueError('Неверный указатель Git: ' + str(pointer))
+        admin = Path(raw[8:])
+        admin = (admin if admin.is_absolute() else repository / admin).resolve(strict=True)
+    common = admin
+    if (admin / 'commondir').is_file():
+        raw = Path((admin / 'commondir').read_text(encoding='utf-8').strip())
+        common = (raw if raw.is_absolute() else admin / raw).resolve(strict=True)
+    for path in set((common, admin)):
+        checked = inventory(path)
+        if checked['errors'] or checked['special'] or checked['links']:
+            raise ValueError('Не удалось целиком перенести метаданные Git: ' + str(path))
+    if (common / 'objects/info/alternates').exists():
+        raise ValueError('Git использует внешнее хранилище objects/alternates: ' + str(common))
+    git = git or shutil.which('git')
+    if not git:
+        raise ValueError('Для проверки переносимой истории нужен Git.')
+    destination = Path(destination)
+    shutil.copytree(common, destination, ignore=lambda folder, names:
+                    ['worktrees'] if Path(folder) == common and 'worktrees' in names else [])
+    if admin != common:
+        for item in admin.iterdir():
+            if item.name in ('commondir', 'gitdir'):
+                continue
+            target = destination / item.name
+            if item.is_dir():
+                shutil.copytree(item, target, dirs_exist_ok=True)
+            else:
+                shutil.copy2(item, target)
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+    environment.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
+
+    def command(*args):
+        result = subprocess.run([git, *args], cwd=repository, env=environment,
+                                capture_output=True, timeout=120)
+        if result.returncode:
+            raise ValueError('Git не подтвердил переносимую историю: ' + str(repository))
+
+    for name in ('config', 'config.worktree'):
+        if name == 'config' or (destination / name).exists():
+            command('config', '--file', str(destination / name), 'core.bare', 'false')
+            command('config', '--file', str(destination / name), 'core.worktree', '..')
+    command('--git-dir=' + str(destination), '--work-tree=' + str(repository), 'fsck', '--connectivity-only')
+    return destination
+
+
 def plan(raw_roots):
     roots={name:Path(path).resolve(strict=True) for name,path in raw_roots.items()};records=[]
     def reference(path):

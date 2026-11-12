@@ -192,7 +192,9 @@ def _scan(data: Path, projects=()) -> dict:
     result = {"files": [], "empty": [], "links": [], "left": [], "projects": {}}
 
     def walk(top: Path, prefix: str, host_rules: bool):
-        for root, dirs, files in os.walk(top):
+        def unreadable(error):
+            raise ValueError('Не удалось прочитать папку переноса: ' + str(error.filename)) from error
+        for root, dirs, files in os.walk(top, onerror=unreadable):
             root_p = Path(root)
             rel_root = root_p.relative_to(top).as_posix()
             rel_root = "" if rel_root == "." else rel_root
@@ -218,6 +220,8 @@ def _scan(data: Path, projects=()) -> dict:
                 if _is_reparse(root_p / f):
                     result["links"].append((prefix + rel, root_p / f))
                     continue
+                if not _stat.S_ISREG((root_p / f).lstat().st_mode):
+                    raise ValueError('Специальный файл требует отдельного переноса: ' + str(root_p / f))
                 result["files"].append((root_p / f, "data/" + prefix + rel))
                 kept += 1
             if rel_root and not keep and not kept:
@@ -450,16 +454,28 @@ def _import_code(zf: zipfile.ZipFile, root: Path, data: Path) -> dict:
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _code_git(config_path: Path, cfg: dict):
-    """The agent's own code repository (config.code/.git), when it is a plain directory."""
-    from localharness.carry_scope import configured_roots, inventory
-    git = configured_roots(config_path, cfg)["code"] / ".git"
-    if not git.is_dir() or _is_reparse(git):
-        return None, ("указатель worktree кода не переносится" if git.is_file() else "")
-    found = inventory(git)
-    if found["errors"] or found["special"] or found["links"]:
-        return None, "история кода содержит недоступные файлы или ссылки — не перенесена"
-    return git, ""
+def _portable_git(scan, config_path, cfg, temporary):
+    """Replace forward worktree pointers with independent, verified Git histories."""
+    from localharness.carry_git import standalone
+    from localharness.carry_scope import configured_roots
+    cc = _codecarry()
+    git = cc._bundled_git(config_path.parent) if cc is not None else None
+    def members(path, prefix):
+        return [(item, prefix + '/' + item.relative_to(path).as_posix())
+                for item in sorted(path.rglob('*')) if item.is_file()]
+    files = []
+    for source, arc in scan['files']:
+        if source.name == '.git':
+            portable = standalone(source.parent, temporary / str(len(files)) / '.git', git=git)
+            files.extend(members(portable, arc))
+        else:
+            files.append((source, arc))
+    scan['files'] = files
+    code = configured_roots(config_path, cfg)['code']
+    pointer = code / '.git'
+    if not pointer.exists() and not pointer.is_symlink():
+        return None
+    return standalone(code, temporary / 'code' / '.git', git=git)
 
 
 def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: bool = False,
@@ -502,12 +518,13 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
     scan = _scan(data, projects)
     passport.update({"links": len(scan["links"]), "empty_dirs": len(scan["empty"]),
                      "not_carried": scan["left"], "projects": scan["projects"]})
-    code_git, code_git_note = _code_git(config_path, cfg)
     exported_cfg = {k: v for k, v in cfg.items()}
     files = 0
     total = 0
     tmp = out.with_suffix(out.suffix + ".part")
+    git_temporary = tempfile.TemporaryDirectory(prefix='helene-carry-git-')
     try:
+        code_git = _portable_git(scan, config_path, cfg, Path(git_temporary.name))
         from private_files import write_private
         write_private(tmp,b'')  # protection is verified BEFORE the ZIP receives secrets
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
@@ -538,8 +555,6 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
                         zf.write(path, "code/git/" + path.relative_to(code_git).as_posix())
                         count += 1
                 passport["code_git"] = count
-            elif code_git_note:
-                passport["code_git_note"] = code_git_note
             # Only the cold, GUI-owned VPS transfer may hand over menu custody.
             # Ordinary Export deliberately excludes all live tunnel state.
             lease=data/'memory/.state/phone-access/telegram-menu.json'
@@ -571,6 +586,8 @@ def export(config_path: Path, out: Path | None = None, *, preserve_phone_lease: 
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
+    finally:
+        git_temporary.cleanup()
     passport["archive"] = str(out)
     passport["archive_bytes"] = out.stat().st_size
     return passport
