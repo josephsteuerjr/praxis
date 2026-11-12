@@ -205,16 +205,30 @@ def invoke(owner, command, args):
         payload=resolve(json.loads(args.get('request','{}')))
         action=args['action']
         if action=='probe':return server_transfer.probe(payload,agent.config)
-        if action=='status':return server_transfer.status(agent.config)
+        if action=='status':
+            from . import server_return
+            # Polled while a return downloads: progress lives in the durable receipt.
+            return {**server_transfer.status(agent.config),'return':server_return.status(agent.config)}
         if action=='locate':return {'ok':True,'base':remote_locator.locate(cfg)}
         if action=='telegram-check':return server_transfer.check_telegram(cfg)
-        if action in ('run','recover-local'):
+        if action in ('run','recover-local','return-scope','return','return-cancel'):
+            from . import server_return
             if Path(str(payload.get('expected_config',''))).resolve()!=agent.config.resolve():
                 raise ValueError('Selected agent changed; reload server transfer')
             if owner.status().get('agents',{}).get(agent.id,{}).get('roles'):
                 raise RuntimeError('Stop the local agent before server transfer')
             if not owner.transfer_lock.acquire(blocking=False):raise RuntimeError('Server transfer already in progress')
-            try:return server_transfer.run(payload,agent.config,owner.root) if action=='run' else server_transfer.recover_local(payload,agent.config)
+            try:
+                if action=='run':return server_transfer.run(payload,agent.config,owner.root)
+                if action=='recover-local':return server_transfer.recover_local(payload,agent.config)
+                if action=='return-scope':return server_return.scope(payload,agent.config,owner.root)
+                if action=='return-cancel':return server_return.cancel(agent.config)
+                projects=payload.get('projects') or []
+                if not isinstance(projects,list):raise ValueError('Invalid project decisions')
+                return server_return.run(payload,agent.config,owner.root,projects=projects)
+            except server_transfer.TransferError as error:
+                if not action.startswith('return'):raise
+                return {'ok':False,'message':str(error),'local_data_kept':True}
             finally:owner.transfer_lock.release()
         raise ValueError('Unknown transfer action')
     if command=='server_install':

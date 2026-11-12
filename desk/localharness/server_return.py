@@ -412,6 +412,10 @@ def activate(config_path, program, row, state, home, meta):
     _record(new_data / 'memory/.state/server-transfer.json', fresh)
     merged = transfer.carry.merge_config(local, meta.get('config') or {})
     merged['tree'] = str(new_data)
+    # The window watched the server copy; the agent now lives here again.
+    merged['mode'] = 'local'
+    for key in ('base', 'key', 'server_locator'):
+        merged.pop(key, None)
     transfer.carry._write_config(Path(config_path), merged)
     retire(old_receipt, row, state)
     return {'ok': True, 'phase': 'done', 'home': str(home), 'data': str(new_data), 'code': code,

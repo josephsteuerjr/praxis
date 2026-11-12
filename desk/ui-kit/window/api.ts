@@ -52,6 +52,8 @@ export const cfg: Cfg = shellCfg
 /** Мост оболочки на Electron (28.09, desk/electron/src/preload.ts). */
 export interface ElectronBridge {
   shell: "electron" | "python";
+  /** The full programme shown in Telegram's MiniApp: window actions belong to the phone. */
+  presentation?: "miniapp";
   platform: string;
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   win(action: "minimize" | "maximize" | "close"): void;

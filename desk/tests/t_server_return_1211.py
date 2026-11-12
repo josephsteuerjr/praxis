@@ -67,7 +67,9 @@ class Scenario:
             archive.writestr('code/mine/tree/a.py', 'a edited before move\n')
             archive.writestr('code/mine/tree/c.py', 'c edited before move\n')
         self.config = self.program / 'helene.json'
-        write(self.config, json.dumps({'mode': 'local', 'tree': str(self.data), 'code': 'tree',
+        # After the move the window watches the server copy (remote mode).
+        write(self.config, json.dumps({'mode': 'remote', 'base': 'https://agent.example', 'key': 'window-key',
+                                       'server_locator': 'telegram-menu', 'tree': str(self.data), 'code': 'tree',
                                        'app': 'app/deskapp.py', 'port': 8094, 'agent': {'name': 'Jarvis'},
                                        'model': {'model': 'sol'}, 'phone': {'enabled': True}}))
         self.row = {'id': '0' * 24, 'archive': str(self.forward), 'archive_sha': 'ab' * 32, 'phase': 'ready',
@@ -307,6 +309,8 @@ class LocalActivation(unittest.TestCase):
         config = json.loads(self.scene.config.read_text())
         self.assertEqual(Path(config['tree']), returned)
         self.assertEqual(config['code'], 'tree')
+        self.assertEqual(config['mode'], 'local')
+        self.assertFalse({'base', 'key', 'server_locator'} & set(config))
         self.assertEqual(carry_scope.read_config(Path(result['code']['local_before']).parent / 'config-before.json')['tree'],
                          str(self.scene.data))
 

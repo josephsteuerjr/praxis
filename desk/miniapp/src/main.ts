@@ -52,7 +52,7 @@ async function start() {
     const appearance=await invoke('appearance_read') as {values:Record<string,string>};
     for(const [key,value] of Object.entries(appearance.values||{}))localStorage.setItem(key,value);
     const info=await invoke('app_info') as {platform?:string};
-    Object.assign(window,{__HELENE__:{shell:'python',platform:info.platform||'',invoke,
+    Object.assign(window,{__HELENE__:{shell:'python',presentation:'miniapp',platform:info.platform||'',invoke,
       win(){/* Telegram owns this window. */}}});
     app.hidden=false;
     await import('../../app/src/main');

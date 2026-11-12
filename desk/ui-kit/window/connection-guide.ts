@@ -1,4 +1,4 @@
-import { api, cfg, inTauri, post, shell } from "./api";
+import { api, cfg, electron, inTauri, post, shell } from "./api";
 import { button, el, field, toggle } from "../dom";
 import { humanError } from "./lib";
 import { phoneCard, type Config, type Loaded } from "./views/settings-frame";
@@ -35,6 +35,13 @@ async function save(patch:Partial<Config>, session:Session) {
     : await shell<{ok?:boolean;error?:string;code?:string}>("config_save",{config:JSON.stringify(next),mtimeNs:fresh.stamp});
   if (reply?.ok===false) throw new Error(reply.error||"Настройки изменились. Перечитай их и повтори.");
   Object.assign(session,await load());
+}
+// Transfer and return replies are composed by our own code in Russian: they ARE the reason.
+// humanError would flatten them to «Не получилось.»; raw exceptions still go through it.
+function reason(error:unknown):string {
+  const raw=(error instanceof Error?error.message:String(error??"")).trim();
+  if(/[А-Яа-яЁё]/.test(raw)&&!/^[A-Za-z_][A-Za-z_0-9]*(Error|Exception):|Traceback|File "/.test(raw))return raw;
+  return humanError(error).text;
 }
 function receipt(box:HTMLElement,text:string,error=false) {
   box.className="receipt"+(error?" err":" ok"); box.textContent=text;
@@ -171,6 +178,10 @@ function drawServer(host:HTMLElement,session:Session) {
   buttons.append(button("Сервер уже работает","quiet",()=>{if(!transferBusy)drawExistingServer(body);}));
   buttons.append(button("Новый агент на сервере","quiet",()=>{if(!transferBusy)drawFreshServer(body);}));
   buttons.append(button("Обновить сервер","quiet",()=>{if(!transferBusy)drawServerUpdate(body);}));
+  const back=button("Вернуть агента с сервера","quiet",()=>{if(!transferBusy)drawReturn(body);});
+  back.hidden=!session.remote;buttons.append(back);
+  void shell<{pending?:boolean;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"})
+    .then(result=>{if(result.pending&&!result.return?.returned)back.hidden=false;}).catch(()=>{});
   if(session.remote)buttons.append(button("Открыть местную копию","quiet",async()=>{
     const out=el("p","receipt");body.replaceChildren(out);
     try{
@@ -260,7 +271,7 @@ function drawNewServer(host:HTMLElement) {
       receipt(out,"Перенос и канал проверены. Stop сохранён; открываю серверную установку…");
       host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
       await attachServer(result.base,result.key,source,result.server_locator);
-    }catch(error){receipt(out,humanError(error).text+" Местная память сохранена. Если сервер уже запущен, не включай второго агента одновременно.",true);}
+    }catch(error){receipt(out,reason(error)+" Местная память сохранена. Если сервер уже запущен, не включай второго агента одновременно.",true);}
     finally{busy=false;transferBusy=false;host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>node.disabled=false);check.disabled=false;start.disabled=!ready;}
   });start.disabled=true;
   const recover=button("Остановить серверную копию для возврата","quiet",async()=>{
@@ -271,7 +282,7 @@ function drawNewServer(host:HTMLElement) {
       const result=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"recover-local",request:JSON.stringify({...data,expected_config:source.path})});
       if(!result.ok)throw new Error(result.message||"Остановка не подтверждена");
       receipt(out,result.message||"Серверная копия остановлена. Местный Stop сохранён.");
-    } catch(error){receipt(out,humanError(error).text,true);}
+    } catch(error){receipt(out,reason(error),true);}
     finally{busy=false;transferBusy=false;recover.disabled=false;}
   });recover.hidden=true;
 
@@ -288,7 +299,7 @@ function drawNewServer(host:HTMLElement) {
       }else trust.hidden=true;
       receipt(out,result.resumable?"Найден твой предыдущий перенос. Продолжу с сохранённого этапа; повторный импорт памяти не нужен.":result.existing?"На сервере уже есть Hélène. Выбери «Сервер уже работает», чтобы подключить окно.":result.message,!ready&&!result.trust_needed);
       start.disabled=!ready;
-    }catch(error){ready=false;receipt(out,humanError(error).text,true);}finally{busy=false;check.disabled=false;}
+    }catch(error){ready=false;receipt(out,reason(error),true);}finally{busy=false;check.disabled=false;}
   }
   const preparation=el("div","server-preparation");preparation.append(docker,check);
   const actions=el("div","server-actions");actions.append(start,recover);
@@ -303,7 +314,122 @@ function drawNewServer(host:HTMLElement) {
         const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
       }
     }
-  }).catch(error=>receipt(out,humanError(error).text,true));
+  }).catch(error=>receipt(out,reason(error),true));
+}
+
+// 12.11 (Yegor): «память, код, проекты — всё». The return brings the agent's CURRENT server
+// life home: review first (the server keeps running), then fence/stop, fresh archive, resumable
+// download, a new home beside the retained local copy, and one live copy. Resume stays separate.
+type ReturnRoot={kind:string;path:string;files:number;bytes:number;git:Array<{path:string;kind:string}>;
+  links:Array<{path:string;target:string;error:string}>;errors:unknown[];special:unknown[];empty_directories:number};
+type ReturnScope={ok:boolean;message?:string;version?:string;local_version?:string;compatible?:boolean;
+  scope?:{roots:ReturnRoot[];projects:Array<{path:string;via:string[]}>;unavailable:Array<{path:string;via?:string;reason:string}>};
+  host_exclusions?:Array<{path:string;reason:string}>};
+type ReturnStatus={returned?:boolean;phase?:string|null;progress?:{done:number;total:number}|null;projects?:Array<{path:string;bring:boolean}>};
+const RETURN_PHASES:Record<string,string>={started:"Готовлю возврат",fenced:"Серверная копия остановлена; снимаю свежий архив",
+  snapshot:"Скачиваю архив агента",downloaded:"Архив скачан и проверен; раскладываю в новую папку",
+  staged:"Копия подготовлена; проверяю версию и переношу правки кода",activating:"Переключаю агента на вернувшиеся данные"};
+const ROOT_TITLES:Record<string,string>={data:"Память, навыки и рабочая папка",code:"Код агента",application:"Оболочка агента"};
+const UNAVAILABLE:Record<string,string>={bound_project_requires_mapping:"проект привязан к другому устройству",
+  project_unavailable:"папки нет на сервере",relative_project_path:"путь записан относительно",project_not_directory:"это не папка"};
+function megabytes(bytes:number){return (bytes/1048576).toFixed(bytes<10485760?1:0)+" МБ";}
+function drawReturn(host:HTMLElement) {
+  const data:Record<string,unknown>={login:"root",port:22,deployment:{directory:"/opt/helene",project:"helene",container:"helene",port:8094}};
+  let decisions:Array<{path:string;bring:boolean}>=[];let reviewed=false;let busy=false;let continuing=false;
+  const out=el("p","receipt");const review=el("div","return-review");const live=el("p","receipt");live.setAttribute("aria-live","polite");
+  const changed=()=>{if(continuing)return;reviewed=false;start.disabled=true;review.replaceChildren();};
+  const {grid,advanced}=sshForm(data,changed,out);const inner=advanced.querySelector<HTMLElement>('.fold-body')!;
+  const deployment=data.deployment as Record<string,unknown>;
+  const check=button("Проверить, что вернётся","quiet",()=>void inspect());
+  const start=button("Вернуть агента","primary",()=>void bring());start.disabled=true;
+  const restartApp=button("Перезапустить программу","primary",async()=>{
+    restartApp.disabled=true;
+    try{await shell("restart_self",{full:true});}catch(error){receipt(out,reason(error),true);restartApp.disabled=false;}
+  });restartApp.hidden=true;
+  const cancel=button("Отменить незавершённый возврат","quiet",async()=>{
+    if(busy)return;busy=true;cancel.disabled=true;
+    try{
+      const source=await shell<Loaded>("config_load");
+      const reply=await shell<{ok:boolean;message?:string}>("server_transfer",{action:"return-cancel",request:JSON.stringify({expected_config:source.path})});
+      if(!reply.ok)throw new Error(reply.message||"Отмена не подтверждена");
+      continuing=false;cancel.hidden=true;start.textContent="Вернуть агента";reviewed=false;start.disabled=true;
+      receipt(out,reply.message||"Возврат отменён.");
+    }catch(error){receipt(out,reason(error),true);}finally{busy=false;cancel.disabled=false;}
+  });cancel.hidden=true;
+  function lock(on:boolean){host.querySelectorAll<HTMLInputElement|HTMLButtonElement>("input,button").forEach(node=>{if(node!==restartApp)node.disabled=on;});}
+  async function inspect() {
+    if(busy||transferBusy)return;busy=true;check.disabled=true;
+    receipt(out,"Читаю состав агента на сервере. Сервер пока продолжает работать, ничего не меняется.");
+    try{
+      const source=await shell<Loaded>("config_load");
+      const result=await shell<ReturnScope>("server_transfer",{action:"return-scope",request:JSON.stringify({...data,expected_config:source.path})});
+      if(!result.ok||!result.scope)throw new Error(result.message||"Состав агента не прочитан.");
+      decisions=result.scope.projects.map(item=>({path:item.path,bring:true}));
+      const roots=el("ul","field-hint");
+      for(const root of result.scope.roots){
+        const extra=[root.git.length?"Git: "+root.git.length:"",root.links.length?"ссылок: "+root.links.length:"",root.empty_directories?"пустых папок: "+root.empty_directories:""].filter(Boolean).join(", ");
+        roots.append(el("li","",(ROOT_TITLES[root.kind]||root.kind)+" — файлов "+root.files+", "+megabytes(root.bytes)+(extra?" ("+extra+")":"")));
+      }
+      const projects=el("div","return-projects");
+      if(result.scope.projects.length){
+        projects.append(el("p","field-hint","Внешние проекты агента на сервере. Отмеченные приедут вместе с ним; остальные останутся на сервере, и это будет записано в отчёте."));
+        result.scope.projects.forEach((item,index)=>projects.append(toggle(item.path,true,value=>{decisions[index].bring=value;})));
+      }
+      const unavailable=result.scope.unavailable.map(item=>el("li","",(item.path||item.via||"проект")+" — "+(UNAVAILABLE[item.reason]||item.reason)));
+      const hostOnly=el("details","fold");hostOnly.append(el("summary","","Что останется на сервере и почему"));
+      const hostList=el("ul","field-hint");(result.host_exclusions||[]).forEach(row=>hostList.append(el("li","",row.path+" — "+row.reason)));
+      if(unavailable.length){hostList.append(...unavailable);}
+      hostOnly.append(hostList);
+      const version=el("p","field-hint","Версия на сервере "+(result.version||"неизвестна")+", здесь "+(result.local_version||"неизвестна")+"."
+        +(result.compatible===false?" Сервер новее: возврат скачается и подождёт, пока программа на этом компьютере обновится.":""));
+      review.replaceChildren(el("h5","","Вернётся"),roots,projects,version,hostOnly);
+      reviewed=true;start.disabled=false;out.textContent="";
+    }catch(error){reviewed=false;receipt(out,reason(error),true);}finally{busy=false;check.disabled=false;}
+  }
+  async function bring() {
+    if((!reviewed&&!continuing)||busy||transferBusy)return;busy=true;transferBusy=true;lock(true);
+    receipt(out,"Останавливаю серверную копию и снимаю свежий архив. Большой агент скачивается дольше; окно можно не трогать.");
+    const poll=setInterval(()=>void shell<{return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
+      const state=result.return;if(!state?.phase)return;
+      const step=RETURN_PHASES[state.phase]||state.phase;
+      live.textContent=state.progress&&state.phase==="snapshot"?step+": "+megabytes(state.progress.done)+" из "+megabytes(state.progress.total):step+".";
+    }).catch(()=>{}),1500);
+    try{
+      const source=await shell<Loaded>("config_load");
+      const result=await shell<{ok:boolean;message?:string;code?:{summary?:string;folder?:string};previous_data?:string}>("server_transfer",
+        {action:"return",request:JSON.stringify({...data,projects:decisions,expected_config:source.path})});
+      if(!result.ok)throw new Error(result.message||"Возврат ещё не завершён.");
+      host.querySelectorAll<HTMLInputElement>('input[type="password"]').forEach(input=>input.value="");delete data.password;delete data.key_text;delete data.key_password;
+      const code=result.code?.summary?" Код: "+result.code.summary+(result.code.folder?" (материалы — "+result.code.folder+")":"")+".":"";
+      receipt(out,(result.message||"Агент вернулся.")+code+(result.previous_data?" Прежняя копия: "+result.previous_data+".":""));
+      live.textContent="";cancel.hidden=true;start.hidden=true;check.hidden=true;
+      // The MiniApp reloads only the phone page; the computer's programme restarts there.
+      if(electron?.presentation==="miniapp")out.textContent+=" Перезапусти программу на компьютере: из Mini App она не перезапускается.";
+      else restartApp.hidden=false;
+    }catch(error){
+      const text=reason(error);
+      receipt(out,text+" Прежняя местная копия и данные на сервере сохранены."+(/повтори/i.test(text)?"":" Повтори — возврат продолжится с сохранённого этапа."),true);
+      cancel.hidden=false;start.textContent="Продолжить возврат";continuing=true;
+    }finally{clearInterval(poll);busy=false;transferBusy=false;lock(false);start.disabled=!reviewed&&!continuing;}
+  }
+  const actions=el("div","server-actions");actions.append(check,start,cancel,restartApp);
+  host.replaceChildren(el("h4","","Вернуть агента на этот компьютер"),
+    el("p","field-hint","Вернётся текущий агент с сервера: память, навыки, настройки, его код и проекты, Git с историей. Сначала посмотри состав — сервер в это время работает. Затем серверная копия остановится, архив скачается и разложится в новую папку рядом с прежней. Прежняя местная копия и данные на сервере не удаляются. Агент останется остановленным: возобнови его сам, когда проверишь."),
+    grid,advanced,review,actions,live,out);
+  void shell<{pending:boolean;host?:string;login?:string;ssh_port?:number;deployment?:Record<string,unknown>;return?:ReturnStatus}>("server_transfer",{action:"status",request:"{}"}).then(result=>{
+    if(!host.isConnected)return;
+    if(result.host&&!data.host){
+      data.host=result.host;data.login=result.login||"root";data.port=result.ssh_port||22;
+      grid.dispatchEvent(new Event('ssh-fields-updated'));
+      if(result.deployment)Object.assign(deployment,result.deployment);
+      const extra=inner.querySelectorAll<HTMLInputElement>("input");[deployment.directory,deployment.project,deployment.port].forEach((value,index)=>{if(extra[index])extra[index].value=String(value);});
+    }
+    if(result.return?.returned){receipt(out,"Агент уже вернулся с этого сервера. Прежняя копия и архив сохранены.");start.hidden=true;check.hidden=true;return;}
+    if(result.return?.phase){
+      continuing=true;decisions=result.return.projects||[];start.textContent="Продолжить возврат";start.disabled=false;cancel.hidden=false;
+      receipt(out,"Найден незавершённый возврат: "+(RETURN_PHASES[result.return.phase]||result.return.phase).toLowerCase()+". Укажи вход на сервер и продолжи — уже сделанное не повторится.");
+    }
+  }).catch(error=>receipt(out,reason(error),true));
 }
 
 // 11.11 (Yegor): install a new server agent and update an installed one from the window;
