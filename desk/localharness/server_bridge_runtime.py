@@ -128,6 +128,12 @@ class Bridge:
             if 'local_proxy_port' in self.ports:
                 listener=socket.socket()
                 if hasattr(socket,'SO_EXCLUSIVEADDRUSE'):listener.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1)
+                else:
+                    # POSIX keeps accepted connections in TIME_WAIT after our
+                    # listener closes. Rebind our loopback address on retry;
+                    # SO_REUSEPORT is deliberately absent, so a live listener
+                    # on the same address still refuses before SSH auth.
+                    listener.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
                 listener.bind(('127.0.0.1',self.ports['local_proxy_port']));listener.listen(16);listener.settimeout(.25)
             def own(client):
                 with self.lock:

@@ -15,8 +15,10 @@ class Forwarding(unittest.TestCase):
     def setUp(self):
         self.stop=threading.Event();self.sockets=[];self.workers=[];self.transports=[];self.auths=[];self.destinations={}
         self.key=paramiko.RSAKey.generate(2048)
-        def listen(port=0):
-            sock=socket.socket();sock.bind(('127.0.0.1',port));sock.listen(10);sock.settimeout(.1);self.sockets.append(sock);return sock
+        def listen(port=0,*,reuse=False):
+            sock=socket.socket()
+            if reuse:sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            sock.bind(('127.0.0.1',port));sock.listen(10);sock.settimeout(.1);self.sockets.append(sock);return sock
         self.listen=listen
         def thread(fn):
             worker=threading.Thread(target=fn,daemon=True);self.workers.append(worker);worker.start()
@@ -112,8 +114,29 @@ class Forwarding(unittest.TestCase):
                 peer.sendall(b'GET /probe HTTP/1.1\r\nHost: fixture\r\n\r\n')
                 self.assertIn(b'fixture',peer.recv(65536))
         bridge.stop();self.assertEqual(bridge.state()['state'],'off')
-        with socket.socket() as probe:probe.bind(('127.0.0.1',local))
+        with socket.socket() as probe:
+            if not hasattr(socket,'SO_EXCLUSIVEADDRUSE'):probe.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+            probe.bind(('127.0.0.1',local))
         self.assertFalse(any(thread.is_alive() for thread in bridge.workers))
+    def test_stopped_forward_reopens_same_port_after_actual_http(self):
+        port=free_port()
+        for _ in range(2):
+            bridge=self.bridge(local_proxy_port=port,remote_proxy_port=self.echo.getsockname()[1])
+            self.wait(bridge,'connected')
+            with socket.create_connection(('127.0.0.1',port),timeout=3) as peer:
+                peer.sendall(b'GET /probe HTTP/1.1\r\nHost: fixture\r\n\r\n')
+                chunks=[]
+                while part:=peer.recv(65536):chunks.append(part)
+                self.assertIn(b'fixture',b''.join(chunks))
+            bridge.stop();self.assertEqual(bridge.state()['state'],'off')
+            self.assertFalse(any(worker.is_alive() for worker in bridge.workers))
+    def test_foreign_reusable_listener_still_refuses_before_authentication(self):
+        busy=self.listen(reuse=True);port=busy.getsockname()[1]
+        bridge=self.bridge(local_proxy_port=port,remote_proxy_port=self.echo.getsockname()[1])
+        self.wait(bridge,'retry');self.assertEqual(self.auths,[])
+        with socket.create_connection(('127.0.0.1',port),timeout=3) as peer:
+            accepted,_=busy.accept();accepted.close()
+        self.assertEqual(busy.getsockname()[1],port)
     def test_foreign_port_is_preserved_before_authentication(self):
         busy=self.listen();port=busy.getsockname()[1]
         bridge=self.bridge(local_proxy_port=port,remote_proxy_port=self.echo.getsockname()[1])
