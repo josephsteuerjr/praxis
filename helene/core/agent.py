@@ -9016,7 +9016,7 @@ _TOOL_CATALOG: ContextVar["dict | None"] = ContextVar("praxis_tool_catalog", def
 
 def tool_pointers_enabled() -> bool:
     """Старые call/describe указатели; off — все схемы родные (h.hand только для скриптов)."""
-    return str(os.getenv("PRAXIS_TOOLS_POINTERS", "on") or "on").strip().lower() not in {
+    return str(os.getenv("PRAXIS_TOOLS_POINTERS", "off") or "off").strip().lower() not in {
         "0", "off", "false", "no"}
 
 
@@ -9192,14 +9192,15 @@ def _parse_call_args(args_json) -> dict:
     return parsed
 
 
-def _unwrap_dispatch(block: dict) -> tuple[dict, bool, str | None]:
+def _unwrap_dispatch(block: dict, *, offered: set[str] | None = None) -> tuple[dict, bool, str | None]:
     """`call(name, args_json)` → блок внутренней руки, ДО durable-записи и воронки.
 
     Возвращает (блок, переписан_ли, текст_отказа). Отказ — результат руки, а не
     исключение: модель видит, что не так, и ход жив. Власть не расширяется: имя
     сверяется с каталогом ЭТОГО хода (`catalog_tools_for(ctx)`), а не с TOOL_IMPL.
     """
-    if not isinstance(block, dict) or block.get("name") != "call" or not tool_pointers_enabled():
+    if (not isinstance(block, dict) or block.get("name") != "call"
+            or (not tool_pointers_enabled() and "call" not in (offered or ()))):
         return block, False, None
     raw = block.get("input") if isinstance(block.get("input"), dict) else {}
     inner = str(raw.get("name") or "").strip()
@@ -17892,7 +17893,7 @@ def _terminal_tool_loop(*, system, messages: list[dict], tools: list,
             # `call(name, args_json)` переписывается во внутреннюю руку ЗДЕСЬ — до
             # durable-записи, побочных эффектов и потолка времени: воронка одна на всех,
             # и в ленте модели остаётся её собственный вызов `call`.
-            b, dispatched, dispatch_note = _unwrap_dispatch(b)
+            b, dispatched, dispatch_note = _unwrap_dispatch(b, offered=offered_names)
             if dispatch_note is not None:
                 tool_results.append({"type": "tool_result", "tool_use_id": b["id"],
                                      "content": dispatch_note})

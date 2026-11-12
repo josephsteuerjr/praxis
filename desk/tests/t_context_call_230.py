@@ -33,6 +33,9 @@ def consumer(profile, input_path, output_path):
     import types
     from contextlib import ExitStack
     from unittest.mock import patch
+    if json.loads(Path(input_path).read_text(encoding='utf-8')).get('product_native'):
+        from localharness import boot
+        os.environ['PRAXIS_TOOLS_POINTERS'] = boot.env_knobs({})['PRAXIS_TOOLS_POINTERS']
     import agent
     import frame_continuation as fc
     import frame_layout
@@ -138,13 +141,27 @@ def consumer(profile, input_path, output_path):
             answer = agent._voice_impl(current, history, 'Synthetic person', ctx=ctx,
                                        tools_override=override, no_tools=True,
                                        max_iters=2 if value.get('with_tool_iteration') else 1)
+        catalog_names = [t.get('name') or t.get('type') for t in agent.catalog_tools_for(ctx)]
     checkpoint = fc._load(Path(source['cache_root'])/(fc._sha(source['chat'])+'.json'))
     Path(output_path).write_text(json.dumps({'calls': calls, 'checkpoint': checkpoint,
                                           'answer': answer, 'receipts': receipts,
-                                          'run_material': run_material}, ensure_ascii=False), encoding='utf-8')
+                                          'run_material': run_material,
+                                          'catalog_names': catalog_names}, ensure_ascii=False), encoding='utf-8')
 
 
 class ActualCalls(unittest.TestCase):
+    def test_product_default_sends_full_schemas_to_the_actual_sdk_boundary(self):
+        for owner in (True, False):
+            result = self.call(envelope=True, product_native=True, owner=owner,
+                               chat='window' if owner else 'guest')
+            tools = result['calls'][0]['tools']
+            names = [t.get('name') or t.get('type') for t in tools]
+            self.assertEqual(names, result['catalog_names'])
+            self.assertTrue({'computer', 'python', 'fs_ls', 'manage_identity'}.issubset(names))
+            self.assertNotIn('describe', names)
+            self.assertNotIn('call', names)
+            self.assertTrue(all(t.get('input_schema') for t in tools if t.get('name')))
+
     def setUp(self):
         tmp = tempfile.TemporaryDirectory(prefix='helene-context-230-')
         self.addCleanup(tmp.cleanup)

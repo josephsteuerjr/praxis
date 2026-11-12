@@ -27,7 +27,8 @@ def _names(tools):
 class PointerBase(Base):
     def setUp(self):
         super().setUp()
-        self._lever = os.environ.pop("PRAXIS_TOOLS_POINTERS", None)
+        self._lever = os.environ.get("PRAXIS_TOOLS_POINTERS")
+        os.environ["PRAXIS_TOOLS_POINTERS"] = "on"  # explicit old-mode compatibility fixtures
         self.addCleanup(self._restore_lever)
 
     def _restore_lever(self):
@@ -38,6 +39,18 @@ class PointerBase(Base):
 
 
 class TestOffered(PointerBase):
+    def test_default_offers_every_schema_without_discovery(self):
+        os.environ.pop("PRAXIS_TOOLS_POINTERS", None)
+        for ctx in (agent.ChannelContext(chat_id="window", owner=True, is_dm=True),
+                    agent.ChannelContext(chat_id="guest", owner=False, is_dm=True)):
+            with self.subTest(owner=ctx.owner):
+                self.assertFalse(agent.tool_pointers_enabled())
+                offered = agent.offered_tools_for(ctx)
+                self.assertEqual(offered, agent.catalog_tools_for(ctx))
+                self.assertTrue({"computer", "python", "fs_ls", "manage_identity"}.issubset(_names(offered)))
+                self.assertNotIn("call", _names(offered))
+                self.assertNotIn("describe", _names(offered))
+
     def test_windows_native_v2_input_events_are_model_visible(self):
         """One real advertised schema must name every native input event, not just Rust."""
         events = agent.COMPUTER_TOOL["input_schema"]["properties"]["events"]["items"]["properties"]
@@ -221,6 +234,16 @@ class TestDispatch(PointerBase):
         self.assertIs(out, block)
         self.assertFalse(dispatched)
         self.assertIsNone(note)
+
+    def test_saved_pointer_turn_can_resume_after_default_changes(self):
+        os.environ["PRAXIS_TOOLS_POINTERS"] = "off"
+        block = {"type": "tool_use", "id": "t1", "name": "call",
+                 "input": {"name": "fs_read", "args_json": '{"path":"soul/SOUL.md"}'}}
+        with agent._bind_tool_catalog(self._ctx()):
+            rewritten, dispatched, note = agent._unwrap_dispatch(block, offered={"call"})
+        self.assertTrue(dispatched)
+        self.assertIsNone(note)
+        self.assertEqual(rewritten["name"], "fs_read")
 
     def test_describe_returns_the_schema_as_a_tool_result(self):
         with agent._bind_tool_catalog(self._ctx()):
