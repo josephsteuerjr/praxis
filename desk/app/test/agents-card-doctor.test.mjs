@@ -13,10 +13,13 @@ assert.ok(src.includes('soul: { kind: "doctor" }'),
   "сид — одно слово doctor, без текстов и доноров через окно");
 assert.ok(src.includes('name: "Доктор"'), "имя доктору — «Доктор»");
 
-// Тост говорит, что поднимется после перезапуска — то же обещание, что у
-// «Завести агента», без выдуманного «работает прямо сейчас».
-assert.ok(src.includes("Поднимется после перезапуска программы"),
-  "тост не обещает мгновенного подъёма");
+// 12.11: the Python supervisor re-reads the roster at once (t_desktop_supervisor_1710
+// raises a re-enabled neighbour without a restart). The toast says when it appears —
+// the same promise as «Завести агента» — and never claims it already works.
+assert.ok(src.includes("Через несколько секунд он появится в переключателе на полке"),
+  "тост говорит, когда доктор появится, без перезапуска программы");
+assert.ok(!src.includes("Поднимется после перезапуска программы"),
+  "устаревшее обещание перезапуска вернулось");
 
 // Отказ — словами оболочки тем же shellToast (как у всех глаголов карточки).
 const docBlock = src.slice(src.indexOf('"Завести доктора"'));

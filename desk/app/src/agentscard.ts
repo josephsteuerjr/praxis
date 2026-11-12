@@ -159,7 +159,8 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
       .then((got) => {
         made.textContent =
           `Агент «${got.name}» заведён: папка ${got.dir}, порт ${got.port}. ` +
-          `Он поднимется после перезапуска программы — тогда же появится в переключателе на полке. ` +
+          // 12.11: the supervisor re-reads the roster at once; no programme restart is needed.
+          `Программа уже поднимает его — через несколько секунд он появится в переключателе на полке. ` +
           `Мозг у него уже есть, а бота и владельца впиши в его собственных настройках.`;
         made.classList.add("ok");
         resetSoul();
@@ -187,7 +188,7 @@ export function agentsCard(_mac = false, _linux = false): { el: HTMLElement } {
       soul: { kind: "doctor" },
     })
       .then((got) => {
-        toast(`Доктор заведён: папка ${got.dir}. Поднимется после перезапуска программы — спроси его о состоянии харнесса.`);
+        toast(`Доктор заведён: папка ${got.dir}. Через несколько секунд он появится в переключателе на полке — спроси его о состоянии харнесса.`);
         void paint();
       })
       .catch(shellToast)
