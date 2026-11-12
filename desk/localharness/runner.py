@@ -119,6 +119,7 @@ _owner_words = [False]
 _STARTED_UTC = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 _continuity = None
 _alarms = None
+_reflection = None
 _forge_events = None
 _self_review = None
 _busy: dict = {"busy": False, "run": "", "since": 0.0, "chat_id": ""}
@@ -2597,6 +2598,31 @@ def _alarm_note(task: dict) -> str:
     return "Сработал твой будильник на это время (чем именно — не записано)."
 
 
+def _reflection_tick() -> None:
+    if owner_stop.paused() or owner_stop.stopped() or _reflection is None or _agent is None or _desk is None or not _brain_ready() or _busy.get('busy'):
+        return
+    def invoke(pulse_id, goal, *, mailbox_index):
+        if owner_stop.paused() or owner_stop.stopped() or _busy.get('busy'):
+            return 'deferred'
+        # Exact Praxis self-run: no fabricated user message, no report in the
+        # main chat. Its durable run retains reasoning, work and explicit sends.
+        run_ids = []
+        def opened(run_id):
+            run_ids.append(run_id)
+            _set_busy(True, run_id)
+        try:
+            _agent.task_window(goal, mailbox_index=mailbox_index,
+                               transport='connected' if _bot is not None and _bot.connected() else 'disconnected',
+                               on_run=opened)
+            if not run_ids:
+                return 'failed'
+            status = _agent._runs().manifest(run_ids[0]).get('status')
+            return 'silent' if status == 'done' else 'failed'
+        finally:
+            _set_busy(False, run_ids[0] if run_ids else '')
+    _reflection.tick(invoke)
+
+
 def _fire_due_tasks() -> None:
     """Адресное срабатывание: claim -> durable run -> погашение намерения."""
     if owner_stop.paused() or _desk is None or _life is None or _alarms is None or not _brain_ready():
@@ -3564,6 +3590,10 @@ def main() -> None:
     from core import events as core_events
     _alarms = alarm_clock.AlarmClock(_continuity, tasks)
     _alarms.install()
+    from reflection import Reflection
+    global _reflection
+    _reflection = Reflection(tree)
+    _reflection.install(agent)
     _forge_events = forge_events.ForgeEvents(_continuity, core_events, forge, perception)
     # Песочница: shell в AppContainer, файловые руки — в папке Hélène, плюс
     # смонтированные владельцем папки (их список ограда перечитывает из
@@ -3841,6 +3871,7 @@ def main() -> None:
             alarms_at = time.time()
             try:
                 _fire_due_tasks()
+                _reflection_tick()
             except Exception:
                 log.exception("тик будильников упал (продукт работает дальше)")
         try:

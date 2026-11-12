@@ -37,6 +37,8 @@ schedule) — он дублировал часовой social_pulse. Перио�
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import datetime as _dt
 import json
@@ -48,6 +50,18 @@ BASE = Path(os.environ.get("PRAXIS_BASE") or Path(__file__).resolve().parent)
 TASKS = BASE / "memory" / "tasks.json"
 KINDS = ("window", "wake", "email", "message", "note")
 AUTHORS = ("praxis", "owner", "app")
+_CREATED_RECEIPTS = ContextVar('scheduled_intent_receipts', default=None)
+
+
+@contextmanager
+def capture_additions():
+    """Exact durable IDs created in this call, never another thread's additions."""
+    receipts = []
+    token = _CREATED_RECEIPTS.set(receipts)
+    try:
+        yield receipts
+    finally:
+        _CREATED_RECEIPTS.reset(token)
 
 
 def message_reassessment_prompt(task: dict) -> str:
@@ -244,6 +258,9 @@ def add(kind: str, goal: str, when: str | None = None, target: str | None = None
     items = _load()
     items.append(task)
     _save(items)
+    receipts = _CREATED_RECEIPTS.get()
+    if receipts is not None:
+        receipts.append(task['id'])
     return task
 
 
