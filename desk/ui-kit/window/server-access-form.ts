@@ -10,6 +10,8 @@ type Check={ok:boolean;trust_needed?:boolean;fingerprint?:string;message:string;
 export function sshAccessForm(data:Record<string,unknown>,changed:()=>void) {
   const element=el('div');const out=el('p','receipt');const trust=el('div');
   const picker=el('select','field-input');picker.setAttribute('aria-label','Сохранённое подключение сервера');
+  // The choice is in the form only when there is something saved to choose.
+  const pickerBox=el('div');
   const manual=el('fieldset','');manual.style.border='0';manual.style.padding='0';manual.style.margin='12px 0';
   const grid=el('div','form-grid two');const extra=el('details','fold');const inner=el('div','fold-body');
   extra.append(el('summary','','SSH-ключ и дополнительные параметры'),inner);
@@ -52,7 +54,9 @@ export function sshAccessForm(data:Record<string,unknown>,changed:()=>void) {
   const load=async()=>{
     try{
       rows=await shell<ServerProfile[]>('server_connection',{action:'list'});
-      picker.replaceChildren(new Option('Новое подключение',''),...rows.filter(row=>!row.error).map(row=>new Option(`${row.name} · ${row.login}@${row.host}`,row.id)));
+      const saved=rows.filter(row=>!row.error);
+      picker.replaceChildren(new Option('Новое подключение',''),...saved.map(row=>new Option(`${row.name} · ${row.login}@${row.host}`,row.id)));
+      if(saved.length)pickerBox.replaceChildren(picker);else pickerBox.replaceChildren();
       picker.value=String(data.server_profile||'');
       const current=rows.find(row=>row.id===picker.value);if(current)choose(current);
     }catch(error){out.textContent=humanError(error).text;}
@@ -70,6 +74,6 @@ export function sshAccessForm(data:Record<string,unknown>,changed:()=>void) {
     }catch(error){out.textContent=humanError(error).text;out.classList.add('err')}
     finally{busy=false;save.disabled=false;picker.disabled=false;manual.disabled=!!data.server_profile;}
   }
-  element.append(picker,manual,save,trust,out);void load();
+  element.append(pickerBox,manual,save,trust,out);void load();
   return element;
 }
